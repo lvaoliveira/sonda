@@ -133,6 +133,18 @@ What holds today:
 - **The schema enforces constraints** such as project keys, commit hashes
   and digest lengths, as a second line of defence behind the server's own
   validation.
+- **Uploads are checked, not trusted:**
+  - The token is checked before the body is read, so an unauthenticated
+    client cannot make the server buffer an upload.
+  - Bodies are capped at 128 MiB as sent and 800 MiB after
+    decompression, so a small gzip that inflates enormously is refused.
+  - Every source is hashed again and must match the report's SHA-256.
+  - Paths, project, branch and commit follow the same rules as
+    `sonda upload` (shared code), and rule ids must exist.
+  - An issue's category comes from sonda's own rule catalog, not the
+    client.
+  - Each upload is one transaction, so a rejected or failed upload leaves
+    nothing behind.
 - **Migrations are all-or-nothing:** each runs in a transaction, and a
   failure stops startup.
 

@@ -76,7 +76,8 @@ pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Er
     })
 }
 
-fn validate_meta(meta: &Meta) -> Result<(), Error> {
+/// Checks project, branch and commit; the server applies the same rules.
+pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
     let bad = |msg: String| Err(Error::InvalidArgument(msg));
     let p = &meta.project;
     if p.is_empty()
@@ -145,7 +146,7 @@ fn listed_files(report: &Value) -> Result<Vec<(String, Sha256)>, Error> {
 /// Accepts only what the scanner writes: `/`-separated, relative, with no
 /// empty, `.` or `..` components. Anything else could name a file outside
 /// the root (`../../.ssh/id_rsa`, `/etc/passwd`, `C:\...`).
-fn check_relative_path(path: &str) -> Result<(), Error> {
+pub fn check_relative_path(path: &str) -> Result<(), Error> {
     let ok = !path.is_empty()
         && !path.contains(['\\', ':', '\0'])
         && path
@@ -160,8 +161,10 @@ fn check_relative_path(path: &str) -> Result<(), Error> {
     }
 }
 
-fn parse_sha256(hex: &str) -> Option<Sha256> {
-    if hex.len() != 64 {
+/// Lowercase or uppercase hex, exactly 64 digits.
+pub fn parse_sha256(hex: &str) -> Option<Sha256> {
+    // The digit check matters: `from_str_radix` alone accepts "+f".
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut out = [0u8; 32];
@@ -318,6 +321,20 @@ mod tests {
                 .to_string()
                 .contains("twice")
         );
+    }
+
+    #[test]
+    fn sha256_must_be_64_hex_digits() {
+        let ok = "ab".repeat(32);
+        assert!(parse_sha256(&ok).is_some());
+        assert!(parse_sha256(&ok.to_uppercase()).is_some());
+        for bad in [
+            &ok[2..],
+            &format!("+f{}", &ok[2..]),
+            &format!("zz{}", &ok[2..]),
+        ] {
+            assert!(parse_sha256(bad).is_none(), "{bad}");
+        }
     }
 
     #[test]

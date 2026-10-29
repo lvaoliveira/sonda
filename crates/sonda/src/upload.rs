@@ -86,11 +86,44 @@ pub fn run(args: UploadArgs) -> Result<ExitCode> {
             .read_to_string(&mut text);
         bail!("the server answered {status}: {}", text.trim());
     }
+    let mut answer = String::new();
+    // Best effort: the upload already succeeded; the summary is a bonus.
+    let _ = response
+        .body_mut()
+        .as_reader()
+        .take(MAX_ERROR_BYTES)
+        .read_to_string(&mut answer);
     eprintln!(
-        "sonda: uploaded {} files for {}/{} to {}",
-        files, upload.project, upload.branch, args.server
+        "sonda: uploaded {} files for {}/{} to {}{}",
+        files,
+        upload.project,
+        upload.branch,
+        args.server,
+        summary(&answer)
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// The server's issue counts, e.g. ": 331 open issues (61 new, 2 fixed)",
+/// or nothing if the answer has none.
+fn summary(answer: &str) -> String {
+    let json: serde_json::Value = serde_json::from_str(answer).unwrap_or_default();
+    let count = |k: &str| json["issues"][k].as_u64();
+    match (
+        count("open"),
+        count("new"),
+        count("reopened"),
+        count("fixed"),
+    ) {
+        (Some(open), Some(new), Some(reopened), Some(fixed)) => {
+            let mut s = format!(": {open} open issues ({new} new, {fixed} fixed");
+            if reopened > 0 {
+                s += &format!(", {reopened} reopened");
+            }
+            s + ")"
+        }
+        _ => String::new(),
+    }
 }
 
 /// `<server>/api/analyses`, after checking the token cannot leak: plain

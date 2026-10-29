@@ -1,0 +1,375 @@
+//! `POST /api/analyses`: decodes and validates what `sonda upload` sends
+//! (ADR-0005). Everything in the request is untrusted. Category comes from
+//! sonda's own rule catalog, and each source's hash is recomputed, never
+//! taken from the client.
+
+use crate::api::ApiError;
+use crate::http::State;
+use crate::store;
+use axum::Json;
+use axum::body::Bytes;
+use axum::http::{HeaderMap, StatusCode, header};
+use flate2::read::GzDecoder;
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use sonda_core::model::Severity;
+use sonda_core::report::REPORT_VERSION;
+use sonda_core::upload::{Meta, check_relative_path, parse_sha256, validate_meta};
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
+
+/// The largest request body accepted, as sent (usually gzipped).
+pub const MAX_BODY_BYTES: usize = 128 << 20;
+/// The largest JSON accepted after decompression: the client's own caps
+/// (512 MiB of sources, a 256 MiB report) plus room for the envelope.
+pub const MAX_JSON_BYTES: u64 = 800 << 20;
+
+const MAX_FILES: usize = 200_000;
+const MAX_ISSUES: usize = 2_000_000;
+const MAX_TEXT: usize = 4_000;
+
+// The envelope is sonda's own and fixed: unknown fields are mistakes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Upload {
+    project: String,
+    branch: String,
+    commit: String,
+    report: Report,
+    sources: Vec<Source>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Source {
+    path: String,
+    content: String,
+}
+
+// The report is read tolerantly: a newer CLI may add fields without
+// changing report_version (see `REPORT_VERSION`).
+#[derive(Deserialize)]
+struct Report {
+    tool: String,
+    version: String,
+    report_version: u64,
+    new_code_reference: Option<String>,
+    measures: Value,
+    gate: Value,
+    files: Vec<File>,
+    issues: Vec<Issue>,
+    warnings: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct File {
+    path: String,
+    language: String,
+    sha256: String,
+    /// Every other field (lines, ncloc, complexity, ...), stored as is.
+    #[serde(flatten)]
+    metrics: serde_json::Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct Issue {
+    rule: String,
+    severity: Severity,
+    message: String,
+    path: String,
+    line: u32,
+    column: u32,
+    end_line: u32,
+    end_column: u32,
+    effort_minutes: u32,
+    is_new: bool,
+    fingerprint: String,
+}
+
+/// An upload that passed every check, ready to store.
+pub struct Analysis {
+    pub meta: Meta,
+    pub tool_version: String,
+    pub new_code_reference: Option<String>,
+    pub measures: Value,
+    pub gate: Value,
+    pub gate_passed: bool,
+    pub warnings: Vec<String>,
+    pub files: Vec<StoredFile>,
+    /// Distinct contents, keyed by SHA-256.
+    pub sources: Vec<([u8; 32], String)>,
+    pub issues: Vec<StoredIssue>,
+}
+
+pub struct StoredFile {
+    pub path: String,
+    pub language: String,
+    pub sha256: [u8; 32],
+    pub metrics: Value,
+}
+
+pub struct StoredIssue {
+    pub fingerprint: [u8; 16],
+    pub rule: &'static str,
+    pub severity: &'static str,
+    pub category: &'static str,
+    pub message: String,
+    pub path: String,
+    pub line: i32,
+    pub col: i32,
+    pub end_line: i32,
+    pub end_col: i32,
+    pub effort_minutes: i32,
+    pub is_new: bool,
+}
+
+pub async fn create(
+    axum::extract::State(state): axum::extract::State<State>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<store::Summary>), ApiError> {
+    let gzip = match headers.get(header::CONTENT_ENCODING).map(|v| v.as_bytes()) {
+        None | Some(b"identity") => false,
+        Some(b"gzip") => true,
+        Some(_) => {
+            return Err(ApiError::UnsupportedMediaType(
+                "Content-Encoding must be gzip or identity".into(),
+            ));
+        }
+    };
+    // Decompressing, parsing and hashing up to hundreds of MiB is CPU work:
+    // keep it off the async workers.
+    let analysis =
+        tokio::task::spawn_blocking(move || decode(&body, gzip, MAX_JSON_BYTES).and_then(validate))
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))??;
+    let summary = store::ingest(&state.pool, analysis).await?;
+    tracing::info!(
+        analysis = summary.analysis_id,
+        new = summary.issues.new,
+        fixed = summary.issues.fixed,
+        "stored analysis"
+    );
+    Ok((StatusCode::CREATED, Json(summary)))
+}
+
+fn decode(body: &[u8], gzip: bool, max_json: u64) -> Result<Upload, ApiError> {
+    let json = if gzip {
+        let mut out = Vec::new();
+        GzDecoder::new(body)
+            .take(max_json + 1)
+            .read_to_end(&mut out)
+            .map_err(|_| ApiError::BadRequest("the body is not valid gzip".into()))?;
+        // A small body that inflates enormously (a "zip bomb") stops here.
+        if out.len() as u64 > max_json {
+            return Err(ApiError::PayloadTooLarge(format!(
+                "the upload exceeds {} MiB uncompressed",
+                max_json >> 20
+            )));
+        }
+        out
+    } else {
+        body.to_vec()
+    };
+    serde_json::from_slice(&json)
+        .map_err(|e| ApiError::BadRequest(format!("the body is not a sonda upload: {e}")))
+}
+
+fn validate(upload: Upload) -> Result<Analysis, ApiError> {
+    let invalid = |m: String| ApiError::Unprocessable(m);
+    let meta = Meta {
+        project: upload.project,
+        branch: upload.branch,
+        commit: upload.commit.to_ascii_lowercase(),
+    };
+    validate_meta(&meta).map_err(|e| invalid(e.to_string()))?;
+    let r = upload.report;
+    if r.tool != "sonda" {
+        return Err(invalid("the report was not written by sonda".into()));
+    }
+    if r.report_version != u64::from(REPORT_VERSION) {
+        return Err(invalid(format!(
+            "report_version {} is not supported; this server reads version {REPORT_VERSION}",
+            r.report_version
+        )));
+    }
+    if r.version.len() > 64 || r.new_code_reference.as_ref().is_some_and(|s| s.len() > 255) {
+        return Err(invalid(
+            "the report's version or new-code reference is too long".into(),
+        ));
+    }
+    if !r.measures.is_object() {
+        return Err(invalid("the report's measures are not an object".into()));
+    }
+    let gate_passed = r.gate["passed"]
+        .as_bool()
+        .ok_or_else(|| invalid("the report's gate has no passed flag".into()))?;
+    if r.files.len() > MAX_FILES || r.issues.len() > MAX_ISSUES {
+        return Err(invalid("the report lists too many files or issues".into()));
+    }
+
+    let mut files = Vec::with_capacity(r.files.len());
+    let mut by_path: HashMap<&str, [u8; 32]> = HashMap::with_capacity(r.files.len());
+    for f in &r.files {
+        check_relative_path(&f.path).map_err(|e| invalid(e.to_string()))?;
+        if !sonda_core::lang::ALL
+            .iter()
+            .any(|l| serde_json::to_value(l).is_ok_and(|v| v == f.language.as_str()))
+        {
+            return Err(invalid(format!(
+                "{}: unknown language {:?}",
+                f.path, f.language
+            )));
+        }
+        let sha256 = parse_sha256(&f.sha256)
+            .ok_or_else(|| invalid(format!("{}: invalid sha256", f.path)))?
+            .0;
+        if by_path.insert(&f.path, sha256).is_some() {
+            return Err(invalid(format!("{} is listed twice", f.path)));
+        }
+        files.push(StoredFile {
+            path: f.path.clone(),
+            language: f.language.clone(),
+            sha256,
+            metrics: Value::Object(f.metrics.clone()),
+        });
+    }
+
+    // Exactly one source per file, matching the hash the scan recorded.
+    if upload.sources.len() != files.len() {
+        return Err(invalid(format!(
+            "{} files but {} sources",
+            files.len(),
+            upload.sources.len()
+        )));
+    }
+    let mut seen_sources = HashSet::with_capacity(upload.sources.len());
+    let mut sources: HashMap<[u8; 32], String> = HashMap::new();
+    for s in upload.sources {
+        let expected = by_path
+            .get(s.path.as_str())
+            .ok_or_else(|| invalid(format!("source {} is not in the report", s.path)))?;
+        let actual: [u8; 32] = Sha256::digest(s.content.as_bytes()).into();
+        if actual != *expected {
+            return Err(invalid(format!(
+                "source {} does not match its sha256",
+                s.path
+            )));
+        }
+        if !seen_sources.insert(s.path) {
+            return Err(invalid("a source is sent twice".into()));
+        }
+        sources.entry(actual).or_insert(s.content);
+    }
+
+    let mut issues = Vec::with_capacity(r.issues.len());
+    let mut fingerprints = HashSet::with_capacity(r.issues.len());
+    for i in r.issues {
+        let rule = sonda_core::rules::find(&i.rule)
+            .ok_or_else(|| invalid(format!("unknown rule {:?}", i.rule)))?;
+        if !by_path.contains_key(i.path.as_str()) {
+            return Err(invalid(format!(
+                "issue in {}, which is not in the report",
+                i.path
+            )));
+        }
+        let fingerprint = parse_fingerprint(&i.fingerprint)
+            .ok_or_else(|| invalid(format!("invalid fingerprint {:?}", i.fingerprint)))?;
+        if !fingerprints.insert(fingerprint) {
+            return Err(invalid(format!(
+                "fingerprint {} appears twice",
+                i.fingerprint
+            )));
+        }
+        let pos = |v: u32| i32::try_from(v).ok().filter(|&v| v >= 1);
+        let (Some(line), Some(col), Some(end_line), Some(end_col)) = (
+            pos(i.line),
+            pos(i.column),
+            pos(i.end_line),
+            pos(i.end_column),
+        ) else {
+            return Err(invalid(format!("{}: issue position out of range", i.path)));
+        };
+        if end_line < line || i.message.len() > MAX_TEXT {
+            return Err(invalid(format!("{}:{line}: malformed issue", i.path)));
+        }
+        issues.push(StoredIssue {
+            fingerprint,
+            rule: rule.id,
+            severity: i.severity.as_str(),
+            category: rule.category.as_str(),
+            message: i.message,
+            path: i.path,
+            line,
+            col,
+            end_line,
+            end_col,
+            effort_minutes: i32::try_from(i.effort_minutes)
+                .map_err(|_| invalid("effort out of range".into()))?,
+            is_new: i.is_new,
+        });
+    }
+
+    if r.warnings.len() > MAX_FILES || r.warnings.iter().any(|w| w.len() > MAX_TEXT) {
+        return Err(invalid("the report's warnings are too large".into()));
+    }
+    Ok(Analysis {
+        meta,
+        tool_version: r.version,
+        new_code_reference: r.new_code_reference,
+        measures: r.measures,
+        gate: r.gate,
+        gate_passed,
+        warnings: r.warnings,
+        files,
+        sources: sources.into_iter().collect(),
+        issues,
+    })
+}
+
+fn parse_fingerprint(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (byte, pair) in out.iter_mut().zip(hex.as_bytes().chunks(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    #[test]
+    fn a_small_body_that_inflates_past_the_cap_is_refused() {
+        // 64 MiB of spaces: valid JSON whitespace, about 64 KiB gzipped.
+        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+        let chunk = vec![b' '; 1 << 20];
+        for _ in 0..64 {
+            e.write_all(&chunk).unwrap();
+        }
+        let bomb = e.finish().unwrap();
+        assert!(bomb.len() < 1 << 20, "{} bytes", bomb.len());
+        let err = decode(&bomb, true, 32 << 20).err().unwrap();
+        assert!(matches!(err, ApiError::PayloadTooLarge(_)), "{err:?}");
+    }
+
+    #[test]
+    fn fingerprints_must_be_32_hex_digits() {
+        assert!(parse_fingerprint("04d724dbbd800b9d4c64c4649cd55415").is_some());
+        for bad in [
+            "",
+            "04d7",
+            "04d724dbbd800b9d4c64c4649cd5541z",
+            "+4d724dbbd800b9d4c64c4649cd55415",
+        ] {
+            assert!(parse_fingerprint(bad).is_none(), "{bad}");
+        }
+    }
+}

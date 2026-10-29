@@ -4,9 +4,9 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 ([ADR-0005](adr/0005-sonda-server.md)). It runs as two containers: `sonda`
 (the server and the web app) and `db` (PostgreSQL).
 
-**Status:** foundation only. The server starts, migrates its database,
-serves the web app and answers `/api/health`. Receiving uploads and the
-Issues and Rules API come next; until then the web app shows mock data.
+**Status:** the server receives uploads and tracks issues across them.
+The Issues and Rules API for the web app comes next; until then the web app
+shows mock data.
 
 ## Quick start (Docker Compose)
 
@@ -32,6 +32,42 @@ SONDA_TOKEN_FILE=secrets/sonda_token   # or: export SONDA_TOKEN=$(cat secrets/so
 
 Stop with `docker compose down`. Data lives in the `pgdata` volume, so it
 survives restarts and upgrades. `docker compose down -v` deletes it.
+
+## Uploading analyses
+
+```sh
+sonda scan . -f json -o report.json
+sonda upload report.json --server http://127.0.0.1:9000 --token-file secrets/sonda_token \
+  --project payments --branch main --commit "$(git rev-parse HEAD)"
+# sonda: uploaded 170 files for payments/main to http://127.0.0.1:9000: 331 open issues (61 new, 2 fixed)
+```
+
+The first upload creates the project. Each upload becomes the branch's
+latest analysis, ordered by when it arrives, not by commit date. Issues are
+matched to the branch's earlier ones by fingerprint:
+
+- **New:** a fingerprint the branch has not seen.
+- **Kept:** an issue still present. It moves to its new line, and its status
+  (confirmed, accepted) and assignee stay.
+- **Fixed:** an issue missing from the upload.
+- **Reopened:** a fixed issue that comes back, with its earlier status.
+
+Branches are tracked separately. Unchanged files are stored once, however
+many analyses include them.
+
+`POST /api/analyses` needs `Authorization: Bearer <token>`. It takes the JSON
+`sonda upload` sends, gzipped or plain, up to 128 MiB as sent and 800 MiB
+uncompressed. It answers `201` with
+`{"analysis_id": 2, "issues": {"open": 331, "new": 61, "reopened": 0, "fixed": 2}}`.
+A rejected upload stores nothing:
+
+| Status | Meaning |
+|---|---|
+| `401` | Missing or wrong token. |
+| `400` | Not gzip, or not a sonda upload. |
+| `413` | Too large, compressed or after decompression. |
+| `415` | A `Content-Encoding` other than gzip or identity. |
+| `422` | Well-formed but invalid, e.g. a source that doesn't match its SHA-256, an unknown rule, an unsafe path, or an unsupported `report_version`. |
 
 ## Exposing it beyond this machine
 

@@ -559,10 +559,22 @@ fn upload(dir: &Path, out: &Path, server: &str) -> Command {
 #[test]
 fn upload_sends_the_report_and_sources() {
     let (dir, out) = scanned(&[("src/app.js", "var x = 1;\n")]);
-    let (url, server) = fake_server("201 Created", r#"{"id":"1"}"#);
+    let (url, server) = fake_server(
+        "201 Created",
+        r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":2}}"#,
+    );
     let result = upload(dir.path(), out.path(), &url).output().unwrap();
     assert_eq!(code(&result), 0, "{}", stderr(&result));
-    assert!(stderr(&result).contains("uploaded 1 files for payments/main"));
+    assert!(
+        stderr(&result).contains("uploaded 1 files for payments/main to http://127.0.0.1:"),
+        "{}",
+        stderr(&result)
+    );
+    assert!(
+        stderr(&result).contains(": 1 open issues (1 new, 2 fixed)"),
+        "{}",
+        stderr(&result)
+    );
 
     let request = server.join().unwrap();
     assert!(

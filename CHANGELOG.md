@@ -58,6 +58,11 @@ file, the report formats and the public library API.
   - Secrets from environment variables or files.
   - A Docker image (distroless, non-root, 69 MB) and a `compose.yaml` that
     runs it with PostgreSQL. See [docs/server.md](docs/server.md).
+- `sonda-server` stores uploads (`POST /api/analyses`) and tracks issues
+  across a branch's analyses by fingerprint:
+  - Issues are new, kept, fixed or reopened.
+  - A human status survives moves, fixes and reopening.
+  - `sonda upload` prints the counts the server returns.
 
 ### Security
 
