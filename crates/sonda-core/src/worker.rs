@@ -15,7 +15,7 @@ use crate::analysis::{self, FileAnalysis, FileError, Token};
 use crate::config::Config;
 use crate::error::Error;
 use crate::lang::Lang;
-use crate::model::{FileMetrics, Issue, Severity};
+use crate::model::{Digest, FileMetrics, Issue, Severity};
 use crate::rules::{self, RuleSet};
 use crate::sandbox::{self, SandboxMode, Status};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -99,6 +99,10 @@ impl Enc {
         self.u64(v as u64);
     }
 
+    fn digest<const N: usize>(&mut self, d: &Digest<N>) {
+        self.0.extend_from_slice(&d.0);
+    }
+
     fn str(&mut self, s: &str) {
         self.usize(s.len());
         self.0.extend_from_slice(s.as_bytes());
@@ -135,6 +139,11 @@ impl<'a> Dec<'a> {
 
     fn u32(&mut self) -> Result<u32, Malformed> {
         u32::try_from(self.u64()?).map_err(|_| "integer too large".into())
+    }
+
+    fn digest<const N: usize>(&mut self) -> Result<Digest<N>, Malformed> {
+        let bytes = self.take(N)?.try_into().map_err(|_| "truncated")?;
+        Ok(Digest(bytes))
     }
 
     fn str(&mut self) -> Result<&'a str, Malformed> {
@@ -201,6 +210,7 @@ fn encode_response(result: &Result<FileAnalysis, FileError>) -> Vec<u8> {
             e.usize(v);
         }
         e.u64(u64::from(i.effort_minutes));
+        e.digest(&i.fingerprint);
     }
     let m = &a.metrics;
     for v in [m.lines, m.ncloc, m.comment_lines, m.functions] {
@@ -218,12 +228,13 @@ fn encode_response(result: &Result<FileAnalysis, FileError>) -> Vec<u8> {
         e.usize(t.line);
     }
     e.u8(u8::from(a.has_syntax_errors));
+    e.digest(&a.sha256);
     e.0
 }
 
 /// Smallest encoded issue: two empty strings (8 bytes each), the severity
-/// byte, four positions and the effort (8 bytes each).
-const MIN_ISSUE_BYTES: usize = 8 + 1 + 8 + 4 * 8 + 8;
+/// byte, four positions and the effort (8 bytes each), and the fingerprint.
+const MIN_ISSUE_BYTES: usize = 8 + 1 + 8 + 4 * 8 + 8 + 16;
 
 /// Outer `Err`: the payload is malformed. Inner `Err`: the worker reported
 /// that the file could not be analyzed.
@@ -265,6 +276,7 @@ fn decode_response(
             end_column,
             effort_minutes: d.u32()?,
             is_new: true,
+            fingerprint: d.digest()?,
         });
     }
     let metrics = FileMetrics {
@@ -291,6 +303,7 @@ fn decode_response(
         1 => true,
         _ => return Err("invalid flag".into()),
     };
+    let sha256 = d.digest()?;
     d.finish()?;
     let analysis = FileAnalysis {
         path: path.to_string(),
@@ -300,6 +313,7 @@ fn decode_response(
         code_lines,
         tokens,
         has_syntax_errors,
+        sha256,
     };
     // Positions out of range would corrupt measures and reports.
     analysis::check_invariants(&analysis)?;
@@ -804,12 +818,14 @@ mod tests {
         for v in [999, 1, 999, 2, 30] {
             e.usize(v);
         }
+        e.digest(&Digest([0; 16]));
         for _ in 0..6 {
             e.usize(1);
         }
         e.usize(0);
         e.usize(0);
         e.u8(0);
+        e.digest(&Digest([0; 32]));
         assert!(
             decode_response(&e.0, "a.js", Lang::JavaScript)
                 .unwrap_err()

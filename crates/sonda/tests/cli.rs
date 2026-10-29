@@ -144,6 +144,20 @@ fn json_report_has_measures_gate_and_issues() {
     assert_eq!(rules, ["js/no-var", "js/no-eval"]);
     assert_eq!(report["issues"][1]["path"], "src/app.js");
     assert_eq!(report["issues"][1]["line"], 2);
+    // The fields `sonda upload` and the server rely on (ADR-0005).
+    assert_eq!(report["report_version"], 1);
+    assert!(is_hex(&report["issues"][1]["fingerprint"], 32));
+    assert_ne!(
+        report["issues"][0]["fingerprint"],
+        report["issues"][1]["fingerprint"]
+    );
+    assert!(is_hex(&report["files"][0]["sha256"], 64));
+}
+
+fn is_hex(v: &Value, len: usize) -> bool {
+    v.as_str().is_some_and(|s| {
+        s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 #[test]
@@ -168,6 +182,12 @@ fn sarif_report_is_valid_2_1_0() {
     let location = &result["locations"][0]["physicalLocation"];
     assert_eq!(location["artifactLocation"]["uri"], "app.js");
     assert_eq!(location["region"]["startLine"], 1);
+    // Same identity as the JSON report's, so tools can correlate the two.
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    assert_eq!(
+        result["partialFingerprints"]["sonda/v1"],
+        report["issues"][0]["fingerprint"]
+    );
 }
 
 #[test]

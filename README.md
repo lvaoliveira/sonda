@@ -60,6 +60,8 @@ sonda scan . --no-isolation               # parse in-process (debugging); see SE
 
 Without `--new-code`, the whole project counts as new code.
 
+Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed. The JSON format is versioned by `report_version`.
+
 Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an error (bad config, unknown rule id, git failure, and so on). Use `--no-gate` to always exit 0.
 
 ### GitHub Actions

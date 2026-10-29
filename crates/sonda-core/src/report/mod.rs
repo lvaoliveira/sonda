@@ -9,7 +9,7 @@ use crate::Outcome;
 use crate::gate::GateResult;
 use crate::lang::Lang;
 use crate::measures::Measures;
-use crate::model::{FileMetrics, Issue};
+use crate::model::{FileMetrics, Issue, Sha256};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,10 +19,16 @@ pub enum Format {
     Sarif,
 }
 
+/// The JSON report's format version. The report is a contract with
+/// `sonda upload` and the server: adding fields keeps the version; removing
+/// or changing one bumps it.
+pub const REPORT_VERSION: u32 = 1;
+
 #[derive(Serialize)]
 pub struct Report<'a> {
     pub tool: &'static str,
     pub version: &'static str,
+    pub report_version: u32,
     /// The branch new code is compared against; `None` means the whole project is new code.
     pub new_code_reference: Option<&'a str>,
     pub measures: &'a Measures,
@@ -40,6 +46,7 @@ pub struct FileReport<'a> {
     #[serde(flatten)]
     pub metrics: FileMetrics,
     pub duplicated_lines: usize,
+    pub sha256: Sha256,
 }
 
 #[derive(Serialize)]
@@ -67,6 +74,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
             language: f.lang,
             metrics: f.metrics,
             duplicated_lines: dup.len(),
+            sha256: f.sha256,
         })
         .collect();
     let loc = |s: crate::duplication::Span| Location {
@@ -92,6 +100,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
     Report {
         tool: "sonda",
         version: env!("CARGO_PKG_VERSION"),
+        report_version: REPORT_VERSION,
         new_code_reference: scan.new_code.reference(),
         measures: &outcome.measures,
         gate: &outcome.gate,

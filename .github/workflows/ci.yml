@@ -60,6 +60,8 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo test --workspace --all-targets --all-features --locked
+      # --all-targets skips doctests; the library's examples must compile too.
+      - run: cargo test --workspace --doc --locked
 
   msrv:
     runs-on: ubuntu-latest

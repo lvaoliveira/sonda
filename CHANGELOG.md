@@ -42,6 +42,11 @@ file, the report formats and the public library API.
   package version younger than 14 days, and `pnpm audit` runs in CI.
 - Fuzz targets for analysis in every grammar and for config parsing, run
   weekly in CI with the C grammars instrumented by AddressSanitizer.
+- Report fields for tracking issues across scans (ADR-0005): each issue has
+  a `fingerprint`, each file a `sha256` of the bytes analyzed, and the JSON
+  report has a `report_version` (1). SARIF results carry the fingerprint as
+  `partialFingerprints`, so GitHub code scanning follows an issue when its
+  line moves.
 
 ### Security
 
