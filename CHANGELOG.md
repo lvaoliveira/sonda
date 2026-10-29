@@ -47,6 +47,11 @@ file, the report formats and the public library API.
   report has a `report_version` (1). SARIF results carry the fingerprint as
   `partialFingerprints`, so GitHub code scanning follows an issue when its
   line moves.
+- `sonda upload` sends a JSON report and the source of every analyzed file
+  to a sonda server, gzip-compressed (ADR-0005).
+  - Refused before connecting: unsafe paths, files changed since the scan,
+    and plain HTTP except to localhost.
+  - The token comes from `SONDA_TOKEN` or `--token-file`.
 
 ### Security
 

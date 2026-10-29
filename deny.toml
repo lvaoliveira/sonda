@@ -18,6 +18,12 @@ allow = [
     "Unicode-3.0",
     # foldhash (via serde_json): permissive, OSI-approved, no copyleft.
     "Zlib",
+    # rustls, rustls-webpki and ring (via ureq, for `sonda upload`): permissive.
+    "ISC",
+    # subtle (via rustls): permissive.
+    "BSD-3-Clause",
+    # webpki-roots: Mozilla's root certificates, which are data; permissive.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 

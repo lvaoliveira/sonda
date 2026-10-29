@@ -8,6 +8,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod upload;
+
 /// Static analysis and quality gates for JavaScript/TypeScript, Python, Java and C/C++.
 #[derive(Parser)]
 #[command(name = "sonda", version)]
@@ -34,6 +36,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
         sandbox: SandboxArg,
     },
+    /// Send a JSON report and the analyzed sources to a sonda server.
+    Upload(upload::UploadArgs),
     /// Write a default sonda.toml.
     Init {
         #[arg(default_value = ".")]
@@ -182,6 +186,7 @@ impl std::io::Write for SafeStderr {
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Scan(args) => scan(args),
+        Command::Upload(args) => upload::run(args),
         Command::Rules { format } => {
             print!("{}", list_rules(format));
             Ok(ExitCode::SUCCESS)

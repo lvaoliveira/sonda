@@ -22,7 +22,7 @@
 //! - interface: `report` (and the `sonda` binary)
 //! - application: this module ([`run`], [`load_config`])
 //! - infrastructure: `scanner` (filesystem), `git`, `worker` (processes),
-//!   `sandbox`
+//!   `sandbox`, `upload` (reads sources for the server; no networking)
 //! - domain: `project`, `measures`, `gate`, `analysis`, `duplication`,
 //!   `rules`, `newcode`, `coverage`, `config` — no I/O
 //! - shared types: `model`, `lang`
@@ -32,6 +32,7 @@ pub mod lang;
 pub mod model;
 pub mod report;
 pub mod rules;
+pub mod upload;
 
 mod analysis;
 mod coverage;
@@ -234,6 +235,7 @@ mod architecture {
             "crate::scanner",
             "crate::git",
             "crate::worker",
+            "crate::upload",
             "crate::report",
             "crate::Outcome",
             "crate::run",
