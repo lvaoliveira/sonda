@@ -1,9 +1,14 @@
 version: 2
 updates:
+  # Version updates wait 14 days after a release, the same supply-chain rule
+  # as pnpm's minimumReleaseAge (web/pnpm-workspace.yaml). Security updates
+  # are not delayed: a fix for a known vulnerability outweighs the wait.
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
     # tree-sitter and its grammars parse untrusted input: review their
     # updates as security-relevant (see docs/engineering-standards.md §8).
     groups:
@@ -13,16 +18,32 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
-  # Base images in Dockerfile and compose.yaml, pinned by digest.
+    cooldown:
+      default-days: 14
+  # Base images in Dockerfile and compose.yaml, pinned by digest. No
+  # cooldown: new digests of the same tag carry OS security patches.
+  # Major versions are changed by hand, never by a bot:
+  # - node: Dockerfile and CI's web job must move together, and Node 25
+  #   dropped corepack (#9 broke the image build).
+  # - postgres: a major upgrade needs a data migration (pg_upgrade or a
+  #   dump and restore); a plain image bump breaks existing volumes.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
