@@ -1,8 +1,10 @@
 use crate::config::Config;
 use crate::lang::{Lang, Syntax};
-use crate::model::{FileMetrics, Issue};
+use crate::model::{Digest, FileMetrics, Fingerprint, Issue, Sha256};
 use crate::rules::{self, ActiveRule, RuleSet};
+use sha2::Digest as _;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::Instant;
 use tree_sitter::{Node, ParseOptions, Parser, QueryCursor, QueryCursorOptions, StreamingIterator};
@@ -24,6 +26,8 @@ pub(crate) struct FileAnalysis {
     pub(crate) code_lines: Vec<usize>,
     pub(crate) tokens: Vec<Token>,
     pub(crate) has_syntax_errors: bool,
+    /// Of the exact bytes analyzed, so a later upload can prove it sends the same source.
+    pub(crate) sha256: Sha256,
 }
 
 /// Why a file could not be analyzed. The scanner reports it as a warning.
@@ -100,6 +104,7 @@ pub(crate) fn analyze(
             ))
     });
     issues.dedup_by(|a, b| a.rule == b.rule && a.line == b.line && a.column == b.column);
+    fingerprints(&ctx, &mut issues);
 
     Ok(FileAnalysis {
         path: path.to_string(),
@@ -109,7 +114,39 @@ pub(crate) fn analyze(
         code_lines: scan.code_lines,
         tokens: scan.tokens,
         has_syntax_errors: root.has_error(),
+        sha256: Digest(sha2::Sha256::digest(bytes).into()),
     })
+}
+
+/// Gives each issue an identity that survives re-scans: a hash of the rule,
+/// the path, the flagged line's text with all whitespace removed, and how
+/// many earlier issues in the file share those three. So edits elsewhere in
+/// the file, moving the line and re-indenting it keep the fingerprint;
+/// changing the flagged line itself does not. `issues` must be sorted.
+fn fingerprints(ctx: &Ctx, issues: &mut [Issue]) {
+    let mut seen: HashMap<(&str, String), u64> = HashMap::new();
+    for issue in issues {
+        let line: String = ctx
+            .lines
+            .text(issue.line - 1)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let mut hasher = sha2::Sha256::new();
+        // Length-prefixed fields, so no two different inputs hash the same
+        // bytes; the tag lets the algorithm change without silent collisions.
+        for field in ["sonda-fingerprint-v1", issue.rule, ctx.path, &line] {
+            hasher.update((field.len() as u64).to_le_bytes());
+            hasher.update(field.as_bytes());
+        }
+        let occurrence = seen.entry((issue.rule, line)).or_insert(0);
+        hasher.update(occurrence.to_le_bytes());
+        *occurrence += 1;
+        let hash = hasher.finalize();
+        let mut short = [0; 16];
+        short.copy_from_slice(&hash[..16]);
+        issue.fingerprint = Digest(short);
+    }
 }
 
 struct Ctx<'a> {
@@ -134,6 +171,8 @@ impl<'a> Ctx<'a> {
             end_column: self.lines.char_column(end.row, end.column),
             effort_minutes: effort,
             is_new: true,
+            // Set once the file's issues are final; see `fingerprints`.
+            fingerprint: Fingerprint::default(),
         }
     }
 
@@ -899,5 +938,55 @@ pub(crate) mod tests {
                 check_invariants(&a).map_err(|e| TestCaseError::fail(format!("{lang:?}: {e}")))?;
             }
         }
+    }
+
+    fn fingerprints_of(path: &str, src: &str) -> Vec<String> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let a = analyze(path, Lang::JavaScript, src, &rules, &cfg, far_deadline()).unwrap();
+        a.issues.iter().map(|i| i.fingerprint.to_string()).collect()
+    }
+
+    /// The algorithm is a contract with every server that stored issues:
+    /// changing it makes all of them look fixed and re-opened. The expected
+    /// values were computed independently (Python's hashlib) from the spec
+    /// in `fingerprints`.
+    #[test]
+    fn fingerprint_and_file_hash_are_pinned() {
+        assert_eq!(
+            fingerprints_of("t", "var x = 1;\n"),
+            ["04d724dbbd800b9d4c64c4649cd55415"]
+        );
+        let a = run(Lang::JavaScript, "var x = 1;\n");
+        assert_eq!(
+            a.sha256.to_string(),
+            "b9a604979c9b2929d86fca2e07b2af1d125ab5e9de226bda1ed91caa417724d3"
+        );
+    }
+
+    #[test]
+    fn fingerprint_survives_moves_and_reindentation() {
+        let before = fingerprints_of("t", "var x = 1;\n");
+        let after = fingerprints_of("t", "// a new comment\n\nfunction f() {}\n    var  x=1;\n");
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn fingerprint_changes_with_the_flagged_line_or_the_path() {
+        let base = fingerprints_of("t", "var x = 1;\n");
+        assert_ne!(base, fingerprints_of("t", "var x = 2;\n"));
+        assert_ne!(base, fingerprints_of("u", "var x = 1;\n"));
+    }
+
+    #[test]
+    fn identical_lines_get_distinct_stable_fingerprints() {
+        let two = fingerprints_of("t", "var x = 1;\nvar x = 1;\n");
+        assert_eq!(two.len(), 2);
+        assert_ne!(two[0], two[1]);
+        // Inserting code between them changes neither.
+        assert_eq!(
+            two,
+            fingerprints_of("t", "var x = 1;\nlet y = 2;\nvar x = 1;\n")
+        );
     }
 }

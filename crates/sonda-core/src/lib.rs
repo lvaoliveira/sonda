@@ -1,18 +1,18 @@
 //! sonda — open-source static analysis and quality gates.
 //!
 //! ```no_run
-//! # fn main() -> Result<(), sonda::Error> {
+//! # fn main() -> Result<(), sonda_core::Error> {
 //! use std::path::Path;
 //! let root = Path::new(".");
-//! let config = sonda::load_config(None, root)?;
-//! let options = sonda::ScanOptions {
+//! let config = sonda_core::load_config(None, root)?;
+//! let options = sonda_core::ScanOptions {
 //!     root: root.to_path_buf(),
 //!     new_code_ref: Some("origin/main".into()),
 //!     ..Default::default()
 //! };
-//! let outcome = sonda::run(&options, &config)?;
-//! let report = sonda::report::build(&outcome, false);
-//! print!("{}", sonda::report::render(&report, sonda::report::Format::Text));
+//! let outcome = sonda_core::run(&options, &config)?;
+//! let report = sonda_core::report::build(&outcome, false);
+//! print!("{}", sonda_core::report::render(&report, sonda_core::report::Format::Text));
 //! # Ok(())
 //! # }
 //! ```

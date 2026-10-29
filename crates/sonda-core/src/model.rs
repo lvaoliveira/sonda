@@ -158,4 +158,33 @@ pub struct Issue {
     pub effort_minutes: u32,
     /// Whether the issue sits on a line that counts as new code.
     pub is_new: bool,
+    /// The issue's identity across scans; see `analysis::fingerprints`.
+    pub fingerprint: Fingerprint,
+}
+
+/// A hash, serialized as lowercase hex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Digest<const N: usize>(pub [u8; N]);
+
+/// Identifies an issue across scans: 128 bits of SHA-256.
+pub type Fingerprint = Digest<16>;
+/// The SHA-256 of a file's analyzed bytes.
+pub type Sha256 = Digest<32>;
+
+impl<const N: usize> Default for Digest<N> {
+    fn default() -> Self {
+        Self([0; N])
+    }
+}
+
+impl<const N: usize> std::fmt::Display for Digest<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+    }
+}
+
+impl<const N: usize> Serialize for Digest<N> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
 }

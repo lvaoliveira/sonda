@@ -46,6 +46,9 @@ pub fn render(r: &Report) -> String {
                         }
                     }
                 }],
+                // Lets GitHub and other SARIF consumers track the issue
+                // across commits, instead of matching on its line number.
+                "partialFingerprints": { "sonda/v1": i.fingerprint.to_string() },
                 "properties": {
                     "severity": i.severity.as_str(),
                     "category": i.category.as_str(),

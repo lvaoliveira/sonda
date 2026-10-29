@@ -25,6 +25,7 @@ Windows:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
+cargo test --workspace --doc
 cargo doc --workspace --lib --no-deps
 cargo run -q -- rules --format markdown | diff - docs/rules.md
 cargo deny check && cargo audit
