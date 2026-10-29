@@ -10,6 +10,6 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     if let Ok(src) = std::str::from_utf8(rest) {
-        sonda::fuzzing::analyze(selector, src);
+        sonda_core::fuzzing::analyze(selector, src);
     }
 });

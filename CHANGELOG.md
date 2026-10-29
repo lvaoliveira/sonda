@@ -25,7 +25,9 @@ file, the report formats and the public library API.
 - `sonda rules` and `sonda init` commands.
 - `-v`/`-vv`/`-vvv` (or `RUST_LOG`) for structured logs on stderr: phase
   timings, counts, and skipped files.
-- A library API: `sonda::run`, `sonda::load_config`, and `sonda::Error`.
+- A library API in the `sonda-core` crate: `sonda_core::run`,
+  `sonda_core::load_config`, and `sonda_core::Error`. The `sonda` crate is
+  the CLI.
 - Files are parsed in worker processes (ADR-0003), so a crash in a
   tree-sitter grammar costs only that file. `--no-isolation` parses
   in-process; `--jobs N` limits parallelism. Overhead measured at +6% on

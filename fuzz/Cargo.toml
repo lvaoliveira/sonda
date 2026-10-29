@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-sonda = { path = "..", features = ["fuzzing"] }
+sonda-core = { path = "../crates/sonda-core", features = ["fuzzing"] }
 
 # Its own workspace, so the main crate's builds and checks ignore it.
 [workspace]

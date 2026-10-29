@@ -9,7 +9,7 @@ on:
         description: Seconds to fuzz each target
         default: "1200"
   pull_request:
-    paths: ["fuzz/**", "src/**", "Cargo.lock"]
+    paths: ["fuzz/**", "crates/sonda-core/**", "Cargo.lock"]
 
 permissions:
   contents: read

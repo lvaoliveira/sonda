@@ -16,14 +16,16 @@ Overview and usage: [`README.md`](README.md).
   becomes a warning.
 - **Deterministic output**: same input and config give a byte-identical report. Sort everything
   that reaches output, and never let `HashMap` order or thread scheduling leak into it.
+- Crates: `crates/sonda-core` (the library: everything below) and `crates/sonda` (the CLI,
+  `main.rs` only). The core never depends on clap, anyhow or the CLI.
 - Layering ([ADR-0001](docs/adr/0001-architecture.md)): interface (`main`, `report`) →
   application (`lib.rs`: `run`, `load_config`) → infrastructure (`scanner`, `git`, `worker`) → domain
   (`project`, `measures`, `gate`, `analysis`, `duplication`, `rules`, `newcode`, `coverage`,
   `config`) → shared types (`model`, `lang`). Domain does no I/O. The `architecture` tests in
   `lib.rs` enforce this; fix the code, not the test.
-- Library errors are the typed `sonda::Error`; per-file problems become warnings, never errors.
+- Library errors are the typed `sonda_core::Error`; per-file problems become warnings, never errors.
   `anyhow` only in `main.rs`. Keep tree-sitter and clap types out of the public API.
-- No `unsafe`, except `src/sandbox/macos.rs` (ADR-0004: `sandbox_init` FFI, with a safety argument).
+- No `unsafe`, except `crates/sonda-core/src/sandbox/macos.rs` (ADR-0004: `sandbox_init` FFI, with a safety argument).
   No `unwrap`/`expect` on production paths without a comment stating the invariant.
   No `panic!` for recoverable errors.
 - Every query rule ships `bad`/`good` examples (they are tests). Every bug fix ships a regression test.
@@ -39,9 +41,9 @@ Overview and usage: [`README.md`](README.md).
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-cargo doc --no-deps
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
+cargo doc --workspace --lib --no-deps
 cargo run -q -- rules --format markdown | diff - docs/rules.md
 ```
 

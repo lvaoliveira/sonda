@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use sonda::config;
-use sonda::report::{self, Format};
-use sonda::rules::{self, RULES};
-use sonda::{Isolation, SandboxMode, ScanOptions};
+use sonda_core::config;
+use sonda_core::report::{self, Format};
+use sonda_core::rules::{self, RULES};
+use sonda_core::{Isolation, SandboxMode, ScanOptions};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -150,6 +150,7 @@ fn init_logging(verbose: u8) {
         2 => "debug",
         _ => "trace",
     };
+    // Targets match by prefix, so `sonda` also covers the library's `sonda_core`.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(format!("sonda={level}")));
     tracing_subscriber::fmt()
@@ -186,7 +187,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Worker { sandbox } => {
-            sonda::serve_worker(sandbox.into())?;
+            sonda_core::serve_worker(sandbox.into())?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Init { path, force } => {
@@ -206,7 +207,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
 }
 
 fn scan(args: ScanArgs) -> Result<ExitCode> {
-    let cfg = sonda::load_config(args.config.as_deref(), &args.path)?;
+    let cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
     let isolation = if args.no_isolation {
         Isolation::InProcess
     } else {
@@ -223,7 +224,7 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         isolation,
         jobs: args.jobs,
     };
-    let outcome = sonda::run(&opts, &cfg)?;
+    let outcome = sonda_core::run(&opts, &cfg)?;
     let passed = outcome.gate.passed;
     let rendered = report::render(&report::build(&outcome, args.only_new), args.format.into());
 

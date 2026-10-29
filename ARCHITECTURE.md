@@ -6,7 +6,7 @@ in the ADRs in [`docs/adr/`](docs/adr/).
 ## Pipeline
 
 ```
-sonda::run
+sonda_core::run
   ├─ RuleSet::new           compile each enabled rule's tree-sitter query (once)
   └─ scanner::scan
        ├─ collect_files     walk the root (.gitignore + scan.exclude, no symlinks), sort by path
@@ -22,10 +22,22 @@ sonda::run
 report::build / render     → text, JSON, SARIF
 ```
 
+## Crates
+
+A Cargo workspace ([ADR-0005](docs/adr/0005-sonda-server.md)):
+
+| Crate | What |
+|---|---|
+| `crates/sonda-core` | The library: every module below except `main.rs`. No clap, no anyhow. |
+| `crates/sonda` | The CLI binary: `main.rs` and its end-to-end tests (`tests/cli.rs`). |
+
+The coming `sonda-server` crate depends on `sonda-core` too, so the CLI and
+the server share one rule catalog and one report model.
+
 ## Layers
 
 Dependencies only point down ([ADR-0001](docs/adr/0001-architecture.md)).
-The `architecture` tests in `src/lib.rs` enforce this.
+The `architecture` tests in `crates/sonda-core/src/lib.rs` enforce this.
 
 | Layer | Modules | Responsibility |
 |---|---|---|
@@ -46,7 +58,7 @@ The `architecture` tests in `src/lib.rs` enforce this.
 It depends only on the API contract in `web/src/api/types.ts`, which a mock
 adapter serves today. A future `sonda server` will implement the same
 contract by storing CLI reports, so the app needs no changes when real data
-arrives. The contract's names follow `src/model.rs` (`code_smell`,
+arrives. The contract's names follow `crates/sonda-core/src/model.rs` (`code_smell`,
 `vulnerability`, severity levels).
 
 ## Cross-cutting concerns
@@ -78,7 +90,7 @@ proven otherwise ([SECURITY.md](SECURITY.md)):
   speed. It is always reported as a warning.
 
 **Errors.**
-- A failure that stops the run is a typed `sonda::Error`: config, invalid
+- A failure that stops the run is a typed `sonda_core::Error`: config, invalid
   argument, I/O on a file the user named, git, or internal.
 - A problem with one analyzed file is a `FileError` or a skip reason, and
   becomes a report warning.
@@ -95,7 +107,7 @@ proven otherwise ([SECURITY.md](SECURITY.md)):
 
 ## Extension points
 
-- **A new rule** is a `Rule` entry in `src/rules/catalog.rs`
+- **A new rule** is a `Rule` entry in `crates/sonda-core/src/rules/catalog.rs`
   ([CONTRIBUTING.md](CONTRIBUTING.md#adding-a-rule)).
 - **A new language** needs:
   - its grammar crate
