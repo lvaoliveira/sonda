@@ -13,7 +13,7 @@ pub(crate) struct Coverage {
 }
 
 impl Coverage {
-    /// Adds one LCOV report. Absolute `SF:` paths are made relative to the
+    /// Adds one LCOV report. `SF:` paths under a root are made relative to the
     /// first of `roots` they are under (pass the scan root as given and
     /// canonicalized, so symlinked roots such as macOS `/tmp` match).
     pub(crate) fn merge_lcov(&mut self, text: &str, roots: &[&Path]) {
@@ -40,14 +40,13 @@ impl Coverage {
 }
 
 fn relative_path(p: &Path, roots: &[&Path]) -> String {
-    let rel = if p.is_absolute() {
-        roots
-            .iter()
-            .find_map(|r| p.strip_prefix(r).ok())
-            .unwrap_or(p)
-    } else {
-        p
-    };
+    // Not gated on `is_absolute()`: on Windows a path like `/repo/a.js` has
+    // no drive letter, so it is not "absolute", yet it can still start with
+    // the scan root. A relative path never matches an absolute root.
+    let rel = roots
+        .iter()
+        .find_map(|r| p.strip_prefix(r).ok())
+        .unwrap_or(p);
     rel.components()
         .filter(|c| !matches!(c, Component::CurDir))
         .map(|c| c.as_os_str().to_string_lossy())
