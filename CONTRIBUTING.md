@@ -8,7 +8,7 @@ the bar every change must meet. Report security issues privately: see
 ## Setup
 
 Install Rust with [rustup](https://rustup.rs). The minimum supported version
-is 1.90 (see `rust-version` in `Cargo.toml`).
+is 1.90 (see `rust-version` in the root `Cargo.toml`).
 
 ```sh
 cargo build
@@ -23,9 +23,9 @@ Windows:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-cargo doc --no-deps
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
+cargo doc --workspace --lib --no-deps
 cargo run -q -- rules --format markdown | diff - docs/rules.md
 cargo deny check && cargo audit
 ```
@@ -56,7 +56,7 @@ Please make sure your change also follows these:
 
 Most rules are a tree-sitter query that captures the offending node as
 `@match`, plus an optional filter function. Add the rule to
-`src/rules/catalog.rs`:
+`crates/sonda-core/src/rules/catalog.rs`:
 
 ```rust
 Rule {
@@ -110,14 +110,14 @@ On Linux, add `-fsanitize=address` to it, and set `CC=clang`, to also catch
 memory errors in the C code. That flag doesn't work with Apple clang.
 
 The `Fuzz` workflow runs both targets weekly with AddressSanitizer, and for
-60 seconds on pull requests that touch `src/` or `fuzz/`. A crash is saved
+60 seconds on pull requests that touch `crates/sonda-core/` or `fuzz/`. A crash is saved
 as a workflow artifact. Reproduce it with `cargo +nightly fuzz run <target>
 <file>`, then turn it into a regression test.
 
 ## The worker sandbox
 
 The warning "killed by the sandbox" means a worker made a system call
-outside the Linux allow-list (`src/sandbox/linux.rs`). This usually follows
+outside the Linux allow-list (`crates/sonda-core/src/sandbox/linux.rs`). This usually follows
 a dependency or std update. To find the call:
 1. Reproduce with `--jobs 1`.
 2. Compare against `--sandbox off`.

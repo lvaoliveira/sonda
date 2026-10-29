@@ -1,26 +1,28 @@
-[package]
-name = "sonda"
+[workspace]
+members = ["crates/sonda-core", "crates/sonda"]
+resolver = "3"
+
+# Shared by every crate, so versions and metadata cannot drift apart.
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-description = "Open-source static analysis and quality gates for JavaScript/TypeScript, Python, Java and C/C++"
 license = "MIT OR Apache-2.0"
-readme = "README.md"
-keywords = ["static-analysis", "linter", "code-quality", "sarif", "tree-sitter"]
-categories = ["command-line-utilities", "development-tools"]
+repository = "https://github.com/lvaoliveira/sonda"
 
-[features]
-# Entry points for the fuzz targets in fuzz/. Not part of the public API.
-fuzzing = []
-
-[dependencies]
+[workspace.dependencies]
+sonda-core = { path = "crates/sonda-core", version = "0.1.0" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 ignore = "0.4.34"
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 rayon = "1.12.0"
+rustix = { version = "1.1.6", features = ["fs", "process"] }
+seccompiler = { version = "0.5.0", features = ["json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 similar = "3.2.1"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 toml = "1.1.8"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
@@ -32,13 +34,3 @@ tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-typescript = "0.23.2"
-
-[dev-dependencies]
-proptest = { version = "1.12.0", default-features = false, features = ["std"] }
-tempfile = "3.27.0"
-
-[target."cfg(unix)".dependencies]
-rustix = { version = "1.1.6", features = ["fs", "process"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-seccompiler = { version = "0.5.0", features = ["json"] }

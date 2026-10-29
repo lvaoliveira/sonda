@@ -39,7 +39,7 @@ Quality gate: FAILED
 ## Install
 
 ```sh
-cargo install --path .
+cargo install --path crates/sonda
 ```
 
 ## Usage

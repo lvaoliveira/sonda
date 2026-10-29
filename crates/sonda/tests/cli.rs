@@ -272,6 +272,16 @@ fn init_writes_a_working_config_once() {
     assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
 }
 
+/// The library's events have the target `sonda_core`, not `sonda`; `-v` must
+/// still show them.
+#[test]
+fn verbose_shows_the_librarys_log_events() {
+    let dir = project(&[("a.py", "x = 1\n")]);
+    let out = run(&["-v", "scan"], dir.path());
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stderr(&out).contains("compiled rules"), "{}", stderr(&out));
+}
+
 #[test]
 fn rules_command_lists_every_rule() {
     let text = stdout(&sonda().arg("rules").output().unwrap());

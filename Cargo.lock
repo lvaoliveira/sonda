@@ -614,6 +614,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
+ "sonda-core",
+ "tempfile",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sonda-core"
+version = "0.1.0"
+dependencies = [
  "ignore",
  "proptest",
  "rayon",
@@ -626,7 +636,6 @@ dependencies = [
  "thiserror",
  "toml",
  "tracing",
- "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-cpp",
