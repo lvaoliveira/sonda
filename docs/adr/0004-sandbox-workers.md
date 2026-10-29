@@ -56,6 +56,16 @@ process**, which the parent already reports as "the parser crashed" for that
 file. In particular, `open`/`openat`, `socket`/`connect` and `execve` all
 kill the worker.
 
+**Amended during implementation:** `openat` returns `EACCES` instead of
+killing the worker. A second, stacked filter does that, and the kernel applies
+the stricter result of the two filters. Libraries probe optional files and
+fall back when the probe fails. For example, the `regex` crate used by
+`#match?` predicates (java/weak-hash) calls std's CPU-count probe, which
+reads cgroup limits under `/proc` and `/sys`. Killing on those probes lost
+every Java file. The worker still cannot open anything. `sched_getaffinity`
+(its own CPU mask) is allowed for the same probe. A CI job that traced
+workers under `strace` found both.
+
 Landlock is deliberately *not* used. With `openat` denied outright, a
 filesystem rule set adds nothing, and leaving it out saves a dependency and
 a kernel-version matrix.
@@ -135,6 +145,31 @@ profile forbids installing filters, or a future macOS.
    makes an unavailable sandbox fatal.
 3. `seccompiler` (Linux) and `rustix` (Unix) are accepted. `rustix` replaces
    the direct `libc` dependency.
+
+## Result (implemented)
+
+**Verified in CI on Linux and macOS:**
+- The escape test (read `/etc/hosts`, connect to a local listener, run
+  `/bin/sh`) is blocked. It also runs with the sandbox off, where every
+  attempt must succeed, so the test cannot pass vacuously.
+- Reports are byte-identical with and without isolation in the CLI suite,
+  which covers all seven languages.
+- On macOS, each layer was disabled in turn: Seatbelt alone blocks all three
+  attempts, the resource limits alone do too, and with neither the test
+  fails.
+
+**Overhead** (release build, macOS, medians):
+
+| Project | Sandbox off | Sandbox on | Difference |
+|---|---|---|---|
+| arandu, 29k lines | 90 ms | 98 ms | +8 ms (paid once per worker) |
+| 1.0M lines | 2.20 s | 2.12 s | within noise |
+
+**Found on the way:**
+- `openat` probes made by libraries (see the amendment above).
+- Installing the second filter after the allow-list was killed by the
+  allow-list itself (`prctl` and `seccomp`). The allow-list is now
+  installed last.
 
 ## Consequences
 

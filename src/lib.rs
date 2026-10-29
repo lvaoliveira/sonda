@@ -21,7 +21,8 @@
 //!
 //! - interface: `report` (and the `sonda` binary)
 //! - application: this module ([`run`], [`load_config`])
-//! - infrastructure: `scanner` (filesystem), `git`, `worker` (processes)
+//! - infrastructure: `scanner` (filesystem), `git`, `worker` (processes),
+//!   `sandbox`
 //! - domain: `project`, `measures`, `gate`, `analysis`, `duplication`,
 //!   `rules`, `newcode`, `coverage`, `config` — no I/O
 //! - shared types: `model`, `lang`
@@ -41,6 +42,7 @@ mod git;
 mod measures;
 mod newcode;
 mod project;
+mod sandbox;
 mod scanner;
 mod worker;
 
@@ -48,6 +50,7 @@ pub use error::Error;
 pub use gate::{ConditionResult, GateResult, Status};
 pub use measures::Measures;
 pub use project::ProjectAnalysis;
+pub use sandbox::SandboxMode;
 pub use scanner::{Isolation, ScanOptions};
 
 use config::Config;
@@ -90,8 +93,8 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
 /// stdin and answers on stdout until stdin closes. The `sonda` binary calls
 /// this for its hidden `__worker` subcommand.
 #[doc(hidden)]
-pub fn serve_worker() -> Result<(), Error> {
-    worker::serve(std::io::stdin().lock(), std::io::stdout().lock())
+pub fn serve_worker(sandbox: SandboxMode) -> Result<(), Error> {
+    worker::serve(std::io::stdin().lock(), std::io::stdout().lock(), sandbox)
 }
 
 /// Loads `explicit` if given, else `<root>/sonda.toml` if it exists, else

@@ -4,7 +4,9 @@
 //!
 //! Protocol over the worker's stdin/stdout: frames of a little-endian `u64`
 //! length followed by the payload. The first frame to a worker is the config
-//! as JSON; then each request frame (one file) gets one response frame.
+//! as JSON; the worker then enters its sandbox (ADR-0004) and answers with a
+//! ready frame saying how far that got. After that, each request frame (one
+//! file) gets one response frame.
 //! The parent reads files itself (size cap, swap checks) and sends only
 //! source text, and it decodes responses defensively: a compromised worker
 //! could send anything.
@@ -15,11 +17,12 @@ use crate::error::Error;
 use crate::lang::Lang;
 use crate::model::{FileMetrics, Issue, Severity};
 use crate::rules::{self, RuleSet};
+use crate::sandbox::{self, SandboxMode, Status};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -303,6 +306,40 @@ fn decode_response(
     Ok(Ok(analysis))
 }
 
+fn encode_ready(status: &Status) -> Vec<u8> {
+    let mut e = Enc::default();
+    match status {
+        Status::Full => e.u8(0),
+        Status::Partial(reason) => {
+            e.u8(1);
+            e.str(reason);
+        }
+        Status::Unsupported => e.u8(2),
+        Status::Off => e.u8(3),
+    }
+    e.0
+}
+
+fn decode_ready(buf: &[u8]) -> Result<Status, Malformed> {
+    let mut d = Dec(buf);
+    let status = match d.u8()? {
+        0 => Status::Full,
+        1 => Status::Partial(d.str()?.to_string()),
+        2 => Status::Unsupported,
+        3 => Status::Off,
+        _ => return Err("unknown sandbox status".into()),
+    };
+    d.finish()?;
+    Ok(status)
+}
+
+fn encode_error(message: &str) -> Vec<u8> {
+    let mut e = Enc::default();
+    e.u8(1);
+    e.str(message);
+    e.0
+}
+
 fn max_request_bytes(config: &Config) -> u64 {
     // Source plus path and fixed fields.
     config
@@ -325,9 +362,9 @@ fn max_response_bytes(config: &Config) -> u64 {
 
 // ----------------------------------------------------------- worker side
 
-/// Runs a worker: reads the config, then answers one request per file until
-/// the parent closes the input.
-pub(crate) fn serve(input: impl Read, output: impl Write) -> Result<(), Error> {
+/// Runs a worker: reads the config, enters the sandbox, reports on it, then
+/// answers one request per file until the parent closes the input.
+pub(crate) fn serve(input: impl Read, output: impl Write, mode: SandboxMode) -> Result<(), Error> {
     let io_error = |e: io::Error| Error::Internal(format!("worker I/O: {e}"));
     let (mut input, mut output) = (BufReader::new(input), BufWriter::new(output));
     let Some(frame) = read_frame(&mut input, MAX_CONFIG_FRAME).map_err(io_error)? else {
@@ -337,14 +374,54 @@ pub(crate) fn serve(input: impl Read, output: impl Write) -> Result<(), Error> {
         .map_err(|e| Error::Internal(format!("worker config: {e}")))?;
     let rules = RuleSet::new(&config.rules)?;
     let limit = max_request_bytes(&config);
+    // Everything that needs the outside world is done: lock down before
+    // reading the first (untrusted) file.
+    let status = sandbox::enter(mode);
+    write_frame(&mut output, &encode_ready(&status)).map_err(io_error)?;
     while let Some(frame) = read_frame(&mut input, limit).map_err(io_error)? {
         let (path, lang, timeout, src) =
             decode_request(&frame).map_err(|e| Error::Internal(format!("worker request: {e}")))?;
         abort_on_test_marker(src);
-        let result = analysis::analyze(path, lang, src, &rules, &config, Instant::now() + timeout);
-        write_frame(&mut output, &encode_response(&result)).map_err(io_error)?;
+        let response = match try_escape_on_test_marker(src) {
+            Some(report) => encode_error(&report),
+            None => {
+                let deadline = Instant::now() + timeout;
+                encode_response(&analysis::analyze(
+                    path, lang, src, &rules, &config, deadline,
+                ))
+            }
+        };
+        write_frame(&mut output, &response).map_err(io_error)?;
     }
     Ok(())
+}
+
+/// Test seam, debug builds only: on a file containing the value of
+/// `SONDA_TEST_WORKER_ESCAPE`, a worker tries to read a file, connect to
+/// `SONDA_TEST_WORKER_ESCAPE_PORT` on localhost and run `/bin/sh`, and reports
+/// which attempts succeeded. Inside the sandbox each must fail (or the
+/// attempt kills the worker).
+fn try_escape_on_test_marker(_src: &str) -> Option<String> {
+    #[cfg(debug_assertions)]
+    if let Some(marker) = std::env::var_os("SONDA_TEST_WORKER_ESCAPE")
+        && let Some(marker) = marker.to_str()
+        && !marker.is_empty()
+        && _src.contains(marker)
+    {
+        let read = std::fs::read("/etc/hosts").is_ok();
+        let connect = std::env::var("SONDA_TEST_WORKER_ESCAPE_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .is_some_and(|port| std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+        let exec = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .status()
+            .is_ok_and(|s| s.success());
+        return Some(format!(
+            "escape attempt: read={read} connect={connect} exec={exec}"
+        ));
+    }
+    None
 }
 
 /// Test seam, debug builds only: a worker aborts on a file containing the
@@ -375,6 +452,9 @@ pub(crate) struct WorkerPool<'a> {
     deadline: Duration,
     /// Workers (and threads driving them); `None` uses every CPU.
     jobs: Option<NonZeroUsize>,
+    sandbox: SandboxMode,
+    /// Whether the "not fully sandboxed" warning was already logged.
+    warned: AtomicBool,
 }
 
 impl<'a> WorkerPool<'a> {
@@ -383,6 +463,7 @@ impl<'a> WorkerPool<'a> {
         config: &Config,
         file_timeout: Duration,
         jobs: Option<NonZeroUsize>,
+        sandbox: SandboxMode,
     ) -> Result<Self, Error> {
         let config_frame = serde_json::to_vec(config)
             .map_err(|e| Error::Internal(format!("serializing config for workers: {e}")))?;
@@ -393,6 +474,8 @@ impl<'a> WorkerPool<'a> {
             file_timeout,
             deadline: file_timeout.saturating_add(GRACE),
             jobs,
+            sandbox,
+            warned: AtomicBool::new(false),
         })
     }
 
@@ -451,11 +534,17 @@ impl<'a> WorkerPool<'a> {
     ) -> Result<Result<FileAnalysis, String>, Error> {
         let worker = match slot {
             Some(w) => w,
-            None => slot.insert(Worker::start(
-                self.program,
-                &self.config_frame,
-                self.max_response,
-            )?),
+            None => {
+                let (worker, status) = Worker::start(
+                    self.program,
+                    self.sandbox,
+                    &self.config_frame,
+                    self.max_response,
+                    self.deadline,
+                )?;
+                self.check_sandbox(status)?;
+                slot.insert(worker)
+            }
         };
         let request = encode_request(path, lang, self.file_timeout, &src);
         let failure = match worker.ask(&request, self.deadline) {
@@ -472,6 +561,24 @@ impl<'a> WorkerPool<'a> {
     }
 }
 
+impl WorkerPool<'_> {
+    /// Applies the sandbox mode to what a new worker reported.
+    fn check_sandbox(&self, status: Status) -> Result<(), Error> {
+        let gap = match status {
+            Status::Full | Status::Off => return Ok(()),
+            Status::Partial(reason) => reason,
+            Status::Unsupported => "this platform has no worker sandbox".into(),
+        };
+        if self.sandbox == SandboxMode::Require {
+            return Err(Error::Sandbox(gap));
+        }
+        if !self.warned.swap(true, Ordering::Relaxed) {
+            tracing::warn!("analysis workers are not fully sandboxed: {gap}");
+        }
+        Ok(())
+    }
+}
+
 struct Worker {
     child: Child,
     stdin: ChildStdin,
@@ -479,9 +586,15 @@ struct Worker {
 }
 
 impl Worker {
-    fn start(program: &Path, config_frame: &[u8], max_response: u64) -> Result<Worker, Error> {
+    fn start(
+        program: &Path,
+        sandbox: SandboxMode,
+        config_frame: &[u8],
+        max_response: u64,
+        deadline: Duration,
+    ) -> Result<(Worker, Status), Error> {
         let mut child = Command::new(program)
-            .arg(WORKER_COMMAND)
+            .args([WORKER_COMMAND, "--sandbox", sandbox.as_arg()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -519,19 +632,27 @@ impl Worker {
             stdin,
             replies,
         };
+        let startup_failure = |w: &mut Worker, detail: String| {
+            let reason = w.exit_status().map_or(detail, |s| describe_exit(&s));
+            Error::Internal(format!("analysis worker failed at startup: {reason}"))
+        };
         if let Err(e) = write_frame(&mut worker.stdin, config_frame) {
-            return Err(Error::Internal(format!(
-                "analysis worker exited at startup: {}",
-                worker.exit_reason().unwrap_or_else(|| e.to_string())
-            )));
+            return Err(startup_failure(&mut worker, e.to_string()));
         }
-        Ok(worker)
+        let status = match worker.replies.recv_timeout(deadline) {
+            Ok(Ok(frame)) => decode_ready(&frame).map_err(|e| {
+                Error::Internal(format!("analysis worker sent an invalid ready frame ({e})"))
+            })?,
+            Ok(Err(e)) => return Err(startup_failure(&mut worker, e.to_string())),
+            Err(_) => return Err(startup_failure(&mut worker, "no ready frame".into())),
+        };
+        Ok((worker, status))
     }
 
     /// Sends one request and waits up to `deadline` for its answer.
     fn ask(&mut self, request: &[u8], deadline: Duration) -> Result<Vec<u8>, String> {
-        let crashed = |w: &mut Worker| match w.exit_reason() {
-            Some(status) => format!("the parser crashed ({status})"),
+        let crashed = |w: &mut Worker| match w.exit_status() {
+            Some(status) => describe_exit(&status),
             None => "the parser crashed".to_string(),
         };
         if write_frame(&mut self.stdin, request).is_err() {
@@ -550,10 +671,24 @@ impl Worker {
     /// The exit status. Kills the process first: a worker that closed its
     /// output but kept running must not make the parent wait forever. If it
     /// already exited, the kill does nothing and its own status is reported.
-    fn exit_reason(&mut self) -> Option<String> {
+    fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
         let _ = self.child.kill();
-        self.child.wait().ok().map(|s| s.to_string())
+        self.child.wait().ok()
     }
+}
+
+/// Why a worker died, telling a sandbox kill (SIGSYS from the seccomp
+/// filter) from an ordinary crash.
+fn describe_exit(status: &std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if status.signal() == Some(rustix::process::Signal::SYS.as_raw()) {
+            return "the parser was killed by the sandbox (a system call outside its allow-list)"
+                .into();
+        }
+    }
+    format!("the parser crashed ({status})")
 }
 
 impl Drop for Worker {
@@ -717,19 +852,31 @@ mod tests {
         }
     }
 
-    /// A stand-in worker program; `script` replaces the real protocol.
+    /// A stand-in worker program. It waits for the config (sent at startup),
+    /// answers with a ready frame ("sandbox off"), then runs `script`. The
+    /// config frame is far smaller than a pipe buffer, so once its first byte
+    /// is readable the parent's write has completed.
     #[cfg(unix)]
     fn fake_worker(dir: &Path, script: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join("worker.sh");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        let ready = r"printf '\001\000\000\000\000\000\000\000\003'";
+        let body = format!("#!/bin/sh\ndd bs=1 count=1 >/dev/null 2>&1\n{ready}\n{script}\n");
+        std::fs::write(&path, body).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
 
     #[cfg(unix)]
     fn run_pool(program: &Path, deadline: Duration) -> Vec<Result<FileAnalysis, String>> {
-        let mut pool = WorkerPool::new(program, &CONFIG, Duration::from_secs(1), None).unwrap();
+        let mut pool = WorkerPool::new(
+            program,
+            &CONFIG,
+            Duration::from_secs(1),
+            None,
+            SandboxMode::Off,
+        )
+        .unwrap();
         pool.deadline = deadline;
         let items = ["a.js", "b.js", "c.js"];
         pool.run(&items, |p| {
@@ -742,15 +889,8 @@ mod tests {
     #[test]
     fn a_worker_that_crashes_only_loses_its_file() {
         let dir = tempfile::tempdir().unwrap();
-        // Die only after the config (sent at startup) has arrived, so the
-        // crash happens on a file request. Exiting at once races the config
-        // write, and a worker that cannot start is a run error by design.
-        // The config frame is far smaller than a pipe buffer, so once its
-        // first byte is readable the parent's write has completed.
-        let program = fake_worker(
-            dir.path(),
-            "dd bs=1 count=1 >/dev/null 2>&1; sleep 0.2; exit 3",
-        );
+        // Dies once the first file request has been sent.
+        let program = fake_worker(dir.path(), "sleep 0.2; exit 3");
         let results = run_pool(&program, Duration::from_secs(10));
         assert_eq!(results.len(), 3);
         for (r, name) in results.iter().zip(["a.js", "b.js", "c.js"]) {
@@ -766,7 +906,7 @@ mod tests {
     #[test]
     fn garbage_from_a_worker_is_a_warning_not_a_crash() {
         let dir = tempfile::tempdir().unwrap();
-        // Reads the config, then answers with an absurd frame length.
+        // Answers the first request with an absurd frame length.
         let program = fake_worker(
             dir.path(),
             "head -c 8 /dev/zero | tr '\\000' '\\377'; sleep 5",
@@ -799,12 +939,26 @@ mod tests {
     }
 
     #[test]
+    fn ready_frames_round_trip() {
+        for status in [
+            Status::Full,
+            Status::Partial("seccomp: unavailable".into()),
+            Status::Unsupported,
+            Status::Off,
+        ] {
+            assert_eq!(decode_ready(&encode_ready(&status)).unwrap(), status);
+        }
+        assert!(decode_ready(&[9]).is_err());
+    }
+
+    #[test]
     fn a_missing_worker_program_fails_the_run() {
         let pool = WorkerPool::new(
             Path::new("/no/such/sonda"),
             &CONFIG,
             Duration::from_secs(1),
             None,
+            SandboxMode::Off,
         )
         .unwrap();
         let err = pool

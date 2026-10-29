@@ -357,6 +357,54 @@ fn a_parser_crash_loses_only_that_file() {
     );
 }
 
+/// ADR-0004: inside the sandbox a worker cannot read files, connect to the
+/// network or run programs. Debug builds make a worker try all three on a
+/// file containing `SONDA_TEST_WORKER_ESCAPE`.
+#[cfg(all(debug_assertions, any(target_os = "linux", target_os = "macos")))]
+#[test]
+fn sandboxed_workers_cannot_escape() {
+    let marker = "SONDA_ESCAPE_MARKER_7";
+    // Connecting succeeds as soon as the listener exists; no accept needed.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let dir = project(&[("escape.py", &format!("x = '{marker}'\n"))]);
+    let scan = |sandbox: &str| {
+        sonda()
+            .args([
+                "scan",
+                "--no-gate",
+                "-f",
+                "json",
+                "--jobs",
+                "1",
+                "--sandbox",
+                sandbox,
+            ])
+            .arg(dir.path())
+            .env("SONDA_TEST_WORKER_ESCAPE", marker)
+            .env("SONDA_TEST_WORKER_ESCAPE_PORT", &port)
+            .output()
+            .unwrap()
+    };
+    let warning = |out: &Output| {
+        assert_eq!(code(out), 0, "{}", stderr(out));
+        json(out)["warnings"][0].as_str().unwrap().to_string()
+    };
+
+    // The seam works: without a sandbox every attempt succeeds.
+    assert_eq!(
+        warning(&scan("off")),
+        "escape.py: skipped, escape attempt: read=true connect=true exec=true"
+    );
+    // `require` fails the run unless the worker is fully sandboxed.
+    let locked = warning(&scan("require"));
+    assert!(
+        locked == "escape.py: skipped, escape attempt: read=false connect=false exec=false"
+            || locked.contains("killed by the sandbox"),
+        "{locked}"
+    );
+}
+
 /// Regression: verbose logs printed a file name's raw escape sequence to
 /// the terminal (tracing-subscriber does not escape `%`-formatted values).
 #[cfg(unix)]

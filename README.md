@@ -54,6 +54,7 @@ sonda rules                               # list rules
 sonda init                                # write a default sonda.toml
 sonda -v scan .                           # log progress to stderr (-vv, -vvv for more)
 sonda scan . --jobs 4                     # limit parallelism (default: every CPU)
+sonda scan . --sandbox require            # refuse to scan if workers cannot be sandboxed
 sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
 ```
 
@@ -157,3 +158,4 @@ sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate t
 ## License
 
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+

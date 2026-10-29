@@ -11,6 +11,7 @@ use crate::lang::Lang;
 use crate::newcode::NewCode;
 use crate::project::ProjectAnalysis;
 use crate::rules::RuleSet;
+use crate::sandbox::SandboxMode;
 use crate::worker::WorkerPool;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
@@ -45,8 +46,12 @@ pub enum Isolation {
     #[default]
     InProcess,
     /// In worker processes running `program __worker` (the `sonda`
-    /// binary). A crash only loses the file being parsed.
-    Workers { program: PathBuf },
+    /// binary). A crash only loses the file being parsed; `sandbox` says
+    /// whether the workers are also locked down (ADR-0004).
+    Workers {
+        program: PathBuf,
+        sandbox: SandboxMode,
+    },
 }
 
 pub(crate) fn scan(
@@ -118,8 +123,10 @@ fn scan_files(
                     .collect()
             })
         }
-        Isolation::Workers { program } => WorkerPool::new(program, cfg, timeout, opts.jobs)?
-            .run(&paths, |c| load(c).map(|src| (c.rel.as_str(), c.lang, src)))?,
+        Isolation::Workers { program, sandbox } => {
+            WorkerPool::new(program, cfg, timeout, opts.jobs, *sandbox)?
+                .run(&paths, |c| load(c).map(|src| (c.rel.as_str(), c.lang, src)))?
+        }
     };
 
     let mut files = Vec::with_capacity(results.len());
@@ -301,11 +308,9 @@ fn read_capped(c: &Candidate, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>
 
 #[cfg(unix)]
 fn open_nonblocking(path: &Path) -> std::io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    Ok(File::from(rustix::fs::open(path, flags, Mode::empty())?))
 }
 
 #[cfg(not(unix))]

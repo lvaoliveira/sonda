@@ -30,6 +30,9 @@ file, the report formats and the public library API.
   tree-sitter grammar costs only that file. `--no-isolation` parses
   in-process; `--jobs N` limits parallelism. Overhead measured at +6% on
   29k lines and +1% on 1M lines.
+- Analysis workers sandbox themselves (ADR-0004): a seccomp allow-list on
+  Linux and Seatbelt on macOS, plus no core dumps and no new file
+  descriptors. `--sandbox best-effort|require|off`.
 - Rule queries are compiled per language on first use, which made scans of
   a 29k-line JavaScript/C project 40% faster.
 - Fuzz targets for analysis in every grammar and for config parsing, run

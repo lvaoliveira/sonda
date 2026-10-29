@@ -19,6 +19,9 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    /// Workers had to be sandboxed (`SandboxMode::Require`) but could not be.
+    #[error("the analysis sandbox is unavailable: {0}")]
+    Sandbox(String),
     /// git failed while determining new code.
     #[error("git: {0}")]
     Git(String),
