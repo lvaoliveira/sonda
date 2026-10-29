@@ -63,6 +63,13 @@ file, the report formats and the public library API.
   - Issues are new, kept, fixed or reopened.
   - A human status survives moves, fixes and reopening.
   - `sonda upload` prints the counts the server returns.
+- `sonda-server` browser sessions and read authorization:
+  - `POST /api/session` exchanges the token for an `HttpOnly` session
+    cookie.
+  - Reads need the token or a session when the server isn't listening on
+    loopback only.
+  - `GET /api/rules` serves the rule catalog with live open-issue counts
+    per rule on each project's main branch.
 
 ### Security
 

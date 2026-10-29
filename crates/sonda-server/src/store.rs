@@ -31,15 +31,18 @@ pub struct IssueCounts {
 ///   accepted);
 /// - a tracked issue missing from this analysis is marked fixed.
 ///
-/// Analyses are ordered by arrival, not by commit date.
+/// Analyses are ordered by arrival, not by commit date. A project's first
+/// analyzed branch becomes its main branch.
 pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let project_id: i64 = sqlx::query_scalar(
-        "INSERT INTO projects (key) VALUES ($1)
-         ON CONFLICT (key) DO UPDATE SET key = EXCLUDED.key
+        "INSERT INTO projects (key, main_branch) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE
+             SET main_branch = coalesce(projects.main_branch, EXCLUDED.main_branch)
          RETURNING id",
     )
     .bind(&a.meta.project)
+    .bind(&a.meta.branch)
     .fetch_one(&mut *tx)
     .await?;
     // One ingestion per branch at a time, so concurrent uploads cannot both

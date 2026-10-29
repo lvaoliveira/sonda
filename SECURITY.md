@@ -145,6 +145,14 @@ What holds today:
     client.
   - Each upload is one transaction, so a rejected or failed upload leaves
     nothing behind.
+- **Reads need authentication off loopback.** Once the server listens
+  beyond loopback, as it does in Docker, every read needs the token or a
+  browser session.
+- **Browsers never hold the token.** Signing in exchanges it for a session
+  cookie: `__Host-` prefixed, `HttpOnly`, `Secure` and
+  `SameSite=Strict`, expiring after 12 hours. The database stores only a
+  SHA-256 hash of each session token, so a database leak yields no usable
+  session, and signing out deletes the session server-side.
 - **Migrations are all-or-nothing:** each runs in a transaction, and a
   failure stops startup.
 
