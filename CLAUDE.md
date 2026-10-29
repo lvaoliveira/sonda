@@ -44,8 +44,10 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc
+# Server database tests need PostgreSQL; without it they skip (docs/server.md):
+SONDA_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres cargo test -p sonda-server
 cargo doc --workspace --lib --no-deps
-cargo run -q -- rules --format markdown | diff - docs/rules.md
+cargo run -q -p sonda -- rules --format markdown | diff - docs/rules.md
 ```
 
 `cargo deny check`, `cargo audit` and `cargo llvm-cov` run in CI. Install them locally with

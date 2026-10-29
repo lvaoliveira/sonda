@@ -1,0 +1,9 @@
+# Allowlist: only what the image build needs reaches the build context, so
+# local secrets, build output and the fuzz corpus never do.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!web/
+web/node_modules
+web/dist

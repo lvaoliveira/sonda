@@ -66,6 +66,12 @@ Each issue in a JSON or SARIF report has a `fingerprint` that stays the same acr
 
 Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an error (bad config, unknown rule id, git failure, and so on). Use `--no-gate` to always exit 0.
 
+### Server
+
+`sonda-server` keeps analyses over time and serves the web app. It runs with
+Docker Compose, as a `sonda` container plus PostgreSQL. It's still being
+built; see [docs/server.md](docs/server.md).
+
 ### GitHub Actions
 
 ```yaml

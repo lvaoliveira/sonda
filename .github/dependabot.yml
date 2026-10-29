@@ -17,3 +17,12 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+  # Base images in Dockerfile and compose.yaml, pinned by digest.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly

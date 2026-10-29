@@ -39,7 +39,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Rules doc is up to date
-        run: cargo run -q --locked -- rules --format markdown | diff - docs/rules.md
+        run: cargo run -q --locked -p sonda -- rules --format markdown | diff - docs/rules.md
       # The fuzz crate is a separate workspace; keep it compiling between
       # the weekly fuzz runs (fuzz.yml).
       - run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
@@ -63,7 +63,17 @@ jobs:
       # --all-targets skips doctests; the library's examples must compile too.
       - run: cargo test --workspace --doc --locked
 
+  # Each crate's own rust-version: the CLI and core library stay at 1.90;
+  # the server needs 1.94 (sqlx 0.9) and ships as a Docker image anyway.
   msrv:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: "1.90" # rust-version in the root Cargo.toml
+            packages: -p sonda -p sonda-core
+          - toolchain: "1.94" # rust-version in crates/sonda-server/Cargo.toml
+            packages: -p sonda-server
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,9 +81,67 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.90" # keep in sync with rust-version in the root Cargo.toml
+          toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo check --workspace --all-targets --locked
+      - run: cargo check ${{ matrix.packages }} --all-targets --locked
+
+  # The server's database tests, against real PostgreSQL. Elsewhere they
+  # skip; here SONDA_REQUIRE_DB_TESTS turns a missing database into a failure.
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # 15 is the oldest supported version (ADR-0005); compose.yaml runs 17.
+        image: postgres:15@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      SONDA_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+      SONDA_REQUIRE_DB_TESTS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test -p sonda-server --all-targets --locked
+
+  # ADR-0005's acceptance check: `docker compose up` on a clean machine
+  # gives a working server.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker compose build
+      - name: Create throwaway secrets
+        run: |
+          mkdir -m 700 secrets
+          openssl rand -hex 32 > secrets/db_password
+          openssl rand -hex 32 > secrets/sonda_token
+          chmod 644 secrets/*
+      - run: docker compose up -d --wait
+      - name: Health, web app and API routing
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9000/api/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9000/api/health | grep -q '"ok"'
+          curl -fsS http://127.0.0.1:9000/issues | grep -qi '<!doctype html>'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/api/nope)" = 404
+      - name: Logs
+        if: always()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
 
   supply-chain:
     runs-on: ubuntu-latest

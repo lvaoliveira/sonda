@@ -12,7 +12,7 @@ is 1.90 (see `rust-version` in the root `Cargo.toml`).
 
 ```sh
 cargo build
-cargo run -- scan path/to/project
+cargo run -p sonda -- scan path/to/project
 cargo install cargo-deny cargo-audit cargo-llvm-cov   # optional, CI runs them too
 ```
 
@@ -27,7 +27,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc
 cargo doc --workspace --lib --no-deps
-cargo run -q -- rules --format markdown | diff - docs/rules.md
+cargo run -q -p sonda -- rules --format markdown | diff - docs/rules.md
 cargo deny check && cargo audit
 ```
 
@@ -89,7 +89,7 @@ Rule {
 - Match named nodes, not keyword tokens: the keyword `function` shares its
   text with a node kind.
 - Regenerate the docs with
-  `cargo run -q -- rules --format markdown > docs/rules.md`.
+  `cargo run -q -p sonda -- rules --format markdown > docs/rules.md`.
 
 ## Fuzzing
 
