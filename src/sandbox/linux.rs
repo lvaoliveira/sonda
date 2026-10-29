@@ -11,6 +11,12 @@ const ALLOWED: &[&str] = &[
     // Its pipes.
     "read",
     "write",
+    // Refused by the second filter (see `filter_json`); listed so that
+    // refusal, not a kill, is what happens.
+    "openat",
+    // Std's CPU-count probe (the regex crate calls it while compiling the
+    // `#match?` predicate of java/weak-hash): reads the worker's own mask.
+    "sched_getaffinity",
     // Memory.
     "brk",
     "mmap",
@@ -51,21 +57,36 @@ fn filter_json(pid: i32) -> String {
             "mismatch_action": "kill_process",
             "filter_action": "allow",
             "filter": rules,
+        },
+        // Opening any file fails with EACCES instead of killing the worker:
+        // libraries probe optional files (std reads cgroup CPU limits) and
+        // fall back when that fails. The worker still cannot open anything;
+        // the kernel applies the stricter result of the two filters.
+        "no_files": {
+            "mismatch_action": "allow",
+            "filter_action": { "errno": EACCES },
+            "filter": [{ "syscall": "openat" }],
         }
     })
     .to_string()
 }
+
+/// EACCES on Linux (all architectures).
+const EACCES: u32 = 13;
 
 pub(super) fn enter() -> Result<(), String> {
     let fail = |e: &dyn std::fmt::Display| format!("seccomp: {e}");
     let arch = TargetArch::try_from(std::env::consts::ARCH).map_err(|e| fail(&e))?;
     let pid = rustix::process::getpid().as_raw_nonzero().get();
     let mut filters = compile_from_json(filter_json(pid).as_bytes(), arch).map_err(|e| fail(&e))?;
-    let program = filters
-        .remove("worker")
-        .ok_or_else(|| fail(&"filter missing"))?;
-    // Also sets PR_SET_NO_NEW_PRIVS.
-    apply_filter(&program).map_err(|e| fail(&e))
+    // Both filters stay active; also sets PR_SET_NO_NEW_PRIVS.
+    for name in ["worker", "no_files"] {
+        let program = filters
+            .remove(name)
+            .ok_or_else(|| fail(&"filter missing"))?;
+        apply_filter(&program).map_err(|e| fail(&e))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -76,7 +97,7 @@ mod tests {
     fn filter_compiles_for_supported_architectures() {
         for arch in [TargetArch::x86_64, TargetArch::aarch64] {
             let filters = compile_from_json(filter_json(1234).as_bytes(), arch).unwrap();
-            assert!(!filters["worker"].is_empty());
+            assert!(!filters["worker"].is_empty() && !filters["no_files"].is_empty());
         }
     }
 }

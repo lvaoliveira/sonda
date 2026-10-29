@@ -56,6 +56,16 @@ process**, which the parent already reports as "the parser crashed" for that
 file. In particular, `open`/`openat`, `socket`/`connect` and `execve` all
 kill the worker.
 
+**Amended during implementation:** `openat` returns `EACCES` instead of
+killing the worker. A second, stacked filter does that, and the kernel applies
+the stricter result of the two filters. Libraries probe optional files and
+fall back when the probe fails. For example, the `regex` crate used by
+`#match?` predicates (java/weak-hash) calls std's CPU-count probe, which
+reads cgroup limits under `/proc` and `/sys`. Killing on those probes lost
+every Java file. The worker still cannot open anything. `sched_getaffinity`
+(its own CPU mask) is allowed for the same probe. A CI job that traced
+workers under `strace` found both.
+
 Landlock is deliberately *not* used. With `openat` denied outright, a
 filesystem rule set adds nothing, and leaving it out saves a dependency and
 a kernel-version matrix.
