@@ -39,6 +39,10 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Rules doc is up to date
         run: cargo run -q --locked -- rules --format markdown | diff - docs/rules.md
+      # The fuzz crate is a separate workspace; keep it compiling between
+      # the weekly fuzz runs (fuzz.yml).
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked -- -D warnings
 
   test:
     strategy:

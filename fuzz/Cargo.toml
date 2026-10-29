@@ -1,0 +1,30 @@
+[package]
+name = "sonda-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sonda = { path = "..", features = ["fuzzing"] }
+
+# Its own workspace, so the main crate's builds and checks ignore it.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "analyze"
+path = "fuzz_targets/analyze.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false

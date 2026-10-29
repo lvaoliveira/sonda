@@ -57,8 +57,9 @@ still validated), and the files they explicitly name (`--config`,
 
 - **Parsers are C code.** tree-sitter's runtime and grammars are C, called
   through FFI. A memory-safety bug in them, triggered by a crafted file,
-  could affect the sonda process. They are kept up to date, but they are not
-  yet fuzzed or run in a separate process.
+  could affect the sonda process. They are fuzzed weekly in CI with
+  AddressSanitizer (see CONTRIBUTING.md) and kept up to date, but they still
+  run in the same process as the rest of sonda.
 - **File-swap race.** If an attacker can modify the directory *while* it is
   being scanned, a file could be swapped for a symlink between the walk and
   the read. A static checkout is not affected.

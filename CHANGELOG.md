@@ -26,6 +26,8 @@ file, the report formats and the public library API.
 - `-v`/`-vv`/`-vvv` (or `RUST_LOG`) for structured logs on stderr: phase
   timings, counts, and skipped files.
 - A library API: `sonda::run`, `sonda::load_config`, and `sonda::Error`.
+- Fuzz targets for analysis in every grammar and for config parsing, run
+  weekly in CI with the C grammars instrumented by AddressSanitizer.
 
 ### Security
 

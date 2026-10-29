@@ -90,6 +90,30 @@ Rule {
 - Regenerate the docs with
   `cargo run -q -- rules --format markdown > docs/rules.md`.
 
+## Fuzzing
+
+`fuzz/` has [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) targets:
+- `analyze` runs arbitrary input through every grammar. The first byte
+  picks the language.
+- `config` parses arbitrary `sonda.toml` contents.
+
+They need nightly Rust:
+
+```sh
+rustup toolchain install nightly && cargo install cargo-fuzz
+CFLAGS="-fsanitize-coverage=inline-8bit-counters,pc-table" \
+  cargo +nightly fuzz run analyze fuzz/corpus/analyze fuzz/seeds/analyze -- -max_total_time=300
+```
+
+`CFLAGS` instruments the C grammars as well, so the fuzzer can explore them.
+On Linux, add `-fsanitize=address` to it, and set `CC=clang`, to also catch
+memory errors in the C code. That flag doesn't work with Apple clang.
+
+The `Fuzz` workflow runs both targets weekly with AddressSanitizer, and for
+60 seconds on pull requests that touch `src/` or `fuzz/`. A crash is saved
+as a workflow artifact. Reproduce it with `cargo +nightly fuzz run <target>
+<file>`, then turn it into a regression test.
+
 ## Commits and pull requests
 
 - Keep each change small and focused, with a message that explains *why*.

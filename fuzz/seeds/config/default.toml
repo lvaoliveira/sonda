@@ -1,0 +1,52 @@
+# sonda configuration
+
+[scan]
+# Glob patterns (gitignore syntax) to skip, in addition to .gitignore.
+exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/vendor/**", "**/*.min.js"]
+# Files larger than this are skipped (usually generated or minified).
+max_file_size_kb = 1024
+# Parsing and rule matching of one file give up after this many seconds
+# (the file is then reported as a warning instead of analyzed).
+file_timeout_secs = 10
+# Each git process (used by --new-code) is killed after this many seconds.
+git_timeout_secs = 120
+
+[rules]
+# Rule ids to turn off. `sonda rules` lists them all.
+disabled = []
+
+# Override the default severity of a rule.
+[rules.severity]
+# "js/no-console" = "info"
+
+[thresholds]
+cognitive_complexity = 15
+function_lines = 80
+parameters = 7
+
+[duplication]
+# A duplicated block must span at least this many tokens and lines.
+min_tokens = 100
+min_lines = 10
+
+# The quality gate fails when any condition holds. Metrics prefixed with
+# "new_" only look at new code (see `--new-code`).
+[[gate.conditions]]
+metric = "new_bugs"
+op = "gt"
+threshold = 0
+
+[[gate.conditions]]
+metric = "new_vulnerabilities"
+op = "gt"
+threshold = 0
+
+[[gate.conditions]]
+metric = "new_coverage"
+op = "lt"
+threshold = 80
+
+[[gate.conditions]]
+metric = "new_duplicated_lines_density"
+op = "gt"
+threshold = 3

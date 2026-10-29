@@ -1,0 +1,5 @@
+#include <vector>
+namespace n {
+template <typename T> class V { public: T get() const { return t_; } private: T t_; };
+auto f = [](int x) { return x > 0 ? x : -x; };
+}

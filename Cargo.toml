@@ -9,6 +9,10 @@ readme = "README.md"
 keywords = ["static-analysis", "linter", "code-quality", "sarif", "tree-sitter"]
 categories = ["command-line-utilities", "development-tools"]
 
+[features]
+# Entry points for the fuzz targets in fuzz/. Not part of the public API.
+fuzzing = []
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }

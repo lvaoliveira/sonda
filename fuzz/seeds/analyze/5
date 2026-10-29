@@ -1,0 +1,8 @@
+#include <stdio.h>
+static int *f(char *d, const char *s, int n) {
+  if (n = 0) { goto end; }
+  strcpy(d, s);
+  switch (n) { case 1: break; default: break; }
+end:
+  return 0;
+}

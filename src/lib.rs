@@ -110,6 +110,46 @@ pub fn load_config(explicit: Option<&Path>, root: &Path) -> Result<Config, Error
     })
 }
 
+/// Entry points for the fuzz targets in `fuzz/`, behind the `fuzzing`
+/// feature. Not part of the public API: no stability guarantees.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing {
+    use crate::analysis::{self, FileError};
+    use crate::config::Config;
+    use crate::rules::RuleSet;
+    use std::sync::LazyLock;
+    use std::time::{Duration, Instant};
+
+    static CONFIG: LazyLock<Config> = LazyLock::new(Config::default);
+    // The built-in rules always compile: a unit test checks every query.
+    static RULES: LazyLock<RuleSet> =
+        LazyLock::new(|| RuleSet::new(&CONFIG.rules).expect("built-in rules compile"));
+
+    /// Analyzes `src` in the language `selector` picks (modulo the number of
+    /// languages) and panics if the result is inconsistent, which is what the
+    /// fuzzer looks for. Hitting the per-file time budget is allowed:
+    /// libFuzzer's own `-timeout` catches anything slower.
+    pub fn analyze(selector: u8, src: &str) {
+        let lang = crate::lang::ALL[usize::from(selector) % crate::lang::ALL.len()];
+        let deadline = Instant::now() + Duration::from_secs(10);
+        match analysis::analyze("fuzz", lang, src, &RULES, &CONFIG, deadline) {
+            Ok(a) => {
+                if let Err(e) = analysis::check_invariants(&a) {
+                    panic!("{lang:?}: {e}");
+                }
+            }
+            Err(FileError::ParseTimeout | FileError::QueryTimeout) => {}
+            Err(e) => panic!("{lang:?}: {e}"),
+        }
+    }
+
+    /// Parses an untrusted `sonda.toml`; it may be rejected, but must not panic.
+    pub fn parse_config(text: &str) {
+        let _ = Config::parse(text);
+    }
+}
+
 /// Shared test configuration.
 #[cfg(test)]
 pub(crate) mod test_support {

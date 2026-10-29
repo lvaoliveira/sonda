@@ -51,6 +51,9 @@ proven otherwise ([SECURITY.md](SECURITY.md)):
 - git is limited to object reads ([ADR-0002](docs/adr/0002-new-code-from-git-objects.md)).
 - Anything printed to a terminal (report lines, errors, logs) goes through
   `report::terminal_safe`.
+- `fuzz/` fuzzes analysis in every grammar, and config parsing, through the
+  `fuzzing` feature. The fuzzer and the property tests share
+  `analysis::check_invariants`.
 
 **Determinism.** The same input gives a byte-identical report:
 

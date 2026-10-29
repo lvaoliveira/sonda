@@ -1,0 +1,14 @@
+import os
+
+def f(a=[], *args, **kw):
+    try:
+        return eval(a) if a else None
+    except:
+        pass
+    finally:
+        assert (a, 'x')
+
+class B:
+    async def g(self):
+        match self:
+            case _: return [x for x in range(3) if x == None]

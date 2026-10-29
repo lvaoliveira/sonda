@@ -301,6 +301,34 @@ fn scan_tokens(
     }
 }
 
+/// Consistency checks on an analysis result, shared by the property tests
+/// and the fuzz targets: every reported position lies inside the file.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn check_invariants(a: &FileAnalysis) -> Result<(), String> {
+    let lines = a.metrics.lines.max(1);
+    let inside = |l: usize| l >= 1 && l <= lines;
+    if let Some(i) = a
+        .issues
+        .iter()
+        .find(|i| !inside(i.line) || i.end_line < i.line || i.column < 1 || i.end_column < 1)
+    {
+        return Err(format!(
+            "{} at {}:{} is outside the file",
+            i.rule, i.line, i.column
+        ));
+    }
+    if !a.code_lines.windows(2).all(|w| w[0] < w[1]) {
+        return Err("code lines are not strictly ascending".into());
+    }
+    if let Some(l) = a.code_lines.iter().find(|&&l| !inside(l)) {
+        return Err(format!("code line {l} is outside the file ({lines} lines)"));
+    }
+    if let Some(t) = a.tokens.iter().find(|t| !inside(t.line)) {
+        return Err(format!("token on line {} is outside the file", t.line));
+    }
+    Ok(())
+}
+
 /// The last row a node occupies. An end at column 0 of a later row is
 /// exclusive: the node stops before that row. (An unterminated string at
 /// the end of a file ends there, one row past the last line.)
@@ -865,14 +893,7 @@ pub(crate) mod tests {
             for &lang in crate::lang::ALL {
                 let a = analyze("f", lang, &src, &RULES, &CONFIG, far_deadline());
                 let a = a.map_err(|e| TestCaseError::fail(format!("{lang:?}: {e}")))?;
-                let lines = a.metrics.lines.max(1);
-                for i in &a.issues {
-                    prop_assert!(i.line >= 1 && i.line <= lines, "{:?} line {}", lang, i.line);
-                    prop_assert!(i.end_line >= i.line && i.column >= 1);
-                }
-                prop_assert!(a.code_lines.windows(2).all(|w| w[0] < w[1]));
-                prop_assert!(a.code_lines.iter().all(|&l| l >= 1 && l <= lines));
-                prop_assert!(a.tokens.iter().all(|t| t.line >= 1 && t.line <= lines));
+                check_invariants(&a).map_err(|e| TestCaseError::fail(format!("{lang:?}: {e}")))?;
             }
         }
     }
