@@ -1,12 +1,16 @@
 //! sonda server (ADR-0005): stores analyses uploaded by `sonda upload` in
 //! PostgreSQL and serves the web app's API.
 //!
-//! Layers, as in sonda-core: `http` (routes, interface) → `db`
-//! (infrastructure); `config` is read once at startup.
+//! Layers, as in sonda-core: `http`, `api` and `ingest` (interface: routes,
+//! auth, validation) → `store` and `db` (infrastructure); `config` is read
+//! once at startup.
 
+pub mod api;
 pub mod config;
 pub mod db;
 pub mod http;
+pub mod ingest;
+pub mod store;
 
 use anyhow::{Context, Result};
 use config::Config;

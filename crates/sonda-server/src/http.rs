@@ -2,10 +2,12 @@
 //! serves the web app, when one is configured.
 
 use crate::config::Token;
-use crate::db;
+use crate::{api, db, ingest};
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::middleware;
+use axum::routing::{get, post};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
@@ -20,8 +22,16 @@ pub struct State {
 }
 
 pub fn router(state: State, web_dir: Option<&Path>) -> Router {
+    let writes = Router::new()
+        .route("/analyses", post(ingest::create))
+        .layer(DefaultBodyLimit::max(ingest::MAX_BODY_BYTES))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::require_token,
+        ));
     let api = Router::new()
         .route("/health", get(health))
+        .merge(writes)
         // An unknown API path is a 404, never the web app's index.html.
         .fallback(|| async {
             (

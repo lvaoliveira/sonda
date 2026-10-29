@@ -240,6 +240,20 @@ blockers or criticals, ranked by severity and age.
 5. **Workspace split:** done now, in phase 1. Today's crate moves into
    `crates/`.
 
+## Amendments
+
+- **2026-10-29, queries are checked at test time, not compile time.** The
+  decision above said compile-time-checked `query!` macros with a committed
+  `.sqlx/` cache. Instead, queries are plain `sqlx::query` with bound
+  parameters. Every query runs against real PostgreSQL in CI (the `server`
+  job, PostgreSQL 15). This avoids requiring `sqlx-cli` and a running
+  database for every contributor's build. sqlx 0.9 still refuses SQL built
+  from strings unless it is explicitly marked as audited, so the
+  parameterized-only rule stays enforced.
+- **2026-10-29, the server's minimum Rust version is 1.94**, above the
+  workspace's 1.90, because sqlx 0.9 requires it. The CLI and core library
+  keep 1.90.
+
 ## Consequences
 
 - The first networked, stateful part of sonda. It gets its own threat

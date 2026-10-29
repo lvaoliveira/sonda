@@ -20,7 +20,8 @@ pub(crate) const PYTHON: &[Lang] = &[Lang::Python];
 pub(crate) const JAVA: &[Lang] = &[Lang::Java];
 pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
 pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
-pub(crate) const ALL: &[Lang] = &[
+/// Every supported language.
+pub const ALL: &[Lang] = &[
     Lang::JavaScript,
     Lang::TypeScript,
     Lang::Tsx,
