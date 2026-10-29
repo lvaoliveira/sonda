@@ -1,10 +1,10 @@
-use crate::gate::{Condition, Op};
-use crate::measures::METRICS;
-use crate::model::Severity;
-use anyhow::{Context, Result, bail};
+//! Configuration types and parsing. Pure: reading the file is the caller's
+//! job (see `crate::load_config`).
+
+use crate::error::Error;
+use crate::model::{Condition, Metric, Op, Severity};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::Path;
 
 pub const FILE_NAME: &str = "sonda.toml";
 
@@ -146,69 +146,48 @@ pub struct GateConfig {
 
 impl Default for GateConfig {
     fn default() -> Self {
-        let cond = |metric: &str, op, threshold| Condition {
-            metric: metric.into(),
+        let cond = |metric, op, threshold| Condition {
+            metric,
             op,
             threshold,
         };
         GateConfig {
             conditions: vec![
-                cond("new_bugs", Op::Gt, 0.0),
-                cond("new_vulnerabilities", Op::Gt, 0.0),
-                cond("new_coverage", Op::Lt, 80.0),
-                cond("new_duplicated_lines_density", Op::Gt, 3.0),
+                cond(Metric::NewBugs, Op::Gt, 0.0),
+                cond(Metric::NewVulnerabilities, Op::Gt, 0.0),
+                cond(Metric::NewCoverage, Op::Lt, 80.0),
+                cond(Metric::NewDuplicatedLinesDensity, Op::Gt, 3.0),
             ],
         }
     }
 }
 
 impl Config {
-    /// Loads `explicit` if given, else `<root>/sonda.toml` if it exists, else defaults.
-    pub fn load(explicit: Option<&Path>, root: &Path) -> Result<Config> {
-        let path = match explicit {
-            Some(p) => p.to_path_buf(),
-            None => {
-                let p = root.join(FILE_NAME);
-                if !p.exists() {
-                    return Ok(Config::default());
-                }
-                p
-            }
-        };
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        Config::parse(&text).with_context(|| format!("invalid config {}", path.display()))
-    }
-
-    pub fn parse(text: &str) -> Result<Config> {
-        let cfg: Config = toml::from_str(text)?;
+    /// Parses and validates TOML. Unknown keys and metric names are rejected
+    /// by deserialization, so a typo fails instead of being ignored. Rule ids
+    /// are checked when the rule set is built.
+    pub fn parse(text: &str) -> Result<Config, Error> {
+        let cfg: Config = toml::from_str(text).map_err(|e| Error::Config(e.to_string()))?;
         cfg.validate()?;
         Ok(cfg)
     }
 
-    // Rule ids are checked when the RuleSet is built; everything else here,
-    // so a typo fails the run instead of silently doing nothing.
-    fn validate(&self) -> Result<()> {
-        for c in &self.gate.conditions {
-            if !METRICS.contains(&c.metric.as_str()) {
-                bail!(
-                    "unknown gate metric '{}'; known metrics: {}",
-                    c.metric,
-                    METRICS.join(", ")
-                );
-            }
-        }
+    fn validate(&self) -> Result<(), Error> {
         let t = &self.thresholds;
-        if t.cognitive_complexity == 0 || t.function_lines == 0 || t.parameters == 0 {
-            bail!("thresholds must be greater than zero");
+        let positive = [
+            (
+                "thresholds.cognitive_complexity",
+                t.cognitive_complexity as u64,
+            ),
+            ("thresholds.function_lines", t.function_lines as u64),
+            ("thresholds.parameters", t.parameters as u64),
+            ("scan.file_timeout_secs", self.scan.file_timeout_secs),
+            ("duplication.min_tokens", self.duplication.min_tokens as u64),
+        ];
+        match positive.iter().find(|(_, v)| *v == 0) {
+            Some((key, _)) => Err(Error::Config(format!("{key} must be greater than zero"))),
+            None => Ok(()),
         }
-        if self.scan.file_timeout_secs == 0 {
-            bail!("scan.file_timeout_secs must be greater than zero");
-        }
-        if self.duplication.min_tokens == 0 {
-            bail!("duplication.min_tokens must be greater than zero");
-        }
-        Ok(())
     }
 }
 
@@ -222,10 +201,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_keys_and_metrics() {
+    fn rejects_unknown_keys_metrics_and_zero_thresholds() {
         assert!(Config::parse("[thresholds]\ncomplexity = 3\n").is_err());
         let bad_metric = "[[gate.conditions]]\nmetric = \"bugz\"\nop = \"gt\"\nthreshold = 0\n";
-        assert!(Config::parse(bad_metric).is_err());
+        let err = Config::parse(bad_metric).unwrap_err().to_string();
+        assert!(err.contains("bugz") && err.contains("new_bugs"), "{err}");
+        let zero = Config::parse("[scan]\nfile_timeout_secs = 0\n").unwrap_err();
+        assert!(zero.to_string().contains("scan.file_timeout_secs"));
     }
 
     #[test]

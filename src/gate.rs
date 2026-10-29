@@ -1,32 +1,8 @@
 use crate::measures::Measures;
-use serde::{Deserialize, Serialize};
+use crate::model::{Condition, Op};
+use serde::Serialize;
 
-/// The gate fails when `metric <op> threshold` holds.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Condition {
-    pub metric: String,
-    pub op: Op,
-    pub threshold: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Op {
-    Gt,
-    Lt,
-}
-
-impl Op {
-    pub fn symbol(self) -> &'static str {
-        match self {
-            Op::Gt => ">",
-            Op::Lt => "<",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Ok,
@@ -49,11 +25,11 @@ pub struct GateResult {
     pub conditions: Vec<ConditionResult>,
 }
 
-pub fn evaluate(conditions: &[Condition], measures: &Measures) -> GateResult {
+pub(crate) fn evaluate(conditions: &[Condition], measures: &Measures) -> GateResult {
     let results: Vec<ConditionResult> = conditions
         .iter()
         .map(|c| {
-            let actual = measures.get(c.metric.as_str()).copied().flatten();
+            let actual = measures.get(&c.metric).copied().flatten();
             let status = match actual {
                 None => Status::NoData,
                 Some(v)
@@ -80,24 +56,25 @@ pub fn evaluate(conditions: &[Condition], measures: &Measures) -> GateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Metric;
 
     #[test]
     fn evaluates_conditions() {
         let measures = Measures::from([
-            ("new_bugs", Some(2.0)),
-            ("new_coverage", None),
-            ("coverage", Some(90.0)),
+            (Metric::NewBugs, Some(2.0)),
+            (Metric::NewCoverage, None),
+            (Metric::Coverage, Some(90.0)),
         ]);
-        let cond = |metric: &str, op, threshold| Condition {
-            metric: metric.into(),
+        let cond = |metric, op, threshold| Condition {
+            metric,
             op,
             threshold,
         };
         let r = evaluate(
             &[
-                cond("new_bugs", Op::Gt, 0.0),
-                cond("new_coverage", Op::Lt, 80.0),
-                cond("coverage", Op::Lt, 80.0),
+                cond(Metric::NewBugs, Op::Gt, 0.0),
+                cond(Metric::NewCoverage, Op::Lt, 80.0),
+                cond(Metric::Coverage, Op::Lt, 80.0),
             ],
             &measures,
         );

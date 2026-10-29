@@ -116,16 +116,18 @@ merge-base blobs (git object reads) vs working tree ──► new-code lines    
                     └──────────► measures ──► quality gate ──► text / JSON / SARIF
 ```
 
-| Module | Responsibility |
-|---|---|
-| `lang.rs` | Language detection, grammars, and per-language node kinds for the structural checks |
-| `rules/` | Rule catalog and compiled tree-sitter queries |
-| `analysis.rs` | Per-file analysis: queries, complexity, metrics, tokens, suppressions |
-| `duplication.rs` | Cross-file copy-paste detection |
-| `newcode.rs` | git-based new-code detection |
-| `coverage.rs` | LCOV import |
-| `measures.rs` / `gate.rs` | Project metrics and quality gate evaluation |
-| `report/` | Text, JSON and SARIF output |
+| Module | Layer | Responsibility |
+|---|---|---|
+| `main.rs`, `report/` | Interface | CLI; text, JSON and SARIF output |
+| `lib.rs` | Application | `run`, `load_config`: the library entry points |
+| `scanner.rs`, `git.rs` | Infrastructure | Finding and reading files, coverage reports, git object reads |
+| `analysis.rs` | Domain | Per-file analysis: queries, complexity, metrics, tokens, suppressions |
+| `rules/` | Domain | Rule catalog and compiled tree-sitter queries |
+| `duplication.rs`, `newcode.rs`, `coverage.rs` | Domain | Copy-paste detection, changed lines, LCOV parsing |
+| `measures.rs`, `gate.rs`, `project.rs`, `config.rs` | Domain | Project metrics, quality gate, configuration |
+| `model.rs`, `lang.rs` | Shared | Plain data types, language table |
+
+The domain does no I/O, and tests enforce the layering. See [ADR-0001](docs/adr/0001-architecture.md).
 
 Parsing uses [tree-sitter](https://tree-sitter.github.io/), so adding a language mostly means adding its grammar crate, its node kinds in `lang.rs`, and rules.
 

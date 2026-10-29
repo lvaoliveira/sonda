@@ -1,17 +1,18 @@
+//! Interface: turns an [`Outcome`] into text, JSON or SARIF.
+
 mod sarif;
 mod text;
 
-pub use text::terminal_safe;
+pub use text::{terminal_safe, terminal_safe_lines};
 
-use crate::analysis::FileMetrics;
+use crate::Outcome;
 use crate::gate::GateResult;
 use crate::lang::Lang;
 use crate::measures::Measures;
-use crate::model::Issue;
-use crate::scanner::ScanResult;
+use crate::model::{FileMetrics, Issue};
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Text,
     Json,
@@ -55,12 +56,8 @@ pub struct Location<'a> {
 }
 
 /// `only_new` limits the listed issues to new code; measures and gate are unaffected.
-pub fn build<'a>(
-    scan: &'a ScanResult,
-    measures: &'a Measures,
-    gate: &'a GateResult,
-    only_new: bool,
-) -> Report<'a> {
+pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
+    let scan = &outcome.analysis;
     let files = scan
         .files
         .iter()
@@ -96,8 +93,8 @@ pub fn build<'a>(
         tool: "sonda",
         version: env!("CARGO_PKG_VERSION"),
         new_code_reference: scan.new_code.reference(),
-        measures,
-        gate,
+        measures: &outcome.measures,
+        gate: &outcome.gate,
         files,
         duplications,
         issues,
@@ -108,6 +105,8 @@ pub fn build<'a>(
 pub fn render(report: &Report, format: Format) -> String {
     match format {
         Format::Text => text::render(report),
+        // Cannot fail: every map key serializes as a string (`Metric` is a
+        // unit-variant enum) and no type has a fallible Serialize impl.
         Format::Json => serde_json::to_string_pretty(report).expect("report serializes") + "\n",
         Format::Sarif => sarif::render(report),
     }

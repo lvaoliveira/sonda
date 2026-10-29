@@ -1,53 +1,52 @@
 use crate::config::Config;
 use crate::lang::{Lang, Syntax};
-use crate::model::Issue;
+use crate::model::{FileMetrics, Issue};
 use crate::rules::{self, ActiveRule, RuleSet};
-use anyhow::{Result, bail};
-use serde::Serialize;
 use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::time::Instant;
 use tree_sitter::{Node, ParseOptions, Parser, QueryCursor, QueryCursorOptions, StreamingIterator};
 
-#[derive(Debug, Clone, Copy, Default, Serialize)]
-pub struct FileMetrics {
-    pub lines: usize,
-    pub ncloc: usize,
-    pub comment_lines: usize,
-    pub functions: usize,
-    pub complexity: u32,
-    pub cognitive_complexity: u32,
-}
-
 /// A source token for duplication detection: hash of its text and its 1-based line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Token {
-    pub hash: u64,
-    pub line: usize,
+pub(crate) struct Token {
+    pub(crate) hash: u64,
+    pub(crate) line: usize,
 }
 
-pub struct FileAnalysis {
-    pub path: String,
-    pub lang: Lang,
-    pub issues: Vec<Issue>,
-    pub metrics: FileMetrics,
+pub(crate) struct FileAnalysis {
+    pub(crate) path: String,
+    pub(crate) lang: Lang,
+    pub(crate) issues: Vec<Issue>,
+    pub(crate) metrics: FileMetrics,
     /// 1-based numbers of lines holding code (not just comments or blanks), ascending.
-    pub code_lines: Vec<usize>,
-    pub tokens: Vec<Token>,
-    pub has_syntax_errors: bool,
+    pub(crate) code_lines: Vec<usize>,
+    pub(crate) tokens: Vec<Token>,
+    pub(crate) has_syntax_errors: bool,
+}
+
+/// Why a file could not be analyzed. The scanner reports it as a warning.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FileError {
+    #[error("parsing did not finish before the per-file timeout")]
+    ParseTimeout,
+    #[error("rule matching did not finish before the per-file timeout")]
+    QueryTimeout,
+    #[error("grammar is incompatible with the tree-sitter runtime: {0}")]
+    Grammar(#[from] tree_sitter::LanguageError),
 }
 
 /// Analyzes one file. Parsing and query matching stop with an error once
 /// `deadline` passes, so a pathological file cannot stall the scan; the
 /// remaining passes are linear in the size of the tree.
-pub fn analyze(
+pub(crate) fn analyze(
     path: &str,
     lang: Lang,
     src: &str,
     rules: &RuleSet,
     cfg: &Config,
     deadline: Instant,
-) -> Result<FileAnalysis> {
+) -> Result<FileAnalysis, FileError> {
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar())?;
     let bytes = src.as_bytes();
@@ -58,7 +57,7 @@ pub fn analyze(
         None,
         Some(options),
     ) else {
-        bail!("parsing did not finish before the per-file timeout");
+        return Err(FileError::ParseTimeout);
     };
     let root = tree.root_node();
     let ctx = Ctx {
@@ -154,7 +153,7 @@ fn run_queries(
     root: Node,
     rules: &RuleSet,
     deadline: Instant,
-) -> Result<Vec<Issue>> {
+) -> Result<Vec<Issue>, FileError> {
     let bytes = ctx.src.as_bytes();
     let mut issues = Vec::new();
     let mut cursor = QueryCursor::new();
@@ -178,7 +177,7 @@ fn run_queries(
             }
         }
         if timed_out.get() {
-            bail!("rule matching did not finish before the per-file timeout");
+            return Err(FileError::QueryTimeout);
         }
     }
     Ok(issues)
@@ -304,7 +303,7 @@ fn scan_tokens(
 
 /// Depth-first pre-order traversal without recursion. `f` returns whether
 /// to descend into the node's children.
-pub fn walk<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
+fn walk<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
     let mut cursor = root.walk();
     loop {
         if f(cursor.node()) && cursor.goto_first_child() {
@@ -322,9 +321,9 @@ pub fn walk<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Complexity {
-    pub cyclomatic: u32,
-    pub cognitive: u32,
+struct Complexity {
+    cyclomatic: u32,
+    cognitive: u32,
 }
 
 /// Cyclomatic complexity plus an approximation of SonarSource's cognitive

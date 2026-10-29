@@ -1,11 +1,16 @@
+//! Infrastructure: finds and reads the files to analyze, loads coverage
+//! reports and asks `git` for new code, then runs the domain analysis.
+
 use crate::analysis::{self, FileAnalysis};
 use crate::config::Config;
 use crate::coverage::Coverage;
-use crate::duplication::{self, Duplication};
+use crate::duplication;
+use crate::error::Error;
+use crate::git;
 use crate::lang::Lang;
 use crate::newcode::NewCode;
+use crate::project::ProjectAnalysis;
 use crate::rules::RuleSet;
-use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use rayon::prelude::*;
@@ -14,23 +19,23 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// What to analyze.
+#[derive(Debug, Clone)]
 pub struct ScanOptions {
+    /// Project directory.
     pub root: PathBuf,
+    /// Git ref new code is compared against (via merge base); `None` makes
+    /// the whole project new code.
     pub new_code_ref: Option<String>,
+    /// LCOV reports to import.
     pub coverage: Vec<PathBuf>,
 }
 
-pub struct ScanResult {
-    pub root: PathBuf,
-    /// Sorted by path.
-    pub files: Vec<FileAnalysis>,
-    pub duplication: Duplication,
-    pub coverage: Coverage,
-    pub new_code: NewCode,
-    pub warnings: Vec<String>,
-}
-
-pub fn scan(opts: &ScanOptions, cfg: &Config, rules: &RuleSet) -> Result<ScanResult> {
+pub(crate) fn scan(
+    opts: &ScanOptions,
+    cfg: &Config,
+    rules: &RuleSet,
+) -> Result<ProjectAnalysis, Error> {
     let (paths, warnings) = collect_files(&opts.root, cfg)?;
     scan_files(opts, cfg, rules, paths, warnings)
 }
@@ -43,13 +48,14 @@ fn scan_files(
     rules: &RuleSet,
     mut paths: Vec<Candidate>,
     mut warnings: Vec<String>,
-) -> Result<ScanResult> {
+) -> Result<ProjectAnalysis, Error> {
     // Every later stage (analysis order, duplication's "first occurrence")
     // relies on this sort.
     paths.sort_by(|a, b| a.1.cmp(&b.1));
     let root = &opts.root;
-    let coverage = Coverage::load(&opts.coverage, root)?;
-    let max_bytes = cfg.scan.max_file_size_kb * 1024;
+    let coverage = load_coverage(&opts.coverage, root)?;
+    // Saturating: the config may come from the analyzed repository.
+    let max_bytes = cfg.scan.max_file_size_kb.saturating_mul(1024);
     let timeout = Duration::from_secs(cfg.scan.file_timeout_secs);
 
     let new_code = match &opts.new_code_ref {
@@ -57,7 +63,7 @@ fn scan_files(
             let contents = paths
                 .iter()
                 .map(|(path, rel, _)| (rel.as_str(), read_capped(path, max_bytes).ok().flatten()));
-            NewCode::from_git(root, r, max_bytes, contents)?
+            git::new_code(root, r, max_bytes, contents)?
         }
         None => NewCode::Everything,
     };
@@ -77,7 +83,7 @@ fn scan_files(
                 String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))?;
             let deadline = Instant::now() + timeout;
             analysis::analyze(rel, *lang, &src, rules, cfg, deadline)
-                .map_err(|e| format!("{rel}: skipped, {e:#}"))
+                .map_err(|e| format!("{rel}: skipped, {e}"))
         })
         .collect();
 
@@ -112,8 +118,7 @@ fn scan_files(
     warnings.sort();
     warnings.dedup();
 
-    Ok(ScanResult {
-        root: root.clone(),
+    Ok(ProjectAnalysis {
         files,
         duplication,
         coverage,
@@ -125,15 +130,18 @@ fn scan_files(
 type Candidate = (PathBuf, String, Lang);
 
 /// Walks `root` honoring .gitignore and `scan.exclude`, keeping supported languages.
-fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<String>)> {
+fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<String>), Error> {
     let mut overrides = OverrideBuilder::new(root);
     for pattern in &cfg.scan.exclude {
         overrides
             .add(&format!("!{pattern}"))
-            .with_context(|| format!("invalid exclude pattern '{pattern}'"))?;
+            .map_err(|e| Error::Config(format!("invalid exclude pattern '{pattern}': {e}")))?;
     }
+    let overrides = overrides
+        .build()
+        .map_err(|e| Error::Config(format!("invalid exclude patterns: {e}")))?;
     let walker = WalkBuilder::new(root)
-        .overrides(overrides.build()?)
+        .overrides(overrides)
         .require_git(false)
         .build();
 
@@ -166,9 +174,26 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
 fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
     let mut buf = Vec::new();
     File::open(path)?
-        .take(max_bytes + 1)
+        .take(max_bytes.saturating_add(1))
         .read_to_end(&mut buf)?;
     Ok((buf.len() as u64 <= max_bytes).then_some(buf))
+}
+
+/// Reads the LCOV reports the user named. Unlike analyzed files, these are
+/// explicit inputs, so a missing or unreadable one is an error.
+fn load_coverage(paths: &[PathBuf], root: &Path) -> Result<Coverage, Error> {
+    let canonical_root = root.canonicalize().ok();
+    let mut roots = vec![root];
+    roots.extend(canonical_root.as_deref());
+    let mut coverage = Coverage::default();
+    for path in paths {
+        let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        coverage.merge_lcov(&text, &roots);
+    }
+    Ok(coverage)
 }
 
 fn relative(path: &Path, root: &Path) -> String {
@@ -183,6 +208,17 @@ fn relative(path: &Path, root: &Path) -> String {
 mod tests {
     use super::*;
     use crate::measures;
+    use crate::model::Metric;
+
+    fn outcome(analysis: ProjectAnalysis, cfg: &Config) -> crate::Outcome {
+        let measures = measures::compute(&analysis);
+        let gate = crate::gate::evaluate(&cfg.gate.conditions, &measures);
+        crate::Outcome {
+            analysis,
+            measures,
+            gate,
+        }
+    }
 
     #[test]
     fn scans_a_mixed_project_end_to_end() {
@@ -227,11 +263,11 @@ mod tests {
         );
 
         let m = measures::compute(&r);
-        assert_eq!(m["files"], Some(2.0));
-        assert_eq!(m["bugs"], Some(2.0));
-        assert_eq!(m["vulnerabilities"], Some(1.0));
-        assert_eq!(m["new_bugs"], Some(2.0)); // no reference: everything is new
-        assert_eq!(m["coverage"], Some(50.0));
+        assert_eq!(m[&Metric::Files], Some(2.0));
+        assert_eq!(m[&Metric::Bugs], Some(2.0));
+        assert_eq!(m[&Metric::Vulnerabilities], Some(1.0));
+        assert_eq!(m[&Metric::NewBugs], Some(2.0)); // no reference: everything is new
+        assert_eq!(m[&Metric::Coverage], Some(50.0));
     }
 
     #[test]
@@ -281,9 +317,8 @@ mod tests {
             .install(|| scan_files(&opts, cfg, &rules, paths, walk_warnings))
             .unwrap();
         assert!(!r.duplication.blocks.is_empty() && r.warnings.len() >= 2);
-        let m = measures::compute(&r);
-        let g = crate::gate::evaluate(&cfg.gate.conditions, &m);
-        let rep = report::build(&r, &m, &g, false);
+        let out = outcome(r, cfg);
+        let rep = report::build(&out, false);
         [Format::Text, Format::Json, Format::Sarif]
             .map(|f| report::render(&rep, f))
             .to_vec()
@@ -349,10 +384,8 @@ mod tests {
             new_code_ref: None,
             coverage: vec![],
         };
-        let r = scan(&opts, &cfg, &rules).unwrap();
-        let m = measures::compute(&r);
-        let g = crate::gate::evaluate(&cfg.gate.conditions, &m);
-        let text = report::render(&report::build(&r, &m, &g, false), Format::Text);
+        let out = outcome(scan(&opts, &cfg, &rules).unwrap(), &cfg);
+        let text = report::render(&report::build(&out, false), Format::Text);
         assert!(!text.contains('\x1b'), "{text}");
         assert!(text.contains("evil\\u{1b}[2J.js"), "{text}");
     }

@@ -63,6 +63,7 @@ pub fn render(r: &Report) -> String {
             "results": results,
         }]
     });
+    // Cannot fail: `doc` is already a `serde_json::Value`.
     serde_json::to_string_pretty(&doc).expect("sarif serializes") + "\n"
 }
 

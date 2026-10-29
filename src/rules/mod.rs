@@ -1,24 +1,24 @@
 mod catalog;
 
 use crate::config::RulesConfig;
+use crate::error::Error;
 use crate::lang::Lang;
 use crate::model::{Category, Severity};
-use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use tree_sitter::{Node, Query};
 
 pub use catalog::RULES;
 
-pub const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
-pub const FUNCTION_LENGTH: &str = "common/function-length";
-pub const TOO_MANY_PARAMETERS: &str = "common/too-many-parameters";
-pub const TODO_COMMENT: &str = "common/todo-comment";
+pub(crate) const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
+pub(crate) const FUNCTION_LENGTH: &str = "common/function-length";
+pub(crate) const TOO_MANY_PARAMETERS: &str = "common/too-many-parameters";
+pub(crate) const TODO_COMMENT: &str = "common/todo-comment";
 
 /// Extra check on the node captured as `@match`; the issue is reported
 /// only when the filter returns true.
-pub type Filter = fn(Node, &[u8]) -> bool;
+pub(crate) type Filter = fn(Node, &[u8]) -> bool;
 
-pub enum Check {
+pub(crate) enum Check {
     /// A tree-sitter query; every `@match` capture becomes an issue.
     Query {
         langs: &'static [Lang],
@@ -33,7 +33,9 @@ pub enum Check {
 /// Every query rule has one; the test suite runs them all.
 pub struct Example {
     pub lang: Lang,
+    /// Noncompliant code.
     pub bad: &'static str,
+    /// Compliant code.
     pub good: &'static str,
 }
 
@@ -47,7 +49,7 @@ pub struct Rule {
     pub severity: Severity,
     /// Estimated time to fix one occurrence, summed into technical debt.
     pub effort_minutes: u32,
-    pub check: Check,
+    pub(crate) check: Check,
     pub example: Option<Example>,
 }
 
@@ -64,30 +66,33 @@ pub fn find(id: &str) -> Option<&'static Rule> {
     RULES.iter().find(|r| r.id == id)
 }
 
-pub struct ActiveRule {
-    pub rule: &'static Rule,
-    pub severity: Severity,
+pub(crate) struct ActiveRule {
+    pub(crate) rule: &'static Rule,
+    pub(crate) severity: Severity,
 }
 
-pub struct CompiledQuery {
-    pub active: usize,
-    pub query: Query,
-    pub match_capture: u32,
-    pub filter: Option<Filter>,
+pub(crate) struct CompiledQuery {
+    pub(crate) active: usize,
+    pub(crate) query: Query,
+    pub(crate) match_capture: u32,
+    pub(crate) filter: Option<Filter>,
 }
 
 /// The enabled rules with their effective severity and compiled queries.
-pub struct RuleSet {
-    pub active: Vec<ActiveRule>,
+pub(crate) struct RuleSet {
+    pub(crate) active: Vec<ActiveRule>,
     queries: HashMap<Lang, Vec<CompiledQuery>>,
 }
 
 impl RuleSet {
-    pub fn new(cfg: &RulesConfig) -> Result<Self> {
-        for id in cfg.disabled.iter().chain(cfg.severity.keys()) {
-            if find(id).is_none() {
-                bail!("unknown rule '{id}' in config (run `sonda rules` to list them)");
-            }
+    pub(crate) fn new(cfg: &RulesConfig) -> Result<Self, Error> {
+        // Sorted, so the reported unknown id does not depend on HashMap order.
+        let mut ids: Vec<&String> = cfg.disabled.iter().chain(cfg.severity.keys()).collect();
+        ids.sort();
+        if let Some(id) = ids.into_iter().find(|id| find(id).is_none()) {
+            return Err(Error::Config(format!(
+                "unknown rule '{id}' (run `sonda rules` to list them)"
+            )));
         }
         let active: Vec<ActiveRule> = RULES
             .iter()
@@ -115,11 +120,11 @@ impl RuleSet {
         Ok(RuleSet { active, queries })
     }
 
-    pub fn queries(&self, lang: Lang) -> &[CompiledQuery] {
+    pub(crate) fn queries(&self, lang: Lang) -> &[CompiledQuery] {
         self.queries.get(&lang).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    pub fn get(&self, id: &str) -> Option<&ActiveRule> {
+    pub(crate) fn get(&self, id: &str) -> Option<&ActiveRule> {
         self.active.iter().find(|a| a.rule.id == id)
     }
 }
@@ -130,12 +135,16 @@ fn compile(
     source: &str,
     active: usize,
     filter: Option<Filter>,
-) -> Result<CompiledQuery> {
-    let query = Query::new(&lang.grammar(), source)
-        .with_context(|| format!("rule {id}: query does not compile for {}", lang.name()))?;
+) -> Result<CompiledQuery, Error> {
+    let query = Query::new(&lang.grammar(), source).map_err(|e| {
+        Error::Internal(format!(
+            "rule {id}: query does not compile for {}: {e}",
+            lang.name()
+        ))
+    })?;
     let match_capture = query
         .capture_index_for_name("match")
-        .with_context(|| format!("rule {id}: query has no @match capture"))?;
+        .ok_or_else(|| Error::Internal(format!("rule {id}: query has no @match capture")))?;
     Ok(CompiledQuery {
         active,
         query,

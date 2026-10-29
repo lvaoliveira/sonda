@@ -1,51 +1,36 @@
-//! LCOV coverage import (`--coverage lcov.info`). LCOV is produced by
+//! LCOV coverage data (`--coverage lcov.info`). LCOV is produced by
 //! istanbul/c8/vitest (JS/TS), coverage.py (`coverage lcov`), gcov/lcov and
-//! llvm-cov (C/C++), and can be converted from JaCoCo.
+//! llvm-cov (C/C++), and can be converted from JaCoCo. Parsing is pure;
+//! reading the report files is done by the scanner.
 
-use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 #[derive(Debug, Default)]
-pub struct Coverage {
+pub(crate) struct Coverage {
     /// Root-relative path -> 1-based line -> hit count.
-    pub files: HashMap<String, BTreeMap<usize, u64>>,
+    pub(crate) files: HashMap<String, BTreeMap<usize, u64>>,
 }
 
 impl Coverage {
-    pub fn load(paths: &[PathBuf], root: &Path) -> Result<Coverage> {
-        let mut cov = Coverage::default();
-        for p in paths {
-            let text = std::fs::read_to_string(p)
-                .with_context(|| format!("reading coverage report {}", p.display()))?;
-            cov.merge_lcov(&text, root);
-        }
-        Ok(cov)
-    }
-
-    pub fn merge_lcov(&mut self, text: &str, root: &Path) {
-        let canonical_root = root.canonicalize().ok();
+    /// Adds one LCOV report. Absolute `SF:` paths are made relative to the
+    /// first of `roots` they are under (pass the scan root as given and
+    /// canonicalized, so symlinked roots such as macOS `/tmp` match).
+    pub(crate) fn merge_lcov(&mut self, text: &str, roots: &[&Path]) {
         let mut current: Option<String> = None;
         for line in text.lines() {
             let line = line.trim();
             if let Some(sf) = line.strip_prefix("SF:") {
-                current = Some(relative_path(
-                    Path::new(sf),
-                    root,
-                    canonical_root.as_deref(),
-                ));
+                current = Some(relative_path(Path::new(sf), roots));
             } else if let Some(da) = line.strip_prefix("DA:") {
                 let (Some(file), Some((ln, rest))) = (&current, da.split_once(',')) else {
                     continue;
                 };
                 let hits = rest.split(',').next().and_then(|h| h.parse::<u64>().ok());
                 if let (Ok(ln), Some(hits)) = (ln.parse::<usize>(), hits) {
-                    *self
-                        .files
-                        .entry(file.clone())
-                        .or_default()
-                        .entry(ln)
-                        .or_insert(0) += hits;
+                    let entry = self.files.entry(file.clone()).or_default();
+                    let total = entry.entry(ln).or_insert(0);
+                    *total = total.saturating_add(hits);
                 }
             } else if line == "end_of_record" {
                 current = None;
@@ -54,11 +39,11 @@ impl Coverage {
     }
 }
 
-fn relative_path(p: &Path, root: &Path, canonical_root: Option<&Path>) -> String {
+fn relative_path(p: &Path, roots: &[&Path]) -> String {
     let rel = if p.is_absolute() {
-        p.strip_prefix(root)
-            .ok()
-            .or_else(|| canonical_root.and_then(|r| p.strip_prefix(r).ok()))
+        roots
+            .iter()
+            .find_map(|r| p.strip_prefix(r).ok())
             .unwrap_or(p)
     } else {
         p
@@ -77,10 +62,24 @@ mod tests {
     #[test]
     fn parses_and_merges_lcov() {
         let mut cov = Coverage::default();
-        let root = Path::new("/repo");
-        cov.merge_lcov("TN:\nSF:/repo/src/a.js\nDA:1,3\nDA:2,0\nend_of_record\nSF:./src/b.py\nDA:5,1,abc\nend_of_record\n", root);
-        cov.merge_lcov("SF:src/a.js\nDA:2,4\nend_of_record\n", root);
+        let roots = [Path::new("/link/repo"), Path::new("/real/repo")];
+        cov.merge_lcov(
+            "TN:\nSF:/real/repo/src/a.js\nDA:1,3\nDA:2,0\nend_of_record\nSF:./src/b.py\nDA:5,1,abc\nend_of_record\n",
+            &roots,
+        );
+        cov.merge_lcov("SF:src/a.js\nDA:2,4\nend_of_record\n", &roots);
         assert_eq!(cov.files["src/a.js"], BTreeMap::from([(1, 3), (2, 4)]));
         assert_eq!(cov.files["src/b.py"], BTreeMap::from([(5, 1)]));
+    }
+
+    #[test]
+    fn ignores_malformed_lines_and_saturates_hit_counts() {
+        let mut cov = Coverage::default();
+        let lcov = format!(
+            "DA:1,1\nSF:a.js\nDA:x,1\nDA:2\nDA:3,-1\nDA:4,{max}\nDA:4,{max}\nend_of_record\n",
+            max = u64::MAX
+        );
+        cov.merge_lcov(&lcov, &[]);
+        assert_eq!(cov.files["a.js"], BTreeMap::from([(4, u64::MAX)]));
     }
 }

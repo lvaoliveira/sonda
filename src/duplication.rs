@@ -49,6 +49,7 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
         lines: vec![BTreeSet::new(); files.len()],
         blocks: Vec::new(),
     };
+    // Indexing `first` cannot panic: it holds every hash in `hashes`.
     for (fb, hs) in hashes.iter().enumerate() {
         for (pb, &h) in hs.iter().enumerate() {
             let ((fa, pa), repeated) = first[&h];

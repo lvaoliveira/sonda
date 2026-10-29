@@ -1,5 +1,6 @@
 use super::Report;
 use crate::gate::Status;
+use crate::model::Metric;
 use std::borrow::Cow;
 use std::fmt::Write;
 
@@ -22,6 +23,16 @@ pub fn terminal_safe(s: &str) -> Cow<'_, str> {
             })
             .collect(),
     )
+}
+
+/// Like [`terminal_safe`], but keeps line breaks: for multi-line messages
+/// such as errors. Report lines use `terminal_safe`, where a newline in a
+/// file name could otherwise forge extra report lines.
+pub fn terminal_safe_lines(s: &str) -> String {
+    s.split('\n')
+        .map(terminal_safe)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn needs_escape(c: char) -> bool {
@@ -80,9 +91,9 @@ pub fn render(r: &Report) -> String {
         }
     }
 
-    let m = |k: &str| r.measures.get(k).copied().flatten();
-    let n = |k: &str| m(k).map_or("n/a".into(), |v| format!("{v}"));
-    let pct = |k: &str| m(k).map_or("n/a".into(), |v| format!("{v:.1}%"));
+    let m = |k: Metric| r.measures.get(&k).copied().flatten();
+    let n = |k: Metric| m(k).map_or("n/a".into(), |v| format!("{v}"));
+    let pct = |k: Metric| m(k).map_or("n/a".into(), |v| format!("{v:.1}%"));
     let scope = match r.new_code_reference {
         Some(reference) => format!("new code = changes since {reference}, marked *"),
         None => "no --new-code reference: the whole project counts as new code".into(),
@@ -91,28 +102,28 @@ pub fn render(r: &Report) -> String {
     let _ = writeln!(
         out,
         "  Files {} · Lines of code {} · Functions {} · Complexity {}",
-        n("files"),
-        n("ncloc"),
-        n("functions"),
-        n("complexity")
+        n(Metric::Files),
+        n(Metric::Ncloc),
+        n(Metric::Functions),
+        n(Metric::Complexity)
     );
     let _ = writeln!(
         out,
         "  Bugs {} ({} new) · Vulnerabilities {} ({} new) · Code smells {} ({} new)",
-        n("bugs"),
-        n("new_bugs"),
-        n("vulnerabilities"),
-        n("new_vulnerabilities"),
-        n("code_smells"),
-        n("new_code_smells")
+        n(Metric::Bugs),
+        n(Metric::NewBugs),
+        n(Metric::Vulnerabilities),
+        n(Metric::NewVulnerabilities),
+        n(Metric::CodeSmells),
+        n(Metric::NewCodeSmells)
     );
     let _ = writeln!(
         out,
         "  Duplication {} · Coverage {} (new code {}) · Debt {}",
-        pct("duplicated_lines_density"),
-        pct("coverage"),
-        pct("new_coverage"),
-        format_minutes(m("debt_minutes").unwrap_or(0.0) as u64)
+        pct(Metric::DuplicatedLinesDensity),
+        pct(Metric::Coverage),
+        pct(Metric::NewCoverage),
+        format_minutes(m(Metric::DebtMinutes).unwrap_or(0.0) as u64)
     );
 
     let _ = writeln!(
@@ -129,7 +140,7 @@ pub fn render(r: &Report) -> String {
         let _ = writeln!(
             out,
             "  {mark} fails if {} {} {} (actual: {actual})",
-            c.condition.metric,
+            c.condition.metric.as_str(),
             c.condition.op.symbol(),
             c.condition.threshold
         );
@@ -160,6 +171,12 @@ mod tests {
         assert_eq!(terminal_safe("x\ry"), "x\\u{d}y");
         assert_eq!(terminal_safe("ok\u{202E}evil"), "ok\\u{202e}evil");
         assert_eq!(terminal_safe("café"), "café");
+    }
+
+    #[test]
+    fn multiline_variant_keeps_newlines_only() {
+        assert_eq!(terminal_safe_lines("a\nb\x1b[1m"), "a\nb\\u{1b}[1m");
+        assert_eq!(terminal_safe("a\nb"), "a\\u{a}b");
     }
 
     #[test]

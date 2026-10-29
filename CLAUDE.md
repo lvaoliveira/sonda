@@ -7,16 +7,22 @@ Overview and usage: [`README.md`](README.md).
 ## Non-negotiables
 
 - **The analyzed repository is untrusted input.** That covers source files, names, symlinks,
-  `.git/` and its config, and its own `sonda.toml`. Never execute anything from it. Every git
-  call disables repo-controlled hooks (`core.fsmonitor`, `core.hooksPath`, ext-diff, textconv)
-  and puts `--end-of-options` before user values.
+  `.git/` and its config, and its own `sonda.toml`. Never execute anything from it. Only ask git
+  to read objects (`rev-parse`, `merge-base`, `ls-tree`, `cat-file`); never `diff`/`status`/
+  `ls-files`, which run repo-configured programs ([ADR-0002](docs/adr/0002-new-code-from-git-objects.md)).
+  Pass `--end-of-options` before user values.
 - **One hostile file must never abort or stall a scan.** Bound size, parse time and stack depth.
   No unbounded recursion over syntax trees: walk iteratively or cap the depth. A per-file failure
   becomes a warning.
 - **Deterministic output**: same input and config give a byte-identical report. Sort everything
   that reaches output, and never let `HashMap` order or thread scheduling leak into it.
-- Domain modules (model, lang, rules, analysis, duplication, measures, gate) do no I/O.
-  Dependencies point toward the domain; nothing in the domain imports `scanner`, `report` or `main`.
+- Layering ([ADR-0001](docs/adr/0001-architecture.md)): interface (`main`, `report`) →
+  application (`lib.rs`: `run`, `load_config`) → infrastructure (`scanner`, `git`) → domain
+  (`project`, `measures`, `gate`, `analysis`, `duplication`, `rules`, `newcode`, `coverage`,
+  `config`) → shared types (`model`, `lang`). Domain does no I/O. The `architecture` tests in
+  `lib.rs` enforce this; fix the code, not the test.
+- Library errors are the typed `sonda::Error`; per-file problems become warnings, never errors.
+  `anyhow` only in `main.rs`. Keep tree-sitter and clap types out of the public API.
 - No `unsafe`. No `unwrap`/`expect` on production paths without a comment stating the invariant.
   No `panic!` for recoverable errors.
 - Every query rule ships `bad`/`good` examples (they are tests). Every bug fix ships a regression test.

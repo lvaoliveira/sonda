@@ -1,14 +1,178 @@
 //! sonda — open-source static analysis and quality gates.
+//!
+//! ```no_run
+//! # fn main() -> Result<(), sonda::Error> {
+//! use std::path::Path;
+//! let root = Path::new(".");
+//! let config = sonda::load_config(None, root)?;
+//! let options = sonda::ScanOptions {
+//!     root: root.to_path_buf(),
+//!     new_code_ref: Some("origin/main".into()),
+//!     coverage: vec![],
+//! };
+//! let outcome = sonda::run(&options, &config)?;
+//! let report = sonda::report::build(&outcome, false);
+//! print!("{}", sonda::report::render(&report, sonda::report::Format::Text));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Layers, with dependencies pointing down (see docs/adr/0001-architecture.md):
+//!
+//! - interface: `report` (and the `sonda` binary)
+//! - application: this module ([`run`], [`load_config`])
+//! - infrastructure: `scanner` (filesystem), `git`
+//! - domain: `project`, `measures`, `gate`, `analysis`, `duplication`,
+//!   `rules`, `newcode`, `coverage`, `config` — no I/O
+//! - shared types: `model`, `lang`
 
-pub mod analysis;
 pub mod config;
-pub mod coverage;
-pub mod duplication;
-pub mod gate;
 pub mod lang;
-pub mod measures;
 pub mod model;
-pub mod newcode;
 pub mod report;
 pub mod rules;
-pub mod scanner;
+
+mod analysis;
+mod coverage;
+mod duplication;
+mod error;
+mod gate;
+mod git;
+mod measures;
+mod newcode;
+mod project;
+mod scanner;
+
+pub use error::Error;
+pub use gate::{ConditionResult, GateResult, Status};
+pub use measures::Measures;
+pub use project::ProjectAnalysis;
+pub use scanner::ScanOptions;
+
+use config::Config;
+use std::path::Path;
+
+/// The result of a run: the analysis, its measures and the quality gate.
+pub struct Outcome {
+    pub analysis: ProjectAnalysis,
+    pub measures: Measures,
+    pub gate: GateResult,
+}
+
+/// Analyzes `options.root` and evaluates the quality gate.
+pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
+    if !options.root.is_dir() {
+        return Err(Error::InvalidArgument(format!(
+            "{} is not a directory",
+            options.root.display()
+        )));
+    }
+    let rules = rules::RuleSet::new(&config.rules)?;
+    let analysis = scanner::scan(options, config, &rules)?;
+    let measures = measures::compute(&analysis);
+    let gate = gate::evaluate(&config.gate.conditions, &measures);
+    Ok(Outcome {
+        analysis,
+        measures,
+        gate,
+    })
+}
+
+/// Loads `explicit` if given, else `<root>/sonda.toml` if it exists, else
+/// the defaults.
+pub fn load_config(explicit: Option<&Path>, root: &Path) -> Result<Config, Error> {
+    let path = match explicit {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let p = root.join(config::FILE_NAME);
+            if !p.is_file() {
+                return Ok(Config::default());
+            }
+            p
+        }
+    };
+    let text = std::fs::read_to_string(&path).map_err(|source| Error::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Config::parse(&text).map_err(|e| match e {
+        Error::Config(msg) => Error::Config(format!("{}: {msg}", path.display())),
+        other => other,
+    })
+}
+
+/// Fitness tests for the layering in docs/adr/0001-architecture.md. They are
+/// textual: they search each file, comments excluded, for forbidden paths.
+#[cfg(test)]
+mod architecture {
+    const DOMAIN: &[(&str, &str)] = &[
+        ("model.rs", include_str!("model.rs")),
+        ("lang.rs", include_str!("lang.rs")),
+        ("config.rs", include_str!("config.rs")),
+        ("rules/mod.rs", include_str!("rules/mod.rs")),
+        ("rules/catalog.rs", include_str!("rules/catalog.rs")),
+        ("analysis.rs", include_str!("analysis.rs")),
+        ("duplication.rs", include_str!("duplication.rs")),
+        ("newcode.rs", include_str!("newcode.rs")),
+        ("coverage.rs", include_str!("coverage.rs")),
+        ("project.rs", include_str!("project.rs")),
+        ("measures.rs", include_str!("measures.rs")),
+        ("gate.rs", include_str!("gate.rs")),
+    ];
+
+    /// The file without comment lines (docs may mention other layers). Test
+    /// modules are included: domain tests need no I/O either.
+    fn code(src: &str) -> String {
+        src.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn domain_does_no_io() {
+        let io = [
+            "std::fs",
+            "std::process",
+            "std::net",
+            "std::env",
+            "File::",
+            "canonicalize",
+            "println!",
+            "eprintln!",
+            "print!(",
+        ];
+        for (file, src) in DOMAIN {
+            for pattern in io {
+                assert!(!code(src).contains(pattern), "{file} uses {pattern}");
+            }
+        }
+    }
+
+    #[test]
+    fn domain_does_not_depend_on_outer_layers() {
+        let outer = [
+            "crate::scanner",
+            "crate::git",
+            "crate::report",
+            "crate::Outcome",
+            "crate::run",
+        ];
+        for (file, src) in DOMAIN {
+            for pattern in outer {
+                assert!(!code(src).contains(pattern), "{file} depends on {pattern}");
+            }
+        }
+    }
+
+    #[test]
+    fn shared_types_depend_on_nothing_in_the_crate() {
+        for file in ["model.rs", "lang.rs"] {
+            let (_, src) = DOMAIN.iter().find(|(f, _)| *f == file).unwrap();
+            assert!(
+                !code(src).contains("crate::"),
+                "{file} imports from the crate"
+            );
+        }
+    }
+}

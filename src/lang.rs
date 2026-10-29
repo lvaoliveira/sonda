@@ -14,13 +14,13 @@ pub enum Lang {
     Cpp,
 }
 
-pub const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
-pub const TS: &[Lang] = &[Lang::TypeScript, Lang::Tsx];
-pub const PYTHON: &[Lang] = &[Lang::Python];
-pub const JAVA: &[Lang] = &[Lang::Java];
-pub const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
-pub const C_ONLY: &[Lang] = &[Lang::C];
-pub const ALL: &[Lang] = &[
+pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
+pub(crate) const TS: &[Lang] = &[Lang::TypeScript, Lang::Tsx];
+pub(crate) const PYTHON: &[Lang] = &[Lang::Python];
+pub(crate) const JAVA: &[Lang] = &[Lang::Java];
+pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
+pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
+pub(crate) const ALL: &[Lang] = &[
     Lang::JavaScript,
     Lang::TypeScript,
     Lang::Tsx,
@@ -59,7 +59,7 @@ impl Lang {
         }
     }
 
-    pub fn grammar(self) -> Language {
+    pub(crate) fn grammar(self) -> Language {
         match self {
             Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -71,7 +71,7 @@ impl Lang {
         }
     }
 
-    pub fn syntax(self) -> &'static Syntax {
+    pub(crate) fn syntax(self) -> &'static Syntax {
         match self {
             Lang::JavaScript | Lang::TypeScript | Lang::Tsx => &JS_SYNTAX,
             Lang::Python => &PYTHON_SYNTAX,
@@ -84,18 +84,18 @@ impl Lang {
 /// Per-language node kinds used by the structural checks and metrics.
 /// `if_statement`, `else_clause` and `elif_clause` are handled specially
 /// by the complexity walker and are not listed here.
-pub struct Syntax {
+pub(crate) struct Syntax {
     /// Nodes measured as functions (complexity, length, parameters).
-    pub functions: &'static [&'static str],
+    pub(crate) functions: &'static [&'static str],
     /// Loops, catches and ternaries: +1 cyclomatic, +1 (+nesting) cognitive.
-    pub branches: &'static [&'static str],
+    pub(crate) branches: &'static [&'static str],
     /// Switch/match constructs: +1 (+nesting) cognitive once per switch.
-    pub switches: &'static [&'static str],
+    pub(crate) switches: &'static [&'static str],
     /// Switch cases: +1 cyclomatic each (default cases excluded).
-    pub cases: &'static [&'static str],
-    pub comments: &'static [&'static str],
+    pub(crate) cases: &'static [&'static str],
+    pub(crate) comments: &'static [&'static str],
     /// Subtrees left out of duplication detection (imports and the like).
-    pub dup_ignore: &'static [&'static str],
+    pub(crate) dup_ignore: &'static [&'static str],
 }
 
 static JS_SYNTAX: Syntax = Syntax {
