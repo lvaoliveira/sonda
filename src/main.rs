@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use sonda::config;
 use sonda::report::{self, Format};
 use sonda::rules::{self, RULES};
-use sonda::{Isolation, ScanOptions};
+use sonda::{Isolation, SandboxMode, ScanOptions};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,7 +30,10 @@ enum Command {
     },
     /// Internal: an analysis worker process (see ADR-0003).
     #[command(name = "__worker", hide = true)]
-    Worker,
+    Worker {
+        #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
+        sandbox: SandboxArg,
+    },
     /// Write a default sonda.toml.
     Init {
         #[arg(default_value = ".")]
@@ -70,10 +73,32 @@ struct ScanArgs {
     /// Files analyzed in parallel (default: every CPU).
     #[arg(short, long, value_name = "N")]
     jobs: Option<std::num::NonZeroUsize>,
+    /// Sandbox the analysis workers: best-effort logs a warning when the
+    /// platform cannot; require fails the run instead (see SECURITY.md).
+    #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
+    sandbox: SandboxArg,
     /// Parse files in this process instead of in worker processes (for
     /// debugging; a parser crash then aborts the whole scan).
     #[arg(long)]
     no_isolation: bool,
+}
+
+/// CLI mirror of `SandboxMode`, keeping clap out of the library API.
+#[derive(Clone, Copy, ValueEnum)]
+enum SandboxArg {
+    BestEffort,
+    Require,
+    Off,
+}
+
+impl From<SandboxArg> for SandboxMode {
+    fn from(a: SandboxArg) -> SandboxMode {
+        match a {
+            SandboxArg::BestEffort => SandboxMode::BestEffort,
+            SandboxArg::Require => SandboxMode::Require,
+            SandboxArg::Off => SandboxMode::Off,
+        }
+    }
 }
 
 /// CLI mirror of `report::Format`, keeping clap out of the library API.
@@ -160,8 +185,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             print!("{}", list_rules(format));
             Ok(ExitCode::SUCCESS)
         }
-        Command::Worker => {
-            sonda::serve_worker()?;
+        Command::Worker { sandbox } => {
+            sonda::serve_worker(sandbox.into())?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Init { path, force } => {
@@ -186,7 +211,10 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         Isolation::InProcess
     } else {
         let program = std::env::current_exe().context("locating the sonda executable")?;
-        Isolation::Workers { program }
+        Isolation::Workers {
+            program,
+            sandbox: args.sandbox.into(),
+        }
     };
     let opts = ScanOptions {
         root: args.path,
