@@ -113,6 +113,7 @@ fn git_command(dir: &Path) -> Command {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
+    tracing::debug!(?args, "running git");
     let out = git_command(dir)
         .args(args)
         .output()

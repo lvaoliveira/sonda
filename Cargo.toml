@@ -19,6 +19,8 @@ serde_json = "1.0.154"
 similar = "3.2.1"
 thiserror = "2.0.21"
 toml = "1.1.8"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "env-filter"] }
 tree-sitter = "0.27.1"
 tree-sitter-c = "0.24.2"
 tree-sitter-cpp = "0.23.4"

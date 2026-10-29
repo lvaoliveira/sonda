@@ -67,10 +67,17 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
             options.root.display()
         )));
     }
+    let started = std::time::Instant::now();
     let rules = rules::RuleSet::new(&config.rules)?;
+    tracing::info!(
+        rules = rules.active.len(),
+        elapsed_ms = started.elapsed().as_millis(),
+        "compiled rules"
+    );
     let analysis = scanner::scan(options, config, &rules)?;
     let measures = measures::compute(&analysis);
     let gate = gate::evaluate(&config.gate.conditions, &measures);
+    tracing::info!(passed = gate.passed, "evaluated quality gate");
     Ok(Outcome {
         analysis,
         measures,
@@ -86,11 +93,13 @@ pub fn load_config(explicit: Option<&Path>, root: &Path) -> Result<Config, Error
         None => {
             let p = root.join(config::FILE_NAME);
             if !p.is_file() {
+                tracing::info!("no sonda.toml found, using defaults");
                 return Ok(Config::default());
             }
             p
         }
     };
+    tracing::info!(path = %path.display(), "loading config");
     let text = std::fs::read_to_string(&path).map_err(|source| Error::Io {
         path: path.clone(),
         source,

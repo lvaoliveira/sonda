@@ -12,6 +12,9 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(name = "sonda", version)]
 struct Cli {
+    /// Log progress to stderr: -v info, -vv debug, -vvv trace. RUST_LOG overrides.
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
     #[command(subcommand)]
     command: Command,
 }
@@ -88,7 +91,9 @@ enum RulesFormat {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::parse();
+    init_logging(cli.verbose);
+    match run(cli) {
         Ok(code) => code,
         Err(e) => {
             // Errors can quote repository content (paths, git messages).
@@ -98,6 +103,43 @@ fn main() -> ExitCode {
             );
             ExitCode::from(2)
         }
+    }
+}
+
+/// Logs go to stderr so stdout stays a clean report. Only sonda's own events
+/// are shown unless RUST_LOG says otherwise.
+fn init_logging(verbose: u8) {
+    let level = match verbose {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(format!("sonda={level}")));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(|| SafeStderr)
+        .with_target(false)
+        .init();
+}
+
+/// Log lines quote repository content (paths, git messages), so they get
+/// the same escaping as the report. tracing-subscriber does not escape
+/// `%`-formatted values here: a file name's raw ESC reached the terminal.
+struct SafeStderr;
+
+impl std::io::Write for SafeStderr {
+    // The fmt layer writes each event in one call, so a buffer never ends
+    // inside a multi-byte character.
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        std::io::stderr().write_all(report::terminal_safe_lines(&text).as_bytes())?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
     }
 }
 

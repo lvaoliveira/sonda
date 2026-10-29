@@ -52,6 +52,7 @@ sonda scan . --format sarif -o sonda.sarif
 sonda scan . --format json --only-new     # list only issues on new code
 sonda rules                               # list rules
 sonda init                                # write a default sonda.toml
+sonda -v scan .                           # log progress to stderr (-vv, -vvv for more)
 ```
 
 Without `--new-code`, the whole project counts as new code.
@@ -107,57 +108,29 @@ Gate metrics: `files`, `lines`, `ncloc`, `functions`, `complexity`, `cognitive_c
 
 ## How it works
 
-```
-files ──► tree-sitter parse ──► query rules (rules/catalog.rs)
-  (parallel)                 ├─► structural checks: complexity, length, parameters, TODOs
-                             └─► metrics + token stream
-all files ──► duplication (rolling hash over token windows)
-merge-base blobs (git object reads) vs working tree ──► new-code lines     LCOV ──► coverage
-                    └──────────► measures ──► quality gate ──► text / JSON / SARIF
-```
-
-| Module | Layer | Responsibility |
-|---|---|---|
-| `main.rs`, `report/` | Interface | CLI; text, JSON and SARIF output |
-| `lib.rs` | Application | `run`, `load_config`: the library entry points |
-| `scanner.rs`, `git.rs` | Infrastructure | Finding and reading files, coverage reports, git object reads |
-| `analysis.rs` | Domain | Per-file analysis: queries, complexity, metrics, tokens, suppressions |
-| `rules/` | Domain | Rule catalog and compiled tree-sitter queries |
-| `duplication.rs`, `newcode.rs`, `coverage.rs` | Domain | Copy-paste detection, changed lines, LCOV parsing |
-| `measures.rs`, `gate.rs`, `project.rs`, `config.rs` | Domain | Project metrics, quality gate, configuration |
-| `model.rs`, `lang.rs` | Shared | Plain data types, language table |
-
-The domain does no I/O, and tests enforce the layering. See [ADR-0001](docs/adr/0001-architecture.md).
-
-Parsing uses [tree-sitter](https://tree-sitter.github.io/), so adding a language mostly means adding its grammar crate, its node kinds in `lang.rs`, and rules.
-
-### Adding a rule
-
-Most rules are a tree-sitter query that captures the offending node as `@match`, plus an optional Rust filter. Every rule has a `bad` and a `good` example, and the test suite checks that the rule flags the first and ignores the second:
-
-```rust
-Rule {
-    id: "js/no-eval",
-    name: "eval() should not be used",
-    description: "eval() executes arbitrary strings as code and is a common injection vector.",
-    message: "Remove this use of eval().",
-    category: Vulnerability,
-    severity: Critical,
-    effort_minutes: 30,
-    check: Check::Query {
-        langs: JS_TS,
-        query: r#"(call_expression function: (identifier) @f (#eq? @f "eval")) @match"#,
-        filter: None,
-    },
-    example: Some(Example { lang: Lang::JavaScript, bad: "eval(userInput);", good: "JSON.parse(userInput);" }),
-},
-```
-
-Then regenerate the docs with `cargo run -- rules --format markdown > docs/rules.md` (CI checks it's up to date).
+Each file is parsed with [tree-sitter](https://tree-sitter.github.io/). sonda
+runs the rules' queries and structural checks on it and collects metrics and
+tokens. Duplication is then detected across all files, new code is computed
+from git, and everything is combined into measures and a quality gate.
+[ARCHITECTURE.md](ARCHITECTURE.md) describes the pipeline and the layers.
 
 ## Security
 
-sonda treats the repository it analyzes as untrusted input. It never runs code from the repository. It only asks git to read objects (it never runs `git diff`, `status` or `ls-files`, which can run programs configured in the repository's `.git/config`). One file can't crash or stall a scan: walks over syntax trees are iterative, and every file has a size limit and a time budget. Symlinks are not followed. Text output shows control characters and Unicode bidi overrides from the repository as visible escapes instead of letting the terminal interpret them. See [docs/engineering-standards.md](docs/engineering-standards.md#4-security).
+sonda treats the repository it analyzes as untrusted input:
+- It never runs code from the repository, and it only asks git to read
+  objects.
+- One file can't crash or stall a scan.
+- Symlinks are not followed.
+- Control characters from the repository are escaped before they reach your
+  terminal.
+
+In CI, load `sonda.toml` from a trusted place so a pull request can't weaken
+its own gate. [SECURITY.md](SECURITY.md) has the threat model, the known
+limitations, and how to report a vulnerability.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), including [how to add a rule](CONTRIBUTING.md#adding-a-rule). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Compared with SonarQube
 

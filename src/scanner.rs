@@ -18,6 +18,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use tracing::{debug, info};
 
 /// What to analyze.
 #[derive(Debug, Clone)]
@@ -36,7 +37,13 @@ pub(crate) fn scan(
     cfg: &Config,
     rules: &RuleSet,
 ) -> Result<ProjectAnalysis, Error> {
+    let started = Instant::now();
     let (paths, warnings) = collect_files(&opts.root, cfg)?;
+    info!(
+        files = paths.len(),
+        elapsed_ms = ms(started),
+        "discovered files"
+    );
     scan_files(opts, cfg, rules, paths, warnings)
 }
 
@@ -60,14 +67,18 @@ fn scan_files(
 
     let new_code = match &opts.new_code_ref {
         Some(r) => {
+            let started = Instant::now();
             let contents = paths
                 .iter()
                 .map(|(path, rel, _)| (rel.as_str(), read_capped(path, max_bytes).ok().flatten()));
-            git::new_code(root, r, max_bytes, contents)?
+            let new_code = git::new_code(root, r, max_bytes, contents)?;
+            info!(reference = %r, elapsed_ms = ms(started), "computed new code");
+            new_code
         }
         None => NewCode::Everything,
     };
 
+    let started = Instant::now();
     let results: Vec<Result<FileAnalysis, String>> = paths
         .par_iter()
         .map(|(path, rel, lang)| {
@@ -91,9 +102,19 @@ fn scan_files(
     for r in results {
         match r {
             Ok(f) => files.push(f),
-            Err(w) => warnings.push(w),
+            Err(w) => {
+                debug!(warning = %w, "file not analyzed");
+                warnings.push(w);
+            }
         }
     }
+    info!(
+        analyzed = files.len(),
+        skipped = paths.len() - files.len(),
+        issues = files.iter().map(|f| f.issues.len()).sum::<usize>(),
+        elapsed_ms = ms(started),
+        "analyzed files"
+    );
     // `paths` is sorted and rayon's collect keeps input order, so `files` is too.
     for f in &mut files {
         if f.has_syntax_errors {
@@ -107,11 +128,18 @@ fn scan_files(
         }
     }
 
+    let started = Instant::now();
     let tokens: Vec<&[analysis::Token]> = files.iter().map(|f| f.tokens.as_slice()).collect();
     let duplication = duplication::detect(
         &tokens,
         cfg.duplication.min_tokens,
         cfg.duplication.min_lines,
+    );
+    info!(
+        tokens = tokens.iter().map(|t| t.len()).sum::<usize>(),
+        blocks = duplication.blocks.len(),
+        elapsed_ms = ms(started),
+        "detected duplication"
     );
 
     // Warnings arrive in filesystem-walk order; sort for stable output.
@@ -166,6 +194,10 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
         files.push((path.to_path_buf(), rel, lang));
     }
     Ok((files, warnings))
+}
+
+fn ms(since: Instant) -> u128 {
+    since.elapsed().as_millis()
 }
 
 /// Reads at most `max_bytes`; `None` if the file is larger. Bounding the read
