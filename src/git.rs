@@ -12,21 +12,32 @@ use crate::newcode::{Changed, NewCode, changed_lines};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 /// Computes new code against the merge base of HEAD and `reference`.
 /// `files` yields each scanned file's root-relative path and current content
 /// (`None` when unreadable or too large; such files are skipped). Base-branch
-/// blobs larger than `max_bytes` count as entirely changed.
+/// blobs larger than `max_bytes` count as entirely changed. Each git process
+/// is killed if it runs longer than `timeout`.
 pub(crate) fn new_code<'a>(
     root: &Path,
     reference: &str,
     max_bytes: u64,
+    timeout: Duration,
     files: impl IntoIterator<Item = (&'a str, Option<Vec<u8>>)>,
 ) -> Result<NewCode, Error> {
     validate_ref(reference)?;
-    let prefix = git(root, &["rev-parse", "--show-prefix"])?;
-    let base = git(root, &["merge-base", "--end-of-options", "HEAD", reference])?;
+    let prefix = git(root, &["rev-parse", "--show-prefix"], timeout)?;
+    let base = git(
+        root,
+        &["merge-base", "--end-of-options", "HEAD", reference],
+        timeout,
+    )?;
     let tree = git(
         root,
         &[
@@ -37,10 +48,11 @@ pub(crate) fn new_code<'a>(
             "--end-of-options",
             base.trim(),
         ],
+        timeout,
     )?;
     let blobs = parse_ls_tree(&tree, prefix.trim_end_matches('\n'));
 
-    let mut cat = CatFile::spawn(root)?;
+    let mut cat = CatFile::start(git_command(root).args(["cat-file", "--batch"]), timeout)?;
     let mut changed = HashMap::new();
     for (path, content) in files {
         let Some(new) = content.and_then(|c| String::from_utf8(c).ok()) else {
@@ -112,12 +124,9 @@ fn git_command(dir: &Path) -> Command {
     cmd
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
+fn git(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, Error> {
     tracing::debug!(?args, "running git");
-    let out = git_command(dir)
-        .args(args)
-        .output()
-        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+    let out = run_with_timeout(git_command(dir).args(args), timeout)?;
     if !out.status.success() {
         return Err(Error::Git(format!(
             "{} failed: {}",
@@ -128,17 +137,107 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Runs `cmd` to completion, killing it after `timeout`.
+fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, Error> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+    let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(Error::Internal("git pipes missing".into()));
+    };
+    let watchdog = Watchdog::start(child, timeout);
+    // Drain stderr concurrently: if either pipe fills up, git blocks forever.
+    let stderr_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        stderr.read_to_end(&mut buf).map(|_| buf)
+    });
+    let mut out = Vec::new();
+    let read = stdout.read_to_end(&mut out);
+    let err = stderr_reader
+        .join()
+        .map_err(|_| Error::Internal("git stderr reader panicked".into()))?;
+    // A timeout explains any read failure, so check it first.
+    let status = watchdog.finish()?;
+    read.map_err(|e| Error::Git(format!("reading git output: {e}")))?;
+    let err = err.map_err(|e| Error::Git(format!("reading git errors: {e}")))?;
+    Ok(Output {
+        status,
+        stdout: out,
+        stderr: err,
+    })
+}
+
+/// Kills a process that outlives its deadline, so a pathological repository
+/// cannot hang the scan. Reads from the killed process's pipes then end, and
+/// `finish` reports the timeout.
+struct Watchdog {
+    done: mpsc::Sender<()>,
+    killed: Arc<AtomicBool>,
+    waiter: JoinHandle<std::io::Result<ExitStatus>>,
+    timeout: Duration,
+}
+
+impl Watchdog {
+    fn start(mut child: Child, timeout: Duration) -> Watchdog {
+        let (done, finished) = mpsc::channel::<()>();
+        let killed = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&killed);
+        let waiter = thread::spawn(move || {
+            if let Err(RecvTimeoutError::Timeout) = finished.recv_timeout(timeout) {
+                flag.store(true, Ordering::SeqCst);
+                // Fails only if the process already exited, which is fine.
+                let _ = child.kill();
+            }
+            child.wait()
+        });
+        Watchdog {
+            done,
+            killed,
+            waiter,
+            timeout,
+        }
+    }
+
+    fn timed_out(&self) -> bool {
+        self.killed.load(Ordering::SeqCst)
+    }
+
+    fn timeout_error(&self) -> Error {
+        Error::Git(format!(
+            "timed out after {:?} (raise scan.git_timeout_secs for very large repositories)",
+            self.timeout
+        ))
+    }
+
+    /// Waits for the process to exit; call once its output is consumed.
+    fn finish(self) -> Result<ExitStatus, Error> {
+        // Ignored error: the waiter stopped listening because it timed out.
+        let _ = self.done.send(());
+        let timeout_error = self.timeout_error();
+        let status = self
+            .waiter
+            .join()
+            .map_err(|_| Error::Internal("git watchdog panicked".into()))?;
+        // The waiter has exited, so the flag is final.
+        if self.killed.load(Ordering::SeqCst) {
+            return Err(timeout_error);
+        }
+        status.map_err(|e| Error::Git(format!("waiting for git: {e}")))
+    }
+}
+
 /// A `git cat-file --batch` process: one request/response per object.
 struct CatFile {
-    child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    watchdog: Watchdog,
 }
 
 impl CatFile {
-    fn spawn(dir: &Path) -> Result<CatFile, Error> {
-        let mut child = git_command(dir)
-            .args(["cat-file", "--batch"])
+    fn start(cmd: &mut Command, timeout: Duration) -> Result<CatFile, Error> {
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -147,58 +246,74 @@ impl CatFile {
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(Error::Internal("git cat-file pipes missing".into()));
         };
-        let stdout = BufReader::new(stdout);
         Ok(CatFile {
-            child,
             stdin,
-            stdout,
+            stdout: BufReader::new(stdout),
+            watchdog: Watchdog::start(child, timeout),
         })
+    }
+
+    /// An error for a failed read or write, explained by the timeout when
+    /// the watchdog killed the process.
+    fn fail(&self, what: impl std::fmt::Display) -> Error {
+        if self.watchdog.timed_out() {
+            self.watchdog.timeout_error()
+        } else {
+            Error::Git(format!("git cat-file: {what}"))
+        }
     }
 
     /// The blob's bytes, or `None` if it is missing or larger than `max_bytes`.
     fn blob(&mut self, oid: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, Error> {
-        let io = |e: std::io::Error| Error::Git(format!("git cat-file: {e}"));
-        writeln!(self.stdin, "{oid}").map_err(io)?;
-        self.stdin.flush().map_err(io)?;
+        if let Err(e) = writeln!(self.stdin, "{oid}").and_then(|()| self.stdin.flush()) {
+            return Err(self.fail(e));
+        }
         let mut header = String::new();
-        self.stdout.read_line(&mut header).map_err(io)?;
+        match self.stdout.read_line(&mut header) {
+            Ok(0) => return Err(self.fail("exited unexpectedly")),
+            Ok(_) => {}
+            Err(e) => return Err(self.fail(e)),
+        }
         // "<oid> <type> <size>" or "<oid> missing"
         let mut parts = header.split_whitespace().skip(1);
         let (Some(kind), Some(size)) = (parts.next(), parts.next()) else {
             return Ok(None);
         };
-        let size: u64 = size
-            .parse()
-            .map_err(|_| Error::Git(format!("bad cat-file header {header:?}")))?;
+        let Ok(size) = size.parse::<u64>() else {
+            return Err(self.fail(format!("bad header {header:?}")));
+        };
         // +1: every object is followed by a newline.
         let mut body = (&mut self.stdout).take(size.saturating_add(1));
         if kind != "blob" || size > max_bytes {
-            std::io::copy(&mut body, &mut std::io::sink()).map_err(io)?;
-            return Ok(None);
+            let skipped = std::io::copy(&mut body, &mut std::io::sink());
+            return match skipped {
+                Ok(n) if n == size.saturating_add(1) => Ok(None),
+                Ok(_) => Err(self.fail("truncated output")),
+                Err(e) => Err(self.fail(e)),
+            };
         }
         let mut buf = Vec::new();
-        body.read_to_end(&mut buf).map_err(io)?;
+        if let Err(e) = body.read_to_end(&mut buf) {
+            return Err(self.fail(e));
+        }
         if buf.pop() != Some(b'\n') || buf.len() as u64 != size {
-            return Err(Error::Git("truncated output from git cat-file".into()));
+            return Err(self.fail("truncated output"));
         }
         Ok(Some(buf))
     }
 
     fn finish(self) -> Result<(), Error> {
-        let CatFile {
-            mut child, stdin, ..
-        } = self;
-        drop(stdin); // EOF ends the batch
-        child
-            .wait()
-            .map_err(|e| Error::Git(format!("waiting for git cat-file: {e}")))?;
-        Ok(())
+        drop(self.stdin); // EOF ends the batch
+        self.watchdog.finish().map(|_| ())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+
+    const TIMEOUT: Duration = Duration::from_secs(30);
     use crate::newcode::NewCode;
     use proptest::prelude::*;
     use std::path::PathBuf;
@@ -225,7 +340,7 @@ mod tests {
         }
 
         fn git(&self, args: &[&str]) {
-            git(&self.root, args).unwrap();
+            git(&self.root, args, TIMEOUT).unwrap();
         }
 
         fn write(&self, path: &str, content: &str) {
@@ -236,7 +351,7 @@ mod tests {
 
         fn new_code(&self, root: &Path, files: &[&str]) -> Result<NewCode, Error> {
             let contents = files.iter().map(|f| (*f, std::fs::read(root.join(f)).ok()));
-            new_code(root, "main", 1 << 20, contents)
+            new_code(root, "main", 1 << 20, TIMEOUT, contents)
         }
     }
 
@@ -281,13 +396,13 @@ mod tests {
     fn rejects_option_like_and_unknown_refs() {
         let repo = Repo::new();
         for bad in ["-x", "--output=/tmp/pwned", "", "main\nHEAD", "a b"] {
-            let err = new_code(&repo.root, bad, 1024, []).unwrap_err();
+            let err = new_code(&repo.root, bad, 1024, TIMEOUT, []).unwrap_err();
             assert!(
                 err.to_string().contains("invalid --new-code"),
                 "{bad:?}: {err}"
             );
         }
-        assert!(new_code(&repo.root, "no-such-branch", 1024, []).is_err());
+        assert!(new_code(&repo.root, "no-such-branch", 1024, TIMEOUT, []).is_err());
     }
 
     /// Regression: `git diff` against the working tree used to run the
@@ -332,7 +447,7 @@ mod tests {
         let repo = Repo::new();
         repo.write("a.py", "a = 1\nb = 3\n");
         let files = [("a.py", std::fs::read(repo.root.join("a.py")).ok())];
-        let nc = new_code(&repo.root, "main", 4, files).unwrap();
+        let nc = new_code(&repo.root, "main", 4, TIMEOUT, files).unwrap();
         assert!(nc.is_new("a.py", 1));
     }
 
@@ -361,5 +476,56 @@ mod tests {
                 prop_assert!(!r.chars().any(|c| c.is_whitespace() || c.is_control()));
             }
         }
+    }
+
+    #[test]
+    fn run_with_timeout_returns_output() {
+        let out = run_with_timeout(Command::new("git").arg("--version"), TIMEOUT).unwrap();
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with("git version"));
+    }
+
+    /// Regression: git calls had no timeout, so a pathological repository
+    /// could hang the scan forever.
+    #[cfg(unix)]
+    #[test]
+    fn hanging_process_is_killed_at_the_deadline() {
+        let started = Instant::now();
+        let err = run_with_timeout(Command::new("sleep").arg("30"), Duration::from_millis(200))
+            .unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// Both pipes are drained concurrently, so large output on stdout and
+    /// stderr cannot deadlock.
+    #[cfg(unix)]
+    #[test]
+    fn large_stdout_and_stderr_do_not_deadlock() {
+        let script = "head -c 1000000 /dev/zero >&2; head -c 1000000 /dev/zero";
+        let out = run_with_timeout(Command::new("sh").args(["-c", script]), TIMEOUT).unwrap();
+        assert_eq!((out.stdout.len(), out.stderr.len()), (1_000_000, 1_000_000));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hanging_cat_file_times_out_instead_of_blocking() {
+        let started = Instant::now();
+        let mut cat =
+            CatFile::start(Command::new("sleep").arg("30"), Duration::from_millis(200)).unwrap();
+        let err = cat.blob("abc", 1024).unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        assert!(cat.finish().is_err());
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// Regression: when cat-file died, its empty answer read as "blob
+    /// missing", silently marking the file as entirely new code.
+    #[cfg(unix)]
+    #[test]
+    fn cat_file_exiting_early_is_an_error() {
+        let mut cat = CatFile::start(&mut Command::new("true"), TIMEOUT).unwrap();
+        let err = cat.blob("abc", 1024).unwrap_err();
+        assert!(!err.to_string().contains("timed out"), "{err}");
     }
 }

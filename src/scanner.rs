@@ -71,7 +71,8 @@ fn scan_files(
             let contents = paths
                 .iter()
                 .map(|(path, rel, _)| (rel.as_str(), read_capped(path, max_bytes).ok().flatten()));
-            let new_code = git::new_code(root, r, max_bytes, contents)?;
+            let git_timeout = Duration::from_secs(cfg.scan.git_timeout_secs);
+            let new_code = git::new_code(root, r, max_bytes, git_timeout, contents)?;
             info!(reference = %r, elapsed_ms = ms(started), "computed new code");
             new_code
         }

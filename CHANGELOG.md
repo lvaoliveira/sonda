@@ -41,7 +41,14 @@ file, the report formats and the public library API.
   that repeated one token took 75 s, and the per-file time budget didn't
   apply. It is now linear: the same file takes 5 ms.
 
+- Every git process is killed after `scan.git_timeout_secs` (default 120),
+  so a pathological repository can no longer hang `--new-code`.
+
 ### Fixed
+
+- When `git cat-file` exited early, its empty answer was read as "blob
+  missing", which silently marked files as entirely new code. It is now an
+  error.
 
 - A node ending in a line break, such as an unterminated string at the end
   of a file or a C `#include` line, counted the following line as code. In

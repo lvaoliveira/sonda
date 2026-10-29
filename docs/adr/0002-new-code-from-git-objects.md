@@ -53,5 +53,8 @@ after `--end-of-options`.
 - Line-level results match `git diff` in normal cases (verified on a real
   repository). They may differ slightly where diff heuristics differ, for
   example with moved blocks.
-- Still open: git commands have no timeout, so a pathological history could
-  make `merge-base` slow.
+- Every git process runs under a watchdog thread that kills it after
+  `scan.git_timeout_secs` (default 120 s). The killed process's pipes reach
+  end-of-file, and the run fails with a timeout error instead of hanging.
+  Stdout and stderr are drained concurrently so a full pipe cannot deadlock
+  git.

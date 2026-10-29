@@ -42,6 +42,9 @@ still validated), and the files they explicitly name (`--config`,
     levels of nesting.
   - Duplication detection runs in linear time, even on input crafted to be
     repetitive.
+- **git cannot hang a scan.** Every git process is killed after
+  `scan.git_timeout_secs` (default 120), and the run fails with a clear
+  error instead of waiting forever.
   - Malformed files become warnings.
 - **No reads outside the scan root.** Symlinks are not followed.
 - **No terminal injection.** Control characters and Unicode bidi overrides
@@ -56,8 +59,6 @@ still validated), and the files they explicitly name (`--config`,
   through FFI. A memory-safety bug in them, triggered by a crafted file,
   could affect the sonda process. They are kept up to date, but they are not
   yet fuzzed or run in a separate process.
-- **git has no timeout.** A pathological repository history could make
-  `merge-base` slow.
 - **File-swap race.** If an attacker can modify the directory *while* it is
   being scanned, a file could be swapped for a symlink between the walk and
   the read. A static checkout is not affected.

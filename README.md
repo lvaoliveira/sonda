@@ -82,6 +82,7 @@ Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an err
 exclude = ["**/node_modules/**", "**/dist/**", "**/*.min.js"]
 max_file_size_kb = 1024    # larger files are skipped with a warning
 file_timeout_secs = 10     # per-file parse + rule-matching budget
+git_timeout_secs = 120     # each git process used by --new-code
 
 [rules]
 disabled = ["js/no-console"]

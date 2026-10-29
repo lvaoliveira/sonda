@@ -19,6 +19,8 @@ max_file_size_kb = 1024
 # Parsing and rule matching of one file give up after this many seconds
 # (the file is then reported as a warning instead of analyzed).
 file_timeout_secs = 10
+# Each git process (used by --new-code) is killed after this many seconds.
+git_timeout_secs = 120
 
 [rules]
 # Rule ids to turn off. `sonda rules` lists them all.
@@ -77,6 +79,7 @@ pub struct ScanConfig {
     pub exclude: Vec<String>,
     pub max_file_size_kb: u64,
     pub file_timeout_secs: u64,
+    pub git_timeout_secs: u64,
 }
 
 impl Default for ScanConfig {
@@ -93,6 +96,7 @@ impl Default for ScanConfig {
             .to_vec(),
             max_file_size_kb: 1024,
             file_timeout_secs: 10,
+            git_timeout_secs: 120,
         }
     }
 }
@@ -182,6 +186,7 @@ impl Config {
             ("thresholds.function_lines", t.function_lines as u64),
             ("thresholds.parameters", t.parameters as u64),
             ("scan.file_timeout_secs", self.scan.file_timeout_secs),
+            ("scan.git_timeout_secs", self.scan.git_timeout_secs),
             ("duplication.min_tokens", self.duplication.min_tokens as u64),
         ];
         match positive.iter().find(|(_, v)| *v == 0) {
