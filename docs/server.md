@@ -4,9 +4,9 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 ([ADR-0005](adr/0005-sonda-server.md)). It runs as two containers: `sonda`
 (the server and the web app) and `db` (PostgreSQL).
 
-**Status:** the server receives uploads and tracks issues across them.
-The Issues and Rules API for the web app comes next; until then the web app
-shows mock data.
+**Status:** the server receives uploads, tracks issues across them, signs
+browsers in, and serves the rule catalog. The Issues API and connecting the
+web app come next; until then the web app shows mock data.
 
 ## Quick start (Docker Compose)
 
@@ -68,6 +68,38 @@ A rejected upload stores nothing:
 | `413` | Too large, compressed or after decompression. |
 | `415` | A `Content-Encoding` other than gzip or identity. |
 | `422` | Well-formed but invalid, e.g. a source that doesn't match its SHA-256, an unknown rule, an unsafe path, or an unsupported `report_version`. |
+
+## Who can read
+
+Anyone can read while the server listens on loopback only, which is the
+default without Docker. Otherwise, as in the Docker image, every read needs
+either the token as `Authorization: Bearer <token>` or a browser session,
+because the server holds source code. Uploads always need the token.
+
+A browser signs in by sending the token once; it gets a session cookie back
+and never keeps the token itself:
+
+| Endpoint | |
+|---|---|
+| `GET /api/session` | `{"authenticated": false, "readsRequireAuth": true}` |
+| `POST /api/session` `{"token": "..."}` | `204` and the cookie, or `401` |
+| `DELETE /api/session` | `204`; ends the session and clears the cookie |
+
+The cookie is `__Host-sonda_session`: `HttpOnly` (page scripts cannot read
+it), `Secure`, `SameSite=Strict`, and valid for 12 hours. The database keeps
+only a SHA-256 hash of each session. Browsers treat `http://localhost` as
+secure, so signing in works locally without TLS.
+
+## Rules
+
+`GET /api/rules` returns sonda's rule catalog: name, description, languages
+(as ids such as `javascript` or `tsx`, the same as in reports), category,
+severity, effort, and noncompliant and compliant examples. It adds live
+counts: open or confirmed issues on each project's main branch, and how many
+projects have them. A project's main branch is the first branch analyzed.
+
+The catalog is read-only. Rules are configured in each repository's
+`sonda.toml`, not on the server.
 
 ## Exposing it beyond this machine
 

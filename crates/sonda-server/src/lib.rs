@@ -10,6 +10,8 @@ pub mod config;
 pub mod db;
 pub mod http;
 pub mod ingest;
+pub mod rules;
+pub mod session;
 pub mod store;
 
 use anyhow::{Context, Result};
@@ -21,9 +23,14 @@ use tokio::net::TcpListener;
 pub async fn run(config: Config) -> Result<()> {
     let pool = db::connect(config.database).await?;
     db::migrate(&pool).await?;
+    let reads_require_auth = !config.listen.ip().is_loopback();
+    if reads_require_auth {
+        tracing::info!("reads require the token or a session (not listening on loopback only)");
+    }
     let state = http::State {
         pool,
         token: std::sync::Arc::new(config.token),
+        reads_require_auth,
     };
     let app = http::router(state, config.web_dir.as_deref());
     let listener = TcpListener::bind(config.listen)

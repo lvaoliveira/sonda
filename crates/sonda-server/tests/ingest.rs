@@ -7,71 +7,10 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{TOKEN, TestDb, state, unreachable_pool};
-use flate2::Compression;
-use flate2::write::GzEncoder;
+use common::{TOKEN, TestDb, gzip, post, state, unreachable_pool, upload, upload_json};
 use serde_json::Value;
-use sonda_core::upload::{self, Meta};
-use sonda_core::{Isolation, ScanOptions, report};
 use sonda_server::{db, http};
-use std::io::Write;
-use std::path::Path;
 use tower::ServiceExt;
-
-/// What `sonda upload` would send for `files`, as plain JSON.
-fn upload_json(dir: &Path, files: &[(&str, &str)], branch: &str) -> Value {
-    for (path, content) in files {
-        let full = dir.join(path);
-        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
-        std::fs::write(full, content).unwrap();
-    }
-    let options = ScanOptions {
-        root: dir.to_path_buf(),
-        isolation: Isolation::InProcess,
-        ..Default::default()
-    };
-    let config = sonda_core::config::Config::default();
-    let outcome = sonda_core::run(&options, &config).unwrap();
-    let json = report::render(&report::build(&outcome, false), report::Format::Json);
-    let meta = Meta {
-        project: "payments".into(),
-        branch: branch.into(),
-        commit: "0123abc".into(),
-    };
-    serde_json::to_value(upload::prepare(json.as_bytes(), dir, meta).unwrap()).unwrap()
-}
-
-fn gzip(bytes: &[u8]) -> Vec<u8> {
-    let mut e = GzEncoder::new(Vec::new(), Compression::fast());
-    e.write_all(bytes).unwrap();
-    e.finish().unwrap()
-}
-
-async fn post(app: axum::Router, token: Option<&str>, body: Vec<u8>) -> (StatusCode, Value) {
-    let mut request = Request::post("/api/analyses")
-        .header("Content-Type", "application/json")
-        .header("Content-Encoding", "gzip");
-    if let Some(t) = token {
-        request = request.header("Authorization", format!("Bearer {t}"));
-    }
-    let response = app
-        .oneshot(request.body(Body::from(body)).unwrap())
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
-
-async fn upload(db: &TestDb, body: &Value) -> (StatusCode, Value) {
-    let app = http::router(state(db.pool.clone()), None);
-    post(app, Some(TOKEN), gzip(&serde_json::to_vec(body).unwrap())).await
-}
 
 #[tokio::test]
 async fn uploads_need_the_token() {

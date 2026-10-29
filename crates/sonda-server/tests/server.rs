@@ -32,6 +32,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "issue_events",
             "issues",
             "projects",
+            "sessions",
             "sources"
         ]
     );

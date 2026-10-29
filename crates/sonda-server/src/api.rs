@@ -1,6 +1,7 @@
-//! Interface: what every API route shares — JSON errors and token auth.
+//! Interface: what every API route shares: JSON errors and authorization.
 
 use crate::http::State;
+use crate::session;
 use axum::Json;
 use axum::extract::Request;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -51,6 +52,28 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
+/// Who is calling, as far as the API cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caller {
+    /// The API token, as a bearer header: `sonda upload`, scripts.
+    Token,
+    /// A browser signed in with the token (see `session`).
+    Session,
+    Anonymous,
+}
+
+pub async fn caller(state: &State, headers: &HeaderMap) -> Result<Caller, ApiError> {
+    if bearer(headers).is_some_and(|t| state.token.matches(t)) {
+        return Ok(Caller::Token);
+    }
+    if let Some(token) = session::from_headers(headers)
+        && session::is_valid(&state.pool, token).await?
+    {
+        return Ok(Caller::Session);
+    }
+    Ok(Caller::Anonymous)
+}
+
 /// Middleware for routes that need the API token. It runs before the body
 /// is read, so an unauthenticated client cannot make the server buffer an
 /// upload.
@@ -64,6 +87,20 @@ pub async fn require_token(
     } else {
         Err(ApiError::Unauthorized)
     }
+}
+
+/// Middleware for reads. Anyone may read while the server listens on
+/// loopback only; otherwise reads need the token or a session, because the
+/// server holds source code.
+pub async fn require_read(
+    axum::extract::State(state): axum::extract::State<State>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    if state.reads_require_auth && caller(&state, request.headers()).await? == Caller::Anonymous {
+        return Err(ApiError::Unauthorized);
+    }
+    Ok(next.run(request).await)
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {

@@ -4,9 +4,16 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use serde_json::Value;
+use sonda_core::upload::{self, Meta};
+use sonda_core::{Isolation, ScanOptions, report};
 use sonda_server::config::Token;
 use sonda_server::http;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use std::io::Write;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -58,10 +65,16 @@ impl TestDb {
     }
 }
 
+/// Reads open, as on a loopback-only server.
 pub fn state(pool: PgPool) -> http::State {
+    state_with(pool, false)
+}
+
+pub fn state_with(pool: PgPool, reads_require_auth: bool) -> http::State {
     http::State {
         pool,
         token: Arc::new(Token::new(TOKEN).unwrap()),
+        reads_require_auth,
     }
 }
 
@@ -86,3 +99,58 @@ pub fn unreachable_pool() -> PgPool {
 }
 
 pub const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+/// What `sonda upload` would send for `files`, as plain JSON.
+pub fn upload_json(dir: &Path, files: &[(&str, &str)], branch: &str) -> Value {
+    for (path, content) in files {
+        let full = dir.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, content).unwrap();
+    }
+    let options = ScanOptions {
+        root: dir.to_path_buf(),
+        isolation: Isolation::InProcess,
+        ..Default::default()
+    };
+    let config = sonda_core::config::Config::default();
+    let outcome = sonda_core::run(&options, &config).unwrap();
+    let json = report::render(&report::build(&outcome, false), report::Format::Json);
+    let meta = Meta {
+        project: "payments".into(),
+        branch: branch.into(),
+        commit: "0123abc".into(),
+    };
+    serde_json::to_value(upload::prepare(json.as_bytes(), dir, meta).unwrap()).unwrap()
+}
+
+pub fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+    e.write_all(bytes).unwrap();
+    e.finish().unwrap()
+}
+
+pub async fn post(app: axum::Router, token: Option<&str>, body: Vec<u8>) -> (StatusCode, Value) {
+    let mut request = Request::post("/api/analyses")
+        .header("Content-Type", "application/json")
+        .header("Content-Encoding", "gzip");
+    if let Some(t) = token {
+        request = request.header("Authorization", format!("Bearer {t}"));
+    }
+    let response = app
+        .oneshot(request.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+pub async fn upload(db: &TestDb, body: &Value) -> (StatusCode, Value) {
+    let app = http::router(state(db.pool.clone()), None);
+    post(app, Some(TOKEN), gzip(&serde_json::to_vec(body).unwrap())).await
+}
