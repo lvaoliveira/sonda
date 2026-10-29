@@ -311,7 +311,6 @@ impl CatFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     const TIMEOUT: Duration = Duration::from_secs(30);
     use crate::newcode::NewCode;
@@ -490,7 +489,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hanging_process_is_killed_at_the_deadline() {
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         let err = run_with_timeout(Command::new("sleep").arg("30"), Duration::from_millis(200))
             .unwrap_err();
         assert!(err.to_string().contains("timed out"), "{err}");
@@ -510,7 +509,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hanging_cat_file_times_out_instead_of_blocking() {
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         let mut cat =
             CatFile::start(Command::new("sleep").arg("30"), Duration::from_millis(200)).unwrap();
         let err = cat.blob("abc", 1024).unwrap_err();
