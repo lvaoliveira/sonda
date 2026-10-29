@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # tree-sitter and its grammars parse untrusted input: review their
+    # updates as security-relevant (see docs/engineering-standards.md §8).
+    groups:
+      tree-sitter:
+        patterns: ["tree-sitter*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,31 @@
+# cargo-deny policy: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[advisories]
+# Every RustSec advisory fails the build, including unmaintained crates
+# and yanked versions; exceptions go in `ignore` with a justification.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licenses compatible with distributing sonda as MIT OR Apache-2.0.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    # foldhash (via serde_json): permissive, OSI-approved, no copyleft.
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
