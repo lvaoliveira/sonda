@@ -79,8 +79,10 @@ pub(super) fn enter() -> Result<(), String> {
     let arch = TargetArch::try_from(std::env::consts::ARCH).map_err(|e| fail(&e))?;
     let pid = rustix::process::getpid().as_raw_nonzero().get();
     let mut filters = compile_from_json(filter_json(pid).as_bytes(), arch).map_err(|e| fail(&e))?;
-    // Both filters stay active; also sets PR_SET_NO_NEW_PRIVS.
-    for name in ["worker", "no_files"] {
+    // Both filters stay active (also sets PR_SET_NO_NEW_PRIVS). The
+    // allow-list must go last: installing a filter takes `prctl` and
+    // `seccomp` calls, which the allow-list itself would kill.
+    for name in ["no_files", "worker"] {
         let program = filters
             .remove(name)
             .ok_or_else(|| fail(&"filter missing"))?;

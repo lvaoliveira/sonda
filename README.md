@@ -157,3 +157,4 @@ sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate t
 ## License
 
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+
