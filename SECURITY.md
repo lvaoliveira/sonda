@@ -47,8 +47,8 @@ still validated), and the files they explicitly name (`--config`,
   error instead of waiting forever.
   - Malformed files become warnings.
 - **No reads outside the scan root.** Symlinks are not followed. On Unix,
-  each file is opened non-blocking and checked to be the same file (device
-  and inode) the walk listed. A file or directory swapped for a symlink or a
+  each file is opened non-blocking and checked to be a regular file, and the
+  same file (device and inode) the walk listed. A file or directory swapped for a symlink or a
   FIFO between listing and reading is skipped with a warning; it is not
   followed, and it cannot hang the scan.
 - **No terminal injection.** Control characters and Unicode bidi overrides

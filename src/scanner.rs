@@ -252,7 +252,12 @@ fn ms(since: Instant) -> u128 {
 /// swapped for a FIFO cannot hang the scan before that check runs.
 fn read_capped(c: &Candidate, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
     let file = open_nonblocking(&c.path)?;
-    if c.id.is_some() && file_id(&file.metadata()?) != c.id {
+    let meta = file.metadata()?;
+    // Both checks are needed: a deleted file's inode can be reused at once
+    // (ext4 does), so a FIFO created in its place can match the identity.
+    // A symlink to an existing file outside the root cannot: that file's
+    // inode was in use alongside the listed one.
+    if !meta.is_file() || (c.id.is_some() && file_id(&meta) != c.id) {
         return Err(std::io::Error::other(
             "skipped, the file was replaced after it was listed",
         ));
@@ -486,6 +491,30 @@ mod tests {
         let text = report::render(&report::build(&out, false), Format::Text);
         assert!(!text.contains('\x1b'), "{text}");
         assert!(text.contains("evil\\u{1b}[2J.js"), "{text}");
+    }
+
+    /// Regression (failed on Linux CI): ext4 reused a deleted file's inode
+    /// for the FIFO created in its place, so the identity matched and the
+    /// FIFO was read as an empty file. Without an identity, as here, only the
+    /// file-type check stands between the scan and a non-regular file.
+    #[cfg(unix)]
+    #[test]
+    fn only_regular_files_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.py");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let candidate = Candidate {
+            path: fifo,
+            rel: "pipe.py".into(),
+            lang: Lang::Python,
+            id: None,
+        };
+        let err = read_capped(&candidate, 1024).unwrap_err();
+        assert!(err.to_string().contains("replaced after it was listed"));
     }
 
     /// Regression: a file swapped for a symlink (or a parent directory
