@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Martian+Mono:wght@300;400;500&display=swap">
+<style>
+:root,[data-theme="dark"]{--bg:#0b0c0c;--panel:#101211;--panel-2:#151817;--hover:#1a1e1c;--line:#202523;--line-2:#2f3532;--text:#eceeed;--muted:#9ba39f;--faint:#6f7773;--accent:oklch(0.83 0.13 178);--accent-ink:#04191a;--accent-soft:color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);--ok:oklch(0.82 0.13 155);--warn:oklch(0.84 0.13 85);--crit:oklch(0.71 0.17 28);--info:oklch(0.77 0.10 250);--crit-soft:color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);--warn-soft:color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);--ok-soft:color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);--info-soft:color-mix(in oklch, oklch(0.77 0.10 250) 13%, transparent);--pip-off:#262b29;--shadow:0 24px 64px rgba(0,0,0,.55);color-scheme:dark}
+[data-theme="light"]{--bg:#f3f4f2;--panel:#ffffff;--panel-2:#f8f9f7;--hover:#eff1ee;--line:#e2e5e1;--line-2:#cfd4cf;--text:#111413;--muted:#56605b;--faint:#7a837e;--accent:oklch(0.52 0.10 182);--accent-ink:#ffffff;--accent-soft:color-mix(in oklch, oklch(0.52 0.10 182) 10%, transparent);--ok:oklch(0.52 0.12 155);--warn:oklch(0.58 0.12 70);--crit:oklch(0.55 0.19 28);--info:oklch(0.52 0.12 255);--crit-soft:color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);--warn-soft:color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);--ok-soft:color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);--info-soft:color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);--pip-off:#e3e6e2;--shadow:0 24px 64px rgba(20,30,25,.14);color-scheme:light}
+body{margin:0;background:#0b0c0c;font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:3px;text-decoration:none}
+a:hover{color:var(--text)}
+button,input,select{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Instrument Sans',system-ui,sans-serif;font-size:14px;line-height:1.5">
+<aside aria-label="Primary" style="width:228px;flex:none;display:flex;flex-direction:column;background:var(--bg);position:sticky;top:0;height:100vh">
+  <a href="Sonda%20Dashboard%20v3.dc.html" style="display:flex;align-items:center;gap:10px;height:60px;padding:0 18px;color:var(--text)">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 0 1 18 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".3"></path><path d="M7 9a5 5 0 0 1 10 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".65"></path><path d="M12 9v9" stroke="var(--accent)" stroke-width="1.6"></path><circle cx="12" cy="20" r="2.4" fill="var(--accent)"></circle></svg>
+    <span style="font-weight:600;font-size:17px;letter-spacing:-0.03em">sonda</span>
+  </a>
+  <div style="display:flex;align-items:center;gap:10px;margin:0 12px 10px;padding:8px 10px;background:var(--panel);border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700">AC</span>
+    <span style="display:flex;flex-direction:column;line-height:1.2;flex:1;min-width:0"><span style="font-weight:600;font-size:13px">acme-corp</span><span style="font-size:11px;color:var(--faint)">self-hosted · 312 projects</span></span>
+  </div>
+  <nav style="display:flex;flex-direction:column;gap:2px;padding:4px 12px;flex:1;overflow:auto">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <sc-if value="{{ n.heading }}" hint-placeholder-val="{{ false }}"><div style="padding:16px 10px 6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">{{ n.heading }}</div></sc-if>
+      <sc-if value="{{ n.label }}" hint-placeholder-val="{{ true }}">
+      <a href="{{ n.href }}" aria-current="{{ n.current }}" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;background:{{ n.bg }};color:{{ n.fg }};font-size:14px;font-weight:{{ n.w }}" style-hover="background:var(--hover);color:var(--text)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:{{ n.ic }}"><sc-for list="{{ n.paths }}" as="d" hint-placeholder-count="2"><path d="{{ d }}"></path></sc-for></svg>
+        <span style="flex:1">{{ n.label }}</span>
+        <sc-if value="{{ n.count }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ n.cc }}">{{ n.count }}</span></sc-if>
+      </a>
+      </sc-if>
+    </sc-for>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px;margin:12px;padding:10px;border-radius:8px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px">MO</span>
+    <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;flex:1"><span style="font-weight:600;font-size:13px">Mara Okafor</span><span style="font-size:11.5px;color:var(--faint)">@checkout</span></span>
+  </div>
+</aside>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 10px 10px 0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border-radius:14px;box-shadow:inset 0 0 0 1px var(--line)">
+  <header style="display:flex;align-items:center;gap:12px;height:56px;padding:0 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:5;border-radius:14px 14px 0 0">
+    <nav aria-label="Breadcrumb" style="display:flex;align-items:center;gap:8px;font-size:13.5px;flex:1;min-width:0;overflow:hidden;white-space:nowrap">
+      <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="2"><span style="display:flex;gap:8px;align-items:center;min-width:{{ c.minw }};flex:{{ c.flex }}"><sc-if value="{{ c.sep }}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="color:var(--line-2)">/</span></sc-if><a href="{{ c.href }}" style="color:{{ c.fg }};font-weight:{{ c.w }};font-family:{{ c.font }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ c.label }}</a></span></sc-for>
+    </nav>
+    <div style="display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:120px;height:34px;padding:0 12px;background:var(--bg);border-radius:8px;color:var(--faint);font-size:13px;box-shadow:inset 0 0 0 1px var(--line)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span style="flex:1;overflow:hidden;white-space:nowrap">Search or run a command</span><span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--hover);color:var(--muted)">⌘K</span></div>
+    <button onClick="{{ toggleTheme }}" aria-label="{{ themeLabel }}" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted);font-family:'Martian Mono',monospace;font-size:10.5px;box-shadow:inset 0 0 0 1px var(--line)" style-hover="color:var(--text)">{{ themeShort }}</button>
+  </header>
+  <main style="flex:1;padding:28px 24px 32px;display:flex;flex-direction:column;gap:20px;max-width:1560px;width:100%;box-sizing:border-box">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:6px"><h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.035em;line-height:1.1">Issues</h1><div style="font-size:13.5px;color:var(--muted)">1,342 open across 312 projects · showing the payments &amp; billing slice</div></div>
+      <div style="display:flex;gap:8px;align-items:center"><button onClick="{{ toggleFacets }}" style="height:34px;padding:0 14px;border:0;border-radius:8px;background:transparent;font-size:13px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">{{ facetsLabel }}</button><span style="font-size:12px;color:var(--faint)"><span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 5px;border-radius:4px;background:var(--hover)">j</span> <span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 5px;border-radius:4px;background:var(--hover)">k</span> move · <span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 5px;border-radius:4px;background:var(--hover)">a</span> assign · <span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 5px;border-radius:4px;background:var(--hover)">c</span> confirm</span></div>
+    </div>
+    <sc-if value="{{ drill }}" hint-placeholder-val="{{ false }}"><div role="status" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;background:var(--accent-soft);font-size:13px"><span style="font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)">Drill-down</span><span style="flex:1">{{ drill }}</span><button onClick="{{ clear }}" style="border:0;background:transparent;color:var(--accent);font-size:12.5px;cursor:pointer;padding:0">Clear</button></div></sc-if>
+
+    <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+      <div aria-busy="true" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:1px;background:var(--line);border-radius:12px;overflow:hidden;min-height:520px;box-shadow:0 0 0 1px var(--line)"><div style="background:var(--panel-2);padding:16px;display:flex;flex-direction:column;gap:12px"><sc-for list="{{ skel }}" as="s" hint-placeholder-count="6"><div style="height:52px;border-radius:8px;background:var(--hover)"></div></sc-for></div><div style="background:var(--panel-2);padding:16px;display:flex;flex-direction:column;gap:12px"><div style="height:24px;width:60%;border-radius:4px;background:var(--hover)"></div><div style="height:220px;border-radius:8px;background:var(--hover)"></div></div></div>
+    </sc-if>
+
+    <sc-if value="{{ ready }}" hint-placeholder-val="{{ false }}">
+    <div style="display:grid;grid-template-columns:{{ cols }};gap:1px;background:var(--line);border-radius:12px;overflow:hidden;min-height:calc(100vh - 220px);box-shadow:0 0 0 1px var(--line)">
+      <sc-if value="{{ showFacets }}" hint-placeholder-val="{{ true }}">
+      <aside aria-label="Filters" style="display:flex;flex-direction:column;gap:18px;padding:16px;background:var(--panel-2);overflow:auto">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <sc-for list="{{ toggles }}" as="t" hint-placeholder-count="2"><button onClick="{{ t.go }}" aria-pressed="{{ t.on }}" style="display:flex;justify-content:space-between;align-items:center;height:32px;padding:0 10px;border:0;border-radius:7px;background:{{ t.bg }};color:{{ t.fg }};font-size:13px;cursor:pointer;box-shadow:inset 0 0 0 1px {{ t.bd }}"><span>{{ t.label }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px">{{ t.n }}</span></button></sc-for>
+        </div>
+        <sc-for list="{{ facets }}" as="fc" hint-placeholder-count="4">
+          <fieldset style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:1px">
+            <legend style="font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:0 0 8px">{{ fc.label }}</legend>
+            <sc-for list="{{ fc.items }}" as="it" hint-placeholder-count="4">
+              <label style="display:flex;align-items:center;gap:9px;padding:5px 6px;border-radius:6px;font-size:13px;cursor:pointer;background:{{ it.bg }}" style-hover="background:var(--hover)">
+                <input type="checkbox" checked="{{ it.on }}" onChange="{{ it.toggle }}" style="accent-color:var(--accent);margin:0">
+                <sc-if value="{{ it.g }}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="color:{{ it.c }};font-size:10px;width:10px">{{ it.g }}</span></sc-if>
+                <span style="flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-family:{{ it.font }};font-size:{{ it.fs }}">{{ it.label }}</span>
+                <span style="font-family:'Martian Mono',monospace;font-size:10px;color:var(--faint)">{{ it.n }}</span>
+              </label>
+            </sc-for>
+          </fieldset>
+        </sc-for>
+        <div style="display:flex;flex-direction:column;gap:2px;padding-top:12px;border-top:1px solid var(--line)"><span style="font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding-bottom:6px">Saved views</span><sc-for list="{{ saved }}" as="v" hint-placeholder-count="3"><button onClick="{{ v.go }}" style="border:0;background:transparent;text-align:left;padding:5px 6px;border-radius:6px;font-size:13px;color:var(--muted);cursor:pointer" style-hover="background:var(--hover);color:var(--text)">{{ v.label }}</button></sc-for></div>
+      </aside>
+      </sc-if>
+
+      <section aria-label="Issue list" style="display:flex;flex-direction:column;min-width:0;background:var(--panel-2)">
+        <div style="display:flex;align-items:center;gap:10px;min-height:48px;padding:0 14px;border-bottom:1px solid var(--line);flex-wrap:wrap">
+          <span style="font-weight:600">{{ countLabel }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint)">{{ effortLabel }}</span><span style="flex:1"></span>
+          <sc-if value="{{ hasChecked }}" hint-placeholder-val="{{ false }}"><span style="display:flex;gap:6px;align-items:center;font-size:12.5px"><span style="color:var(--muted)">{{ checkedN }} selected</span><button onClick="{{ bulkAssign }}" style="height:26px;padding:0 10px;border:0;border-radius:6px;background:var(--accent);color:var(--accent-ink);font-size:12px;font-weight:600;cursor:pointer">Assign to me</button><button onClick="{{ bulkConfirm }}" style="height:26px;padding:0 10px;border:0;border-radius:6px;background:transparent;font-size:12px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">Confirm</button></span></sc-if>
+        </div>
+        <sc-if value="{{ none }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-direction:column;gap:6px;padding:40px 18px"><span style="font-weight:600;font-size:16px">Nothing matches</span><span style="color:var(--muted);font-size:13px">Either very good news or a filter that's too narrow.</span><button onClick="{{ clear }}" style="align-self:flex-start;margin-top:8px;height:30px;padding:0 12px;border:0;border-radius:7px;background:transparent;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">Reset filters</button></div></sc-if>
+        <div role="listbox" aria-label="Issues" style="display:flex;flex-direction:column;overflow:auto">
+          <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+            <div role="option" aria-selected="{{ r.sel }}" onClick="{{ r.open }}" style="display:grid;grid-template-columns:16px 14px minmax(0,1fr);align-items:start;gap:10px;padding:12px 14px 12px 11px;border-bottom:1px solid var(--line);border-left:3px solid {{ r.bar }};background:{{ r.bg }};cursor:pointer" style-hover="background:var(--hover)">
+              <input type="checkbox" aria-label="Select {{ r.key }}" checked="{{ r.checked }}" onClick="{{ r.check }}" onChange="{{ r.noop }}" style="accent-color:var(--accent);margin:3px 0 0">
+              <span aria-label="{{ r.sevL }}" style="color:{{ r.sevC }};font-size:10px;padding-top:3px">{{ r.sevG }}</span>
+              <span style="display:flex;flex-direction:column;gap:4px;min-width:0">
+                <span style="font-size:13.5px;font-weight:500;line-height:1.35;text-wrap:pretty">{{ r.title }}</span>
+                <span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ r.loc }}</span>
+                <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--faint)"><span style="color:{{ r.stC }}">{{ r.status }}</span><span>·</span><span>{{ r.cat }}</span><span>·</span><span>{{ r.effort }}</span><span>·</span><span>{{ r.age }}</span><sc-if value="{{ r.isNew }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:9px;letter-spacing:.06em;padding:1px 6px;border-radius:8px;background:var(--accent-soft);color:var(--accent)">NEW</span></sc-if><sc-if value="{{ r.mine }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:9px;letter-spacing:.06em;padding:1px 6px;border-radius:8px;background:var(--hover);color:var(--muted)">YOU</span></sc-if></span>
+              </span>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <sc-if value="{{ iss }}" hint-placeholder-val="{{ false }}">
+      <article aria-label="Issue detail" style="display:flex;flex-direction:column;min-width:0;background:var(--panel);overflow:auto">
+        <div style="display:flex;flex-direction:column;gap:12px;padding:18px 20px;border-bottom:1px solid var(--line)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">
+            <span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:12px;background:{{ iss.sevBg }};color:{{ iss.sevC }};font-weight:600"><span aria-hidden="true" style="font-size:10px">{{ iss.sevG }}</span>{{ iss.sevL }}</span>
+            <span style="height:24px;display:inline-flex;align-items:center;padding:0 10px;border-radius:12px;background:var(--hover)">{{ iss.catL }}</span>
+            <sc-if value="{{ iss.cwe }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--muted)">{{ iss.cwe }}</span></sc-if>
+            <span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint)">{{ iss.key }}</span>
+            <a href="{{ iss.ruleHref }}" style="font-family:'Martian Mono',monospace;font-size:10.5px">{{ iss.rule }}</a>
+          </div>
+          <h2 style="margin:0;font-size:21px;font-weight:600;line-height:1.25;letter-spacing:-0.02em;text-wrap:pretty">{{ iss.title }}</h2>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--line);border-radius:9px;overflow:hidden;box-shadow:0 0 0 1px var(--line)">
+            <sc-for list="{{ iss.meta }}" as="m" hint-placeholder-count="6"><div style="display:flex;flex-direction:column;gap:2px;padding:8px 10px;background:var(--panel-2)"><span style="font-size:11px;color:var(--faint)">{{ m.k }}</span><span style="font-family:{{ m.font }};font-size:{{ m.fs }};overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:{{ m.c }}">{{ m.v }}</span></div></sc-for>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{ iss.actions }}" as="a" hint-placeholder-count="4"><button onClick="{{ a.go }}" disabled="{{ a.dis }}" style="height:32px;padding:0 13px;border:0;border-radius:8px;background:{{ a.bg }};color:{{ a.fg }};font-size:13px;font-weight:{{ a.w }};cursor:pointer;box-shadow:{{ a.sh }};opacity:{{ a.op }}">{{ a.label }}</button></sc-for></div>
+        </div>
+        <div style="display:flex;flex-direction:column;border-bottom:1px solid var(--line)">
+          <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 20px;font-family:'Martian Mono',monospace;font-size:10.5px;background:var(--panel-2);border-bottom:1px solid var(--line)"><a href="{{ iss.compHref }}" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted)">{{ iss.file }}</a><span style="color:var(--faint)">{{ iss.lang }}</span></div>
+          <div role="region" aria-label="Source code" style="overflow:auto;background:var(--bg);font-family:'Martian Mono',monospace;font-size:11.5px;line-height:1.85;padding:8px 0">
+            <sc-for list="{{ iss.lines }}" as="l" hint-placeholder-count="9">
+              <div style="display:flex;flex-direction:column">
+                <div style="display:flex;background:{{ l.bg }};box-shadow:inset 3px 0 0 {{ l.bar }}"><span style="flex:none;width:52px;padding-right:14px;text-align:right;color:{{ l.nc }};user-select:none">{{ l.n }}</span><span style="white-space:pre;padding-right:20px"><sc-for list="{{ l.toks }}" as="tk" hint-placeholder-count="3"><span style="color:{{ tk.c }}">{{ tk.t }}</span></sc-for></span></div>
+                <sc-if value="{{ l.note }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:10px;margin:6px 20px 8px 66px;padding:10px 12px;border-radius:8px;background:var(--panel-2);font-family:'Instrument Sans',sans-serif;font-size:13px;line-height:1.45;white-space:normal;box-shadow:inset 0 0 0 1px var(--line-2)"><span aria-hidden="true" style="color:{{ iss.sevC }};font-size:10px;padding-top:3px">{{ iss.sevG }}</span><span>{{ l.note }}</span></div></sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px;padding:18px 20px 28px">
+          <section style="display:flex;flex-direction:column;gap:6px"><h3 style="margin:0;font-family:'Martian Mono',monospace;font-size:9.5px;font-weight:400;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">Why it matters</h3><p style="margin:0;font-size:14px;max-width:68ch;text-wrap:pretty">{{ iss.why }}</p></section>
+          <section style="display:flex;flex-direction:column;gap:8px"><h3 style="margin:0;font-family:'Martian Mono',monospace;font-size:9.5px;font-weight:400;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">How to fix</h3><p style="margin:0;font-size:14px;max-width:68ch;text-wrap:pretty">{{ iss.fix }}</p><pre style="margin:0;padding:12px 14px;border-radius:8px;background:var(--bg);font-family:'Martian Mono',monospace;font-size:11.5px;line-height:1.8;overflow:auto;box-shadow:inset 3px 0 0 var(--ok),inset 0 0 0 1px var(--line)">{{ iss.fixCode }}</pre></section>
+          <sc-if value="{{ iss.hasRelated }}" hint-placeholder-val="{{ false }}"><section style="display:flex;flex-direction:column;gap:2px"><h3 style="margin:0 0 6px;font-family:'Martian Mono',monospace;font-size:9.5px;font-weight:400;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">Related issues</h3><sc-for list="{{ iss.related }}" as="rl" hint-placeholder-count="2"><button onClick="{{ rl.go }}" style="display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:8px 0;border:0;border-top:1px solid var(--line);background:transparent;text-align:left;cursor:pointer;font-size:13.5px" style-hover="color:var(--accent)"><span aria-hidden="true" style="color:{{ rl.c }};font-size:10px">{{ rl.g }}</span><span>{{ rl.title }}</span><span style="font-family:'Martian Mono',monospace;font-size:10px;color:var(--faint)">{{ rl.key }}</span></button></sc-for></section></sc-if>
+        </div>
+      </article>
+      </sc-if>
+    </div>
+    </sc-if>
+    <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}"><div role="status" aria-live="polite" style="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:30;display:flex;gap:12px;align-items:center;padding:10px 16px;border-radius:10px;background:var(--text);color:var(--bg);font-size:13px;box-shadow:var(--shadow)"><span>{{ toast }}</span><button onClick="{{ undo }}" style="border:0;background:transparent;color:inherit;font-weight:600;text-decoration:underline;cursor:pointer;padding:0">Undo</button></div></sc-if>
+</main>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;}}">
+
+const ICON = { overview: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'], projects: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'], components: ['m7.5 4.27 9 5.15', 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'], issues: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2'], security: ['M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'], analyses: ['M22 12h-4l-3 9L9 3l-3 9H2'], gates: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'm9 12 2 2 4-4'], rules: ['M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z', 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'], admin: ['M20 7h-9', 'M14 17H5', 'M17 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6', 'M7 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6'] };
+const NAVDEF = [['overview', 'Overview', 'Sonda Dashboard v3'], ['projects', 'Projects', 'Sonda Projects', '312'], ['components', 'Components', 'Sonda Component', '611'], ['issues', 'Issues', 'Sonda Issues', '1.3k'], ['security', 'Security', 'Sonda Security', '23', 1], ['analyses', 'Analyses', 'Sonda Analysis'], 0, ['gates', 'Quality gates', 'Sonda Gates'], ['rules', 'Rules', 'Sonda Rules'], ['admin', 'Administration', 'Sonda Admin']];
+const href = (f) => encodeURI(f) + '.dc.html';
+function shell(c, active, crumbs) {
+  let stored = null; try { stored = localStorage.getItem('sonda-theme'); } catch (e) {}
+  const theme = c.state.theme || stored || c.props.defaultTheme || 'dark';
+  return {
+    theme, themeShort: theme, themeLabel: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+    toggleTheme: () => { const t = theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem('sonda-theme', t); } catch (e) {} c.setState({ theme: t }); },
+    nav: NAVDEF.map((n) => !n ? { heading: 'Configure' } : { label: n[1], href: href(n[2]), paths: ICON[n[0]], count: n[3] || '', cc: n[4] ? 'var(--crit)' : 'var(--faint)', current: n[0] === active ? 'page' : undefined, bg: n[0] === active ? 'var(--panel)' : 'transparent', fg: n[0] === active ? 'var(--text)' : 'var(--muted)', w: n[0] === active ? 600 : 400, ic: n[0] === active ? 'var(--accent)' : 'currentColor' }),
+    crumbs: crumbs.map(([label, f, mono], i) => ({ flex: i === crumbs.length - 1 ? '0 1 auto' : '0 4 auto', minw: i === crumbs.length - 1 ? '0' : '4.5em', label, href: f ? href(f) : '#', sep: i > 0, fg: i === crumbs.length - 1 ? 'var(--text)' : 'var(--faint)', w: i === crumbs.length - 1 ? 600 : 400, font: mono ? "'Martian Mono',monospace" : 'inherit' }))
+  };
+}
+const LVL = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+const lvlColor = (n) => n >= 4 ? 'var(--ok)' : n === 3 ? 'var(--warn)' : 'var(--crit)';
+const pips = (n, h0 = 4) => [0, 1, 2, 3, 4].map((i) => ({ h: (h0 + i * 2) + 'px', c: i < n ? lvlColor(n) : 'var(--pip-off)' }));
+const GATE = { passed: { l: 'Passing', c: 'var(--ok)', dot: 'var(--ok)', r: '50%', ring: 'none' }, failed: { l: 'Blocking', c: 'var(--crit)', dot: 'var(--crit)', r: '2px', ring: '0 0 0 3px var(--crit-soft)' }, running: { l: 'Sounding', c: 'var(--info)', dot: 'transparent', r: '50%', ring: 'inset 0 0 0 2px var(--info)' }, partial: { l: 'Partial', c: 'var(--warn)', dot: 'var(--warn)', r: '1px', ring: 'none' } };
+const seg = (on) => ({ bg: on ? 'var(--panel)' : 'transparent', fg: on ? 'var(--text)' : 'var(--muted)', sh: on ? 'inset 0 0 0 1px var(--line-2)' : 'none' });
+
+
+const SEV = { blocker: { g: '■', c: 'var(--crit)', bg: 'var(--crit-soft)', l: 'Blocker', o: 0 }, critical: { g: '▲', c: 'var(--crit)', bg: 'var(--crit-soft)', l: 'Critical', o: 1 }, major: { g: '◆', c: 'var(--warn)', bg: 'var(--warn-soft)', l: 'Major', o: 2 }, minor: { g: '●', c: 'var(--info)', bg: 'var(--info-soft)', l: 'Minor', o: 3 }, info: { g: '○', c: 'var(--faint)', bg: 'var(--hover)', l: 'Info', o: 4 } };
+const CAT = { bug: 'Bug', vuln: 'Vulnerability', smell: 'Code smell' };
+const COMPL = { checkout: 'services/checkout-api', ledger: 'services/ledger', fraud: 'services/fraud-scoring', webco: 'packages/web-checkout', sdk: 'packages/sdk-js', money: 'libs/money', billing: 'billing-service', mobile: 'mobile-bff' };
+const fmtEff = function (m) { return m >= 60 ? (Math.floor(m / 60) + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '')) : m + 'min'; };
+const EMPTY = { sev: [], cat: [], status: ['Open', 'Confirmed'], comp: [], file: '', me: false, isNew: false };
+
+class Component extends DCLogic {
+  state = { theme: null, data: null, f: Object.assign({}, EMPTY), sel: null, checked: [], status: {}, assign: {}, toast: null, showFacets: true, w: 1400, drill: '' };
+  componentDidMount() {
+    const self = this;
+    fetch('data/issues.json').then(function (r) { return r.json(); }).then(function (d) { setTimeout(function () { self.setState({ data: d }); }, 350); });
+    this._h = function () {
+      const h = decodeURIComponent((window.location.hash || '').slice(1)); if (!h) return;
+      const f = Object.assign({}, EMPTY), parts = [];
+      h.split('&').forEach(function (kv) { const p = kv.split('='); if (p[0] === 'new') { f.isNew = true; parts.push('new code'); } if (p[0] === 'cat') { f.cat = [p[1]]; parts.push(CAT[p[1]] + 's'); } if (p[0] === 'comp') { f.comp = [p[1]]; parts.push(COMPL[p[1]] || p[1]); } if (p[0] === 'file') { f.file = p[1]; parts.push(p[1]); } if (p[0] === 'me') { f.me = true; parts.push('assigned to you'); } });
+      self.setState({ f: f, sel: null, drill: 'Showing ' + parts.join(' · ') + ' — from the metric you clicked' });
+    };
+    this._r = function () { self.setState({ w: window.innerWidth, showFacets: window.innerWidth >= 1280 }); };
+    this._k = function (e) {
+      if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+      const rows = self._rows || []; if (!rows.length) return;
+      const i = Math.max(0, rows.findIndex(function (x) { return x.id === self._selId; }));
+      if (e.key === 'j') self.setState({ sel: rows[Math.min(rows.length - 1, i + 1)].id });
+      if (e.key === 'k') self.setState({ sel: rows[Math.max(0, i - 1)].id });
+      if (e.key === 'a') self.act(self._selId, 'assign');
+      if (e.key === 'c') self.act(self._selId, 'Confirmed');
+    };
+    this._h(); this._r();
+    window.addEventListener('hashchange', this._h); window.addEventListener('resize', this._r); window.addEventListener('keydown', this._k);
+  }
+  componentWillUnmount() { window.removeEventListener('hashchange', this._h); window.removeEventListener('resize', this._r); window.removeEventListener('keydown', this._k); clearTimeout(this._t); }
+  flash(msg, undo) { const self = this; clearTimeout(this._t); this._undo = undo; this.setState({ toast: msg }); this._t = setTimeout(function () { self.setState({ toast: null }); }, 4000); }
+  act(id, what) {
+    const self = this, prevS = Object.assign({}, this.state.status), prevA = Object.assign({}, this.state.assign);
+    if (what === 'assign') { this.setState({ assign: Object.assign({}, prevA, { [id]: 'Mara Okafor' }) }); this.flash('Assigned to you', function () { self.setState({ assign: prevA }); }); return; }
+    this.setState({ status: Object.assign({}, prevS, { [id]: what }) });
+    this.flash('Marked ' + what.toLowerCase(), function () { self.setState({ status: prevS }); });
+  }
+  renderVals() {
+    const self = this, s = this.state, f = s.f;
+    const base = shell(this, 'issues', [['acme-corp', 'Sonda Dashboard v3'], ['Issues', 'Sonda Issues']]);
+    if (!s.data) return Object.assign(base, { loading: true, ready: false, skel: [1, 2, 3, 4, 5, 6], facetsLabel: 'Filters', toggleFacets: function () {} });
+    const all = s.data.map(function (x) { return Object.assign({}, x, { status: s.status[x.id] || x.status, assignee: s.assign[x.id] || x.assignee, mine: x.mine || !!s.assign[x.id] }); });
+    const match = function (x, skip) {
+      return (skip === 'sev' || !f.sev.length || f.sev.indexOf(x.sev) >= 0) && (skip === 'cat' || !f.cat.length || f.cat.indexOf(x.cat) >= 0) && (skip === 'status' || !f.status.length || f.status.indexOf(x.status) >= 0) && (skip === 'comp' || !f.comp.length || f.comp.indexOf(x.comp) >= 0) && (!f.file || x.file.indexOf(f.file) >= 0) && (!f.me || x.mine) && (!f.isNew || x.isNew);
+    };
+    const list = all.filter(function (x) { return match(x); }).sort(function (a, b) { return SEV[a.sev].o - SEV[b.sev].o; });
+    this._rows = list;
+    const sel = list.find(function (x) { return x.id === s.sel; }) || list[0];
+    this._selId = sel ? sel.id : null;
+    const setF = function (patch) { self.setState({ f: Object.assign({}, f, patch), sel: null, drill: '' }); };
+    const tog = function (key, v) { return function () { const arr = f[key].slice(), i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); setF({ [key]: arr }); }; };
+    const facet = function (label, key, opts) { return { label: label, items: opts.map(function (o) { const on = f[key].indexOf(o.v) >= 0; return { label: o.l, g: o.g || '', c: o.c || '', n: all.filter(function (x) { return match(x, key) && x[key] === o.v; }).length, on: on, bg: on ? 'var(--hover)' : 'transparent', font: o.mono ? "'Martian Mono',monospace" : 'inherit', fs: o.mono ? '11px' : '13px', toggle: tog(key, o.v) }; }) }; };
+    const facets = [
+      facet('Severity', 'sev', ['blocker', 'critical', 'major', 'minor'].map(function (k) { return { v: k, l: SEV[k].l, g: SEV[k].g, c: SEV[k].c }; })),
+      facet('Category', 'cat', ['vuln', 'bug', 'smell'].map(function (k) { return { v: k, l: CAT[k] }; })),
+      facet('Status', 'status', ['Open', 'Confirmed', 'Fixed', 'Accepted'].map(function (k) { return { v: k, l: k }; })),
+      facet('Component', 'comp', Object.keys(COMPL).map(function (k) { return { v: k, l: COMPL[k], mono: true }; }))
+    ];
+    const tg = function (label, key, n) { const on = f[key]; return { label: label, n: n, on: on, bg: on ? 'var(--accent-soft)' : 'transparent', fg: on ? 'var(--accent)' : 'var(--text)', bd: on ? 'var(--accent)' : 'var(--line-2)', go: function () { setF({ [key]: !on }); } }; };
+    const stC = function (st) { return st === 'Open' ? 'var(--text)' : st === 'Confirmed' ? 'var(--warn)' : st === 'Fixed' ? 'var(--ok)' : 'var(--faint)'; };
+    const rows = list.map(function (x) {
+      const on = sel && x.id === sel.id, ck = s.checked.indexOf(x.id) >= 0;
+      return { key: x.key, title: x.title, loc: x.file + ':' + x.note, sevG: SEV[x.sev].g, sevC: SEV[x.sev].c, sevL: SEV[x.sev].l, cat: CAT[x.cat], effort: fmtEff(x.effort), age: x.age, status: x.status, stC: stC(x.status), isNew: x.isNew, mine: x.mine, sel: on, bg: on ? 'var(--panel)' : 'transparent', bar: on ? 'var(--accent)' : 'transparent', checked: ck,
+        open: function () { self.setState({ sel: x.id }); }, noop: function () {},
+        check: function (e) { e.stopPropagation(); const c = s.checked.slice(), i = c.indexOf(x.id); if (i >= 0) c.splice(i, 1); else c.push(x.id); self.setState({ checked: c }); } };
+    });
+    let iss = null;
+    if (sel) {
+      const S = SEV[sel.sev];
+      const btn = function (label, go, primary, dis) { return { label: label, go: go, dis: !!dis, bg: primary ? 'var(--accent)' : 'transparent', fg: primary ? 'var(--accent-ink)' : 'var(--text)', w: primary ? 600 : 500, sh: primary ? 'none' : 'inset 0 0 0 1px var(--line-2)', op: dis ? 0.45 : 1 }; };
+      iss = { key: sel.key, title: sel.title, rule: sel.rule, ruleHref: href('Sonda Rules') + '#' + sel.rule, cwe: sel.cwe || '', sevG: S.g, sevC: S.c, sevBg: S.bg, sevL: S.l, catL: CAT[sel.cat], file: sel.file, lang: sel.lang, compHref: href('Sonda Component') + '#' + sel.comp,
+        meta: [{ k: 'Location', v: sel.file.split('/').pop() + ':' + sel.note, font: "'Martian Mono',monospace", fs: '11px', c: 'var(--text)' }, { k: 'Component', v: sel.compPath, font: "'Martian Mono',monospace", fs: '11px', c: 'var(--text)' }, { k: 'Effort', v: fmtEff(sel.effort), font: "'Martian Mono',monospace", fs: '11px', c: 'var(--text)' }, { k: 'Detected', v: sel.date + (sel.isNew ? ' · new code' : ''), font: 'inherit', fs: '13px', c: 'var(--text)' }, { k: 'Status', v: sel.status, font: 'inherit', fs: '13px', c: stC(sel.status) }, { k: 'Assignee', v: sel.assignee || 'Unassigned', font: 'inherit', fs: '13px', c: sel.assignee ? 'var(--text)' : 'var(--faint)' }],
+        actions: [btn(sel.assignee === 'Mara Okafor' ? 'Assigned to you' : 'Assign to me', function () { self.act(sel.id, 'assign'); }, sel.assignee !== 'Mara Okafor', sel.assignee === 'Mara Okafor'), btn('Confirm', function () { self.act(sel.id, 'Confirmed'); }, false, sel.status === 'Confirmed'), btn('Resolve as fixed', function () { self.act(sel.id, 'Fixed'); }, false, sel.status === 'Fixed'), btn('Accept risk', function () { self.act(sel.id, 'Accepted'); }, false, sel.status === 'Accepted'), btn('Open in editor', function () { self.flash('Opening ' + sel.file.split('/').pop() + ':' + sel.note + ' in VS Code', null); }, false, false)],
+        lines: sel.lines.map(function (l) { const h = sel.hl.indexOf(l.n) >= 0; return { n: l.n, toks: l.toks, bg: h ? 'color-mix(in oklch, ' + S.c + ' 11%, transparent)' : 'transparent', bar: h ? S.c : 'transparent', nc: h ? S.c : 'var(--faint)', note: l.n === sel.note ? sel.msg : '' }; }),
+        why: sel.why, fix: sel.fix, fixCode: sel.fixCode,
+        related: sel.related.map(function (id) { const r = all.find(function (x) { return x.id === id; }); return r ? { title: r.title, key: r.key, g: SEV[r.sev].g, c: SEV[r.sev].c, go: function () { self.setState({ f: Object.assign({}, EMPTY, { status: [] }), sel: id, drill: '' }); } } : null; }).filter(Boolean)
+      };
+      iss.hasRelated = iss.related.length > 0;
+    }
+    const eff = list.reduce(function (a, x) { return a + x.effort; }, 0);
+    const wide = s.w >= 1280;
+    return Object.assign(base, {
+      loading: false, ready: true, skel: [], showFacets: s.showFacets, facetsLabel: s.showFacets ? 'Hide filters' : 'Filters',
+      toggleFacets: function () { self.setState({ showFacets: !s.showFacets }); },
+      cols: s.showFacets ? (wide ? '240px minmax(0,1fr) minmax(0,1.35fr)' : '220px minmax(0,1fr) minmax(0,1.2fr)') : 'minmax(0,1fr) minmax(0,1.35fr)',
+      drill: s.drill, toggles: [tg('Assigned to me', 'me', all.filter(function (x) { return x.mine; }).length), tg('New code only', 'isNew', all.filter(function (x) { return x.isNew; }).length)], facets: facets,
+      saved: [['My open issues', { me: true }], ['Security on main', { cat: ['vuln'] }], ['Introduced this week', { isNew: true }]].map(function (v) { return { label: v[0], go: function () { setF(Object.assign({}, EMPTY, v[1])); } }; }),
+      countLabel: list.length + (list.length === 1 ? ' issue' : ' issues'), effortLabel: '~' + fmtEff(eff) + ' effort', rows: rows, none: list.length === 0, iss: iss,
+      hasChecked: s.checked.length > 0, checkedN: String(s.checked.length),
+      bulkAssign: function () { const a = Object.assign({}, s.assign); s.checked.forEach(function (id) { a[id] = 'Mara Okafor'; }); self.setState({ assign: a, checked: [] }); self.flash(s.checked.length + ' issues assigned to you', null); },
+      bulkConfirm: function () { const st = Object.assign({}, s.status); s.checked.forEach(function (id) { st[id] = 'Confirmed'; }); self.setState({ status: st, checked: [] }); self.flash(s.checked.length + ' issues confirmed', null); },
+      clear: function () { history.replaceState(null, '', window.location.pathname + window.location.search); self.setState({ f: Object.assign({}, EMPTY), drill: '', sel: null }); },
+      toast: s.toast, undo: function () { if (self._undo) self._undo(); clearTimeout(self._t); self.setState({ toast: null }); }
+    });
+  }
+}
+</script>
+</body>
+</html>

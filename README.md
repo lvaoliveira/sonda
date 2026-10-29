@@ -109,6 +109,13 @@ threshold = 0
 
 Gate metrics: `files`, `lines`, `ncloc`, `functions`, `complexity`, `cognitive_complexity`, `issues`, `bugs`, `vulnerabilities`, `code_smells`, `blocker_issues`, `critical_issues`, `major_issues`, `debt_minutes`, `duplicated_lines`, `duplicated_lines_density`, `coverage`. Most also have a `new_` variant for new code only: `new_lines`, `new_issues`, `new_bugs`, `new_vulnerabilities`, `new_code_smells`, `new_blocker_issues`, `new_critical_issues`, `new_major_issues`, `new_debt_minutes`, `new_duplicated_lines`, `new_duplicated_lines_density` and `new_coverage`. A condition on a metric with no data, such as coverage without a report, is shown as "no data" and does not fail the gate.
 
+## Web app (preview)
+
+[`web/`](web/) is the Sonda web app, built from the design handoff in
+[`docs/designs/`](docs/designs/). Overview, Issues and Rules are done so far.
+It runs against a typed API contract with mock data until `sonda server`
+exists. See [web/README.md](web/README.md).
+
 ## How it works
 
 Each file is parsed with [tree-sitter](https://tree-sitter.github.io/). sonda

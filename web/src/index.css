@@ -1,0 +1,203 @@
+@import "tailwindcss";
+@import "@fontsource/instrument-sans/400.css";
+@import "@fontsource/instrument-sans/500.css";
+@import "@fontsource/instrument-sans/600.css";
+@import "@fontsource/instrument-sans/700.css";
+@import "@fontsource/martian-mono/300.css";
+@import "@fontsource/martian-mono/400.css";
+@import "@fontsource/martian-mono/500.css";
+
+/* Theme is set by data-theme on <html> (see lib/theme.ts), not a class. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * Sonda design tokens, exactly as in docs/designs (design_handoff README).
+ * Prefixed --sd-* because the design's --muted (secondary text) and --accent
+ * (brand teal) mean something else in shadcn (background fills).
+ */
+:root,
+[data-theme="dark"] {
+  --sd-bg: #0b0c0c;
+  --sd-panel: #101211;
+  --sd-panel-2: #151817;
+  --sd-hover: #1a1e1c;
+  --sd-line: #202523;
+  --sd-line-2: #2f3532;
+  --sd-text: #eceeed;
+  --sd-muted: #9ba39f;
+  --sd-faint: #6f7773;
+  --sd-accent: oklch(0.83 0.13 178);
+  --sd-accent-ink: #04191a;
+  --sd-accent-soft: color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);
+  --sd-ok: oklch(0.82 0.13 155);
+  --sd-warn: oklch(0.84 0.13 85);
+  --sd-crit: oklch(0.71 0.17 28);
+  --sd-info: oklch(0.77 0.1 250);
+  --sd-crit-soft: color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);
+  --sd-warn-soft: color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);
+  --sd-ok-soft: color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);
+  --sd-info-soft: color-mix(in oklch, oklch(0.77 0.1 250) 13%, transparent);
+  --sd-pip-off: #262b29;
+  --sd-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --sd-bg: #f3f4f2;
+  --sd-panel: #ffffff;
+  --sd-panel-2: #f8f9f7;
+  --sd-hover: #eff1ee;
+  --sd-line: #e2e5e1;
+  --sd-line-2: #cfd4cf;
+  --sd-text: #111413;
+  --sd-muted: #56605b;
+  --sd-faint: #7a837e;
+  --sd-accent: oklch(0.52 0.1 182);
+  --sd-accent-ink: #ffffff;
+  --sd-accent-soft: color-mix(in oklch, oklch(0.52 0.1 182) 10%, transparent);
+  --sd-ok: oklch(0.52 0.12 155);
+  --sd-warn: oklch(0.58 0.12 70);
+  --sd-crit: oklch(0.55 0.19 28);
+  --sd-info: oklch(0.52 0.12 255);
+  --sd-crit-soft: color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);
+  --sd-warn-soft: color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);
+  --sd-ok-soft: color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);
+  --sd-info-soft: color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);
+  --sd-pip-off: #e3e6e2;
+  --sd-shadow: 0 24px 64px rgba(20, 30, 25, 0.14);
+  color-scheme: light;
+}
+
+/* shadcn's variables, derived from the Sonda palette so its components match. */
+:root {
+  --background: var(--sd-panel);
+  --foreground: var(--sd-text);
+  --card: var(--sd-panel-2);
+  --card-foreground: var(--sd-text);
+  --popover: var(--sd-panel);
+  --popover-foreground: var(--sd-text);
+  --primary: var(--sd-accent);
+  --primary-foreground: var(--sd-accent-ink);
+  --secondary: var(--sd-hover);
+  --secondary-foreground: var(--sd-text);
+  --muted: var(--sd-hover);
+  --muted-foreground: var(--sd-muted);
+  --accent: var(--sd-hover);
+  --accent-foreground: var(--sd-text);
+  --destructive: var(--sd-crit);
+  --border: var(--sd-line);
+  --input: var(--sd-line-2);
+  --ring: var(--sd-accent);
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans", system-ui, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, monospace;
+
+  /* Sonda colors: bg-canvas, bg-panel, text-fg-muted, bg-brand, border-line, ... */
+  --color-canvas: var(--sd-bg);
+  --color-panel: var(--sd-panel);
+  --color-panel-2: var(--sd-panel-2);
+  --color-hover: var(--sd-hover);
+  --color-line: var(--sd-line);
+  --color-line-strong: var(--sd-line-2);
+  --color-fg: var(--sd-text);
+  --color-fg-muted: var(--sd-muted);
+  --color-fg-faint: var(--sd-faint);
+  --color-brand: var(--sd-accent);
+  --color-brand-ink: var(--sd-accent-ink);
+  --color-brand-soft: var(--sd-accent-soft);
+  --color-ok: var(--sd-ok);
+  --color-ok-soft: var(--sd-ok-soft);
+  --color-warn: var(--sd-warn);
+  --color-warn-soft: var(--sd-warn-soft);
+  --color-crit: var(--sd-crit);
+  --color-crit-soft: var(--sd-crit-soft);
+  --color-info: var(--sd-info);
+  --color-info-soft: var(--sd-info-soft);
+  --color-pip-off: var(--sd-pip-off);
+  --shadow-float: var(--sd-shadow);
+
+  /* shadcn */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Borders are inset shadows in this design: they never change layout. */
+@utility edge {
+  box-shadow: inset 0 0 0 1px var(--sd-line);
+}
+@utility edge-strong {
+  box-shadow: inset 0 0 0 1px var(--sd-line-2);
+}
+/* Micro-labels: Martian Mono, uppercase, tracked. */
+@utility micro-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sd-faint);
+}
+
+@layer base {
+  body {
+    margin: 0;
+    background: var(--sd-bg);
+    color: var(--sd-text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a {
+    color: var(--sd-accent);
+    text-decoration: none;
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    color: var(--sd-text);
+  }
+  button,
+  input,
+  select {
+    font-family: inherit;
+    color: inherit;
+  }
+  :focus-visible {
+    outline: 2px solid var(--sd-accent);
+    outline-offset: 2px;
+  }
+  h1,
+  h2,
+  h3,
+  p {
+    text-wrap: pretty;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+}

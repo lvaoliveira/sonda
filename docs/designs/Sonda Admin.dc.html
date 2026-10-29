@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Martian+Mono:wght@300;400;500&display=swap">
+<style>
+:root,[data-theme="dark"]{--bg:#0b0c0c;--panel:#101211;--panel-2:#151817;--hover:#1a1e1c;--line:#202523;--line-2:#2f3532;--text:#eceeed;--muted:#9ba39f;--faint:#6f7773;--accent:oklch(0.83 0.13 178);--accent-ink:#04191a;--accent-soft:color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);--ok:oklch(0.82 0.13 155);--warn:oklch(0.84 0.13 85);--crit:oklch(0.71 0.17 28);--info:oklch(0.77 0.10 250);--crit-soft:color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);--warn-soft:color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);--ok-soft:color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);--info-soft:color-mix(in oklch, oklch(0.77 0.10 250) 13%, transparent);--pip-off:#262b29;--shadow:0 24px 64px rgba(0,0,0,.55);color-scheme:dark}
+[data-theme="light"]{--bg:#f3f4f2;--panel:#ffffff;--panel-2:#f8f9f7;--hover:#eff1ee;--line:#e2e5e1;--line-2:#cfd4cf;--text:#111413;--muted:#56605b;--faint:#7a837e;--accent:oklch(0.52 0.10 182);--accent-ink:#ffffff;--accent-soft:color-mix(in oklch, oklch(0.52 0.10 182) 10%, transparent);--ok:oklch(0.52 0.12 155);--warn:oklch(0.58 0.12 70);--crit:oklch(0.55 0.19 28);--info:oklch(0.52 0.12 255);--crit-soft:color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);--warn-soft:color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);--ok-soft:color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);--info-soft:color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);--pip-off:#e3e6e2;--shadow:0 24px 64px rgba(20,30,25,.14);color-scheme:light}
+body{margin:0;background:#0b0c0c;font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:3px;text-decoration:none}
+a:hover{color:var(--text)}
+button,input,select{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Instrument Sans',system-ui,sans-serif;font-size:14px;line-height:1.5">
+<aside aria-label="Primary" style="width:228px;flex:none;display:flex;flex-direction:column;background:var(--bg);position:sticky;top:0;height:100vh">
+  <a href="Sonda%20Dashboard%20v3.dc.html" style="display:flex;align-items:center;gap:10px;height:60px;padding:0 18px;color:var(--text)">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 0 1 18 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".3"></path><path d="M7 9a5 5 0 0 1 10 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".65"></path><path d="M12 9v9" stroke="var(--accent)" stroke-width="1.6"></path><circle cx="12" cy="20" r="2.4" fill="var(--accent)"></circle></svg>
+    <span style="font-weight:600;font-size:17px;letter-spacing:-0.03em">sonda</span>
+  </a>
+  <div style="display:flex;align-items:center;gap:10px;margin:0 12px 10px;padding:8px 10px;background:var(--panel);border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700">AC</span>
+    <span style="display:flex;flex-direction:column;line-height:1.2;flex:1;min-width:0"><span style="font-weight:600;font-size:13px">acme-corp</span><span style="font-size:11px;color:var(--faint)">self-hosted · 312 projects</span></span>
+  </div>
+  <nav style="display:flex;flex-direction:column;gap:2px;padding:4px 12px;flex:1;overflow:auto">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <sc-if value="{{ n.heading }}" hint-placeholder-val="{{ false }}"><div style="padding:16px 10px 6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">{{ n.heading }}</div></sc-if>
+      <sc-if value="{{ n.label }}" hint-placeholder-val="{{ true }}">
+      <a href="{{ n.href }}" aria-current="{{ n.current }}" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;background:{{ n.bg }};color:{{ n.fg }};font-size:14px;font-weight:{{ n.w }}" style-hover="background:var(--hover);color:var(--text)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:{{ n.ic }}"><sc-for list="{{ n.paths }}" as="d" hint-placeholder-count="2"><path d="{{ d }}"></path></sc-for></svg>
+        <span style="flex:1">{{ n.label }}</span>
+        <sc-if value="{{ n.count }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ n.cc }}">{{ n.count }}</span></sc-if>
+      </a>
+      </sc-if>
+    </sc-for>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px;margin:12px;padding:10px;border-radius:8px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px">MO</span>
+    <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;flex:1"><span style="font-weight:600;font-size:13px">Mara Okafor</span><span style="font-size:11.5px;color:var(--faint)">@checkout</span></span>
+  </div>
+</aside>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 10px 10px 0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border-radius:14px;box-shadow:inset 0 0 0 1px var(--line)">
+  <header style="display:flex;align-items:center;gap:12px;height:56px;padding:0 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:5;border-radius:14px 14px 0 0">
+    <nav aria-label="Breadcrumb" style="display:flex;align-items:center;gap:8px;font-size:13.5px;flex:1;min-width:0;overflow:hidden;white-space:nowrap">
+      <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="2"><span style="display:flex;gap:8px;align-items:center;min-width:{{ c.minw }};flex:{{ c.flex }}"><sc-if value="{{ c.sep }}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="color:var(--line-2)">/</span></sc-if><a href="{{ c.href }}" style="color:{{ c.fg }};font-weight:{{ c.w }};font-family:{{ c.font }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ c.label }}</a></span></sc-for>
+    </nav>
+    <div style="display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:120px;height:34px;padding:0 12px;background:var(--bg);border-radius:8px;color:var(--faint);font-size:13px;box-shadow:inset 0 0 0 1px var(--line)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span style="flex:1;overflow:hidden;white-space:nowrap">Search or run a command</span><span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--hover);color:var(--muted)">⌘K</span></div>
+    <button onClick="{{ toggleTheme }}" aria-label="{{ themeLabel }}" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted);font-family:'Martian Mono',monospace;font-size:10.5px;box-shadow:inset 0 0 0 1px var(--line)" style-hover="color:var(--text)">{{ themeShort }}</button>
+  </header>
+  <main style="flex:1;padding:28px 24px 32px;display:flex;flex-direction:column;gap:20px;max-width:1560px;width:100%;box-sizing:border-box">
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap"><div style="display:flex;flex-direction:column;gap:6px"><h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.035em;line-height:1.1">Administration</h1><div style="font-size:13.5px;color:var(--muted)">acme-corp · self-hosted · sonda-server 0.9.2 · PostgreSQL 16 · 4 scanner workers</div></div></div>
+    <div role="tablist" aria-label="Admin sections" style="display:flex;padding:3px;background:var(--bg);border-radius:9px;box-shadow:inset 0 0 0 1px var(--line);width:max-content;max-width:100%;overflow-x:auto"><sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><button role="tab" aria-selected="{{ t.on }}" onClick="{{ t.go }}" style="height:30px;padding:0 14px;border:0;border-radius:6px;background:{{ t.bg }};color:{{ t.fg }};font-size:13.5px;cursor:pointer;box-shadow:{{ t.sh }};white-space:nowrap">{{ t.label }}</button></sc-for></div>
+
+    <sc-if value="{{ is.members }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><label style="display:flex;align-items:center;gap:8px;flex:1 1 240px;max-width:340px;height:36px;padding:0 12px;background:var(--bg);border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)"><input aria-label="Filter members" placeholder="Filter 148 members" value="{{ q }}" onChange="{{ onQ }}" style="flex:1;min-width:0;border:0;background:transparent;font-size:13.5px;outline:none"></label><span style="flex:1"></span><button style="height:36px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:13.5px;cursor:pointer">Invite members</button></div>
+      <div style="background:var(--panel-2);border-radius:12px;overflow:auto;box-shadow:inset 0 0 0 1px var(--line)">
+        <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:13.5px">
+          <thead><tr style="font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)"><th scope="col" style="text-align:left;font-weight:400;padding:10px 20px;border-bottom:1px solid var(--line)">Member</th><th scope="col" style="text-align:left;font-weight:400;padding:10px 8px;border-bottom:1px solid var(--line)">Teams</th><th scope="col" style="text-align:left;font-weight:400;padding:10px 8px;border-bottom:1px solid var(--line)">Role</th><th scope="col" style="text-align:left;font-weight:400;padding:10px 8px;border-bottom:1px solid var(--line)">Auth</th><th scope="col" style="text-align:right;font-weight:400;padding:10px 20px 10px 8px;border-bottom:1px solid var(--line)">Last active</th></tr></thead>
+          <tbody><sc-for list="{{ members }}" as="m" hint-placeholder-count="7"><tr style-hover="background:var(--hover)">
+            <td style="padding:10px 20px;border-bottom:1px solid var(--line)"><span style="display:flex;align-items:center;gap:10px"><span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--hover);font-size:11px;font-weight:600">{{ m.ini }}</span><span style="display:flex;flex-direction:column;line-height:1.3"><span style="font-weight:500">{{ m.name }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint)">{{ m.email }}</span></span></span></td>
+            <td style="padding:10px 8px;border-bottom:1px solid var(--line)"><span style="display:flex;gap:4px;flex-wrap:wrap"><sc-for list="{{ m.teams }}" as="t" hint-placeholder-count="2"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;padding:2px 8px;border-radius:10px;background:var(--hover)">{{ t }}</span></sc-for></span></td>
+            <td style="padding:10px 8px;border-bottom:1px solid var(--line)"><select aria-label="Role for {{ m.name }}" value="{{ m.role }}" onChange="{{ m.setRole }}" style="height:30px;padding:0 8px;border:0;border-radius:7px;background:var(--bg);font-size:13px;box-shadow:inset 0 0 0 1px var(--line)"><option>Owner</option><option>Admin</option><option>Maintainer</option><option>Developer</option><option>Viewer</option></select></td>
+            <td style="padding:10px 8px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--muted)">{{ m.auth }}</td>
+            <td style="padding:10px 20px 10px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:'Martian Mono',monospace;font-size:11px;color:var(--faint)">{{ m.last }}</td>
+          </tr></sc-for></tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ is.teams }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px"><sc-for list="{{ teams }}" as="t" hint-placeholder-count="6"><div style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:10px"><span style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-family:'Martian Mono',monospace;font-size:13px">{{ t.name }}</span><span style="font-size:12px;color:var(--faint)">{{ t.n }} members</span></span><span style="font-size:13px;color:var(--muted)">Owns {{ t.owns }}</span><span style="display:flex;gap:6px;font-size:12.5px;color:var(--faint)">Synced from <span style="font-family:'Martian Mono',monospace;font-size:11px;color:var(--text)">{{ t.src }}</span></span></div></sc-for></div>
+    </sc-if>
+
+    <sc-if value="{{ is.integrations }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px"><sc-for list="{{ integrations }}" as="i" hint-placeholder-count="6"><div style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:10px"><span style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:15px">{{ i.name }}</span><span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:{{ i.c }}"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:{{ i.c }}"></span>{{ i.status }}</span></span><span style="font-size:13px;color:var(--muted);flex:1;text-wrap:pretty">{{ i.desc }}</span><button style="align-self:flex-start;height:30px;padding:0 12px;border:0;border-radius:7px;background:transparent;font-size:12.5px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">{{ i.cta }}</button></div></sc-for></div>
+    </sc-if>
+
+    <sc-if value="{{ is.system }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px">
+        <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Analysis defaults</h2></div>
+          <sc-for list="{{ settings }}" as="st" hint-placeholder-count="4"><label style="display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:14px;align-items:center;padding-top:12px;border-top:1px solid var(--line)"><span style="display:flex;flex-direction:column;gap:2px"><span style="font-size:13.5px;font-weight:500">{{ st.k }}</span><span style="font-size:12.5px;color:var(--faint)">{{ st.d }}</span></span><input value="{{ st.v }}" style="height:32px;padding:0 10px;border:0;border-radius:7px;background:var(--bg);font-family:'Martian Mono',monospace;font-size:11.5px;box-shadow:inset 0 0 0 1px var(--line)"></label></sc-for>
+        </section>
+        <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:10px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Instance health</h2></div>
+          <sc-for list="{{ health }}" as="h" hint-placeholder-count="5"><div style="display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px"><span style="width:8px;height:8px;border-radius:50%;background:{{ h.c }}"></span><span>{{ h.k }}</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px;color:var(--muted)">{{ h.v }}</span></div></sc-for>
+        </section>
+      </div>
+    </sc-if>
+</main>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;}}">
+
+const ICON = { overview: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'], projects: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'], components: ['m7.5 4.27 9 5.15', 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'], issues: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2'], security: ['M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'], analyses: ['M22 12h-4l-3 9L9 3l-3 9H2'], gates: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'm9 12 2 2 4-4'], rules: ['M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z', 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'], admin: ['M20 7h-9', 'M14 17H5', 'M17 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6', 'M7 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6'] };
+const NAVDEF = [['overview', 'Overview', 'Sonda Dashboard v3'], ['projects', 'Projects', 'Sonda Projects', '312'], ['components', 'Components', 'Sonda Component', '611'], ['issues', 'Issues', 'Sonda Issues', '1.3k'], ['security', 'Security', 'Sonda Security', '23', 1], ['analyses', 'Analyses', 'Sonda Analysis'], 0, ['gates', 'Quality gates', 'Sonda Gates'], ['rules', 'Rules', 'Sonda Rules'], ['admin', 'Administration', 'Sonda Admin']];
+const href = (f) => encodeURI(f) + '.dc.html';
+function shell(c, active, crumbs) {
+  let stored = null; try { stored = localStorage.getItem('sonda-theme'); } catch (e) {}
+  const theme = c.state.theme || stored || c.props.defaultTheme || 'dark';
+  return {
+    theme, themeShort: theme, themeLabel: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+    toggleTheme: () => { const t = theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem('sonda-theme', t); } catch (e) {} c.setState({ theme: t }); },
+    nav: NAVDEF.map((n) => !n ? { heading: 'Configure' } : { label: n[1], href: href(n[2]), paths: ICON[n[0]], count: n[3] || '', cc: n[4] ? 'var(--crit)' : 'var(--faint)', current: n[0] === active ? 'page' : undefined, bg: n[0] === active ? 'var(--panel)' : 'transparent', fg: n[0] === active ? 'var(--text)' : 'var(--muted)', w: n[0] === active ? 600 : 400, ic: n[0] === active ? 'var(--accent)' : 'currentColor' }),
+    crumbs: crumbs.map(([label, f, mono], i) => ({ flex: i === crumbs.length - 1 ? '0 1 auto' : '0 4 auto', minw: i === crumbs.length - 1 ? '0' : '4.5em', label, href: f ? href(f) : '#', sep: i > 0, fg: i === crumbs.length - 1 ? 'var(--text)' : 'var(--faint)', w: i === crumbs.length - 1 ? 600 : 400, font: mono ? "'Martian Mono',monospace" : 'inherit' }))
+  };
+}
+const LVL = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+const lvlColor = (n) => n >= 4 ? 'var(--ok)' : n === 3 ? 'var(--warn)' : 'var(--crit)';
+const pips = (n, h0 = 4) => [0, 1, 2, 3, 4].map((i) => ({ h: (h0 + i * 2) + 'px', c: i < n ? lvlColor(n) : 'var(--pip-off)' }));
+const GATE = { passed: { l: 'Passing', c: 'var(--ok)', dot: 'var(--ok)', r: '50%', ring: 'none' }, failed: { l: 'Blocking', c: 'var(--crit)', dot: 'var(--crit)', r: '2px', ring: '0 0 0 3px var(--crit-soft)' }, running: { l: 'Sounding', c: 'var(--info)', dot: 'transparent', r: '50%', ring: 'inset 0 0 0 2px var(--info)' }, partial: { l: 'Partial', c: 'var(--warn)', dot: 'var(--warn)', r: '1px', ring: 'none' } };
+const seg = (on) => ({ bg: on ? 'var(--panel)' : 'transparent', fg: on ? 'var(--text)' : 'var(--muted)', sh: on ? 'inset 0 0 0 1px var(--line-2)' : 'none' });
+
+
+class Component extends DCLogic {
+  state = { theme: null, tab: 'members', q: '', roles: {} };
+  renderVals() {
+    const self = this, s = this.state;
+    const M = [['Mara Okafor', 'mara.okafor@acme.com', ['@checkout'], 'Developer', 'Okta SSO', 'now'], ['Dana Voss', 'dana.voss@acme.com', ['@ledger-team'], 'Maintainer', 'Okta SSO', '5m'], ['Anil Nair', 'anil.nair@acme.com', ['@risk-ml'], 'Developer', 'Okta SSO', '1h'], ['Lena Brandt', 'lena.brandt@acme.com', ['@web-platform', '@dx'], 'Maintainer', 'Okta SSO', '2h'], ['Priya Shah', 'priya.shah@acme.com', ['@mobile', '@security'], 'Admin', 'Okta SSO', '20m'], ['Jonas Ruiz', 'j.ruiz@acme.com', ['@checkout'], 'Developer', 'Okta SSO', '1d'], ['ci-bot', 'ci@acme.com', ['—'], 'Viewer', 'API token · expires Mar 2027', '12m']];
+    const q = s.q.toLowerCase();
+    return Object.assign(shell(this, 'admin', [['acme-corp', 'Sonda Dashboard v3'], ['Administration', 'Sonda Admin']]), {
+      tabs: [['members', 'Members'], ['teams', 'Teams'], ['integrations', 'Integrations'], ['system', 'System']].map(function (t) { const on = s.tab === t[0]; return Object.assign({ label: t[1], on: on, go: function () { self.setState({ tab: t[0] }); } }, seg(on)); }),
+      is: { members: s.tab === 'members', teams: s.tab === 'teams', integrations: s.tab === 'integrations', system: s.tab === 'system' },
+      q: s.q, onQ: function (e) { self.setState({ q: e.target.value }); },
+      members: M.filter(function (m) { return !q || (m[0] + m[1] + m[2].join(' ')).toLowerCase().indexOf(q) >= 0; }).map(function (m) { return { name: m[0], email: m[1], teams: m[2], role: s.roles[m[1]] || m[3], auth: m[4], last: m[5], ini: m[0].split(/[ -]/).map(function (w) { return w[0]; }).join('').slice(0, 2).toUpperCase(), setRole: function (e) { self.setState({ roles: Object.assign({}, s.roles, { [m[1]]: e.target.value }) }); } }; }),
+      teams: [['@checkout', 6, 'services/checkout-api', 'GitHub team acme/checkout'], ['@ledger-team', 4, 'services/ledger, libs/money', 'GitHub team acme/ledger'], ['@risk-ml', 5, 'services/fraud-scoring', 'Okta group risk-ml'], ['@web-platform', 9, 'packages/web-checkout, web-console', 'GitHub team acme/web'], ['@security', 3, 'review of all hotspots', 'Okta group appsec'], ['@data-platform', 7, 'ml-feature-store, data-pipeline', 'GitHub team acme/data']].map(function (t) { return { name: t[0], n: t[1], owns: t[2], src: t[3] }; }),
+      integrations: [['GitHub', 'Connected', 'var(--ok)', 'App installed on acme · PR decoration, check runs and CODEOWNERS sync for 287 repos.', 'Configure'], ['GitLab', 'Not connected', 'var(--faint)', 'Import projects and decorate merge requests from gitlab.acme.internal.', 'Connect'], ['Slack', 'Connected', 'var(--ok)', 'Gate failures on main → #eng-quality. Security blockers → #appsec-alerts.', 'Configure'], ['Jira', 'Connected', 'var(--ok)', 'Create tickets from issues; status syncs back when the ticket is closed.', 'Configure'], ['Okta (OIDC)', 'Connected', 'var(--ok)', 'SSO and group-to-team mapping for 148 members.', 'Configure'], ['Webhooks', '1 failing', 'var(--warn)', 'https://hooks.acme.internal/sonda returned 502 on the last 3 deliveries.', 'Inspect']].map(function (i) { return { name: i[0], status: i[1], c: i[2], desc: i[3], cta: i[4] }; }),
+      settings: [['New code definition', 'Default reference for "new code" on new projects', 'previous version'], ['Analysis retention', 'Keep full results for this many days', '365'], ['Max scan duration', 'Abort analyses that run longer than this', '30m'], ['Excluded paths', 'Applied to every project unless overridden', '**/vendor/**, **/*.pb.go']].map(function (x) { return { k: x[0], d: x[1], v: x[2] }; }),
+      health: [['API', 'var(--ok)', '99.98% · p95 84 ms'], ['Scanner workers', 'var(--ok)', '4 / 4 online'], ['Analysis queue', 'var(--warn)', '6 waiting · ~3 min'], ['Database', 'var(--ok)', '48 GB · 31% used'], ['Last backup', 'var(--ok)', 'Today 03:00 UTC']].map(function (h) { return { k: h[0], c: h[1], v: h[2] }; })
+    });
+  }
+}
+</script>
+</body>
+</html>

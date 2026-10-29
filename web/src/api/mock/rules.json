@@ -1,0 +1,292 @@
+{
+ "total": 4812,
+ "languageCount": 14,
+ "activeCount": 1284,
+ "profile": "acme-default",
+ "languages": [
+  {
+   "name": "Rust",
+   "rules": 612
+  },
+  {
+   "name": "Go",
+   "rules": 538
+  },
+  {
+   "name": "TypeScript",
+   "rules": 871
+  },
+  {
+   "name": "Java",
+   "rules": 1204
+  },
+  {
+   "name": "Python",
+   "rules": 693
+  }
+ ],
+ "rules": [
+  {
+   "id": "go/sql-string-concat",
+   "name": "SQL queries should not be built from concatenated input",
+   "description": "Building SQL with string concatenation lets attackers change the query structure. Use placeholders and pass values separately to database/sql, sqlx or pgx.",
+   "language": "Go",
+   "category": "vulnerability",
+   "severity": "critical",
+   "active": true,
+   "openIssues": 7,
+   "projects": 3,
+   "tags": [
+    "owasp-a03",
+    "cwe-89"
+   ],
+   "noncompliant": "q := \"SELECT * FROM users WHERE email = '\" + email + \"'\"\nrows, err := db.Query(q)",
+   "compliant": "rows, err := db.Query(\n    \"SELECT * FROM users WHERE email = $1\", email)",
+   "params": []
+  },
+  {
+   "id": "java/hardcoded-secret",
+   "name": "Credentials and API keys should not be hard-coded",
+   "description": "Detects high-entropy strings and known key formats (AWS, Stripe, GitHub, Slack) assigned to fields, constants or properties.",
+   "language": "Java",
+   "category": "vulnerability",
+   "severity": "blocker",
+   "active": true,
+   "openIssues": 3,
+   "projects": 2,
+   "tags": [
+    "owasp-a07",
+    "cwe-798"
+   ],
+   "noncompliant": "private static final String KEY = \"sk_live_51Hx\u2026\";",
+   "compliant": "@Value(\"${stripe.api-key}\")\nprivate String key;",
+   "params": [
+    {
+     "key": "minEntropy",
+     "value": "4.2",
+     "description": "Minimum Shannon entropy (bits/char) for unknown formats"
+    },
+    {
+     "key": "ignorePaths",
+     "value": "src/test/**",
+     "description": "Glob patterns excluded from detection"
+    }
+   ]
+  },
+  {
+   "id": "ts/jwt-no-verify",
+   "name": "JWTs should be verified, not just decoded",
+   "description": "jwt.decode() and similar helpers return claims without checking signature, issuer or expiry. Use verify() with a pinned algorithm.",
+   "language": "TypeScript",
+   "category": "vulnerability",
+   "severity": "critical",
+   "active": true,
+   "openIssues": 2,
+   "projects": 1,
+   "tags": [
+    "owasp-a02",
+    "cwe-347"
+   ],
+   "noncompliant": "const claims = jwt.decode(token);",
+   "compliant": "const claims = jwt.verify(token, key, {\n  algorithms: [\"RS256\"],\n});",
+   "params": []
+  },
+  {
+   "id": "ts/no-unsanitized-html",
+   "name": "HTML passed to dangerouslySetInnerHTML should be sanitized",
+   "description": "Flags dangerouslySetInnerHTML and innerHTML assignments whose value is not passed through a configured sanitizer.",
+   "language": "TypeScript",
+   "category": "vulnerability",
+   "severity": "critical",
+   "active": true,
+   "openIssues": 4,
+   "projects": 2,
+   "tags": [
+    "owasp-a03",
+    "cwe-79",
+    "react"
+   ],
+   "noncompliant": "<div dangerouslySetInnerHTML={{ __html: body }} />",
+   "compliant": "<div dangerouslySetInnerHTML={{\n  __html: DOMPurify.sanitize(body),\n}} />",
+   "params": [
+    {
+     "key": "sanitizers",
+     "value": "DOMPurify.sanitize, sanitizeHtml",
+     "description": "Functions treated as sanitizing"
+    }
+   ]
+  },
+  {
+   "id": "py/yaml-unsafe-load",
+   "name": "yaml.load should use SafeLoader",
+   "description": "yaml.load with Loader, UnsafeLoader or FullLoader can instantiate arbitrary Python objects from untrusted input.",
+   "language": "Python",
+   "category": "vulnerability",
+   "severity": "critical",
+   "active": true,
+   "openIssues": 2,
+   "projects": 2,
+   "tags": [
+    "cwe-502"
+   ],
+   "noncompliant": "cfg = yaml.load(fh, Loader=yaml.Loader)",
+   "compliant": "cfg = yaml.safe_load(fh)",
+   "params": []
+  },
+  {
+   "id": "rust/unwrap-on-fallible",
+   "name": "unwrap() and expect() should not be used in library request paths",
+   "description": "Panics abort the current task or thread. In functions that already return Result, propagate the error with ? instead.",
+   "language": "Rust",
+   "category": "bug",
+   "severity": "major",
+   "active": true,
+   "openIssues": 23,
+   "projects": 4,
+   "tags": [
+    "panic",
+    "robustness"
+   ],
+   "noncompliant": "let acct = accounts.get(&id).unwrap();",
+   "compliant": "let acct = accounts.get(&id)\n    .ok_or(Error::UnknownAccount(id))?;",
+   "params": [
+    {
+     "key": "allowInTests",
+     "value": "true",
+     "description": "Ignore #[cfg(test)] modules"
+    },
+    {
+     "key": "allowInMain",
+     "value": "true",
+     "description": "Ignore fn main() and build scripts"
+    }
+   ]
+  },
+  {
+   "id": "ts/no-floating-promise",
+   "name": "Promises should be awaited or explicitly handled",
+   "description": "A promise that is neither awaited, returned nor given a rejection handler turns failures into unhandled rejections.",
+   "language": "TypeScript",
+   "category": "bug",
+   "severity": "major",
+   "active": true,
+   "openIssues": 41,
+   "projects": 6,
+   "tags": [
+    "async"
+   ],
+   "noncompliant": "onExpire() { this.refresh(); }",
+   "compliant": "onExpire() {\n  this.refresh().catch(this.report);\n}",
+   "params": [
+    {
+     "key": "ignoreVoid",
+     "value": "true",
+     "description": "Allow void-prefixed calls (void fn())"
+    }
+   ]
+  },
+  {
+   "id": "go/unchecked-error",
+   "name": "Returned errors should be checked",
+   "description": "Ignoring an error return hides I/O, encoding and network failures.",
+   "language": "Go",
+   "category": "bug",
+   "severity": "minor",
+   "active": true,
+   "openIssues": 88,
+   "projects": 9,
+   "tags": [
+    "errcheck"
+   ],
+   "noncompliant": "json.NewEncoder(w).Encode(out)",
+   "compliant": "if err := json.NewEncoder(w).Encode(out); err != nil {\n    log.Warn(\"encode\", \"err\", err)\n}",
+   "params": [
+    {
+     "key": "exclude",
+     "value": "fmt.Print*, (*bytes.Buffer).Write",
+     "description": "Functions whose errors may be ignored"
+    }
+   ]
+  },
+  {
+   "id": "py/broad-except",
+   "name": "Exceptions should not be caught with a bare or broad except",
+   "description": "Catching Exception hides programming errors and makes fallbacks fire for the wrong reasons.",
+   "language": "Python",
+   "category": "code_smell",
+   "severity": "major",
+   "active": true,
+   "openIssues": 57,
+   "projects": 5,
+   "tags": [
+    "error-handling"
+   ],
+   "noncompliant": "try:\n    score = model(x)\nexcept Exception:\n    score = 0.0",
+   "compliant": "try:\n    score = model(x)\nexcept ModelUnavailable:\n    score = FALLBACK",
+   "params": []
+  },
+  {
+   "id": "java/cognitive-complexity",
+   "name": "Cognitive complexity of methods should not be too high",
+   "description": "Counts nesting, breaks in linear flow and boolean sequences. High scores correlate with defect density and slow reviews.",
+   "language": "Java",
+   "category": "code_smell",
+   "severity": "major",
+   "active": true,
+   "openIssues": 132,
+   "projects": 6,
+   "tags": [
+    "complexity"
+   ],
+   "noncompliant": "// complexity 31\npublic Money calculate(Invoice inv) { \u2026 }",
+   "compliant": "// complexity 6\npublic Money calculate(Invoice inv) {\n  return taxes.apply(inv);\n}",
+   "params": [
+    {
+     "key": "threshold",
+     "value": "15",
+     "description": "Maximum allowed score per method"
+    }
+   ]
+  },
+  {
+   "id": "rust/undocumented-unsafe",
+   "name": "unsafe blocks should carry a // SAFETY: comment",
+   "description": "Every unsafe block should state the invariant that makes it sound, so reviewers can check it.",
+   "language": "Rust",
+   "category": "code_smell",
+   "severity": "minor",
+   "active": true,
+   "openIssues": 6,
+   "projects": 2,
+   "tags": [
+    "unsafe"
+   ],
+   "noncompliant": "unsafe { ptr.read() }",
+   "compliant": "// SAFETY: ptr is non-null and aligned;\n// we hold the only reference.\nunsafe { ptr.read() }",
+   "params": []
+  },
+  {
+   "id": "go/duplicated-block",
+   "name": "Blocks of code should not be duplicated",
+   "description": "Per-language duplicate block detection. Disabled in favor of the cross-language duplication metric.",
+   "language": "Go",
+   "category": "code_smell",
+   "severity": "minor",
+   "active": false,
+   "openIssues": 0,
+   "projects": 0,
+   "tags": [
+    "duplication"
+   ],
+   "noncompliant": "// same 14 lines in 4 files",
+   "compliant": "// one shared helper",
+   "params": [
+    {
+     "key": "minTokens",
+     "value": "100",
+     "description": "Minimum duplicated tokens"
+    }
+   ]
+  }
+ ]
+}
