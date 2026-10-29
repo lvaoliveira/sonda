@@ -129,7 +129,7 @@ jobs:
           for i in 0 1 2 3 4 5 6; do tail -c +2 "fuzz/seeds/analyze/$i" > "/tmp/p/seed$i.${exts[$i]}"; done
           cp -r src /tmp/p/rust-src-not-scanned
           printf 'class A { void f() { int x = 1; } }\n' > /tmp/p/Big.java
-          strace -f -qq -o /tmp/trace target/release/sonda scan /tmp/p --no-gate --sandbox off --jobs 2 > /dev/null
+          strace -f -qq -s 80 -o /tmp/trace target/release/sonda scan /tmp/p --no-gate --sandbox off --jobs 2 > /dev/null
           python3 - <<'PY'
           import re, collections
           workers, after, calls = set(), set(), collections.Counter()
@@ -147,4 +147,14 @@ jobs:
           print("workers traced:", len(workers))
           for name, n in sorted(calls.items()):
               print(f"SYSCALL {name} {n}")
+          # The full post-ready sequence of one worker, with arguments.
+          first = sorted(after)[0] if after else None
+          seen = False
+          for line in open("/tmp/trace"):
+              if first and line.startswith(first + " "):
+                  if not seen and " write(1," in line:
+                      seen = True
+                      continue
+                  if seen and not line.split(None, 1)[1].startswith(("read(0", "write(1")):
+                      print("SEQ", line.rstrip()[:200])
           PY
