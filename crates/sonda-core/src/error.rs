@@ -25,6 +25,10 @@ pub enum Error {
     /// git failed while determining new code.
     #[error("git: {0}")]
     Git(String),
+    /// A report cannot be uploaded: it is malformed, lists an unsafe path,
+    /// or a source changed since the scan.
+    #[error("cannot upload: {0}")]
+    Upload(String),
     /// A bug in sonda, e.g. a rule query that does not compile.
     #[error("internal error: {0}")]
     Internal(String),

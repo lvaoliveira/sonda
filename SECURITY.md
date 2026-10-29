@@ -71,6 +71,20 @@ still validated), and the files they explicitly name (`--config`,
   escapes in text reports, error messages and logs. JSON and SARIF escape
   them through the serializer.
 - **Deterministic output**, so results can be audited and reproduced.
+- **`sonda upload` sends only what was analyzed.** The report file is
+  treated as untrusted:
+  - Paths must be relative, with no `..`, and may not pass through a symlink.
+    So a tampered report cannot make it send `~/.ssh/id_rsa` or
+    `/etc/passwd`.
+  - Every file must match the SHA-256 the scan recorded, so a file edited or
+    swapped since the scan is refused, not uploaded.
+  - All checks run before any connection is made.
+- **The upload token does not leak.** It comes from `SONDA_TOKEN` or a file,
+  never a command-line flag, because flags are visible in `ps` and CI logs.
+  It is sent only over HTTPS, except to `localhost`. Redirects are not
+  followed, so it only goes to the URL you named. URLs with embedded
+  credentials are refused. Server certificates are checked against Mozilla's
+  root certificates (webpki-roots).
 
 ### Known limitations
 
@@ -82,6 +96,8 @@ still validated), and the files they explicitly name (`--config`,
   would run with your privileges. Use `--sandbox require` to refuse to scan
   where the sandbox is unavailable. The parsers are fuzzed weekly with
   AddressSanitizer.
+- **Uploads to a server with a private CA fail.** `sonda upload` trusts
+  Mozilla's roots, not the operating system's store or a custom CA.
 - **File-swap check is Unix-only.** On Windows (where creating symlinks needs
   elevated rights) the identity check below is not available.
 - **The repository's own `sonda.toml` is trusted by default.** A pull request

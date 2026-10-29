@@ -14,8 +14,12 @@ categories = ["command-line-utilities", "development-tools"]
 sonda-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+flate2.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+flate2.workspace = true
 tempfile.workspace = true

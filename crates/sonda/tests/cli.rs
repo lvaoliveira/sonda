@@ -451,3 +451,186 @@ fn logs_escape_control_characters_from_the_repository() {
     assert!(!stderr.contains('\x1b'), "raw escape in logs");
     assert!(!out.stdout.contains(&0x1b), "raw escape in report");
 }
+
+// ------------------------------------------------------------------ upload
+
+/// What the fake server received.
+struct Request {
+    head: String,
+    body: Vec<u8>,
+}
+
+impl Request {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.head.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case(name).then(|| v.trim())
+        })
+    }
+}
+
+/// An HTTP server on localhost that answers one request with `status` and
+/// `reply`, then hands back what it received.
+fn fake_server(
+    status: &'static str,
+    reply: &'static str,
+) -> (String, std::thread::JoinHandle<Request>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut head = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            head.push_str(&line);
+        }
+        let request = Request {
+            head,
+            body: Vec::new(),
+        };
+        let len: usize = request.header("content-length").unwrap().parse().unwrap();
+        let mut body = vec![0; len];
+        reader.read_exact(&mut body).unwrap();
+        let mut stream = stream;
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+            reply.len()
+        )
+        .unwrap();
+        Request { body, ..request }
+    });
+    (url, handle)
+}
+
+/// A scanned project and its JSON report, kept outside the project.
+fn scanned(files: &[(&str, &str)]) -> (TempDir, TempDir) {
+    let dir = project(files);
+    let out = tempfile::tempdir().unwrap();
+    let report = out.path().join("report.json");
+    let status = sonda()
+        .args(["scan", "--no-gate", "-f", "json", "-o"])
+        .arg(&report)
+        .arg(dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    (dir, out)
+}
+
+fn upload(dir: &Path, out: &Path, server: &str) -> Command {
+    let mut cmd = sonda();
+    cmd.args([
+        "upload",
+        "--project",
+        "payments",
+        "--branch",
+        "main",
+        "--commit",
+        "0123abc",
+    ])
+    .arg("--server")
+    .arg(server)
+    .arg("--root")
+    .arg(dir)
+    .arg(out.join("report.json"))
+    .env("SONDA_TOKEN", "s3cret")
+    .env_remove("SONDA_SERVER");
+    // The fake server is on localhost; never route through a proxy.
+    for var in [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
+#[test]
+fn upload_sends_the_report_and_sources() {
+    let (dir, out) = scanned(&[("src/app.js", "var x = 1;\n")]);
+    let (url, server) = fake_server("201 Created", r#"{"id":"1"}"#);
+    let result = upload(dir.path(), out.path(), &url).output().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert!(stderr(&result).contains("uploaded 1 files for payments/main"));
+
+    let request = server.join().unwrap();
+    assert!(
+        request.head.starts_with("POST /api/analyses HTTP/1.1"),
+        "{}",
+        request.head
+    );
+    assert_eq!(request.header("authorization"), Some("Bearer s3cret"));
+    assert_eq!(request.header("content-encoding"), Some("gzip"));
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(&request.body[..]),
+        &mut json,
+    )
+    .unwrap();
+    let body: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(body["project"], "payments");
+    assert_eq!(body["branch"], "main");
+    assert_eq!(body["commit"], "0123abc");
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(out.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(body["report"], report);
+    assert_eq!(body["sources"][0]["path"], "src/app.js");
+    assert_eq!(body["sources"][0]["content"], "var x = 1;\n");
+}
+
+#[test]
+fn upload_reports_the_servers_refusal() {
+    let (dir, out) = scanned(&[("a.js", "var x;\n")]);
+    let (url, server) = fake_server("401 Unauthorized", r#"{"error":"bad token"}"#);
+    let result = upload(dir.path(), out.path(), &url).output().unwrap();
+    server.join().unwrap();
+    assert_eq!(code(&result), 2);
+    assert!(stderr(&result).contains("401"), "{}", stderr(&result));
+    assert!(stderr(&result).contains("bad token"), "{}", stderr(&result));
+}
+
+/// These fail before connecting: nothing listens on the URL they get.
+#[test]
+fn upload_refuses_before_sending_anything() {
+    let nowhere = "http://127.0.0.1:9";
+    let (dir, out) = scanned(&[("a.js", "var x;\n")]);
+
+    std::fs::write(dir.path().join("a.js"), "var y;\n").unwrap();
+    let changed = stderr(&upload(dir.path(), out.path(), nowhere).output().unwrap());
+    assert!(changed.contains("changed since the scan"), "{changed}");
+
+    let insecure = stderr(
+        &upload(dir.path(), out.path(), "http://example.com")
+            .output()
+            .unwrap(),
+    );
+    assert!(insecure.contains("plain http"), "{insecure}");
+
+    let no_token = upload(dir.path(), out.path(), nowhere)
+        .env_remove("SONDA_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(code(&no_token), 2);
+    assert!(
+        stderr(&no_token).contains("SONDA_TOKEN"),
+        "{}",
+        stderr(&no_token)
+    );
+
+    let report = out.path().join("report.json");
+    let text = std::fs::read_to_string(&report).unwrap();
+    std::fs::write(&report, text.replace("\"a.js\"", "\"../a.js\"")).unwrap();
+    let unsafe_path = stderr(&upload(dir.path(), out.path(), nowhere).output().unwrap());
+    assert!(unsafe_path.contains("unsafe path"), "{unsafe_path}");
+}

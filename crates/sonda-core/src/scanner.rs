@@ -307,14 +307,14 @@ fn read_capped(c: &Candidate, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>
 }
 
 #[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_nonblocking(path: &Path) -> std::io::Result<File> {
     use rustix::fs::{Mode, OFlags};
     let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
     Ok(File::from(rustix::fs::open(path, flags, Mode::empty())?))
 }
 
 #[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_nonblocking(path: &Path) -> std::io::Result<File> {
     File::open(path)
 }
 

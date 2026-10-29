@@ -43,7 +43,7 @@ The `architecture` tests in `crates/sonda-core/src/lib.rs` enforce this.
 |---|---|---|
 | Interface | `main.rs`, `report/` | CLI arguments, logging setup, exit codes; text/JSON/SARIF rendering and terminal escaping |
 | Application | `lib.rs` | `run`, `load_config`, `Outcome`: the public entry points |
-| Infrastructure | `scanner.rs`, `git.rs`, `worker.rs` | Filesystem walk and capped reads, coverage files, git object reads, the analysis worker pool and its protocol |
+| Infrastructure | `scanner.rs`, `git.rs`, `worker.rs`, `upload.rs` | Filesystem walk and capped reads, coverage files, git object reads, the analysis worker pool and its protocol, reading and checking sources for `sonda upload` (no networking: the CLI's `upload.rs` does the HTTP) |
 | Domain | `analysis.rs` | One file: parse, rules, complexity, metrics, tokens, suppressions |
 | | `rules/` | Rule catalog (`catalog.rs`) and compiled queries (`RuleSet`) |
 | | `duplication.rs` | Cross-file copy-paste detection |

@@ -56,6 +56,8 @@ sonda -v scan .                           # log progress to stderr (-vv, -vvv fo
 sonda scan . --jobs 4                     # limit parallelism (default: every CPU)
 sonda scan . --sandbox require            # refuse to scan if workers cannot be sandboxed
 sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
+sonda upload report.json --server https://sonda.example.com \
+  --project payments --branch main --commit "$GITHUB_SHA"   # token from SONDA_TOKEN
 ```
 
 Without `--new-code`, the whole project counts as new code.
