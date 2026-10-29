@@ -1,0 +1,90 @@
+# Running the sonda server
+
+The server stores analyses uploaded by `sonda upload` and serves the web app
+([ADR-0005](adr/0005-sonda-server.md)). It runs as two containers: `sonda`
+(the server and the web app) and `db` (PostgreSQL).
+
+**Status:** foundation only. The server starts, migrates its database,
+serves the web app and answers `/api/health`. Receiving uploads and the
+Issues and Rules API come next; until then the web app shows mock data.
+
+## Quick start (Docker Compose)
+
+From the repository root:
+
+```sh
+mkdir -m 700 secrets
+openssl rand -hex 32 > secrets/db_password
+openssl rand -hex 32 > secrets/sonda_token
+chmod 644 secrets/*        # the containers read them as non-root users
+
+docker compose up -d --wait
+curl http://127.0.0.1:9000/api/health     # {"status":"ok"}
+open http://127.0.0.1:9000                # the web app
+```
+
+`secrets/` is git-ignored, and the directory's `700` mode keeps other users
+on the machine out. `secrets/sonda_token` is the token `sonda upload` needs:
+
+```sh
+SONDA_TOKEN_FILE=secrets/sonda_token   # or: export SONDA_TOKEN=$(cat secrets/sonda_token)
+```
+
+Stop with `docker compose down`. Data lives in the `pgdata` volume, so it
+survives restarts and upgrades. `docker compose down -v` deletes it.
+
+## Exposing it beyond this machine
+
+The port is published on `127.0.0.1` only. To reach the server from other
+machines, put a reverse proxy that terminates TLS (Caddy, nginx, a cloud
+load balancer) in front of `127.0.0.1:9000`. `sonda upload` refuses plain
+HTTP to anything but localhost, so the token never crosses the network
+unencrypted.
+
+## Configuration
+
+Secrets come from environment variables or files (`*_FILE`), never from
+command-line flags. Setting both a variable and its `_FILE` form is an error.
+
+| Variable | Meaning |
+|---|---|
+| `DATABASE_URL` / `DATABASE_URL_FILE` | `postgres://user@host:port/db`. Required. |
+| `DATABASE_PASSWORD` / `DATABASE_PASSWORD_FILE` | The database password, if not in the URL. |
+| `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The API token, at least 32 characters. Required. Kept in memory only as a SHA-256 hash and compared in constant time. |
+| `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
+| `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
+| `RUST_LOG` | Log filter. Default `sonda=info,sqlx=warn`. |
+
+PostgreSQL 15 or newer. On startup the server waits up to 30 seconds for
+the database, then applies pending migrations, each in a transaction. If a
+migration fails, the server exits instead of serving.
+
+## Running without Docker
+
+```sh
+cargo build --release -p sonda-server
+DATABASE_URL=postgres://sonda@localhost/sonda DATABASE_PASSWORD_FILE=... \
+  SONDA_TOKEN_FILE=... target/release/sonda-server --web-dir web/dist
+```
+
+## Backups
+
+Everything durable is in PostgreSQL:
+
+```sh
+docker compose exec -T db pg_dump -U sonda -Fc sonda > sonda.dump
+```
+
+## Development
+
+The database tests run against a throwaway database on any PostgreSQL
+server you point them at. Without one, they skip:
+
+```sh
+docker run -d --name sonda-test-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17
+SONDA_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres cargo test -p sonda-server
+```
+
+CI runs them against PostgreSQL 15, the oldest supported version, with
+`SONDA_REQUIRE_DB_TESTS=1`, so a missing database fails the build instead of
+skipping silently.

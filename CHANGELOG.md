@@ -52,6 +52,12 @@ file, the report formats and the public library API.
   - Refused before connecting: unsafe paths, files changed since the scan,
     and plain HTTP except to localhost.
   - The token comes from `SONDA_TOKEN` or `--token-file`.
+- `sonda-server`, the foundation (ADR-0005):
+  - A PostgreSQL schema with migrations.
+  - `/api/health`, and serving the web app.
+  - Secrets from environment variables or files.
+  - A Docker image (distroless, non-root, 69 MB) and a `compose.yaml` that
+    runs it with PostgreSQL. See [docs/server.md](docs/server.md).
 
 ### Security
 

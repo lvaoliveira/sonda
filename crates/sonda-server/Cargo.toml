@@ -1,0 +1,28 @@
+[package]
+name = "sonda-server"
+description = "The sonda server: stores analyses uploaded by `sonda upload` and serves the web app's API"
+version.workspace = true
+edition.workspace = true
+# Above the workspace's 1.90: sqlx 0.9 needs 1.94. The server ships as a
+# Docker image built with a pinned toolchain; the CLI keeps the lower minimum.
+rust-version = "1.94"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true

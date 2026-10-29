@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sonda-core", "crates/sonda"]
+members = ["crates/sonda-core", "crates/sonda", "crates/sonda-server"]
 resolver = "3"
 
 # Shared by every crate, so versions and metadata cannot drift apart.
@@ -13,6 +13,7 @@ repository = "https://github.com/lvaoliveira/sonda"
 [workspace.dependencies]
 sonda-core = { path = "crates/sonda-core", version = "0.1.0" }
 anyhow = "1.0.104"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 ignore = "0.4.34"
@@ -24,9 +25,14 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = { version = "0.11.1", default-features = false }
 similar = "3.2.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "migrate", "macros"] }
+subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 toml = "1.1.8"
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["fs", "timeout"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "env-filter"] }
 tree-sitter = "0.27.1"
@@ -37,7 +43,8 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-typescript = "0.23.2"
 # 3.4.3 and 3.5.0 were younger than the 14-day minimum when added. Cargo.lock
-# also holds rustls-webpki 0.103.16 and webpki-roots 1.0.10 below that age, on
-# purpose: they fix RUSTSEC-2026-0382 and RUSTSEC-2026-0381. A security fix
-# overrides the minimum age.
+# holds a few crates below that age on purpose, because a security fix
+# overrides the minimum: rustls-webpki 0.103.16 (RUSTSEC-2026-0382),
+# webpki-roots 1.0.10 (RUSTSEC-2026-0381) and ctutils 0.4.4 (RUSTSEC-2026-0385,
+# the oldest fixed release).
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }

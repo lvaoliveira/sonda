@@ -1,0 +1,53 @@
+# sonda server + PostgreSQL (ADR-0005). See docs/server.md. Before the first
+# `docker compose up`, create the two secrets:
+#
+#   mkdir -m 700 secrets
+#   openssl rand -hex 32 > secrets/db_password
+#   openssl rand -hex 32 > secrets/sonda_token
+#   chmod 644 secrets/*    # readable by the containers' non-root users
+name: sonda
+
+services:
+  sonda:
+    build: .
+    image: sonda-server:local
+    # Published on this machine only; put a TLS reverse proxy in front to
+    # expose it.
+    ports: ["127.0.0.1:9000:9000"]
+    environment:
+      DATABASE_URL: postgres://sonda@db:5432/sonda
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      SONDA_TOKEN_FILE: /run/secrets/sonda_token
+    secrets: [db_password, sonda_token]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  db:
+    image: postgres:17@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    environment:
+      POSTGRES_USER: sonda
+      POSTGRES_DB: sonda
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sonda", "-d", "sonda"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    # No ports: the database is reachable only on the compose network.
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  sonda_token:
+    file: ./secrets/sonda_token
+
+volumes:
+  pgdata:

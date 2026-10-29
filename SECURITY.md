@@ -109,6 +109,33 @@ still validated), and the files they explicitly name (`--config`,
   sonda scan . --config /tmp/sonda.toml --new-code origin/main
   ```
 
+## The server
+
+`sonda-server` ([docs/server.md](docs/server.md)) is still being built.
+What holds today:
+
+- **Untrusted:** everything that arrives over the network, including
+  uploads, which carry other people's source code.
+- **Not exposed by default:** it listens on `127.0.0.1`. The Docker image
+  listens on all interfaces inside the container, but Compose publishes the
+  port on the host's localhost only. The database container publishes no
+  port at all.
+- **Secrets stay out of sight:** they come from environment variables or
+  files, never command-line flags, and errors never echo the database URL,
+  which may hold the password.
+- **The API token** must be at least 32 characters. It is kept in memory
+  only as a SHA-256 hash and compared in constant time.
+- **The container is locked down:** it runs as a non-root user on a
+  distroless image with no shell, with a read-only filesystem, all Linux
+  capabilities dropped, and `no-new-privileges`.
+- **SQL is parameterized.** sqlx 0.9 rejects SQL built from strings unless
+  it is marked as audited, and the only such SQL is in tests.
+- **The schema enforces constraints** such as project keys, commit hashes
+  and digest lengths, as a second line of defence behind the server's own
+  validation.
+- **Migrations are all-or-nothing:** each runs in a transaction, and a
+  failure stops startup.
+
 ## Supply chain
 
 CI runs `cargo deny` (advisories, licenses, sources) and `cargo audit` on
