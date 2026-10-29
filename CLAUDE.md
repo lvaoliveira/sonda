@@ -23,7 +23,8 @@ Overview and usage: [`README.md`](README.md).
   `lib.rs` enforce this; fix the code, not the test.
 - Library errors are the typed `sonda::Error`; per-file problems become warnings, never errors.
   `anyhow` only in `main.rs`. Keep tree-sitter and clap types out of the public API.
-- No `unsafe`. No `unwrap`/`expect` on production paths without a comment stating the invariant.
+- No `unsafe`, except `src/sandbox/macos.rs` (ADR-0004: `sandbox_init` FFI, with a safety argument).
+  No `unwrap`/`expect` on production paths without a comment stating the invariant.
   No `panic!` for recoverable errors.
 - Every query rule ships `bad`/`good` examples (they are tests). Every bug fix ships a regression test.
 - Fail loudly on bad config: unknown keys, rule ids and metrics are errors, never ignored.

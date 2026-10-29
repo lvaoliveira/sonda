@@ -114,6 +114,20 @@ The `Fuzz` workflow runs both targets weekly with AddressSanitizer, and for
 as a workflow artifact. Reproduce it with `cargo +nightly fuzz run <target>
 <file>`, then turn it into a regression test.
 
+## The worker sandbox
+
+The warning "killed by the sandbox" means a worker made a system call
+outside the Linux allow-list (`src/sandbox/linux.rs`). This usually follows
+a dependency or std update. To find the call:
+1. Reproduce with `--jobs 1`.
+2. Compare against `--sandbox off`.
+3. Trace the worker with
+   `strace -f -o trace sonda scan <dir> --sandbox off`, looking at what the
+   `__worker` process does after it writes its ready frame.
+
+Add a call to the allow-list only if it cannot reach files, the network or
+other processes, and say why in a comment.
+
 ## Commits and pull requests
 
 - Keep each change small and focused, with a message that explains *why*.

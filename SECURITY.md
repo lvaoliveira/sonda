@@ -46,6 +46,17 @@ still validated), and the files they explicitly name (`--config`,
   processes. If one crashes or hangs, that file becomes a warning, the
   worker is restarted, and the report covers everything else. The parent
   validates every worker reply as untrusted input.
+- **A parser exploit is contained on Linux and macOS**
+  ([ADR-0004](docs/adr/0004-sandbox-workers.md)). Each worker sandboxes
+  itself before it reads any file:
+  - **Linux:** a seccomp allow-list. Opening files fails, and network
+    access or starting programs kills the worker.
+  - **macOS:** Seatbelt `(deny default)`.
+  - **Both:** no core dumps and no new file descriptors.
+
+  Tests check that a sandboxed worker cannot read a file, connect to a
+  socket or start a program. `--sandbox require` fails the run if a worker
+  cannot be sandboxed. The default, best-effort, logs a warning instead.
 - **git cannot hang a scan.** Every git process is killed after
   `scan.git_timeout_secs` (default 120), and the run fails with a clear
   error instead of waiting forever.
@@ -63,13 +74,14 @@ still validated), and the files they explicitly name (`--config`,
 
 ### Known limitations
 
-- **Parser exploits are not contained yet.** tree-sitter's runtime and
-  grammars are C, called through FFI. They run in worker processes
-  ([ADR-0003](docs/adr/0003-isolate-parsing.md)), so a parser *crash* only
-  loses the file being parsed. The workers are not yet sandboxed, though, so
-  a crafted file that *exploits* a parser bug would run with your privileges.
-  Sandboxing is planned for Linux and macOS (phase 2). Meanwhile the parsers
-  are fuzzed weekly with AddressSanitizer and kept up to date.
+- **Windows workers are not sandboxed.** tree-sitter's runtime and grammars
+  are C, called through FFI. They run in worker processes
+  ([ADR-0003](docs/adr/0003-isolate-parsing.md)) everywhere, so a parser
+  crash only loses one file. On Linux and macOS the workers are also
+  sandboxed (below). On Windows, a crafted file that exploits a parser bug
+  would run with your privileges. Use `--sandbox require` to refuse to scan
+  where the sandbox is unavailable. The parsers are fuzzed weekly with
+  AddressSanitizer.
 - **File-swap check is Unix-only.** On Windows (where creating symlinks needs
   elevated rights) the identity check below is not available.
 - **The repository's own `sonda.toml` is trusted by default.** A pull request

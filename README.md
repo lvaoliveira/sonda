@@ -54,6 +54,7 @@ sonda rules                               # list rules
 sonda init                                # write a default sonda.toml
 sonda -v scan .                           # log progress to stderr (-vv, -vvv for more)
 sonda scan . --jobs 4                     # limit parallelism (default: every CPU)
+sonda scan . --sandbox require            # refuse to scan if workers cannot be sandboxed
 sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
 ```
 
