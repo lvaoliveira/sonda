@@ -3,6 +3,11 @@
 //! Every window of `min_tokens` consecutive tokens is hashed with a rolling
 //! hash. Each repeated window is paired with the first occurrence of that
 //! window, then extended token by token into a maximal block.
+//!
+//! Linear time, even on hostile input: no block starts inside a copy that
+//! is already reported, so copy ranges are disjoint and the total extension
+//! work is bounded by the number of tokens. (Without that rule, a file
+//! repeating one token was quadratic: 80,000 lines took 75 s.)
 
 use crate::analysis::Token;
 use serde::Serialize;
@@ -49,11 +54,17 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
         lines: vec![BTreeSet::new(); files.len()],
         blocks: Vec::new(),
     };
+    // Per file, the token index up to which copies are already reported.
+    let mut copied_until = vec![0usize; files.len()];
     // Indexing `first` cannot panic: it holds every hash in `hashes`.
     for (fb, hs) in hashes.iter().enumerate() {
         for (pb, &h) in hs.iter().enumerate() {
             let ((fa, pa), repeated) = first[&h];
-            if !repeated || (fa, pa) == (fb, pb) || overlaps(fa, pa, fb, pb, w) {
+            if !repeated
+                || (fa, pa) == (fb, pb)
+                || overlaps(fa, pa, fb, pb, w)
+                || pb < copied_until[fb]
+            {
                 continue;
             }
             // Already covered by a block that started one token earlier.
@@ -79,6 +90,7 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
             {
                 len += 1;
             }
+            copied_until[fb] = pb + len;
             let span = |file: usize, tokens: &[Token], start: usize| Span {
                 file,
                 start_line: tokens[start].line,
@@ -128,6 +140,7 @@ fn window_hashes(tokens: &[Token], w: usize) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     /// One token per character, one line per `\n`.
     fn tokens(s: &str) -> Vec<Token> {
@@ -144,6 +157,30 @@ mod tests {
             }
         }
         out
+    }
+
+    /// Regression: one repeated token made detection quadratic (each window
+    /// re-extended a block back to the start); 80,000 lines took 75 s in a
+    /// release build. Linear, this takes milliseconds even unoptimized; the
+    /// bound is two orders of magnitude above that.
+    #[test]
+    fn repetitive_input_is_linear() {
+        let n = 200_000;
+        let same: Vec<Token> = (0..n)
+            .map(|i| Token {
+                hash: 7,
+                line: i + 1,
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let d = detect(&[&same], 100, 10);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        // Still reported: everything after the first window repeats it.
+        assert!(d.lines[0].len() > n - 200);
     }
 
     #[test]
@@ -178,5 +215,59 @@ mod tests {
         let repetitive = tokens("aaaaaaaa");
         // Overlapping windows of a run must not be reported as copies of each other.
         assert_eq!(detect(&[&repetitive], 4, 1).blocks.len(), 1);
+    }
+
+    /// Token streams from a tiny alphabet, so repeats are common.
+    fn token_files() -> impl Strategy<Value = Vec<Vec<Token>>> {
+        let file = prop::collection::vec((0u64..3, 0usize..3), 0..300).prop_map(|raw| {
+            let mut line = 1;
+            raw.into_iter()
+                .map(|(hash, newlines)| {
+                    line += newlines / 2;
+                    Token { hash, line }
+                })
+                .collect::<Vec<_>>()
+        });
+        prop::collection::vec(file, 1..4)
+    }
+
+    proptest! {
+        #![proptest_config(crate::test_support::proptest_config(256))]
+
+        #[test]
+        fn rolling_hash_equals_direct_hash(
+            hashes in prop::collection::vec(any::<u64>(), 1..200),
+            w in 1usize..20,
+        ) {
+            let tokens: Vec<Token> = hashes.iter().map(|&hash| Token { hash, line: 1 }).collect();
+            let rolled = window_hashes(&tokens, w);
+            for (i, h) in rolled.iter().enumerate() {
+                prop_assert_eq!(*h, window_hashes(&tokens[i..i + w], w)[0]);
+            }
+        }
+
+        #[test]
+        fn blocks_are_real_copies_within_their_files(
+            files in token_files(),
+            min_tokens in 2usize..12,
+            min_lines in 1usize..4,
+        ) {
+            let refs: Vec<&[Token]> = files.iter().map(Vec::as_slice).collect();
+            let d = detect(&refs, min_tokens, min_lines);
+            prop_assert_eq!(d.lines.len(), files.len());
+            let last_line = |f: usize| files[f].last().map_or(0, |t| t.line);
+            for b in &d.blocks {
+                for s in [b.original, b.copy] {
+                    prop_assert!(s.start_line <= s.end_line && s.end_line <= last_line(s.file));
+                }
+                prop_assert!(b.copy.end_line - b.copy.start_line + 1 >= min_lines);
+            }
+            for (f, lines) in d.lines.iter().enumerate() {
+                prop_assert!(lines.iter().all(|&l| l >= 1 && l <= last_line(f)));
+            }
+            // Same input, same output.
+            let again = detect(&refs, min_tokens, min_lines);
+            prop_assert_eq!(again.blocks, d.blocks);
+        }
     }
 }

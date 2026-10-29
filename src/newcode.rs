@@ -64,6 +64,7 @@ pub(crate) fn changed_lines(old: &str, new: &str) -> HashSet<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn changed_lines_are_inserts_and_replacements() {
@@ -82,5 +83,24 @@ mod tests {
             files: HashMap::from([("a.py".into(), Changed::Lines(HashSet::from([2])))]),
         };
         assert!(nc.is_new("a.py", 2) && !nc.is_new("a.py", 1) && !nc.is_new("b.py", 1));
+    }
+
+    fn text() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::sample::select(vec!["a", "b", "c", ""]), 0..40)
+            .prop_map(|lines| lines.iter().map(|l| format!("{l}\n")).collect())
+    }
+
+    proptest! {
+        #![proptest_config(crate::test_support::proptest_config(256))]
+
+        #[test]
+        fn changed_lines_are_lines_of_the_new_text(old in text(), new in text()) {
+            let changed = changed_lines(&old, &new);
+            let count = new.lines().count();
+            prop_assert!(changed.iter().all(|&l| l >= 1 && l <= count));
+            prop_assert!(changed_lines(&new, &new).is_empty());
+            let all: HashSet<usize> = (1..=count).collect();
+            prop_assert_eq!(changed_lines("", &new), all);
+        }
     }
 }

@@ -40,6 +40,8 @@ still validated), and the files they explicitly name (`--config`,
   - Parsing and rule matching stop at `scan.file_timeout_secs`.
   - Syntax trees are walked without recursion, which is tested with 100,000
     levels of nesting.
+  - Duplication detection runs in linear time, even on input crafted to be
+    repetitive.
   - Malformed files become warnings.
 - **No reads outside the scan root.** Symlinks are not followed.
 - **No terminal injection.** Control characters and Unicode bidi overrides
@@ -59,8 +61,6 @@ still validated), and the files they explicitly name (`--config`,
 - **File-swap race.** If an attacker can modify the directory *while* it is
   being scanned, a file could be swapped for a symlink between the walk and
   the read. A static checkout is not affected.
-- **Duplication detection** has not been tested against inputs crafted for
-  its worst-case running time.
 - **The repository's own `sonda.toml` is trusted by default.** A pull request
   can edit it to disable rules or weaken the quality gate. In CI, load the
   config from a trusted place instead, such as the base branch:

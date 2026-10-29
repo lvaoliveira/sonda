@@ -264,7 +264,7 @@ fn scan_tokens(
     let mut tokens = Vec::new();
     let todo_rule = rules.get(rules::TODO_COMMENT);
     let mark = |flags: &mut Vec<bool>, node: Node| {
-        flags[node.start_position().row..=node.end_position().row].fill(true);
+        flags[node.start_position().row..=last_row(node)].fill(true);
     };
 
     walk(root, |node| {
@@ -298,6 +298,18 @@ fn scan_tokens(
         code_lines,
         comment_lines: comment.iter().filter(|&&c| c).count(),
         tokens,
+    }
+}
+
+/// The last row a node occupies. An end at column 0 of a later row is
+/// exclusive: the node stops before that row. (An unterminated string at
+/// the end of a file ends there, one row past the last line.)
+fn last_row(node: Node) -> usize {
+    let (start, end) = (node.start_position(), node.end_position());
+    if end.column == 0 && end.row > start.row {
+        end.row - 1
+    } else {
+        end.row
     }
 }
 
@@ -626,6 +638,8 @@ impl<'a> LineIndex<'a> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::sync::LazyLock;
 
     fn run(lang: Lang, src: &str) -> FileAnalysis {
         let cfg = Config::default();
@@ -696,6 +710,15 @@ pub(crate) mod tests {
             msg.contains(&format!("'{}…'", "x".repeat(MAX_NAME_CHARS))),
             "{msg}"
         );
+    }
+
+    /// Regression (found by the fuzz property): an unterminated string at the
+    /// end of a file counted a code line past the last line.
+    #[test]
+    fn tokens_ending_in_a_newline_do_not_add_a_line() {
+        let a = run(Lang::Java, "class A { String s = \"abc\n");
+        assert_eq!(a.metrics.lines, 1);
+        assert_eq!(a.code_lines, vec![1]);
     }
 
     #[test]
@@ -814,5 +837,43 @@ pub(crate) mod tests {
         let a = run(Lang::Python, "import os\nfrom a import b\nx = 1\n");
         assert_eq!(a.tokens.len(), 3); // x = 1
         assert_eq!(a.metrics.ncloc, 3);
+    }
+
+    static CONFIG: LazyLock<Config> = LazyLock::new(Config::default);
+    static RULES: LazyLock<RuleSet> = LazyLock::new(|| RuleSet::new(&CONFIG.rules).unwrap());
+
+    /// Code-shaped noise: real keywords and brackets in random order,
+    /// including unbalanced nesting, odd line endings and non-ASCII text.
+    fn code_like() -> impl Strategy<Value = String> {
+        let vocab = vec![
+            "if", "else", "elif", "for", "while", "do", "switch", "case", "default", "try",
+            "catch", "except", "def", "function", "class", "return", "goto", "eval", "var", "=>",
+            "->", "(", ")", "{", "}", "[", "]", ";", ",", ":", "=", "==", "&&", "||", "and", "x",
+            "y", "\"s\"", "'c'", "`t`", "#", "//", "/*", "*/", "TODO", "NOSONAR", "é", "\u{202e}",
+            " ", "\t", "\n", "\r\n", "\r", "\\",
+        ];
+        prop::collection::vec(prop::sample::select(vocab), 0..400).prop_map(|t| t.concat())
+    }
+
+    proptest! {
+        #![proptest_config(crate::test_support::proptest_config(64))]
+
+        /// A small fuzzer: analysis of arbitrary code-shaped input must succeed
+        /// in every grammar and report positions inside the file.
+        #[test]
+        fn analysis_never_fails_on_malformed_code(src in code_like()) {
+            for &lang in crate::lang::ALL {
+                let a = analyze("f", lang, &src, &RULES, &CONFIG, far_deadline());
+                let a = a.map_err(|e| TestCaseError::fail(format!("{lang:?}: {e}")))?;
+                let lines = a.metrics.lines.max(1);
+                for i in &a.issues {
+                    prop_assert!(i.line >= 1 && i.line <= lines, "{:?} line {}", lang, i.line);
+                    prop_assert!(i.end_line >= i.line && i.column >= 1);
+                }
+                prop_assert!(a.code_lines.windows(2).all(|w| w[0] < w[1]));
+                prop_assert!(a.code_lines.iter().all(|&l| l >= 1 && l <= lines));
+                prop_assert!(a.tokens.iter().all(|t| t.line >= 1 && t.line <= lines));
+            }
+        }
     }
 }

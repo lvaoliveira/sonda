@@ -58,6 +58,7 @@ fn relative_path(p: &Path, roots: &[&Path]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn parses_and_merges_lcov() {
@@ -81,5 +82,36 @@ mod tests {
         );
         cov.merge_lcov(&lcov, &[]);
         assert_eq!(cov.files["a.js"], BTreeMap::from([(4, u64::MAX)]));
+    }
+
+    fn lcov_record() -> impl Strategy<Value = String> {
+        let path = prop::sample::select(vec!["a.js", "src/b.py", "/root/c.c"]);
+        let lines = prop::collection::vec((1usize..50, 0u64..5), 0..10);
+        (path, lines).prop_map(|(path, lines)| {
+            let da: String = lines.iter().map(|(l, h)| format!("DA:{l},{h}\n")).collect();
+            format!("SF:{path}\n{da}end_of_record\n")
+        })
+    }
+
+    proptest! {
+        #![proptest_config(crate::test_support::proptest_config(256))]
+
+        #[test]
+        fn parser_accepts_any_input_without_panicking(
+            text in prop_oneof![any::<String>(), "(SF:|DA:|end_of_record|[0-9,\\n-])*"]
+        ) {
+            Coverage::default().merge_lcov(&text, &[Path::new("/root")]);
+        }
+
+        #[test]
+        fn merge_order_does_not_matter(a in lcov_record(), b in lcov_record()) {
+            let roots = [Path::new("/root")];
+            let (mut ab, mut ba) = (Coverage::default(), Coverage::default());
+            ab.merge_lcov(&a, &roots);
+            ab.merge_lcov(&b, &roots);
+            ba.merge_lcov(&b, &roots);
+            ba.merge_lcov(&a, &roots);
+            prop_assert_eq!(ab.files, ba.files);
+        }
     }
 }

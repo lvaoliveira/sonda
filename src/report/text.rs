@@ -163,6 +163,7 @@ fn format_minutes(total: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn escapes_terminal_control_and_bidi_characters() {
@@ -186,5 +187,26 @@ mod tests {
         assert_eq!(format_minutes(120), "2h");
         assert_eq!(format_minutes(125), "2h 5min");
         assert_eq!(format_minutes(480 * 3 + 90), "3d 1h");
+    }
+
+    proptest! {
+        #![proptest_config(crate::test_support::proptest_config(512))]
+
+        #[test]
+        fn escaped_text_is_inert_and_stable(s in any::<String>()) {
+            let safe = terminal_safe(&s);
+            prop_assert!(!safe.chars().any(needs_escape));
+            prop_assert_eq!(terminal_safe(&safe), safe.clone(), "escaping is idempotent");
+            if !s.chars().any(needs_escape) {
+                prop_assert_eq!(safe, s.as_str());
+            }
+        }
+
+        #[test]
+        fn multiline_escaping_keeps_exactly_the_newlines(s in any::<String>()) {
+            let safe = terminal_safe_lines(&s);
+            prop_assert_eq!(safe.matches('\n').count(), s.matches('\n').count());
+            prop_assert!(!safe.chars().any(|c| c != '\n' && needs_escape(c)));
+        }
     }
 }

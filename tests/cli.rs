@@ -1,9 +1,290 @@
-//! End-to-end tests of the `sonda` binary.
+//! End-to-end tests of the `sonda` binary: exit codes, output formats and
+//! commands, as a user or CI pipeline sees them.
 
-use std::process::Command;
+use serde_json::Value;
+use std::path::Path;
+use std::process::{Command, Output};
+use tempfile::TempDir;
 
 fn sonda() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_sonda"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sonda"));
+    cmd.env_remove("RUST_LOG");
+    cmd
+}
+
+fn run(args: &[&str], dir: &Path) -> Output {
+    sonda().args(args).arg(dir).output().unwrap()
+}
+
+fn code(out: &Output) -> i32 {
+    out.status.code().expect("exited normally")
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn project(files: &[(&str, &str)]) -> TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, content) in files {
+        let full = dir.path().join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, content).unwrap();
+    }
+    dir
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+fn json(out: &Output) -> Value {
+    serde_json::from_slice(&out.stdout).expect("valid JSON on stdout")
+}
+
+#[test]
+fn exit_code_reflects_the_quality_gate() {
+    let clean = project(&[("app.py", "x = 1\n")]);
+    let out = run(&["scan"], clean.path());
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("Quality gate: PASSED"));
+
+    let vulnerable = project(&[("app.js", "eval(x);\n")]);
+    let out = run(&["scan"], vulnerable.path());
+    assert_eq!(code(&out), 1);
+    assert!(stdout(&out).contains("Quality gate: FAILED"));
+
+    assert_eq!(code(&run(&["scan", "--no-gate"], vulnerable.path())), 0);
+}
+
+#[test]
+fn errors_exit_with_2_and_a_message() {
+    let dir = project(&[("app.py", "x = 1\n")]);
+    let missing = dir.path().join("nope");
+    let cases: Vec<(Vec<&str>, &Path, &str)> = vec![
+        (vec!["scan"], &missing, "is not a directory"),
+        // `--new-code -x` is already refused by clap; the `=` form reaches
+        // sonda's own validation.
+        (
+            vec!["scan", "--new-code=-x"],
+            dir.path(),
+            "invalid --new-code reference",
+        ),
+        (
+            vec!["scan", "--new-code", "-x"],
+            dir.path(),
+            "unexpected argument",
+        ),
+        (vec!["scan", "--new-code", "main"], dir.path(), "git"),
+        (
+            vec!["scan", "--coverage", "/no/such/lcov.info"],
+            dir.path(),
+            "cannot read",
+        ),
+    ];
+    for (args, path, expected) in cases {
+        let out = run(&args, path);
+        assert_eq!(code(&out), 2, "{args:?}");
+        assert!(
+            stderr(&out).contains(expected),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+        assert!(out.stdout.is_empty(), "{args:?}: no report on error");
+    }
+}
+
+#[test]
+fn bad_repository_config_is_an_error_not_ignored() {
+    for (toml, expected) in [
+        (
+            "[rules]\ndisabled = [\"js/nope\"]\n",
+            "unknown rule 'js/nope'",
+        ),
+        (
+            "[[gate.conditions]]\nmetric = \"bugz\"\nop = \"gt\"\nthreshold = 0\n",
+            "unknown variant `bugz`",
+        ),
+        ("[thresholds]\nparams = 3\n", "unknown field `params`"),
+        ("[scan]\nfile_timeout_secs = 0\n", "scan.file_timeout_secs"),
+    ] {
+        let dir = project(&[("app.py", "x = 1\n"), ("sonda.toml", toml)]);
+        let out = run(&["scan"], dir.path());
+        assert_eq!(code(&out), 2, "{toml}");
+        assert!(stderr(&out).contains(expected), "{toml}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn json_report_has_measures_gate_and_issues() {
+    let dir = project(&[("src/app.js", "var x = 1;\neval(x);\n")]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    assert_eq!(report["tool"], "sonda");
+    assert_eq!(report["measures"]["files"], 1.0);
+    assert_eq!(report["measures"]["vulnerabilities"], 1.0);
+    assert_eq!(report["gate"]["passed"], false);
+    let rules: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["rule"].as_str().unwrap())
+        .collect();
+    assert_eq!(rules, ["js/no-var", "js/no-eval"]);
+    assert_eq!(report["issues"][1]["path"], "src/app.js");
+    assert_eq!(report["issues"][1]["line"], 2);
+}
+
+#[test]
+fn sarif_report_is_valid_2_1_0() {
+    let dir = project(&[("app.js", "eval(x);\n")]);
+    let sarif = json(&run(&["scan", "--no-gate", "-f", "sarif"], dir.path()));
+    assert_eq!(sarif["version"], "2.1.0");
+    let run0 = &sarif["runs"][0];
+    let rule_count = stdout(&sonda().arg("rules").output().unwrap())
+        .lines()
+        .count();
+    assert_eq!(
+        run0["tool"]["driver"]["rules"].as_array().unwrap().len(),
+        rule_count
+    );
+    let result = &run0["results"][0];
+    assert_eq!(result["ruleId"], "js/no-eval");
+    assert_eq!(result["level"], "error");
+    // ruleIndex must point at the rule it names.
+    let index = result["ruleIndex"].as_u64().unwrap() as usize;
+    assert_eq!(run0["tool"]["driver"]["rules"][index]["id"], "js/no-eval");
+    let location = &result["locations"][0]["physicalLocation"];
+    assert_eq!(location["artifactLocation"]["uri"], "app.js");
+    assert_eq!(location["region"]["startLine"], 1);
+}
+
+#[test]
+fn output_file_receives_the_report_and_stdout_stays_empty() {
+    let dir = project(&[("app.js", "eval(x);\n")]);
+    let target = dir.path().join("out.sarif");
+    let out = sonda()
+        .args(["scan", "--no-gate", "-f", "sarif", "-o"])
+        .arg(&target)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0);
+    assert!(out.stdout.is_empty());
+    assert!(stderr(&out).contains("quality gate FAILED"));
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(target).unwrap()).unwrap();
+    assert_eq!(written["runs"][0]["results"][0]["ruleId"], "js/no-eval");
+}
+
+#[test]
+fn only_new_lists_new_issues_but_gate_sees_everything() {
+    let dir = project(&[("old.js", "eval(a);\n")]);
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "old"]);
+    git(root, &["checkout", "-qb", "feature"]);
+    std::fs::write(root.join("new.js"), "eval(b);\n").unwrap();
+
+    let out = run(
+        &["scan", "--new-code", "main", "--only-new", "-f", "json"],
+        root,
+    );
+    assert_eq!(
+        code(&out),
+        1,
+        "the new vulnerability fails the default gate"
+    );
+    let report = json(&out);
+    assert_eq!(report["new_code_reference"], "main");
+    let paths: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["new.js"]);
+    assert_eq!(report["measures"]["vulnerabilities"], 2.0);
+    assert_eq!(report["measures"]["new_vulnerabilities"], 1.0);
+}
+
+#[test]
+fn coverage_report_feeds_the_coverage_measures() {
+    let dir = project(&[
+        ("app.js", "const a = 1;\nconst b = 2;\n"),
+        ("lcov.info", "SF:app.js\nDA:1,3\nDA:2,0\nend_of_record\n"),
+    ]);
+    let lcov = dir.path().join("lcov.info");
+    let out = sonda()
+        .args(["scan", "-f", "json", "--coverage"])
+        .arg(&lcov)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let report = json(&out);
+    assert_eq!(report["measures"]["coverage"], 50.0);
+    assert_eq!(report["measures"]["new_coverage"], 50.0);
+    assert_eq!(
+        code(&out),
+        1,
+        "50% < 80% on new code fails the default gate"
+    );
+}
+
+#[test]
+fn init_writes_a_working_config_once() {
+    let dir = project(&[("app.py", "x = 1\n")]);
+    let config = dir.path().join("sonda.toml");
+    let out = run(&["init"], dir.path());
+    assert_eq!(code(&out), 0);
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert!(written.contains("[[gate.conditions]]"));
+    assert_eq!(
+        code(&run(&["scan"], dir.path())),
+        0,
+        "the written config loads"
+    );
+
+    std::fs::write(&config, "# mine\n").unwrap();
+    let again = run(&["init"], dir.path());
+    assert_eq!(code(&again), 2);
+    assert!(stderr(&again).contains("already exists"));
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "# mine\n",
+        "not overwritten"
+    );
+
+    assert_eq!(code(&run(&["init", "--force"], dir.path())), 0);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
+}
+
+#[test]
+fn rules_command_lists_every_rule() {
+    let text = stdout(&sonda().arg("rules").output().unwrap());
+    assert!(text.lines().count() >= 30);
+    assert!(text.lines().any(|l| l.starts_with("js/no-eval ")));
+    let md = stdout(
+        &sonda()
+            .args(["rules", "--format", "markdown"])
+            .output()
+            .unwrap(),
+    );
+    assert!(md.starts_with("# Rules"));
+    assert!(md.contains("Noncompliant:"));
 }
 
 /// Regression: verbose logs printed a file name's raw escape sequence to
@@ -15,15 +296,9 @@ fn logs_escape_control_characters_from_the_repository() {
     // Invalid UTF-8 content makes the file name appear in a debug log.
     std::fs::write(dir.path().join("evil\x1b[2J.py"), b"x = '\xff'\n").unwrap();
 
-    let out = sonda()
-        .args(["scan", "--no-gate", "-vv"])
-        .arg(dir.path())
-        .env_remove("RUST_LOG")
-        .output()
-        .unwrap();
-
-    assert!(out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let out = run(&["scan", "--no-gate", "-vv"], dir.path());
+    assert_eq!(code(&out), 0);
+    let stderr = stderr(&out);
     assert!(stderr.contains("evil\\u{1b}[2J.py"), "{stderr}");
     assert!(!stderr.contains('\x1b'), "raw escape in logs");
     assert!(!out.stdout.contains(&0x1b), "raw escape in report");

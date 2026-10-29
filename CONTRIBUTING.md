@@ -36,6 +36,10 @@ Please make sure your change also follows these:
   - A bug fix includes a test that fails without the fix.
   - Changes that touch untrusted input (file contents, names, git) include a
     test with hostile input.
+- **Property tests** (`proptest`) use a fixed seed, so CI is deterministic.
+  When changing a parser or the analysis, also run a few other seeds, for
+  example `PROPTEST_RNG_SEED=7 cargo test`. A failure prints a minimal input;
+  turn it into a named regression test.
 - **The domain stays pure.** Don't add I/O outside `scanner.rs`, `git.rs`,
   `lib.rs` and the interface layer; the `architecture` tests will fail.
 - **Output stays deterministic.** Never let `HashMap` order or thread timing

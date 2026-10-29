@@ -37,3 +37,13 @@ file, the report formats and the public library API.
   cap and a time budget for parsing and rule matching.
 - Control characters and bidi overrides from the repository are escaped in
   text reports, errors and logs.
+- Duplication detection was quadratic on repetitive input. A 160 KB file
+  that repeated one token took 75 s, and the per-file time budget didn't
+  apply. It is now linear: the same file takes 5 ms.
+
+### Fixed
+
+- A node ending in a line break, such as an unterminated string at the end
+  of a file or a C `#include` line, counted the following line as code. In
+  a real project this added one line of code to every C file that had a
+  blank line after its includes. Found by the new fuzz property test.

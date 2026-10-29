@@ -200,6 +200,7 @@ impl CatFile {
 mod tests {
     use super::*;
     use crate::newcode::NewCode;
+    use proptest::prelude::*;
     use std::path::PathBuf;
 
     struct Repo {
@@ -348,5 +349,17 @@ mod tests {
         let blobs = parse_ls_tree(&out, "sub/");
         assert_eq!(blobs.len(), 2);
         assert_eq!(blobs["a.py"], "abc123");
+    }
+
+    proptest! {
+        #![proptest_config(crate::test_support::proptest_config(512))]
+
+        #[test]
+        fn accepted_refs_can_never_be_read_as_options(r in any::<String>()) {
+            if validate_ref(&r).is_ok() {
+                prop_assert!(!r.is_empty() && !r.starts_with('-'));
+                prop_assert!(!r.chars().any(|c| c.is_whitespace() || c.is_control()));
+            }
+        }
     }
 }

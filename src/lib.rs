@@ -110,6 +110,24 @@ pub fn load_config(explicit: Option<&Path>, root: &Path) -> Result<Config, Error
     })
 }
 
+/// Shared test configuration.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use proptest::test_runner::{Config, RngSeed};
+
+    /// Property tests use a fixed seed so every run, local or CI, checks the
+    /// same cases. Set PROPTEST_RNG_SEED to explore others.
+    pub(crate) fn proptest_config(cases: u32) -> Config {
+        let mut config = Config::with_cases(cases);
+        if std::env::var_os("PROPTEST_RNG_SEED").is_none() {
+            config.rng_seed = RngSeed::Fixed(0x0050_11DA);
+        }
+        // A fixed seed already reproduces failures; don't write files.
+        config.failure_persistence = None;
+        config
+    }
+}
+
 /// Fitness tests for the layering in docs/adr/0001-architecture.md. They are
 /// textual: they search each file, comments excluded, for forbidden paths.
 #[cfg(test)]
