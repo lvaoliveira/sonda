@@ -43,6 +43,9 @@ file, the report formats and the public library API.
   that repeated one token took 75 s, and the per-file time budget didn't
   apply. It is now linear: the same file takes 5 ms.
 
+- A file or parent directory swapped for a symlink or FIFO during a scan is
+  detected by device and inode and skipped, instead of being followed outside
+  the root or hanging the scan (Unix).
 - Every git process is killed after `scan.git_timeout_secs` (default 120),
   so a pathological repository can no longer hang `--new-code`.
 

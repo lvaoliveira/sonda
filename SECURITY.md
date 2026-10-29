@@ -46,7 +46,11 @@ still validated), and the files they explicitly name (`--config`,
   `scan.git_timeout_secs` (default 120), and the run fails with a clear
   error instead of waiting forever.
   - Malformed files become warnings.
-- **No reads outside the scan root.** Symlinks are not followed.
+- **No reads outside the scan root.** Symlinks are not followed. On Unix,
+  each file is opened non-blocking and checked to be the same file (device
+  and inode) the walk listed. A file or directory swapped for a symlink or a
+  FIFO between listing and reading is skipped with a warning; it is not
+  followed, and it cannot hang the scan.
 - **No terminal injection.** Control characters and Unicode bidi overrides
   ("Trojan Source") from the repository are shown as visible `\u{..}`
   escapes in text reports, error messages and logs. JSON and SARIF escape
@@ -60,9 +64,8 @@ still validated), and the files they explicitly name (`--config`,
   could affect the sonda process. They are fuzzed weekly in CI with
   AddressSanitizer (see CONTRIBUTING.md) and kept up to date, but they still
   run in the same process as the rest of sonda.
-- **File-swap race.** If an attacker can modify the directory *while* it is
-  being scanned, a file could be swapped for a symlink between the walk and
-  the read. A static checkout is not affected.
+- **File-swap check is Unix-only.** On Windows (where creating symlinks needs
+  elevated rights) the identity check below is not available.
 - **The repository's own `sonda.toml` is trusted by default.** A pull request
   can edit it to disable rules or weaken the quality gate. In CI, load the
   config from a trusted place instead, such as the base branch:

@@ -58,7 +58,7 @@ fn scan_files(
 ) -> Result<ProjectAnalysis, Error> {
     // Every later stage (analysis order, duplication's "first occurrence")
     // relies on this sort.
-    paths.sort_by(|a, b| a.1.cmp(&b.1));
+    paths.sort_by(|a, b| a.rel.cmp(&b.rel));
     let root = &opts.root;
     let coverage = load_coverage(&opts.coverage, root)?;
     // Saturating: the config may come from the analyzed repository.
@@ -70,7 +70,7 @@ fn scan_files(
             let started = Instant::now();
             let contents = paths
                 .iter()
-                .map(|(path, rel, _)| (rel.as_str(), read_capped(path, max_bytes).ok().flatten()));
+                .map(|c| (c.rel.as_str(), read_capped(c, max_bytes).ok().flatten()));
             let git_timeout = Duration::from_secs(cfg.scan.git_timeout_secs);
             let new_code = git::new_code(root, r, max_bytes, git_timeout, contents)?;
             info!(reference = %r, elapsed_ms = ms(started), "computed new code");
@@ -82,8 +82,9 @@ fn scan_files(
     let started = Instant::now();
     let results: Vec<Result<FileAnalysis, String>> = paths
         .par_iter()
-        .map(|(path, rel, lang)| {
-            let bytes = read_capped(path, max_bytes)
+        .map(|c| {
+            let (rel, lang) = (&c.rel, &c.lang);
+            let bytes = read_capped(c, max_bytes)
                 .map_err(|e| format!("{rel}: {e}"))?
                 .ok_or_else(|| {
                     format!(
@@ -156,7 +157,38 @@ fn scan_files(
     })
 }
 
-type Candidate = (PathBuf, String, Lang);
+/// A file found by the walk.
+struct Candidate {
+    path: PathBuf,
+    /// Root-relative, with `/` separators.
+    rel: String,
+    lang: Lang,
+    /// What the walk saw, to detect the file being swapped before it is read.
+    id: Option<FileId>,
+}
+
+/// Device and inode, from metadata that does not follow symlinks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(unix)]
+fn file_id(meta: &std::fs::Metadata) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    Some(FileId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+// Windows needs elevated rights to create symlinks, and std exposes no stable
+// file identity there, so the swap check is Unix-only.
+#[cfg(not(unix))]
+fn file_id(_: &std::fs::Metadata) -> Option<FileId> {
+    None
+}
 
 /// Walks `root` honoring .gitignore and `scan.exclude`, keeping supported languages.
 fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<String>), Error> {
@@ -192,7 +224,16 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
             continue;
         };
         let rel = relative(path, root);
-        files.push((path.to_path_buf(), rel, lang));
+        let Ok(meta) = entry.metadata() else {
+            warnings.push(format!("{rel}: skipped, metadata unavailable"));
+            continue;
+        };
+        files.push(Candidate {
+            path: path.to_path_buf(),
+            rel,
+            lang,
+            id: file_id(&meta),
+        });
     }
     Ok((files, warnings))
 }
@@ -201,15 +242,39 @@ fn ms(since: Instant) -> u128 {
     since.elapsed().as_millis()
 }
 
-/// Reads at most `max_bytes`; `None` if the file is larger. Bounding the read
-/// itself (not a prior size check) keeps memory bounded even if the file
-/// grows between listing and reading.
-fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
+/// Reads at most `max_bytes` of a candidate; `None` if the file is larger.
+/// Bounding the read itself (not a prior size check) keeps memory bounded
+/// even if the file grows between listing and reading.
+///
+/// The opened file must be the one the walk listed: if it (or a directory on
+/// its path) was swapped since, for instance for a symlink pointing outside
+/// the root, the read is refused. On Unix the open is non-blocking, so a file
+/// swapped for a FIFO cannot hang the scan before that check runs.
+fn read_capped(c: &Candidate, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
+    let file = open_nonblocking(&c.path)?;
+    if c.id.is_some() && file_id(&file.metadata()?) != c.id {
+        return Err(std::io::Error::other(
+            "skipped, the file was replaced after it was listed",
+        ));
+    }
     let mut buf = Vec::new();
-    File::open(path)?
-        .take(max_bytes.saturating_add(1))
+    file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut buf)?;
     Ok((buf.len() as u64 <= max_bytes).then_some(buf))
+}
+
+#[cfg(unix)]
+fn open_nonblocking(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> std::io::Result<File> {
+    File::open(path)
 }
 
 /// Reads the LCOV reports the user named. Unlike analyzed files, these are
@@ -421,5 +486,56 @@ mod tests {
         let text = report::render(&report::build(&out, false), Format::Text);
         assert!(!text.contains('\x1b'), "{text}");
         assert!(text.contains("evil\\u{1b}[2J.js"), "{text}");
+    }
+
+    /// Regression: a file swapped for a symlink (or a parent directory
+    /// swapped) between listing and reading was followed outside the root.
+    /// The swaps are made after `collect_files`, as a race would.
+    #[cfg(unix)]
+    #[test]
+    fn files_swapped_after_listing_are_not_read() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.py");
+        std::fs::write(&secret, "eval(secret)\n").unwrap();
+        std::fs::create_dir(outside.path().join("dir")).unwrap();
+        std::fs::write(outside.path().join("dir/b.py"), "eval(secret)\n").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("a.py"), "x = 1\n").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/b.py"), "x = 2\n").unwrap();
+        std::fs::write(root.join("pipe.py"), "x = 3\n").unwrap();
+
+        let cfg = Config::default();
+        let (paths, warnings) = collect_files(root, &cfg).unwrap();
+        assert_eq!(paths.len(), 3);
+
+        std::fs::remove_file(root.join("a.py")).unwrap();
+        symlink(&secret, root.join("a.py")).unwrap();
+        std::fs::rename(root.join("sub"), root.join("sub-old")).unwrap();
+        symlink(outside.path().join("dir"), root.join("sub")).unwrap();
+        std::fs::remove_file(root.join("pipe.py")).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("pipe.py"))
+            .status()
+            .unwrap();
+        assert!(made.success());
+
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![],
+        };
+        let r = scan_files(&opts, &cfg, &rules, paths, warnings).unwrap();
+        assert!(r.files.is_empty(), "nothing outside the root was analyzed");
+        assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
+        assert!(
+            r.warnings
+                .iter()
+                .all(|w| w.contains("replaced after it was listed"))
+        );
     }
 }

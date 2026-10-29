@@ -604,6 +604,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ignore",
+ "libc",
  "proptest",
  "rayon",
  "serde",
