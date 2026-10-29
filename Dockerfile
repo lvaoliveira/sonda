@@ -3,6 +3,8 @@
 # app, on a distroless runtime with no shell, running as a non-root user.
 # Base images are pinned by digest; Dependabot proposes updates.
 
+# Node 22 LTS, as in CI's web job. Node 25+ no longer ships corepack, which
+# installs the exact pnpm in package.json's packageManager field.
 FROM node:22-trixie-slim@sha256:2117f713a417f3aff682ac8f5bc2ebbdf1beed51f36e67ab1e0fd3866b6d2d8f AS web
 WORKDIR /web
 RUN corepack enable
