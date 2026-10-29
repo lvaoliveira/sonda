@@ -742,7 +742,15 @@ mod tests {
     #[test]
     fn a_worker_that_crashes_only_loses_its_file() {
         let dir = tempfile::tempdir().unwrap();
-        let program = fake_worker(dir.path(), "exit 3");
+        // Die only after the config (sent at startup) has arrived, so the
+        // crash happens on a file request. Exiting at once races the config
+        // write, and a worker that cannot start is a run error by design.
+        // The config frame is far smaller than a pipe buffer, so once its
+        // first byte is readable the parent's write has completed.
+        let program = fake_worker(
+            dir.path(),
+            "dd bs=1 count=1 >/dev/null 2>&1; sleep 0.2; exit 3",
+        );
         let results = run_pool(&program, Duration::from_secs(10));
         assert_eq!(results.len(), 3);
         for (r, name) in results.iter().zip(["a.js", "b.js", "c.js"]) {
