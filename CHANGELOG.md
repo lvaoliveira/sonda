@@ -35,6 +35,9 @@ file, the report formats and the public library API.
   descriptors. `--sandbox best-effort|require|off`.
 - Rule queries are compiled per language on first use, which made scans of
   a 29k-line JavaScript/C project 40% faster.
+- Web app preview (`web/`): Overview, Issues and Rules screens from the
+  design handoff, on a typed API contract with mock data. Supply chain: no
+  package version younger than 14 days, and `pnpm audit` runs in CI.
 - Fuzz targets for analysis in every grammar and for config parsing, run
   weekly in CI with the C grammars instrumented by AddressSanitizer.
 

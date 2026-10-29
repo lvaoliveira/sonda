@@ -1,0 +1,4222 @@
+[
+ {
+  "id": 1,
+  "key": "SND-4821",
+  "severity": "critical",
+  "category": "vulnerability",
+  "rule": "go/sql-string-concat",
+  "title": "SQL query built by concatenating user-controlled input",
+  "component": "checkout",
+  "componentPath": "services/checkout-api",
+  "project": "payments-platform",
+  "file": "services/checkout-api/internal/orders/repo.go",
+  "line": 88,
+  "language": "Go",
+  "effortMinutes": 30,
+  "age": "2d",
+  "detected": "Oct 27, 2026",
+  "status": "open",
+  "isNew": true,
+  "message": "customerID flows from POST /v1/orders \u2192 FindByCustomer without parameterization.",
+  "why": "Anyone who controls customerID can append arbitrary SQL \u2014 reading other customers' orders or altering data. This path is reachable from the public guest-checkout API without authentication.",
+  "fix": "Pass values as query parameters so the driver escapes them. Build optional clauses with placeholders instead of string concatenation.",
+  "fixCode": "query := \"SELECT id, total_cents, status FROM orders WHERE customer_id = $1\"\nargs := []any{customerID}\nif status != \"\" {\n    query += \" AND status = $2\"\n    args = append(args, status)\n}\nrows, err := r.db.QueryContext(ctx, query, args...)",
+  "related": [
+   7,
+   11
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 86,
+     "tokens": [
+      {
+       "text": "func",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      },
+      {
+       "text": "r",
+       "role": "plain"
+      },
+      {
+       "text": " *",
+       "role": "punct"
+      },
+      {
+       "text": "Repo",
+       "role": "type"
+      },
+      {
+       "text": ") ",
+       "role": "punct"
+      },
+      {
+       "text": "FindByCustomer",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "ctx",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "context",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Context",
+       "role": "type"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "customerID",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "status",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "string",
+       "role": "keyword"
+      },
+      {
+       "text": ") ([]",
+       "role": "punct"
+      },
+      {
+       "text": "Order",
+       "role": "type"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "error",
+       "role": "keyword"
+      },
+      {
+       "text": ") {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 87,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "// TODO: move to sqlc once split tender lands",
+       "role": "comment"
+      }
+     ]
+    },
+    {
+     "number": 88,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "query",
+       "role": "plain"
+      },
+      {
+       "text": " := ",
+       "role": "punct"
+      },
+      {
+       "text": "\"SELECT id, total_cents, status FROM orders WHERE customer_id = '\"",
+       "role": "string"
+      },
+      {
+       "text": " + ",
+       "role": "punct"
+      },
+      {
+       "text": "customerID",
+       "role": "plain"
+      },
+      {
+       "text": " + ",
+       "role": "punct"
+      },
+      {
+       "text": "\"'\"",
+       "role": "string"
+      }
+     ]
+    },
+    {
+     "number": 89,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "status",
+       "role": "plain"
+      },
+      {
+       "text": " != ",
+       "role": "punct"
+      },
+      {
+       "text": "\"\"",
+       "role": "string"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 90,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "query",
+       "role": "plain"
+      },
+      {
+       "text": " += ",
+       "role": "punct"
+      },
+      {
+       "text": "\" AND status = '\"",
+       "role": "string"
+      },
+      {
+       "text": " + ",
+       "role": "punct"
+      },
+      {
+       "text": "status",
+       "role": "plain"
+      },
+      {
+       "text": " + ",
+       "role": "punct"
+      },
+      {
+       "text": "\"'\"",
+       "role": "string"
+      }
+     ]
+    },
+    {
+     "number": 91,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 92,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "rows",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "err",
+       "role": "keyword"
+      },
+      {
+       "text": " := ",
+       "role": "punct"
+      },
+      {
+       "text": "r",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "db",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "QueryContext",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "ctx",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "query",
+       "role": "plain"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 93,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "err",
+       "role": "keyword"
+      },
+      {
+       "text": " != ",
+       "role": "punct"
+      },
+      {
+       "text": "nil",
+       "role": "keyword"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 94,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "nil",
+       "role": "keyword"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "fmt",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Errorf",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "\"find orders: %w\"",
+       "role": "string"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "err",
+       "role": "keyword"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 95,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    88,
+    90
+   ]
+  },
+  "cwe": "CWE-89",
+  "assignee": "Mara Okafor"
+ },
+ {
+  "id": 6,
+  "key": "SND-4830",
+  "severity": "blocker",
+  "category": "vulnerability",
+  "rule": "java/hardcoded-secret",
+  "title": "Live Stripe secret key hard-coded in configuration class",
+  "component": "billing",
+  "componentPath": "billing-service",
+  "project": "billing-service",
+  "file": "src/main/java/com/acme/billing/config/StripeConfig.java",
+  "line": 14,
+  "language": "Java",
+  "effortMinutes": 60,
+  "age": "3h",
+  "detected": "Oct 29, 2026",
+  "status": "open",
+  "isNew": true,
+  "message": "Matches Stripe live secret key pattern sk_live_\u2026 (entropy 4.9 bits/char).",
+  "why": "The key grants full access to the Stripe account \u2014 charges, refunds and customer data. It is already in git history, so removing the line is not enough.",
+  "fix": "Rotate the key in the Stripe dashboard first. Then load it from the secrets manager at startup and fail fast if it is missing.",
+  "fixCode": "@Bean\npublic StripeClient stripeClient(@Value(\"${stripe.api-key}\") String apiKey) {\n    return new StripeClient(apiKey);\n}",
+  "related": [
+   10
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 11,
+     "tokens": [
+      {
+       "text": "@Configuration",
+       "role": "type"
+      }
+     ]
+    },
+    {
+     "number": 12,
+     "tokens": [
+      {
+       "text": "public",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "class",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "StripeConfig",
+       "role": "type"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 13,
+     "tokens": []
+    },
+    {
+     "number": 14,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "private",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "static",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "final",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "String",
+       "role": "type"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "API_KEY",
+       "role": "type"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "\"sk_live_51Hx9QeEXAMPLEonlyK2vZ\"",
+       "role": "string"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 15,
+     "tokens": []
+    },
+    {
+     "number": 16,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "@Bean",
+       "role": "type"
+      }
+     ]
+    },
+    {
+     "number": 17,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "public",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "StripeClient",
+       "role": "type"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "stripeClient",
+       "role": "plain"
+      },
+      {
+       "text": "() {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 18,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "new",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "StripeClient",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "API_KEY",
+       "role": "type"
+      },
+      {
+       "text": ");",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 19,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 20,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    14
+   ]
+  },
+  "cwe": "CWE-798"
+ },
+ {
+  "id": 12,
+  "key": "SND-4802",
+  "severity": "critical",
+  "category": "vulnerability",
+  "rule": "ts/jwt-no-verify",
+  "title": "JWT decoded without verifying its signature",
+  "component": "mobile",
+  "componentPath": "auth/session",
+  "project": "mobile-bff",
+  "file": "src/auth/jwt.ts",
+  "line": 27,
+  "language": "TypeScript",
+  "effortMinutes": 45,
+  "age": "40m",
+  "detected": "Oct 29, 2026",
+  "status": "open",
+  "isNew": true,
+  "message": "jwt.decode() returns claims without checking the signature or issuer.",
+  "why": "Any client can forge a token with arbitrary sub and scopes and it will be accepted. Introduced by \"auth: accept tokens from legacy issuer\".",
+  "fix": "Verify the token with the issuer public key and pin the algorithm and audience.",
+  "fixCode": "const claims = jwt.verify(token, publicKey, {\n  algorithms: [\"RS256\"],\n  issuer: [\"https://id.acme.com\", \"https://legacy-id.acme.com\"],\n  audience: \"mobile-bff\",\n}) as Claims;",
+  "related": [],
+  "code": {
+   "lines": [
+    {
+     "number": 22,
+     "tokens": [
+      {
+       "text": "import",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "jwt",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "from",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "\"jsonwebtoken\"",
+       "role": "string"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 23,
+     "tokens": []
+    },
+    {
+     "number": 24,
+     "tokens": [
+      {
+       "text": "export",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "function",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "sessionFromHeader",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "header",
+       "role": "plain"
+      },
+      {
+       "text": "?: ",
+       "role": "punct"
+      },
+      {
+       "text": "string",
+       "role": "keyword"
+      },
+      {
+       "text": "): ",
+       "role": "punct"
+      },
+      {
+       "text": "Session",
+       "role": "type"
+      },
+      {
+       "text": " | ",
+       "role": "punct"
+      },
+      {
+       "text": "null",
+       "role": "keyword"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 25,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " (!",
+       "role": "punct"
+      },
+      {
+       "text": "header",
+       "role": "plain"
+      },
+      {
+       "text": "?.",
+       "role": "punct"
+      },
+      {
+       "text": "startsWith",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "\"Bearer \"",
+       "role": "string"
+      },
+      {
+       "text": ")) ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "null",
+       "role": "keyword"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 26,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "const",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "token",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "header",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "slice",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "7",
+       "role": "number"
+      },
+      {
+       "text": ");",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 27,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "const",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "claims",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "jwt",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "decode",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "token",
+       "role": "plain"
+      },
+      {
+       "text": ") ",
+       "role": "punct"
+      },
+      {
+       "text": "as",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "Claims",
+       "role": "type"
+      },
+      {
+       "text": " | ",
+       "role": "punct"
+      },
+      {
+       "text": "null",
+       "role": "keyword"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 28,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " (!",
+       "role": "punct"
+      },
+      {
+       "text": "claims",
+       "role": "plain"
+      },
+      {
+       "text": ") ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "null",
+       "role": "keyword"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 29,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " { ",
+       "role": "punct"
+      },
+      {
+       "text": "userId",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "claims",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "sub",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "scopes",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "claims",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "scp",
+       "role": "plain"
+      },
+      {
+       "text": " ?? [] };",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 30,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    27
+   ]
+  },
+  "cwe": "CWE-347",
+  "assignee": "Priya Shah"
+ },
+ {
+  "id": 3,
+  "key": "SND-4819",
+  "severity": "critical",
+  "category": "vulnerability",
+  "rule": "ts/no-unsanitized-html",
+  "title": "Campaign HTML rendered with dangerouslySetInnerHTML without sanitizing",
+  "component": "webco",
+  "componentPath": "packages/web-checkout",
+  "project": "payments-platform",
+  "file": "packages/web-checkout/src/components/PromoBanner.tsx",
+  "line": 31,
+  "language": "TypeScript",
+  "effortMinutes": 20,
+  "age": "5d",
+  "detected": "Oct 24, 2026",
+  "status": "confirmed",
+  "isNew": true,
+  "message": "campaign.bodyHtml is editable by marketing users in the CMS.",
+  "why": "A CMS user (or anyone who compromises one) can inject script that runs on the checkout page with access to card-entry iframes and session cookies.",
+  "fix": "Sanitize with an allow-list before rendering, or render the campaign as structured content.",
+  "fixCode": "import DOMPurify from \"dompurify\";\nconst html = DOMPurify.sanitize(campaign.bodyHtml ?? \"\", {\n  ALLOWED_TAGS: [\"b\", \"i\", \"a\", \"p\", \"br\"],\n});",
+  "related": [],
+  "code": {
+   "lines": [
+    {
+     "number": 26,
+     "tokens": [
+      {
+       "text": "export",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "function",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "PromoBanner",
+       "role": "type"
+      },
+      {
+       "text": "({ ",
+       "role": "punct"
+      },
+      {
+       "text": "campaign",
+       "role": "plain"
+      },
+      {
+       "text": " }: ",
+       "role": "punct"
+      },
+      {
+       "text": "Props",
+       "role": "type"
+      },
+      {
+       "text": ") {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 27,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "const",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "html",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "campaign",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "bodyHtml",
+       "role": "plain"
+      },
+      {
+       "text": " ?? ",
+       "role": "punct"
+      },
+      {
+       "text": "\"\"",
+       "role": "string"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 28,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 29,
+     "tokens": [
+      {
+       "text": "    <",
+       "role": "punct"
+      },
+      {
+       "text": "div",
+       "role": "plain"
+      }
+     ]
+    },
+    {
+     "number": 30,
+     "tokens": [
+      {
+       "text": "      ",
+       "role": "punct"
+      },
+      {
+       "text": "className",
+       "role": "plain"
+      },
+      {
+       "text": "=",
+       "role": "punct"
+      },
+      {
+       "text": "\"promo\"",
+       "role": "string"
+      }
+     ]
+    },
+    {
+     "number": 31,
+     "tokens": [
+      {
+       "text": "      ",
+       "role": "punct"
+      },
+      {
+       "text": "dangerouslySetInnerHTML",
+       "role": "plain"
+      },
+      {
+       "text": "={{ ",
+       "role": "punct"
+      },
+      {
+       "text": "__html",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "html",
+       "role": "plain"
+      },
+      {
+       "text": " }}",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 32,
+     "tokens": [
+      {
+       "text": "    />",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 33,
+     "tokens": [
+      {
+       "text": "  );",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 34,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    31
+   ]
+  },
+  "cwe": "CWE-79",
+  "assignee": "Lena Brandt"
+ },
+ {
+  "id": 4,
+  "key": "SND-4811",
+  "severity": "critical",
+  "category": "vulnerability",
+  "rule": "py/yaml-unsafe-load",
+  "title": "yaml.load with the full Loader allows arbitrary object construction",
+  "component": "fraud",
+  "componentPath": "services/fraud-scoring",
+  "project": "payments-platform",
+  "file": "services/fraud-scoring/scoring/config.py",
+  "line": 23,
+  "language": "Python",
+  "effortMinutes": 5,
+  "age": "6d",
+  "detected": "Oct 23, 2026",
+  "status": "open",
+  "isNew": true,
+  "message": "Model configs are pulled from a shared S3 bucket writable by 3 teams.",
+  "why": "A crafted YAML file can execute code in the scoring service, which has read access to transaction history.",
+  "fix": "Use safe_load, which only builds plain Python types.",
+  "fixCode": "cfg = yaml.safe_load(fh)",
+  "related": [
+   9
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 17,
+     "tokens": [
+      {
+       "text": "import",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "yaml",
+       "role": "plain"
+      }
+     ]
+    },
+    {
+     "number": 18,
+     "tokens": [
+      {
+       "text": "from",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "pathlib",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "import",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "Path",
+       "role": "type"
+      }
+     ]
+    },
+    {
+     "number": 19,
+     "tokens": []
+    },
+    {
+     "number": 20,
+     "tokens": []
+    },
+    {
+     "number": 21,
+     "tokens": [
+      {
+       "text": "def",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "load_model_config",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "path",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "Path",
+       "role": "type"
+      },
+      {
+       "text": ") -> ",
+       "role": "punct"
+      },
+      {
+       "text": "dict",
+       "role": "keyword"
+      },
+      {
+       "text": ":",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 22,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "with",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "path",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "open",
+       "role": "plain"
+      },
+      {
+       "text": "() ",
+       "role": "punct"
+      },
+      {
+       "text": "as",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "fh",
+       "role": "plain"
+      },
+      {
+       "text": ":",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 23,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "cfg",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "yaml",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "load",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "fh",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "Loader",
+       "role": "type"
+      },
+      {
+       "text": "=",
+       "role": "punct"
+      },
+      {
+       "text": "yaml",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Loader",
+       "role": "type"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 24,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "\"threshold\"",
+       "role": "string"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "not",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "in",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "cfg",
+       "role": "plain"
+      },
+      {
+       "text": ":",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 25,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "raise",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "KeyError",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "\"threshold missing\"",
+       "role": "string"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 26,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "cfg",
+       "role": "plain"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    23
+   ]
+  },
+  "cwe": "CWE-502",
+  "assignee": "Anil Nair"
+ },
+ {
+  "id": 2,
+  "key": "SND-4817",
+  "severity": "major",
+  "category": "bug",
+  "rule": "rust/unwrap-on-fallible",
+  "title": "unwrap() on a fallible lookup in the posting path can panic the worker",
+  "component": "ledger",
+  "componentPath": "services/ledger",
+  "project": "payments-platform",
+  "file": "services/ledger/src/posting.rs",
+  "line": 143,
+  "language": "Rust",
+  "effortMinutes": 15,
+  "age": "3d",
+  "detected": "Oct 26, 2026",
+  "status": "confirmed",
+  "isNew": true,
+  "message": "Both lookups can fail for postings replayed from the dead-letter queue.",
+  "why": "A panic aborts the Tokio worker and drops every in-flight posting on it. The function already returns Result, so the error can be propagated.",
+  "fix": "Map the missing account and conversion failure into LedgerError and use ?.",
+  "fixCode": "let account = self.accounts.get_mut(&p.account_id)\n    .ok_or(LedgerError::UnknownAccount(p.account_id))?;\nlet amount = Money::try_from(p.amount_minor)\n    .map_err(LedgerError::InvalidAmount)?;",
+  "related": [
+   8
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 141,
+     "tokens": [
+      {
+       "text": "pub",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "fn",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "apply_posting",
+       "role": "plain"
+      },
+      {
+       "text": "(&",
+       "role": "punct"
+      },
+      {
+       "text": "mut",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "self",
+       "role": "keyword"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": ": &",
+       "role": "punct"
+      },
+      {
+       "text": "Posting",
+       "role": "type"
+      },
+      {
+       "text": ") -> ",
+       "role": "punct"
+      },
+      {
+       "text": "Result",
+       "role": "type"
+      },
+      {
+       "text": "<",
+       "role": "punct"
+      },
+      {
+       "text": "Balance",
+       "role": "type"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "LedgerError",
+       "role": "type"
+      },
+      {
+       "text": "> {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 142,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "let",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "account",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "self",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "accounts",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "get_mut",
+       "role": "plain"
+      },
+      {
+       "text": "(&",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "account_id",
+       "role": "plain"
+      },
+      {
+       "text": ").",
+       "role": "punct"
+      },
+      {
+       "text": "unwrap",
+       "role": "plain"
+      },
+      {
+       "text": "();",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 143,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "let",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "amount",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "Money",
+       "role": "type"
+      },
+      {
+       "text": "::",
+       "role": "punct"
+      },
+      {
+       "text": "try_from",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "amount_minor",
+       "role": "plain"
+      },
+      {
+       "text": ").",
+       "role": "punct"
+      },
+      {
+       "text": "unwrap",
+       "role": "plain"
+      },
+      {
+       "text": "();",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 144,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "account",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "balance",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "account",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "balance",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "checked_add",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "amount",
+       "role": "plain"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 145,
+     "tokens": [
+      {
+       "text": "        .",
+       "role": "punct"
+      },
+      {
+       "text": "ok_or",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "LedgerError",
+       "role": "type"
+      },
+      {
+       "text": "::",
+       "role": "punct"
+      },
+      {
+       "text": "Overflow",
+       "role": "type"
+      },
+      {
+       "text": ")?;",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 146,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "self",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "journal",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "push",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "clone",
+       "role": "plain"
+      },
+      {
+       "text": "());",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 147,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "Ok",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "account",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "balance",
+       "role": "plain"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 148,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    142,
+    143
+   ]
+  },
+  "assignee": "Dana Voss"
+ },
+ {
+  "id": 5,
+  "key": "SND-4808",
+  "severity": "major",
+  "category": "bug",
+  "rule": "ts/no-floating-promise",
+  "title": "Promise from refreshToken() is neither awaited nor handled",
+  "component": "sdk",
+  "componentPath": "packages/sdk-js",
+  "project": "payments-platform",
+  "file": "packages/sdk-js/src/client.ts",
+  "line": 78,
+  "language": "TypeScript",
+  "effortMinutes": 10,
+  "age": "8d",
+  "detected": "Oct 21, 2026",
+  "status": "open",
+  "isNew": false,
+  "message": "A rejected refresh becomes an unhandled rejection and the client keeps the stale token.",
+  "why": "Callers retry with an expired token and see a burst of 401s; in Node this also crashes the process under --unhandled-rejections=strict.",
+  "fix": "Await the call, or attach a handler that emits an error event.",
+  "fixCode": "onExpire() {\n  this.emit(\"token:refreshing\");\n  this.refreshToken().catch((err) => this.emit(\"token:error\", err));\n}",
+  "related": [],
+  "code": {
+   "lines": [
+    {
+     "number": 72,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "async",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "refreshToken",
+       "role": "plain"
+      },
+      {
+       "text": "(): ",
+       "role": "punct"
+      },
+      {
+       "text": "Promise",
+       "role": "type"
+      },
+      {
+       "text": "<",
+       "role": "punct"
+      },
+      {
+       "text": "void",
+       "role": "keyword"
+      },
+      {
+       "text": "> {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 73,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "const",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "res",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "await",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "this",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "http",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "post",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "\"/oauth/token\"",
+       "role": "string"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "this",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "creds",
+       "role": "plain"
+      },
+      {
+       "text": ");",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 74,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "this",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "token",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "res",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "data",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "access_token",
+       "role": "plain"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 75,
+     "tokens": [
+      {
+       "text": "  }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 76,
+     "tokens": []
+    },
+    {
+     "number": 77,
+     "tokens": [
+      {
+       "text": "  ",
+       "role": "punct"
+      },
+      {
+       "text": "onExpire",
+       "role": "plain"
+      },
+      {
+       "text": "() {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 78,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "this",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "refreshToken",
+       "role": "plain"
+      },
+      {
+       "text": "();",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 79,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "this",
+       "role": "keyword"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "emit",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "\"token:refreshing\"",
+       "role": "string"
+      },
+      {
+       "text": ");",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 80,
+     "tokens": [
+      {
+       "text": "  }",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    78
+   ]
+  },
+  "assignee": "Mara Okafor"
+ },
+ {
+  "id": 7,
+  "key": "SND-4790",
+  "severity": "minor",
+  "category": "bug",
+  "rule": "go/unchecked-error",
+  "title": "Error returned by json.Encoder.Encode is ignored",
+  "component": "checkout",
+  "componentPath": "services/checkout-api",
+  "project": "payments-platform",
+  "file": "services/checkout-api/internal/http/handler.go",
+  "line": 58,
+  "language": "Go",
+  "effortMinutes": 5,
+  "age": "9d",
+  "detected": "Oct 20, 2026",
+  "status": "open",
+  "isNew": false,
+  "message": "Encode can fail on a closed connection or an unsupported value.",
+  "why": "Silent failures here leave clients with truncated JSON and no server-side log line to correlate.",
+  "fix": "Check the error and log it with the request ID.",
+  "fixCode": "if err := json.NewEncoder(w).Encode(out); err != nil {\n    h.log.Warn(\"encode order\", \"id\", id, \"err\", err)\n}",
+  "related": [
+   1
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 50,
+     "tokens": [
+      {
+       "text": "func",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      },
+      {
+       "text": "h",
+       "role": "plain"
+      },
+      {
+       "text": " *",
+       "role": "punct"
+      },
+      {
+       "text": "Handler",
+       "role": "type"
+      },
+      {
+       "text": ") ",
+       "role": "punct"
+      },
+      {
+       "text": "GetOrder",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "w",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "http",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "ResponseWriter",
+       "role": "type"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "r",
+       "role": "plain"
+      },
+      {
+       "text": " *",
+       "role": "punct"
+      },
+      {
+       "text": "http",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Request",
+       "role": "type"
+      },
+      {
+       "text": ") {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 51,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "id",
+       "role": "plain"
+      },
+      {
+       "text": " := ",
+       "role": "punct"
+      },
+      {
+       "text": "chi",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "URLParam",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "r",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "\"id\"",
+       "role": "string"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 52,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "out",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "err",
+       "role": "keyword"
+      },
+      {
+       "text": " := ",
+       "role": "punct"
+      },
+      {
+       "text": "h",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "svc",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Get",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "r",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Context",
+       "role": "type"
+      },
+      {
+       "text": "(), ",
+       "role": "punct"
+      },
+      {
+       "text": "id",
+       "role": "plain"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 53,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "err",
+       "role": "keyword"
+      },
+      {
+       "text": " != ",
+       "role": "punct"
+      },
+      {
+       "text": "nil",
+       "role": "keyword"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 54,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "h",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "fail",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "w",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "err",
+       "role": "keyword"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 55,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      }
+     ]
+    },
+    {
+     "number": 56,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 57,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "w",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "Header",
+       "role": "type"
+      },
+      {
+       "text": "().",
+       "role": "punct"
+      },
+      {
+       "text": "Set",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "\"Content-Type\"",
+       "role": "string"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "\"application/json\"",
+       "role": "string"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 58,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "json",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "NewEncoder",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "w",
+       "role": "plain"
+      },
+      {
+       "text": ").",
+       "role": "punct"
+      },
+      {
+       "text": "Encode",
+       "role": "type"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "out",
+       "role": "plain"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 59,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    58
+   ]
+  },
+  "assignee": "Mara Okafor"
+ },
+ {
+  "id": 11,
+  "key": "SND-4824",
+  "severity": "minor",
+  "category": "code_smell",
+  "rule": "go/duplicated-block",
+  "title": "Tender validation duplicated across 4 handlers",
+  "component": "checkout",
+  "componentPath": "services/checkout-api",
+  "project": "payments-platform",
+  "file": "services/checkout-api/internal/tender/split.go",
+  "line": 113,
+  "language": "Go",
+  "effortMinutes": 40,
+  "age": "12m",
+  "detected": "Oct 29, 2026",
+  "status": "open",
+  "isNew": true,
+  "message": "14 identical lines also in refund.go, capture.go and void.go.",
+  "why": "The split-tender change already had to fix the same rounding bug in two of the four copies.",
+  "fix": "Move validation into tender.Validate and call it from each handler.",
+  "fixCode": "func Validate(parts []Tender, total int64) error { ... }",
+  "related": [
+   1
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 108,
+     "tokens": [
+      {
+       "text": "func",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "validateSplit",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "parts",
+       "role": "plain"
+      },
+      {
+       "text": " []",
+       "role": "punct"
+      },
+      {
+       "text": "Tender",
+       "role": "type"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "int64",
+       "role": "plain"
+      },
+      {
+       "text": ") ",
+       "role": "punct"
+      },
+      {
+       "text": "error",
+       "role": "keyword"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 109,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "var",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "sum",
+       "role": "plain"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "int64",
+       "role": "plain"
+      }
+     ]
+    },
+    {
+     "number": 110,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "for",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "_",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": " := ",
+       "role": "punct"
+      },
+      {
+       "text": "range",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "parts",
+       "role": "plain"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 111,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "AmountMinor",
+       "role": "type"
+      },
+      {
+       "text": " <= ",
+       "role": "punct"
+      },
+      {
+       "text": "0",
+       "role": "number"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 112,
+     "tokens": [
+      {
+       "text": "            ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "ErrInvalidAmount",
+       "role": "type"
+      }
+     ]
+    },
+    {
+     "number": 113,
+     "tokens": [
+      {
+       "text": "        }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 114,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "sum",
+       "role": "plain"
+      },
+      {
+       "text": " += ",
+       "role": "punct"
+      },
+      {
+       "text": "p",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "AmountMinor",
+       "role": "type"
+      }
+     ]
+    },
+    {
+     "number": 115,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 116,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "sum",
+       "role": "plain"
+      },
+      {
+       "text": " != ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 117,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "ErrTenderMismatch",
+       "role": "type"
+      }
+     ]
+    },
+    {
+     "number": 118,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 119,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "nil",
+       "role": "keyword"
+      }
+     ]
+    },
+    {
+     "number": 120,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    110,
+    111,
+    112,
+    113
+   ]
+  },
+  "assignee": "Mara Okafor"
+ },
+ {
+  "id": 9,
+  "key": "SND-4770",
+  "severity": "major",
+  "category": "code_smell",
+  "rule": "py/broad-except",
+  "title": "Broad except Exception hides scoring failures and returns 0.0",
+  "component": "fraud",
+  "componentPath": "services/fraud-scoring",
+  "project": "payments-platform",
+  "file": "services/fraud-scoring/scoring/model.py",
+  "line": 49,
+  "language": "Python",
+  "effortMinutes": 15,
+  "age": "3w",
+  "detected": "Oct 8, 2026",
+  "status": "open",
+  "isNew": false,
+  "message": "A score of 0.0 means \"approve\" downstream.",
+  "why": "Any feature or model error silently approves the transaction, which is the worst possible fallback for a fraud check.",
+  "fix": "Catch only expected errors and fail closed.",
+  "fixCode": "except (FeatureError, ModelUnavailable) as e:\n    log.warning(\"scoring failed\", exc_info=e)\n    return 1.0  # fail closed: route to manual review",
+  "related": [
+   4
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 44,
+     "tokens": [
+      {
+       "text": "def",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "score",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "txn",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "Transaction",
+       "role": "type"
+      },
+      {
+       "text": ") -> ",
+       "role": "punct"
+      },
+      {
+       "text": "float",
+       "role": "keyword"
+      },
+      {
+       "text": ":",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 45,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "try",
+       "role": "keyword"
+      },
+      {
+       "text": ":",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 46,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "features",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "build_features",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "txn",
+       "role": "plain"
+      },
+      {
+       "text": ")",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 47,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "float",
+       "role": "keyword"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "model",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "predict_proba",
+       "role": "plain"
+      },
+      {
+       "text": "([",
+       "role": "punct"
+      },
+      {
+       "text": "features",
+       "role": "plain"
+      },
+      {
+       "text": "])[",
+       "role": "punct"
+      },
+      {
+       "text": "0",
+       "role": "number"
+      },
+      {
+       "text": "][",
+       "role": "punct"
+      },
+      {
+       "text": "1",
+       "role": "number"
+      },
+      {
+       "text": "])",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 48,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "except",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "Exception",
+       "role": "type"
+      },
+      {
+       "text": ":",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 49,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "0.0",
+       "role": "number"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    48,
+    49
+   ]
+  },
+  "assignee": "Anil Nair"
+ },
+ {
+  "id": 10,
+  "key": "SND-4655",
+  "severity": "major",
+  "category": "code_smell",
+  "rule": "java/cognitive-complexity",
+  "title": "Cognitive complexity of calculate() is 31 (max 15)",
+  "component": "billing",
+  "componentPath": "billing-service",
+  "project": "billing-service",
+  "file": "src/main/java/com/acme/billing/invoice/InvoiceCalculator.java",
+  "line": 118,
+  "language": "Java",
+  "effortMinutes": 360,
+  "age": "4mo",
+  "detected": "Jun 30, 2026",
+  "status": "accepted",
+  "isNew": false,
+  "message": "9 nested conditionals, 3 loops, 2 early returns.",
+  "why": "Tax rules change quarterly; every change here has needed a hotfix in the past year.",
+  "fix": "Extract a TaxStrategy per region and test each in isolation.",
+  "fixCode": "Money total = inv.lines().stream()\n    .map(l -> taxes.forRegion(inv.region()).apply(inv, l))\n    .reduce(Money.zero(inv.currency()), Money::plus);",
+  "related": [
+   6
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 118,
+     "tokens": [
+      {
+       "text": "public",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "Money",
+       "role": "type"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "calculate",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "Invoice",
+       "role": "type"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ") {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 119,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "Money",
+       "role": "type"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "Money",
+       "role": "type"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "zero",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "currency",
+       "role": "plain"
+      },
+      {
+       "text": "());",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 120,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "for",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      },
+      {
+       "text": "Line",
+       "role": "type"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "l",
+       "role": "plain"
+      },
+      {
+       "text": " : ",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "lines",
+       "role": "plain"
+      },
+      {
+       "text": "()) {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 121,
+     "tokens": [
+      {
+       "text": "        ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      },
+      {
+       "text": "l",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "isTaxable",
+       "role": "plain"
+      },
+      {
+       "text": "()) {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 122,
+     "tokens": [
+      {
+       "text": "            ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "region",
+       "role": "plain"
+      },
+      {
+       "text": "().",
+       "role": "punct"
+      },
+      {
+       "text": "isEu",
+       "role": "plain"
+      },
+      {
+       "text": "()) {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 123,
+     "tokens": [
+      {
+       "text": "                ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "plus",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "l",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "net",
+       "role": "plain"
+      },
+      {
+       "text": "().",
+       "role": "punct"
+      },
+      {
+       "text": "times",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "vat",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "l",
+       "role": "plain"
+      },
+      {
+       "text": ")));",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 124,
+     "tokens": [
+      {
+       "text": "            } ",
+       "role": "punct"
+      },
+      {
+       "text": "else",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "if",
+       "role": "keyword"
+      },
+      {
+       "text": " (",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "region",
+       "role": "plain"
+      },
+      {
+       "text": "().",
+       "role": "punct"
+      },
+      {
+       "text": "hasSalesTax",
+       "role": "plain"
+      },
+      {
+       "text": "()) {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 125,
+     "tokens": [
+      {
+       "text": "                ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": " = ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "plus",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "l",
+       "role": "plain"
+      },
+      {
+       "text": ".",
+       "role": "punct"
+      },
+      {
+       "text": "net",
+       "role": "plain"
+      },
+      {
+       "text": "().",
+       "role": "punct"
+      },
+      {
+       "text": "times",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "salesTax",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "inv",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "l",
+       "role": "plain"
+      },
+      {
+       "text": ")));",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 126,
+     "tokens": [
+      {
+       "text": "            }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 127,
+     "tokens": [
+      {
+       "text": "        }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 128,
+     "tokens": [
+      {
+       "text": "    }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 129,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "return",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "total",
+       "role": "plain"
+      },
+      {
+       "text": ";",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 130,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    118
+   ]
+  }
+ },
+ {
+  "id": 8,
+  "key": "SND-4612",
+  "severity": "minor",
+  "category": "code_smell",
+  "rule": "rust/undocumented-unsafe",
+  "title": "unsafe block without a // SAFETY: comment",
+  "component": "money",
+  "componentPath": "libs/money",
+  "project": "payments-platform",
+  "file": "libs/money/src/fixed.rs",
+  "line": 61,
+  "language": "Rust",
+  "effortMinutes": 10,
+  "age": "5mo",
+  "detected": "May 19, 2026",
+  "status": "open",
+  "isNew": false,
+  "message": "transmute relies on Fixed being #[repr(C)] \u2014 not asserted.",
+  "why": "Tuple layout is unspecified in Rust; a compiler upgrade can silently corrupt every amount built this way.",
+  "fix": "Construct the struct directly \u2014 no unsafe needed.",
+  "fixCode": "pub fn from_raw_parts(units: i64, nanos: i32) -> Self {\n    Fixed { units, nanos }\n}",
+  "related": [
+   2
+  ],
+  "code": {
+   "lines": [
+    {
+     "number": 60,
+     "tokens": [
+      {
+       "text": "pub",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "fn",
+       "role": "keyword"
+      },
+      {
+       "text": " ",
+       "role": "punct"
+      },
+      {
+       "text": "from_raw_parts",
+       "role": "plain"
+      },
+      {
+       "text": "(",
+       "role": "punct"
+      },
+      {
+       "text": "units",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "i64",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "nanos",
+       "role": "plain"
+      },
+      {
+       "text": ": ",
+       "role": "punct"
+      },
+      {
+       "text": "i32",
+       "role": "plain"
+      },
+      {
+       "text": ") -> ",
+       "role": "punct"
+      },
+      {
+       "text": "Self",
+       "role": "keyword"
+      },
+      {
+       "text": " {",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 61,
+     "tokens": [
+      {
+       "text": "    ",
+       "role": "punct"
+      },
+      {
+       "text": "unsafe",
+       "role": "keyword"
+      },
+      {
+       "text": " { ",
+       "role": "punct"
+      },
+      {
+       "text": "std",
+       "role": "plain"
+      },
+      {
+       "text": "::",
+       "role": "punct"
+      },
+      {
+       "text": "mem",
+       "role": "plain"
+      },
+      {
+       "text": "::",
+       "role": "punct"
+      },
+      {
+       "text": "transmute",
+       "role": "plain"
+      },
+      {
+       "text": "::<(",
+       "role": "punct"
+      },
+      {
+       "text": "i64",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "i32",
+       "role": "plain"
+      },
+      {
+       "text": "), ",
+       "role": "punct"
+      },
+      {
+       "text": "Fixed",
+       "role": "type"
+      },
+      {
+       "text": ">((",
+       "role": "punct"
+      },
+      {
+       "text": "units",
+       "role": "plain"
+      },
+      {
+       "text": ", ",
+       "role": "punct"
+      },
+      {
+       "text": "nanos",
+       "role": "plain"
+      },
+      {
+       "text": ")) }",
+       "role": "punct"
+      }
+     ]
+    },
+    {
+     "number": 62,
+     "tokens": [
+      {
+       "text": "}",
+       "role": "punct"
+      }
+     ]
+    }
+   ],
+   "highlighted": [
+    61
+   ]
+  },
+  "assignee": "Dana Voss"
+ }
+]

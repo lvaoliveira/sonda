@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Martian+Mono:wght@300;400;500&display=swap">
+<style>
+:root,[data-theme="dark"]{--bg:#0b0c0c;--panel:#101211;--panel-2:#151817;--hover:#1a1e1c;--line:#202523;--line-2:#2f3532;--text:#eceeed;--muted:#9ba39f;--faint:#6f7773;--accent:oklch(0.83 0.13 178);--accent-ink:#04191a;--accent-soft:color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);--ok:oklch(0.82 0.13 155);--warn:oklch(0.84 0.13 85);--crit:oklch(0.71 0.17 28);--info:oklch(0.77 0.10 250);--crit-soft:color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);--warn-soft:color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);--ok-soft:color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);--info-soft:color-mix(in oklch, oklch(0.77 0.10 250) 13%, transparent);--pip-off:#262b29;--shadow:0 24px 64px rgba(0,0,0,.55);color-scheme:dark}
+[data-theme="light"]{--bg:#f3f4f2;--panel:#ffffff;--panel-2:#f8f9f7;--hover:#eff1ee;--line:#e2e5e1;--line-2:#cfd4cf;--text:#111413;--muted:#56605b;--faint:#7a837e;--accent:oklch(0.52 0.10 182);--accent-ink:#ffffff;--accent-soft:color-mix(in oklch, oklch(0.52 0.10 182) 10%, transparent);--ok:oklch(0.52 0.12 155);--warn:oklch(0.58 0.12 70);--crit:oklch(0.55 0.19 28);--info:oklch(0.52 0.12 255);--crit-soft:color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);--warn-soft:color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);--ok-soft:color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);--info-soft:color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);--pip-off:#e3e6e2;--shadow:0 24px 64px rgba(20,30,25,.14);color-scheme:light}
+body{margin:0;background:#0b0c0c;font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:3px;text-decoration:none}
+a:hover{color:var(--text)}
+button,input,select{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Instrument Sans',system-ui,sans-serif;font-size:14px;line-height:1.5">
+<aside aria-label="Primary" style="width:228px;flex:none;display:flex;flex-direction:column;background:var(--bg);position:sticky;top:0;height:100vh">
+  <a href="Sonda%20Dashboard%20v3.dc.html" style="display:flex;align-items:center;gap:10px;height:60px;padding:0 18px;color:var(--text)">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 0 1 18 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".3"></path><path d="M7 9a5 5 0 0 1 10 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".65"></path><path d="M12 9v9" stroke="var(--accent)" stroke-width="1.6"></path><circle cx="12" cy="20" r="2.4" fill="var(--accent)"></circle></svg>
+    <span style="font-weight:600;font-size:17px;letter-spacing:-0.03em">sonda</span>
+  </a>
+  <div style="display:flex;align-items:center;gap:10px;margin:0 12px 10px;padding:8px 10px;background:var(--panel);border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700">AC</span>
+    <span style="display:flex;flex-direction:column;line-height:1.2;flex:1;min-width:0"><span style="font-weight:600;font-size:13px">acme-corp</span><span style="font-size:11px;color:var(--faint)">self-hosted · 312 projects</span></span>
+  </div>
+  <nav style="display:flex;flex-direction:column;gap:2px;padding:4px 12px;flex:1;overflow:auto">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <sc-if value="{{ n.heading }}" hint-placeholder-val="{{ false }}"><div style="padding:16px 10px 6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">{{ n.heading }}</div></sc-if>
+      <sc-if value="{{ n.label }}" hint-placeholder-val="{{ true }}">
+      <a href="{{ n.href }}" aria-current="{{ n.current }}" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;background:{{ n.bg }};color:{{ n.fg }};font-size:14px;font-weight:{{ n.w }}" style-hover="background:var(--hover);color:var(--text)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:{{ n.ic }}"><sc-for list="{{ n.paths }}" as="d" hint-placeholder-count="2"><path d="{{ d }}"></path></sc-for></svg>
+        <span style="flex:1">{{ n.label }}</span>
+        <sc-if value="{{ n.count }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ n.cc }}">{{ n.count }}</span></sc-if>
+      </a>
+      </sc-if>
+    </sc-for>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px;margin:12px;padding:10px;border-radius:8px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px">MO</span>
+    <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;flex:1"><span style="font-weight:600;font-size:13px">Mara Okafor</span><span style="font-size:11.5px;color:var(--faint)">@checkout</span></span>
+  </div>
+</aside>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 10px 10px 0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border-radius:14px;box-shadow:inset 0 0 0 1px var(--line)">
+  <header style="display:flex;align-items:center;gap:12px;height:56px;padding:0 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:5;border-radius:14px 14px 0 0">
+    <nav aria-label="Breadcrumb" style="display:flex;align-items:center;gap:8px;font-size:13.5px;flex:1;min-width:0;overflow:hidden;white-space:nowrap">
+      <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="2"><span style="display:flex;gap:8px;align-items:center;min-width:{{ c.minw }};flex:{{ c.flex }}"><sc-if value="{{ c.sep }}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="color:var(--line-2)">/</span></sc-if><a href="{{ c.href }}" style="color:{{ c.fg }};font-weight:{{ c.w }};font-family:{{ c.font }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ c.label }}</a></span></sc-for>
+    </nav>
+    <div style="display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:120px;height:34px;padding:0 12px;background:var(--bg);border-radius:8px;color:var(--faint);font-size:13px;box-shadow:inset 0 0 0 1px var(--line)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span style="flex:1;overflow:hidden;white-space:nowrap">Search or run a command</span><span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--hover);color:var(--muted)">⌘K</span></div>
+    <button onClick="{{ toggleTheme }}" aria-label="{{ themeLabel }}" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted);font-family:'Martian Mono',monospace;font-size:10.5px;box-shadow:inset 0 0 0 1px var(--line)" style-hover="color:var(--text)">{{ themeShort }}</button>
+  </header>
+  <main style="flex:1;padding:28px 24px 32px;display:flex;flex-direction:column;gap:20px;max-width:1560px;width:100%;box-sizing:border-box">
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:stretch">
+      <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+        <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"><h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.035em;line-height:1.1">payments-platform</h1><span style="font-size:11.5px;color:var(--muted);padding:2px 9px;border-radius:10px;background:var(--hover)">Monorepo · 7 components</span></div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)">
+          <span style="font-family:'Martian Mono',monospace;font-size:11.5px">acme/payments-platform</span>
+          <label style="display:flex;align-items:center;gap:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 3v12"></path><path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6"></path><path d="M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6"></path><path d="M15 6a9 9 0 0 0-9 9"></path></svg><select aria-label="Branch" value="{{ branch }}" onChange="{{ onBranch }}" style="height:28px;padding:0 8px;border:0;border-radius:6px;background:var(--bg);font-family:'Martian Mono',monospace;font-size:11.5px;box-shadow:inset 0 0 0 1px var(--line)"><option value="main">main</option><option value="release/2.4">release/2.4</option><option value="feat/split-tender">feat/split-tender</option></select></label>
+          <span>Go · Rust · TypeScript · Python</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px">412k lines</span>
+          <a href="Sonda%20Analysis.dc.html" style="display:inline-flex;gap:6px;align-items:center;font-size:13px">Analysis <span style="font-family:'Martian Mono',monospace;font-size:11.5px">9f3c2a1</span> · {{ analyzed }} →</a>
+        </div>
+      </div>
+      <a href="Sonda%20Gates.dc.html" style="display:flex;flex-direction:column;justify-content:center;gap:4px;min-width:230px;padding:14px 18px;border-radius:12px;background:var(--crit-soft);color:var(--text);box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--crit) 35%, transparent)">
+        <span style="font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--crit)">Gate · Payments strict</span>
+        <span style="display:flex;align-items:center;gap:8px;font-size:20px;font-weight:600;letter-spacing:-0.02em"><span aria-hidden="true" style="width:10px;height:10px;border-radius:2px;background:var(--crit);box-shadow:0 0 0 3px var(--crit-soft)"></span>Blocking</span>
+        <span style="font-size:12.5px;color:var(--muted)">{{ failCount }} of 6 conditions failing</span>
+      </a>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div role="tablist" aria-label="Code scope" style="display:flex;padding:3px;background:var(--bg);border-radius:9px;box-shadow:inset 0 0 0 1px var(--line)"><sc-for list="{{ scopes }}" as="o" hint-placeholder-count="2"><button role="tab" aria-selected="{{ o.on }}" onClick="{{ o.go }}" style="height:30px;padding:0 14px;border:0;border-radius:6px;background:{{ o.bg }};color:{{ o.fg }};font-size:13.5px;font-weight:500;cursor:pointer;box-shadow:{{ o.sh }}">{{ o.label }}</button></sc-for></div>
+      <span style="font-size:13px;color:var(--muted)">{{ scopeDesc }}</span>
+    </div>
+
+    <section aria-label="Metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line)">
+      <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="7">
+        <a href="{{ m.href }}" style="display:flex;flex-direction:column;gap:8px;padding:16px 18px;background:var(--panel-2);color:var(--text);min-height:132px" style-hover="background:var(--hover)">
+          <span style="font-size:13px;color:var(--muted)">{{ m.label }}</span>
+          <span style="display:flex;align-items:flex-end;gap:10px"><span style="font-family:'Martian Mono',monospace;font-size:26px;font-weight:300;letter-spacing:-0.05em;line-height:1.05;color:{{ m.vc }}">{{ m.value }}</span><sc-if value="{{ m.pips }}" hint-placeholder-val="{{ false }}"><span style="display:flex;align-items:flex-end;gap:2px;height:16px;padding-bottom:4px"><sc-for list="{{ m.pips }}" as="pp" hint-placeholder-count="5"><span style="width:4px;height:{{ pp.h }};border-radius:1px;background:{{ pp.c }}"></span></sc-for></span></sc-if></span>
+          <span style="font-size:12px;color:var(--faint);flex:1">{{ m.sub }}</span>
+          <span style="font-size:12px;color:var(--accent)">{{ m.cta }} →</span>
+        </a>
+      </sc-for>
+    </section>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px">
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)">
+        <h2 style="margin:0 0 10px;font-size:16px;font-weight:600;letter-spacing:-0.01em">Gate conditions</h2>
+        <sc-for list="{{ conds }}" as="c" hint-placeholder-count="6">
+          <div style="display:grid;grid-template-columns:18px minmax(0,1fr) auto 70px;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px">
+            <span role="img" aria-label="{{ c.sr }}" style="display:grid;place-items:center;width:18px;height:18px;border-radius:5px;background:{{ c.bg }};color:{{ c.c }};font-size:10px;font-weight:700">{{ c.g }}</span>
+            <span>{{ c.metric }}</span>
+            <span style="font-family:'Martian Mono',monospace;font-size:11px;color:var(--faint)">{{ c.req }}</span>
+            <span style="font-family:'Martian Mono',monospace;font-size:12.5px;text-align:right;color:{{ c.c }}">{{ c.actual }}</span>
+          </div>
+        </sc-for>
+      </section>
+      <section style="display:flex;flex-direction:column;gap:14px;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">History</h2><span style="font-family:'Martian Mono',monospace;font-size:11px;color:var(--faint)">last 12 analyses · {{ branch }}</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px">
+          <sc-for list="{{ sparks }}" as="s" hint-placeholder-count="3">
+            <div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:12.5px;color:var(--muted)">{{ s.label }}</span><span style="font-family:'Martian Mono',monospace;font-size:17px;font-weight:300;letter-spacing:-0.03em">{{ s.value }} <span style="font-size:10.5px;color:{{ s.dc }}">{{ s.delta }}</span></span><svg viewBox="0 0 100 24" preserveAspectRatio="none" style="width:100%;height:44px" aria-hidden="true"><polyline points="{{ s.area }}" fill="{{ s.fill }}" stroke="none"></polyline><polyline points="{{ s.pts }}" fill="none" stroke="{{ s.dc }}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline></svg></div>
+          </sc-for>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:1px solid var(--line)"><span style="font-size:12.5px;color:var(--muted)">Gate per analysis</span><div style="display:grid;grid-template-columns:repeat(12,1fr);gap:4px"><sc-for list="{{ runs }}" as="r" hint-placeholder-count="12"><span title="{{ r.t }}" style="height:22px;border-radius:4px;background:{{ r.c }};display:grid;place-items:center;font-size:9px;color:var(--text)">{{ r.g }}</span></sc-for></div></div>
+      </section>
+    </div>
+
+    <section style="display:flex;flex-direction:column;background:var(--panel-2);border-radius:12px;overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px;flex-wrap:wrap"><div style="display:flex;flex-direction:column;gap:2px"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Components</h2><span style="font-size:13px;color:var(--muted)">Detected from go.work, Cargo workspace, pnpm-workspace.yaml and CODEOWNERS · each has its own gate</span></div><a href="Sonda%20Component.dc.html" style="font-size:13px;font-weight:500">Open component explorer →</a></div>
+      <div style="overflow-x:auto">
+      <table style="width:100%;min-width:900px;border-collapse:collapse;font-size:13.5px">
+        <thead><tr style="color:var(--faint);font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase"><th scope="col" style="text-align:left;font-weight:400;padding:9px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Component</th><th scope="col" style="text-align:left;font-weight:400;padding:9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Owner</th><th scope="col" style="text-align:left;font-weight:400;padding:9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Gate</th><th scope="col" style="text-align:left;font-weight:400;padding:9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Rel · Sec · Mnt</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">{{ covHead }}</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Dup.</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">{{ issHead }}</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 20px 9px 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Debt</th></tr></thead>
+        <tbody>
+          <sc-for list="{{ comps }}" as="c" hint-placeholder-count="7">
+            <tr onClick="{{ c.open }}" style="cursor:pointer" style-hover="background:var(--hover)">
+              <td style="padding:11px 20px;border-bottom:1px solid var(--line)"><span style="display:flex;flex-direction:column;line-height:1.3"><span style="font-family:'Martian Mono',monospace;font-size:12px">{{ c.path }}</span><span style="font-size:12px;color:var(--faint)">{{ c.lang }} · {{ c.loc }}</span></span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line);font-family:'Martian Mono',monospace;font-size:11px;color:var(--muted)">{{ c.owner }}</td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line)"><span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;color:{{ c.gate.c }};white-space:nowrap"><span aria-hidden="true" style="width:8px;height:8px;border-radius:{{ c.gate.r }};background:{{ c.gate.dot }};box-shadow:{{ c.gate.ring }}"></span>{{ c.gate.l }}</span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line)"><span style="display:flex;gap:10px"><sc-for list="{{ c.ratings }}" as="r" hint-placeholder-count="3"><span title="{{ r.t }}" style="display:flex;align-items:flex-end;gap:2px;height:14px"><sc-for list="{{ r.pips }}" as="pp" hint-placeholder-count="5"><span style="width:3px;height:{{ pp.h }};border-radius:1px;background:{{ pp.c }}"></span></sc-for></span></sc-for></span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:'Martian Mono',monospace;font-size:12px;color:{{ c.covC }}">{{ c.covS }}</td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:'Martian Mono',monospace;font-size:12px;color:{{ c.dupC }}">{{ c.dupS }}</td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:'Martian Mono',monospace;font-size:12px">{{ c.iss }}</td>
+              <td style="padding:11px 20px 11px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:'Martian Mono',monospace;font-size:11px;color:var(--faint)">{{ c.debt }}</td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      </div>
+    </section>
+</main>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;}}">
+
+const ICON = { overview: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'], projects: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'], components: ['m7.5 4.27 9 5.15', 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'], issues: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2'], security: ['M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'], analyses: ['M22 12h-4l-3 9L9 3l-3 9H2'], gates: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'm9 12 2 2 4-4'], rules: ['M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z', 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'], admin: ['M20 7h-9', 'M14 17H5', 'M17 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6', 'M7 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6'] };
+const NAVDEF = [['overview', 'Overview', 'Sonda Dashboard v3'], ['projects', 'Projects', 'Sonda Projects', '312'], ['components', 'Components', 'Sonda Component', '611'], ['issues', 'Issues', 'Sonda Issues', '1.3k'], ['security', 'Security', 'Sonda Security', '23', 1], ['analyses', 'Analyses', 'Sonda Analysis'], 0, ['gates', 'Quality gates', 'Sonda Gates'], ['rules', 'Rules', 'Sonda Rules'], ['admin', 'Administration', 'Sonda Admin']];
+const href = (f) => encodeURI(f) + '.dc.html';
+function shell(c, active, crumbs) {
+  let stored = null; try { stored = localStorage.getItem('sonda-theme'); } catch (e) {}
+  const theme = c.state.theme || stored || c.props.defaultTheme || 'dark';
+  return {
+    theme, themeShort: theme, themeLabel: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+    toggleTheme: () => { const t = theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem('sonda-theme', t); } catch (e) {} c.setState({ theme: t }); },
+    nav: NAVDEF.map((n) => !n ? { heading: 'Configure' } : { label: n[1], href: href(n[2]), paths: ICON[n[0]], count: n[3] || '', cc: n[4] ? 'var(--crit)' : 'var(--faint)', current: n[0] === active ? 'page' : undefined, bg: n[0] === active ? 'var(--panel)' : 'transparent', fg: n[0] === active ? 'var(--text)' : 'var(--muted)', w: n[0] === active ? 600 : 400, ic: n[0] === active ? 'var(--accent)' : 'currentColor' }),
+    crumbs: crumbs.map(([label, f, mono], i) => ({ flex: i === crumbs.length - 1 ? '0 1 auto' : '0 4 auto', minw: i === crumbs.length - 1 ? '0' : '4.5em', label, href: f ? href(f) : '#', sep: i > 0, fg: i === crumbs.length - 1 ? 'var(--text)' : 'var(--faint)', w: i === crumbs.length - 1 ? 600 : 400, font: mono ? "'Martian Mono',monospace" : 'inherit' }))
+  };
+}
+const LVL = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+const lvlColor = (n) => n >= 4 ? 'var(--ok)' : n === 3 ? 'var(--warn)' : 'var(--crit)';
+const pips = (n, h0 = 4) => [0, 1, 2, 3, 4].map((i) => ({ h: (h0 + i * 2) + 'px', c: i < n ? lvlColor(n) : 'var(--pip-off)' }));
+const GATE = { passed: { l: 'Passing', c: 'var(--ok)', dot: 'var(--ok)', r: '50%', ring: 'none' }, failed: { l: 'Blocking', c: 'var(--crit)', dot: 'var(--crit)', r: '2px', ring: '0 0 0 3px var(--crit-soft)' }, running: { l: 'Sounding', c: 'var(--info)', dot: 'transparent', r: '50%', ring: 'inset 0 0 0 2px var(--info)' }, partial: { l: 'Partial', c: 'var(--warn)', dot: 'var(--warn)', r: '1px', ring: 'none' } };
+const seg = (on) => ({ bg: on ? 'var(--panel)' : 'transparent', fg: on ? 'var(--text)' : 'var(--muted)', sh: on ? 'inset 0 0 0 1px var(--line-2)' : 'none' });
+
+
+const COMPS = [
+  { id: 'checkout', path: 'services/checkout-api', dir: 'services', name: 'checkout-api', lang: 'Go', owner: '@checkout', people: ['@mokafor', '@j-ruiz', '@t-lindqvist'], gate: 'failed', gateName: 'Payments strict', r: ['C', 'E', 'B'], rn: ['B', 'E', 'A'], cov: 61.3, covN: 54.0, dup: 4.8, dupN: 6.1, iss: 41, newIss: 6, debt: '9d 4h', debtN: '5h 20m', loc: '88k', files: 302, trend: [33, 34, 36, 35, 37, 38, 40, 41], deps: [['services/ledger', 'gRPC'], ['libs/money', 'go module'], ['libs/proto', 'go module']], usedBy: [['packages/web-checkout', 'HTTP'], ['packages/sdk-js', 'HTTP']], fails: 'Security on new code E · coverage 54.0% < 80%',
+    fileList: [['internal/orders/', 'repo.go', 6, 42.1, 8.4, 612], ['internal/http/', 'handler.go', 5, 55.0, 2.2, 488], ['internal/tender/', 'split.go', 4, 38.6, 0.0, 271], ['internal/orders/', 'service.go', 3, 71.9, 6.0, 530], ['cmd/checkout/', 'main.go', 1, 0.0, 0.0, 96]] },
+  { id: 'ledger', path: 'services/ledger', dir: 'services', name: 'ledger', lang: 'Rust', owner: '@ledger-team', people: ['@dvoss', '@k-tanaka'], gate: 'passed', gateName: 'Payments strict', r: ['A', 'A', 'B'], rn: ['B', 'A', 'A'], cov: 84.1, covN: 88.2, dup: 1.2, dupN: 0.0, iss: 12, newIss: 2, debt: '3d 2h', debtN: '40m', loc: '61k', files: 214, trend: [18, 17, 17, 15, 14, 14, 13, 12], deps: [['libs/money', 'crate'], ['libs/proto', 'crate']], usedBy: [['services/checkout-api', 'gRPC']], fails: '',
+    fileList: [['src/', 'posting.rs', 3, 78.2, 0.0, 412], ['src/', 'journal.rs', 2, 88.0, 0.0, 296], ['src/store/', 'pg.rs', 2, 71.4, 3.1, 538], ['src/', 'reconcile.rs', 1, 92.5, 0.0, 341]] },
+  { id: 'fraud', path: 'services/fraud-scoring', dir: 'services', name: 'fraud-scoring', lang: 'Python', owner: '@risk-ml', people: ['@a-nair', '@s-oduya'], gate: 'failed', gateName: 'Sonda way', r: ['B', 'D', 'C'], rn: ['B', 'D', 'C'], cov: 48.9, covN: 22.0, dup: 2.1, dupN: 0.0, iss: 37, newIss: 3, debt: '14d', debtN: '2h', loc: '42k', files: 133, trend: [29, 30, 31, 31, 33, 34, 36, 37], deps: [['libs/proto', 'pip package']], usedBy: [['services/checkout-api', 'gRPC']], fails: 'Coverage on new code 22.0% < 80%',
+    fileList: [['scoring/', 'config.py', 3, 22.0, 0.0, 88], ['scoring/', 'model.py', 4, 51.3, 4.0, 344], ['scoring/features/', 'velocity.py', 2, 63.8, 1.9, 205], ['notebooks/', 'explore.py', 0, 0.0, 0.0, 412]] },
+  { id: 'webco', path: 'packages/web-checkout', dir: 'packages', name: 'web-checkout', lang: 'TypeScript', owner: '@web-platform', people: ['@lena.b', '@r-cho'], gate: 'failed', gateName: 'Sonda way', r: ['B', 'D', 'A'], rn: ['A', 'D', 'A'], cov: 72.0, covN: 81.4, dup: 6.3, dupN: 9.1, iss: 28, newIss: 2, debt: '4d 6h', debtN: '1h', loc: '73k', files: 488, trend: [24, 24, 25, 27, 26, 27, 28, 28], deps: [['packages/sdk-js', 'workspace'], ['services/checkout-api', 'HTTP']], usedBy: [], fails: 'Security on new code D · duplication 9.1% > 3%',
+    fileList: [['src/components/', 'PromoBanner.tsx', 2, 40.0, 12.5, 64], ['src/components/', 'TenderPicker.tsx', 3, 66.7, 9.1, 231], ['src/hooks/', 'useCart.ts', 1, 81.2, 0.0, 142]] },
+  { id: 'sdk', path: 'packages/sdk-js', dir: 'packages', name: 'sdk-js', lang: 'TypeScript', owner: '@dx', people: ['@p-ito'], gate: 'passed', gateName: 'Sonda way', r: ['C', 'A', 'A'], rn: ['B', 'A', 'A'], cov: 88.5, covN: 91.0, dup: 0.4, dupN: 0.0, iss: 9, newIss: 1, debt: '1d 1h', debtN: '15m', loc: '19k', files: 96, trend: [11, 11, 10, 10, 9, 10, 9, 9], deps: [['services/checkout-api', 'HTTP']], usedBy: [['packages/web-checkout', 'workspace']], fails: '',
+    fileList: [['src/', 'client.ts', 2, 84.0, 0.0, 318], ['src/', 'retry.ts', 1, 95.5, 0.0, 77]] },
+  { id: 'money', path: 'libs/money', dir: 'libs', name: 'money', lang: 'Rust', owner: '@ledger-team', people: ['@dvoss'], gate: 'passed', gateName: 'Payments strict', r: ['A', 'A', 'B'], rn: ['A', 'A', 'A'], cov: 93.2, covN: 100, dup: 0.0, dupN: 0.0, iss: 4, newIss: 0, debt: '3h', debtN: '0', loc: '6.1k', files: 22, trend: [6, 6, 5, 5, 5, 4, 4, 4], deps: [], usedBy: [['services/ledger', 'crate'], ['services/checkout-api', 'go module']], fails: '',
+    fileList: [['src/', 'fixed.rs', 1, 90.1, 0.0, 188], ['src/', 'currency.rs', 0, 97.0, 0.0, 402]] },
+  { id: 'proto', path: 'libs/proto', dir: 'libs', name: 'proto', lang: 'Go · generated', owner: '@platform', people: ['@platform'], gate: 'passed', gateName: 'Sonda way', r: ['A', 'A', 'A'], rn: ['A', 'A', 'A'], cov: null, covN: null, dup: 0.0, dupN: 0.0, iss: 0, newIss: 0, debt: '0', debtN: '0', loc: '21k', files: 64, trend: [0, 0, 0, 0, 0, 0, 0, 0], deps: [], usedBy: [['services/ledger', 'crate'], ['services/checkout-api', 'go module'], ['services/fraud-scoring', 'pip']], fails: '',
+    fileList: [['gen/payments/v1/', 'orders.pb.go', 0, null, 0.0, 2210]] }
+];
+function line(arr, h, pad) { h = h || 24; pad = pad || 2; var mn = Math.min.apply(null, arr), mx = Math.max.apply(null, arr), r = mx - mn || 1; return arr.map(function (v, i) { return (i / (arr.length - 1) * 100).toFixed(2) + ',' + (h - pad - (v - mn) / r * (h - pad * 2)).toFixed(2); }).join(' '); }
+function area(arr) { return '0,24 ' + line(arr) + ' 100,24'; }
+const covColor = function (v) { return v == null ? 'var(--faint)' : v >= 80 ? 'var(--ok)' : v >= 60 ? 'var(--warn)' : 'var(--crit)'; };
+const dupColor = function (v) { return v > 5 ? 'var(--crit)' : v > 3 ? 'var(--warn)' : 'var(--muted)'; };
+const RN = ['Reliability', 'Security', 'Maintainability'];
+
+class Component extends DCLogic {
+  state = { theme: null, scope: 'new', branch: 'main' };
+  renderVals() {
+    const nw = this.state.scope === 'new';
+    const M = nw
+      ? [['New issues', '14', null, '+14 · 2 critical, 5 major', 'Issues introduced', 'Sonda Issues', 'new'], ['Reliability', '3', 'C', '4 new bugs', 'See bugs', 'Sonda Issues', 'cat=bug'], ['Security', '1', 'E', '2 new critical vulnerabilities', 'See vulnerabilities', 'Sonda Issues', 'cat=vuln'], ['Maintainability', '5', 'A', '8 new code smells', 'See code smells', 'Sonda Issues', 'cat=smell'], ['Coverage', '71.2%', null, 'on 8,214 new lines · target 80%', 'Uncovered components', 'Sonda Component', 'sort=cov'], ['Duplication', '3.9%', null, 'on new lines · limit 3%', 'Duplicated components', 'Sonda Component', 'sort=dup'], ['Technical debt', '1d 4h', null, 'added since v2.4.0', 'Largest contributors', 'Sonda Issues', 'cat=smell']]
+      : [['Open issues', '131', null, '6 critical · 49 major', 'Issue explorer', 'Sonda Issues', ''], ['Reliability', '3', 'C', '38 bugs', 'See bugs', 'Sonda Issues', 'cat=bug'], ['Security', '1', 'E', '14 vulnerabilities · 9 hotspots', 'See vulnerabilities', 'Sonda Issues', 'cat=vuln'], ['Maintainability', '4', 'B', '79 code smells · ratio 1.9%', 'See code smells', 'Sonda Issues', 'cat=smell'], ['Coverage', '69.8%', null, '287k lines to cover', 'Uncovered components', 'Sonda Component', 'sort=cov'], ['Duplication', '2.9%', null, '11.9k duplicated lines', 'Duplicated components', 'Sonda Component', 'sort=dup'], ['Technical debt', '47d', null, 'ratio 1.9%', 'Largest contributors', 'Sonda Issues', 'cat=smell']];
+    const metrics = M.map(function (m) {
+      const lv = m[2] ? LVL[m[2]] : 0;
+      return { label: m[0], value: m[2] ? (['', 'E', 'D', 'C', 'B', 'A'][lv] === m[2] ? lv + '/5' : '') : m[1], vc: lv ? lvlColor(lv) : (m[0].indexOf('Coverage') === 0 ? covColor(parseFloat(m[1])) : 'var(--text)'), pips: lv ? pips(lv, 6) : null, sub: m[3], cta: m[4], href: href(m[5]) + (m[6] ? '#' + m[6] : '') };
+    });
+    const C = nw
+      ? [['f', 'New blocker + critical issues', '= 0', '2'], ['f', 'Security on new code', 'level 5', 'level 1'], ['f', 'Coverage on new code', '≥ 80%', '71.2%'], ['f', 'Duplication on new code', '≤ 3%', '3.9%'], ['p', 'Hotspots reviewed', '100%', '100%'], ['p', 'Reliability on new code', '≥ level 3', 'level 3']]
+      : [['f', 'New blocker + critical issues', '= 0', '2'], ['f', 'Security on new code', 'level 5', 'level 1'], ['f', 'Coverage on new code', '≥ 80%', '71.2%'], ['f', 'Duplication on new code', '≤ 3%', '3.9%'], ['p', 'Overall security', '≥ level 2', 'level 1'], ['p', 'Overall coverage', '≥ 60%', '69.8%']];
+    const conds = C.map(function (c) { const f = c[0] === 'f'; return { metric: c[1], req: c[2], actual: c[3], g: f ? '✕' : '✓', c: f ? 'var(--crit)' : 'var(--ok)', bg: f ? 'var(--crit-soft)' : 'var(--ok-soft)', sr: f ? 'Failing' : 'Passing' }; });
+    const sp = [['Open issues', '131', '+13', 'bad', [118, 116, 119, 120, 119, 123, 122, 125, 124, 128, 129, 131]], ['Coverage', '69.8%', '−0.9', 'bad', [70.7, 70.9, 70.6, 70.8, 71.0, 70.4, 70.6, 70.2, 70.1, 70.3, 69.9, 69.8]], ['Debt', '47d', '+2d', 'bad', [45, 45, 45.5, 45.2, 45.8, 46, 46.1, 46.4, 46.2, 46.7, 46.9, 47]]].map(function (s) { const c = s[3] === 'bad' ? 'var(--crit)' : 'var(--ok)'; return { label: s[0], value: s[1], delta: s[2], dc: c, pts: line(s[4]), area: area(s[4]), fill: 'color-mix(in oklch, ' + c + ' 10%, transparent)' }; });
+    const runs = [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0].map(function (p, i) { return { g: p ? '✓' : '✕', c: p ? 'var(--ok-soft)' : 'var(--crit-soft)', t: 'Analysis ' + (i + 1) + ': ' + (p ? 'passing' : 'blocking') }; });
+    const comps = COMPS.slice().sort(function (a, b) { return (a.gate === 'failed' ? 0 : 1) - (b.gate === 'failed' ? 0 : 1); }).map(function (c) {
+      const r = nw ? c.rn : c.r, cov = nw ? c.covN : c.cov, dup = nw ? c.dupN : c.dup;
+      return { path: c.path, lang: c.lang, loc: c.loc + ' lines', owner: c.owner, gate: GATE[c.gate], ratings: r.map(function (l, i) { return { pips: pips(LVL[l]), t: RN[i] + ': level ' + LVL[l] + ' of 5' }; }), covS: cov == null ? 'n/a' : cov.toFixed(1) + '%', covC: covColor(cov), dupS: dup.toFixed(1) + '%', dupC: dupColor(dup), iss: nw ? (c.newIss ? '+' + c.newIss : '—') : String(c.iss), debt: nw ? c.debtN : c.debt, open: function () { window.location.href = href('Sonda Component') + '#' + c.id; } };
+    });
+    const self = this;
+    return Object.assign({}, shell(this, 'projects', [['acme-corp', 'Sonda Dashboard v3'], ['Projects', 'Sonda Projects'], ['payments-platform', 'Sonda Project']]), {
+      branch: this.state.branch, onBranch: function (e) { self.setState({ branch: e.target.value }); },
+      analyzed: this.state.branch === 'main' ? '12 min ago' : this.state.branch === 'release/2.4' ? '2 days ago' : '3 h ago',
+      failCount: '4', scopes: [['new', 'New code'], ['all', 'Overall code']].map(function (o) { const on = self.state.scope === o[0]; return Object.assign({ label: o[1], on: on, go: function () { self.setState({ scope: o[0] }); } }, seg(on)); }),
+      scopeDesc: nw ? 'Since v2.4.0 · 14 days · 8,214 new or changed lines across 5 components' : 'Entire codebase on ' + this.state.branch + ' · 412k lines',
+      metrics: metrics, conds: conds, sparks: sp, runs: runs, comps: comps, covHead: nw ? 'New cov.' : 'Coverage', issHead: nw ? 'New issues' : 'Issues'
+    });
+  }
+}
+</script>
+</body>
+</html>

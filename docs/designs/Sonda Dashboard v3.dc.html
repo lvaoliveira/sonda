@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Martian+Mono:wght@300;400;500&display=swap">
+<style>
+:root,[data-theme="dark"]{--bg:#0b0c0c;--panel:#101211;--panel-2:#151817;--hover:#1a1e1c;--line:#202523;--line-2:#2f3532;--text:#eceeed;--muted:#9ba39f;--faint:#6f7773;--accent:oklch(0.83 0.13 178);--accent-ink:#04191a;--accent-soft:color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);--ok:oklch(0.82 0.13 155);--warn:oklch(0.84 0.13 85);--crit:oklch(0.71 0.17 28);--info:oklch(0.77 0.10 250);--crit-soft:color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);--warn-soft:color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);--ok-soft:color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);--info-soft:color-mix(in oklch, oklch(0.77 0.10 250) 13%, transparent);--pip-off:#262b29;--shadow:0 24px 64px rgba(0,0,0,.55);color-scheme:dark}
+[data-theme="light"]{--bg:#f3f4f2;--panel:#ffffff;--panel-2:#f8f9f7;--hover:#eff1ee;--line:#e2e5e1;--line-2:#cfd4cf;--text:#111413;--muted:#56605b;--faint:#7a837e;--accent:oklch(0.52 0.10 182);--accent-ink:#ffffff;--accent-soft:color-mix(in oklch, oklch(0.52 0.10 182) 10%, transparent);--ok:oklch(0.52 0.12 155);--warn:oklch(0.58 0.12 70);--crit:oklch(0.55 0.19 28);--info:oklch(0.52 0.12 255);--crit-soft:color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);--warn-soft:color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);--ok-soft:color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);--info-soft:color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);--pip-off:#e3e6e2;--shadow:0 24px 64px rgba(20,30,25,.14);color-scheme:light}
+[data-theme="dark"][data-accent="cyan"]{--accent:oklch(0.82 0.11 220);--accent-soft:color-mix(in oklch, oklch(0.82 0.11 220) 14%, transparent)}
+[data-theme="light"][data-accent="cyan"]{--accent:oklch(0.52 0.11 232);--accent-soft:color-mix(in oklch, oklch(0.52 0.11 232) 10%, transparent)}
+[data-theme="dark"][data-accent="green"]{--accent:oklch(0.85 0.15 150);--accent-soft:color-mix(in oklch, oklch(0.85 0.15 150) 14%, transparent)}
+[data-theme="light"][data-accent="green"]{--accent:oklch(0.52 0.13 150);--accent-soft:color-mix(in oklch, oklch(0.52 0.13 150) 10%, transparent)}
+body{margin:0;background:#0b0c0c;font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:3px}
+a:hover{color:var(--text)}
+button,input{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" data-accent="{{ accent }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Instrument Sans',system-ui,sans-serif;font-size:14px;line-height:1.5">
+
+<aside aria-label="Primary" style="width:228px;flex:none;display:flex;flex-direction:column;background:var(--bg);position:sticky;top:0;height:100vh">
+  <div style="display:flex;align-items:center;gap:10px;height:60px;padding:0 18px">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" style="flex:none"><path d="M3 9a9 9 0 0 1 18 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".3"></path><path d="M7 9a5 5 0 0 1 10 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".65"></path><path d="M12 9v9" stroke="var(--accent)" stroke-width="1.6"></path><circle cx="12" cy="20" r="2.4" fill="var(--accent)"></circle></svg>
+    <span style="font-weight:600;font-size:17px;letter-spacing:-0.03em">sonda</span>
+  </div>
+  <button style="display:flex;align-items:center;gap:10px;margin:0 12px 10px;padding:8px 10px;background:var(--panel);border:0;border-radius:8px;text-align:left;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line)" style-hover="background:var(--hover)">
+    <span style="display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700">AC</span>
+    <span style="display:flex;flex-direction:column;line-height:1.2;flex:1;min-width:0"><span style="font-weight:600;font-size:13px">acme-corp</span><span style="font-size:11px;color:var(--faint)">self-hosted · 312 projects</span></span>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path></svg>
+  </button>
+  <nav style="display:flex;flex-direction:column;gap:2px;padding:4px 12px;flex:1;overflow:auto">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <sc-if value="{{ n.heading }}" hint-placeholder-val="{{ false }}"><div style="padding:16px 10px 6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">{{ n.heading }}</div></sc-if>
+      <sc-if value="{{ n.label }}" hint-placeholder-val="{{ true }}">
+      <a href="{{ n.href }}" aria-current="{{ n.current }}" style="position:relative;display:flex;align-items:center;gap:10px;width:100%;height:34px;padding:0 10px;border-radius:8px;background:{{ n.bg }};color:{{ n.fg }};font-size:14px;font-weight:{{ n.w }};text-decoration:none;box-sizing:border-box" style-hover="background:var(--hover);color:var(--text)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:{{ n.ic }}"><sc-for list="{{ n.paths }}" as="d" hint-placeholder-count="2"><path d="{{ d }}"></path></sc-for></svg>
+        <span style="flex:1">{{ n.label }}</span>
+        <sc-if value="{{ n.count }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ n.cc }}">{{ n.count }}</span></sc-if>
+      </a>
+      </sc-if>
+    </sc-for>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px;margin:12px;padding:10px;border-radius:8px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px">MO</span>
+    <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;flex:1"><span style="font-weight:600;font-size:13px">Mara Okafor</span><span style="font-size:11.5px;color:var(--faint)">@checkout</span></span>
+    <span style="font-family:'Martian Mono',monospace;font-size:9.5px;color:var(--faint)">0.9.2</span>
+  </div>
+</aside>
+
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 10px 10px 0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border-radius:14px;box-shadow:inset 0 0 0 1px var(--line)">
+  <header style="display:flex;align-items:center;gap:12px;height:56px;padding:0 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:5;border-radius:14px 14px 0 0">
+    <nav aria-label="Breadcrumb" style="display:flex;align-items:center;gap:8px;font-size:13.5px;flex:1;min-width:0"><span style="color:var(--faint)">acme-corp</span><span aria-hidden="true" style="color:var(--line-2)">/</span><span style="font-weight:600">Overview</span></nav>
+    <button style="display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:120px;height:34px;padding:0 12px;background:var(--bg);border:0;border-radius:8px;color:var(--faint);font-size:13px;cursor:pointer;text-align:left;box-shadow:inset 0 0 0 1px var(--line)" style-hover="box-shadow:inset 0 0 0 1px var(--line-2)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+      <span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Search or run a command</span>
+      <span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--hover);color:var(--muted)">⌘K</span>
+    </button>
+    <button onClick="{{ toggleTheme }}" aria-label="{{ themeLabel }}" title="{{ themeLabel }}" style="display:grid;place-items:center;width:34px;height:34px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted)" style-hover="background:var(--hover);color:var(--text)">
+      <sc-if value="{{ isDark }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg></sc-if>
+      <sc-if value="{{ isLight }}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg></sc-if>
+    </button>
+    <button aria-label="Notifications, 3 unread" style="position:relative;display:grid;place-items:center;width:34px;height:34px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted)" style-hover="background:var(--hover);color:var(--text)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+      <span style="position:absolute;top:7px;right:8px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--panel)"></span>
+    </button>
+  </header>
+
+  <main style="flex:1;padding:28px 24px 32px;display:flex;flex-direction:column;gap:24px;max-width:1560px;width:100%;box-sizing:border-box">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.035em;line-height:1.1">Overview</h1>
+        <div style="font-size:13.5px;color:var(--muted)">312 projects · 611 components · last sounding <span style="font-family:'Martian Mono',monospace;font-size:12px;color:var(--text)">12m ago</span></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div role="group" aria-label="Scope" style="display:flex;padding:3px;background:var(--bg);border-radius:9px;box-shadow:inset 0 0 0 1px var(--line)">
+          <sc-for list="{{ scopes }}" as="o" hint-placeholder-count="2"><button onClick="{{ o.go }}" aria-pressed="{{ o.on }}" style="height:28px;padding:0 12px;border:0;border-radius:6px;background:{{ o.bg }};color:{{ o.fg }};font-size:13px;font-weight:500;cursor:pointer;box-shadow:{{ o.sh }}">{{ o.label }}</button></sc-for>
+        </div>
+        <div role="group" aria-label="Time range" style="display:flex;padding:3px;background:var(--bg);border-radius:9px;box-shadow:inset 0 0 0 1px var(--line)">
+          <sc-for list="{{ ranges }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.go }}" aria-pressed="{{ o.on }}" style="height:28px;padding:0 10px;border:0;border-radius:6px;background:{{ o.bg }};color:{{ o.fg }};font-size:11px;cursor:pointer;font-family:'Martian Mono',monospace;box-shadow:{{ o.sh }}">{{ o.label }}</button></sc-for>
+        </div>
+      </div>
+    </div>
+
+<sc-if value="{{ st.loading }}" hint-placeholder-val="{{ false }}">
+  <div aria-busy="true" style="display:flex;flex-direction:column;gap:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line)"><sc-for list="{{ skel }}" as="s" hint-placeholder-count="6"><div style="height:120px;background:var(--panel);padding:18px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box"><div style="width:55%;height:9px;border-radius:3px;background:var(--hover)"></div><div style="width:40%;height:24px;border-radius:4px;background:var(--hover)"></div></div></sc-for></div>
+    <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)"><div style="width:160px;height:3px;border-radius:2px;background:var(--hover);overflow:hidden"><div style="width:58%;height:100%;background:var(--accent)"></div></div>Sounding 312 projects…</div>
+    <div style="height:300px;border-radius:12px;background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--line)"></div>
+  </div>
+</sc-if>
+<sc-if value="{{ st.empty }}" hint-placeholder-val="{{ false }}">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));border-radius:12px;background:var(--panel-2);overflow:hidden;max-width:920px;box-shadow:inset 0 0 0 1px var(--line)">
+    <div style="padding:32px;display:flex;flex-direction:column;gap:12px">
+      <span style="font-family:'Martian Mono',monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">No soundings yet</span>
+      <h2 style="margin:0;font-size:24px;font-weight:600;letter-spacing:-0.03em;text-wrap:pretty">Point Sonda at a repository to map what's beneath it.</h2>
+      <p style="margin:0;color:var(--muted);text-wrap:pretty">Runs locally or in CI. Components are detected from Cargo workspaces, go.work, pnpm workspaces and CODEOWNERS.</p>
+      <div style="display:flex;gap:8px;margin-top:8px"><button style="height:36px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:13.5px;cursor:pointer">Connect GitHub</button><button style="height:36px;padding:0 16px;border:0;border-radius:8px;background:transparent;font-weight:500;font-size:13.5px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">CLI quickstart</button></div>
+    </div>
+    <pre style="margin:0;padding:32px;background:var(--bg);font-family:'Martian Mono',monospace;font-size:11.5px;line-height:2;color:var(--text);overflow:auto"><span style="color:var(--faint)">$</span> cargo install sonda-cli
+<span style="color:var(--faint)">$</span> sonda login --org acme-corp
+<span style="color:var(--faint)">$</span> sonda scan --branch main
+<span style="color:var(--accent)">  ↳ 7 components · 3,914 files</span></pre>
+  </div>
+</sc-if>
+<sc-if value="{{ st.error }}" hint-placeholder-val="{{ false }}">
+  <div role="alert" style="display:flex;gap:14px;max-width:720px;padding:18px 20px;background:var(--crit-soft);border-radius:12px;box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--crit) 35%, transparent)">
+    <span aria-hidden="true" style="display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--crit);color:var(--bg);font-weight:700;font-size:13px">!</span>
+    <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+      <span style="font-weight:600;font-size:15px">Lost contact with sonda-api</span>
+      <span style="color:var(--muted);font-size:13px;text-wrap:pretty">Returned <span style="font-family:'Martian Mono',monospace;font-size:12px;color:var(--text)">503</span> after 10s. Cached snapshot from 12 minutes ago is available. Request <span style="font-family:'Martian Mono',monospace;font-size:12px;color:var(--text)">01JB7Q4M2ZK9X3</span>.</span>
+      <div style="display:flex;gap:8px"><button style="height:32px;padding:0 14px;border:0;border-radius:8px;background:var(--text);color:var(--bg);font-weight:600;font-size:13px;cursor:pointer">Retry</button><button style="height:32px;padding:0 14px;border:0;border-radius:8px;background:transparent;font-weight:500;font-size:13px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">Show cached</button></div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ st.live }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;flex-direction:column;gap:20px">
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:20px;align-items:stretch">
+    <section aria-labelledby="focus-h" style="grid-column:span 2;min-width:0;display:flex;flex-direction:column;background:var(--panel-2);border-radius:12px;overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px 12px">
+        <div style="display:flex;flex-direction:column;gap:2px"><h2 id="focus-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Where to focus</h2><span style="font-size:13px;color:var(--muted)">Ranked by gate impact, exposure and age · {{ scopeName }}</span></div>
+        <span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint)">4 / 19</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;padding:0 10px 10px">
+      <sc-for list="{{ focus }}" as="f" hint-placeholder-count="4">
+        <button onClick="{{ f.go }}" style="display:grid;grid-template-columns:4px minmax(0,1fr) auto;gap:14px;align-items:stretch;padding:14px 14px 14px 10px;border:0;border-radius:9px;background:var(--panel);text-align:left;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line)" style-hover="box-shadow:inset 0 0 0 1px var(--line-2);background:var(--hover)">
+          <span aria-hidden="true" style="border-radius:2px;background:{{ f.c }}"></span>
+          <span style="display:flex;flex-direction:column;gap:4px;min-width:0">
+            <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:{{ f.c }}"><span aria-hidden="true">{{ f.g }}</span>{{ f.tag }}</span></span>
+            <span style="font-weight:600;font-size:15px;letter-spacing:-0.01em;line-height:1.3;text-wrap:pretty">{{ f.title }}</span>
+            <span style="font-size:13px;color:var(--muted);text-wrap:pretty">{{ f.body }}</span>
+            <span style="display:flex;gap:6px;align-items:center;font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint);flex-wrap:wrap;margin-top:2px"><sc-for list="{{ f.path }}" as="p" hint-placeholder-count="3"><span style="display:flex;gap:6px;align-items:center"><span>{{ p.s }}</span><span style="color:{{ p.c }}">{{ p.t }}</span></span></sc-for></span>
+          </span>
+          <span style="display:flex;align-items:center;gap:6px;align-self:center;white-space:nowrap;height:30px;padding:0 12px;border-radius:7px;background:var(--hover);font-size:12.5px;font-weight:500">{{ f.cta }}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></span>
+        </button>
+      </sc-for>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 20px 14px;font-size:12.5px;color:var(--muted)"><span>15 lower-priority items</span><button style="border:0;background:transparent;padding:0;font-size:12.5px;color:var(--accent);cursor:pointer;font-weight:500">Open issue explorer →</button></div>
+    </section>
+
+    <section aria-labelledby="health-h" style="min-width:0;display:flex;flex-direction:column;gap:18px;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><h2 id="health-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Code health</h2><span style="font-size:12.5px;color:var(--muted)">{{ rangeLong }}</span></div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-family:'Martian Mono',monospace;font-size:52px;font-weight:300;letter-spacing:-0.06em;line-height:.95">{{ healthScore }}</span><span style="font-family:'Martian Mono',monospace;font-size:12px;color:var(--ok)">{{ healthDelta }}</span></div>
+        <div aria-hidden="true" style="display:flex;gap:3px"><sc-for list="{{ healthBar }}" as="c" hint-placeholder-count="20"><span style="flex:1;height:10px;border-radius:2px;background:{{ c }}"></span></sc-for></div>
+        <span style="font-size:12.5px;color:var(--muted)">Health index out of 100 · driven up by maintainability, held back by security</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ health }}" as="h" hint-placeholder-count="4">
+          <button onClick="{{ h.go }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto 34px;gap:12px;align-items:center;padding:8px 8px;margin:0 -8px;border:0;border-radius:8px;background:transparent;text-align:left;cursor:pointer;font-size:13.5px" style-hover="background:var(--hover)">
+            <span style="display:flex;flex-direction:column;min-width:0;line-height:1.35"><span>{{ h.label }}</span><span style="font-size:12px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ h.note }}</span></span>
+            <span title="{{ h.tip }}" style="display:flex;align-items:flex-end;gap:2px;height:14px"><sc-for list="{{ h.pips }}" as="p" hint-placeholder-count="5"><span style="width:4px;height:{{ p.h }};border-radius:1px;background:{{ p.c }}"></span></sc-for></span>
+            <span style="font-family:'Martian Mono',monospace;font-size:12px;text-align:right;color:{{ h.c }}">{{ h.v }}</span>
+          </button>
+        </sc-for>
+      </div>
+    </section>
+  </div>
+
+  <section aria-label="Key metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;background:var(--line);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line)">
+    <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="6">
+      <button onClick="{{ k.go }}" aria-label="{{ k.aria }}" style="position:relative;display:flex;flex-direction:column;gap:6px;padding:16px 18px 44px;background:{{ k.bg }};border:0;text-align:left;cursor:pointer;min-width:0;overflow:hidden" style-hover="background:var(--hover)">
+        <span style="display:flex;justify-content:space-between;align-items:center;width:100%;gap:8px"><span style="font-size:13px;color:var(--muted)">{{ k.label }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ k.dc }}">{{ k.delta }}</span></span>
+        <span style="display:flex;align-items:baseline;gap:5px"><span style="font-family:'Martian Mono',monospace;font-size:26px;font-weight:300;letter-spacing:-0.05em;line-height:1.1">{{ k.value }}</span><span style="font-size:13px;color:var(--faint)">{{ k.unit }}</span></span>
+        <span style="font-size:12px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;width:100%">{{ k.sub }}</span>
+        <svg viewBox="0 0 100 24" preserveAspectRatio="none" style="position:absolute;left:0;right:0;bottom:0;width:100%;height:34px;display:block" aria-hidden="true"><polyline points="{{ k.area }}" fill="{{ k.fill }}" stroke="none"></polyline><polyline points="{{ k.pts }}" fill="none" stroke="{{ k.sc }}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"></polyline></svg>
+      </button>
+    </sc-for>
+  </section>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:20px">
+    <section aria-labelledby="trend-h" style="grid-column:span 2;min-width:0;display:flex;flex-direction:column;gap:14px;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;flex-direction:column;gap:2px"><h2 id="trend-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Issue flow</h2><span style="font-size:13px;color:var(--muted)">Introduced vs. resolved per {{ bucket }} · open backlog</span></div>
+        <div style="display:flex;gap:28px;flex-wrap:wrap">
+          <sc-for list="{{ flowStats }}" as="s" hint-placeholder-count="3"><span style="display:flex;flex-direction:column;align-items:flex-end"><span style="font-size:12px;color:var(--faint)">{{ s.k }}</span><span style="font-family:'Martian Mono',monospace;font-size:16px;font-weight:300;letter-spacing:-0.03em;color:{{ s.c }}">{{ s.v }}</span></span></sc-for>
+        </div>
+      </div>
+      <div style="position:relative;height:220px;margin-top:4px" onMouseLeave="{{ clearHover }}">
+        <div style="position:absolute;inset:0 0 22px 38px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none"><sc-for list="{{ gridLines }}" as="g" hint-placeholder-count="4"><div style="border-top:1px solid var(--line);position:relative"><span style="position:absolute;left:-38px;top:-8px;font-family:'Martian Mono',monospace;font-size:9.5px;color:var(--faint)">{{ g }}</span></div></sc-for></div>
+        <div style="position:absolute;inset:0 0 22px 38px;display:flex;align-items:flex-end;gap:{{ barGap }}">
+          <sc-for list="{{ flow }}" as="b" hint-placeholder-count="13">
+            <div onMouseEnter="{{ b.hover }}" style="flex:1;height:100%;display:flex;align-items:flex-end;justify-content:center;gap:3px;border-radius:6px;background:{{ b.hbg }}">
+              <div style="flex:1;max-width:10px;height:{{ b.inH }};background:var(--crit);border-radius:3px 3px 1px 1px"></div>
+              <div style="flex:1;max-width:10px;height:{{ b.outH }};background:var(--accent);border-radius:3px 3px 1px 1px"></div>
+            </div>
+          </sc-for>
+        </div>
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;left:38px;top:0;bottom:22px;width:calc(100% - 38px);height:calc(100% - 22px);pointer-events:none;overflow:visible" aria-hidden="true"><polyline points="{{ openLine }}" fill="none" stroke="var(--text)" stroke-width="1.5" stroke-dasharray="1 4" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline></svg>
+        <div style="position:absolute;left:38px;right:0;bottom:0;display:flex;justify-content:space-between;font-family:'Martian Mono',monospace;font-size:9.5px;color:var(--faint)"><sc-for list="{{ xLabels }}" as="x" hint-placeholder-count="4"><span>{{ x }}</span></sc-for></div>
+        <sc-if value="{{ tip }}" hint-placeholder-val="{{ false }}">
+          <div role="tooltip" style="position:absolute;top:0;left:{{ tip.left }};transform:translateX({{ tip.tx }});min-width:176px;padding:12px 14px;background:var(--panel);border-radius:10px;box-shadow:var(--shadow),inset 0 0 0 1px var(--line-2);font-size:12.5px;pointer-events:none;z-index:2;display:flex;flex-direction:column;gap:5px">
+            <span style="font-weight:600">{{ tip.label }}</span>
+            <span style="display:flex;justify-content:space-between;gap:16px"><span style="color:var(--muted)">Introduced</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px;color:var(--crit)">+{{ tip.inn }}</span></span>
+            <span style="display:flex;justify-content:space-between;gap:16px"><span style="color:var(--muted)">Resolved</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px;color:var(--accent)">−{{ tip.out }}</span></span>
+            <span style="display:flex;justify-content:space-between;gap:16px;padding-top:5px;border-top:1px solid var(--line)"><span style="color:var(--muted)">Open</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px">{{ tip.open }}</span></span>
+          </div>
+        </sc-if>
+      </div>
+      <div style="display:flex;gap:16px;font-size:12px;color:var(--muted);align-items:center"><span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:var(--crit)"></span>Introduced</span><span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:var(--accent)"></span>Resolved</span><span style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dotted var(--text)"></span>Open backlog</span></div>
+    </section>
+
+    <section aria-labelledby="sev-h" style="min-width:0;display:flex;flex-direction:column;gap:16px;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><h2 id="sev-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Open by severity</h2><span style="font-family:'Martian Mono',monospace;font-size:11.5px;color:var(--muted)">{{ sevTotal }}</span></div>
+      <div aria-hidden="true" style="display:grid;grid-template-columns:repeat(20,1fr);gap:3px">
+        <sc-for list="{{ waffle }}" as="w" hint-placeholder-count="100"><span style="aspect-ratio:1;border-radius:2px;background:{{ w }}"></span></sc-for>
+      </div>
+      <div style="display:flex;flex-direction:column">
+        <sc-for list="{{ sev }}" as="s" hint-placeholder-count="5">
+          <button onClick="{{ s.go }}" style="display:grid;grid-template-columns:16px minmax(0,1fr) auto 46px;gap:10px;align-items:center;padding:7px 8px;margin:0 -8px;border:0;border-radius:8px;background:transparent;text-align:left;cursor:pointer;font-size:13.5px" style-hover="background:var(--hover)">
+            <span aria-hidden="true" style="color:{{ s.c }};font-size:11px;text-align:center">{{ s.g }}</span>
+            <span>{{ s.l }} <span style="color:var(--faint);font-size:12px">{{ s.newN }}</span></span>
+            <span style="font-family:'Martian Mono',monospace;font-size:12px">{{ s.n }}</span>
+            <span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint);text-align:right">{{ s.pct }}</span>
+          </button>
+        </sc-for>
+      </div>
+      <span style="font-size:12px;color:var(--faint)">Each square ≈ 1% of open issues. Blockers always get one.</span>
+    </section>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:20px">
+    <section aria-labelledby="cmp-h" style="grid-column:span 2;min-width:0;display:flex;flex-direction:column;background:var(--panel-2);border-radius:12px;overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px;flex-wrap:wrap">
+        <div style="display:flex;flex-direction:column;gap:2px"><h2 id="cmp-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Project health</h2><span style="font-size:13px;color:var(--muted)">Lowest scores first · monorepos expand to components</span></div>
+        <button style="border:0;background:transparent;padding:0;font-size:12.5px;color:var(--accent);font-weight:500;cursor:pointer">All 312 projects →</button>
+      </div>
+      <div style="overflow-x:auto">
+      <table style="width:100%;min-width:780px;border-collapse:collapse;font-size:13.5px">
+        <thead><tr style="color:var(--faint);font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase">
+          <th scope="col" style="text-align:left;font-weight:400;padding:8px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Project</th>
+          <th scope="col" style="text-align:left;font-weight:400;padding:8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Gate</th>
+          <th scope="col" style="text-align:left;font-weight:400;padding:8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Score</th>
+          <th scope="col" style="text-align:left;font-weight:400;padding:8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><abbr title="Reliability · Security · Maintainability" style="text-decoration:none">Rel · Sec · Mnt</abbr></th>
+          <th scope="col" style="text-align:left;font-weight:400;padding:8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Coverage</th>
+          <th scope="col" style="text-align:right;font-weight:400;padding:8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">New</th>
+          <th scope="col" style="text-align:left;font-weight:400;padding:8px 20px 8px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">30d</th>
+        </tr></thead>
+        <tbody>
+          <sc-for list="{{ projects }}" as="p" hint-placeholder-count="6">
+            <tr onClick="{{ p.toggle }}" style="cursor:pointer;background:{{ p.rowBg }}" style-hover="background:var(--hover)">
+              <td style="padding:11px 20px;border-bottom:1px solid var(--line)"><span style="display:flex;align-items:center;gap:10px;padding-left:{{ p.indent }}"><span aria-hidden="true" style="width:10px;color:var(--faint);font-size:9px">{{ p.caret }}</span><span style="display:flex;flex-direction:column;line-height:1.3;min-width:0"><span style="display:flex;gap:8px;align-items:baseline"><span style="font-weight:{{ p.fw }};font-family:{{ p.font }};font-size:{{ p.fs }}">{{ p.name }}</span><sc-if value="{{ p.mono }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;color:var(--muted);padding:1px 7px;border-radius:10px;background:var(--hover)">{{ p.mono }}</span></sc-if></span><span style="font-size:12px;color:var(--faint)">{{ p.sub }}</span></span></span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line)"><span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;color:{{ p.gate.c }};white-space:nowrap"><span aria-hidden="true" style="width:8px;height:8px;border-radius:{{ p.gate.r }};background:{{ p.gate.dot }};box-shadow:{{ p.gate.ring }}"></span>{{ p.gate.l }}</span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line);font-family:'Martian Mono',monospace;font-size:13px;color:{{ p.scoreC }}">{{ p.score }}</td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line)"><span style="display:flex;gap:10px"><sc-for list="{{ p.ratings }}" as="r" hint-placeholder-count="3"><span title="{{ r.t }}" style="display:flex;align-items:flex-end;gap:2px;height:14px"><sc-for list="{{ r.pips }}" as="pp" hint-placeholder-count="5"><span style="width:3px;height:{{ pp.h }};border-radius:1px;background:{{ pp.c }}"></span></sc-for></span></sc-for></span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line)"><span style="display:flex;align-items:center;gap:8px"><svg width="18" height="18" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="var(--pip-off)" stroke-width="5"></circle><circle cx="18" cy="18" r="14" fill="none" stroke="{{ p.covC }}" stroke-width="5" stroke-dasharray="{{ p.covDash }}" transform="rotate(-90 18 18)"></circle></svg><span style="font-family:'Martian Mono',monospace;font-size:12px">{{ p.covS }}</span></span></td>
+              <td style="padding:11px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:'Martian Mono',monospace;font-size:12px;color:{{ p.newC }}">{{ p.newN }}</td>
+              <td style="padding:11px 20px 11px 16px;border-bottom:1px solid var(--line)"><svg viewBox="0 0 100 24" preserveAspectRatio="none" style="width:88px;height:22px;display:block" aria-label="{{ p.trendL }}"><polyline points="{{ p.spark }}" fill="none" stroke="{{ p.sc }}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"></polyline></svg></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="gate-h" style="min-width:0;display:flex;flex-direction:column;gap:14px;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><h2 id="gate-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Gate history</h2><span style="font-family:'Martian Mono',monospace;font-size:11.5px">81% <span style="color:var(--crit)">−3</span></span></div>
+      <span style="font-size:13px;color:var(--muted);margin-top:-10px">Share of main-branch evaluations passing, per day</span>
+      <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:4px">
+        <sc-for list="{{ gateDays }}" as="d" hint-placeholder-count="30"><span title="{{ d.t }}" style="aspect-ratio:1;border-radius:4px;background:{{ d.c }};display:grid;place-items:center;font-family:'Martian Mono',monospace;font-size:8.5px;color:{{ d.fc }}">{{ d.v }}</span></sc-for>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-family:'Martian Mono',monospace;font-size:9.5px;color:var(--faint)"><span>Sep 30</span><span>Oct 29</span></div>
+      <div style="display:flex;flex-direction:column;gap:2px;padding-top:12px;border-top:1px solid var(--line)">
+        <span style="font-size:12.5px;color:var(--muted);margin-bottom:4px">Most-failed conditions</span>
+        <sc-for list="{{ failConds }}" as="c" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:minmax(0,1fr) 60px 28px;gap:10px;align-items:center;font-size:13px;padding:4px 0"><span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ c.l }}</span><span style="height:4px;border-radius:2px;background:var(--pip-off)"><span style="display:block;height:100%;width:{{ c.w }};border-radius:2px;background:var(--crit)"></span></span><span style="font-family:'Martian Mono',monospace;font-size:11px;color:var(--muted);text-align:right">{{ c.n }}</span></div></sc-for>
+      </div>
+    </section>
+  </div>
+
+  <section aria-labelledby="ra-h" style="display:flex;flex-direction:column;background:var(--panel-2);border-radius:12px;overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px"><div style="display:flex;align-items:center;gap:12px"><h2 id="ra-h" style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Recent analyses</h2><span style="display:flex;align-items:center;gap:6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)"></span>Live</span></div><button style="border:0;background:transparent;padding:0;font-size:12.5px;color:var(--accent);font-weight:500;cursor:pointer">All analyses →</button></div>
+    <div style="overflow-x:auto">
+    <sc-for list="{{ recent }}" as="a" hint-placeholder-count="6">
+      <div style="display:grid;grid-template-columns:22px minmax(150px,1.2fr) minmax(220px,2fr) minmax(170px,1.4fr) 80px 50px;gap:14px;align-items:center;padding:12px 20px;border-top:1px solid var(--line);font-size:13.5px;min-width:840px;cursor:pointer" style-hover="background:var(--hover)">
+        <span aria-label="{{ a.statusL }}" style="display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:{{ a.bg }};color:{{ a.c }};font-size:10px;font-weight:700">{{ a.g }}</span>
+        <span style="display:flex;flex-direction:column;line-height:1.3;min-width:0"><span style="font-weight:600">{{ a.project }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint)">{{ a.branch }} · {{ a.sha }}</span></span>
+        <span style="color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ a.msg }}</span>
+        <span style="display:flex;flex-direction:column;gap:5px;min-width:0">
+          <span style="font-size:13px;color:{{ a.nc }};overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ a.note }}</span>
+          <sc-if value="{{ a.progress }}" hint-placeholder-val="{{ false }}"><span style="height:3px;border-radius:2px;background:var(--pip-off);overflow:hidden"><span style="display:block;height:100%;width:{{ a.progress }};background:var(--info);border-radius:2px"></span></span></sc-if>
+        </span>
+        <span style="font-family:'Martian Mono',monospace;font-size:11px;color:var(--muted)">{{ a.dur }}</span>
+        <span style="font-family:'Martian Mono',monospace;font-size:11px;color:var(--faint);text-align:right">{{ a.when }}</span>
+      </div>
+    </sc-for>
+    </div>
+  </section>
+</div>
+</sc-if>
+  </main>
+</div>
+</div>
+
+<sc-if value="{{ drawer }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeDrawer }}" style="position:fixed;inset:0;background:color-mix(in srgb, var(--bg) 55%, transparent);backdrop-filter:blur(2px);z-index:20"></div>
+  <aside role="dialog" aria-modal="true" aria-labelledby="dr-h" style="position:fixed;top:10px;right:10px;bottom:10px;width:480px;max-width:calc(100vw - 20px);background:var(--panel);border-radius:14px;box-shadow:var(--shadow),inset 0 0 0 1px var(--line-2);z-index:21;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:18px 22px;border-bottom:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)">Sounding · {{ scopeName }}</span><button onClick="{{ closeDrawer }}" aria-label="Close" style="display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted)" style-hover="background:var(--hover);color:var(--text)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div>
+      <h2 id="dr-h" style="margin:0;font-size:20px;font-weight:600;letter-spacing:-0.025em">{{ drawer.title }}</h2>
+      <span style="font-size:13.5px;color:var(--muted);text-wrap:pretty">{{ drawer.sub }}</span>
+      <div style="display:flex;gap:4px;margin-top:6px"><sc-for list="{{ depth }}" as="d" hint-placeholder-count="5"><span style="flex:1;display:flex;flex-direction:column;gap:5px"><span style="height:3px;border-radius:2px;background:{{ d.c }}"></span><span style="font-family:'Martian Mono',monospace;font-size:9.5px;color:{{ d.fc }}">{{ d.l }}</span></span></sc-for></div>
+    </div>
+    <div style="flex:1;overflow:auto;display:flex;flex-direction:column;padding:8px">
+      <sc-for list="{{ drawer.items }}" as="it" hint-placeholder-count="5">
+        <div style="display:flex;flex-direction:column;border-radius:10px;background:{{ it.bg }};margin-bottom:2px">
+          <button onClick="{{ it.toggle }}" aria-expanded="{{ it.open }}" style="display:grid;grid-template-columns:minmax(0,1fr) 90px 52px;gap:12px;align-items:center;padding:12px 14px;border:0;border-radius:10px;background:transparent;text-align:left;cursor:pointer" style-hover="background:var(--hover)">
+            <span style="display:flex;flex-direction:column;min-width:0;line-height:1.35"><span style="font-family:'Martian Mono',monospace;font-size:12px">{{ it.comp }}</span><span style="font-size:12.5px;color:var(--faint)">{{ it.project }} · {{ it.owner }}</span></span>
+            <span style="height:4px;border-radius:2px;background:var(--pip-off);overflow:hidden"><span style="display:block;height:100%;width:{{ it.w }};background:{{ drawer.c }};border-radius:2px"></span></span>
+            <span style="font-family:'Martian Mono',monospace;font-size:12.5px;text-align:right">{{ it.v }}</span>
+          </button>
+          <sc-if value="{{ it.open }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;padding:0 14px 14px;gap:6px">
+              <sc-for list="{{ it.files }}" as="fl" hint-placeholder-count="2">
+                <div style="display:flex;flex-direction:column;gap:5px;padding:10px 12px;border-radius:8px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)">
+                  <span style="display:flex;justify-content:space-between;gap:8px;font-family:'Martian Mono',monospace;font-size:11px"><span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis"><span style="color:var(--faint)">{{ fl.dir }}</span>{{ fl.base }}</span><span style="color:var(--muted)">{{ fl.v }}</span></span>
+                  <sc-if value="{{ fl.issue }}" hint-placeholder-val="{{ false }}"><span style="display:flex;gap:8px;align-items:baseline;font-size:13px"><span aria-hidden="true" style="color:{{ fl.sc }};font-size:10px">{{ fl.sg }}</span><span style="flex:1;min-width:0;text-wrap:pretty">{{ fl.issue }}</span><span style="font-family:'Martian Mono',monospace;font-size:10px;color:var(--faint)">L{{ fl.line }}</span></span></sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display:flex;gap:8px;padding:14px 18px;border-top:1px solid var(--line)"><button style="flex:1;height:38px;padding:0 16px;border:0;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:13.5px;cursor:pointer;text-align:left">{{ drawer.cta }} →</button><button onClick="{{ closeDrawer }}" style="height:38px;padding:0 16px;border:0;border-radius:9px;background:transparent;font-weight:500;font-size:13.5px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">Close</button></div>
+  </aside>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;teal&quot;,&quot;cyan&quot;,&quot;green&quot;],&quot;default&quot;:&quot;teal&quot;,&quot;tsType&quot;:&quot;'teal'|'cyan'|'green'&quot;},&quot;dataState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;loading&quot;,&quot;empty&quot;,&quot;error&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;'live'|'loading'|'empty'|'error'&quot;}}">
+const ICON = {
+  overview: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'],
+  projects: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'],
+  components: ['m7.5 4.27 9 5.15', 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'],
+  issues: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2'],
+  security: ['M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'],
+  analyses: ['M22 12h-4l-3 9L9 3l-3 9H2'],
+  gates: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'm9 12 2 2 4-4'],
+  rules: ['M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z', 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'],
+  admin: ['M20 7h-9', 'M14 17H5', 'M17 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6', 'M7 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6']
+};
+const SEV = {
+  blocker: { g: '■', c: 'var(--crit)', l: 'Blocker' }, critical: { g: '▲', c: 'var(--crit)', l: 'Critical' },
+  major: { g: '◆', c: 'var(--warn)', l: 'Major' }, minor: { g: '●', c: 'var(--info)', l: 'Minor' }, info: { g: '○', c: 'var(--faint)', l: 'Info' }
+};
+const LVL = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+const lvlColor = (n) => n >= 4 ? 'var(--ok)' : n === 3 ? 'var(--warn)' : 'var(--crit)';
+const pips = (n, h0 = 6) => [0, 1, 2, 3, 4].map((i) => ({ h: (h0 + i * 2) + 'px', c: i < n ? lvlColor(n) : 'var(--pip-off)' }));
+const GATE = {
+  passed: { l: 'Passing', c: 'var(--ok)', dot: 'var(--ok)', r: '50%', ring: 'none', g: '✓', bg: 'var(--ok-soft)' },
+  failed: { l: 'Blocking', c: 'var(--crit)', dot: 'var(--crit)', r: '2px', ring: '0 0 0 3px var(--crit-soft)', g: '✕', bg: 'var(--crit-soft)' },
+  running: { l: 'Sounding', c: 'var(--info)', dot: 'transparent', r: '50%', ring: 'inset 0 0 0 2px var(--info)', g: '◌', bg: 'var(--info-soft)' },
+  partial: { l: 'Partial', c: 'var(--warn)', dot: 'var(--warn)', r: '1px', ring: 'none', g: '!', bg: 'var(--warn-soft)' }
+};
+const RAT_NAMES = ['Reliability', 'Security', 'Maintainability'];
+
+function rng(seed) { let s = seed; return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; }; }
+function line(arr, h = 24, pad = 2) {
+  const mn = Math.min(...arr), mx = Math.max(...arr), r = mx - mn || 1;
+  return arr.map((v, i) => `${(i / (arr.length - 1) * 100).toFixed(2)},${(h - pad - (v - mn) / r * (h - pad * 2)).toFixed(2)}`).join(' ');
+}
+function area(arr, h = 24) { return `0,${h} ${line(arr, h)} 100,${h}`; }
+function score(x) { const s = x.r.reduce((a, l) => a + LVL[l], 0) / 15 * 70 + x.cov * 0.3; return Math.round(s); }
+
+const PROJECTS = [
+  { name: 'payments-platform', sub: 'acme/payments-platform · Go, Rust, TS, Python', mono: '7 components', gate: 'failed', r: ['C', 'E', 'B'], cov: 69.8, newN: 14, trend: [118, 120, 119, 123, 125, 124, 128, 131], comps: [
+    { name: 'services/checkout-api', sub: 'Go · @checkout', gate: 'failed', r: ['C', 'E', 'B'], cov: 61.3, newN: 6, trend: [33, 34, 36, 35, 37, 38, 40, 41] },
+    { name: 'services/fraud-scoring', sub: 'Python · @risk-ml', gate: 'failed', r: ['B', 'D', 'C'], cov: 48.9, newN: 3, trend: [29, 30, 31, 31, 33, 34, 36, 37] },
+    { name: 'packages/web-checkout', sub: 'TypeScript · @web-platform', gate: 'failed', r: ['B', 'D', 'A'], cov: 72.0, newN: 2, trend: [24, 24, 25, 27, 26, 27, 28, 28] },
+    { name: 'services/ledger', sub: 'Rust · @ledger-team', gate: 'passed', r: ['A', 'A', 'B'], cov: 84.1, newN: 2, trend: [18, 17, 17, 15, 14, 14, 13, 12] }
+  ] },
+  { name: 'billing-service', sub: 'acme/billing-service · Java', gate: 'failed', r: ['B', 'E', 'C'], cov: 58.4, newN: 9, trend: [230, 226, 224, 221, 219, 218, 216, 214] },
+  { name: 'ml-feature-store', sub: 'acme/ml-feature-store · Python', gate: 'failed', r: ['C', 'B', 'D'], cov: 41.7, newN: 11, trend: [150, 154, 158, 161, 165, 168, 170, 173] },
+  { name: 'mobile-bff', sub: 'acme/mobile-bff · TypeScript', gate: 'failed', r: ['C', 'C', 'B'], cov: 63.1, newN: 5, trend: [74, 73, 75, 72, 71, 73, 72, 71] },
+  { name: 'data-pipeline', sub: 'acme/data-pipeline · Python', gate: 'partial', r: ['B', 'C', 'C'], cov: 52.3, newN: 4, trend: [70, 69, 68, 68, 66, 65, 65, 64] },
+  { name: 'inventory-service', sub: 'acme/inventory-service · Java', gate: 'running', r: ['B', 'B', 'C'], cov: 66.0, newN: 0, trend: [101, 100, 99, 99, 98, 97, 97, 96] }
+];
+
+const DRILL = {
+  gate: { title: '59 projects blocking on their gate', sub: 'Components ordered by how many conditions they break. 41 of 59 trace to new-code coverage or new critical issues.', c: 'var(--crit)', cta: 'Open failing projects', unit: '',
+    items: [['services/checkout-api', 'payments-platform', '@checkout', 4, [['internal/orders/', 'repo.go', 'security', 'critical', 'SQL query built by concatenating user input', 88], ['internal/tender/', 'split.go', '38.6% cov', 'major', 'Partial-refund branch is never tested', 112]]],
+      ['billing-service', 'billing-service', '@billing', 3, [['config/', 'StripeConfig.java', 'blocker', 'blocker', 'Hard-coded live Stripe secret key', 14]]],
+      ['services/fraud-scoring', 'payments-platform', '@risk-ml', 3, [['scoring/', 'config.py', '22% cov', 'major', 'yaml.load with unsafe Loader on model config', 22]]],
+      ['feature_store/ingest', 'ml-feature-store', '@data-platform', 2, [['ingest/', 'kafka_consumer.py', 'reliability', 'major', 'Broad except swallows deserialization errors', 61]]],
+      ['packages/web-checkout', 'payments-platform', '@web-platform', 2, [['src/components/', 'PromoBanner.tsx', 'security', 'critical', 'Unsanitized HTML passed to dangerouslySetInnerHTML', 31]]]] },
+  critical: { title: '47 blocker & critical issues', sub: 'Grouped by component. 9 introduced this week; 2 assigned to you.', c: 'var(--crit)', cta: 'Triage in issue explorer', unit: '',
+    items: [['services/checkout-api', 'payments-platform', '@checkout', 9, [['internal/orders/', 'repo.go', '3', 'critical', 'SQL query built by concatenating user input', 88], ['internal/http/', 'handler.go', '2', 'critical', 'Request body size unbounded before JSON decode', 54]]],
+      ['billing-service', 'billing-service', '@billing', 8, [['config/', 'StripeConfig.java', '1', 'blocker', 'Hard-coded live Stripe secret key', 14], ['invoice/', 'PdfRenderer.java', '2', 'critical', 'XXE: DocumentBuilderFactory allows external entities', 40]]],
+      ['auth/session', 'mobile-bff', '@mobile', 6, [['src/auth/', 'jwt.ts', '2', 'critical', 'JWT decoded without signature verification', 27]]],
+      ['packages/web-checkout', 'payments-platform', '@web-platform', 5, [['src/components/', 'PromoBanner.tsx', '1', 'critical', 'Unsanitized HTML passed to dangerouslySetInnerHTML', 31]]],
+      ['services/fraud-scoring', 'payments-platform', '@risk-ml', 4, [['scoring/', 'config.py', '1', 'critical', 'yaml.load with unsafe Loader on model config', 22]]]] },
+  vulns: { title: '23 open vulnerabilities', sub: '5 critical · 9 high · 9 medium. Reachable from a public endpoint first.', c: 'var(--crit)', cta: 'Open security', unit: '',
+    items: [['services/checkout-api', 'payments-platform', '@checkout', 5, [['internal/orders/', 'repo.go', 'CWE-89', 'critical', 'SQL injection reachable from POST /v1/orders', 88]]],
+      ['billing-service', 'billing-service', '@billing', 4, [['config/', 'StripeConfig.java', 'CWE-798', 'blocker', 'Live secret committed to repository', 14]]],
+      ['auth/session', 'mobile-bff', '@mobile', 4, [['src/auth/', 'jwt.ts', 'CWE-347', 'critical', 'JWT signature not verified', 27]]],
+      ['packages/web-checkout', 'payments-platform', '@web-platform', 3, [['src/components/', 'PromoBanner.tsx', 'CWE-79', 'critical', 'Stored XSS via campaign body HTML', 31]]],
+      ['services/fraud-scoring', 'payments-platform', '@risk-ml', 2, [['scoring/', 'config.py', 'CWE-502', 'major', 'Unsafe YAML deserialization', 22]]]] },
+  coverage: { title: 'Coverage 72.4% — where the gaps are', sub: 'Components furthest below the 80% new-code threshold, with their least-covered files.', c: 'var(--warn)', cta: 'Open coverage report', unit: '%', invert: true,
+    items: [['feature_store/ingest', 'ml-feature-store', '@data-platform', 41.7, [['ingest/', 'backfill.py', '12.0%'], ['ingest/', 'kafka_consumer.py', '38.5%']]],
+      ['services/fraud-scoring', 'payments-platform', '@risk-ml', 48.9, [['scoring/', 'config.py', '22.0%'], ['scoring/', 'model.py', '51.3%']]],
+      ['pipelines/nightly', 'data-pipeline', '@data-platform', 52.3, [['dags/', 'reconcile_ledger.py', '30.4%']]],
+      ['billing-service', 'billing-service', '@billing', 58.4, [['invoice/', 'InvoiceCalculator.java', '44.9%']]],
+      ['services/checkout-api', 'payments-platform', '@checkout', 61.3, [['internal/tender/', 'split.go', '38.6%'], ['internal/orders/', 'repo.go', '42.1%']]]] },
+  dup: { title: 'Duplication 3.1% of lines', sub: 'Mostly copy-pasted request handlers.', c: 'var(--warn)', cta: 'Open duplication report', unit: '%',
+    items: [['mobile-bff', 'mobile-bff', '@mobile', 8.8, [['src/routes/', 'orders.ts', '14.2%'], ['src/routes/', 'returns.ts', '13.7%']]],
+      ['billing-service', 'billing-service', '@billing', 7.1, [['invoice/', 'TaxRules.java', '18.0%']]],
+      ['packages/web-checkout', 'payments-platform', '@web-platform', 6.3, [['src/components/', 'TenderPicker.tsx', '9.1%']]],
+      ['feature_store/ingest', 'ml-feature-store', '@data-platform', 5.6, [['ingest/', 'schemas.py', '11.4%']]],
+      ['services/checkout-api', 'payments-platform', '@checkout', 4.8, [['internal/orders/', 'repo.go', '8.4%']]]] },
+  debt: { title: 'Technical debt 412 days', sub: 'Estimated remediation effort. Top 5 components hold 38% of the total.', c: 'var(--info)', cta: 'Open maintainability issues', unit: 'd',
+    items: [['billing-service', 'billing-service', '@billing', 61, [['invoice/', 'InvoiceCalculator.java', '6d', 'major', 'Cognitive complexity 31 (max 15) in calculate()', 118]]],
+      ['feature_store/ingest', 'ml-feature-store', '@data-platform', 44, [['ingest/', 'kafka_consumer.py', '4d', 'major', 'Function has 14 parameters (max 7)', 30]]],
+      ['web-console/app', 'web-console', '@web-platform', 29, [['src/pages/', 'Settings.tsx', '2d', 'minor', 'Component is 1,240 lines; split by section', 1]]],
+      ['services/fraud-scoring', 'payments-platform', '@risk-ml', 14, [['scoring/', 'model.py', '2d', 'major', 'Broad except Exception hides scoring failures', 47]]],
+      ['services/checkout-api', 'payments-platform', '@checkout', 9, [['internal/orders/', 'service.go', '1d', 'minor', 'Duplicated validation across 4 handlers', 210]]]] }
+};
+
+class Component extends DCLogic {
+  state = { theme: null, range: '90d', scope: 'all', hover: null, drawer: null, openItem: 0, expanded: { 'payments-platform': true } };
+
+  componentDidMount() {
+    this._key = (e) => { if (e.key === 'Escape' && this.state.drawer) this.setState({ drawer: null }); };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); }
+  openDrill(k) { this.setState({ drawer: k, openItem: 0 }); }
+
+  flowData() {
+    const r = this.state.range, n = r === '7d' ? 7 : r === '30d' ? 30 : 13;
+    const rand = rng(r === '7d' ? 7 : r === '30d' ? 31 : 91), scale = r === '90d' ? 1 : 0.16, sc = this.state.scope === 'mine' ? 0.12 : 1;
+    let open = Math.round((r === '90d' ? 1480 : r === '30d' ? 1398 : 1361) * sc);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const inn = Math.round((60 + rand() * 50 + (i === Math.floor(n * 0.3) ? 40 : 0)) * scale * sc), res = Math.round((70 + rand() * 45) * scale * sc);
+      open += inn - res; out.push({ inn, out: res, open });
+    }
+    const diff = Math.round(1342 * sc) - out[n - 1].open;
+    out.forEach((d, i) => { d.open += Math.round(diff * (i + 1) / n); });
+    const start = new Date(2026, 9, 29), step = r === '90d' ? 7 : 1;
+    out.forEach((d, i) => { const dt = new Date(start); dt.setDate(start.getDate() - (n - 1 - i) * step); d.date = dt; });
+    return out;
+  }
+
+  renderVals() {
+    let stored = null; try { stored = localStorage.getItem('sonda-theme'); } catch (e) {}
+    const theme = this.state.theme || stored || this.props.defaultTheme || 'dark';
+    const ds = this.props.dataState || 'live';
+    const mine = this.state.scope === 'mine';
+    const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const seg = (on) => ({ bg: on ? 'var(--panel)' : 'transparent', fg: on ? 'var(--text)' : 'var(--muted)', sh: on ? 'inset 0 0 0 1px var(--line-2), 0 1px 2px rgba(0,0,0,.2)' : 'none' });
+
+    const navDef = [
+      { id: 'overview', label: 'Overview' }, { id: 'projects', label: 'Projects', count: '312' }, { id: 'components', label: 'Components', count: '611' },
+      { id: 'issues', label: 'Issues', count: '1.3k' }, { id: 'security', label: 'Security', count: '23', hot: true }, { id: 'analyses', label: 'Analyses' },
+      { heading: 'Configure' }, { id: 'gates', label: 'Quality gates' }, { id: 'rules', label: 'Rules' }, { id: 'admin', label: 'Administration' }
+    ];
+    const nav = navDef.map((n) => n.heading ? { heading: n.heading } : {
+      ...n, href: encodeURI({ overview: 'Sonda Dashboard v3', projects: 'Sonda Projects', components: 'Sonda Component', issues: 'Sonda Issues', security: 'Sonda Security', analyses: 'Sonda Analysis', gates: 'Sonda Gates', rules: 'Sonda Rules', admin: 'Sonda Admin' }[n.id]) + '.dc.html', paths: ICON[n.id], current: n.id === 'overview' ? 'page' : undefined, cc: n.hot ? 'var(--crit)' : 'var(--faint)',
+      bg: n.id === 'overview' ? 'var(--panel)' : 'transparent', fg: n.id === 'overview' ? 'var(--text)' : 'var(--muted)', w: n.id === 'overview' ? 600 : 400, ic: n.id === 'overview' ? 'var(--accent)' : 'currentColor'
+    });
+
+    const focus = [
+      { g: '▲', c: 'var(--crit)', tag: 'Your team · blocks main', title: 'checkout-api is blocking its gate on main', body: '2 critical vulnerabilities in new code — SQL built from request input in orders/repo.go. Blocking for 3 consecutive analyses.', path: [{ s: '', t: 'payments-platform', c: 'var(--muted)' }, { s: '›', t: 'services/checkout-api', c: 'var(--text)' }, { s: '·', t: '~1h 15m', c: 'var(--faint)' }], cta: 'Review 2', k: 'vulns' },
+      { g: '■', c: 'var(--crit)', tag: 'Blocker · 3h ago', title: 'Live Stripe secret committed to billing-service', body: 'StripeConfig.java:14 contains an sk_live key. Rotate it in Stripe first — it is already in git history.', path: [{ s: '', t: 'billing-service', c: 'var(--muted)' }, { s: '›', t: 'config/StripeConfig.java', c: 'var(--text)' }, { s: '·', t: 'CWE-798', c: 'var(--faint)' }], cta: 'Open', k: 'critical' },
+      { g: '◆', c: 'var(--warn)', tag: 'Coverage −6.2 pts', title: 'fraud-scoring coverage fell to 48.9% on new code', body: 'The new scoring/config.py loader ships untested. Gate requires 80% on new code.', path: [{ s: '', t: 'payments-platform', c: 'var(--muted)' }, { s: '›', t: 'services/fraud-scoring', c: 'var(--text)' }], cta: 'Files', k: 'coverage' },
+      { g: '●', c: 'var(--info)', tag: 'Assigned to you', title: '7 issues assigned to you · 3 introduced this week', body: 'Oldest: unchecked error from json.Encode in internal/http/handler.go (9 days).', path: [{ s: '', t: '4 in checkout-api', c: 'var(--muted)' }, { s: '·', t: '3 in sdk-js', c: 'var(--muted)' }], cta: 'My issues', k: 'critical' }
+    ].map((f) => ({ ...f, go: () => this.openDrill(f.k) }));
+
+    const hs = mine ? 61 : 74;
+    const healthBar = Array.from({ length: 20 }, (_, i) => i < Math.round(hs / 5) ? (i < 8 ? 'var(--crit)' : i < 14 ? 'var(--warn)' : 'var(--ok)') : 'var(--pip-off)');
+    const health = [
+      { label: 'Reliability', l: 'B', v: '76', note: '214 bugs · 6 critical', k: 'critical' },
+      { label: 'Security', l: 'D', v: '48', note: '23 vulnerabilities in 14 projects', k: 'vulns' },
+      { label: 'Maintainability', l: 'B', v: '79', note: '412 days debt · 2.8% ratio', k: 'debt' },
+      { label: 'Coverage', l: 'C', v: '72', note: '72.4% · 80% target on new code', k: 'coverage' }
+    ].map((h) => ({ ...h, pips: pips(LVL[h.l]), c: lvlColor(LVL[h.l]), tip: `${h.label}: level ${LVL[h.l]} of 5`, go: () => this.openDrill(h.k) }));
+
+    const kd = mine
+      ? [['gate', 'Gate pass rate', '67', '%', '−8 pts', 'bad', '4 of 6 components passing', [80, 82, 78, 75, 76, 72, 70, 67]], ['critical', 'Blocker + critical', '9', '', '+3', 'bad', '2 assigned to you', [5, 5, 6, 6, 7, 6, 8, 9]], ['vulns', 'Vulnerabilities', '5', '', '+2', 'bad', '2 critical · checkout-api', [2, 3, 3, 3, 4, 3, 4, 5]], ['coverage', 'Coverage', '68.1', '%', '−1.4', 'bad', 'new code 61.0%', [70, 70.4, 69.8, 69.5, 69.1, 68.9, 68.4, 68.1]], ['dup', 'Duplication', '3.6', '%', '+0.3', 'bad', 'checkout handlers', [3.1, 3.2, 3.2, 3.3, 3.4, 3.4, 3.5, 3.6]], ['debt', 'Tech debt', '27', 'days', '−2d', 'good', 'ratio 3.1%', [31, 30, 30, 29, 29, 28, 28, 27]]]
+      : [['gate', 'Gate pass rate', '81', '%', '−3 pts', 'bad', '253 of 312 passing', [86, 85, 85, 84, 84, 83, 82, 81]], ['critical', 'Blocker + critical', '47', '', '+9', 'bad', '9 introduced this week', [38, 40, 37, 39, 41, 40, 44, 47]], ['vulns', 'Vulnerabilities', '23', '', '−6', 'good', '5 critical · 14 projects', [33, 31, 32, 30, 28, 27, 25, 23]], ['coverage', 'Coverage', '72.4', '%', '+1.1', 'good', 'new code 76.8%', [70.9, 71.2, 71.0, 71.5, 71.8, 72.0, 72.1, 72.4]], ['dup', 'Duplication', '3.1', '%', '+0.2', 'bad', '1.2M duplicated lines', [2.8, 2.9, 2.9, 3.0, 2.9, 3.0, 3.1, 3.1]], ['debt', 'Tech debt', '412', 'days', '−18d', 'good', 'ratio 2.8%', [438, 434, 431, 427, 422, 419, 415, 412]]];
+    const kpis = kd.map(([k, label, value, unit, delta, tone, sub, arr]) => {
+      const on = this.state.drawer === k, col = tone === 'good' ? 'var(--ok)' : 'var(--crit)';
+      return { label, value, unit, delta, sub, dc: col, pts: line(arr), area: area(arr), sc: on ? 'var(--accent)' : col, fill: on ? 'var(--accent-soft)' : `color-mix(in oklch, ${col} 9%, transparent)`, bg: on ? 'var(--hover)' : 'var(--panel-2)', aria: `${label} ${value}${unit}, ${delta}. Show affected components`, go: () => this.openDrill(k) };
+    });
+
+    const fd = this.flowData();
+    const maxBar = Math.max(...fd.map((d) => Math.max(d.inn, d.out))) * 1.15;
+    const opens = fd.map((d) => d.open), oMin = Math.min(...opens) * 0.985, oMax = Math.max(...opens) * 1.01;
+    const flow = fd.map((d, i) => ({ inH: (d.inn / maxBar * 62).toFixed(1) + '%', outH: (d.out / maxBar * 62).toFixed(1) + '%', hbg: this.state.hover === i ? 'var(--hover)' : 'transparent', hover: () => this.state.hover !== i && this.setState({ hover: i }) }));
+    const openLine = fd.map((d, i) => `${((i + 0.5) / fd.length * 100).toFixed(2)},${(4 + (1 - (d.open - oMin) / (oMax - oMin)) * 34).toFixed(2)}`).join(' ');
+    let tip = null;
+    if (this.state.hover != null && fd[this.state.hover]) {
+      const i = this.state.hover, d = fd[i], pct = (i + 0.5) / fd.length;
+      tip = { label: this.state.range === '90d' ? 'Week of ' + fmt(d.date) : fmt(d.date), inn: d.inn, out: d.out, open: d.open.toLocaleString(), left: `calc(38px + (100% - 38px) * ${pct.toFixed(3)})`, tx: pct > 0.7 ? 'calc(-100% - 12px)' : '12px' };
+    }
+    const xi = [0, Math.floor(fd.length / 3), Math.floor(fd.length * 2 / 3), fd.length - 1];
+    const tIn = fd.reduce((a, d) => a + d.inn, 0), tOut = fd.reduce((a, d) => a + d.out, 0), net = tIn - tOut;
+    const flowStats = [{ k: 'Introduced', v: tIn.toLocaleString(), c: 'var(--text)' }, { k: 'Resolved', v: tOut.toLocaleString(), c: 'var(--text)' }, { k: 'Net', v: (net > 0 ? '+' : '−') + Math.abs(net).toLocaleString(), c: net > 0 ? 'var(--crit)' : 'var(--ok)' }];
+    const gm = Math.round(maxBar * 0.62);
+    const gridLines = [gm, Math.round(gm * 2 / 3), Math.round(gm / 3), 0].map(String);
+
+    const sevRaw = mine ? [['blocker', 1, 0], ['critical', 8, 3], ['major', 51, 6], ['minor', 77, 4], ['info', 22, 1]] : [['blocker', 12, 2], ['critical', 35, 7], ['major', 418, 31], ['minor', 692, 40], ['info', 185, 6]];
+    const sevTot = sevRaw.reduce((a, s) => a + s[1], 0);
+    const sev = sevRaw.map(([k, n, nw]) => ({ ...SEV[k], n: n.toLocaleString(), newN: nw ? `+${nw}` : '', pct: (n / sevTot * 100).toFixed(1) + '%', go: () => this.openDrill(k === 'blocker' || k === 'critical' ? 'critical' : 'debt') }));
+    let cells = sevRaw.map(([k, n]) => ({ k, c: Math.max(1, Math.round(n / sevTot * 100)) }));
+    let diff = 100 - cells.reduce((a, c) => a + c.c, 0);
+    const big = cells.reduce((a, c) => (c.c > a.c ? c : a), cells[0]); big.c += diff;
+    const waffle = [];
+    cells.forEach((c) => { for (let i = 0; i < c.c; i++) waffle.push(SEV[c.k].c); });
+
+    const rows = [];
+    (mine ? [PROJECTS[0]] : PROJECTS).forEach((p) => {
+      const exp = !!this.state.expanded[p.name];
+      const mk = (x, child) => {
+        const last = x.trend[x.trend.length - 1], first = x.trend[0], sc = score(x), circ = 2 * Math.PI * 14;
+        return {
+          name: x.name, sub: x.sub, mono: child ? '' : (x.mono || ''), font: child ? "'Martian Mono',monospace" : 'inherit', fs: child ? '12px' : '14px', fw: child ? 400 : 600, indent: child ? '20px' : '0px',
+          caret: child ? '' : (x.comps ? (exp ? '▾' : '▸') : ''), rowBg: child ? 'var(--panel)' : 'transparent', gate: GATE[x.gate],
+          score: String(sc), scoreC: sc >= 75 ? 'var(--ok)' : sc >= 60 ? 'var(--warn)' : 'var(--crit)',
+          ratings: x.r.map((l, i) => ({ pips: pips(LVL[l], 4), t: `${RAT_NAMES[i]}: level ${LVL[l]} of 5` })),
+          covS: x.cov.toFixed(1) + '%', covDash: `${(x.cov / 100 * circ).toFixed(1)} ${circ.toFixed(1)}`, covC: x.cov >= 80 ? 'var(--ok)' : x.cov >= 60 ? 'var(--warn)' : 'var(--crit)',
+          newN: x.newN ? '+' + x.newN : '—', newC: x.newN >= 5 ? 'var(--crit)' : 'var(--muted)',
+          spark: line(x.trend), sc: last > first ? 'var(--crit)' : 'var(--ok)', trendL: `Open issues ${last > first ? 'rising' : 'falling'}: ${first} to ${last}`,
+          toggle: x.comps ? () => this.setState((s) => ({ expanded: { ...s.expanded, [x.name]: !s.expanded[x.name] } })) : () => {}
+        };
+      };
+      rows.push(mk(p, false));
+      if (p.comps && exp) p.comps.forEach((c) => rows.push(mk(c, true)));
+    });
+
+    const gr = rng(42);
+    const gateDays = Array.from({ length: 30 }, (_, i) => {
+      const rate = Math.round((0.9 - gr() * 0.12 - (i > 22 ? 0.05 : 0)) * 100), dt = new Date(2026, 8, 30 + i);
+      const bad = rate < 80;
+      const c = bad ? `color-mix(in oklch, var(--crit) ${30 + (80 - rate) * 5}%, transparent)` : `color-mix(in oklch, var(--accent) ${Math.min(90, 15 + (rate - 78) * 6)}%, transparent)`;
+      return { c, v: rate, fc: bad ? 'var(--text)' : 'var(--text)', t: `${fmt(dt)} · ${rate}% of evaluations passed` };
+    });
+    const failConds = [['Coverage on new code < 80%', 31], ['New critical issues > 0', 22], ['Duplication on new code > 3%', 14], ['Hotspots reviewed < 100%', 9]].map(([l, n]) => ({ l, n: String(n), w: (n / 31 * 100).toFixed(0) + '%' }));
+
+    const recent = [
+      ['running', 'inventory-service', 'feat/reservations', '3be71d0', 'reservations: hold stock for 15 min on cart add', 'Running rules · stage 6 of 9', '2:41', 'now', '64%'],
+      ['failed', 'payments-platform', 'main', '9f3c2a1', 'checkout: support split tender for gift cards', '+14 new issues · 2 critical', '4m 12s', '12m'],
+      ['passed', 'web-console', 'main', '77a0c4e', 'settings: migrate billing tab to new table', '−6 issues · coverage +0.4%', '2m 03s', '26m'],
+      ['failed', 'mobile-bff', 'main', 'c01d9e2', 'auth: accept tokens from legacy issuer', 'Security level 3 → 2', '1m 18s', '40m'],
+      ['passed', 'auth-gateway', 'release/1.8', 'a4d0f19', 'release: 1.8.3', 'No new issues', '48s', '1h'],
+      ['partial', 'data-pipeline', 'main', '5e2f8b4', 'dags: nightly ledger reconciliation', 'Coverage report missing for 2 modules', '3m 56s', '4h']
+    ].filter((r) => !mine || r[1] === 'payments-platform').map(([st, project, branch, sha, msg, note, dur, when, progress]) => {
+      const g = GATE[st];
+      return { project, branch, sha, msg, note, dur, when, progress: st === 'running' ? progress : '', g: g.g, bg: g.bg, c: g.c, statusL: g.l, nc: st === 'failed' ? 'var(--crit)' : st === 'partial' ? 'var(--warn)' : st === 'running' ? 'var(--info)' : 'var(--muted)' };
+    });
+
+    let drawer = null;
+    if (this.state.drawer && DRILL[this.state.drawer]) {
+      const D = DRILL[this.state.drawer], max = Math.max(...D.items.map((i) => i[3]));
+      drawer = { ...D, items: D.items.map(([comp, project, owner, v, files], idx) => ({
+        comp, project, owner, v: v + (D.unit || ''), w: (D.invert ? (100 - v) / 60 * 100 : v / max * 100).toFixed(0) + '%',
+        open: this.state.openItem === idx, bg: this.state.openItem === idx ? 'var(--panel-2)' : 'transparent',
+        toggle: () => this.setState((s) => ({ openItem: s.openItem === idx ? -1 : idx })),
+        files: files.map(([dir, base, fv, sv, issue, ln]) => ({ dir, base, v: fv, issue: issue || '', line: ln, sg: sv ? SEV[sv].g : '', sc: sv ? SEV[sv].c : '' }))
+      })) };
+    }
+    const depth = ['org', 'project', 'component', 'file', 'issue'].map((l, i) => ({ l, c: i <= 2 ? 'var(--accent)' : 'var(--pip-off)', fc: i === 2 ? 'var(--accent)' : 'var(--faint)' }));
+
+    return {
+      theme, accent: this.props.accent || 'teal', isDark: theme === 'dark', isLight: theme === 'light',
+      themeLabel: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+      toggleTheme: () => { const t = theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem('sonda-theme', t); } catch (e) {} this.setState({ theme: t }); },
+      nav, st: { live: ds === 'live', loading: ds === 'loading', empty: ds === 'empty', error: ds === 'error' }, skel: [1, 2, 3, 4, 5, 6],
+      scopes: [['all', 'All projects'], ['mine', 'My team']].map(([k, label]) => ({ label, on: this.state.scope === k, ...seg(this.state.scope === k), go: () => this.setState({ scope: k, hover: null }) })),
+      ranges: ['7d', '30d', '90d'].map((k) => ({ label: k, on: this.state.range === k, ...seg(this.state.range === k), go: () => this.setState({ range: k, hover: null }) })),
+      scopeName: mine ? '@checkout' : 'all projects',
+      rangeLong: this.state.range === '7d' ? 'vs 7 days ago' : this.state.range === '30d' ? 'vs 30 days ago' : 'vs 90 days ago',
+      focus, healthScore: String(hs), healthDelta: mine ? '−4' : '+6', healthBar, health, kpis,
+      bucket: this.state.range === '90d' ? 'week' : 'day',
+      flow, openLine, tip, flowStats, gridLines, barGap: fd.length > 20 ? '2px' : '8px', xLabels: xi.map((i) => fmt(fd[i].date)), clearHover: () => this.setState({ hover: null }),
+      sev, sevTotal: sevTot.toLocaleString(), waffle, projects: rows, gateDays, failConds, recent,
+      drawer, depth, closeDrawer: () => this.setState({ drawer: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

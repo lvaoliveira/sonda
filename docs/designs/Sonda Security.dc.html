@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Martian+Mono:wght@300;400;500&display=swap">
+<style>
+:root,[data-theme="dark"]{--bg:#0b0c0c;--panel:#101211;--panel-2:#151817;--hover:#1a1e1c;--line:#202523;--line-2:#2f3532;--text:#eceeed;--muted:#9ba39f;--faint:#6f7773;--accent:oklch(0.83 0.13 178);--accent-ink:#04191a;--accent-soft:color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);--ok:oklch(0.82 0.13 155);--warn:oklch(0.84 0.13 85);--crit:oklch(0.71 0.17 28);--info:oklch(0.77 0.10 250);--crit-soft:color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);--warn-soft:color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);--ok-soft:color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);--info-soft:color-mix(in oklch, oklch(0.77 0.10 250) 13%, transparent);--pip-off:#262b29;--shadow:0 24px 64px rgba(0,0,0,.55);color-scheme:dark}
+[data-theme="light"]{--bg:#f3f4f2;--panel:#ffffff;--panel-2:#f8f9f7;--hover:#eff1ee;--line:#e2e5e1;--line-2:#cfd4cf;--text:#111413;--muted:#56605b;--faint:#7a837e;--accent:oklch(0.52 0.10 182);--accent-ink:#ffffff;--accent-soft:color-mix(in oklch, oklch(0.52 0.10 182) 10%, transparent);--ok:oklch(0.52 0.12 155);--warn:oklch(0.58 0.12 70);--crit:oklch(0.55 0.19 28);--info:oklch(0.52 0.12 255);--crit-soft:color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);--warn-soft:color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);--ok-soft:color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);--info-soft:color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);--pip-off:#e3e6e2;--shadow:0 24px 64px rgba(20,30,25,.14);color-scheme:light}
+body{margin:0;background:#0b0c0c;font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:3px;text-decoration:none}
+a:hover{color:var(--text)}
+button,input,select{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Instrument Sans',system-ui,sans-serif;font-size:14px;line-height:1.5">
+<aside aria-label="Primary" style="width:228px;flex:none;display:flex;flex-direction:column;background:var(--bg);position:sticky;top:0;height:100vh">
+  <a href="Sonda%20Dashboard%20v3.dc.html" style="display:flex;align-items:center;gap:10px;height:60px;padding:0 18px;color:var(--text)">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 0 1 18 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".3"></path><path d="M7 9a5 5 0 0 1 10 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".65"></path><path d="M12 9v9" stroke="var(--accent)" stroke-width="1.6"></path><circle cx="12" cy="20" r="2.4" fill="var(--accent)"></circle></svg>
+    <span style="font-weight:600;font-size:17px;letter-spacing:-0.03em">sonda</span>
+  </a>
+  <div style="display:flex;align-items:center;gap:10px;margin:0 12px 10px;padding:8px 10px;background:var(--panel);border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700">AC</span>
+    <span style="display:flex;flex-direction:column;line-height:1.2;flex:1;min-width:0"><span style="font-weight:600;font-size:13px">acme-corp</span><span style="font-size:11px;color:var(--faint)">self-hosted · 312 projects</span></span>
+  </div>
+  <nav style="display:flex;flex-direction:column;gap:2px;padding:4px 12px;flex:1;overflow:auto">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <sc-if value="{{ n.heading }}" hint-placeholder-val="{{ false }}"><div style="padding:16px 10px 6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">{{ n.heading }}</div></sc-if>
+      <sc-if value="{{ n.label }}" hint-placeholder-val="{{ true }}">
+      <a href="{{ n.href }}" aria-current="{{ n.current }}" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;background:{{ n.bg }};color:{{ n.fg }};font-size:14px;font-weight:{{ n.w }}" style-hover="background:var(--hover);color:var(--text)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:{{ n.ic }}"><sc-for list="{{ n.paths }}" as="d" hint-placeholder-count="2"><path d="{{ d }}"></path></sc-for></svg>
+        <span style="flex:1">{{ n.label }}</span>
+        <sc-if value="{{ n.count }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ n.cc }}">{{ n.count }}</span></sc-if>
+      </a>
+      </sc-if>
+    </sc-for>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px;margin:12px;padding:10px;border-radius:8px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px">MO</span>
+    <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;flex:1"><span style="font-weight:600;font-size:13px">Mara Okafor</span><span style="font-size:11.5px;color:var(--faint)">@checkout</span></span>
+  </div>
+</aside>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 10px 10px 0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border-radius:14px;box-shadow:inset 0 0 0 1px var(--line)">
+  <header style="display:flex;align-items:center;gap:12px;height:56px;padding:0 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:5;border-radius:14px 14px 0 0">
+    <nav aria-label="Breadcrumb" style="display:flex;align-items:center;gap:8px;font-size:13.5px;flex:1;min-width:0;overflow:hidden;white-space:nowrap">
+      <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="2"><span style="display:flex;gap:8px;align-items:center;min-width:{{ c.minw }};flex:{{ c.flex }}"><sc-if value="{{ c.sep }}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="color:var(--line-2)">/</span></sc-if><a href="{{ c.href }}" style="color:{{ c.fg }};font-weight:{{ c.w }};font-family:{{ c.font }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ c.label }}</a></span></sc-for>
+    </nav>
+    <div style="display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:120px;height:34px;padding:0 12px;background:var(--bg);border-radius:8px;color:var(--faint);font-size:13px;box-shadow:inset 0 0 0 1px var(--line)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span style="flex:1;overflow:hidden;white-space:nowrap">Search or run a command</span><span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--hover);color:var(--muted)">⌘K</span></div>
+    <button onClick="{{ toggleTheme }}" aria-label="{{ themeLabel }}" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted);font-family:'Martian Mono',monospace;font-size:10.5px;box-shadow:inset 0 0 0 1px var(--line)" style-hover="color:var(--text)">{{ themeShort }}</button>
+  </header>
+  <main style="flex:1;padding:28px 24px 32px;display:flex;flex-direction:column;gap:20px;max-width:1560px;width:100%;box-sizing:border-box">
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap"><div style="display:flex;flex-direction:column;gap:6px"><h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.035em;line-height:1.1">Security</h1><div style="font-size:13.5px;color:var(--muted)">23 open vulnerabilities · 18 hotspots awaiting review · mapped to OWASP Top 10 2025 and CWE</div></div><a href="Sonda%20Issues.dc.html#cat=vuln" style="height:36px;display:inline-flex;align-items:center;padding:0 16px;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:13.5px">Triage vulnerabilities</a></div>
+    <section aria-label="Vulnerability summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line)">
+      <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="7"><a href="{{ k.href }}" style="display:flex;flex-direction:column;gap:6px;padding:16px 18px;background:var(--panel-2);color:var(--text)" style-hover="background:var(--hover)"><span style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)"><span aria-hidden="true" style="color:{{ k.c }};font-size:10px">{{ k.g }}</span>{{ k.label }}</span><span style="font-family:'Martian Mono',monospace;font-size:26px;font-weight:300;letter-spacing:-0.05em;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--faint)">{{ k.sub }}</span></a></sc-for>
+    </section>
+    <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;padding:0;overflow:hidden">
+      <div style="padding:16px 20px 4px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Fix these first</h2><span style="font-size:12.5px;color:var(--faint)">severity × reachable from a public entry point × exposure age</span></div></div>
+      <sc-for list="{{ findings }}" as="s" hint-placeholder-count="5">
+        <a href="{{ s.href }}" style="display:grid;grid-template-columns:36px minmax(0,2fr) minmax(0,1.5fr) 90px 90px;gap:16px;align-items:center;padding:13px 20px;border-top:1px solid var(--line);color:var(--text)" style-hover="background:var(--hover)">
+          <span style="font-family:'Martian Mono',monospace;font-size:18px;font-weight:300;color:var(--faint)">{{ s.n }}</span>
+          <span style="display:flex;flex-direction:column;gap:3px;min-width:0"><span style="font-weight:500;font-size:14px">{{ s.title }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ s.where }}</span></span>
+          <span style="display:flex;gap:8px;align-items:baseline;font-size:13px;min-width:0"><span aria-hidden="true" style="width:7px;height:7px;flex:none;border-radius:50%;background:{{ s.rc }};transform:translateY(-1px)"></span><span style="color:var(--muted);text-wrap:pretty">{{ s.reach }}</span></span>
+          <span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--muted)">{{ s.cwe }}</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:{{ s.sevC }}"><span aria-hidden="true" style="font-size:10px">{{ s.sevG }}</span>{{ s.sevL }}</span>
+        </a>
+      </sc-for>
+    </section>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:20px">
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:12px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Risk trend · 12 weeks</h2><span style="font-size:12.5px;color:var(--faint)">−18% weighted risk</span></div>
+        <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%;height:150px" aria-label="Weighted open risk falling from 142 to 116 over 12 weeks"><polyline points="{{ riskArea }}" fill="color-mix(in oklch, var(--crit) 10%, transparent)" stroke="none"></polyline><polyline points="{{ riskLine }}" fill="none" stroke="var(--crit)" stroke-width="1.6" vector-effect="non-scaling-stroke"></polyline><polyline points="{{ fixedLine }}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="1 4" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline></svg>
+        <div style="display:flex;gap:16px;font-size:12px;color:var(--muted)"><span style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:2px;background:var(--crit)"></span>Weighted open risk</span><span style="display:flex;align-items:center;gap:6px"><span style="width:14px;border-top:2px dotted var(--accent)"></span>Fixed per week</span></div>
+      </section>
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:8px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Affected projects</h2></div>
+        <sc-for list="{{ projs }}" as="p" hint-placeholder-count="5"><a href="Sonda%20Project.dc.html" style="display:grid;grid-template-columns:130px minmax(0,1fr) 26px;gap:12px;align-items:center;padding:4px 0;color:var(--text);font-size:13px" style-hover="color:var(--accent)"><span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ p.name }}</span><span style="display:flex;height:8px;gap:2px"><span style="width:{{ p.cw }};border-radius:2px;background:var(--crit)"></span><span style="width:{{ p.ow }};border-radius:2px;background:var(--warn);opacity:.7"></span></span><span style="font-family:'Martian Mono',monospace;font-size:11.5px;text-align:right">{{ p.n }}</span></a></sc-for>
+        <div style="display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px"><span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:var(--crit)"></span>Critical + high</span><span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:var(--warn);opacity:.7"></span>Medium + low</span></div>
+      </section>
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:10px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Remediation</h2></div>
+        <div aria-hidden="true" style="display:flex;height:10px;gap:2px;border-radius:3px;overflow:hidden"><sc-for list="{{ remed }}" as="r" hint-placeholder-count="4"><div style="width:{{ r.w }};background:{{ r.c }}"></div></sc-for></div>
+        <sc-for list="{{ remed }}" as="r" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:center;font-size:13px;padding:5px 0;border-top:1px solid var(--line)"><span style="width:8px;height:8px;border-radius:2px;background:{{ r.c }}"></span><span>{{ r.l }}</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px">{{ r.n }}</span></div></sc-for>
+        <span style="font-size:12.5px;color:var(--muted)">Median time to fix a critical: <span style="font-family:'Martian Mono',monospace;font-size:11.5px;color:var(--text)">4.2 days</span> · target 7</span>
+      </section>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:20px">
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">High-risk components</h2></div>
+        <sc-for list="{{ comps }}" as="c" hint-placeholder-count="5"><a href="{{ c.href }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto 64px;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--line);color:var(--text)" style-hover="color:var(--accent)"><span style="display:flex;flex-direction:column;min-width:0;line-height:1.35"><span style="font-family:'Martian Mono',monospace;font-size:11.5px">{{ c.path }}</span><span style="font-size:12.5px;color:var(--faint)">{{ c.why }}</span></span><span title="Security level {{ c.lv }} of 5" style="display:flex;align-items:flex-end;gap:2px;height:14px"><sc-for list="{{ c.pips }}" as="pp" hint-placeholder-count="5"><span style="width:3px;height:{{ pp.h }};border-radius:1px;background:{{ pp.c }}"></span></sc-for></span><span style="font-family:'Martian Mono',monospace;font-size:11px;text-align:right;color:var(--muted)">{{ c.n }} vulns</span></a></sc-for>
+      </section>
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Security hotspots</h2><span style="font-size:12.5px;color:var(--faint)">{{ hotNote }}</span></div>
+        <sc-for list="{{ hot }}" as="h" hint-placeholder-count="5">
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)">
+            <span style="display:flex;flex-direction:column;min-width:0;line-height:1.35"><span style="font-size:13.5px;font-weight:500">{{ h.cat }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ h.file }}</span></span>
+            <sc-if value="{{ h.open }}" hint-placeholder-val="{{ true }}"><span style="display:flex;gap:6px"><button onClick="{{ h.safe }}" style="height:28px;padding:0 11px;border:0;border-radius:7px;background:transparent;font-size:12.5px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">Safe</button><button onClick="{{ h.fix }}" style="height:28px;padding:0 11px;border:0;border-radius:7px;background:var(--crit-soft);color:var(--crit);font-size:12.5px;font-weight:600;cursor:pointer">Needs fix</button></span></sc-if>
+            <sc-if value="{{ h.done }}" hint-placeholder-val="{{ false }}"><button onClick="{{ h.reopen }}" style="border:0;background:transparent;padding:0;font-size:12.5px;color:{{ h.dc }};cursor:pointer">{{ h.dl }} · undo</button></sc-if>
+          </div>
+        </sc-for>
+      </section>
+    </div>
+</main>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;}}">
+
+const ICON = { overview: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'], projects: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'], components: ['m7.5 4.27 9 5.15', 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'], issues: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2'], security: ['M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'], analyses: ['M22 12h-4l-3 9L9 3l-3 9H2'], gates: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'm9 12 2 2 4-4'], rules: ['M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z', 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'], admin: ['M20 7h-9', 'M14 17H5', 'M17 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6', 'M7 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6'] };
+const NAVDEF = [['overview', 'Overview', 'Sonda Dashboard v3'], ['projects', 'Projects', 'Sonda Projects', '312'], ['components', 'Components', 'Sonda Component', '611'], ['issues', 'Issues', 'Sonda Issues', '1.3k'], ['security', 'Security', 'Sonda Security', '23', 1], ['analyses', 'Analyses', 'Sonda Analysis'], 0, ['gates', 'Quality gates', 'Sonda Gates'], ['rules', 'Rules', 'Sonda Rules'], ['admin', 'Administration', 'Sonda Admin']];
+const href = (f) => encodeURI(f) + '.dc.html';
+function shell(c, active, crumbs) {
+  let stored = null; try { stored = localStorage.getItem('sonda-theme'); } catch (e) {}
+  const theme = c.state.theme || stored || c.props.defaultTheme || 'dark';
+  return {
+    theme, themeShort: theme, themeLabel: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+    toggleTheme: () => { const t = theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem('sonda-theme', t); } catch (e) {} c.setState({ theme: t }); },
+    nav: NAVDEF.map((n) => !n ? { heading: 'Configure' } : { label: n[1], href: href(n[2]), paths: ICON[n[0]], count: n[3] || '', cc: n[4] ? 'var(--crit)' : 'var(--faint)', current: n[0] === active ? 'page' : undefined, bg: n[0] === active ? 'var(--panel)' : 'transparent', fg: n[0] === active ? 'var(--text)' : 'var(--muted)', w: n[0] === active ? 600 : 400, ic: n[0] === active ? 'var(--accent)' : 'currentColor' }),
+    crumbs: crumbs.map(([label, f, mono], i) => ({ flex: i === crumbs.length - 1 ? '0 1 auto' : '0 4 auto', minw: i === crumbs.length - 1 ? '0' : '4.5em', label, href: f ? href(f) : '#', sep: i > 0, fg: i === crumbs.length - 1 ? 'var(--text)' : 'var(--faint)', w: i === crumbs.length - 1 ? 600 : 400, font: mono ? "'Martian Mono',monospace" : 'inherit' }))
+  };
+}
+const LVL = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+const lvlColor = (n) => n >= 4 ? 'var(--ok)' : n === 3 ? 'var(--warn)' : 'var(--crit)';
+const pips = (n, h0 = 4) => [0, 1, 2, 3, 4].map((i) => ({ h: (h0 + i * 2) + 'px', c: i < n ? lvlColor(n) : 'var(--pip-off)' }));
+const GATE = { passed: { l: 'Passing', c: 'var(--ok)', dot: 'var(--ok)', r: '50%', ring: 'none' }, failed: { l: 'Blocking', c: 'var(--crit)', dot: 'var(--crit)', r: '2px', ring: '0 0 0 3px var(--crit-soft)' }, running: { l: 'Sounding', c: 'var(--info)', dot: 'transparent', r: '50%', ring: 'inset 0 0 0 2px var(--info)' }, partial: { l: 'Partial', c: 'var(--warn)', dot: 'var(--warn)', r: '1px', ring: 'none' } };
+const seg = (on) => ({ bg: on ? 'var(--panel)' : 'transparent', fg: on ? 'var(--text)' : 'var(--muted)', sh: on ? 'inset 0 0 0 1px var(--line-2)' : 'none' });
+
+
+function line(arr, h, pad) { h = h || 40; pad = pad || 3; var mn = Math.min.apply(null, arr), mx = Math.max.apply(null, arr), r = mx - mn || 1; return arr.map(function (v, i) { return (i / (arr.length - 1) * 100).toFixed(2) + ',' + (h - pad - (v - mn) / r * (h - pad * 2)).toFixed(2); }).join(' '); }
+class Component extends DCLogic {
+  state = { theme: null, hot: {} };
+  renderVals() {
+    const self = this, hs = this.state.hot;
+    const I = href('Sonda Issues');
+    const kpis = [['▲', 'var(--crit)', 'Critical', '5', '3 reachable publicly', I + '#cat=vuln'], ['◆', 'var(--crit)', 'High', '9', '+2 this week', I + '#cat=vuln'], ['●', 'var(--warn)', 'Medium', '9', '−4 this week', I + '#cat=vuln'], ['○', 'var(--faint)', 'Low', '0', '', I + '#cat=vuln'], ['◇', 'var(--info)', 'Hotspots to review', String(18 - Object.keys(hs).length), '72% reviewed on main', '#hot'], ['', 'var(--muted)', 'Fixed · 30 days', '31', 'median 4.2 days', I], ['', 'var(--muted)', 'Secrets exposed', '1', 'billing-service', I + '#comp=billing'], ['', 'var(--muted)', 'Dependencies with CVEs', '12', '3 fixable by upgrade', href('Sonda Projects')]].map(function (k) { return { g: k[0], c: k[1], label: k[2], value: k[3], sub: k[4], href: k[5] }; });
+    const findings = [['SQL injection in order lookup', 'payments-platform › services/checkout-api › internal/orders/repo.go:88', 'Reachable from POST /v1/orders (guest checkout)', 'CWE-89', 'critical', 'var(--crit)', 'comp=checkout&cat=vuln'], ['Live Stripe secret committed', 'billing-service › config/StripeConfig.java:14', 'Key valid · in git history since 3h ago', 'CWE-798', 'blocker', 'var(--crit)', 'comp=billing'], ['JWT accepted without signature check', 'mobile-bff › src/auth/jwt.ts:27', 'Every authenticated route in the app', 'CWE-347', 'critical', 'var(--crit)', 'comp=mobile'], ['Stored XSS in promo banner', 'payments-platform › packages/web-checkout › PromoBanner.tsx:31', 'Rendered on /checkout; source is CMS-editable', 'CWE-79', 'critical', 'var(--warn)', 'comp=webco'], ['Unsafe YAML deserialization', 'payments-platform › services/fraud-scoring › scoring/config.py:23', 'Internal only · bucket writable by 3 teams', 'CWE-502', 'critical', 'var(--faint)', 'comp=fraud']].map(function (f, i) { const SV = { blocker: ['■', 'Blocker'], critical: ['▲', 'Critical'] }[f[4]]; return { n: String(i + 1).padStart(2, '0'), title: f[0], where: f[1], reach: f[2], cwe: f[3], sevG: SV[0], sevL: SV[1], sevC: 'var(--crit)', rc: f[5], href: I + '#' + f[6] }; });
+    const risk = [142, 140, 144, 139, 136, 137, 131, 128, 125, 122, 119, 116], fixed = [6, 8, 5, 9, 11, 7, 12, 10, 9, 13, 11, 12];
+    const projs = [['billing-service', 4, 2], ['payments-platform', 4, 3], ['mobile-bff', 3, 1], ['ml-feature-store', 1, 2], ['data-pipeline', 0, 2]].map(function (p) { return { name: p[0], n: String(p[1] + p[2]), cw: (p[1] / 7 * 100) + '%', ow: (p[2] / 7 * 100) + '%' }; });
+    const remed = [['Open', 15, 'var(--crit)'], ['In progress', 8, 'var(--warn)'], ['Fixed · 30d', 31, 'var(--ok)'], ['Accepted risk', 4, 'var(--faint)']].map(function (r) { return { l: r[0], n: String(r[1]), c: r[2], w: (r[1] / 58 * 100).toFixed(1) + '%' }; });
+    const comps = [['services/checkout-api', 'SQL built from input · 2 new this week', 1, 5, 'checkout'], ['billing-service', 'Committed secret · XXE in PDF renderer', 1, 4, ''], ['auth/session · mobile-bff', 'Token verification bypass', 2, 4, ''], ['packages/web-checkout', 'Unsanitized HTML on checkout page', 2, 3, 'webco'], ['services/fraud-scoring', 'Unsafe deserialization', 2, 2, 'fraud']].map(function (c) { return { path: c[0], why: c[1], lv: c[2], pips: pips(c[2]), n: c[3], href: c[4] ? href('Sonda Component') + '#' + c[4] : href('Sonda Projects') }; });
+    const HOT = [['h1', 'Weak hash: MD5 used for idempotency keys', 'services/checkout-api/internal/http/idempotency.go:31'], ['h2', 'Permissive CORS: Access-Control-Allow-Origin *', 'mobile-bff/src/server.ts:18'], ['h3', 'Pseudo-random generator for reset tokens', 'auth-gateway/internal/reset/token.go:12'], ['h4', 'Disabled TLS verification in test helper', 'data-pipeline/dags/utils/http.py:9'], ['h5', 'Regex with nested quantifier on user input', 'web-console/src/lib/search.ts:44']];
+    const hot = HOT.map(function (h) { const st = hs[h[0]]; return { cat: h[1], file: h[2], open: !st, done: !!st, dl: st === 'safe' ? 'Marked safe' : 'Sent to issues', dc: st === 'safe' ? 'var(--ok)' : 'var(--crit)', safe: function () { self.setState({ hot: Object.assign({}, hs, { [h[0]]: 'safe' }) }); }, fix: function () { self.setState({ hot: Object.assign({}, hs, { [h[0]]: 'fix' }) }); }, reopen: function () { const n = Object.assign({}, hs); delete n[h[0]]; self.setState({ hot: n }); } }; });
+    return Object.assign(shell(this, 'security', [['acme-corp', 'Sonda Dashboard v3'], ['Security', 'Sonda Security']]), { kpis: kpis, findings: findings, riskLine: line(risk), riskArea: '0,40 ' + line(risk) + ' 100,40', fixedLine: line(fixed.map(function (v) { return v + 120; }).concat([]), 40, 3), projs: projs, remed: remed, comps: comps, hot: hot, hotNote: (18 - Object.keys(hs).length) + ' to review · 5 shown' });
+  }
+}
+</script>
+</body>
+</html>

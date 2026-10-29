@@ -40,6 +40,15 @@ The `architecture` tests in `src/lib.rs` enforce this.
 | | `config.rs` | Configuration types, parsing and validation |
 | Shared | `model.rs`, `lang.rs` | Plain data (`Issue`, `Metric`, `Condition`, ...), language table |
 
+## Web app
+
+`web/` is a separate React/TypeScript app (see [web/README.md](web/README.md)).
+It depends only on the API contract in `web/src/api/types.ts`, which a mock
+adapter serves today. A future `sonda server` will implement the same
+contract by storing CLI reports, so the app needs no changes when real data
+arrives. The contract's names follow `src/model.rs` (`code_smell`,
+`vulnerability`, severity levels).
+
 ## Cross-cutting concerns
 
 **Untrusted input.** Everything in the analyzed repository is hostile until

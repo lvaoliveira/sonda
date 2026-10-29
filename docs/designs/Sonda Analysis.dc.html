@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Martian+Mono:wght@300;400;500&display=swap">
+<style>
+:root,[data-theme="dark"]{--bg:#0b0c0c;--panel:#101211;--panel-2:#151817;--hover:#1a1e1c;--line:#202523;--line-2:#2f3532;--text:#eceeed;--muted:#9ba39f;--faint:#6f7773;--accent:oklch(0.83 0.13 178);--accent-ink:#04191a;--accent-soft:color-mix(in oklch, oklch(0.83 0.13 178) 14%, transparent);--ok:oklch(0.82 0.13 155);--warn:oklch(0.84 0.13 85);--crit:oklch(0.71 0.17 28);--info:oklch(0.77 0.10 250);--crit-soft:color-mix(in oklch, oklch(0.71 0.17 28) 15%, transparent);--warn-soft:color-mix(in oklch, oklch(0.84 0.13 85) 13%, transparent);--ok-soft:color-mix(in oklch, oklch(0.82 0.13 155) 12%, transparent);--info-soft:color-mix(in oklch, oklch(0.77 0.10 250) 13%, transparent);--pip-off:#262b29;--shadow:0 24px 64px rgba(0,0,0,.55);color-scheme:dark}
+[data-theme="light"]{--bg:#f3f4f2;--panel:#ffffff;--panel-2:#f8f9f7;--hover:#eff1ee;--line:#e2e5e1;--line-2:#cfd4cf;--text:#111413;--muted:#56605b;--faint:#7a837e;--accent:oklch(0.52 0.10 182);--accent-ink:#ffffff;--accent-soft:color-mix(in oklch, oklch(0.52 0.10 182) 10%, transparent);--ok:oklch(0.52 0.12 155);--warn:oklch(0.58 0.12 70);--crit:oklch(0.55 0.19 28);--info:oklch(0.52 0.12 255);--crit-soft:color-mix(in oklch, oklch(0.55 0.19 28) 9%, transparent);--warn-soft:color-mix(in oklch, oklch(0.62 0.13 75) 12%, transparent);--ok-soft:color-mix(in oklch, oklch(0.52 0.12 155) 10%, transparent);--info-soft:color-mix(in oklch, oklch(0.52 0.12 255) 9%, transparent);--pip-off:#e3e6e2;--shadow:0 24px 64px rgba(20,30,25,.14);color-scheme:light}
+body{margin:0;background:#0b0c0c;font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:3px;text-decoration:none}
+a:hover{color:var(--text)}
+button,input,select{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:'Instrument Sans',system-ui,sans-serif;font-size:14px;line-height:1.5">
+<aside aria-label="Primary" style="width:228px;flex:none;display:flex;flex-direction:column;background:var(--bg);position:sticky;top:0;height:100vh">
+  <a href="Sonda%20Dashboard%20v3.dc.html" style="display:flex;align-items:center;gap:10px;height:60px;padding:0 18px;color:var(--text)">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 0 1 18 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".3"></path><path d="M7 9a5 5 0 0 1 10 0" fill="none" stroke="var(--text)" stroke-width="1.6" opacity=".65"></path><path d="M12 9v9" stroke="var(--accent)" stroke-width="1.6"></path><circle cx="12" cy="20" r="2.4" fill="var(--accent)"></circle></svg>
+    <span style="font-weight:600;font-size:17px;letter-spacing:-0.03em">sonda</span>
+  </a>
+  <div style="display:flex;align-items:center;gap:10px;margin:0 12px 10px;padding:8px 10px;background:var(--panel);border-radius:8px;box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700">AC</span>
+    <span style="display:flex;flex-direction:column;line-height:1.2;flex:1;min-width:0"><span style="font-weight:600;font-size:13px">acme-corp</span><span style="font-size:11px;color:var(--faint)">self-hosted · 312 projects</span></span>
+  </div>
+  <nav style="display:flex;flex-direction:column;gap:2px;padding:4px 12px;flex:1;overflow:auto">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <sc-if value="{{ n.heading }}" hint-placeholder-val="{{ false }}"><div style="padding:16px 10px 6px;font-family:'Martian Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">{{ n.heading }}</div></sc-if>
+      <sc-if value="{{ n.label }}" hint-placeholder-val="{{ true }}">
+      <a href="{{ n.href }}" aria-current="{{ n.current }}" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;background:{{ n.bg }};color:{{ n.fg }};font-size:14px;font-weight:{{ n.w }}" style-hover="background:var(--hover);color:var(--text)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:{{ n.ic }}"><sc-for list="{{ n.paths }}" as="d" hint-placeholder-count="2"><path d="{{ d }}"></path></sc-for></svg>
+        <span style="flex:1">{{ n.label }}</span>
+        <sc-if value="{{ n.count }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:{{ n.cc }}">{{ n.count }}</span></sc-if>
+      </a>
+      </sc-if>
+    </sc-for>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px;margin:12px;padding:10px;border-radius:8px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">
+    <span style="display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11px">MO</span>
+    <span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;flex:1"><span style="font-weight:600;font-size:13px">Mara Okafor</span><span style="font-size:11.5px;color:var(--faint)">@checkout</span></span>
+  </div>
+</aside>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:10px 10px 10px 0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border-radius:14px;box-shadow:inset 0 0 0 1px var(--line)">
+  <header style="display:flex;align-items:center;gap:12px;height:56px;padding:0 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:5;border-radius:14px 14px 0 0">
+    <nav aria-label="Breadcrumb" style="display:flex;align-items:center;gap:8px;font-size:13.5px;flex:1;min-width:0;overflow:hidden;white-space:nowrap">
+      <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="2"><span style="display:flex;gap:8px;align-items:center;min-width:{{ c.minw }};flex:{{ c.flex }}"><sc-if value="{{ c.sep }}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="color:var(--line-2)">/</span></sc-if><a href="{{ c.href }}" style="color:{{ c.fg }};font-weight:{{ c.w }};font-family:{{ c.font }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ c.label }}</a></span></sc-for>
+    </nav>
+    <div style="display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:120px;height:34px;padding:0 12px;background:var(--bg);border-radius:8px;color:var(--faint);font-size:13px;box-shadow:inset 0 0 0 1px var(--line)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span style="flex:1;overflow:hidden;white-space:nowrap">Search or run a command</span><span style="font-family:'Martian Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--hover);color:var(--muted)">⌘K</span></div>
+    <button onClick="{{ toggleTheme }}" aria-label="{{ themeLabel }}" style="height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;cursor:pointer;color:var(--muted);font-family:'Martian Mono',monospace;font-size:10.5px;box-shadow:inset 0 0 0 1px var(--line)" style-hover="color:var(--text)">{{ themeShort }}</button>
+  </header>
+  <main style="flex:1;padding:28px 24px 32px;display:flex;flex-direction:column;gap:20px;max-width:1560px;width:100%;box-sizing:border-box">
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:stretch">
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+        <span style="font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);color:var(--accent)">Analysis · payments-platform</span>
+        <h1 style="margin:0;font-size:26px;font-weight:600;letter-spacing:-0.03em;line-height:1.2;text-wrap:pretty">checkout: support split tender for gift cards</h1>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);align-items:center"><span style="font-family:'Martian Mono',monospace;font-size:11.5px;color:var(--text)">9f3c2a1e7b04</span><span style="font-family:'Martian Mono',monospace;font-size:11.5px">main</span><span>Mara Okafor</span><span>Oct 29, 2026 · 09:41 UTC</span><span>sonda-cli 0.9.2 · GitHub Actions #8812</span></div>
+      </div>
+      <a href="Sonda%20Project.dc.html" style="display:flex;flex-direction:column;justify-content:center;gap:4px;min-width:220px;padding:14px 18px;border-radius:12px;background:var(--crit-soft);color:var(--text);box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--crit) 35%, transparent)"><span style="font-family:'Martian Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);color:var(--crit)">Result</span><span style="display:flex;align-items:center;gap:8px;font-size:20px;font-weight:600"><span aria-hidden="true" style="width:10px;height:10px;border-radius:2px;background:var(--crit)"></span>Gate blocking</span><span style="font-size:12.5px;color:var(--muted)">Completed with 2 warnings</span></a>
+    </div>
+    <section aria-label="Summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--line);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line)">
+      <sc-for list="{{ stats }}" as="s" hint-placeholder-count="6"><a href="{{ s.href }}" style="display:flex;flex-direction:column;gap:5px;padding:14px 16px;background:var(--panel-2);color:var(--text)" style-hover="background:var(--hover)"><span style="font-size:12.5px;color:var(--muted)">{{ s.k }}</span><span style="font-family:'Martian Mono',monospace;font-size:22px;font-weight:300;letter-spacing:-0.05em;color:{{ s.c }}">{{ s.v }}</span><span style="font-size:12px;color:var(--faint)">{{ s.sub }}</span></a></sc-for>
+    </section>
+    <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Stages</h2><span style="font-size:12.5px;color:var(--faint)"><span style="font-family:'Martian Mono',monospace">0:00 → 4:12</span> · click a stage to filter the log</span></div>
+      <div style="display:flex;flex-direction:column">
+        <sc-for list="{{ stages }}" as="s" hint-placeholder-count="9">
+          <button onClick="{{ s.go }}" aria-pressed="{{ s.on }}" style="display:grid;grid-template-columns:22px minmax(150px,240px) minmax(0,1fr) 56px;gap:14px;align-items:center;padding:9px 8px;margin:0 -8px;border:0;border-radius:8px;background:{{ s.bg }};text-align:left;cursor:pointer;font-size:13.5px" style-hover="background:var(--hover)">
+            <span role="img" aria-label="{{ s.statusL }}" style="display:grid;place-items:center;width:20px;height:20px;border-radius:6px;font-size:10px;font-weight:700;background:{{ s.ibg }};color:{{ s.ifg }}">{{ s.ig }}</span>
+            <span style="display:flex;flex-direction:column;line-height:1.3"><span style="font-weight:500">{{ s.name }}</span><span style="font-size:12px;color:var(--faint)">{{ s.detail }}</span></span>
+            <span style="position:relative;height:10px;border-radius:5px;background:var(--pip-off)"><span style="position:absolute;top:0;bottom:0;left:{{ s.left }};width:{{ s.width }};border-radius:5px;background:{{ s.bar }}"></span></span>
+            <span style="font-family:'Martian Mono',monospace;font-size:11px;text-align:right;color:var(--muted)">{{ s.dur }}</span>
+          </button>
+        </sc-for>
+      </div>
+    </section>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:20px">
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:10px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Warnings · partial results</h2></div>
+        <sc-for list="{{ warns }}" as="w" hint-placeholder-count="2"><div style="display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;padding:12px 14px;border-radius:10px;background:var(--warn-soft)"><span aria-hidden="true" style="color:var(--warn);font-size:11px;padding-top:2px">▲</span><span style="display:flex;flex-direction:column;gap:4px"><span style="font-size:13.5px;font-weight:500;text-wrap:pretty">{{ w.title }}</span><span style="font-size:13px;color:var(--muted);text-wrap:pretty">{{ w.body }}</span><span style="font-family:'Martian Mono',monospace;font-size:10.5px;color:var(--faint)">{{ w.ref }}</span></span></div></sc-for>
+        <div style="display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;padding:12px 14px;border-radius:10px;background:var(--info-soft)"><span aria-hidden="true" style="color:var(--info);font-size:11px;padding-top:2px">◌</span><span style="display:flex;flex-direction:column;gap:4px"><span style="font-size:13.5px;font-weight:500">Re-run only the failed parts</span><span style="font-size:13px;color:var(--muted)">Upload the missing coverage report for packages/sdk-js and Sonda will re-evaluate the gate without a full scan.</span><span style="display:flex;gap:8px;margin-top:4px"><button style="height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--text);color:var(--bg);font-size:12.5px;font-weight:600;cursor:pointer">Upload lcov.info</button><button style="height:28px;padding:0 12px;border:0;border-radius:7px;background:transparent;font-size:12.5px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--line-2)">Copy CLI command</button></span></span></div>
+      </section>
+      <section style="display:flex;flex-direction:column;padding:18px 20px;background:var(--panel-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);min-width:0;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em">Log · {{ logStage }}</h2><sc-if value="{{ filtered }}" hint-placeholder-val="{{ false }}"><button onClick="{{ allLogs }}" style="border:0;background:transparent;padding:0;font-size:12.5px;color:var(--accent);cursor:pointer">Show all</button></sc-if></div>
+        <pre aria-label="Execution log" style="margin:0;padding:14px 16px;border-radius:10px;background:var(--bg);font-family:'Martian Mono',monospace;font-size:10.5px;line-height:1.9;overflow:auto;max-height:360px;box-shadow:inset 0 0 0 1px var(--line)"><sc-for list="{{ logs }}" as="l" hint-placeholder-count="12"><span style="display:block;color:{{ l.c }}"><span style="color:var(--faint)">{{ l.t }}</span>  <span style="color:var(--faint)">{{ l.lv }}</span>  {{ l.m }}</span></sc-for></pre>
+      </section>
+    </div>
+</main>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;}}">
+
+const ICON = { overview: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'], projects: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'], components: ['m7.5 4.27 9 5.15', 'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'], issues: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2'], security: ['M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'], analyses: ['M22 12h-4l-3 9L9 3l-3 9H2'], gates: ['M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20', 'm9 12 2 2 4-4'], rules: ['M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z', 'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'], admin: ['M20 7h-9', 'M14 17H5', 'M17 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6', 'M7 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6'] };
+const NAVDEF = [['overview', 'Overview', 'Sonda Dashboard v3'], ['projects', 'Projects', 'Sonda Projects', '312'], ['components', 'Components', 'Sonda Component', '611'], ['issues', 'Issues', 'Sonda Issues', '1.3k'], ['security', 'Security', 'Sonda Security', '23', 1], ['analyses', 'Analyses', 'Sonda Analysis'], 0, ['gates', 'Quality gates', 'Sonda Gates'], ['rules', 'Rules', 'Sonda Rules'], ['admin', 'Administration', 'Sonda Admin']];
+const href = (f) => encodeURI(f) + '.dc.html';
+function shell(c, active, crumbs) {
+  let stored = null; try { stored = localStorage.getItem('sonda-theme'); } catch (e) {}
+  const theme = c.state.theme || stored || c.props.defaultTheme || 'dark';
+  return {
+    theme, themeShort: theme, themeLabel: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+    toggleTheme: () => { const t = theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem('sonda-theme', t); } catch (e) {} c.setState({ theme: t }); },
+    nav: NAVDEF.map((n) => !n ? { heading: 'Configure' } : { label: n[1], href: href(n[2]), paths: ICON[n[0]], count: n[3] || '', cc: n[4] ? 'var(--crit)' : 'var(--faint)', current: n[0] === active ? 'page' : undefined, bg: n[0] === active ? 'var(--panel)' : 'transparent', fg: n[0] === active ? 'var(--text)' : 'var(--muted)', w: n[0] === active ? 600 : 400, ic: n[0] === active ? 'var(--accent)' : 'currentColor' }),
+    crumbs: crumbs.map(([label, f, mono], i) => ({ flex: i === crumbs.length - 1 ? '0 1 auto' : '0 4 auto', minw: i === crumbs.length - 1 ? '0' : '4.5em', label, href: f ? href(f) : '#', sep: i > 0, fg: i === crumbs.length - 1 ? 'var(--text)' : 'var(--faint)', w: i === crumbs.length - 1 ? 600 : 400, font: mono ? "'Martian Mono',monospace" : 'inherit' }))
+  };
+}
+const LVL = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+const lvlColor = (n) => n >= 4 ? 'var(--ok)' : n === 3 ? 'var(--warn)' : 'var(--crit)';
+const pips = (n, h0 = 4) => [0, 1, 2, 3, 4].map((i) => ({ h: (h0 + i * 2) + 'px', c: i < n ? lvlColor(n) : 'var(--pip-off)' }));
+const GATE = { passed: { l: 'Passing', c: 'var(--ok)', dot: 'var(--ok)', r: '50%', ring: 'none' }, failed: { l: 'Blocking', c: 'var(--crit)', dot: 'var(--crit)', r: '2px', ring: '0 0 0 3px var(--crit-soft)' }, running: { l: 'Sounding', c: 'var(--info)', dot: 'transparent', r: '50%', ring: 'inset 0 0 0 2px var(--info)' }, partial: { l: 'Partial', c: 'var(--warn)', dot: 'var(--warn)', r: '1px', ring: 'none' } };
+const seg = (on) => ({ bg: on ? 'var(--panel)' : 'transparent', fg: on ? 'var(--text)' : 'var(--muted)', sh: on ? 'inset 0 0 0 1px var(--line-2)' : 'none' });
+
+const ST = [["Fetch & checkout","shallow clone, 3,914 files",0,6,"ok"],["Detect components","7 from go.work, Cargo, pnpm, CODEOWNERS",6,3,"ok"],["Parse sources","Go · Rust · TypeScript · Python",9,81,"warn"],["Build symbol index","412k lines · 61k symbols",90,38,"ok"],["Run rules","1,284 rules · 8 workers",128,94,"ok"],["Import coverage","6 of 7 reports found",222,11,"warn"],["Compute duplication","cross-language, 100-token window",233,12,"ok"],["Evaluate gates","project + 7 component gates",245,2,"fail"],["Publish results","uploaded 2.1 MB to sonda-api",247,5,"ok"]];
+const LOGS = [[0,"00:00.0","INFO","sonda-cli 0.9.2 (rustc 1.91.0) · org acme-corp · project payments-platform"],[0,"00:01.2","INFO","git: fetched 9f3c2a1e7b04 (main) depth=50"],[1,"00:06.4","INFO","components: go.work → services/checkout-api, libs/proto"],[1,"00:07.1","INFO","components: Cargo workspace → services/ledger, libs/money"],[1,"00:08.0","INFO","components: pnpm → packages/web-checkout, packages/sdk-js · CODEOWNERS → services/fraud-scoring"],[2,"00:31.7","INFO","parse: go 1,102 files · rust 488 · typescript 1,871 · python 451"],[2,"01:28.3","WARN","parse: services/fraud-scoring/notebooks/explore.py:212 — unsupported syntax (match on dataclass pattern), file skipped"],[2,"01:29.9","WARN","parse: services/fraud-scoring/notebooks/report.py — same, file skipped"],[3,"02:08.0","INFO","index: 61,204 symbols · 9,318 cross-component references"],[4,"03:00.2","INFO","rules: 1,284 active · 8 workers · 14 new issues · 6 resolved"],[4,"03:41.6","INFO","rules: taint go/sql-string-concat → POST /v1/orders → Repo.FindByCustomer"],[5,"03:43.1","INFO","coverage: imported coverage.out (go), lcov (rust), coverage.xml (python), lcov (web-checkout)"],[5,"03:52.8","WARN","coverage: packages/sdk-js/coverage/lcov.info not found — carried over from 3be71d0"],[6,"04:04.9","INFO","duplication: 11.9k duplicated lines (2.9%) · new code 3.9%"],[7,"04:05.4","ERROR","gate payments-strict: services/checkout-api FAILED (security on new code 1/5, coverage 54.0%)"],[7,"04:05.6","ERROR","gate sonda-way: services/fraud-scoring FAILED (coverage on new code 22.0%)"],[8,"04:12.0","INFO","published analysis 01JB7P9W · https://sonda.acme.internal/a/01JB7P9W"]];
+
+class Component extends DCLogic {
+  state = { theme: null, stage: null };
+  renderVals() {
+    const self = this, s = this.state, T = 252;
+    const fmt = function (sec) { return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
+    const IC = { ok: ['✓', 'var(--ok-soft)', 'var(--ok)', 'var(--ok)', 'Completed'], warn: ['!', 'var(--warn-soft)', 'var(--warn)', 'var(--warn)', 'Completed with warnings'], fail: ['✕', 'var(--crit-soft)', 'var(--crit)', 'var(--crit)', 'Gate failed'] };
+    const stages = ST.map(function (x, i) { const ic = IC[x[4]], on = s.stage === i; return { name: x[0], detail: x[1], left: (x[2] / T * 100).toFixed(2) + '%', width: Math.max(x[3] / T * 100, 0.8).toFixed(2) + '%', dur: x[3] >= 60 ? fmt(x[3]) : x[3] + 's', ig: ic[0], ibg: ic[1], ifg: ic[2], bar: x[4] === 'ok' ? 'color-mix(in oklch, var(--accent) 70%, transparent)' : ic[3], statusL: ic[4], on: on, bg: on ? 'var(--hover)' : 'transparent', go: function () { self.setState({ stage: on ? null : i }); } }; });
+    const LC = { INFO: 'var(--text)', WARN: 'var(--warn)', ERROR: 'var(--crit)' };
+    const logs = LOGS.filter(function (l) { return s.stage == null || l[0] === s.stage; }).map(function (l) { return { t: l[1], lv: l[2].padEnd(5, ' '), m: l[3], c: LC[l[2]] }; });
+    const I = href('Sonda Issues');
+    return Object.assign(shell(this, 'analyses', [['acme-corp', 'Sonda Dashboard v3'], ['payments-platform', 'Sonda Project'], ['Analysis 9f3c2a1', 'Sonda Analysis', true]]), {
+      stats: [['Duration', '4m 12s', 'p50 for this repo 3m 40s', 'var(--text)', '#'], ['Files analyzed', '3,912', '2 skipped', 'var(--text)', '#'], ['New issues', '+14', '2 critical · 5 major', 'var(--crit)', I + '#new'], ['Resolved', '6', 'since previous analysis', 'var(--ok)', I], ['Components', '7', '3 blocking their gate', 'var(--text)', href('Sonda Component')], ['Warnings', '2', 'partial coverage, parse', 'var(--warn)', '#']].map(function (x) { return { k: x[0], v: x[1], sub: x[2], c: x[3], href: x[4] }; }),
+      stages: stages, logs: logs, logStage: s.stage == null ? 'all stages' : ST[s.stage][0], filtered: s.stage != null, allLogs: function () { self.setState({ stage: null }); },
+      warns: [{ title: 'Coverage report missing for packages/sdk-js', body: 'lcov.info was not found at the configured path. Coverage for this component was carried over from the previous analysis (3be71d0), so its gate result may be stale.', ref: 'sonda.toml › [component.sdk-js] coverage = "coverage/lcov.info"' }, { title: '2 files skipped in services/fraud-scoring', body: 'The Python parser does not yet support match statements with dataclass patterns. Both files are notebooks and excluded from the gate.', ref: 'notebooks/explore.py · notebooks/report.py' }]
+    });
+  }
+}
+</script>
+</body>
+</html>
