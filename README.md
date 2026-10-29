@@ -53,6 +53,8 @@ sonda scan . --format json --only-new     # list only issues on new code
 sonda rules                               # list rules
 sonda init                                # write a default sonda.toml
 sonda -v scan .                           # log progress to stderr (-vv, -vvv for more)
+sonda scan . --jobs 4                     # limit parallelism (default: every CPU)
+sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
 ```
 
 Without `--new-code`, the whole project counts as new code.

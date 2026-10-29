@@ -14,6 +14,7 @@ pub(crate) struct Token {
     pub(crate) line: usize,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) struct FileAnalysis {
     pub(crate) path: String,
     pub(crate) lang: Lang,
@@ -34,6 +35,8 @@ pub(crate) enum FileError {
     QueryTimeout,
     #[error("grammar is incompatible with the tree-sitter runtime: {0}")]
     Grammar(#[from] tree_sitter::LanguageError),
+    #[error("{0}")]
+    Rules(String),
 }
 
 /// Analyzes one file. Parsing and query matching stop with an error once
@@ -164,7 +167,7 @@ fn run_queries(
         timed_out.set(flow.is_break());
         flow
     };
-    for cq in rules.queries(lang) {
+    for cq in rules.queries(lang).map_err(FileError::Rules)? {
         let active = &rules.active[cq.active];
         let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
         let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
@@ -301,9 +304,9 @@ fn scan_tokens(
     }
 }
 
-/// Consistency checks on an analysis result, shared by the property tests
-/// and the fuzz targets: every reported position lies inside the file.
-#[cfg(any(test, feature = "fuzzing"))]
+/// Consistency checks on an analysis result: every reported position lies
+/// inside the file. Applied to results from worker processes (which are not
+/// trusted), and used by the property tests and fuzz targets.
 pub(crate) fn check_invariants(a: &FileAnalysis) -> Result<(), String> {
     let lines = a.metrics.lines.max(1);
     let inside = |l: usize| l >= 1 && l <= lines;

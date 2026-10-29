@@ -19,7 +19,7 @@ module visibility and fitness tests. Dependencies only point down:
 |---|---|---|
 | Interface | `main.rs` (CLI), `report/` | stdout/stderr, output file |
 | Application | `lib.rs`: `run`, `load_config`, `Outcome` | reads the config file |
-| Infrastructure | `scanner` (walk and read files, load coverage), `git` | yes |
+| Infrastructure | `scanner` (walk and read files, load coverage), `git`, `worker` (analysis processes, ADR-0003) | yes |
 | Domain | `project`, `measures`, `gate`, `analysis`, `duplication`, `rules`, `newcode`, `coverage`, `config` | **no** |
 | Shared types | `model`, `lang` | no, and they import nothing from the crate |
 

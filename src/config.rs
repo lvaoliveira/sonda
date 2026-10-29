@@ -3,7 +3,7 @@
 
 use crate::error::Error;
 use crate::model::{Condition, Metric, Op, Severity};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const FILE_NAME: &str = "sonda.toml";
@@ -63,7 +63,7 @@ op = "gt"
 threshold = 3
 "#;
 
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub scan: ScanConfig,
@@ -73,7 +73,7 @@ pub struct Config {
     pub gate: GateConfig,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScanConfig {
     pub exclude: Vec<String>,
@@ -101,14 +101,14 @@ impl Default for ScanConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RulesConfig {
     pub disabled: Vec<String>,
     pub severity: HashMap<String, Severity>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
     pub cognitive_complexity: u32,
@@ -126,7 +126,7 @@ impl Default for Thresholds {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DuplicationConfig {
     pub min_tokens: usize,
@@ -142,7 +142,7 @@ impl Default for DuplicationConfig {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GateConfig {
     pub conditions: Vec<Condition>,

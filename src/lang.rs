@@ -47,6 +47,15 @@ impl Lang {
         })
     }
 
+    /// Position in `ALL`, a stable one-byte encoding.
+    pub(crate) fn index(self) -> u8 {
+        self as u8
+    }
+
+    pub(crate) fn from_index(index: u8) -> Option<Lang> {
+        ALL.get(usize::from(index)).copied()
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Lang::JavaScript => "javascript",
@@ -179,6 +188,15 @@ static C_SYNTAX: Syntax = Syntax {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_round_trips_through_all() {
+        for (i, &lang) in ALL.iter().enumerate() {
+            assert_eq!(usize::from(lang.index()), i);
+            assert_eq!(Lang::from_index(lang.index()), Some(lang));
+        }
+        assert_eq!(Lang::from_index(ALL.len() as u8), None);
+    }
 
     #[test]
     fn detects_languages_by_extension() {

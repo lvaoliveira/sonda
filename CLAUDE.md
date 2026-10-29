@@ -17,7 +17,7 @@ Overview and usage: [`README.md`](README.md).
 - **Deterministic output**: same input and config give a byte-identical report. Sort everything
   that reaches output, and never let `HashMap` order or thread scheduling leak into it.
 - Layering ([ADR-0001](docs/adr/0001-architecture.md)): interface (`main`, `report`) →
-  application (`lib.rs`: `run`, `load_config`) → infrastructure (`scanner`, `git`) → domain
+  application (`lib.rs`: `run`, `load_config`) → infrastructure (`scanner`, `git`, `worker`) → domain
   (`project`, `measures`, `gate`, `analysis`, `duplication`, `rules`, `newcode`, `coverage`,
   `config`) → shared types (`model`, `lang`). Domain does no I/O. The `architecture` tests in
   `lib.rs` enforce this; fix the code, not the test.

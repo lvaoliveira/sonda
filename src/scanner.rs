@@ -11,17 +11,19 @@ use crate::lang::Lang;
 use crate::newcode::NewCode;
 use crate::project::ProjectAnalysis;
 use crate::rules::RuleSet;
+use crate::worker::WorkerPool;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::Read;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 /// What to analyze.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
     /// Project directory.
     pub root: PathBuf,
@@ -30,6 +32,21 @@ pub struct ScanOptions {
     pub new_code_ref: Option<String>,
     /// LCOV reports to import.
     pub coverage: Vec<PathBuf>,
+    /// Where files are parsed (ADR-0003).
+    pub isolation: Isolation,
+    /// Files analyzed in parallel; `None` uses every CPU.
+    pub jobs: Option<NonZeroUsize>,
+}
+
+/// Where files are parsed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Isolation {
+    /// In this process. A crash in a tree-sitter grammar aborts the scan.
+    #[default]
+    InProcess,
+    /// In worker processes running `program __worker` (the `sonda`
+    /// binary). A crash only loses the file being parsed.
+    Workers { program: PathBuf },
 }
 
 pub(crate) fn scan(
@@ -80,25 +97,30 @@ fn scan_files(
     };
 
     let started = Instant::now();
-    let results: Vec<Result<FileAnalysis, String>> = paths
-        .par_iter()
-        .map(|c| {
-            let (rel, lang) = (&c.rel, &c.lang);
-            let bytes = read_capped(c, max_bytes)
-                .map_err(|e| format!("{rel}: {e}"))?
-                .ok_or_else(|| {
-                    format!(
-                        "{rel}: skipped, larger than {} KB",
-                        cfg.scan.max_file_size_kb
-                    )
-                })?;
-            let src =
-                String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))?;
-            let deadline = Instant::now() + timeout;
-            analysis::analyze(rel, *lang, &src, rules, cfg, deadline)
-                .map_err(|e| format!("{rel}: skipped, {e}"))
-        })
-        .collect();
+    let load = |c: &Candidate| load_source(c, max_bytes, cfg.scan.max_file_size_kb);
+    // Same warning text in both modes, so reports do not depend on the mode.
+    let results: Vec<Result<FileAnalysis, String>> = match &opts.isolation {
+        Isolation::InProcess => {
+            let threads = opts.jobs.map_or(0, NonZeroUsize::get); // 0: rayon's default
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .map_err(|e| Error::Internal(format!("thread pool: {e}")))?;
+            pool.install(|| {
+                paths
+                    .par_iter()
+                    .map(|c| {
+                        let src = load(c)?;
+                        let deadline = Instant::now() + timeout;
+                        analysis::analyze(&c.rel, c.lang, &src, rules, cfg, deadline)
+                            .map_err(|e| format!("{}: skipped, {e}", c.rel))
+                    })
+                    .collect()
+            })
+        }
+        Isolation::Workers { program } => WorkerPool::new(program, cfg, timeout, opts.jobs)?
+            .run(&paths, |c| load(c).map(|src| (c.rel.as_str(), c.lang, src)))?,
+    };
 
     let mut files = Vec::with_capacity(results.len());
     for r in results {
@@ -238,6 +260,15 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
     Ok((files, warnings))
 }
 
+/// A candidate's source text, or the warning explaining why it is skipped.
+fn load_source(c: &Candidate, max_bytes: u64, max_kb: u64) -> Result<String, String> {
+    let rel = &c.rel;
+    let bytes = read_capped(c, max_bytes)
+        .map_err(|e| format!("{rel}: {e}"))?
+        .ok_or_else(|| format!("{rel}: skipped, larger than {max_kb} KB"))?;
+    String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))
+}
+
 fn ms(since: Instant) -> u128 {
     since.elapsed().as_millis()
 }
@@ -349,6 +380,8 @@ mod tests {
             root: root.to_path_buf(),
             new_code_ref: None,
             coverage: vec![root.join("lcov.info")],
+            isolation: Isolation::InProcess,
+            jobs: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
 
@@ -390,6 +423,8 @@ mod tests {
             root: dir.path().to_path_buf(),
             new_code_ref: None,
             coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         assert_eq!(r.files.len(), 1);
@@ -405,6 +440,8 @@ mod tests {
             root: root.to_path_buf(),
             new_code_ref: None,
             coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
         };
         let (mut paths, _) = collect_files(root, cfg).unwrap();
         let mut walk_warnings = vec!["z: walk error".to_string(), "a: walk error".to_string()];
@@ -486,6 +523,8 @@ mod tests {
             root: dir.path().to_path_buf(),
             new_code_ref: None,
             coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
         };
         let out = outcome(scan(&opts, &cfg, &rules).unwrap(), &cfg);
         let text = report::render(&report::build(&out, false), Format::Text);
@@ -557,6 +596,8 @@ mod tests {
             root: root.to_path_buf(),
             new_code_ref: None,
             coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
         };
         let r = scan_files(&opts, &cfg, &rules, paths, warnings).unwrap();
         assert!(r.files.is_empty(), "nothing outside the root was analyzed");

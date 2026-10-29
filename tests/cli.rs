@@ -287,6 +287,76 @@ fn rules_command_lists_every_rule() {
     assert!(md.contains("Noncompliant:"));
 }
 
+#[test]
+fn worker_isolation_does_not_change_the_report() {
+    let shared = "function shared(a, b) {\n  if (a == b) { return a + b; }\n  for (let i = 0; i < a; i++) { b += i * 2; }\n  return b - a;\n}\n";
+    let dir = project(&[
+        ("src/a.js", &format!("var x = 1;\n{shared}")),
+        ("src/b.js", &format!("{shared}eval(y);\n")),
+        ("tool.py", "def f(a=[]):\n    return a  # TODO\n"),
+        ("broken.py", "def (:\n"),
+        ("Main.java", "class Main { void f() { System.exit(1); } }\n"),
+        (
+            "sonda.toml",
+            "[duplication]\nmin_tokens = 20\nmin_lines = 3\n",
+        ),
+    ]);
+    std::fs::write(dir.path().join("latin1.py"), b"x = '\xff'\n").unwrap();
+    let isolated = run(&["scan", "--no-gate", "-f", "json"], dir.path());
+    let in_process = run(
+        &["scan", "--no-gate", "-f", "json", "--no-isolation"],
+        dir.path(),
+    );
+    assert_eq!(code(&isolated), 0, "{}", stderr(&isolated));
+    let report = json(&isolated);
+    assert!(!report["duplications"].as_array().unwrap().is_empty());
+    assert!(report["warnings"].as_array().unwrap().len() >= 2);
+    assert_eq!(stdout(&isolated), stdout(&in_process));
+}
+
+/// ADR-0003: a parser crash loses only the file being parsed. Debug builds
+/// abort a worker on a file containing `SONDA_TEST_WORKER_ABORT`.
+#[cfg(debug_assertions)]
+#[test]
+fn a_parser_crash_loses_only_that_file() {
+    let marker = "SONDA_ABORT_MARKER_42";
+    // The crashing file comes first; with one worker, every later file
+    // needs the restarted worker.
+    let dir = project(&[
+        ("a-crash.py", &format!("x = '{marker}'\n")),
+        ("b.js", "eval(x);\n"),
+        ("c.js", "var y = 1;\n"),
+    ]);
+    let out = sonda()
+        .args(["scan", "--no-gate", "-f", "json", "--jobs", "1"])
+        .arg(dir.path())
+        .env("SONDA_TEST_WORKER_ABORT", marker)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = json(&out);
+    let rules: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["rule"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        rules,
+        ["js/no-eval", "js/no-var"],
+        "the other files are analyzed"
+    );
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("a-crash.py: skipped, the parser crashed"),
+        "{warnings:?}"
+    );
+}
+
 /// Regression: verbose logs printed a file name's raw escape sequence to
 /// the terminal (tracing-subscriber does not escape `%`-formatted values).
 #[cfg(unix)]

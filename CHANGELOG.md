@@ -26,6 +26,12 @@ file, the report formats and the public library API.
 - `-v`/`-vv`/`-vvv` (or `RUST_LOG`) for structured logs on stderr: phase
   timings, counts, and skipped files.
 - A library API: `sonda::run`, `sonda::load_config`, and `sonda::Error`.
+- Files are parsed in worker processes (ADR-0003), so a crash in a
+  tree-sitter grammar costs only that file. `--no-isolation` parses
+  in-process; `--jobs N` limits parallelism. Overhead measured at +6% on
+  29k lines and +1% on 1M lines.
+- Rule queries are compiled per language on first use, which made scans of
+  a 29k-line JavaScript/C project 40% faster.
 - Fuzz targets for analysis in every grammar and for config parsing, run
   weekly in CI with the C grammars instrumented by AddressSanitizer.
 

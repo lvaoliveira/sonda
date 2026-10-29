@@ -8,7 +8,7 @@
 //! let options = sonda::ScanOptions {
 //!     root: root.to_path_buf(),
 //!     new_code_ref: Some("origin/main".into()),
-//!     coverage: vec![],
+//!     ..Default::default()
 //! };
 //! let outcome = sonda::run(&options, &config)?;
 //! let report = sonda::report::build(&outcome, false);
@@ -21,7 +21,7 @@
 //!
 //! - interface: `report` (and the `sonda` binary)
 //! - application: this module ([`run`], [`load_config`])
-//! - infrastructure: `scanner` (filesystem), `git`
+//! - infrastructure: `scanner` (filesystem), `git`, `worker` (processes)
 //! - domain: `project`, `measures`, `gate`, `analysis`, `duplication`,
 //!   `rules`, `newcode`, `coverage`, `config` — no I/O
 //! - shared types: `model`, `lang`
@@ -42,12 +42,13 @@ mod measures;
 mod newcode;
 mod project;
 mod scanner;
+mod worker;
 
 pub use error::Error;
 pub use gate::{ConditionResult, GateResult, Status};
 pub use measures::Measures;
 pub use project::ProjectAnalysis;
-pub use scanner::ScanOptions;
+pub use scanner::{Isolation, ScanOptions};
 
 use config::Config;
 use std::path::Path;
@@ -83,6 +84,14 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
         measures,
         gate,
     })
+}
+
+/// Runs a worker process for [`Isolation::Workers`]: reads requests on
+/// stdin and answers on stdout until stdin closes. The `sonda` binary calls
+/// this for its hidden `__worker` subcommand.
+#[doc(hidden)]
+pub fn serve_worker() -> Result<(), Error> {
+    worker::serve(std::io::stdin().lock(), std::io::stdout().lock())
 }
 
 /// Loads `explicit` if given, else `<root>/sonda.toml` if it exists, else
@@ -221,6 +230,7 @@ mod architecture {
         let outer = [
             "crate::scanner",
             "crate::git",
+            "crate::worker",
             "crate::report",
             "crate::Outcome",
             "crate::run",

@@ -81,6 +81,34 @@ later, if at all.
 2. Phase 2 sandboxing covers **Linux and macOS**. Windows stays
    crash-contained only.
 
+## Result (phase 1, implemented)
+
+`src/worker.rs` holds the protocol and the pool; `--no-isolation` and
+`--jobs N` are new CLI flags.
+
+**Measured** (release build, 12 CPUs, median of 9 runs on 29k lines and 3 on
+1M lines):
+
+| Project | In-process | Workers | Overhead |
+|---|---|---|---|
+| arandu, 29k lines, 170 files | 98 ms | 104 ms | +6.1% |
+| 35 copies of it, 1.0M lines, 5,600 files | 2.51 s | 2.54 s | +1.2% |
+
+The first measurement was +67%: each worker compiled every rule's query,
+which took ~70 ms, mostly for TypeScript and C++. Queries are now compiled
+per language on first use. That also made in-process scans of arandu 40%
+faster (162 ms to 98 ms).
+
+**Tests:**
+- A worker that aborts on one file (a debug-only test seam) costs only that
+  file, and the restarted worker analyzes the rest. The test runs with
+  `--jobs 1` so the restart path is exercised; it fails if restarts are
+  disabled.
+- Fake workers that exit, send garbage, or hang each give a warning per
+  file.
+- The text, JSON and SARIF reports are byte-identical with and without
+  isolation.
+
 ## Consequences
 
 - Roughly 400 to 600 lines for the protocol, pool and lifecycle, plus tests,

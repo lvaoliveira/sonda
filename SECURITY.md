@@ -42,6 +42,10 @@ still validated), and the files they explicitly name (`--config`,
     levels of nesting.
   - Duplication detection runs in linear time, even on input crafted to be
     repetitive.
+- **A parser crash cannot abort a scan.** Files are parsed in worker
+  processes. If one crashes or hangs, that file becomes a warning, the
+  worker is restarted, and the report covers everything else. The parent
+  validates every worker reply as untrusted input.
 - **git cannot hang a scan.** Every git process is killed after
   `scan.git_timeout_secs` (default 120), and the run fails with a clear
   error instead of waiting forever.
@@ -59,11 +63,13 @@ still validated), and the files they explicitly name (`--config`,
 
 ### Known limitations
 
-- **Parsers are C code.** tree-sitter's runtime and grammars are C, called
-  through FFI. A memory-safety bug in them, triggered by a crafted file,
-  could affect the sonda process. They are fuzzed weekly in CI with
-  AddressSanitizer (see CONTRIBUTING.md) and kept up to date, but they still
-  run in the same process as the rest of sonda.
+- **Parser exploits are not contained yet.** tree-sitter's runtime and
+  grammars are C, called through FFI. They run in worker processes
+  ([ADR-0003](docs/adr/0003-isolate-parsing.md)), so a parser *crash* only
+  loses the file being parsed. The workers are not yet sandboxed, though, so
+  a crafted file that *exploits* a parser bug would run with your privileges.
+  Sandboxing is planned for Linux and macOS (phase 2). Meanwhile the parsers
+  are fuzzed weekly with AddressSanitizer and kept up to date.
 - **File-swap check is Unix-only.** On Windows (where creating symlinks needs
   elevated rights) the identity check below is not available.
 - **The repository's own `sonda.toml` is trusted by default.** A pull request

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use sonda::ScanOptions;
 use sonda::config;
 use sonda::report::{self, Format};
 use sonda::rules::{self, RULES};
+use sonda::{Isolation, ScanOptions};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -28,6 +28,9 @@ enum Command {
         #[arg(long, value_enum, default_value_t = RulesFormat::Text)]
         format: RulesFormat,
     },
+    /// Internal: an analysis worker process (see ADR-0003).
+    #[command(name = "__worker", hide = true)]
+    Worker,
     /// Write a default sonda.toml.
     Init {
         #[arg(default_value = ".")]
@@ -64,6 +67,13 @@ struct ScanArgs {
     /// Always exit 0, even when the quality gate fails.
     #[arg(long)]
     no_gate: bool,
+    /// Files analyzed in parallel (default: every CPU).
+    #[arg(short, long, value_name = "N")]
+    jobs: Option<std::num::NonZeroUsize>,
+    /// Parse files in this process instead of in worker processes (for
+    /// debugging; a parser crash then aborts the whole scan).
+    #[arg(long)]
+    no_isolation: bool,
 }
 
 /// CLI mirror of `report::Format`, keeping clap out of the library API.
@@ -150,6 +160,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             print!("{}", list_rules(format));
             Ok(ExitCode::SUCCESS)
         }
+        Command::Worker => {
+            sonda::serve_worker()?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Init { path, force } => {
             let target = path.join(config::FILE_NAME);
             if target.exists() && !force {
@@ -168,10 +182,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
 fn scan(args: ScanArgs) -> Result<ExitCode> {
     let cfg = sonda::load_config(args.config.as_deref(), &args.path)?;
+    let isolation = if args.no_isolation {
+        Isolation::InProcess
+    } else {
+        let program = std::env::current_exe().context("locating the sonda executable")?;
+        Isolation::Workers { program }
+    };
     let opts = ScanOptions {
         root: args.path,
         new_code_ref: args.new_code,
         coverage: args.coverage,
+        isolation,
+        jobs: args.jobs,
     };
     let outcome = sonda::run(&opts, &cfg)?;
     let passed = outcome.gate.passed;

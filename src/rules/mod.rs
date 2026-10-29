@@ -4,7 +4,7 @@ use crate::config::RulesConfig;
 use crate::error::Error;
 use crate::lang::Lang;
 use crate::model::{Category, Severity};
-use std::collections::HashMap;
+use std::sync::OnceLock;
 use tree_sitter::{Node, Query};
 
 pub use catalog::RULES;
@@ -78,10 +78,14 @@ pub(crate) struct CompiledQuery {
     pub(crate) filter: Option<Filter>,
 }
 
-/// The enabled rules with their effective severity and compiled queries.
+/// The enabled rules with their effective severity. Queries are compiled
+/// per language on first use: compiling all of them costs ~70 ms, mostly for
+/// TypeScript and C++, which many projects never contain (and every worker
+/// process would pay it again).
 pub(crate) struct RuleSet {
     pub(crate) active: Vec<ActiveRule>,
-    queries: HashMap<Lang, Vec<CompiledQuery>>,
+    /// Indexed by `Lang::index`.
+    queries: Vec<OnceLock<Result<Vec<CompiledQuery>, String>>>,
 }
 
 impl RuleSet {
@@ -103,25 +107,34 @@ impl RuleSet {
             })
             .collect();
 
-        let mut queries: HashMap<Lang, Vec<CompiledQuery>> = HashMap::new();
-        for (idx, a) in active.iter().enumerate() {
+        let queries = crate::lang::ALL.iter().map(|_| OnceLock::new()).collect();
+        Ok(RuleSet { active, queries })
+    }
+
+    /// The compiled queries of the active rules for `lang`. An error means a
+    /// built-in query does not compile: a bug, which tests guard against.
+    pub(crate) fn queries(&self, lang: Lang) -> Result<&[CompiledQuery], String> {
+        let slot = &self.queries[usize::from(lang.index())];
+        slot.get_or_init(|| self.compile_for(lang))
+            .as_deref()
+            .map_err(Clone::clone)
+    }
+
+    fn compile_for(&self, lang: Lang) -> Result<Vec<CompiledQuery>, String> {
+        let mut compiled = Vec::new();
+        for (idx, a) in self.active.iter().enumerate() {
             if let Check::Query {
                 langs,
                 query,
                 filter,
             } = a.rule.check
+                && langs.contains(&lang)
             {
-                for &lang in langs {
-                    let compiled = compile(a.rule.id, lang, query, idx, filter)?;
-                    queries.entry(lang).or_default().push(compiled);
-                }
+                compiled
+                    .push(compile(a.rule.id, lang, query, idx, filter).map_err(|e| e.to_string())?);
             }
         }
-        Ok(RuleSet { active, queries })
-    }
-
-    pub(crate) fn queries(&self, lang: Lang) -> &[CompiledQuery] {
-        self.queries.get(&lang).map(Vec::as_slice).unwrap_or(&[])
+        Ok(compiled)
     }
 
     pub(crate) fn get(&self, id: &str) -> Option<&ActiveRule> {
@@ -209,6 +222,23 @@ mod tests {
                 r.id,
                 ex.good
             );
+        }
+    }
+
+    /// Queries compile lazily, so nothing at startup proves they compile:
+    /// this does, for every language each rule claims.
+    #[test]
+    fn every_query_compiles_for_every_language() {
+        let rules = RuleSet::new(&RulesConfig::default()).unwrap();
+        for &lang in crate::lang::ALL {
+            let compiled = rules
+                .queries(lang)
+                .unwrap_or_else(|e| panic!("{lang:?}: {e}"));
+            let expected = RULES
+                .iter()
+                .filter(|r| matches!(r.check, Check::Query { langs, .. } if langs.contains(&lang)))
+                .count();
+            assert_eq!(compiled.len(), expected, "{lang:?}");
         }
     }
 

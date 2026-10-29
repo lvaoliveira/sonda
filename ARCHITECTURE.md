@@ -12,7 +12,8 @@ sonda::run
        ├─ collect_files     walk the root (.gitignore + scan.exclude, no symlinks), sort by path
        ├─ load_coverage     read the LCOV files the user named
        ├─ git::new_code     merge base + blob reads → changed lines   (only with --new-code)
-       ├─ analysis::analyze per file, in parallel (rayon):
+       ├─ analysis::analyze per file, in parallel: in worker processes
+       │     (worker.rs, ADR-0003), or with rayon under --no-isolation:
        │     parse (time budget) → query rules (time budget) → complexity,
        │     length, parameters → lines, comments, tokens, TODOs → suppressions
        └─ duplication::detect   rolling hash over every file's token stream
@@ -30,7 +31,7 @@ The `architecture` tests in `src/lib.rs` enforce this.
 |---|---|---|
 | Interface | `main.rs`, `report/` | CLI arguments, logging setup, exit codes; text/JSON/SARIF rendering and terminal escaping |
 | Application | `lib.rs` | `run`, `load_config`, `Outcome`: the public entry points |
-| Infrastructure | `scanner.rs`, `git.rs` | Filesystem walk and capped reads, coverage files, git object reads |
+| Infrastructure | `scanner.rs`, `git.rs`, `worker.rs` | Filesystem walk and capped reads, coverage files, git object reads, the analysis worker pool and its protocol |
 | Domain | `analysis.rs` | One file: parse, rules, complexity, metrics, tokens, suppressions |
 | | `rules/` | Rule catalog (`catalog.rs`) and compiled queries (`RuleSet`) |
 | | `duplication.rs` | Cross-file copy-paste detection |
