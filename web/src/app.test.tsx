@@ -246,6 +246,22 @@ describe('Components', () => {
   })
 })
 
+describe('Security', () => {
+  it('shows open vulnerabilities, what to fix first, risk and where they concentrate', async () => {
+    renderAt('/security')
+    expect(await screen.findByText(/23 open vulnerabilities in 6 projects/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Triage vulnerabilities' })).toHaveAttribute('href', '/issues?cat=vulnerability')
+    const focus = screen.getByRole('region', { name: 'Fix these first' })
+    const items = within(focus).getAllByRole('listitem')
+    expect(items[0]).toHaveTextContent('Blocker')
+    expect(items[items.length - 1]).toHaveTextContent('Major')
+    expect(within(focus).getByRole('link', { name: 'js/no-eval' })).toHaveAttribute('href', '/rules#js%2Fno-eval')
+    expect(screen.getByRole('region', { name: /Risk · 12 weeks/ })).toHaveTextContent('−')
+    expect(screen.getByRole('region', { name: 'High-risk components' })).toHaveTextContent('billing-service/src/')
+    expect(screen.getByRole('region', { name: 'Remediation' })).toHaveTextContent('4.2 days')
+  })
+})
+
 describe('Signing in', () => {
   it('requires a username and password when the server requires them to read', async () => {
     const user = userEvent.setup()

@@ -14,9 +14,9 @@ import { OverviewPage } from '@/pages/OverviewPage'
 import { ProjectPage } from '@/pages/ProjectPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RulesPage } from '@/pages/RulesPage'
+import { SecurityPage } from '@/pages/SecurityPage'
 
 const NOT_BUILT: [string, string][] = [
-  ['/security', 'Security'],
   ['/gates', 'Quality gates'],
 ]
 
@@ -43,6 +43,7 @@ export function AppRoutes() {
           <Route path="/projects/:key" element={<ProjectPage />} />
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
           <Route path="/components" element={<ComponentsPage />} />
+          <Route path="/security" element={<SecurityPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/admin" element={<AdminPage />} />
