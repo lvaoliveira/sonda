@@ -64,16 +64,18 @@ export function Button({
   onClick,
   children,
   className = '',
+  type = 'button',
 }: {
   primary?: boolean
   disabled?: boolean
   onClick?: () => void
   children: ReactNode
   className?: string
+  type?: 'button' | 'submit'
 }) {
   return (
     <button
-      type="button"
+      type={type}
       onClick={onClick}
       disabled={disabled}
       className={`h-8 cursor-pointer rounded-lg border-0 px-[13px] text-[13px] disabled:cursor-default disabled:opacity-45 ${

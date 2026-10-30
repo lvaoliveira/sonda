@@ -5,6 +5,7 @@ import {
   CircleDot,
   Folder,
   LayoutGrid,
+  LogOut,
   type LucideIcon,
   Package,
   Search,
@@ -14,6 +15,7 @@ import {
 import type { ReactNode } from 'react'
 import { Link, NavLink } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
+import { useSessionActions } from '@/api/session'
 import type { NavCounts } from '@/api/types'
 import { compactCount } from '@/lib/format'
 import { useTheme } from '@/lib/theme'
@@ -22,7 +24,7 @@ interface NavItem {
   to: string
   label: string
   icon: LucideIcon
-  count?: (c: NavCounts) => number
+  count?: (c: NavCounts) => number | null
   hot?: boolean
 }
 
@@ -60,8 +62,11 @@ export interface Crumb {
 export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: ReactNode }) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
+  const { signOut } = useSessionActions()
   const [theme, toggleTheme] = useTheme()
   const data = shell.state === 'ready' ? shell.data : null
+  // Every trail starts at the organization, named by the server.
+  const trail: Crumb[] = [{ label: data?.org.name ?? '…', to: '/' }, ...crumbs]
 
   return (
     <div className="flex min-h-screen bg-canvas text-fg">
@@ -77,7 +82,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
           <span className="flex min-w-0 flex-1 flex-col leading-[1.2]">
             <span className="text-[13px] font-semibold">{data?.org.name ?? ' '}</span>
             <span className="text-[11px] text-fg-faint">
-              {data ? `${data.org.deployment} · ${data.org.projectCount} projects` : ' '}
+              {data ? data.org.deployment + (data.org.projectCount != null ? ` · ${data.org.projectCount} projects` : '') : ' '}
             </span>
           </span>
         </div>
@@ -102,9 +107,9 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
                   <>
                     <item.icon size={16} strokeWidth={1.6} aria-hidden="true" className="flex-none" style={{ color: isActive ? 'var(--sd-accent)' : 'currentColor' }} />
                     <span className="flex-1">{item.label}</span>
-                    {item.count && data && (
+                    {item.count && data && item.count(data.counts) != null && (
                       <span className="font-mono text-[10.5px]" style={{ color: item.hot ? 'var(--sd-crit)' : 'var(--sd-faint)' }}>
-                        {compactCount(item.count(data.counts))}
+                        {compactCount(item.count(data.counts) ?? 0)}
                       </span>
                     )}
                   </>
@@ -119,6 +124,11 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
             <span className="text-[13px] font-semibold">{data?.user.name ?? ' '}</span>
             <span className="text-[11.5px] text-fg-faint">{data?.user.handle ?? ' '}</span>
           </span>
+          {signOut && (
+            <button type="button" onClick={signOut} aria-label="Sign out" title="Sign out" className="grid size-7 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-fg-faint hover:bg-hover hover:text-fg">
+              <LogOut size={15} strokeWidth={1.6} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </aside>
 
@@ -126,8 +136,8 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
         <div className="flex min-w-0 flex-1 flex-col rounded-[14px] bg-panel edge">
           <header className="sticky top-0 z-5 flex h-14 items-center gap-3 rounded-t-[14px] border-b border-line bg-panel px-6">
             <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[13.5px] whitespace-nowrap">
-              {crumbs.map((c, i) => {
-                const last = i === crumbs.length - 1
+              {trail.map((c, i) => {
+                const last = i === trail.length - 1
                 return (
                   <span key={i} className="flex items-center gap-2" style={{ minWidth: last ? 0 : '4.5em', flex: last ? '0 1 auto' : '0 4 auto' }}>
                     {i > 0 && (

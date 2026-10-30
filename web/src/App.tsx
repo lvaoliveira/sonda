@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
 import { ApiProvider } from '@/api/ApiProvider'
+import { SessionGate } from '@/components/shell/SessionGate'
 import type { SondaApi } from '@/api/types'
 import { IssuesPage } from '@/pages/IssuesPage'
 import { NotBuiltPage } from '@/pages/NotBuiltPage'
@@ -19,7 +20,9 @@ export function App({ api }: { api: SondaApi }) {
   return (
     <ApiProvider api={api}>
       <BrowserRouter>
-        <AppRoutes />
+        <SessionGate>
+          <AppRoutes />
+        </SessionGate>
       </BrowserRouter>
     </ApiProvider>
   )

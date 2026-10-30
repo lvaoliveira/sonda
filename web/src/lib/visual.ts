@@ -76,3 +76,20 @@ export function projectScore(levels: Level[], coverage: number): number {
   const ratings = levels.reduce((sum, l) => sum + l, 0) / (levels.length * 5)
   return Math.round(ratings * 70 + coverage * 0.3)
 }
+
+const LANGUAGE_LABEL: Record<string, string> = {
+  javascript: 'JavaScript',
+  typescript: 'TypeScript',
+  tsx: 'TSX',
+  python: 'Python',
+  java: 'Java',
+  c: 'C',
+  cpp: 'C++',
+  go: 'Go',
+  rust: 'Rust',
+}
+
+/** Display name for a language id (as in reports); unknown ids show as is. */
+export function languageLabel(id: string): string {
+  return LANGUAGE_LABEL[id] ?? id
+}

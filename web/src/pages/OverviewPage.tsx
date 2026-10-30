@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react'
 import { Fragment, type ReactNode, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { Drill, DrillMetric, FlowBucket, Overview, ProjectHealth, Range, Scope } from '@/api/types'
+import type { Drill, DrillMetric, FlowBucket, Overview, ProjectHealth, Range, Scope, SondaApi } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { DrillDrawer } from '@/components/sonda/DrillDrawer'
 import { Segmented } from '@/components/sonda/controls'
@@ -25,13 +25,33 @@ const DRILL_LINK: Record<DrillMetric, string> = {
 
 export function OverviewPage() {
   const api = useApi()
+  return api.overview ? <OverviewScreen load={api.overview} /> : <OverviewNotYet />
+}
+
+/** Against a real server: the Overview needs analysis history it does not serve yet. */
+function OverviewNotYet() {
+  return (
+    <AppShell crumbs={[{ label: 'Overview', to: '/' }]}>
+      <PageHeader title="Overview" summary="Needs analysis history: the next step (ADR-0005, phase 3)." />
+      <div className="flex max-w-[640px] flex-col gap-2 rounded-xl bg-panel-2 px-6 py-5 edge">
+        <span className="font-semibold">Trends, ratings and the quality-gate history come next.</span>
+        <span className="text-[13px] text-fg-muted">
+          The server stores every analysis already; this screen will be built from them rather than show sample numbers. Real data is on <Link to="/issues">Issues</Link> and{' '}
+          <Link to="/rules">Rules</Link>.
+        </span>
+      </div>
+    </AppShell>
+  )
+}
+
+function OverviewScreen({ load }: { load: NonNullable<SondaApi['overview']> }) {
   const [scope, setScope] = useState<Scope>('all')
   const [range, setRange] = useState<Range>('90d')
   const [drill, setDrill] = useState<DrillMetric | null>(null)
-  const data = useAsync(() => api.overview(scope, range), [api, scope, range])
+  const data = useAsync(() => load(scope, range), [load, scope, range])
 
   return (
-    <AppShell crumbs={[{ label: 'acme-corp', to: '/' }, { label: 'Overview', to: '/' }]}>
+    <AppShell crumbs={[{ label: 'Overview', to: '/' }]}>
       <PageHeader
         title="Overview"
         summary={
@@ -443,7 +463,11 @@ function Severities({ data, onDrill }: { data: Overview; onDrill: (m: DrillMetri
 }
 
 function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: number }) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({ 'payments-platform': true })
+  // The first monorepo starts expanded, to show that components exist.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    const first = projects.find((p) => p.components?.length)
+    return first ? { [first.name]: true } : {}
+  })
   const th = 'border-y border-line px-2 py-2 text-left font-normal'
   const row = (p: ProjectHealth, child: boolean) => {
     const score = projectScore([p.reliability, p.security, p.maintainability], p.coverage)
@@ -680,7 +704,7 @@ function Recent({ data }: { data: Overview }) {
 function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope; onClose: () => void }) {
   const api = useApi()
   const navigate = useNavigate()
-  const drill = useAsync(() => api.drill(metric, scope), [api, metric, scope])
+  const drill = useAsync(() => (api.drill ? api.drill(metric, scope) : Promise.reject(new Error('not available'))), [api, metric, scope])
   const [open, setOpen] = useState(0)
   const d: Drill | null = drill.state === 'ready' ? drill.data : null
   const color = d ? `var(--sd-${d.tone})` : 'var(--sd-accent)'
