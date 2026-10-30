@@ -3,16 +3,20 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { ApiProvider } from '@/api/ApiProvider'
-import { createMockApi } from '@/api/mock'
+import { createMockApi, MOCK_TOKEN } from '@/api/mock'
+import type { SondaApi } from '@/api/types'
 import { AppRoutes } from '@/App'
+import { SessionGate } from '@/components/shell/SessionGate'
 import { PipMeter } from '@/components/sonda/meters'
 import { GateStatus } from '@/components/sonda/status'
 
-function renderAt(path: string) {
+function renderAt(path: string, api: SondaApi = createMockApi(0)) {
   return render(
-    <ApiProvider api={createMockApi(0)}>
+    <ApiProvider api={api}>
       <MemoryRouter initialEntries={[path]}>
-        <AppRoutes />
+        <SessionGate>
+          <AppRoutes />
+        </SessionGate>
       </MemoryRouter>
     </ApiProvider>,
   )
@@ -41,18 +45,28 @@ describe('Issues', () => {
     for (const row of rows) expect(row).toHaveTextContent('Vulnerability')
   })
 
-  it('changes status with an undo, through the API', async () => {
+  it('changes status with an undo, through the API, and records it', async () => {
     const user = userEvent.setup()
     renderAt('/issues')
     const detail = await screen.findByRole('article', { name: 'Issue detail' })
-    // Read the title first: once accepted, the issue leaves the default
-    // (open + confirmed) view and the selection moves to the next one.
-    const title = within(detail).getByRole('heading', { level: 2 }).textContent
+    await within(detail).findByRole('button', { name: 'Accept risk' })
+    expect(within(detail).getByText('No triage changes yet.')).toBeInTheDocument()
+    const row = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')[0]
+    const before = within(row).getByText(/^(Open|Confirmed)$/).textContent ?? ''
     await user.click(within(detail).getByRole('button', { name: 'Accept risk' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Marked accepted')
-    await waitFor(() => expect(screen.getByRole('listbox', { name: 'Issues' })).not.toHaveTextContent(title ?? ''))
+    await waitFor(() => expect(within(row).getByText('Accepted')).toBeInTheDocument())
+    expect(await within(detail).findByText(/→ accepted/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Undo' }))
-    await waitFor(() => expect(screen.getByRole('listbox', { name: 'Issues' })).toHaveTextContent(title ?? ''))
+    await waitFor(() => expect(within(row).getByText(before)).toBeInTheDocument())
+  })
+
+  it('offers no "assign to me" without a name', async () => {
+    const api = createMockApi(0)
+    const shell = api.shell
+    renderAt('/issues', { ...api, shell: async () => ({ ...(await shell()), me: null }) })
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    expect(await within(detail).findByRole('button', { name: /sign in with a name/ })).toBeDisabled()
   })
 
   it('moves the selection with j and k', async () => {
@@ -70,7 +84,9 @@ describe('Issues', () => {
   it('links each issue to its rule', async () => {
     renderAt('/issues')
     const detail = await screen.findByRole('article', { name: 'Issue detail' })
-    const ruleLink = within(detail).getAllByRole('link').find((a) => a.getAttribute('href')?.startsWith('/rules#'))
+    // The detail loads after the list.
+    const links = await within(detail).findAllByRole('link')
+    const ruleLink = links.find((a) => a.getAttribute('href')?.startsWith('/rules#'))
     expect(ruleLink).toBeDefined()
   })
 })
@@ -87,13 +103,11 @@ describe('Rules', () => {
     expect(screen.getByText('No rules match “no-such-rule”')).toBeInTheDocument()
   })
 
-  it('toggles a rule in the profile', async () => {
-    const user = userEvent.setup()
-    renderAt('/rules')
-    const toggle = await screen.findByRole('switch')
-    const before = toggle.getAttribute('aria-checked')
-    await user.click(toggle)
-    await waitFor(() => expect(screen.getByRole('switch')).not.toHaveAttribute('aria-checked', before ?? ''))
+  it('is read-only and shows how to configure a rule in sonda.toml', async () => {
+    renderAt('/rules#py/broad-except')
+    await screen.findByRole('heading', { level: 2, name: /bare or broad except/ })
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    expect(screen.getByText(/disabled = \["py\/broad-except"\]/)).toBeInTheDocument()
   })
 
   it('selects the rule named in the URL hash', async () => {
@@ -103,7 +117,45 @@ describe('Rules', () => {
   })
 })
 
+describe('Signing in', () => {
+  it('requires the token when the server requires it to read', async () => {
+    const user = userEvent.setup()
+    renderAt('/rules', createMockApi(0, { signedIn: false, readsRequireAuth: true }))
+    expect(await screen.findByRole('heading', { name: 'Sign in to sonda' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue read-only' })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('API token'), 'wrong')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('That token is not valid')
+    await user.clear(screen.getByLabelText('API token'))
+    await user.type(screen.getByLabelText('API token'), MOCK_TOKEN)
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Rules' })).toBeInTheDocument()
+  })
+
+  it('lets a viewer continue read-only where reads are open, and sign out', async () => {
+    const user = userEvent.setup()
+    renderAt('/rules', createMockApi(0, { signedIn: false, readsRequireAuth: false }))
+    await user.click(await screen.findByRole('button', { name: 'Continue read-only' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Rules' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+
+  it('signs out back to the sign-in page', async () => {
+    const user = userEvent.setup()
+    renderAt('/rules')
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('heading', { name: 'Sign in to sonda' })).toBeInTheDocument()
+  })
+})
+
 describe('Overview', () => {
+  it('says so honestly when the server has no overview yet', async () => {
+    const api = createMockApi(0)
+    renderAt('/', { ...api, overview: undefined, drill: undefined })
+    expect(await screen.findByText('Trends, ratings and the quality-gate history come next.')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Key metrics' })).not.toBeInTheDocument()
+  })
+
   it('opens the drill-down drawer from a metric and closes it with Escape', async () => {
     const user = userEvent.setup()
     renderAt('/')
@@ -138,7 +190,7 @@ describe('Shell', () => {
   it('marks the current page and links unbuilt screens to an honest placeholder', async () => {
     const user = userEvent.setup()
     renderAt('/rules')
-    const nav = screen.getByRole('complementary', { name: 'Primary' })
+    const nav = await screen.findByRole('complementary', { name: 'Primary' })
     expect(within(nav).getByRole('link', { name: /Rules/ })).toHaveAttribute('aria-current', 'page')
     await user.click(within(nav).getByRole('link', { name: /Quality gates/ }))
     expect(await screen.findByText('Designed, not built yet.')).toBeInTheDocument()
@@ -147,7 +199,7 @@ describe('Shell', () => {
   it('toggles and remembers the theme', async () => {
     const user = userEvent.setup()
     renderAt('/rules')
-    await user.click(screen.getByRole('button', { name: 'Switch to light theme' }))
+    await user.click(await screen.findByRole('button', { name: 'Switch to light theme' }))
     expect(document.documentElement.dataset.theme).toBe('light')
     expect(localStorage.getItem('sonda-theme')).toBe('light')
   })

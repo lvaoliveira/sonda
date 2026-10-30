@@ -8,4 +8,9 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
+  // `pnpm dev:server`: same-origin /api, as in production, so the session
+  // cookie works unchanged.
+  server: {
+    proxy: { '/api': 'http://127.0.0.1:9000' },
+  },
 })

@@ -4,9 +4,12 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 ([ADR-0005](adr/0005-sonda-server.md)). It runs as two containers: `sonda`
 (the server and the web app) and `db` (PostgreSQL).
 
-**Status:** the server receives uploads, tracks issues across them, signs
-browsers in, and serves issues (with triage) and the rule catalog.
-Connecting the web app comes next; until then it shows mock data.
+**Status:**
+- **Server:** receives uploads, tracks issues across them, signs browsers
+  in, and serves issues (with triage) and the rule catalog.
+- **Web app:** shows them. Open http://127.0.0.1:9000 and sign in with the
+  token.
+- **Overview:** comes next, built from the stored analysis history.
 
 ## Quick start (Docker Compose)
 
@@ -20,7 +23,7 @@ chmod 644 secrets/*        # the containers read them as non-root users
 
 docker compose up -d --wait
 curl http://127.0.0.1:9000/api/health     # {"status":"ok"}
-open http://127.0.0.1:9000                # the web app
+open http://127.0.0.1:9000                # the web app; sign in with secrets/sonda_token
 ```
 
 `secrets/` is git-ignored, and the directory's `700` mode keeps other users

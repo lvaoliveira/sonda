@@ -78,6 +78,15 @@ file, the report formats and the public library API.
   - `PATCH /api/issues/{id}` changes status or assignee and records it.
 - `sonda_core::highlight`: a dependency-free syntax highlighter for showing
   code.
+- The web app shows real data from `sonda-server`:
+  - **Sign-in:** a session cookie the page cannot read.
+  - **Issues:** filters, facets and paging done by the server; code,
+    history and triage per issue.
+  - **Rules:** read-only.
+
+  The Overview stays on sample data under `pnpm dev`, and says it comes
+  next when running against the server. The production build no longer
+  contains any sample data.
 
 ### Security
 
