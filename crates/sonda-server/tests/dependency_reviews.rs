@@ -6,7 +6,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use common::{PASSWORD, TestDb, create_user, sign_in, state_with, upload, upload_json_for};
+use common::{TOKEN, TestDb, state_with, upload, upload_json_for};
 use serde_json::{Value, json};
 use sonda_server::{advisories, db, http};
 use tower::ServiceExt;
@@ -96,9 +96,10 @@ async fn findings_are_triaged_with_reasons_and_audited() {
         StatusCode::UNAUTHORIZED
     );
 
-    create_user(&db, "ann", "member").await;
-    let session = sign_in(&app, "ann", PASSWORD).await.unwrap();
-    let csrf = [("cookie", session.as_str()), ("sonda-csrf", "1")];
+    // As a script would; session sign-in for this route group is covered
+    // by the issue triage tests.
+    let bearer = format!("Bearer {TOKEN}");
+    let auth = [("authorization", bearer.as_str())];
     for (bad, expected) in [
         (json!({ "reason": null }), StatusCode::UNPROCESSABLE_ENTITY),
         (json!({ "reason": "   " }), StatusCode::UNPROCESSABLE_ENTITY),
@@ -117,21 +118,21 @@ async fn findings_are_triaged_with_reasons_and_audited() {
             b[k] = v.clone();
         }
         assert_eq!(
-            send(&app, review(b.clone(), &csrf)).await.0,
+            send(&app, review(b.clone(), &auth)).await.0,
             expected,
             "{b}"
         );
     }
 
-    let (status, r) = send(&app, review(accept, &csrf)).await;
+    let (status, r) = send(&app, review(accept, &auth)).await;
     assert_eq!(status, StatusCode::OK, "{r}");
     assert_eq!(
         (r["status"].as_str(), r["reviewedBy"].as_str()),
-        (Some("accepted"), Some("ann"))
+        (Some("accepted"), Some("api-token"))
     );
 
     // Listed with its review, but no longer counted.
-    let d = read(&app, "/api/projects/shop/dependencies", &csrf).await;
+    let d = read(&app, "/api/projects/shop/dependencies", &auth).await;
     assert_eq!(d["summary"]["vulnerable"], 1, "{d}");
     let lodash = d["dependencies"]
         .as_array()
@@ -146,7 +147,7 @@ async fn findings_are_triaged_with_reasons_and_audited() {
     );
 
     // The Security screen counts what's left: requests, open.
-    let s = read(&app, "/api/security", &csrf).await;
+    let s = read(&app, "/api/security", &auth).await;
     let deps = &s["dependencies"];
     assert_eq!(deps["vulnerablePackages"], 1, "{deps}");
     assert_eq!(deps["projectsAffected"], 1);
@@ -156,10 +157,10 @@ async fn findings_are_triaged_with_reasons_and_audited() {
 
     // Names match as PyPI normalizes them; reopening counts it again.
     let confirm = json!({ "ecosystem": "pypi", "name": "requests", "advisory": "GHSA-bbbb-bbbb-bbbb", "status": "confirmed" });
-    assert_eq!(send(&app, review(confirm, &csrf)).await.0, StatusCode::OK);
+    assert_eq!(send(&app, review(confirm, &auth)).await.0, StatusCode::OK);
     let reopen = json!({ "ecosystem": "npm", "name": "lodash", "advisory": "GHSA-aaaa-aaaa-aaaa", "status": "open" });
-    assert_eq!(send(&app, review(reopen, &csrf)).await.0, StatusCode::OK);
-    let d = read(&app, "/api/projects/shop/dependencies", &csrf).await;
+    assert_eq!(send(&app, review(reopen, &auth)).await.0, StatusCode::OK);
+    let d = read(&app, "/api/projects/shop/dependencies", &auth).await;
     assert_eq!(d["summary"]["vulnerable"], 2);
 
     let events: Vec<(String, String, String)> = sqlx::query_as(
@@ -171,9 +172,9 @@ async fn findings_are_triaged_with_reasons_and_audited() {
     assert_eq!(
         events,
         [
-            ("ann".into(), "open".into(), "accepted".into()),
-            ("ann".into(), "open".into(), "confirmed".into()),
-            ("ann".into(), "accepted".into(), "open".into()),
+            ("api-token".into(), "open".into(), "accepted".into()),
+            ("api-token".into(), "open".into(), "confirmed".into()),
+            ("api-token".into(), "accepted".into(), "open".into()),
         ]
     );
 }
