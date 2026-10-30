@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::lang::{Lang, Syntax};
 use crate::model::{Category, Digest, FileMetrics, Fingerprint, Issue, Sha256};
-use crate::rules::{self, ActiveRule, Filter, RuleSet};
+use crate::rules::{self, ActiveRule, Check, Filter, RuleSet};
+use crate::semantic;
 use sha2::Digest as _;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -26,6 +27,8 @@ pub(crate) struct FileAnalysis {
     pub(crate) code_lines: Vec<usize>,
     pub(crate) tokens: Vec<Token>,
     pub(crate) has_syntax_errors: bool,
+    /// The semantic layer ran out of time: semantic rules found nothing.
+    pub(crate) semantic_incomplete: bool,
     /// Of the exact bytes analyzed, so a later upload can prove it sends the same source.
     pub(crate) sha256: Sha256,
 }
@@ -75,6 +78,7 @@ pub(crate) fn analyze(
     let syn = lang.syntax();
 
     let mut issues = run_queries(&ctx, lang, root, rules, deadline)?;
+    let semantic_incomplete = run_semantic(&ctx, lang, root, rules, deadline, &mut issues);
     let mut metrics = FileMetrics::default();
     measure_functions(&ctx, syn, root, rules, cfg, &mut issues, &mut metrics);
     let scan = scan_tokens(&ctx, syn, root, rules, &mut issues);
@@ -114,6 +118,7 @@ pub(crate) fn analyze(
         code_lines: scan.code_lines,
         tokens: scan.tokens,
         has_syntax_errors: root.has_error(),
+        semantic_incomplete,
         sha256: Digest(sha2::Sha256::digest(bytes).into()),
     })
 }
@@ -252,6 +257,55 @@ pub(crate) fn is_test_file(path: &str) -> bool {
         || stem.starts_with("test_")
         || stem.ends_with("_test")
         || segments.any(|d| matches!(d, "test" | "tests" | "__tests__" | "spec" | "__mocks__"))
+}
+
+/// Runs the semantic rules for `lang`, building the model only if one is
+/// active. Returns whether the model ran out of time; the file then keeps
+/// its other findings (ADR-0008).
+fn run_semantic(
+    ctx: &Ctx,
+    lang: Lang,
+    root: Node,
+    rules: &RuleSet,
+    deadline: Instant,
+    issues: &mut Vec<Issue>,
+) -> bool {
+    // Declaration files describe code that lives elsewhere: nothing in them
+    // runs, and their names are all visible to other files.
+    if is_declaration_file(ctx.path) {
+        return false;
+    }
+    let test_file = is_test_file(ctx.path);
+    let active: Vec<(&ActiveRule, rules::SemanticFind)> = rules
+        .active
+        .iter()
+        .filter_map(|a| match a.rule.check {
+            Check::Semantic { langs, find } if langs.contains(&lang) => Some((a, find)),
+            _ => None,
+        })
+        .filter(|(a, _)| !(test_file && a.rule.category == Category::Vulnerability))
+        .collect();
+    if active.is_empty() {
+        return false;
+    }
+    let bytes = ctx.src.as_bytes();
+    let Some(model) = semantic::build(lang, root, bytes, deadline) else {
+        return semantic::supports(lang);
+    };
+    for (a, find) in active {
+        for node in find(&model, bytes) {
+            let msg = a.rule.message.to_string();
+            issues.push(ctx.issue(a, node, msg, a.rule.effort_minutes));
+        }
+    }
+    false
+}
+
+/// TypeScript declaration files: `x.d.ts`, `x.d.mts`, `x.d.cts`.
+fn is_declaration_file(path: &str) -> bool {
+    [".d.ts", ".d.mts", ".d.cts"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
 }
 
 fn measure_functions(
@@ -1054,13 +1108,14 @@ pub(crate) mod tests {
 
     #[test]
     fn identical_lines_get_distinct_stable_fingerprints() {
-        let two = fingerprints_of("t", "var x = 1;\nvar x = 1;\n");
+        // Not `var x` twice: that is also a redeclaration.
+        let two = fingerprints_of("t", "eval(x);\neval(x);\n");
         assert_eq!(two.len(), 2);
         assert_ne!(two[0], two[1]);
         // Inserting code between them changes neither.
         assert_eq!(
             two,
-            fingerprints_of("t", "var x = 1;\nlet y = 2;\nvar x = 1;\n")
+            fingerprints_of("t", "eval(x);\nlet y = 2;\neval(x);\n")
         );
     }
 }

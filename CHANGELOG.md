@@ -9,7 +9,7 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 169
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 175
   rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
@@ -149,6 +149,13 @@ file, the report formats and the public library API.
   weak TLS versions, ciphers, modes and keys, `jwt` with `none`,
   world-writable files, hard-coded passwords and secrets, insecure cookies,
   CORS for every origin, and disabled helmet protections.
+- A semantic layer for JavaScript/TypeScript ([ADR-0008](docs/adr/0008-semantic-layer.md),
+  phase S1): scopes, declarations and references per file, with hoisting,
+  destructuring, imports and TypeScript types. Six rules use it: unused
+  local variables and functions, unused imports, reassigned constants and
+  imports, redeclared names, and assignments to undeclared names.
+  Declaration files (`.d.ts`) are skipped. A file whose model can't be built
+  within the per-file timeout keeps its other findings, with a warning.
 - Vulnerability rules skip test files (`*.test.*`, `*.spec.*`, `test_*.py`,
   `*_test.*`, and `test`, `tests`, `__tests__`, `spec` or `__mocks__`
   directories), where credentials and weak settings are fixtures.

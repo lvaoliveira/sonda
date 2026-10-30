@@ -1,7 +1,9 @@
 # ADR-0008: A semantic layer for deeper rules
 
-- Status: **accepted as a plan.** It's built in phases, after the first
-  syntactic rule batches of [ADR-0007](0007-sonarqube-rule-parity.md).
+- Status: **accepted; S1 in progress.** It's built in phases, after the
+  first syntactic rule batches of [ADR-0007](0007-sonarqube-rule-parity.md).
+  S1 is built for JavaScript/TypeScript (`semantic/`), with six rules; the
+  rest of S1 is on the [roadmap](../roadmap.md).
 - Date: 2026-10-30
 
 ## Context
