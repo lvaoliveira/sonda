@@ -36,7 +36,9 @@ Constraints from earlier decisions:
 ### 1. The CLI builds the SBOM; it never looks up vulnerabilities
 
 `sonda scan` reads lockfiles and adds a `dependencies` section to the
-report (a new `report_version`). Each dependency records:
+report. It's a new field, so `report_version` stays (the report's contract:
+adding fields keeps the version), and servers that don't know it ignore
+it. Each dependency records:
 
 - its ecosystem, name and exact version, and its package URL (purl), the
   identifier CycloneDX, SPDX and OSV all use;
@@ -156,9 +158,8 @@ that wants a failing build.
 
 ## Consequences
 
-- The report format and the upload contract change: a new
-  `report_version`. An older server refuses newer reports, as it already
-  does.
+- The report gains a field, and later the upload carries it; older
+  servers ignore it. Storing it (phase 2) is a server migration.
 - Dependency results can change without a new analysis, unlike every
   other server number. The web app shows when advisories were last synced.
 - Two version-ordering implementations, SemVer and PEP 440, become part
