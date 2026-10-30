@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::lang::{Lang, Syntax};
 use crate::model::{Digest, FileMetrics, Fingerprint, Issue, Sha256};
-use crate::rules::{self, ActiveRule, RuleSet};
+use crate::rules::{self, ActiveRule, Filter, RuleSet};
 use sha2::Digest as _;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -215,9 +215,14 @@ fn run_queries(
         let (idx, filter) = cq.patterns[m.pattern_index];
         let active = &rules.active[idx];
         for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
-            if filter.is_none_or(|f| f(cap.node, bytes)) {
+            let node = match filter {
+                None => Some(cap.node),
+                Some(Filter::Keep(keep)) => keep(cap.node, bytes).then_some(cap.node),
+                Some(Filter::Find(find)) => find(cap.node, bytes),
+            };
+            if let Some(node) = node {
                 let msg = active.rule.message.to_string();
-                issues.push(ctx.issue(active, cap.node, msg, active.rule.effort_minutes));
+                issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
             }
         }
     }
@@ -777,7 +782,11 @@ pub(crate) mod tests {
             Lang::JavaScript,
             &format!("function {name}({params}) {{}}\n"),
         );
-        let msg = &a.issues[0].message;
+        let issue = a
+            .issues
+            .iter()
+            .find(|i| i.rule == rules::TOO_MANY_PARAMETERS);
+        let msg = &issue.expect("too many parameters").message;
         assert!(
             msg.contains(&format!("'{}…'", "x".repeat(MAX_NAME_CHARS))),
             "{msg}"
@@ -969,7 +978,10 @@ pub(crate) mod tests {
     #[test]
     fn fingerprint_survives_moves_and_reindentation() {
         let before = fingerprints_of("t", "var x = 1;\n");
-        let after = fingerprints_of("t", "// a new comment\n\nfunction f() {}\n    var  x=1;\n");
+        let after = fingerprints_of(
+            "t",
+            "// a new comment\n\nfunction f() { g(); }\n    var  x=1;\n",
+        );
         assert_eq!(before, after);
     }
 

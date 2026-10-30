@@ -79,7 +79,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: r#"["==" "!="] @match"#,
-            filter: Some(not_nullish_comparison),
+            filter: Some(Keep(not_nullish_comparison)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -159,7 +159,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(catch_clause body: (statement_block) @match)",
-            filter: Some(empty_block),
+            filter: Some(Keep(empty_block)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -194,7 +194,7 @@ pub(super) static RULES: &[Rule] = &[
         name: "finally blocks should not return, throw, break or continue",
         description: "A jump out of a finally block discards whatever the try or catch block \
                       was doing: its return value or its exception is silently lost.",
-        message: "This finally block returns, throws, breaks or continues, which discards the try block's result or exception. Move the jump out of it.",
+        message: "Move this jump out of the finally block, so it can't discard the try block's result or exception.",
         category: Bug,
         severity: Critical,
         effort_minutes: 15,
@@ -202,7 +202,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(finally_clause body: (statement_block) @match)",
-            filter: Some(jumps_out_of_finally),
+            filter: Some(Find(jump_out_of_finally)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -244,7 +244,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(formal_parameters) @match",
-            filter: Some(has_duplicate_parameter),
+            filter: Some(Keep(has_duplicate_parameter)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -264,7 +264,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(assignment_expression) @match",
-            filter: Some(assigns_itself),
+            filter: Some(Keep(assigns_itself)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -286,7 +286,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(binary_expression) @match",
-            filter: Some(operands_are_pure),
+            filter: Some(Keep(operands_are_pure)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -299,7 +299,7 @@ pub(super) static RULES: &[Rule] = &[
         name: "Conditions in an if/else-if chain or switch should be unique",
         description: "A condition repeated further down an if/else-if chain, or a repeated \
                       switch case, can never be reached: the first one always wins.",
-        message: "A condition here is repeated later in the same chain, so the later branch never runs. Fix or remove it.",
+        message: "This condition repeats an earlier one in the same chain, so this branch never runs. Fix or remove it.",
         category: Bug,
         severity: Major,
         effort_minutes: 5,
@@ -307,7 +307,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "[(if_statement) (switch_body)] @match",
-            filter: Some(has_repeated_condition),
+            filter: Some(Find(repeated_condition)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -327,7 +327,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(binary_expression) @match",
-            filter: Some(compares_with_nan),
+            filter: Some(Keep(compares_with_nan)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -348,7 +348,7 @@ pub(super) static RULES: &[Rule] = &[
             langs: JS_TS,
             query: r#"(assignment_expression right: (unary_expression operator: ["+" "-" "!"]) @match)
                       (variable_declarator value: (unary_expression operator: ["+" "-" "!"]) @match)"#,
-            filter: Some(glued_to_equals_sign),
+            filter: Some(Keep(glued_to_equals_sign)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -411,7 +411,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "[(object_pattern) (array_pattern)] @match",
-            filter: Some(empty_block),
+            filter: Some(Keep(empty_block)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -456,7 +456,7 @@ pub(super) static RULES: &[Rule] = &[
             query: r#"(binary_expression
                         left: (unary_expression operator: "!")
                         operator: ["==" "!=" "===" "!=="]) @match"#,
-            filter: Some(negates_a_value),
+            filter: Some(Keep(negates_a_value)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -505,7 +505,7 @@ pub(super) static RULES: &[Rule] = &[
                         left: (string) @match
                         operator: ["==" "!=" "===" "!=="]
                         right: (unary_expression operator: "typeof"))"#,
-            filter: Some(not_a_typeof_result),
+            filter: Some(Keep(not_a_typeof_result)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -525,7 +525,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: r#"(method_definition "set" body: (statement_block) @body) @match"#,
-            filter: Some(setter_returns_a_value),
+            filter: Some(Keep(setter_returns_a_value)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -546,7 +546,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: r#"[(generator_function_declaration) (generator_function) (method_definition "*")] @match"#,
-            filter: Some(generator_never_yields),
+            filter: Some(Keep(generator_never_yields)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -559,7 +559,7 @@ pub(super) static RULES: &[Rule] = &[
         name: "Object literals and classes should not define a member twice",
         description: "When a key or member name repeats, the last definition silently replaces \
                       the earlier ones.",
-        message: "This object or class defines the same member twice, and the later one silently replaces the earlier. Remove or rename one.",
+        message: "Remove or rename this member: an earlier one has the same name and is overwritten.",
         category: Bug,
         severity: Major,
         effort_minutes: 5,
@@ -567,7 +567,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "[(object) (class_body)] @match",
-            filter: Some(has_duplicate_member),
+            filter: Some(Find(duplicate_member)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -591,7 +591,7 @@ pub(super) static RULES: &[Rule] = &[
                         left: (identifier) @l
                         right: (update_expression argument: (identifier) @r) @match
                         (#eq? @l @r))",
-            filter: Some(is_postfix),
+            filter: Some(Keep(is_postfix)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -612,7 +612,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(for_statement) @match",
-            filter: Some(counter_moves_away_from_bound),
+            filter: Some(Keep(counter_moves_away_from_bound)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -633,7 +633,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "[(if_statement) (ternary_expression)] @match",
-            filter: Some(all_branches_identical),
+            filter: Some(Keep(all_branches_identical)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -725,7 +725,7 @@ pub(super) static RULES: &[Rule] = &[
             langs: JS_TS,
             query: r#"([(identifier) (undefined)] @match
                         (#any-of? @match "undefined" "NaN" "Infinity" "eval" "arguments"))"#,
-            filter: Some(is_bound_or_assigned),
+            filter: Some(Keep(is_bound_or_assigned)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -770,7 +770,7 @@ pub(super) static RULES: &[Rule] = &[
             langs: JS_TS,
             query: r#"((string) @match
                         (#match? @match "(?i)^[\"'](md2|md4|md5|sha-?1|ripemd-?160)[\"']$"))"#,
-            filter: Some(is_create_hash_algorithm),
+            filter: Some(Keep(is_create_hash_algorithm)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -791,12 +791,765 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: "(number) @match",
-            filter: Some(loses_precision),
+            filter: Some(Keep(loses_precision)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
             bad: "const id = 9007199254740993;",
             good: "const id = 9007199254740993n;\nconst max = 9007199254740991;\nconst x = 0.1 + 1e21 + 0xFF;",
+        }),
+    },
+    Rule {
+        id: "js/empty-block",
+        name: "Blocks should not be left empty",
+        description: "An empty if, else, loop, try or finally block is usually unfinished \
+                      code. If it's intended, a comment saying why makes that clear.",
+        message: "Fill in this empty block, remove it, or add a comment explaining why it's empty.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S108")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(if_statement consequence: (statement_block) @match)
+                    (else_clause (statement_block) @match)
+                    (for_statement body: (statement_block) @match)
+                    (for_in_statement body: (statement_block) @match)
+                    (while_statement body: (statement_block) @match)
+                    (do_statement body: (statement_block) @match)
+                    (try_statement body: (statement_block) @match)
+                    (finally_clause body: (statement_block) @match)
+                    (switch_statement body: (switch_body) @match)",
+            filter: Some(Keep(empty_block)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (ready) {} else { start(); }",
+            good: "if (ready) { /* already started */ } else { start(); }\nfunction noop() {}",
+        }),
+    },
+    Rule {
+        id: "js/switch-fallthrough",
+        name: "switch cases should not fall through",
+        description: "A case without a break, return or throw at its end also runs the next \
+                      case's code, which is rarely intended. Empty cases that share a body \
+                      are fine, and so is a case followed by a comment that mentions falling \
+                      through.",
+        message: "End this case with 'break', 'return' or 'throw', or add a '// falls through' comment if that's intended.",
+        category: CodeSmell,
+        severity: Blocker,
+        effort_minutes: 10,
+        sonar: &[exact("S128")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(switch_body) @match",
+            filter: Some(Find(falling_case)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "switch (x) { case 1: a(); case 2: b(); break; }",
+            good: "switch (x) {\ncase 1:\ncase 2: b(); break;\ncase 3: c();\n// falls through\ncase 4: if (y) { return; } else { throw e; }\ndefault: d();\n}",
+        }),
+    },
+    Rule {
+        id: "js/equality-in-for-condition",
+        name: "A for loop should not end on an equality test of its counter",
+        description: "`for (i = 0; i !== 10; i += 3)` steps over 10 and never stops. A \
+                      range test (`<`, `>`) ends the loop even when the counter skips the \
+                      exact value.",
+        message: "Use '<', '<=', '>' or '>=' to end this loop, so it stops even if the counter skips the value.",
+        category: CodeSmell,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S888")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(for_statement) @match",
+            filter: Some(Keep(counter_tested_for_equality)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "for (let i = 0; i !== 10; i += 3) { f(i); }",
+            good: "for (let i = 0; i < 10; i += 3) { f(i); }\nfor (let n = head; n !== null; n = n.next) { f(n); }",
+        }),
+    },
+    Rule {
+        id: "js/no-label",
+        name: "Labels should not be used",
+        description: "Labeled breaks and continues jump across nested code and make control \
+                      flow hard to follow. Extracting a function with an early return is \
+                      usually clearer.",
+        message: "Remove this label: restructure the loops, for example by extracting a function that returns early.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 20,
+        sonar: &[exact("S1119")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(labeled_statement) @match",
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "outer: for (const a of rows) { for (const b of a) { if (b) { break outer; } } }",
+            good: "for (const a of rows) { if (a.some(Boolean)) { break; } }",
+        }),
+    },
+    Rule {
+        id: "js/boolean-literal-comparison",
+        name: "Booleans should not be compared with true or false",
+        description: "`x == true` is a roundabout `x`, and with loose equality it can also \
+                      match values that aren't booleans.",
+        message: "Use the value directly ('x' or '!x') instead of comparing it with true or false.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[related("S1125")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(binary_expression) @match",
+            filter: Some(Keep(loosely_compares_boolean_literal)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (done == true) { stop(); }",
+            good: "if (done) { stop(); }\nif (flag === false) { start(); }",
+        }),
+    },
+    Rule {
+        id: "js/return-boolean-if",
+        name: "A condition should be returned directly, not through if/else",
+        description: "`if (c) { return true; } else { return false; }` is a long way to \
+                      write `return c;`.",
+        message: "Return the condition itself (or its negation) instead of true/false from each branch.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[related("S1126")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(if_statement) @match",
+            filter: Some(Keep(returns_boolean_from_both_branches)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function big(a) { if (a > 10) { return true; } else { return false; } }",
+            good: "function big(a) { return a > 10; }\nfunction g(a) { if (a) { return true; } else { return a === 0; } }",
+        }),
+    },
+    Rule {
+        id: "js/empty-function",
+        name: "Functions should not be empty",
+        description: "An empty function may be unfinished. If it's an intentional no-op, a \
+                      comment inside says so. Arrow functions (common as callbacks) and \
+                      constructors are not checked.",
+        message: "Implement this function, or add a comment explaining why it's empty.",
+        category: CodeSmell,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S1186")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(function_declaration) (function_expression) (generator_function_declaration)
+                     (generator_function) (method_definition)] @match",
+            filter: Some(Keep(has_empty_body)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class Cache { clear() {} }",
+            good: "class Cache { clear() { /* nothing cached yet */ } constructor() {} }\nconst noop = () => {};",
+        }),
+    },
+    Rule {
+        id: "js/nested-block",
+        name: "Code blocks should not be nested for no reason",
+        description: "A bare `{ ... }` inside other code adds indentation and suggests a \
+                      missing if or loop. Blocks inside switch cases, which scope `let` and \
+                      `const`, are fine.",
+        message: "Remove these braces, or extract the block into a function.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S1199")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(statement_block) (program)] @match",
+            filter: Some(Find(nested_block)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function f() { a(); { b(); } }",
+            good: "function f() { a(); b(); }\nswitch (x) { case 1: { const y = 1; f(y); } }",
+        }),
+    },
+    Rule {
+        id: "js/label-in-switch",
+        name: "switch statements should not contain labels",
+        description: "A label inside a switch is usually a misspelled `default:` or a \
+                      missing `case`, and it silently matches nothing. Labeled blocks and \
+                      loops, which a `break label` can target, are fine.",
+        message: "This is a label, not a case: did you mean 'case' or 'default'?",
+        category: CodeSmell,
+        severity: Blocker,
+        effort_minutes: 5,
+        sonar: &[exact("S1219")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(switch_case (labeled_statement) @match)
+                    (switch_default (labeled_statement) @match)",
+            filter: Some(Keep(labels_a_plain_statement)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "switch (x) { case 1: f(); break; defualt: g(); }",
+            good: "switch (x) { case 1: f(); break; default: g(); }\nswitch (y) { case 2: done: if (z) { break done; } }",
+        }),
+    },
+    Rule {
+        id: "js/for-as-while",
+        name: "A for loop with only a condition should be a while loop",
+        description: "`for (; cond;)` has no initializer or update, which is exactly what \
+                      `while (cond)` expresses more plainly.",
+        message: "Replace this 'for' with 'while', since it has no initializer or update.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S1264")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(for_statement) @match",
+            filter: Some(Keep(only_has_condition)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "for (; i < n;) { i = next(i); }",
+            good: "while (i < n) { i = next(i); }\nfor (;;) { if (done()) { break; } }",
+        }),
+    },
+    Rule {
+        id: "js/octal-literal",
+        name: "Legacy octal literals should not be used",
+        description: "`0755` is octal, not 755, which surprises readers. Strict mode forbids \
+                      it; `0o755` says it explicitly.",
+        message: "Write this octal number with the '0o' prefix (0o755), or drop the leading zero if it's decimal.",
+        category: CodeSmell,
+        severity: Blocker,
+        effort_minutes: 2,
+        sonar: &[exact("S1314")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((number) @match (#match? @match "^0[0-7]+$"))"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const mode = 0755;",
+            good: "const mode = 0o755;\nconst zero = 0;\nconst half = 0.5;",
+        }),
+    },
+    Rule {
+        id: "js/octal-escape",
+        name: "Octal escape sequences should not be used",
+        description: "`\"\\251\"` is an octal escape, deprecated and forbidden in strict mode \
+                      and template literals.",
+        message: "Use a hexadecimal or Unicode escape instead, such as \\xA9 or \\u00A9.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6657")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(escape_sequence) @match",
+            filter: Some(Keep(is_octal_escape)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const c = '\\251 2026';",
+            good: "const c = '\\u00a9 2026';\nconst nul = '\\0';",
+        }),
+    },
+    Rule {
+        id: "js/call-arguments-new-line",
+        name: "Call arguments should start on the same line as the function",
+        description: "`a\\n(b)` is parsed as the call `a(b)`, which is rarely what was meant \
+                      when a line starts with a parenthesis.",
+        message: "Move this '(' to the line of the function it calls, or add a semicolon if the lines are separate statements.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S1472")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(call_expression) @match",
+            filter: Some(Find(arguments_on_a_later_line)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const x = load\n(config);",
+            good: "const x = load(\n  config,\n);\nconst y = tag\n`text`;",
+        }),
+    },
+    Rule {
+        id: "js/too-many-cases",
+        name: "switch statements should not have too many cases",
+        description: "A switch with more than 30 cases is hard to read and maintain; a \
+                      lookup table (an object or a Map) is usually clearer.",
+        message: "This switch has more than 30 cases; replace it with a lookup table.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 30,
+        sonar: &[exact("S1479")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(switch_body) @match",
+            filter: Some(Keep(has_too_many_cases)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "switch (x) { case 0: case 1: case 2: case 3: case 4: case 5: case 6: case 7: \
+                  case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15: \
+                  case 16: case 17: case 18: case 19: case 20: case 21: case 22: case 23: \
+                  case 24: case 25: case 26: case 27: case 28: case 29: case 30: f(); }",
+            good: "switch (x) { case 0: case 1: f(); break; default: g(); }",
+        }),
+    },
+    Rule {
+        id: "js/multiline-string",
+        name: "Strings should not continue on the next line with a backslash",
+        description: "A backslash at the end of a line continues the string, but any space \
+                      after it breaks the code, and the indentation of the next line ends up \
+                      in the string.",
+        message: "Join the parts with '+' or use a template literal instead of a backslash line continuation.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S1516")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(string) @match",
+            filter: Some(Keep(continues_on_next_line)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const s = 'one \\\ntwo';",
+            good: "const s = 'one ' +\n  'two';\nconst t = `one\ntwo`;",
+        }),
+    },
+    Rule {
+        id: "js/primitive-wrapper",
+        name: "Primitive wrapper objects should not be created",
+        description: "`new String('a')` is an object, not a string: `typeof` says \"object\", \
+                      it's always truthy (even `new Boolean(false)`), and `===` compares \
+                      identity.",
+        message: "Remove 'new': call String(), Number() or Boolean() to convert, or use a literal.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S1533")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(new_expression
+                        constructor: (identifier) @c
+                        (#any-of? @c "String" "Number" "Boolean")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const ok = new Boolean(false);",
+            good: "const ok = Boolean(value);\nconst s = String(n);",
+        }),
+    },
+    Rule {
+        id: "js/default-param-not-last",
+        name: "Parameters with defaults should come last",
+        description: "A default followed by a required parameter can only be used by \
+                      passing `undefined` explicitly.",
+        message: "Move the parameters with default values after the required ones.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S1788")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(formal_parameters) @match",
+            filter: Some(Find(default_before_required)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function connect(port = 80, host) {}",
+            good: "function connect(host, port = 80) {}\nfunction g(a = 1, ...rest) {}",
+        }),
+    },
+    Rule {
+        id: "js/inverted-equality",
+        name: "Equality checks should not be inverted",
+        description: "`!(a === b)` is `a !== b` with an extra step.",
+        message: "Use the opposite operator instead of negating the comparison: 'a !== b', not '!(a === b)'.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[related("S1940")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(unary_expression
+                        operator: "!"
+                        argument: (parenthesized_expression (binary_expression) @b)) @match"#,
+            filter: Some(Keep(negates_an_equality)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (!(a === b)) { f(); }",
+            good: "if (a !== b) { f(); }\nif (!(a < b)) { f(); }\nif (!(e instanceof E)) { f(); }",
+        }),
+    },
+    Rule {
+        id: "js/empty-class",
+        name: "Classes should not be empty",
+        description: "A class with no members does nothing a plain object couldn't. Classes \
+                      that extend or implement something, or carry decorators, are fine.",
+        message: "Add members to this class, or remove it.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S2094")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(class_declaration) (class)] @match",
+            filter: Some(Keep(is_empty_class)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class Marker {}",
+            good: "class Marker { id = 1; }\nclass NotFound extends Error {}",
+        }),
+    },
+    Rule {
+        id: "js/arguments-callee",
+        name: "arguments.callee and arguments.caller should not be used",
+        description: "Both are forbidden in strict mode and prevent engine optimizations.",
+        message: "Refer to the function by name instead of arguments.callee or arguments.caller.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S2685")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match (#any-of? @match "callee" "caller"))"#,
+            filter: Some(Keep(is_property_of_arguments)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function fact(n) { return n ? n * arguments.callee(n - 1) : 1; }",
+            good: "function fact(n) { return n ? n * fact(n - 1) : 1; }\nconst c = opts.callee;",
+        }),
+    },
+    Rule {
+        id: "js/useless-catch",
+        name: "catch clauses should do more than rethrow",
+        description: "`catch (e) { throw e; }` changes nothing: the error would propagate \
+                      the same way without it.",
+        message: "Remove this catch clause, or handle the error before rethrowing it.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S2737")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(catch_clause
+                        parameter: (identifier) @p
+                        body: (statement_block . (throw_statement (identifier) @t) .)
+                        (#eq? @p @t)) @match",
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "try { f(); } catch (e) { throw e; }",
+            good: "try { f(); } catch (e) { log(e); throw e; }\ntry { f(); } catch (e) { throw new Wrapped(e); }",
+        }),
+    },
+    Rule {
+        id: "js/nested-ternary",
+        name: "Ternary operators should not be nested",
+        description: "`a ? x : b ? y : z` packs several decisions into one expression; an \
+                      if/else chain or a lookup is easier to read.",
+        message: "Extract the nested ternary into an if/else chain, a separate variable or a lookup.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S3358")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(ternary_expression) @match",
+            filter: Some(Keep(has_nested_ternary)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const size = n > 100 ? 'big' : n > 10 ? 'medium' : 'small';",
+            good: "const size = n > 100 ? 'big' : 'small';\nconst f = a ? g(() => (b ? 1 : 2)) : 3;",
+        }),
+    },
+    Rule {
+        id: "js/redundant-jump",
+        name: "Jumps should not be redundant",
+        description: "A bare `return;` at the end of a function, or `continue;` at the end \
+                      of a loop body, does nothing.",
+        message: "Remove this redundant jump.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S3626")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(function_declaration body: (statement_block (return_statement) @match .))
+                    (function_expression body: (statement_block (return_statement) @match .))
+                    (arrow_function body: (statement_block (return_statement) @match .))
+                    (method_definition body: (statement_block (return_statement) @match .))
+                    (generator_function_declaration body: (statement_block (return_statement) @match .))
+                    (generator_function body: (statement_block (return_statement) @match .))
+                    (for_statement body: (statement_block (continue_statement) @match .))
+                    (for_in_statement body: (statement_block (continue_statement) @match .))
+                    (while_statement body: (statement_block (continue_statement) @match .))
+                    (do_statement body: (statement_block (continue_statement) @match .))",
+            filter: Some(Keep(is_bare_jump)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function f() { g(); return; }",
+            good: "function f() { if (a) { return; } g(); }\nfor (const x of xs) { if (x) { continue; } g(x); }",
+        }),
+    },
+    Rule {
+        id: "js/throw-literal",
+        name: "Literals should not be thrown",
+        description: "A thrown string or number has no stack trace, and code that catches it \
+                      can't rely on `error.message` or `instanceof Error`.",
+        message: "Throw an Error object instead: throw new Error('...').",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S3696")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(throw_statement
+                        [(string) (template_string) (number) (true) (false) (null) (undefined)] @match)",
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "throw 'not found';",
+            good: "throw new Error('not found');\nthrow err;",
+        }),
+    },
+    Rule {
+        id: "js/sparse-array",
+        name: "Array literals should not have holes",
+        description: "`[1, , 3]` creates an empty slot that iteration methods skip, and the \
+                      extra comma is easy to miss or mistake for a typo.",
+        message: "Remove the extra comma, or write 'undefined' explicitly.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S4140")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(array) @match",
+            filter: Some(Keep(has_hole)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const a = [1, , 3];",
+            good: "const a = [1, undefined, 3];\nconst b = [1, 2,];",
+        }),
+    },
+    Rule {
+        id: "js/default-not-last",
+        name: "The default clause should be last",
+        description: "A `default` in the middle of a switch reads like the end of it; \
+                      readers expect it last.",
+        message: "Move this 'default' clause to the end of the switch.",
+        category: CodeSmell,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S4524")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(switch_body) @match",
+            filter: Some(Find(default_before_a_case)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "switch (x) { default: f(); break; case 1: g(); }",
+            good: "switch (x) { case 1: g(); break; default: f(); }",
+        }),
+    },
+    Rule {
+        id: "js/lonely-if",
+        name: "An if should not be the only statement in an else block",
+        description: "`else { if (b) { ... } }` is `else if (b) { ... }` with an extra level \
+                      of nesting.",
+        message: "Merge this 'if' into the 'else' as 'else if'.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6660")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(else_clause (statement_block . (if_statement) @match .))",
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (a) { f(); } else { if (b) { g(); } }",
+            good: "if (a) { f(); } else if (b) { g(); }\nif (a) { f(); } else { if (b) { g(); } h(); }",
+        }),
+    },
+    Rule {
+        id: "js/declaration-in-case",
+        name: "case clauses should not declare let, const, class or function directly",
+        description: "Declarations in one case are visible in the whole switch, but only \
+                      initialized when that case runs, so using them from another case \
+                      throws.",
+        message: "Wrap this case's body in braces, so the declaration stays local to it.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6836")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(switch_case [(lexical_declaration) (class_declaration) (function_declaration)] @match)
+                    (switch_default [(lexical_declaration) (class_declaration) (function_declaration)] @match)",
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "switch (x) { case 1: const y = 2; f(y); }",
+            good: "switch (x) { case 1: { const y = 2; f(y); } }",
+        }),
+    },
+    Rule {
+        id: "js/rename-to-same-name",
+        name: "Imports, exports and destructuring should not rename to the same name",
+        description: "`import { a as a }` or `const { k: k } = o` renames nothing.",
+        message: "Remove the redundant rename.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S6650")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(import_specifier name: (_) @a alias: (_) @b (#eq? @a @b)) @match
+                    (export_specifier name: (_) @a alias: (_) @b (#eq? @a @b)) @match
+                    (pair_pattern key: (property_identifier) @a value: (identifier) @b (#eq? @a @b)) @match",
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "import { load as load } from './io';",
+            good: "import { load as read } from './io';\nconst { k } = o;\nconst { k: key } = o;",
+        }),
+    },
+    Rule {
+        id: "js/proto-property",
+        name: "__proto__ should not be used",
+        description: "`__proto__` is a legacy accessor. Object.getPrototypeOf, \
+                      Object.setPrototypeOf and Object.create say the same thing in standard \
+                      terms.",
+        message: "Use Object.getPrototypeOf(), Object.setPrototypeOf() or Object.create() instead of __proto__.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S6654")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match (#eq? @match "__proto__"))"#,
+            filter: Some(Keep(is_member_property)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const p = obj.__proto__;",
+            good: "const p = Object.getPrototypeOf(obj);",
+        }),
+    },
+    Rule {
+        id: "js/global-isnan",
+        name: "Number.isNaN() should be used instead of isNaN()",
+        description: "The global isNaN() converts its argument first, so `isNaN('abc')` is \
+                      true. Number.isNaN() only says whether the value is NaN.",
+        message: "Use Number.isNaN(), which doesn't convert its argument to a number first.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6679")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(call_expression function: (identifier) @f (#eq? @f "isNaN")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (isNaN(value)) { reset(); }",
+            good: "if (Number.isNaN(value)) { reset(); }",
+        }),
+    },
+    Rule {
+        id: "js/eslint-disable-all",
+        name: "eslint-disable comments should name the rules they disable",
+        description: "A bare `eslint-disable` turns off every rule, hiding problems nobody \
+                      meant to accept.",
+        message: "Name the rules this comment disables, e.g. 'eslint-disable-next-line no-console'.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S7724")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(comment) @match",
+            filter: Some(Keep(disables_every_eslint_rule)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "/* eslint-disable */\nf();",
+            good: "/* eslint-disable no-console */\n// eslint-disable-next-line no-alert -- legacy prompt\nf(); // see the eslint-disable docs",
+        }),
+    },
+    Rule {
+        id: "js/init-to-undefined",
+        name: "Variables should not be initialized to undefined",
+        description: "`let x = undefined;` is what `let x;` already does.",
+        message: "Remove '= undefined': the variable is already undefined.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S6645")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(variable_declarator value: (undefined) @match)",
+            filter: Some(Keep(declared_without_const)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "let current = undefined;",
+            good: "let current;\nconst none = undefined;",
+        }),
+    },
+    Rule {
+        id: "js/trim-left-right",
+        name: "trimStart() and trimEnd() should be used instead of trimLeft() and trimRight()",
+        description: "trimLeft() and trimRight() are legacy aliases kept for compatibility.",
+        message: "Use trimStart() or trimEnd(), the standard names.",
+        category: CodeSmell,
+        severity: Critical,
+        effort_minutes: 1,
+        sonar: &[exact("S7783")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match (#any-of? @match "trimLeft" "trimRight"))"#,
+            filter: Some(Keep(is_member_property)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const s = input.trimLeft();",
+            good: "const s = input.trimStart();",
         }),
     },
     Rule {
@@ -895,14 +1648,14 @@ fn has_side_effects(node: Node) -> bool {
     effect(node) || contains(node, effect)
 }
 
-/// Whether a return, throw, break or continue leaves `block`. Walks down,
-/// keeping the loops, switches and labels around the current node, since
-/// looking up a node's parent costs a walk from the root.
-fn jumps_out_of_finally(block: Node, src: &[u8]) -> bool {
+/// The first return, throw, break or continue that leaves `block`. Walks
+/// down, keeping the loops, switches and labels around the current node,
+/// since looking up a node's parent costs a walk from the root.
+fn jump_out_of_finally<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut around: Vec<(usize, Node)> = Vec::new();
     let mut cursor = block.walk();
     if !cursor.goto_first_child() {
-        return false;
+        return None;
     }
     let mut depth = 1;
     loop {
@@ -911,7 +1664,7 @@ fn jumps_out_of_finally(block: Node, src: &[u8]) -> bool {
             around.pop();
         }
         match n.kind() {
-            "return_statement" | "throw_statement" => return true,
+            "return_statement" | "throw_statement" => return Some(n),
             kind @ ("break_statement" | "continue_statement") => {
                 let label = n
                     .named_child(0)
@@ -928,7 +1681,7 @@ fn jumps_out_of_finally(block: Node, src: &[u8]) -> bool {
                     }
                 });
                 if !stays {
-                    return true;
+                    return Some(n);
                 }
             }
             _ => {}
@@ -940,7 +1693,7 @@ fn jumps_out_of_finally(block: Node, src: &[u8]) -> bool {
         }
         while !cursor.goto_next_sibling() {
             if !cursor.goto_parent() {
-                return false;
+                return None;
             }
             depth -= 1;
         }
@@ -1016,34 +1769,29 @@ fn operands_are_pure(expr: Node, src: &[u8]) -> bool {
         && !has_side_effects(left)
 }
 
-/// For an if statement, whether its condition comes back further down its
-/// else-if chain; for a switch, whether two cases test the same value.
-fn has_repeated_condition(node: Node, src: &[u8]) -> bool {
+/// For an if statement, its condition where it comes back further down its
+/// else-if chain; for a switch, a case testing the same value as an earlier
+/// one.
+fn repeated_condition<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if node.kind() == "switch_body" {
         let mut seen = std::collections::HashSet::new();
         let mut cursor = node.walk();
         return node
             .named_children(&mut cursor)
             .filter_map(|case| case.child_by_field_name("value"))
-            .any(|value| !seen.insert(text(value, src)));
+            .find(|&value| !seen.insert(text(value, src)));
     }
-    let Some(cond) = node.child_by_field_name("condition") else {
-        return false;
-    };
+    let cond = node.child_by_field_name("condition")?;
     let mut current = node;
     for _ in 0..MAX_CHAIN {
-        let Some(next) = else_if(current) else {
-            break;
-        };
-        if next
-            .child_by_field_name("condition")
-            .is_some_and(|c| same_text(c, cond, src))
-        {
-            return true;
+        let next = else_if(current)?;
+        let later = next.child_by_field_name("condition")?;
+        if same_text(later, cond, src) {
+            return Some(later);
         }
         current = next;
     }
-    false
+    None
 }
 
 /// How far down an else-if chain the checks look, so a generated chain of
@@ -1176,13 +1924,12 @@ fn member_key(member: Node, src: &[u8]) -> Option<(bool, Vec<u8>)> {
     Some((has_token(member, "static"), name))
 }
 
-fn has_duplicate_member(container: Node, src: &[u8]) -> bool {
+fn duplicate_member<'t>(container: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut seen = std::collections::HashSet::new();
     let mut cursor = container.walk();
     container
         .named_children(&mut cursor)
-        .filter_map(|m| member_key(m, src))
-        .any(|key| !seen.insert(key))
+        .find(|&m| member_key(m, src).is_some_and(|key| !seen.insert(key)))
 }
 
 fn is_postfix(update: Node, _: &[u8]) -> bool {
@@ -1316,14 +2063,7 @@ fn is_bound_or_assigned(name: Node, _: &[u8]) -> bool {
         _ => false,
     };
     // Rare, so the walk up (each step costly) happens only here.
-    let mut ancestor = Some(parent);
-    while binds && let Some(a) = ancestor {
-        if DECLARATIONS_ONLY.contains(&a.kind()) {
-            return false;
-        }
-        ancestor = a.parent();
-    }
-    binds
+    binds && !DECLARATIONS_ONLY.contains(&parent.kind()) && !declares_only(parent)
 }
 
 fn loses_precision(number: Node, src: &[u8]) -> bool {
@@ -1357,6 +2097,405 @@ fn loses_precision(number: Node, src: &[u8]) -> bool {
             .to_string()
     };
     !value.is_finite() || significant(&lower) != significant(&format!("{value:e}"))
+}
+
+/// A bare block directly inside `container`. Captured from the outside: a
+/// `(statement_block (statement_block))` pattern stays open over the
+/// block's whole subtree, which is quadratic on deep nesting.
+fn nested_block<'t>(container: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let mut cursor = container.walk();
+    container
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "statement_block")
+}
+
+/// The last named child that isn't a comment.
+fn last_statement(node: Node) -> Option<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|c| c.kind() != "comment")
+        .last()
+}
+
+/// Whether control can't continue past `statement`: it ends with a break,
+/// return, throw or continue, also through blocks and if/else with both
+/// branches ending that way. Iterative, with a work list.
+fn ends_with_jump(statement: Node) -> bool {
+    let mut pending = vec![statement];
+    while let Some(s) = pending.pop() {
+        match s.kind() {
+            "break_statement" | "return_statement" | "throw_statement" | "continue_statement" => {}
+            "statement_block" => match last_statement(s) {
+                Some(last) => pending.push(last),
+                None => return false,
+            },
+            "if_statement" => {
+                let consequence = s.child_by_field_name("consequence");
+                let otherwise = s
+                    .child_by_field_name("alternative")
+                    .and_then(last_statement);
+                match (consequence, otherwise) {
+                    (Some(c), Some(o)) => pending.extend([c, o]),
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// A case that runs into the next one: it has statements, the last can
+/// fall through, and no comment after it mentions falling through.
+fn falling_case<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut falling: Option<Node> = None;
+    let mut cursor = body.walk();
+    for child in body.named_children(&mut cursor) {
+        match child.kind() {
+            "switch_case" | "switch_default" => {
+                if falling.is_some() {
+                    return falling;
+                }
+                let value = child.child_by_field_name("value");
+                let mut inner = child.walk();
+                let body: Vec<Node> = child
+                    .named_children(&mut inner)
+                    .filter(|&c| Some(c) != value)
+                    .collect();
+                let commented = body
+                    .last()
+                    .is_some_and(|&c| c.kind() == "comment" && mentions_fall_through(c, src));
+                let last = body.iter().rev().find(|c| c.kind() != "comment");
+                falling = last
+                    .filter(|&&l| !commented && !ends_with_jump(l))
+                    .map(|_| child);
+            }
+            "comment" if mentions_fall_through(child, src) => falling = None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn mentions_fall_through(comment: Node, src: &[u8]) -> bool {
+    let t = text(comment, src).to_ascii_lowercase();
+    t.windows(4).any(|w| w == b"fall")
+}
+
+fn counter_tested_for_equality(for_statement: Node, src: &[u8]) -> bool {
+    let (Some(cond), Some(update)) = (
+        for_statement.child_by_field_name("condition"),
+        for_statement.child_by_field_name("increment"),
+    ) else {
+        return false;
+    };
+    let counter = match update.kind() {
+        "update_expression" => update.child_by_field_name("argument"),
+        "augmented_assignment_expression"
+            if update
+                .child_by_field_name("operator")
+                .is_some_and(|op| matches!(op.kind(), "+=" | "-=")) =>
+        {
+            update.child_by_field_name("left")
+        }
+        _ => None,
+    };
+    let Some(counter) = counter.filter(|c| c.kind() == "identifier") else {
+        return false;
+    };
+    cond.kind() == "binary_expression"
+        && cond
+            .child_by_field_name("operator")
+            .is_some_and(|op| EQUALITY.contains(&op.kind()))
+        && ["left", "right"].iter().any(|f| {
+            cond.child_by_field_name(f)
+                .is_some_and(|side| same_text(side, counter, src))
+        })
+}
+
+fn loosely_compares_boolean_literal(expr: Node, _: &[u8]) -> bool {
+    expr.child_by_field_name("operator")
+        .is_some_and(|op| matches!(op.kind(), "==" | "!="))
+        && ["left", "right"].iter().any(|f| {
+            expr.child_by_field_name(f)
+                .is_some_and(|side| matches!(side.kind(), "true" | "false"))
+        })
+}
+
+/// `true` or `false` when `branch` is just `return true;`/`return false;`,
+/// alone or in a block.
+fn returned_boolean(branch: Node) -> Option<bool> {
+    let statement = if branch.kind() == "statement_block" {
+        if branch.named_child_count() != 1 {
+            return None;
+        }
+        branch.named_child(0)?
+    } else {
+        branch
+    };
+    if statement.kind() != "return_statement" {
+        return None;
+    }
+    match statement.named_child(0)?.kind() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn returns_boolean_from_both_branches(if_statement: Node, _: &[u8]) -> bool {
+    let then = if_statement
+        .child_by_field_name("consequence")
+        .and_then(returned_boolean);
+    let otherwise = if_statement
+        .child_by_field_name("alternative")
+        .and_then(|e| {
+            let mut cursor = e.walk();
+            e.named_children(&mut cursor)
+                .find(|c| c.kind() != "comment")
+        })
+        .and_then(returned_boolean);
+    matches!((then, otherwise), (Some(a), Some(b)) if a != b)
+}
+
+fn has_empty_body(function: Node, src: &[u8]) -> bool {
+    let is_constructor = function.kind() == "method_definition"
+        && function
+            .child_by_field_name("name")
+            .is_some_and(|n| text(n, src) == b"constructor");
+    !is_constructor
+        && function
+            .child_by_field_name("body")
+            .is_some_and(|b| b.kind() == "statement_block" && b.named_child_count() == 0)
+}
+
+fn only_has_condition(for_statement: Node, _: &[u8]) -> bool {
+    for_statement
+        .child_by_field_name("initializer")
+        .is_some_and(|i| i.kind() == "empty_statement")
+        && for_statement.child_by_field_name("increment").is_none()
+        && for_statement
+            .child_by_field_name("condition")
+            .is_some_and(|c| c.kind() != "empty_statement")
+}
+
+fn is_octal_escape(escape: Node, src: &[u8]) -> bool {
+    matches!(
+        text(escape, src),
+        [b'\\', b'1'..=b'7', ..] | [b'\\', b'0', b'0'..=b'9', ..]
+    )
+}
+
+/// The arguments of a call when they start on a later line than the
+/// function.
+fn arguments_on_a_later_line<'t>(call: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    // In `f<T>(x)`, the arguments follow the type arguments.
+    let before = call
+        .child_by_field_name("type_arguments")
+        .or_else(|| call.child_by_field_name("function"))?;
+    call.child_by_field_name("arguments").filter(|args| {
+        args.kind() == "arguments" && args.start_position().row > before.end_position().row
+    })
+}
+
+fn has_too_many_cases(body: Node, _: &[u8]) -> bool {
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor)
+        .filter(|c| c.kind() == "switch_case")
+        .count()
+        > 30
+}
+
+fn continues_on_next_line(string: Node, src: &[u8]) -> bool {
+    text(string, src)
+        .windows(2)
+        .any(|w| w == b"\\\n" || w == b"\\\r")
+}
+
+/// The first parameter with a default value that a required parameter
+/// follows.
+fn default_before_required<'t>(params: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let mut first_default = None;
+    let mut cursor = params.walk();
+    for p in params.named_children(&mut cursor) {
+        let (has_default, required) = match p.kind() {
+            "assignment_pattern" => (true, false),
+            "required_parameter" => {
+                let rest = p
+                    .child_by_field_name("pattern")
+                    .is_some_and(|x| x.kind() == "rest_pattern");
+                if rest {
+                    return None;
+                }
+                let has_default = p.child_by_field_name("value").is_some();
+                (has_default, !has_default)
+            }
+            "identifier" | "object_pattern" | "array_pattern" => (false, true),
+            "rest_pattern" => return None,
+            _ => (false, false),
+        };
+        if has_default && first_default.is_none() {
+            first_default = Some(p);
+        } else if required && first_default.is_some() {
+            return first_default;
+        }
+    }
+    None
+}
+
+fn negates_an_equality(negation: Node, _: &[u8]) -> bool {
+    negation
+        .child_by_field_name("argument")
+        .and_then(|p| p.named_child(0))
+        .and_then(|b| b.child_by_field_name("operator"))
+        .is_some_and(|op| EQUALITY.contains(&op.kind()))
+}
+
+fn is_empty_class(class: Node, _: &[u8]) -> bool {
+    let mut cursor = class.walk();
+    let extends_or_decorated = class
+        .children(&mut cursor)
+        .any(|c| matches!(c.kind(), "class_heritage" | "decorator"));
+    !extends_or_decorated
+        && class
+            .child_by_field_name("body")
+            .is_some_and(|b| b.named_child_count() == 0)
+        && !declares_only(class)
+}
+
+/// Whether `node` is inside a type-only declaration (`declare ...`, a
+/// signature), where nothing runs. Walks up, so call it only on rare nodes.
+fn declares_only(node: Node) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(a) = ancestor {
+        if DECLARATIONS_ONLY.contains(&a.kind()) {
+            return true;
+        }
+        ancestor = a.parent();
+    }
+    false
+}
+
+/// A label on a simple statement, like the misspelled `defualt: f();`. A
+/// label on a block, if, try, loop or switch is a `break` target.
+fn labels_a_plain_statement(label: Node, _: &[u8]) -> bool {
+    label.child_by_field_name("body").is_some_and(|b| {
+        matches!(
+            b.kind(),
+            "expression_statement"
+                | "return_statement"
+                | "throw_statement"
+                | "break_statement"
+                | "continue_statement"
+                | "lexical_declaration"
+                | "variable_declaration"
+                | "empty_statement"
+        )
+    })
+}
+
+/// `name` is the property of a member expression (`x.name`), not an object
+/// key or a method name. Checked only on rare names, so the parent lookup
+/// is cheap overall.
+fn is_member_property(name: Node, _: &[u8]) -> bool {
+    name.parent().is_some_and(|m| {
+        m.kind() == "member_expression" && m.child_by_field_name("property") == Some(name)
+    })
+}
+
+fn is_property_of_arguments(name: Node, src: &[u8]) -> bool {
+    name.parent().is_some_and(|m| {
+        m.kind() == "member_expression"
+            && m.child_by_field_name("object")
+                .is_some_and(|o| text(o, src) == b"arguments")
+    })
+}
+
+fn has_nested_ternary(ternary: Node, _: &[u8]) -> bool {
+    let nested = ["condition", "consequence", "alternative"].iter().any(|f| {
+        let mut part = ternary.child_by_field_name(f);
+        while let Some(p) = part.filter(|p| p.kind() == "parenthesized_expression") {
+            part = p.named_child(0);
+        }
+        part.is_some_and(|p| p.kind() == "ternary_expression")
+    });
+    nested && reports_chain(ternary)
+}
+
+/// Whether `ternary` is the outermost of its chain (so a chain reports
+/// once), and the chain doesn't sit directly in a JSX `{...}`, the usual
+/// way to render loading/empty/list states. Walks up only from ternaries
+/// already found nested, so the parent lookups stay rare.
+fn reports_chain(ternary: Node) -> bool {
+    let mut parent = ternary.parent();
+    while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
+        parent = p.parent();
+    }
+    parent.is_none_or(|p| !matches!(p.kind(), "ternary_expression" | "jsx_expression"))
+}
+
+/// `return;` or `continue;`, with no value or label.
+fn is_bare_jump(jump: Node, _: &[u8]) -> bool {
+    jump.named_child_count() == 0
+}
+
+fn has_hole(array: Node, _: &[u8]) -> bool {
+    let mut cursor = array.walk();
+    let mut previous = "";
+    for c in array.children(&mut cursor) {
+        if c.kind() == "comment" {
+            continue;
+        }
+        if c.kind() == "," && matches!(previous, "," | "[") {
+            return true;
+        }
+        previous = c.kind();
+    }
+    false
+}
+
+/// A `default` clause followed by a `case`.
+fn default_before_a_case<'t>(body: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let mut default = None;
+    let mut cursor = body.walk();
+    for c in body.named_children(&mut cursor) {
+        match c.kind() {
+            "switch_default" => default = Some(c),
+            "switch_case" if default.is_some() => return default,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn disables_every_eslint_rule(comment: Node, src: &[u8]) -> bool {
+    let Ok(t) = std::str::from_utf8(text(comment, src)) else {
+        return false;
+    };
+    let body = t
+        .trim_start_matches("//")
+        .trim_start_matches("/*")
+        .trim_end_matches("*/")
+        .trim();
+    [
+        "eslint-disable-next-line",
+        "eslint-disable-line",
+        "eslint-disable",
+    ]
+    .iter()
+    .find_map(|d| body.strip_prefix(d))
+    // The directive word must end here: "eslint-disable-foo" is not one.
+    .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+    .is_some_and(|rest| rest.split("--").next().unwrap_or("").trim().is_empty())
+}
+
+/// `let x = undefined` or `var x = undefined`: removing the initializer
+/// from a `const` would not compile.
+fn declared_without_const(undefined: Node, _: &[u8]) -> bool {
+    undefined
+        .parent()
+        .and_then(|declarator| declarator.parent())
+        .is_some_and(|d| d.kind() == "variable_declaration" || has_token(d, "let"))
 }
 
 #[cfg(test)]
@@ -1393,7 +2532,7 @@ mod tests {
     g(() => { return 1; });
   }
 }";
-        assert_eq!(flagged("js/jump-in-finally", JS, src), [2]);
+        assert_eq!(flagged("js/jump-in-finally", JS, src), [3]);
         let inner = "try { f(); } finally {\n  for (;;) { if (a) { break; } continue; }\n  l: { break l; }\n  switch (x) { case 1: break; }\n}";
         assert!(flagged("js/jump-in-finally", JS, inner).is_empty());
     }
@@ -1404,7 +2543,7 @@ mod tests {
         assert_eq!(flagged("js/duplicate-parameter", TS, params), [1]);
         // Overload signatures and accessor pairs are not duplicates.
         let class = "class A {\n  m(x: number): void;\n  m(x: any) {}\n  get v() { return 1; }\n  set v(x) {}\n  v2 = 1;\n  v2 = 2;\n}";
-        assert_eq!(flagged("js/duplicate-member", TS, class), [1]);
+        assert_eq!(flagged("js/duplicate-member", TS, class), [7]);
         assert_eq!(
             flagged("js/empty-destructuring", TS, "function C({}: Props) {}"),
             [1]
@@ -1437,8 +2576,8 @@ mod tests {
 
     #[test]
     fn duplicate_conditions_need_the_same_chain() {
-        let src = "if (a) {} else if (b) {} else if (a) {}\nif (a) { if (a) {} }\nswitch (x) { case 1: case 2: case 1: }";
-        assert_eq!(flagged("js/duplicate-condition", JS, src), [1, 3]);
+        let src = "if (a) {} else if (b) {}\nelse if (a) {}\nif (a) { if (a) {} }\nswitch (x) {\ncase 1: case 2:\ncase 1: }";
+        assert_eq!(flagged("js/duplicate-condition", JS, src), [2, 6]);
     }
 
     /// Shapes where a filter that looks up parents or siblings, or compares
@@ -1465,6 +2604,61 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let file = analyze("t", JS, &src, &rules, &cfg, deadline).expect("finishes in time");
         assert!(file.issues.iter().any(|i| i.rule == "js/jump-in-finally"));
+    }
+
+    #[test]
+    fn fall_through_cases() {
+        let src = "switch (x) {
+case 1: a();
+case 2: b(); // falls through
+case 3: { c(); break; }
+case 4: if (y) { d(); } else { return; }
+case 5:
+case 6: e(); /* fall through */
+default: f();
+}";
+        assert_eq!(flagged("js/switch-fallthrough", JS, src), [2]);
+        let later = "switch (x) {\ncase 1: break;\ncase 2: if (y) { d(); } else { return; }\ncase 3: g();\n}";
+        assert_eq!(flagged("js/switch-fallthrough", JS, later), [3]);
+    }
+
+    #[test]
+    fn typescript_parameters_functions_and_classes() {
+        let src = "function f(a: number = 1, b?: string, c: number) { h(); }
+function g(a = 1, ...rest: number[]) { h(); }
+abstract class A { abstract m(): void; n(): void; o() {} }
+class B implements I {}
+@dec class C {}";
+        assert_eq!(flagged("js/default-param-not-last", TS, src), [1]);
+        assert_eq!(flagged("js/empty-function", TS, src), [3]);
+        assert!(flagged("js/empty-class", TS, src).is_empty());
+        let ambient = "declare namespace M { class Projection {} }";
+        assert!(flagged("js/empty-class", TS, ambient).is_empty());
+        let generic = "const t = make<{\n  a: string;\n}>();";
+        assert!(flagged("js/call-arguments-new-line", TS, generic).is_empty());
+    }
+
+    #[test]
+    fn small_syntax_rules() {
+        let src = "/* eslint-disable-next-line */
+// eslint-disable-line -- because
+// eslint-disabled-ish
+x = 08;
+y = '\\\\1';
+z = a ? b : c ? d : e ? f : g;
+w = (a ? b : c) ? d : e;
+v = load
+  (c)
+  .then(f);";
+        assert_eq!(flagged("js/eslint-disable-all", JS, src), [1, 2]);
+        assert!(flagged("js/octal-literal", JS, src).is_empty());
+        assert!(flagged("js/octal-escape", JS, src).is_empty());
+        assert_eq!(flagged("js/nested-ternary", JS, src), [6, 7]);
+        let jsx = "const v = <div>{!rows ? <Spinner /> : rows.length ? <List /> : x ? <A /> : <B />}</div>;";
+        assert!(flagged("js/nested-ternary", JS, jsx).is_empty());
+        assert_eq!(flagged("js/call-arguments-new-line", JS, src), [9]);
+        let jumps = "const f = () => { g(); return; };\nwhile (a) { b(); continue; }\nfunction h() { return; /* done */ }";
+        assert_eq!(flagged("js/redundant-jump", TS, jumps), [1, 2]);
     }
 
     #[test]

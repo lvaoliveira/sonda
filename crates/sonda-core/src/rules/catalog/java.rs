@@ -16,7 +16,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(binary_expression operator: ["==" "!="]) @match"#,
-            filter: Some(has_string_literal_operand),
+            filter: Some(Keep(has_string_literal_operand)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -61,7 +61,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: "(catch_clause body: (block) @match)",
-            filter: Some(empty_block),
+            filter: Some(Keep(empty_block)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -81,7 +81,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_invocation name: (identifier) @n (#eq? @n "printStackTrace")) @match"#,
-            filter: Some(no_arguments),
+            filter: Some(Keep(no_arguments)),
         },
         example: Some(Example {
             lang: Lang::Java,

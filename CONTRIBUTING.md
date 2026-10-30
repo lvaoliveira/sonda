@@ -105,6 +105,10 @@ them linear in the file's size:
   while the left operand's subtree is matched, which is quadratic on long
   `a + b + ...` chains. Match `(binary_expression) @match` and check the
   operator in the filter.
+- **Watch for unanchored child steps.** `(statement_block (statement_block))`
+  stays open over the whole outer block, so it's quadratic on deep
+  nesting. Capture the outer node and find the child with a `Find` filter,
+  which can report a node other than the captured one.
 - **Compare text in the filter, lengths first**, rather than `#eq?` on
   captures that can be large.
 - `large_and_deep_code_stays_fast` in `catalog/js.rs` guards these shapes.
