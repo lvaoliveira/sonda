@@ -475,6 +475,8 @@ async fn rules_report_live_counts_on_main_branches() {
     );
     assert!(no_var["noncompliant"].is_string() && no_var["compliant"].is_string());
     assert_eq!(rule("js/no-eval")["openIssues"], 0);
+    assert_eq!(no_var["onByDefault"], true);
+    assert_eq!(rule("js/prefer-const")["onByDefault"], false);
     assert_eq!(
         catalog["total"].as_u64(),
         Some(catalog["rules"].as_array().unwrap().len() as u64)

@@ -110,6 +110,13 @@ describe('Rules', () => {
     expect(screen.getByText(/disabled = \["py\/broad-except"\]/)).toBeInTheDocument()
   })
 
+  it('shows how to turn on a rule that is off by default', async () => {
+    renderAt('/rules#rust/undocumented-unsafe')
+    const detail = await screen.findByRole('article')
+    expect(within(detail).getByText('Off by default')).toBeInTheDocument()
+    expect(within(detail).getByText(/enabled = \["rust\/undocumented-unsafe"\]/)).toBeInTheDocument()
+  })
+
   it('selects the rule named in the URL hash', async () => {
     renderAt('/rules#py/broad-except')
     const detail = await screen.findByRole('heading', { level: 2, name: /bare or broad except/ })

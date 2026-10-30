@@ -26,7 +26,10 @@ file_timeout_secs = 10
 git_timeout_secs = 120
 
 [rules]
-# Rule ids to turn off. `sonda rules` lists them all.
+# Rules that are off by default to turn on. `sonda rules` lists them all,
+# marking those that are off by default.
+enabled = []
+# Rule ids to turn off.
 disabled = []
 
 # Override the default severity of a rule.
@@ -109,6 +112,8 @@ impl Default for ScanConfig {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RulesConfig {
+    /// Rules that are off by default to turn on.
+    pub enabled: Vec<String>,
     pub disabled: Vec<String>,
     pub severity: HashMap<String, Severity>,
 }

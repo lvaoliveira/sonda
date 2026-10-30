@@ -130,6 +130,12 @@ function Rules({ catalog }: { catalog: RuleCatalog }) {
                   <span>
                     {CATEGORY_LABEL[r.category]} · {r.languages.map(languageLabel).join(', ')}
                   </span>
+                  {!r.onByDefault && (
+                    <>
+                      <span>·</span>
+                      <span>off by default</span>
+                    </>
+                  )}
                 </span>
               </div>
             )
@@ -149,6 +155,7 @@ function RuleDetail({ rule }: { rule: Rule }) {
           <SeverityPill severity={rule.severity} />
           <span className="inline-flex h-6 items-center rounded-xl bg-hover px-2.5">{CATEGORY_LABEL[rule.category]}</span>
           <span className="text-fg-muted">{rule.languages.map(languageLabel).join(', ')}</span>
+          {!rule.onByDefault && <span className="inline-flex h-6 items-center rounded-xl bg-hover px-2.5 text-fg-muted">Off by default</span>}
           <Mono className="text-[10.5px] text-fg-faint">{rule.id}</Mono>
         </div>
         <h2 className="m-0 text-[22px] leading-[1.25] font-semibold tracking-[-0.025em]">{rule.name}</h2>
@@ -181,9 +188,12 @@ function RuleDetail({ rule }: { rule: Rule }) {
 
       <section className="flex flex-col gap-2">
         <h3 className="m-0 font-normal micro-label">Configure</h3>
-        <p className="m-0 text-[13px] text-fg-muted">Rules are configured per repository, in its sonda.toml. To turn this one off, or change its severity:</p>
+        <p className="m-0 text-[13px] text-fg-muted">
+          Rules are configured per repository, in its sonda.toml. To turn this one {rule.onByDefault ? 'off' : 'on (it is off by default)'}, or change its
+          severity:
+        </p>
         <pre className="m-0 overflow-auto rounded-lg bg-canvas px-3.5 py-3 font-mono text-[11.5px] leading-[1.8] edge">
-          {`[rules]\ndisabled = ["${rule.id}"]\n\n[rules.severity]\n"${rule.id}" = "major"`}
+          {`[rules]\n${rule.onByDefault ? 'disabled' : 'enabled'} = ["${rule.id}"]\n\n[rules.severity]\n"${rule.id}" = "major"`}
         </pre>
       </section>
     </article>

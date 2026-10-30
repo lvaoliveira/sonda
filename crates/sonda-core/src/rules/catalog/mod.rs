@@ -32,6 +32,15 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
     .collect()
 });
 
+/// Rules that are off unless `rules.enabled` lists them: those outside
+/// SonarQube's default profile that report style choices many codebases
+/// make on purpose.
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    "js/unused-parameter",
+    "js/shadowed-variable",
+    "js/prefer-const",
+];
+
 // ---------------------------------------------------- shared filters
 
 pub(super) fn empty_block(node: Node, _: &[u8]) -> bool {

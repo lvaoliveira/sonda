@@ -28,14 +28,14 @@ typescript:S905,bug,major,yes,main,syntactic,done,js/useless-expression
 typescript:S909,code_smell,minor,no,main,syntactic,todo,
 typescript:S1066,code_smell,major,no,main,syntactic,todo,
 typescript:S1067,code_smell,critical,no,main,syntactic,todo,
-typescript:S1068,code_smell,major,yes,main,syntactic,todo,
+typescript:S1068,code_smell,major,yes,main,syntactic,done,js/unused-private-field
 typescript:S1077,code_smell,minor,yes,main,syntactic,done,js/img-alt
 typescript:S1082,bug,minor,yes,main,syntactic,done,js/mouse-without-keyboard
 typescript:S1090,code_smell,minor,yes,main,syntactic,done,js/iframe-title
 typescript:S1105,code_smell,minor,no,main,syntactic,deprecated,
 typescript:S1110,code_smell,minor,no,main,syntactic,deprecated,
 typescript:S1116,code_smell,minor,no,main,syntactic,deprecated,
-typescript:S1117,code_smell,major,no,main,syntactic,todo,
+typescript:S1117,code_smell,major,no,main,syntactic,done,js/shadowed-variable
 typescript:S1119,code_smell,major,yes,main,syntactic,done,js/no-label
 typescript:S1121,code_smell,major,yes,main,syntactic,partial,js/assignment-in-condition
 typescript:S1125,code_smell,minor,yes,main,syntactic,partial,js/boolean-literal-comparison
@@ -45,7 +45,7 @@ typescript:S1134,code_smell,major,yes,main,syntactic,done,common/todo-comment
 typescript:S1135,code_smell,info,yes,main,syntactic,done,common/todo-comment
 typescript:S1143,bug,critical,yes,main,syntactic,done,js/jump-in-finally
 typescript:S1154,bug,major,no,main,types,deprecated,
-typescript:S1172,code_smell,major,no,main,syntactic,todo,
+typescript:S1172,code_smell,major,no,main,syntactic,done,js/unused-parameter
 typescript:S1186,code_smell,critical,yes,main,syntactic,done,js/empty-function
 typescript:S1192,code_smell,critical,no,main,syntactic,todo,
 typescript:S1199,code_smell,minor,yes,main,syntactic,done,js/nested-block
@@ -113,7 +113,7 @@ typescript:S2260,code_smell,major,no,main,syntactic,todo,
 typescript:S2301,code_smell,major,yes,main,types,todo,
 typescript:S2310,code_smell,major,yes,main,syntactic,todo,
 typescript:S2376,code_smell,major,no,main,syntactic,todo,
-typescript:S2392,code_smell,major,yes,main,syntactic,todo,
+typescript:S2392,code_smell,major,yes,main,syntactic,done,js/var-outside-block
 typescript:S2424,bug,major,no,main,syntactic,todo,
 typescript:S2427,bug,minor,no,main,syntactic,todo,
 typescript:S2430,code_smell,critical,yes,main,syntactic,todo,
@@ -145,7 +145,7 @@ typescript:S3003,code_smell,major,no,main,types,todo,
 typescript:S3257,code_smell,minor,no,main,syntactic,todo,
 typescript:S3317,code_smell,minor,no,main,syntactic,todo,
 typescript:S3330,vulnerability,minor,yes,main,syntactic,done,js/cookie-not-httponly
-typescript:S3353,code_smell,critical,no,main,syntactic,todo,
+typescript:S3353,code_smell,critical,no,main,syntactic,done,js/prefer-const
 typescript:S3358,code_smell,major,yes,main,syntactic,done,js/nested-ternary
 typescript:S3402,code_smell,minor,no,main,types,todo,
 typescript:S3415,code_smell,major,yes,test,syntactic,done,js/assertion-order
@@ -180,7 +180,7 @@ typescript:S3973,code_smell,critical,no,main,syntactic,deprecated,
 typescript:S3981,bug,major,yes,main,types,todo,
 typescript:S3984,bug,major,yes,main,syntactic,done,js/error-not-thrown
 typescript:S4023,code_smell,minor,no,main,syntactic,todo,
-typescript:S4030,code_smell,major,yes,main,syntactic,todo,
+typescript:S4030,code_smell,major,yes,main,syntactic,done,js/collection-never-read
 typescript:S4036,vulnerability,minor,yes,main,syntactic,done,js/command-path
 typescript:S4043,code_smell,major,yes,main,types,todo,
 typescript:S4084,code_smell,minor,yes,main,syntactic,todo,

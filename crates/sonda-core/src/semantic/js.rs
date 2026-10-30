@@ -8,7 +8,7 @@
 //! resolved after the pass, so hoisting works. Types and values share one
 //! namespace: imports used only as types count as used.
 
-use super::{DeclKind, Model, Ref, ScopeId, ScopeKind};
+use super::{DeclKind, Function, Model, Ref, ScopeId, ScopeKind};
 use std::collections::HashSet;
 use std::time::Instant;
 use tree_sitter::Node;
@@ -132,6 +132,10 @@ impl<'t> Binder<'t, '_> {
                 }
                 None
             }
+            "class_body" => {
+                self.m.classes.push(node);
+                None
+            }
             "statement_block" if self.function_bodies.contains(&node.id()) => None,
             "statement_block" | "switch_body" | "for_statement" => {
                 Some(self.m.push_scope(scope, ScopeKind::Block))
@@ -153,7 +157,9 @@ impl<'t> Binder<'t, '_> {
                     } else {
                         block
                     };
+                    let first = self.m.decls.len();
                     self.declare_pattern(target, left, decl_kind);
+                    self.written_in(first, block);
                 }
                 Some(block)
             }
@@ -215,12 +221,19 @@ impl<'t> Binder<'t, '_> {
                 } else {
                     (DeclKind::Let, scope)
                 };
+                let first = self.m.decls.len();
                 let mut cursor = node.walk();
                 for declarator in node.named_children(&mut cursor) {
                     if let Some(name) = declarator.child_by_field_name("name") {
                         self.declare_pattern(target, name, decl_kind);
+                        if name.kind() == "identifier"
+                            && let Some(d) = self.m.decls.last_mut()
+                        {
+                            d.declarator = Some(declarator);
+                        }
                     }
                 }
+                self.written_in(first, scope);
                 None
             }
             // Parameter names in a type (`(a: T) => U`) or an overload
@@ -310,15 +323,27 @@ impl<'t> Binder<'t, '_> {
             self.declare(outer, name, DeclKind::Function);
         }
         let inner = self.m.push_scope(outer, ScopeKind::Function);
-        if let Some(params) = node.child_by_field_name("parameters") {
-            let mut cursor = params.walk();
-            let list: Vec<Node> = params.named_children(&mut cursor).collect();
-            for p in list {
-                self.declare_pattern(inner, p, DeclKind::Param);
+        let list: Vec<Node> = match node.child_by_field_name("parameters") {
+            Some(params) => {
+                let mut cursor = params.walk();
+                params
+                    .named_children(&mut cursor)
+                    .filter(|p| p.kind() != "comment")
+                    .collect()
             }
-        } else if let Some(param) = node.child_by_field_name("parameter") {
-            self.declare_pattern(inner, param, DeclKind::Param);
+            None => node.child_by_field_name("parameter").into_iter().collect(),
+        };
+        let mut params = Vec::with_capacity(list.len());
+        for p in list {
+            let first = self.m.decls.len();
+            self.declare_pattern(inner, p, DeclKind::Param);
+            params.push((first..self.m.decls.len()).collect());
         }
+        self.m.functions.push(Function {
+            node,
+            scope: inner,
+            params,
+        });
         if let Some(body) = node.child_by_field_name("body")
             && body.kind() == "statement_block"
         {
@@ -363,6 +388,14 @@ impl<'t> Binder<'t, '_> {
         self.not_refs.insert(name.id());
         let text = self.text(name);
         self.m.declare(scope, text, kind, name);
+    }
+
+    /// Records that declarations from `first` on are written in `block`
+    /// (where a `var` in a block differs from the scope it belongs to).
+    fn written_in(&mut self, first: usize, block: ScopeId) {
+        for d in &mut self.m.decls[first..] {
+            d.block = block;
+        }
     }
 
     fn declare_pattern(&mut self, scope: ScopeId, pattern: Node<'t>, kind: DeclKind) {
@@ -426,6 +459,17 @@ impl<'t> Binder<'t, '_> {
             return;
         }
         let text = self.text(node);
+        if text == "arguments" {
+            // Arrow functions see their enclosing function's `arguments`:
+            // mark every function scope around the use.
+            let mut s = Some(scope);
+            while let Some(id) = s {
+                if self.m.scopes[id].kind == ScopeKind::Function {
+                    self.m.scopes[id].uses_arguments = true;
+                }
+                s = self.m.scopes[id].parent;
+            }
+        }
         let parent_kind = parent.map_or("", |p| p.kind());
         // `<div>` is an HTML element, not a variable.
         if matches!(

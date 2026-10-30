@@ -125,5 +125,5 @@ from a public entry point. Each needs its own groundwork, smallest first:
 | **Per-user or per-project API tokens** | One server token serves every upload (ADR-0006). | Tokens owned by users or projects, revocable, shown once. |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
-| **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with six rules ([ADR-0008](adr/0008-semantic-layer.md)). | On the same model: unused parameters and private class members, shadowing, variables used outside their block (S2392). Then binders for Python, Java and C/C++. |
+| **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules ([ADR-0008](adr/0008-semantic-layer.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |

@@ -104,6 +104,7 @@ file_timeout_secs = 10     # per-file parse + rule-matching budget
 git_timeout_secs = 120     # each git process used by --new-code
 
 [rules]
+enabled = ["js/prefer-const"]   # rules that are off by default (`sonda rules` marks them)
 disabled = ["js/no-console"]
 
 [rules.severity]
