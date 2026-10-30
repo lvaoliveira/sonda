@@ -7,7 +7,7 @@ import { componentDetail, listComponents } from './components'
 import { GATES } from './gates'
 import { SECURITY } from './security'
 import { dependencyList, reviewDependency } from './dependencies'
-import { PROJECT_LIST, projectDetail } from './projects'
+import { PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
 import { queryIssues } from './query'
 import rulesData from './rules.json'
 
@@ -158,6 +158,10 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       const detail = projectDetail(project, branch)
       if (!detail) throw new Error('not found')
       return wait(dependencyList(detail))
+    },
+    setNewCodePeriod: async (project, analysis) => {
+      guard()
+      return wait(setNewCodePeriod(project, analysis))
     },
     reviewDependency: async (_project, patch) => {
       guard()

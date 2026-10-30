@@ -161,7 +161,31 @@ describe('Projects', () => {
     expect(screen.getByRole('heading', { name: 'History' })).toBeInTheDocument()
     expect(screen.getByText('services/')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'New code' }))
-    expect(screen.getByText(/new lines since origin\/main/)).toBeInTheDocument()
+    // The main branch: new code since its period's start (ADR-0011).
+    expect(screen.getByText(/new lines since .* \(the first analysis\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Issues first seen after analysis/)).toBeInTheDocument()
+    expect(screen.getByText('on lines the scan changed')).toBeInTheDocument()
+  })
+
+  it('lets an admin start the main branch’s new code at a later analysis', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/billing-service')
+    await screen.findByRole('heading', { level: 1, name: 'billing-service' })
+    await user.click(screen.getByRole('button', { name: 'New code' }))
+    const start = await screen.findByRole('combobox', { name: 'Start new code at' })
+    const options = within(start).getAllByRole('option')
+    await user.selectOptions(start, options[0])
+    // The page reloads (the gate and new-code measures change): wait for
+    // the old view to go before opening New code again.
+    const reopen = async (button: string) => {
+      await user.click(screen.getByRole('button', { name: button }))
+      await waitFor(() => expect(screen.queryByRole('button', { name: button })).not.toBeInTheDocument())
+      await user.click(await screen.findByRole('button', { name: 'New code' }))
+    }
+    await reopen('Start new code here')
+    expect(await screen.findByText(/\(set by an admin\)/)).toBeInTheDocument()
+    await reopen('Back to the first analysis')
+    expect(await screen.findByText(/\(the first analysis\)/)).toBeInTheDocument()
   })
 
   it('switches branches through the URL and explains unknown ones', async () => {

@@ -1,6 +1,6 @@
 # ADR-0011: A new code period on the server
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-10-30
 
 ## Context

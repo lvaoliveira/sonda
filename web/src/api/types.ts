@@ -449,6 +449,19 @@ export interface ProjectDetail {
   components: ProjectComponent[]
   /** From the analysis's lockfiles; null when it recorded none. */
   dependencies: DependencySummary | null
+  /** On the main branch, where new code starts (ADR-0011); null on other branches. */
+  newCodePeriod: NewCodePeriod | null
+}
+
+/** The main branch's new code period: it starts at this analysis. */
+export interface NewCodePeriod {
+  analysis: number
+  sha: string
+  analyzedAt: string
+  /** Moved by an admin, rather than the project's first analysis. */
+  reset: boolean
+  /** New-code measures that keep the scan's values (no per-line data on the server). */
+  fromScan: string[]
 }
 
 // ------------------------------------------------------------ dependencies
@@ -766,6 +779,8 @@ export interface SondaApi {
   component(project: string, path: string, branch?: string): Promise<ComponentDetail>
   /** The project's dependencies on `branch`, or on its main branch. */
   dependencies(project: string, branch?: string): Promise<DependencyList>
+  /** Admins: starts the main branch's new code at `analysis`, or at the first analysis (null). */
+  setNewCodePeriod(project: string, analysis: number | null): Promise<NewCodePeriod>
   /** Triages one known vulnerability in one of the project's packages. */
   reviewDependency(project: string, patch: DependencyReviewPatch): Promise<DependencyReview>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>

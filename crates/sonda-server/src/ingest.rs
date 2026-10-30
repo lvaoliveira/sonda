@@ -175,6 +175,17 @@ pub async fn create(
             .await
             .map_err(|e| ApiError::Internal(e.into()))??;
     let summary = store::ingest(&state.pool, analysis).await?;
+    // On the main branch, new code is the project's period (ADR-0011).
+    let main: Option<i64> = sqlx::query_scalar(
+        "SELECT p.id FROM analyses a JOIN projects p ON p.id = a.project_id
+         WHERE a.id = $1 AND a.branch = p.main_branch",
+    )
+    .bind(summary.analysis_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some(project) = main {
+        crate::new_code::refresh(&state.pool, project).await?;
+    }
     crate::dependencies::refresh_gates(
         &state.pool,
         crate::dependencies::GateScope::Analysis(summary.analysis_id),

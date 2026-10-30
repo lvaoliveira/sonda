@@ -169,6 +169,13 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- A new code period on the server (ADR-0011): on each project's main
+  branch, issues first seen after the period's starting analysis (the
+  first, unless an admin moved it) are new, and nothing ages out. The
+  server recomputes `is_new`, the new-issue measures, `new_lines` (from
+  stored sources) and the gate on each main-branch upload; coverage and
+  duplication on new code keep the scan's values. Admins move the start
+  from the project page (`PUT /api/projects/{key}/new-code`), audited.
 - A default for new code (ADR-0010): without `--new-code`, `auto` judges
   what the run changed. In a GitHub Actions pull request, that's against
   its base branch; in a push, the commits it pushed; on a branch with

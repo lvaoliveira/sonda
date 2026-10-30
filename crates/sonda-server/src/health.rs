@@ -80,6 +80,35 @@ pub(crate) fn debt_text(minutes: f64) -> String {
 }
 
 /// "New vulnerabilities > 0", from a stored gate condition.
+/// Re-evaluates a stored gate's conditions against `measures`, as the CLI
+/// does (`gt`/`lt`; no value is "no data", which doesn't fail), and sets
+/// `passed`. Returns whether it passes. For values the server computes
+/// itself (ADR-0009, ADR-0011).
+pub(crate) fn evaluate_gate(gate: &mut Value, measures: &Value) -> bool {
+    for c in gate["conditions"].as_array_mut().into_iter().flatten() {
+        let Some(metric) = c["metric"].as_str() else {
+            continue;
+        };
+        let actual = measures[metric].as_f64();
+        let threshold = c["threshold"].as_f64().unwrap_or(0.0);
+        let status = match (actual, c["op"].as_str()) {
+            (None, _) => "no_data",
+            (Some(v), Some("gt")) if v > threshold => "error",
+            (Some(v), Some("lt")) if v < threshold => "error",
+            _ => "ok",
+        };
+        c["actual"] = actual.map_or(Value::Null, Value::from);
+        c["status"] = Value::from(status);
+    }
+    let passed = gate["conditions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .all(|c| c["status"] != "error");
+    gate["passed"] = Value::from(passed);
+    passed
+}
+
 pub(crate) fn condition_label(c: &Value) -> String {
     let metric = c["metric"].as_str().unwrap_or("?");
     let name = match metric {

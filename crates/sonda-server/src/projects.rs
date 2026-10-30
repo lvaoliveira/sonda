@@ -69,6 +69,9 @@ pub struct ProjectDetail {
     pub components: Vec<ComponentRow>,
     /// From the analysis's lockfiles; null when it recorded none.
     pub dependencies: Option<crate::dependencies::Summary>,
+    /// On the main branch, where new code starts (ADR-0011); null on other
+    /// branches, whose new code is what their scans compared with.
+    pub new_code_period: Option<crate::new_code::Period>,
 }
 
 #[derive(Serialize)]
@@ -296,6 +299,11 @@ pub async fn get_project(
     let languages = language_shares(&files);
     let components = components(&files, &issues, codeowners.as_deref());
     let dependencies = crate::dependencies::summary(pool, project, analysis).await?;
+    let new_code_period = if branch == main_branch {
+        crate::new_code::period(pool, project).await?
+    } else {
+        None
+    };
 
     Ok(Json(ProjectDetail {
         key,
@@ -324,6 +332,7 @@ pub async fn get_project(
         history,
         components,
         dependencies,
+        new_code_period,
     }))
 }
 

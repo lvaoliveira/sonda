@@ -1,4 +1,4 @@
-import type { GateState, Level, ProjectDetail, ProjectList, ProjectRow } from '../types'
+import type { GateState, Level, NewCodePeriod, ProjectDetail, ProjectHistoryPoint, ProjectList, ProjectRow } from '../types'
 import { DEPENDENCY_SUMMARY } from './dependencies'
 
 type Row = [key: string, languages: string[], gate: GateState, levels: [Level, Level, Level], coverage: number | null, dup: number, issues: number, ncloc: number, hoursAgo: number]
@@ -105,5 +105,31 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
     })),
     // A release branch analyzed before lockfiles were read.
     dependencies: on === p.mainBranch ? DEPENDENCY_SUMMARY : null,
+    newCodePeriod: on === p.mainBranch ? newCodePeriod(p.key, history) : null,
   }
+}
+
+/** Where each project's new code starts, when an admin moved it. */
+const PERIODS = new Map<string, number>()
+
+function newCodePeriod(key: string, history: ProjectHistoryPoint[]): NewCodePeriod {
+  const moved = PERIODS.get(key)
+  const start = history.find((h) => h.id === moved) ?? history[0]
+  return {
+    analysis: start.id,
+    sha: start.sha,
+    analyzedAt: start.analyzedAt,
+    reset: moved !== undefined && start.id === moved,
+    fromScan: ['new_coverage', 'new_duplicated_lines_density'],
+  }
+}
+
+/** As the server does: admins only, and only an analysis of the main branch. */
+export function setNewCodePeriod(key: string, analysis: number | null): NewCodePeriod {
+  const p = projectDetail(key)
+  if (!p) throw new Error('not found')
+  if (analysis === null) PERIODS.delete(key)
+  else if (p.history.some((h) => h.id === analysis)) PERIODS.set(key, analysis)
+  else throw new Error('the new code period starts at an analysis of the project’s main branch')
+  return newCodePeriod(key, p.history)
 }

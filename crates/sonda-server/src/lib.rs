@@ -19,6 +19,7 @@ mod health;
 pub mod http;
 pub mod ingest;
 pub mod issues;
+pub mod new_code;
 pub mod overview;
 pub mod projects;
 pub mod rules;

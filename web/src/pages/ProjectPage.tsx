@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { MeasureSet, ProjectDetail, ProjectHistoryPoint } from '@/api/types'
+import type { MeasureSet, NewCodePeriod, ProjectDetail, ProjectHistoryPoint } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
-import { Segmented } from '@/components/sonda/controls'
+import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { HealthBar, PipMeter, Sparkline } from '@/components/sonda/meters'
 import { GateConditions } from '@/components/sonda/gate'
@@ -30,12 +30,12 @@ export function ProjectPage() {
           </Link>
         </div>
       )}
-      {detail.state === 'ready' && <Project p={detail.data} />}
+      {detail.state === 'ready' && <Project p={detail.data} reload={detail.reload} />}
     </AppShell>
   )
 }
 
-function Project({ p }: { p: ProjectDetail }) {
+function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   const navigate = useNavigate()
   const lines = p.languages.reduce((sum, l) => sum + l.ncloc, 0)
   const projectUrl = `/projects/${encodeURIComponent(p.key)}`
@@ -76,7 +76,7 @@ function Project({ p }: { p: ProjectDetail }) {
       </div>
 
       <div className="grid grid-cols-1 gap-5 min-[1000px]:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
-        <Measures p={p} />
+        <Measures p={p} reload={reload} />
         <Gate p={p} />
       </div>
       <History history={p.history} branch={p.branch} />
@@ -152,13 +152,16 @@ function Gate({ p }: { p: ProjectDetail }) {
 
 type Scope = 'overall' | 'newCode'
 
-function Measures({ p }: { p: ProjectDetail }) {
+function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   const [scope, setScope] = useState<Scope>('overall')
   const m: MeasureSet = p.measures[scope]
   const issues = (extra: string) =>
     `/issues?project=${encodeURIComponent(p.key)}&branch=${encodeURIComponent(p.branch)}${extra}${scope === 'newCode' ? '&new' : ''}`
   const count = (v: number | null) => (v == null ? '—' : formatNumber(v))
   const pct = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}%`)
+  const period = p.newCodePeriod
+  // Without per-line data, the server keeps the scan's own values for these.
+  const fromScan = scope === 'newCode' && period != null
   const tiles: { label: string; value: string; sub: string; to?: string; color?: string }[] = [
     { label: 'Bugs', value: count(m.bugs), sub: 'Reliability', to: issues('&cat=bug') },
     { label: 'Vulnerabilities', value: count(m.vulnerabilities), sub: 'Security', to: issues('&cat=vulnerability') },
@@ -166,10 +169,10 @@ function Measures({ p }: { p: ProjectDetail }) {
     {
       label: 'Coverage',
       value: pct(m.coverage),
-      sub: m.coverage == null ? 'No coverage uploaded' : scope === 'newCode' ? 'on changed lines' : 'of code lines',
+      sub: m.coverage == null ? 'No coverage uploaded' : fromScan ? 'on lines the scan changed' : scope === 'newCode' ? 'on changed lines' : 'of code lines',
       color: m.coverage == null ? undefined : coverageColor(m.coverage),
     },
-    { label: 'Duplication', value: pct(m.duplication), sub: 'duplicated lines' },
+    { label: 'Duplication', value: pct(m.duplication), sub: fromScan ? 'in lines the scan changed' : 'duplicated lines' },
     { label: 'Debt', value: m.debtMinutes == null ? '—' : formatDebt(m.debtMinutes), sub: 'to fix every issue', to: issues('') },
   ]
   return (
@@ -178,7 +181,9 @@ function Measures({ p }: { p: ProjectDetail }) {
       title="Measures"
       subtitle={
         scope === 'newCode'
-          ? `${formatNumber(m.lines ?? 0)} new lines${p.analysis.newCodeReference ? ` since ${p.analysis.newCodeReference}` : ''}`
+          ? period
+            ? `${formatNumber(m.lines ?? 0)} new lines since ${shortDate(period.analyzedAt)} (${period.reset ? 'set by an admin' : 'the first analysis'})`
+            : `${formatNumber(m.lines ?? 0)} new lines${p.analysis.newCodeReference ? ` since ${p.analysis.newCodeReference}` : ''}`
           : `${formatNumber(m.lines ?? 0)} lines of code`
       }
       aside={
@@ -229,7 +234,73 @@ function Measures({ p }: { p: ProjectDetail }) {
           </div>
         ))}
       </MetricGrid>
+      {scope === 'newCode' && period && <NewCodeStart p={p} period={period} reload={reload} />}
     </Card>
+  )
+}
+
+/** Where the main branch's new code starts, and for admins, moving it (ADR-0011). */
+function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCodePeriod; reload: () => void }) {
+  const api = useApi()
+  const shell = useAsync(() => api.shell(), [api])
+  const isAdmin = shell.state === 'ready' && shell.data.isAdmin
+  const [choice, setChoice] = useState(String(period.analysis))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const move = async (analysis: number | null) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setNewCodePeriod(p.key, analysis)
+      reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2 border-t border-line pt-3 text-[13px] text-fg-muted">
+      <p className="m-0">
+        Issues first seen after analysis{' '}
+        <Link to={`/analyses/${period.analysis}`} className="font-mono text-xs">
+          {period.sha.slice(0, 9)}
+        </Link>{' '}
+        ({shortDate(period.analyzedAt)}) are new; what was there then is accepted. Coverage and duplication on new code come from the scan.
+      </p>
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="new-code-start" className="text-xs">
+            Start new code at
+          </label>
+          <select
+            id="new-code-start"
+            value={choice}
+            onChange={(e) => setChoice(e.target.value)}
+            className="h-[30px] rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge"
+          >
+            {[...p.history].reverse().map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.sha.slice(0, 9)} · {shortDate(h.analyzedAt)}
+              </option>
+            ))}
+          </select>
+          <Button onClick={() => void move(Number(choice))} disabled={busy || Number(choice) === period.analysis}>
+            Start new code here
+          </Button>
+          {period.reset && (
+            <Button onClick={() => void move(null)} disabled={busy}>
+              Back to the first analysis
+            </Button>
+          )}
+          <span className="text-xs text-fg-faint">Accepts the issues present then. Recorded with your name.</span>
+        </div>
+      )}
+      {error && (
+        <span role="alert" className="text-xs text-crit">
+          {error}
+        </span>
+      )}
+    </div>
   )
 }
 

@@ -15,7 +15,13 @@ async fn projects_on_the_default_gate_are_recognized() {
     };
     db::migrate(&db.pool).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
-    for (project, src) in [("payments", "eval(x);\n"), ("docs", "let y = 1;\n")] {
+    // payments' first analysis is clean and starts its new code period
+    // (ADR-0011); its second adds a vulnerability, which is then new.
+    for (project, src) in [
+        ("payments", "let x = 1;\n"),
+        ("payments", "eval(x);\n"),
+        ("docs", "let y = 1;\n"),
+    ] {
         let (status, summary) = upload(
             &db,
             &upload_json_for(dir.path(), &[("a.js", src)], project, "main"),
@@ -40,7 +46,7 @@ async fn projects_on_the_default_gate_are_recognized() {
         .find(|c| c["metric"] == "new_vulnerabilities")
         .unwrap();
     assert_eq!(vulns["failing"], 1);
-    assert_eq!(gates[0]["evaluations"].as_array().unwrap().len(), 2);
+    assert_eq!(gates[0]["evaluations"].as_array().unwrap().len(), 3);
     assert_eq!(gates[0]["mostCommonFailure"], "New vulnerabilities > 0");
     db.drop().await;
 }

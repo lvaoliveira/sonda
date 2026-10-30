@@ -5,8 +5,8 @@ use crate::api::{ApiError, Caller};
 use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
-    analyses, api, components, db, dependencies, drill, gates, ingest, issues, overview, projects,
-    rules, security, session, throttle,
+    analyses, api, components, db, dependencies, drill, gates, ingest, issues, new_code, overview,
+    projects, rules, security, session, throttle,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -83,6 +83,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         ));
     let admin = Router::new()
         .route("/users", get(users::list_users).post(users::create_user))
+        .route("/projects/{key}/new-code", put(new_code::put_period))
         .route("/users/{id}", patch(users::update_user))
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(
