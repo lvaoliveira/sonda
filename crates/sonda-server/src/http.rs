@@ -3,12 +3,12 @@
 
 use crate::api::{ApiError, Caller};
 use crate::config::Token;
-use crate::{api, db, ingest, rules, session};
+use crate::{api, db, ingest, issues, rules, session};
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -34,9 +34,21 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
             state.clone(),
             api::require_token,
         ));
-    let reads = Router::new().route("/rules", get(rules::list)).route_layer(
-        middleware::from_fn_with_state(state.clone(), api::require_read),
-    );
+    let reads = Router::new()
+        .route("/rules", get(rules::list))
+        .route("/issues", get(issues::list_issues))
+        .route("/issues/{id}", get(issues::get_issue))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::require_read,
+        ));
+    let triage = Router::new()
+        .route("/issues/{id}", patch(issues::patch_issue))
+        .layer(DefaultBodyLimit::max(4096))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::require_write,
+        ));
     let sessions = Router::new()
         .route(
             "/session",
@@ -47,6 +59,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/health", get(health))
         .merge(writes)
         .merge(reads)
+        .merge(triage)
         .merge(sessions)
         // An unknown API path is a 404, never the web app's index.html.
         .fallback(|| async {

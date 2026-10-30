@@ -24,10 +24,11 @@
 //! - infrastructure: `scanner` (filesystem), `git`, `worker` (processes),
 //!   `sandbox`, `upload` (reads sources for the server; no networking)
 //! - domain: `project`, `measures`, `gate`, `analysis`, `duplication`,
-//!   `rules`, `newcode`, `coverage`, `config` — no I/O
+//!   `rules`, `newcode`, `coverage`, `config`, `highlight` — no I/O
 //! - shared types: `model`, `lang`
 
 pub mod config;
+pub mod highlight;
 pub mod lang;
 pub mod model;
 pub mod report;
@@ -198,6 +199,7 @@ mod architecture {
         ("project.rs", include_str!("project.rs")),
         ("measures.rs", include_str!("measures.rs")),
         ("gate.rs", include_str!("gate.rs")),
+        ("highlight.rs", include_str!("highlight.rs")),
     ];
 
     /// The file without comment lines (docs may mention other layers). Test

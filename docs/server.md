@@ -5,8 +5,8 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 (the server and the web app) and `db` (PostgreSQL).
 
 **Status:** the server receives uploads, tracks issues across them, signs
-browsers in, and serves the rule catalog. The Issues API and connecting the
-web app come next; until then the web app shows mock data.
+browsers in, and serves issues (with triage) and the rule catalog.
+Connecting the web app comes next; until then it shows mock data.
 
 ## Quick start (Docker Compose)
 
@@ -89,6 +89,43 @@ The cookie is `__Host-sonda_session`: `HttpOnly` (page scripts cannot read
 it), `Secure`, `SameSite=Strict`, and valid for 12 hours. The database keeps
 only a SHA-256 hash of each session. Browsers treat `http://localhost` as
 secure, so signing in works locally without TLS.
+
+## Issues
+
+`GET /api/issues` lists issues, most severe first. By default it covers
+each project's main branch. Every filter is optional:
+
+| Parameter | |
+|---|---|
+| `project`, `branch` | One project; a branch other than its main one |
+| `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted` or `fixed` |
+| `file` | Any part of the path |
+| `assignee`, `new=true` | Assigned to someone; on new code only |
+| `offset`, `limit` | Paging; `limit` is 1-200, default 50 |
+
+An unknown value or parameter is a `400`, so a typo never looks like "no
+issues". The answer holds `total`, the page of `items`, and `facets`: for
+severity, category, status and component, the count per value. Each facet
+ignores its own selection, so choosing *critical* still shows how many
+*major* issues there are. A component is a path's top-level directory, or
+`.` for files at the root.
+
+`GET /api/issues/{id}` adds:
+- the rule's name, description and examples;
+- its triage history;
+- the code around the issue, up to 80 lines, as of the latest analysis
+  that saw it. Each line is a list of `{text, role}` tokens, so the browser
+  needs no highlighter.
+
+The server highlights with a small built-in lexer, not tree-sitter: it
+runs on uploaded code inside the server process, where sonda never runs its
+C parsers (ADR-0003 keeps them in sandboxed workers).
+
+`PATCH /api/issues/{id}` with `{"status": "confirmed"}` (or `open`,
+`accepted`) and/or `{"assignee": "alice"}` (`""` unassigns) changes triage.
+Each change is recorded in the issue's history. `fixed` cannot be set: it
+is decided by analyses. A change needs the token, or a browser session plus
+a `Sonda-Csrf` header.
 
 ## Rules
 

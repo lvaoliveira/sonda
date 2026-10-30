@@ -14,6 +14,9 @@ use serde_json::json;
 #[derive(Debug)]
 pub enum ApiError {
     Unauthorized,
+    /// Authenticated, but the request is not allowed as sent.
+    Forbidden(String),
+    NotFound,
     BadRequest(String),
     PayloadTooLarge(String),
     UnsupportedMediaType(String),
@@ -26,6 +29,8 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "missing or invalid token".into()),
+            Self::Forbidden(m) => (StatusCode::FORBIDDEN, m),
+            Self::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             Self::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             Self::PayloadTooLarge(m) => (StatusCode::PAYLOAD_TOO_LARGE, m),
             Self::UnsupportedMediaType(m) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, m),
@@ -99,6 +104,31 @@ pub async fn require_read(
 ) -> Result<Response, ApiError> {
     if state.reads_require_auth && caller(&state, request.headers()).await? == Caller::Anonymous {
         return Err(ApiError::Unauthorized);
+    }
+    Ok(next.run(request).await)
+}
+
+/// The header a browser session must add to every change. A cross-site
+/// form or script cannot set it without a CORS preflight, which this server
+/// never approves, so a session cookie alone can never make a change.
+pub const CSRF_HEADER: &str = "sonda-csrf";
+
+/// Middleware for changes made from the web app (triage): the token, or a
+/// session plus `CSRF_HEADER`.
+pub async fn require_write(
+    axum::extract::State(state): axum::extract::State<State>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    match caller(&state, request.headers()).await? {
+        Caller::Token => {}
+        Caller::Session if request.headers().contains_key(CSRF_HEADER) => {}
+        Caller::Session => {
+            return Err(ApiError::Forbidden(format!(
+                "missing the {CSRF_HEADER} header"
+            )));
+        }
+        Caller::Anonymous => return Err(ApiError::Unauthorized),
     }
     Ok(next.run(request).await)
 }

@@ -153,6 +153,17 @@ What holds today:
   `SameSite=Strict`, expiring after 12 hours. The database stores only a
   SHA-256 hash of each session token, so a database leak yields no usable
   session, and signing out deletes the session server-side.
+- **Sessions alone cannot change anything.** A change made with a session
+  cookie also needs a `Sonda-Csrf` header. A cross-site form or script
+  cannot set that header without a CORS preflight, which the server never
+  approves. Combined with `SameSite=Strict`, this blocks cross-site
+  request forgery.
+- **Uploaded code is never parsed by C code in the server.** The issue
+  view's syntax highlighting uses a small pure-Rust lexer. It is linear,
+  never recurses, and is property-tested to lose no text, so tree-sitter's C
+  parsers stay confined to sandboxed workers (ADR-0003).
+- **Request input never becomes SQL.** Filters are bound as arrays, with an
+  empty array meaning no filter, so every query is a fixed string.
 - **Migrations are all-or-nothing:** each runs in a transaction, and a
   failure stops startup.
 

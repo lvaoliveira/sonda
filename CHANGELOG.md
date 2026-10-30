@@ -70,6 +70,14 @@ file, the report formats and the public library API.
     loopback only.
   - `GET /api/rules` serves the rule catalog with live open-issue counts
     per rule on each project's main branch.
+- `sonda-server` issues API:
+  - `GET /api/issues` filters (severity, category, status, component,
+    file, assignee, new code), paginates, and counts facets.
+  - `GET /api/issues/{id}` adds the rule, the triage history, and the
+    surrounding code with syntax highlighting.
+  - `PATCH /api/issues/{id}` changes status or assignee and records it.
+- `sonda_core::highlight`: a dependency-free syntax highlighter for showing
+  code.
 
 ### Security
 
