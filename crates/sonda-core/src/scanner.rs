@@ -4,6 +4,7 @@
 use crate::analysis::{self, FileAnalysis};
 use crate::config::{Config, ScanConfig};
 use crate::coverage::Coverage;
+use crate::deps::{self, Dependency, FileKind};
 use crate::duplication;
 use crate::error::Error;
 use crate::git;
@@ -16,6 +17,7 @@ use crate::worker::WorkerPool;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::num::NonZeroUsize;
@@ -60,13 +62,99 @@ pub(crate) fn scan(
     rules: &RuleSet,
 ) -> Result<ProjectAnalysis, Error> {
     let started = Instant::now();
-    let (paths, warnings) = collect_files(&opts.root, cfg)?;
+    let found = collect_files(&opts.root, cfg)?;
     info!(
-        files = paths.len(),
+        files = found.files.len(),
+        lockfiles = found.dependency_files.len(),
         elapsed_ms = ms(started),
         "discovered files"
     );
-    scan_files(opts, cfg, rules, paths, warnings)
+    let (dependencies, dependency_warnings) = load_dependencies(&found.dependency_files);
+    let mut analysis = scan_files(opts, cfg, rules, found.files, found.warnings)?;
+    analysis.dependencies = dependencies;
+    analysis.warnings.extend(dependency_warnings);
+    analysis.warnings.sort();
+    analysis.warnings.dedup();
+    Ok(analysis)
+}
+
+/// The project's dependencies from its lockfiles, without analyzing any
+/// code: what `sonda sbom` exports.
+pub(crate) fn dependencies(
+    root: &Path,
+    cfg: &Config,
+) -> Result<(Vec<Dependency>, Vec<String>), Error> {
+    let found = collect_files(root, cfg)?;
+    let (dependencies, mut warnings) = load_dependencies(&found.dependency_files);
+    warnings.extend(found.warnings);
+    warnings.sort();
+    warnings.dedup();
+    Ok((dependencies, warnings))
+}
+
+/// Lockfiles are machine-written and can be much larger than source files
+/// (`scan.max_file_size_kb`); this still bounds memory.
+const LOCKFILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Reads and parses each lockfile; problems become warnings. Sorted, so the
+/// result does not depend on the walk's order.
+fn load_dependencies(files: &[DependencyFile]) -> (Vec<Dependency>, Vec<String>) {
+    let started = Instant::now();
+    let read = |f: &DependencyFile| -> Result<String, String> {
+        let bytes = read_listed(&f.path, f.id, LOCKFILE_MAX_BYTES)
+            .map_err(|e| format!("{}: {e}", f.rel))?
+            .ok_or_else(|| {
+                format!(
+                    "{}: skipped, larger than {} MB",
+                    f.rel,
+                    LOCKFILE_MAX_BYTES >> 20
+                )
+            })?;
+        String::from_utf8(bytes).map_err(|_| format!("{}: skipped, not valid UTF-8", f.rel))
+    };
+    let dir = |rel: &str| rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+    // pyproject.toml is read only next to a poetry.lock, which needs it.
+    let poetry_dirs: Vec<String> = files
+        .iter()
+        .filter(|f| f.kind == FileKind::PoetryLock)
+        .map(|f| dir(&f.rel))
+        .collect();
+    let manifests: HashMap<String, String> = files
+        .iter()
+        .filter(|f| f.kind == FileKind::PyProject && poetry_dirs.contains(&dir(&f.rel)))
+        .filter_map(|f| read(f).ok().map(|text| (dir(&f.rel), text)))
+        .collect();
+
+    let mut dependencies = Vec::new();
+    let mut warnings = Vec::new();
+    for f in files.iter().filter(|f| f.kind != FileKind::PyProject) {
+        // An unsupported lockfile is only reported, never read.
+        let text = match f.kind {
+            FileKind::Unsupported => String::new(),
+            _ => match read(f) {
+                Ok(t) => t,
+                Err(w) => {
+                    warnings.push(w);
+                    continue;
+                }
+            },
+        };
+        let manifest = manifests.get(&dir(&f.rel)).map(String::as_str);
+        match deps::parse(f.kind, &f.rel, &text, manifest) {
+            Ok(parsed) => {
+                dependencies.extend(parsed.dependencies);
+                warnings.extend(parsed.notes.into_iter().map(|n| format!("{}: {n}", f.rel)));
+            }
+            Err(e) => warnings.push(format!("{}: skipped, {e}", f.rel)),
+        }
+    }
+    dependencies.sort();
+    info!(
+        dependencies = dependencies.len(),
+        elapsed_ms = ms(started),
+        "read lockfiles"
+    );
+    (dependencies, warnings)
 }
 
 /// Everything after file discovery. Output must not depend on the order of
@@ -190,6 +278,7 @@ fn scan_files(
         coverage,
         new_code,
         warnings,
+        dependencies: Vec::new(),
     })
 }
 
@@ -226,8 +315,24 @@ fn file_id(_: &std::fs::Metadata) -> Option<FileId> {
     None
 }
 
-/// Walks `root` honoring .gitignore and `scan.exclude`, keeping supported languages.
-fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<String>), Error> {
+/// A lockfile or manifest found by the walk.
+struct DependencyFile {
+    path: PathBuf,
+    rel: String,
+    kind: FileKind,
+    id: Option<FileId>,
+}
+
+/// What the walk found.
+struct Found {
+    files: Vec<Candidate>,
+    dependency_files: Vec<DependencyFile>,
+    warnings: Vec<String>,
+}
+
+/// Walks `root` honoring .gitignore and `scan.exclude`, keeping supported
+/// languages, and lockfiles.
+fn collect_files(root: &Path, cfg: &Config) -> Result<Found, Error> {
     let mut overrides = OverrideBuilder::new(root);
     for pattern in &cfg.scan.exclude {
         overrides
@@ -243,6 +348,7 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
         .build();
 
     let mut files = Vec::new();
+    let mut dependency_files = Vec::new();
     let mut warnings = Vec::new();
     for entry in walker {
         let entry = match entry {
@@ -256,22 +362,42 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
             continue;
         }
         let path = entry.path();
-        let Some(lang) = Lang::from_path(path) else {
+        let dependency_kind = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(deps::file_kind);
+        let lang = Lang::from_path(path);
+        if lang.is_none() && dependency_kind.is_none() {
             continue;
-        };
+        }
         let rel = relative(path, root);
         let Ok(meta) = entry.metadata() else {
             warnings.push(format!("{rel}: skipped, metadata unavailable"));
             continue;
         };
-        files.push(Candidate {
-            path: path.to_path_buf(),
-            rel,
-            lang,
-            id: file_id(&meta),
-        });
+        let id = file_id(&meta);
+        match (lang, dependency_kind) {
+            (Some(lang), _) => files.push(Candidate {
+                path: path.to_path_buf(),
+                rel,
+                lang,
+                id,
+            }),
+            (None, Some(kind)) => dependency_files.push(DependencyFile {
+                path: path.to_path_buf(),
+                rel,
+                kind,
+                id,
+            }),
+            (None, None) => {}
+        }
     }
-    Ok((files, warnings))
+    dependency_files.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok(Found {
+        files,
+        dependency_files,
+        warnings,
+    })
 }
 
 /// A candidate's source text, or the warning explaining why it is skipped.
@@ -314,13 +440,22 @@ fn ms(since: Instant) -> u128 {
 /// the root, the read is refused. On Unix the open is non-blocking, so a file
 /// swapped for a FIFO cannot hang the scan before that check runs.
 fn read_capped(c: &Candidate, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
-    let file = open_nonblocking(&c.path)?;
+    read_listed(&c.path, c.id, max_bytes)
+}
+
+/// [`read_capped`] for any file the walk listed with identity `id`.
+fn read_listed(
+    path: &Path,
+    id: Option<FileId>,
+    max_bytes: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let file = open_nonblocking(path)?;
     let meta = file.metadata()?;
     // Both checks are needed: a deleted file's inode can be reused at once
     // (ext4 does), so a FIFO created in its place can match the identity.
     // A symlink to an existing file outside the root cannot: that file's
     // inode was in use alongside the listed one.
-    if !meta.is_file() || (c.id.is_some() && file_id(&meta) != c.id) {
+    if !meta.is_file() || (id.is_some() && file_id(&meta) != id) {
         return Err(std::io::Error::other(
             "skipped, the file was replaced after it was listed",
         ));
@@ -382,6 +517,82 @@ mod tests {
             measures,
             gate,
         }
+    }
+
+    #[test]
+    fn reads_lockfiles_outside_excluded_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |p: &str, s: &str| {
+            let full = root.join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, s).unwrap();
+        };
+        write(
+            "web/package-lock.json",
+            r#"{"lockfileVersion": 3, "packages": {"": {"dependencies": {"lodash": "^4"}},
+               "node_modules/lodash": {"version": "4.17.20", "license": "MIT"}}}"#,
+        );
+        // A dependency's own lockfile, under the default exclude.
+        write(
+            "web/node_modules/lodash/package-lock.json",
+            r#"{"lockfileVersion": 3, "packages": {"node_modules/x": {"version": "1.0.0"}}}"#,
+        );
+        write(
+            "api/poetry.lock",
+            "[[package]]\nname = \"flask\"\nversion = \"3.0.0\"\n",
+        );
+        write(
+            "api/pyproject.toml",
+            "[project]\ndependencies = [\"flask>=3\"]\n",
+        );
+        write("old/package-lock.json", r#"{"lockfileVersion": 1}"#);
+        write("app/pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+        write("src/app.js", "let a = 1;\n");
+
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            ..ScanOptions::default()
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let got: Vec<(&str, &str, Option<bool>, &str)> = r
+            .dependencies
+            .iter()
+            .map(|d| {
+                (
+                    d.name.as_str(),
+                    d.version.as_str(),
+                    d.direct,
+                    d.source.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("lodash", "4.17.20", Some(true), "web/package-lock.json"),
+                ("flask", "3.0.0", Some(true), "api/poetry.lock"),
+            ]
+        );
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.starts_with("old/package-lock.json: skipped, lockfileVersion 1")),
+            "{:?}",
+            r.warnings
+        );
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.starts_with("app/pnpm-lock.yaml: skipped, not read")),
+            "{:?}",
+            r.warnings
+        );
+        // The same list without analyzing code.
+        let (only, _) = dependencies(root, &cfg).unwrap();
+        assert_eq!(only, r.dependencies);
     }
 
     #[test]
@@ -511,7 +722,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
         };
-        let (mut paths, _) = collect_files(root, cfg).unwrap();
+        let mut paths = collect_files(root, cfg).unwrap().files;
         let mut walk_warnings = vec!["z: walk error".to_string(), "a: walk error".to_string()];
         if reverse {
             paths.reverse();
@@ -645,7 +856,8 @@ mod tests {
         std::fs::write(root.join("pipe.py"), "x = 3\n").unwrap();
 
         let cfg = Config::default();
-        let (paths, warnings) = collect_files(root, &cfg).unwrap();
+        let found = collect_files(root, &cfg).unwrap();
+        let (paths, warnings) = (found.files, found.warnings);
         assert_eq!(paths.len(), 3);
 
         std::fs::remove_file(root.join("a.py")).unwrap();

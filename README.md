@@ -32,6 +32,7 @@ Quality gate: FAILED
 - **New code**: everything changed since the merge base with a branch (committed or not), plus untracked files. Each issue and metric is reported both overall and for new code, the "clean as you code" approach.
 - **Quality gate**: configurable conditions on any metric. Exit code 1 when it fails.
 - **Output**: human-readable text, JSON, or SARIF 2.1.0 for GitHub code scanning, GitLab and IDEs. Security rules carry their CWE ids and OWASP Top 10 categories.
+- **Dependencies (SBOM)**: the packages a project's lockfiles pin (`package-lock.json`, `Cargo.lock`, `poetry.lock`, `uv.lock`, pinned `requirements*.txt`), in the JSON report and exportable as CycloneDX 1.6 or SPDX 2.3 with `sonda sbom`. Read offline; no package manager runs. Matching them against known vulnerabilities is planned ([ADR-0009](docs/adr/0009-dependencies-and-advisories.md)).
 - **Suppression**: put `// NOSONAR` or `// sonda-ignore` on a line to suppress every issue on it. Put `// sonda-ignore: js/no-var, js/eqeqeq` to suppress only the listed rules.
 - **Fast**: files are analyzed in parallel, and `.gitignore` is respected.
 - **Deterministic**: the same code and config produce byte-identical reports, whatever the thread count or filesystem order. The one exception is a file that hits its time budget, which is reported as a warning.
@@ -50,6 +51,8 @@ sonda scan . --new-code origin/main       # judge only what changed since main
 sonda scan . --coverage lcov.info         # import coverage (repeatable)
 sonda scan . --format sarif -o sonda.sarif
 sonda scan . --format json --only-new     # list only issues on new code
+sonda sbom . -o sbom.cdx.json             # SBOM of the lockfiles' dependencies (CycloneDX)
+sonda sbom . --format spdx                # the same as SPDX 2.3 JSON
 sonda rules                               # list rules
 sonda init                                # write a default sonda.toml
 sonda -v scan .                           # log progress to stderr (-vv, -vvv for more)
@@ -62,7 +65,7 @@ sonda upload report.json --server https://sonda.example.com \
 
 Without `--new-code`, the whole project counts as new code.
 
-Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed. The JSON format is versioned by `report_version`.
+Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed. The JSON format is versioned by `report_version`. Its `dependencies` list each package's ecosystem, name, version, package URL, lockfile, whether it's direct where the lockfile says, and its license where recorded. `sonda sbom` stamps the SBOM with the current time, or with `SOURCE_DATE_EPOCH` when set, for reproducible output.
 
 Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an error (bad config, unknown rule id, git failure, and so on). Use `--no-gate` to always exit 0.
 
