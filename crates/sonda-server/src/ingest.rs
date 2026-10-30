@@ -175,6 +175,11 @@ pub async fn create(
             .await
             .map_err(|e| ApiError::Internal(e.into()))??;
     let summary = store::ingest(&state.pool, analysis).await?;
+    crate::dependencies::refresh_gates(
+        &state.pool,
+        crate::dependencies::GateScope::Analysis(summary.analysis_id),
+    )
+    .await?;
     tracing::info!(
         analysis = summary.analysis_id,
         new = summary.issues.new,

@@ -25,6 +25,22 @@ pub(crate) fn compute(project: &ProjectAnalysis) -> Measures {
         Some(sum(|m| m.cognitive_complexity as usize)),
     );
 
+    // Packages, not findings: one package with two advisories counts once.
+    let vulnerable = |severe: bool| {
+        project.vulnerabilities.as_ref().map(|v| {
+            let mut purls: Vec<&str> = v
+                .iter()
+                .filter(|f| !severe || f.severity >= crate::model::Severity::Critical)
+                .map(|f| f.purl.as_str())
+                .collect();
+            purls.sort_unstable();
+            purls.dedup();
+            purls.len() as f64
+        })
+    };
+    m.insert(Metric::VulnerableDependencies, vulnerable(false));
+    m.insert(Metric::SevereVulnerableDependencies, vulnerable(true));
+
     let issues: Vec<&Issue> = project.files.iter().flat_map(|f| &f.issues).collect();
     let new_issues: Vec<&Issue> = issues.iter().copied().filter(|i| i.is_new).collect();
     for ((overall, new), (all, fresh)) in ISSUE_METRICS.iter().zip(

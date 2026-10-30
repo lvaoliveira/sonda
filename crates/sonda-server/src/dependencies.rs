@@ -547,6 +547,7 @@ pub async fn patch_review(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    refresh_gates(&state.pool, GateScope::Project(project)).await?;
     Ok(Json(Review {
         status,
         reason,
@@ -669,6 +670,114 @@ pub async fn portfolio(pool: &PgPool) -> Result<Portfolio, sqlx::Error> {
     });
     p.top.truncate(TOP_FINDINGS);
     Ok(p)
+}
+
+/// Gate metrics the server keeps current from its advisories (ADR-0009).
+const GATE_METRICS: &[&str] = &["vulnerable_dependencies", "severe_vulnerable_dependencies"];
+
+/// Which analyses' gates to refresh.
+pub enum GateScope {
+    /// One analysis, as it's uploaded.
+    Analysis(i64),
+    /// The latest analysis of each of the project's branches.
+    Project(i64),
+    /// The latest analysis of every branch.
+    All,
+}
+
+/// Re-evaluates gate conditions on vulnerable dependencies with the
+/// server's advisories and reviews, and stores the result with the
+/// analysis, so every page shows the same gate. Without advisory data, the
+/// values the CLI reported (usually "no data") stand. Returns how many
+/// gates it updated.
+pub async fn refresh_gates(pool: &PgPool, scope: GateScope) -> Result<usize, sqlx::Error> {
+    if advisories::status(pool).await?.is_none() {
+        return Ok(0);
+    }
+    let targets: Vec<(i64, i64, serde_json::Value, serde_json::Value)> = match scope {
+        GateScope::Analysis(id) => {
+            sqlx::query_as("SELECT id, project_id, gate, measures FROM analyses WHERE id = $1")
+                .bind(id)
+                .fetch_all(pool)
+                .await?
+        }
+        GateScope::Project(_) | GateScope::All => {
+            let project = match scope {
+                GateScope::Project(p) => Some(p),
+                _ => None,
+            };
+            sqlx::query_as(
+                "SELECT DISTINCT ON (project_id, branch) id, project_id, gate, measures
+                 FROM analyses WHERE $1::bigint IS NULL OR project_id = $1
+                 ORDER BY project_id, branch, id DESC",
+            )
+            .bind(project)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let uses_metrics = |gate: &serde_json::Value| {
+        gate["conditions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|c| {
+                c["metric"]
+                    .as_str()
+                    .is_some_and(|m| GATE_METRICS.contains(&m))
+            })
+    };
+    let mut updated = 0;
+    for (id, project, mut gate, mut measures) in targets.into_iter().filter(|t| uses_metrics(&t.2))
+    {
+        let mut deps = merge(rows(pool, id).await?);
+        annotate(pool, &mut [(project, &mut deps)]).await?;
+        let count = |severe: bool| {
+            deps.iter()
+                .filter(|d| {
+                    d.advisories.iter().any(|a| {
+                        !a.accepted()
+                            && (!severe || matches!(a.severity.as_str(), "blocker" | "critical"))
+                    })
+                })
+                .count() as f64
+        };
+        let values = [
+            ("vulnerable_dependencies", count(false)),
+            ("severe_vulnerable_dependencies", count(true)),
+        ];
+        for c in gate["conditions"].as_array_mut().into_iter().flatten() {
+            let Some(&(_, value)) = values.iter().find(|(m, _)| c["metric"] == *m) else {
+                continue;
+            };
+            let threshold = c["threshold"].as_f64().unwrap_or(0.0);
+            let failing = match c["op"].as_str() {
+                Some("gt") => value > threshold,
+                Some("lt") => value < threshold,
+                _ => false,
+            };
+            c["actual"] = serde_json::json!(value);
+            c["status"] = serde_json::json!(if failing { "error" } else { "ok" });
+        }
+        let passed = gate["conditions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|c| c["status"] != "error");
+        gate["passed"] = serde_json::json!(passed);
+        for (metric, value) in values {
+            measures[metric] = serde_json::json!(value);
+        }
+        sqlx::query("UPDATE analyses SET gate = $2, gate_passed = $3, measures = $4 WHERE id = $1")
+            .bind(id)
+            .bind(&gate)
+            .bind(passed)
+            .bind(&measures)
+            .execute(pool)
+            .await?;
+        updated += 1;
+    }
+    Ok(updated)
 }
 
 #[cfg(test)]

@@ -396,6 +396,14 @@ status is `open`, `confirmed` or `accepted`.
   count as vulnerable.
 - **Audit:** every change is recorded with who made it.
 
+**Gate conditions** on `vulnerable_dependencies` or
+`severe_vulnerable_dependencies` are evaluated by the server once it has
+advisories. It re-evaluates them, accepted findings left out, when an
+analysis is uploaded, when advisories are imported or synced (each
+branch's latest analysis), and when a finding is reviewed. The result is
+stored with the analysis, so every page agrees. Until advisories exist,
+the CLI's values stand: "no data", unless it scanned with `--advisories`.
+
 `GET /api/security` adds `dependencies`: open and confirmed findings
 across each project's main branch, by severity, with how many packages
 and projects they affect, the ten most severe, and when advisories were

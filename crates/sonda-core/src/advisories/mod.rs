@@ -99,6 +99,84 @@ pub enum Match {
     Unknown,
 }
 
+/// A known vulnerability affecting one of a project's dependencies.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Vulnerability {
+    /// The dependency's package URL.
+    pub purl: String,
+    pub ecosystem: Ecosystem,
+    pub name: String,
+    pub version: String,
+    pub advisory: String,
+    pub aliases: Vec<String>,
+    pub summary: String,
+    pub severity: Severity,
+    /// The lowest later version that fixes it.
+    pub fixed_in: Option<String>,
+}
+
+/// The known vulnerabilities in `deps`, most severe first: one per package
+/// and vulnerability (records that alias each other count once, GitHub's
+/// kept), withdrawn advisories left out.
+pub fn check(deps: &[crate::deps::Dependency], advisories: &[Advisory]) -> Vec<Vulnerability> {
+    use std::collections::{HashMap, HashSet};
+    let mut by_package: HashMap<(Ecosystem, &str), Vec<(&Advisory, &AffectedPackage)>> =
+        HashMap::new();
+    for a in advisories.iter().filter(|a| a.withdrawn.is_none()) {
+        for p in &a.packages {
+            by_package
+                .entry((p.ecosystem, p.name.as_str()))
+                .or_default()
+                .push((a, p));
+        }
+    }
+    let mut found = Vec::new();
+    let mut seen_packages = HashSet::new();
+    for d in deps {
+        // A package pinned by several lockfiles is one package.
+        if !seen_packages.insert(&d.purl) {
+            continue;
+        }
+        let key = package_key(d.ecosystem, &d.name);
+        let mut hits: Vec<(&Advisory, &AffectedPackage)> = by_package
+            .get(&(d.ecosystem, key.as_str()))
+            .into_iter()
+            .flatten()
+            .filter(|(_, p)| p.affects(&d.version) == Match::Affected)
+            .copied()
+            .collect();
+        hits.sort_by_key(|(a, _)| (a.source != Source::GitHub, a.id.clone()));
+        let mut names: HashSet<&str> = HashSet::new();
+        for (a, p) in hits {
+            let ids: Vec<&str> = std::iter::once(a.id.as_str())
+                .chain(a.aliases.iter().map(String::as_str))
+                .collect();
+            if ids.iter().any(|id| names.contains(id)) {
+                continue;
+            }
+            names.extend(ids);
+            found.push(Vulnerability {
+                purl: d.purl.clone(),
+                ecosystem: d.ecosystem,
+                name: d.name.clone(),
+                version: d.version.clone(),
+                advisory: a.id.clone(),
+                aliases: a.aliases.clone(),
+                summary: a.summary.clone(),
+                severity: a.severity,
+                fixed_in: p.fixed_in(&d.version),
+            });
+        }
+    }
+    // Most severe first (Severity orders info..blocker).
+    found.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then_with(|| (&a.purl, &a.advisory).cmp(&(&b.purl, &b.advisory)))
+    });
+    found
+}
+
 /// Summaries are cut to this many characters.
 const MAX_SUMMARY: usize = 300;
 
@@ -422,6 +500,39 @@ mod tests {
         assert_eq!(parse(&LODASH.replace("GHSA-", "MAL-")).unwrap(), None);
         assert_eq!(parse(&LODASH.replace("\"npm\"", "\"Go\"")).unwrap(), None);
         assert!(parse("{").is_err());
+    }
+
+    #[test]
+    fn checks_dependencies_once_per_vulnerability() {
+        let dep = |name: &str, version: &str, purl: &str| crate::deps::Dependency {
+            ecosystem: Ecosystem::Npm,
+            name: name.into(),
+            version: version.into(),
+            purl: purl.into(),
+            direct: None,
+            source: "package-lock.json".into(),
+            license: None,
+        };
+        let ghsa = parse(LODASH).unwrap().unwrap();
+        // The same vulnerability from another database, and a withdrawn one.
+        let mut alias = ghsa.clone();
+        alias.id = "RUSTSEC-0000-0000".into();
+        alias.source = Source::RustSec;
+        alias.aliases = vec!["GHSA-35jh-r3h4-6jhm".into()];
+        let mut withdrawn = ghsa.clone();
+        withdrawn.id = "GHSA-gone".into();
+        withdrawn.aliases = vec![];
+        withdrawn.withdrawn = Some("2024-01-01T00:00:00Z".into());
+        let deps = [
+            dep("lodash", "4.17.20", "pkg:npm/lodash@4.17.20"),
+            dep("lodash", "4.17.20", "pkg:npm/lodash@4.17.20"),
+            dep("lodash", "4.17.21", "pkg:npm/lodash@4.17.21"),
+        ];
+        let found = check(&deps, &[alias, withdrawn, ghsa]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].advisory, "GHSA-35jh-r3h4-6jhm");
+        assert_eq!(found[0].fixed_in.as_deref(), Some("4.17.21"));
+        assert_eq!(found[0].severity, Severity::Critical);
     }
 
     #[test]

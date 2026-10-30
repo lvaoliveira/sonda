@@ -1,3 +1,4 @@
+use crate::advisories::Vulnerability;
 use crate::analysis::FileAnalysis;
 use crate::coverage::Coverage;
 use crate::deps::Dependency;
@@ -17,4 +18,7 @@ pub struct ProjectAnalysis {
     pub(crate) warnings: Vec<String>,
     /// From the project's lockfiles (ADR-0009). Sorted.
     pub(crate) dependencies: Vec<Dependency>,
+    /// Known vulnerabilities in them, when checked against advisories
+    /// (`ScanOptions::advisories`); `None` when not checked.
+    pub(crate) vulnerabilities: Option<Vec<Vulnerability>>,
 }

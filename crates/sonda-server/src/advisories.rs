@@ -75,6 +75,10 @@ pub(crate) async fn finish(pool: &PgPool, summary: &ImportSummary) -> Result<(),
         .bind(i32::try_from(summary.imported).unwrap_or(i32::MAX))
         .execute(pool)
         .await?;
+    // New or changed advisories can change gates on vulnerable dependencies.
+    if summary.imported > 0 {
+        crate::dependencies::refresh_gates(pool, crate::dependencies::GateScope::All).await?;
+    }
     Ok(())
 }
 

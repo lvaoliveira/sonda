@@ -40,6 +40,10 @@ pub struct Report<'a> {
     pub issues: Vec<&'a Issue>,
     /// From the project's lockfiles (ADR-0009).
     pub dependencies: &'a [Dependency],
+    /// Known vulnerabilities in them, most severe first; absent unless
+    /// checked against advisories (`--advisories`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vulnerabilities: Option<&'a [crate::advisories::Vulnerability]>,
     pub warnings: &'a [String],
 }
 
@@ -112,6 +116,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         duplications,
         issues,
         dependencies: &scan.dependencies,
+        vulnerabilities: scan.vulnerabilities.as_deref(),
         warnings: &scan.warnings,
     }
 }

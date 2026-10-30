@@ -169,6 +169,14 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- Gate conditions on vulnerable dependencies: `vulnerable_dependencies`
+  and `severe_vulnerable_dependencies` (packages with a blocker or critical
+  finding). `sonda scan --advisories DIR` checks dependencies against the
+  OSV records in DIR, fills these metrics, and lists the vulnerabilities
+  in the report (JSON `vulnerabilities`, a text section); without it they
+  have no data. A server with advisories evaluates them itself, reviews
+  included, on upload, on advisory import or sync, and on review, and
+  stores the result with the analysis.
 - Triage of vulnerable dependencies: confirm a finding, or accept it with
   a reason (required), from the Dependencies page or
   `PATCH /api/projects/{key}/dependencies/reviews`. Reviews are per
