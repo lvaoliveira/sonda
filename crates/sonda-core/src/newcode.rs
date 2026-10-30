@@ -21,37 +21,35 @@ pub(crate) enum NewCode {
     },
 }
 
-/// The tag `sonda baseline` sets: the commit whose existing debt a project
-/// accepted when it adopted sonda (ADR-0010).
-pub const BASELINE_TAG: &str = "sonda-baseline";
-
 /// How the new-code reference was chosen (ADR-0010).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Basis {
     /// Named by `--new-code` or `scan.new_code`.
     Given(String),
+    /// A pull request, against its base branch.
+    PullRequest(String),
+    /// A push in CI, against the commit it replaced.
+    Push(String),
     /// A branch with commits its default branch lacks: the merge base with
     /// that branch (`origin/main`, say).
     DefaultBranch(String),
-    /// On the default branch: the latest tag before HEAD, as of the last
-    /// release.
-    LatestTag(String),
-    /// No tag: the last commit `days` or more older than HEAD (by commit
-    /// date, so the same commit always gives the same result).
-    Days { days: u32, commit: String },
+    /// Nothing else applies (a local run on the default branch, say):
+    /// uncommitted changes, against HEAD.
+    Uncommitted,
     /// Nothing to compare with; why.
     WholeProject(String),
 }
 
 impl Basis {
-    /// For reports: `given`, `default_branch`, `latest_tag`, `days`,
-    /// `whole_project`.
+    /// For reports: `given`, `pull_request`, `push`, `default_branch`,
+    /// `uncommitted`, `whole_project`.
     pub fn kind(&self) -> &'static str {
         match self {
             Basis::Given(_) => "given",
+            Basis::PullRequest(_) => "pull_request",
+            Basis::Push(_) => "push",
             Basis::DefaultBranch(_) => "default_branch",
-            Basis::LatestTag(_) => "latest_tag",
-            Basis::Days { .. } => "days",
+            Basis::Uncommitted => "uncommitted",
             Basis::WholeProject(_) => "whole_project",
         }
     }
@@ -60,12 +58,13 @@ impl Basis {
     pub fn describe(&self) -> String {
         match self {
             Basis::Given(r) => format!("changes since {r}"),
-            Basis::DefaultBranch(b) => format!("changes since the merge base with {b}"),
-            Basis::LatestTag(t) => format!("changes since tag {t}"),
-            Basis::Days { days, commit } => format!(
-                "changes in the {days} days before HEAD (since {})",
-                &commit[..commit.len().min(12)]
+            Basis::PullRequest(b) => format!("changes in this pull request, against {b}"),
+            Basis::Push(before) => format!(
+                "changes in this push, since {}",
+                &before[..before.len().min(12)]
             ),
+            Basis::DefaultBranch(b) => format!("changes since the merge base with {b}"),
+            Basis::Uncommitted => "uncommitted changes, against HEAD".into(),
             Basis::WholeProject(why) => format!("the whole project ({why})"),
         }
     }

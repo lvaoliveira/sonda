@@ -8,7 +8,7 @@
 //! and diffs the working-tree files itself (see docs/adr/0002).
 
 use crate::error::Error;
-use crate::newcode::{BASELINE_TAG, Basis, Changed, NewCode, changed_lines};
+use crate::newcode::{Basis, Changed, NewCode, changed_lines};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -85,11 +85,58 @@ pub(crate) enum Auto {
     Nothing(String),
 }
 
-/// Picks the new-code reference when none is given: the default branch's
-/// merge base on a branch that has diverged from it; on the default branch,
-/// the latest tag before HEAD; without a tag, the last commit `days` or more
-/// older than HEAD. Reads refs and commits only (ADR-0002).
-pub(crate) fn auto_reference(root: &Path, days: u32, timeout: Duration) -> Result<Auto, Error> {
+/// What a CI run says about the change it builds. GitHub Actions only, for
+/// now.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Ci {
+    /// A pull request's base branch (`GITHUB_BASE_REF`).
+    pub(crate) pr_base: Option<String>,
+    /// A push's previous head: the event's `before` commit.
+    pub(crate) push_before: Option<String>,
+}
+
+/// The event file is a few kilobytes; this bounds a hostile one.
+const MAX_EVENT_BYTES: u64 = 1 << 20;
+
+impl Ci {
+    /// From GitHub Actions' variables, read through `var`.
+    pub(crate) fn from_env(var: &dyn Fn(&str) -> Option<String>) -> Ci {
+        if var("GITHUB_ACTIONS").as_deref() != Some("true") {
+            return Ci::default();
+        }
+        let pr_base = var("GITHUB_BASE_REF").filter(|b| validate_ref(b).is_ok());
+        let push_before = (var("GITHUB_EVENT_NAME").as_deref() == Some("push"))
+            .then(|| var("GITHUB_EVENT_PATH"))
+            .flatten()
+            .and_then(|path| {
+                let mut text = String::new();
+                std::fs::File::open(path)
+                    .ok()?
+                    .take(MAX_EVENT_BYTES)
+                    .read_to_string(&mut text)
+                    .ok()?;
+                let event: serde_json::Value = serde_json::from_str(&text).ok()?;
+                event["before"].as_str().map(str::to_string)
+            })
+            // All zeros: the push created the branch, so there's no before.
+            .filter(|sha| {
+                (sha.len() == 40 || sha.len() == 64)
+                    && sha.bytes().all(|b| b.is_ascii_hexdigit())
+                    && !sha.bytes().all(|b| b == b'0')
+            });
+        Ci {
+            pr_base,
+            push_before,
+        }
+    }
+}
+
+/// Picks the new-code reference when none is given (ADR-0010), first match
+/// wins: a pull request's base branch; a push's previous head; the merge
+/// base with the default branch, on a branch that has diverged from it;
+/// otherwise HEAD, so uncommitted changes are new code. Reads refs and
+/// commits only (ADR-0002).
+pub(crate) fn auto_reference(root: &Path, ci: &Ci, timeout: Duration) -> Result<Auto, Error> {
     let Some(head) = git_ok(
         root,
         &["rev-parse", "--verify", "-q", "HEAD^{commit}"],
@@ -101,6 +148,23 @@ pub(crate) fn auto_reference(root: &Path, days: u32, timeout: Duration) -> Resul
         ));
     };
     let head = head.trim();
+    let exists = |reference: &str| -> Result<bool, Error> {
+        let commit = format!("{reference}^{{commit}}");
+        Ok(git_ok(root, &["rev-parse", "--verify", "-q", &commit], timeout)?.is_some())
+    };
+    if let Some(base) = &ci.pr_base {
+        // actions/checkout fetches it as a remote branch.
+        for candidate in [format!("origin/{base}"), base.clone()] {
+            if exists(&candidate)? {
+                return Ok(Auto::Found(candidate, Basis::PullRequest(base.clone())));
+            }
+        }
+    }
+    if let Some(before) = &ci.push_before
+        && exists(before)?
+    {
+        return Ok(Auto::Found(before.clone(), Basis::Push(before.clone())));
+    }
     if let Some(branch) = default_branch(root, timeout)?
         && let Some(base) = git_ok(
             root,
@@ -111,87 +175,7 @@ pub(crate) fn auto_reference(root: &Path, days: u32, timeout: Duration) -> Resul
     {
         return Ok(Auto::Found(branch.clone(), Basis::DefaultBranch(branch)));
     }
-    // A baseline set at HEAD (as `sonda baseline` just did) applies as is.
-    let baseline = format!("refs/tags/{BASELINE_TAG}^{{commit}}");
-    if git_ok(root, &["rev-parse", "--verify", "-q", &baseline], timeout)?
-        .is_some_and(|c| c.trim() == head)
-    {
-        return Ok(Auto::Found(
-            BASELINE_TAG.into(),
-            Basis::LatestTag(BASELINE_TAG.into()),
-        ));
-    }
-    // HEAD^: on a release commit, its own tag would leave nothing new.
-    if let Some(tag) = git_ok(
-        root,
-        &[
-            "describe",
-            "--tags",
-            "--abbrev=0",
-            "--end-of-options",
-            "HEAD^",
-        ],
-        timeout,
-    )? {
-        let tag = tag.trim().to_string();
-        if validate_ref(&tag).is_ok() {
-            return Ok(Auto::Found(tag.clone(), Basis::LatestTag(tag)));
-        }
-    }
-    if days > 0
-        && let Some(time) = commit_time(root, head, timeout)?
-    {
-        let before = time.saturating_sub(i64::from(days) * 86_400);
-        let found = git_ok(
-            root,
-            &[
-                "rev-list",
-                "-1",
-                "--first-parent",
-                &format!("--before={before}"),
-                "HEAD",
-            ],
-            timeout,
-        )?;
-        if let Some(commit) = found
-            .map(|c| c.trim().to_string())
-            .filter(|c| !c.is_empty())
-        {
-            return Ok(Auto::Found(commit.clone(), Basis::Days { days, commit }));
-        }
-    }
-    let window = if days > 0 {
-        format!(", no commit {days} days older than HEAD")
-    } else {
-        String::new()
-    };
-    Ok(Auto::Nothing(format!(
-        "no diverged default branch and no tag{window}; set a baseline with `sonda baseline`"
-    )))
-}
-
-/// Tags HEAD as [`BASELINE_TAG`]; with `force`, moves an existing one.
-/// Returns the commit. Hooks are off: tagging updates a ref, which runs the
-/// repository's reference-transaction hook (ADR-0002).
-pub(crate) fn tag_baseline(root: &Path, force: bool, timeout: Duration) -> Result<String, Error> {
-    let head = git(root, &["rev-parse", "--verify", "HEAD^{commit}"], timeout)?;
-    let head = head.trim().to_string();
-    let existing = format!("refs/tags/{BASELINE_TAG}^{{commit}}");
-    if let Some(at) = git_ok(root, &["rev-parse", "--verify", "-q", &existing], timeout)?
-        && !force
-    {
-        return Err(Error::InvalidArgument(format!(
-            "{BASELINE_TAG} already tags {}; --force moves it to HEAD",
-            &at.trim()[..12.min(at.trim().len())]
-        )));
-    }
-    let mut args = vec!["-c", "core.hooksPath=/dev/null", "tag"];
-    if force {
-        args.push("-f");
-    }
-    args.extend(["--end-of-options", BASELINE_TAG, &head]);
-    git(root, &args, timeout)?;
-    Ok(head)
+    Ok(Auto::Found("HEAD".into(), Basis::Uncommitted))
 }
 
 /// The branch others merge into: what `origin/HEAD` points at, else
@@ -218,20 +202,6 @@ fn default_branch(root: &Path, timeout: Duration) -> Result<Option<String>, Erro
         }
     }
     Ok(None)
-}
-
-/// A commit's committer time, in seconds, from the object itself: `git log`
-/// would honor `log.showSignature` and run gpg.
-fn commit_time(root: &Path, commit: &str, timeout: Duration) -> Result<Option<i64>, Error> {
-    let Some(object) = git_ok(root, &["cat-file", "commit", commit], timeout)? else {
-        return Ok(None);
-    };
-    Ok(object
-        .lines()
-        .take_while(|l| !l.is_empty())
-        .find_map(|l| l.strip_prefix("committer "))
-        .and_then(|l| l.rsplit(' ').nth(1))
-        .and_then(|t| t.parse().ok()))
 }
 
 /// Like [`git`], but a failing command (an unknown ref, not a repository)
@@ -577,23 +547,12 @@ mod tests {
         assert!(new_code(&repo.root, "no-such-branch", 1024, TIMEOUT, []).is_err());
     }
 
-    /// `git` with fixed dates, so commits have known times.
-    fn git_at(root: &Path, date: &str, args: &[&str]) {
-        let out = git_command(root)
-            .env("GIT_AUTHOR_DATE", date)
-            .env("GIT_COMMITTER_DATE", date)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+    fn auto_with(root: &Path, ci: &Ci) -> Auto {
+        auto_reference(root, ci, TIMEOUT).unwrap()
     }
 
     fn auto(root: &Path) -> Auto {
-        auto_reference(root, 30, TIMEOUT).unwrap()
+        auto_with(root, &Ci::default())
     }
 
     fn found(a: Auto) -> (String, Basis) {
@@ -622,85 +581,106 @@ mod tests {
     }
 
     #[test]
-    fn auto_on_the_default_branch_uses_the_latest_tag_then_a_time_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        git(root, &["init", "-q", "-b", "main"], TIMEOUT).unwrap();
-        git(root, &["config", "user.email", "t@example.com"], TIMEOUT).unwrap();
-        git(root, &["config", "user.name", "t"], TIMEOUT).unwrap();
-        // So `git log` here would run a program; auto must not use it.
-        git(root, &["config", "log.showSignature", "true"], TIMEOUT).unwrap();
-        let commit = |date: &str, msg: &str| {
-            std::fs::write(root.join("a.py"), msg).unwrap();
-            git_at(root, date, &["add", "."]);
-            git_at(root, date, &["commit", "-qm", msg]);
-        };
-        commit("2026-01-01T00:00:00Z", "old");
-        assert!(
-            matches!(auto(root), Auto::Nothing(_)),
-            "one commit: nothing before it"
-        );
-        commit("2026-03-01T00:00:00Z", "middle");
-        commit("2026-03-20T00:00:00Z", "recent");
-        let old = git(root, &["rev-parse", "HEAD~2"], TIMEOUT).unwrap();
-        // No tag: the last commit 30 days or more before HEAD's date.
-        let (reference, basis) = found(auto(root));
-        assert_eq!(reference, old.trim());
-        assert!(matches!(basis, Basis::Days { days: 30, .. }), "{basis:?}");
-        assert!(
-            matches!(auto_reference(root, 0, TIMEOUT).unwrap(), Auto::Nothing(_)),
-            "0 days turns the window off"
-        );
-        // A tag before HEAD wins.
-        git(root, &["tag", "v1.0", "HEAD~1"], TIMEOUT).unwrap();
-        assert_eq!(
-            found(auto(root)),
-            ("v1.0".into(), Basis::LatestTag("v1.0".into()))
-        );
-        // On a release commit, its own tag would leave nothing: the one before.
-        git(root, &["tag", "v1.1"], TIMEOUT).unwrap();
-        assert_eq!(found(auto(root)).0, "v1.0");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_baseline_tags_head_without_running_hooks_and_applies_at_once() {
-        use std::os::unix::fs::PermissionsExt;
+    fn auto_on_the_default_branch_judges_uncommitted_changes() {
         let repo = Repo::new();
         repo.git(&["checkout", "-q", "main"]);
-        // A hook that would run when the tag's ref is written.
-        let hooks = repo.root.join("hooks");
-        std::fs::create_dir_all(&hooks).unwrap();
-        let marker = repo.root.join("PWNED");
-        let hook = hooks.join("reference-transaction");
-        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-        repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        assert_eq!(found(auto(&repo.root)), ("HEAD".into(), Basis::Uncommitted));
+        repo.write("a.py", "a = 1\nb = 3\n");
+        let contents = [("a.py", std::fs::read(repo.root.join("a.py")).ok())];
+        let nc = new_code(&repo.root, "HEAD", 1 << 20, TIMEOUT, contents).unwrap();
+        assert!(!nc.is_new("a.py", 1));
+        assert!(nc.is_new("a.py", 2));
+    }
 
-        let head = git(&repo.root, &["rev-parse", "HEAD"], TIMEOUT).unwrap();
+    #[test]
+    fn auto_uses_a_pull_request_base_and_a_push_range_first() {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        let first = git(&repo.root, &["rev-parse", "HEAD"], TIMEOUT).unwrap();
+        repo.write("b.py", "x = 1\n");
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-qm", "pushed"]);
+
+        let pr = Ci {
+            pr_base: Some("main".into()),
+            push_before: None,
+        };
         assert_eq!(
-            tag_baseline(&repo.root, false, TIMEOUT).unwrap(),
-            head.trim()
+            found(auto_with(&repo.root, &pr)),
+            ("main".into(), Basis::PullRequest("main".into()))
         );
-        assert!(!marker.exists(), "a hook ran");
-        // Right away, on HEAD itself.
+        // As actions/checkout fetches it: a remote branch, preferred.
+        repo.git(&["update-ref", "refs/remotes/origin/main", "main"]);
+        assert_eq!(found(auto_with(&repo.root, &pr)).0, "origin/main");
+
+        let push = Ci {
+            pr_base: None,
+            push_before: Some(first.trim().into()),
+        };
         assert_eq!(
-            found(auto(&repo.root)),
-            (
-                BASELINE_TAG.to_string(),
-                Basis::LatestTag(BASELINE_TAG.into())
-            )
+            found(auto_with(&repo.root, &push)),
+            (first.trim().into(), Basis::Push(first.trim().into()))
         );
-        // Not moved by accident; moved on purpose.
-        assert!(tag_baseline(&repo.root, false, TIMEOUT).is_err());
-        repo.write("a.py", "a = 1\nb = 2\nc = 3\n");
-        repo.git(&["commit", "-qam", "after the baseline"]);
-        // That commit (the test's own git call) ran the hook; sonda's don't.
-        let _ = std::fs::remove_file(&marker);
-        assert_eq!(found(auto(&repo.root)).0, BASELINE_TAG, "found from HEAD^");
-        let moved = tag_baseline(&repo.root, true, TIMEOUT).unwrap();
-        assert_ne!(moved, head.trim());
-        assert!(!marker.exists(), "a hook ran");
+        // A base or a before that isn't in the clone falls through.
+        let unknown = Ci {
+            pr_base: Some("release".into()),
+            push_before: Some("1".repeat(40)),
+        };
+        assert_eq!(found(auto_with(&repo.root, &unknown)).1, Basis::Uncommitted);
+    }
+
+    #[test]
+    fn ci_context_comes_from_github_actions_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let event = dir.path().join("event.json");
+        let sha = "a".repeat(40);
+        std::fs::write(
+            &event,
+            format!("{{\"before\": \"{sha}\", \"after\": \"b\"}}"),
+        )
+        .unwrap();
+        let path = event.to_str().unwrap().to_string();
+        let env = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            Ci::from_env(&move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.clone())
+            })
+        };
+        assert_eq!(
+            env(&[("GITHUB_BASE_REF", "main")]),
+            Ci::default(),
+            "not in Actions"
+        );
+        assert_eq!(
+            env(&[("GITHUB_ACTIONS", "true"), ("GITHUB_BASE_REF", "main")])
+                .pr_base
+                .as_deref(),
+            Some("main")
+        );
+        let push = [
+            ("GITHUB_ACTIONS", "true"),
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_EVENT_PATH", path.as_str()),
+        ];
+        assert_eq!(env(&push).push_before, Some(sha));
+        // A new branch's push has no before; nor does another event.
+        std::fs::write(&event, format!("{{\"before\": \"{}\"}}", "0".repeat(40))).unwrap();
+        assert_eq!(env(&push).push_before, None);
+        assert_eq!(
+            env(&[
+                ("GITHUB_ACTIONS", "true"),
+                ("GITHUB_BASE_REF", "--upload-pack=x")
+            ])
+            .pr_base,
+            None,
+            "option-like refs are refused"
+        );
     }
 
     #[test]

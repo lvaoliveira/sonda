@@ -277,7 +277,11 @@ fn scan_files(
                 None,
                 Basis::WholeProject("new code is set to \"none\"".into()),
             ),
-            "auto" => match git::auto_reference(root, cfg.scan.new_code_days, git_timeout)? {
+            "auto" => match git::auto_reference(
+                root,
+                &git::Ci::from_env(&|name| std::env::var(name).ok()),
+                git_timeout,
+            )? {
                 Auto::Found(r, basis) => (Some(r), basis),
                 Auto::Nothing(why) => (None, Basis::WholeProject(why)),
             },

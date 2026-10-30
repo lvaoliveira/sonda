@@ -55,7 +55,6 @@ mod worker;
 pub use error::Error;
 pub use gate::{ConditionResult, GateResult, Status};
 pub use measures::Measures;
-pub use newcode::BASELINE_TAG;
 pub use project::ProjectAnalysis;
 pub use sandbox::SandboxMode;
 pub use scanner::{Isolation, ScanOptions};
@@ -94,15 +93,6 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
         measures,
         gate,
     })
-}
-
-/// Tags the HEAD of the repository at `root` as [`BASELINE_TAG`]: new code
-/// is then compared with this commit until a later tag (ADR-0010). With
-/// `force`, moves an existing baseline. Returns the commit; pushing the tag
-/// is the caller's choice.
-pub fn set_baseline(root: &Path, force: bool) -> Result<String, Error> {
-    let timeout = std::time::Duration::from_secs(config::Config::default().scan.git_timeout_secs);
-    git::tag_baseline(root, force, timeout)
 }
 
 /// The dependencies `root`'s lockfiles pin (ADR-0009), and warnings about

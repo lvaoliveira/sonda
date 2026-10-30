@@ -9,6 +9,16 @@ use tempfile::TempDir;
 fn sonda() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sonda"));
     cmd.env_remove("RUST_LOG");
+    // These tests run in GitHub Actions too, whose pull request or push
+    // would otherwise decide new code (ADR-0010).
+    for var in [
+        "GITHUB_ACTIONS",
+        "GITHUB_BASE_REF",
+        "GITHUB_EVENT_NAME",
+        "GITHUB_EVENT_PATH",
+    ] {
+        cmd.env_remove(var);
+    }
     cmd
 }
 
@@ -371,7 +381,7 @@ fn output_file_receives_the_report_and_stdout_stays_empty() {
 }
 
 #[test]
-fn new_code_defaults_to_the_latest_tag_or_the_default_branch() {
+fn new_code_follows_the_pull_request_push_or_branch() {
     let dir = project(&[("old.js", "eval(a);\n")]);
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -379,43 +389,72 @@ fn new_code_defaults_to_the_latest_tag_or_the_default_branch() {
     git(root, &["config", "user.name", "t"]);
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "old"]);
-    git(root, &["tag", "v1.0"]);
-    std::fs::write(root.join("new.js"), "eval(b);\n").unwrap();
-    git(root, &["add", "."]);
-    git(root, &["commit", "-qm", "after the release"]);
+    let new_paths = |report: &Value| -> Vec<String> {
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["is_new"] == true)
+            .map(|i| i["path"].as_str().unwrap().to_string())
+            .collect()
+    };
 
-    // On main: changes since the latest tag.
+    // Locally on main: uncommitted changes, so existing code isn't new.
+    std::fs::write(root.join("wip.js"), "eval(w);\n").unwrap();
     let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
-    assert_eq!(report["new_code_basis"], "latest_tag");
-    assert_eq!(report["new_code_reference"], "v1.0");
-    assert_eq!(report["new_code_description"], "changes since tag v1.0");
-    let new_paths: Vec<&str> = report["issues"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|i| i["is_new"] == true)
-        .map(|i| i["path"].as_str().unwrap())
-        .collect();
-    assert_eq!(new_paths, ["new.js"]);
+    assert_eq!(report["new_code_basis"], "uncommitted");
+    assert_eq!(new_paths(&report), ["wip.js"]);
     let text = stdout(&run(&["scan", "--no-gate"], root));
     assert!(
-        text.contains("new code = changes since tag v1.0, marked *"),
+        text.contains("new code = uncommitted changes, against HEAD, marked *"),
         "{text}"
     );
+    std::fs::remove_file(root.join("wip.js")).unwrap();
 
-    // On a branch: its merge base with main.
+    // A branch: its merge base with main.
     git(root, &["checkout", "-qb", "feature"]);
-    std::fs::write(root.join("feature.js"), "eval(c);\n").unwrap();
+    std::fs::write(root.join("feature.js"), "eval(f);\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "feature"]);
     let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
+    assert_eq!(report["new_code_basis"], "default_branch");
+    assert_eq!(new_paths(&report), ["feature.js"]);
+
+    // In GitHub Actions: the pull request's base, or the push's range.
+    let in_actions = |vars: &[(&str, &str)]| {
+        let mut cmd = sonda();
+        cmd.args(["scan", "--no-gate", "-f", "json"])
+            .arg(root)
+            .env("GITHUB_ACTIONS", "true");
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+        json(&cmd.output().unwrap())
+    };
+    let report = in_actions(&[("GITHUB_BASE_REF", "main")]);
+    assert_eq!(report["new_code_basis"], "pull_request");
     assert_eq!(
-        (
-            report["new_code_basis"].as_str(),
-            report["new_code_reference"].as_str()
-        ),
-        (Some("default_branch"), Some("main"))
+        report["new_code_description"],
+        "changes in this pull request, against main"
     );
+    let before = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD~1"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let event = root.join("event.json");
+    std::fs::write(&event, format!("{{\"before\": \"{}\"}}", before.trim())).unwrap();
+    let report = in_actions(&[
+        ("GITHUB_EVENT_NAME", "push"),
+        ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+    ]);
+    assert_eq!(report["new_code_basis"], "push");
+    assert_eq!(new_paths(&report), ["feature.js"]);
 
     // `none`, and a sonda.toml setting, win over auto.
     let report = json(&run(
@@ -423,66 +462,15 @@ fn new_code_defaults_to_the_latest_tag_or_the_default_branch() {
         root,
     ));
     assert_eq!(report["new_code_basis"], "whole_project");
-    assert_eq!(report["new_code_reference"], serde_json::Value::Null);
-    std::fs::write(root.join("sonda.toml"), "[scan]\nnew_code = \"v1.0\"\n").unwrap();
+    std::fs::write(root.join("sonda.toml"), "[scan]\nnew_code = \"main\"\n").unwrap();
     let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
     assert_eq!(
         (
             report["new_code_basis"].as_str(),
             report["new_code_reference"].as_str()
         ),
-        (Some("given"), Some("v1.0"))
+        (Some("given"), Some("main"))
     );
-}
-
-#[test]
-fn a_baseline_starts_new_code_where_it_is_set() {
-    let dir = project(&[("old.js", "eval(a);\n")]);
-    let root = dir.path();
-    git(root, &["init", "-q", "-b", "main"]);
-    git(root, &["config", "user.email", "t@example.com"]);
-    git(root, &["config", "user.name", "t"]);
-    git(root, &["add", "."]);
-    git(root, &["commit", "-qm", "old"]);
-
-    // No tag: the whole project, and how to fix that.
-    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
-    assert_eq!(report["new_code_basis"], "whole_project");
-    assert!(
-        report["new_code_description"]
-            .as_str()
-            .unwrap()
-            .contains("sonda baseline"),
-        "{}",
-        report["new_code_description"]
-    );
-
-    let out = run(&["baseline"], root);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains("git push origin sonda-baseline"),
-        "{}",
-        stderr(&out)
-    );
-    assert_eq!(
-        code(&run(&["baseline"], root)),
-        2,
-        "an existing baseline isn't moved by accident"
-    );
-
-    std::fs::write(root.join("new.js"), "eval(b);\n").unwrap();
-    git(root, &["add", "."]);
-    git(root, &["commit", "-qm", "new"]);
-    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
-    assert_eq!(report["new_code_reference"], "sonda-baseline");
-    let new_paths: Vec<&str> = report["issues"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|i| i["is_new"] == true)
-        .map(|i| i["path"].as_str().unwrap())
-        .collect();
-    assert_eq!(new_paths, ["new.js"]);
 }
 
 #[test]
