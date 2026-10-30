@@ -13,6 +13,7 @@ repository = "https://github.com/lvaoliveira/sonda"
 [workspace.dependencies]
 sonda-core = { path = "crates/sonda-core", version = "0.1.0" }
 anyhow = "1.0.104"
+argon2 = "0.6.0"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
@@ -49,3 +50,11 @@ tree-sitter-typescript = "0.23.2"
 # webpki-roots 1.0.10 (RUSTSEC-2026-0381) and ctutils 0.4.4 (RUSTSEC-2026-0385,
 # the oldest fixed release).
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
+
+# Argon2 is slow by design; unoptimized, it makes the server's tests crawl.
+# Release builds are unaffected (they are optimized anyway).
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

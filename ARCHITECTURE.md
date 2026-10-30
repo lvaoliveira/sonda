@@ -30,7 +30,7 @@ A Cargo workspace ([ADR-0005](docs/adr/0005-sonda-server.md)):
 |---|---|
 | `crates/sonda-core` | The library: every module below except `main.rs`. No clap, no anyhow. |
 | `crates/sonda` | The CLI binary: `main.rs`, `upload.rs` (HTTP), and its end-to-end tests (`tests/cli.rs`). |
-| `crates/sonda-server` | The server: `config.rs` (secrets), `db.rs` (pool, migrations), `http.rs` (routes), `migrations/` (schema). Needs Rust 1.94; see [docs/server.md](docs/server.md). |
+| `crates/sonda-server` | The server. `config.rs` (secrets), `db.rs` (pool, migrations), `http.rs` and `api.rs` (routes, authorization), `ingest.rs` and `store.rs` (uploads), `issues.rs`, `rules.rs`, `overview.rs`, `users.rs` and `session.rs` (users and sign-in, [ADR-0006](docs/adr/0006-users.md)), and `migrations/` (schema). Needs Rust 1.94; see [docs/server.md](docs/server.md). |
 
 The server will depend on `sonda-core` once it ingests reports, so the CLI
 and the server share one rule catalog and one report model.

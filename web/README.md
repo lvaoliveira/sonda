@@ -70,10 +70,13 @@ need one:
 - **Reads are open** (a server on localhost): the viewer may continue
   read-only.
 
-Signing in sends the API token once. The server answers with an `HttpOnly`
-session cookie, so page scripts, and anything injected into them, never see
-a credential. There are no user accounts yet: "Assign to me" uses a name the
-viewer types at sign-in, kept in `localStorage`.
+People sign in with username and password (ADR-0006). The server answers
+with an `HttpOnly` session cookie, so page scripts, and anything injected
+into them, never see a credential.
+- **Administration** (`/admin`) is for admins only. It is hidden from
+  members, and the server refuses them too. Admins manage users there.
+- **Account** (`/account`) lets anyone change their own password.
+- **"Assign to me"** uses the signed-in username.
 
 ## Deliberately not faked
 

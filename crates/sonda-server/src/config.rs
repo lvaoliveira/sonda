@@ -19,6 +19,9 @@ pub struct Config {
     pub token: Token,
     /// The built web app (`web/dist`), served for every non-API path.
     pub web_dir: Option<PathBuf>,
+    /// Username and password for the first admin, used only while no users
+    /// exist (ADR-0006).
+    pub admin: Option<(String, String)>,
 }
 
 /// The API token, kept only as a hash.
@@ -74,11 +77,25 @@ impl Config {
         }
         let token = secret(env, "SONDA_TOKEN")?
             .context("set SONDA_TOKEN or SONDA_TOKEN_FILE: the API token clients upload with")?;
+        let admin = match secret(env, "SONDA_ADMIN_PASSWORD")? {
+            Some(password) => {
+                let username = env
+                    .var("SONDA_ADMIN_USERNAME")
+                    .unwrap_or_else(|| "admin".into());
+                crate::users::check_username(&username)
+                    .map_err(|e| anyhow::anyhow!("SONDA_ADMIN_USERNAME: {e}"))?;
+                crate::users::check_password(&password)
+                    .map_err(|e| anyhow::anyhow!("SONDA_ADMIN_PASSWORD: {e}"))?;
+                Some((username, password))
+            }
+            None => None,
+        };
         Ok(Self {
             listen,
             database,
             token: Token::new(&token)?,
             web_dir,
+            admin,
         })
     }
 }

@@ -4,10 +4,10 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 ([ADR-0005](adr/0005-sonda-server.md)). It runs as two containers: `sonda`
 (the server and the web app) and `db` (PostgreSQL).
 
-**Status:** the server receives uploads, tracks issues across them, signs
-browsers in, and serves the Overview, issues (with triage) and the rule
+**Status:** the server receives uploads, tracks issues across them, has
+users with roles, and serves the Overview, issues (with triage) and the rule
 catalog. The web app shows all of it: open http://127.0.0.1:9000 and sign in
-with the token. The Overview's per-metric drill-down drawer comes next;
+as `admin`. The Overview's per-metric drill-down drawer comes next;
 until then, a metric opens the matching issues.
 
 ## Quick start (Docker Compose)
@@ -18,15 +18,22 @@ From the repository root:
 mkdir -m 700 secrets
 openssl rand -hex 32 > secrets/db_password
 openssl rand -hex 32 > secrets/sonda_token
+openssl rand -base64 18 > secrets/admin_password
 chmod 644 secrets/*        # the containers read them as non-root users
 
 docker compose up -d --wait
 curl http://127.0.0.1:9000/api/health     # {"status":"ok"}
-open http://127.0.0.1:9000                # the web app; sign in with secrets/sonda_token
+open http://127.0.0.1:9000                # sign in as admin, password in secrets/admin_password
 ```
 
 `secrets/` is git-ignored, and the directory's `700` mode keeps other users
-on the machine out. `secrets/sonda_token` is the token `sonda upload` needs:
+on the machine out.
+
+- **`secrets/admin_password`:** creates the first user, `admin`, the first
+  time the server starts. Add more users under Administration. Once any user
+  exists, this file is ignored, so changing it never resets a password.
+  Change the admin's password under Account.
+- **`secrets/sonda_token`:** the API token `sonda upload` needs:
 
 ```sh
 SONDA_TOKEN_FILE=secrets/sonda_token   # or: export SONDA_TOKEN=$(cat secrets/sonda_token)
@@ -71,21 +78,43 @@ A rejected upload stores nothing:
 | `415` | A `Content-Encoding` other than gzip or identity. |
 | `422` | Well-formed but invalid, e.g. a source that doesn't match its SHA-256, an unknown rule, an unsafe path, or an unsupported `report_version`. |
 
-## Who can read
+## Users and sign-in
 
-Anyone can read while the server listens on loopback only, which is the
-default without Docker. Otherwise, as in the Docker image, every read needs
-either the token as `Authorization: Bearer <token>` or a browser session,
-because the server holds source code. Uploads always need the token.
+Users and roles are described in [ADR-0006](adr/0006-users.md).
 
-A browser signs in by sending the token once; it gets a session cookie back
-and never keeps the token itself:
+| Role | Can |
+|---|---|
+| **member** | Read, and triage: status and assignee. |
+| **admin** | The same, plus manage users. |
+
+- **Where each credential works:**
+  - People sign in with username and password.
+  - The API token is for machines: `sonda upload`, and scripts reading or
+    triaging with `Authorization: Bearer <token>`. It cannot manage users,
+    and it no longer signs browsers in.
+- **Who can read:** anyone, while the server listens on loopback only (the
+  default without Docker). Otherwise, as in the Docker image, every read
+  needs a signed-in user or the token, because the server holds source code.
 
 | Endpoint | |
 |---|---|
-| `GET /api/session` | `{"authenticated": false, "readsRequireAuth": true}` |
-| `POST /api/session` `{"token": "..."}` | `204` and the cookie, or `401` |
-| `DELETE /api/session` | `204`; ends the session and clears the cookie |
+| `GET /api/session` | `{"user": {...} or null, "authenticated": false, "readsRequireAuth": true}` |
+| `POST /api/session` `{"username": "...", "password": "..."}` | `204` and the cookie, or `401` "invalid username or password" |
+| `DELETE /api/session` | `204`. Ends the session and clears the cookie. |
+| `PUT /api/me/password` `{"current": "...", "new": "..."}` | `204`. Your other sessions end. |
+| `GET /api/users`, `POST /api/users`, `PATCH /api/users/{id}` | Admins only. List users; create one; change display name, role, disabled, or reset the password. |
+
+- **Passwords:** at least 12 characters, stored as Argon2id hashes.
+- **Failed sign-ins:** every failure gets the same answer after the same
+  amount of hashing, so nobody can probe which usernames exist.
+- **Users are disabled, never deleted,** so the audit trail keeps their
+  names.
+- **Ending sessions:** disabling a user or resetting their password signs
+  them out everywhere.
+- **Lockout protection:** the last active admin cannot be disabled or
+  demoted.
+- **Audit:** triage changes record who made them, as a username or
+  `api-token`.
 
 The cookie is `__Host-sonda_session`: `HttpOnly` (page scripts cannot read
 it), `Secure`, `SameSite=Strict`, and valid for 12 hours. The database keeps
@@ -196,6 +225,8 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `DATABASE_URL` / `DATABASE_URL_FILE` | `postgres://user@host:port/db`. Required. |
 | `DATABASE_PASSWORD` / `DATABASE_PASSWORD_FILE` | The database password, if not in the URL. |
 | `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The API token, at least 32 characters. Required. Kept in memory only as a SHA-256 hash and compared in constant time. |
+| `SONDA_ADMIN_PASSWORD` / `SONDA_ADMIN_PASSWORD_FILE` | Creates the first admin while no users exist; ignored afterwards. At least 12 characters. |
+| `SONDA_ADMIN_USERNAME` | That admin's username. Default `admin`. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
 | `RUST_LOG` | Log filter. Default `sonda=info,sqlx=warn`. |

@@ -43,7 +43,7 @@ describe('the HTTP API client', () => {
     await expect(createHttpApi('/api', fn).rules()).rejects.toBeInstanceOf(AuthError)
     expect(onUnauthorized).toHaveBeenCalledOnce()
     // A wrong token at sign-in is the form's to report, not a session expiry.
-    await expect(createHttpApi('/api', fn).signIn('nope')).rejects.toThrow('That token is not valid')
+    await expect(createHttpApi('/api', fn).signIn('ann', 'nope')).rejects.toThrow('Invalid username or password')
     expect(onUnauthorized).toHaveBeenCalledOnce()
     window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   })
@@ -59,13 +59,30 @@ describe('the HTTP API client', () => {
     await expect(createHttpApi('/api', fn).issue(1)).rejects.toThrow('unknown severity "fatal"')
   })
 
-  it('builds the shell from real counts, leaving unknown ones out', async () => {
-    localStorage.setItem('sonda-name', 'Ann Lee')
-    const { fn } = fakeFetch(() => json(page))
+  it('builds the shell from the signed-in user and real counts, leaving unknown ones out', async () => {
+    const ann = { id: 2, username: 'ann', displayName: 'Ann Lee', role: 'admin', disabled: false }
+    const { fn } = fakeFetch((url) => json(url.endsWith('/session') ? { user: ann, authenticated: true, readsRequireAuth: true } : page))
     const shell = await createHttpApi('/api', fn).shell()
     expect(shell.counts).toEqual({ projects: null, components: null, issues: 3, security: 2 })
-    expect(shell.me).toBe('Ann Lee')
-    expect(shell.user.initials).toBe('AL')
+    expect(shell.me).toBe('ann')
+    expect(shell.user).toEqual({ name: 'Ann Lee', handle: '@ann', initials: 'AL' })
+    expect(shell.isAdmin).toBe(true)
     expect(shell.org.projectCount).toBeNull()
+  })
+
+  it('signs in with username and password, and manages users', async () => {
+    const { fn, calls } = fakeFetch((url, init) => (init.method === 'POST' && url.endsWith('/session') ? new Response(null, { status: 204 }) : json({ id: 3 })))
+    const api = createHttpApi('/api', fn)
+    await api.signIn('ann', 'correct horse battery')
+    await api.changePassword('correct horse battery', 'an even better one')
+    await api.createUser({ username: 'bob', displayName: 'Bob', role: 'member', password: 'a long enough one' })
+    await api.updateUser(3, { disabled: true })
+    expect(calls.map((c) => `${c.init.method} ${c.url} ${c.init.body}`)).toEqual([
+      'POST /api/session {"username":"ann","password":"correct horse battery"}',
+      'PUT /api/me/password {"current":"correct horse battery","new":"an even better one"}',
+      'POST /api/users {"username":"bob","displayName":"Bob","role":"member","password":"a long enough one"}',
+      'PATCH /api/users/3 {"disabled":true}',
+    ])
+    expect(calls.every((c) => (c.init.headers as Record<string, string>)['Sonda-Csrf'] === '1')).toBe(true)
   })
 })

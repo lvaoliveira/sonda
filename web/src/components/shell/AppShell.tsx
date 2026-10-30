@@ -26,6 +26,8 @@ interface NavItem {
   icon: LucideIcon
   count?: (c: NavCounts) => number | null
   hot?: boolean
+  /** Shown to admins only. */
+  adminOnly?: boolean
 }
 
 const NAV: (NavItem | 'Configure')[] = [
@@ -38,7 +40,7 @@ const NAV: (NavItem | 'Configure')[] = [
   'Configure',
   { to: '/gates', label: 'Quality gates', icon: CircleCheck },
   { to: '/rules', label: 'Rules', icon: BookOpen },
-  { to: '/admin', label: 'Administration', icon: SlidersHorizontal },
+  { to: '/admin', label: 'Administration', icon: SlidersHorizontal, adminOnly: true },
 ]
 
 /** Two sonar arcs over a plumb line with a teal dot. */
@@ -87,7 +89,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
           </span>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 overflow-auto px-3 py-1">
-          {NAV.map((item) =>
+          {NAV.filter((item) => item === 'Configure' || !item.adminOnly || data?.isAdmin).map((item) =>
             item === 'Configure' ? (
               <div key={item} className="px-2.5 pt-4 pb-1.5 font-mono text-[10px] tracking-[.08em] text-fg-faint uppercase">
                 {item}
@@ -120,10 +122,10 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
         </nav>
         <div className="m-3 flex items-center gap-2.5 rounded-lg bg-panel p-2.5 edge">
           <span className="grid size-7 place-items-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand">{data?.user.initials ?? '··'}</span>
-          <span className="flex min-w-0 flex-1 flex-col leading-[1.25]">
+          <Link to="/account" title="Your account" className="flex min-w-0 flex-1 flex-col leading-[1.25] text-fg hover:text-fg">
             <span className="text-[13px] font-semibold">{data?.user.name ?? ' '}</span>
             <span className="text-[11.5px] text-fg-faint">{data?.user.handle ?? ' '}</span>
-          </span>
+          </Link>
           {signOut && (
             <button type="button" onClick={signOut} aria-label="Sign out" title="Sign out" className="grid size-7 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-fg-faint hover:bg-hover hover:text-fg">
               <LogOut size={15} strokeWidth={1.6} aria-hidden="true" />

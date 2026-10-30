@@ -15,6 +15,7 @@ pub mod overview;
 pub mod rules;
 pub mod session;
 pub mod store;
+pub mod users;
 
 use anyhow::{Context, Result};
 use config::Config;
@@ -25,6 +26,7 @@ use tokio::net::TcpListener;
 pub async fn run(config: Config) -> Result<()> {
     let pool = db::connect(config.database).await?;
     db::migrate(&pool).await?;
+    users::bootstrap_admin(&pool, config.admin).await?;
     let reads_require_auth = !config.listen.ip().is_loopback();
     if reads_require_auth {
         tracing::info!("reads require the token or a session (not listening on loopback only)");

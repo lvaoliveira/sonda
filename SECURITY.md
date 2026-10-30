@@ -88,6 +88,11 @@ still validated), and the files they explicitly name (`--config`,
 
 ### Known limitations
 
+- **No sign-in throttling yet.** Each attempt costs an Argon2 hash (tens of
+  milliseconds), but nothing limits attempts per username or address. On a
+  server exposed beyond a private network, rate-limit `POST /api/session` at
+  the reverse proxy.
+
 - **Windows workers are not sandboxed.** tree-sitter's runtime and grammars
   are C, called through FFI. They run in worker processes
   ([ADR-0003](docs/adr/0003-isolate-parsing.md)) everywhere, so a parser
@@ -148,11 +153,21 @@ What holds today:
 - **Reads need authentication off loopback.** Once the server listens
   beyond loopback, as it does in Docker, every read needs the token or a
   browser session.
-- **Browsers never hold the token.** Signing in exchanges it for a session
-  cookie: `__Host-` prefixed, `HttpOnly`, `Secure` and
-  `SameSite=Strict`, expiring after 12 hours. The database stores only a
-  SHA-256 hash of each session token, so a database leak yields no usable
-  session, and signing out deletes the session server-side.
+- **People sign in as themselves** ([ADR-0006](docs/adr/0006-users.md)).
+  - **Passwords** are stored as Argon2id hashes (OWASP parameters) and must
+    have at least 12 characters.
+  - **Uniform failures:** a failed sign-in gets the same answer and the same
+    hashing time whether or not the username exists.
+  - **Accounts:** users are disabled, never deleted. Disabling a user or
+    resetting their password ends their sessions. The last active admin
+    can't be removed.
+  - **Roles:** only admins manage users. The API token is for machines and
+    can't manage users or sign browsers in.
+- **Browsers hold only a session cookie.** It is `__Host-` prefixed,
+  `HttpOnly`, `Secure` and `SameSite=Strict`, and expires after 12 hours.
+  The database stores only a SHA-256 hash of each session token, so a
+  database leak yields no usable session. Signing out deletes the session
+  server-side.
 - **Sessions alone cannot change anything.** A change made with a session
   cookie also needs a `Sonda-Csrf` header. A cross-site form or script
   cannot set that header without a CORS preflight, which the server never

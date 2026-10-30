@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
-import { initials, storedName } from '@/lib/identity'
-import { AuthError, type IssueDetail, type IssuePage, type Overview, type RuleCatalog, type Session, type Shell, type SondaApi } from './types'
+import { initials } from '@/lib/identity'
+import { AuthError, type IssueDetail, type IssuePage, type Overview, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -24,7 +24,7 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     if (response.status === 401) {
       // A wrong token at sign-in is the sign-in form's to report.
       if (path !== '/session') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
-      throw new AuthError(path === '/session' ? 'That token is not valid' : undefined)
+      throw new AuthError(path === '/session' ? 'Invalid username or password' : undefined)
     }
     if (!response.ok) {
       const error = (await response.json().catch(() => null)) as { error?: string } | null
@@ -35,18 +35,22 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
 
   return {
     session: () => call<Session>('GET', '/session'),
-    signIn: (token) => call<void>('POST', '/session', { token }),
+    signIn: (username, password) => call<void>('POST', '/session', { username, password }),
     signOut: () => call<void>('DELETE', '/session'),
-    // There are no accounts yet: the name is what the viewer typed at sign-in.
+    changePassword: (current, next) => call<void>('PUT', '/me/password', { current, new: next }),
+    users: () => call<UserRow[]>('GET', '/users'),
+    createUser: (user) => call<User>('POST', '/users', user),
+    updateUser: (id, patch) => call<User>('PATCH', `/users/${id}`, patch),
     // Counts the server cannot give yet are null, and the shell omits them.
     shell: async () => {
-      const open = await call<IssuePage>('GET', `/issues?status=open,confirmed&limit=1`)
-      const name = storedName()
+      const [session, open] = await Promise.all([call<Session>('GET', '/session'), call<IssuePage>('GET', `/issues?status=open,confirmed&limit=1`)])
+      const user = session.user
       return {
         org: { name: 'sonda', initials: 'S', deployment: 'self-hosted', projectCount: null },
-        user: { name: name || 'Signed in', handle: name ? '' : 'set a name at sign-in', initials: initials(name) },
+        user: user ? { name: user.displayName, handle: `@${user.username}`, initials: initials(user.displayName) } : { name: 'Read-only', handle: 'not signed in', initials: '··' },
+        isAdmin: user?.role === 'admin',
         counts: { projects: null, components: null, issues: open.total, security: open.facets.category.vulnerability ?? 0 },
-        me: name || null,
+        me: user?.username ?? null,
       } satisfies Shell
     },
     // There are no teams yet (`teams: false`), so the scope is always "all".

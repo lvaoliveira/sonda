@@ -159,3 +159,28 @@ pub async fn upload(db: &TestDb, body: &Value) -> (StatusCode, Value) {
     let app = http::router(state(db.pool.clone()), None);
     post(app, Some(TOKEN), gzip(&serde_json::to_vec(body).unwrap())).await
 }
+
+/// The password every test user gets.
+pub const PASSWORD: &str = "correct horse battery";
+
+pub async fn create_user(db: &TestDb, username: &str, role: &str) -> i64 {
+    sonda_server::users::create(&db.pool, username, username, role, PASSWORD)
+        .await
+        .unwrap()
+        .id
+}
+
+/// Signs in; returns the session cookie as a browser sends it back.
+pub async fn sign_in(app: &axum::Router, username: &str, password: &str) -> Option<String> {
+    let request = Request::post("/api/session")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "username": username, "password": password }).to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    response
+        .headers()
+        .get("set-cookie")
+        .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
+}

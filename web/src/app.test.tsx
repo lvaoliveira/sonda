@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { ApiProvider } from '@/api/ApiProvider'
-import { createMockApi, MOCK_TOKEN } from '@/api/mock'
+import { createMockApi, MOCK_PASSWORD } from '@/api/mock'
 import type { SondaApi } from '@/api/types'
 import { AppRoutes } from '@/App'
 import { SessionGate } from '@/components/shell/SessionGate'
@@ -118,18 +118,22 @@ describe('Rules', () => {
 })
 
 describe('Signing in', () => {
-  it('requires the token when the server requires it to read', async () => {
+  it('requires a username and password when the server requires them to read', async () => {
     const user = userEvent.setup()
     renderAt('/rules', createMockApi(0, { signedIn: false, readsRequireAuth: true }))
     expect(await screen.findByRole('heading', { name: 'Sign in to sonda' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Continue read-only' })).not.toBeInTheDocument()
-    await user.type(screen.getByLabelText('API token'), 'wrong')
+    await user.type(screen.getByLabelText('Username'), 'dev')
+    await user.type(screen.getByLabelText('Password'), 'wrong password')
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('That token is not valid')
-    await user.clear(screen.getByLabelText('API token'))
-    await user.type(screen.getByLabelText('API token'), MOCK_TOKEN)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid username or password')
+    await user.clear(screen.getByLabelText('Password'))
+    await user.type(screen.getByLabelText('Password'), MOCK_PASSWORD)
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(await screen.findByRole('heading', { level: 1, name: 'Rules' })).toBeInTheDocument()
+    // A member sees no administration.
+    expect(screen.queryByRole('link', { name: /Administration/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Dev Patel/ })).toHaveAttribute('href', '/account')
   })
 
   it('lets a viewer continue read-only where reads are open, and sign out', async () => {
@@ -145,6 +149,42 @@ describe('Signing in', () => {
     renderAt('/rules')
     await user.click(await screen.findByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in to sonda' })).toBeInTheDocument()
+  })
+})
+
+describe('Users', () => {
+  it('lets an admin add users and refuses to remove the last admin', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin')
+    expect(await screen.findByRole('cell', { name: /Dev Patel/ })).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Username'), 'bob')
+    await user.type(screen.getByLabelText('Display name'), 'Bob Builder')
+    await user.type(screen.getByLabelText('Initial password'), 'a long enough one')
+    await user.click(screen.getByRole('button', { name: 'Add user' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Created bob')
+    expect(await screen.findByRole('cell', { name: /Bob Builder/ })).toBeInTheDocument()
+    // Mara is the only admin: demoting her is refused, and says why.
+    await user.selectOptions(screen.getByLabelText('Role of mara'), 'member')
+    expect(await screen.findByRole('alert')).toHaveTextContent('last active admin')
+  })
+
+  it('keeps administration from members', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin', createMockApi(0, { signedIn: false, readsRequireAuth: true }))
+    await user.type(await screen.findByLabelText('Username'), 'dev')
+    await user.type(screen.getByLabelText('Password'), MOCK_PASSWORD)
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByText('Admins only.')).toBeInTheDocument()
+  })
+
+  it('changes your own password', async () => {
+    const user = userEvent.setup()
+    renderAt('/account')
+    await user.type(await screen.findByLabelText('Current password'), MOCK_PASSWORD)
+    await user.type(screen.getByLabelText('New password'), 'an even better one')
+    await user.type(screen.getByLabelText('Repeat the new password'), 'an even better one')
+    await user.click(screen.getByRole('button', { name: 'Change password' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Password changed')
   })
 })
 
