@@ -6,6 +6,7 @@ import { AccountPage } from '@/pages/AccountPage'
 import { AnalysesPage } from '@/pages/AnalysesPage'
 import { AnalysisPage } from '@/pages/AnalysisPage'
 import { ComponentPage } from '@/pages/ComponentPage'
+import { CoveragePage, FileCoveragePage } from '@/pages/CoveragePage'
 import { DependenciesPage } from '@/pages/DependenciesPage'
 import { ComponentsPage } from '@/pages/ComponentsPage'
 import { GatesPage } from '@/pages/GatesPage'
@@ -41,6 +42,8 @@ export function AppRoutes() {
           <Route path="/projects/:key" element={<ProjectPage />} />
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
           <Route path="/projects/:key/dependencies" element={<DependenciesPage />} />
+          <Route path="/projects/:key/coverage" element={<CoveragePage />} />
+          <Route path="/projects/:key/coverage/file" element={<FileCoveragePage />} />
           <Route path="/components" element={<ComponentsPage />} />
           <Route path="/security" element={<SecurityPage />} />
           <Route path="/gates" element={<GatesPage />} />

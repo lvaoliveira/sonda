@@ -186,6 +186,11 @@ file, the report formats and the public library API.
   to compute coverage on its main-branch new code period, instead of
   keeping the scan's value, and the Overview's coverage drill-down lists
   each project's least covered files.
+- A coverage report in the web app, like an LCOV HTML report: line
+  coverage by directory and file, and each file's source with uncovered
+  lines in red and a way to step through them. The project page's
+  Coverage tile opens it. `GET /api/projects/{key}/coverage` and
+  `.../coverage/file?path=` serve it.
 - A default for new code (ADR-0010): without `--new-code`, `auto` judges
   what the run changed. In a GitHub Actions pull request, that's against
   its base branch; in a push, the commits it pushed; on a branch with
@@ -324,6 +329,11 @@ file, the report formats and the public library API.
   change every tile was green, even a 0% gate pass rate. Each tile is now
   colored by how its value stands (`tone` in `GET /api/overview`), and the
   delta keeps the trend's color, gray when unchanged.
+
+- On the server's main-branch new code period, an issue first seen after
+  the start no longer counts as new unless its line changed since then.
+  Rules added in a sonda release made old, untouched code fail the gate
+  with "new" issues.
 
 - When `git cat-file` exited early, its empty answer was read as "blob
   missing", which silently marked files as entirely new code. It is now an

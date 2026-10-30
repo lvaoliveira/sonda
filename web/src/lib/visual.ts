@@ -1,4 +1,4 @@
-import type { Category, GateState, IssueStatus, Level, Severity } from '@/api/types'
+import type { Category, GateState, IssueStatus, Level, Severity, TokenRole } from '@/api/types'
 
 /** Severity is always a glyph plus a label, never color alone. */
 export const SEVERITY: Record<Severity, { glyph: string; label: string; color: string; soft: string; rank: number }> = {
@@ -97,3 +97,14 @@ export function languageLabel(id: string): string {
 
 /** Package ecosystems, as dependencies report them. */
 export const ECOSYSTEM_LABEL: Record<string, string> = { npm: 'npm', cargo: 'Cargo', pypi: 'PyPI' }
+
+/** Token roles map to theme colors, as in the design handoff. */
+export const ROLE_COLOR: Record<TokenRole, string> = {
+  keyword: 'var(--sd-info)',
+  string: 'var(--sd-ok)',
+  number: 'var(--sd-warn)',
+  comment: 'var(--sd-faint)',
+  type: 'var(--sd-accent)',
+  punct: 'var(--sd-muted)',
+  plain: 'var(--sd-text)',
+}

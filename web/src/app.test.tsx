@@ -270,6 +270,52 @@ describe('Dependencies', () => {
   })
 })
 
+describe('Coverage', () => {
+  it('opens from the project, then walks directories down to a file’s uncovered lines', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform')
+    await user.click(await screen.findByRole('link', { name: /%$/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Coverage' })).toBeInTheDocument()
+    // The root: directories add up their files, the biggest gaps first.
+    const rows = () => within(screen.getByRole('table')).getAllByRole('row').slice(1)
+    expect(rows().map((r) => within(r).getByRole('link').textContent)).toEqual(['src/', 'scripts/'])
+    expect(within(rows()[0]).getByText('1 without data')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('link', { name: 'src/' }))
+    expect(await screen.findByRole('navigation', { name: 'Directory' })).toHaveTextContent('All files/src')
+    await user.click(screen.getByRole('button', { name: 'Name' }))
+    expect(rows().map((r) => within(r).getByRole('link').textContent)).toEqual(['api/', 'billing/', 'generated/', 'util/', 'index.ts'])
+    await user.click(screen.getByRole('link', { name: 'billing/' }))
+    await user.click(await screen.findByRole('link', { name: 'refunds.ts' }))
+
+    // Every coverable line of refunds.ts is uncovered: one block to step to.
+    expect(await screen.findByRole('heading', { level: 1, name: 'refunds.ts' })).toBeInTheDocument()
+    expect(screen.getByText(/0\.0% · 0 of 21 lines covered/)).toBeInTheDocument()
+    expect(screen.getByText('1 uncovered block')).toBeInTheDocument()
+    const source = screen.getByRole('region', { name: 'Source code with coverage' })
+    expect(source.querySelectorAll('[data-coverage="uncovered"]')).toHaveLength(21)
+    expect(source.querySelectorAll('[data-coverage="covered"]')).toHaveLength(0)
+  })
+
+  it('searches files across directories and keeps only those with gaps', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform/coverage')
+    await user.type(await screen.findByRole('searchbox', { name: 'Search files' }), 'auth')
+    const names = () => within(screen.getByRole('table')).getAllByRole('link').map((l) => l.textContent)
+    expect(names()).toEqual(['src/api/auth/session.ts', 'src/api/auth/tokens.ts'])
+    await user.clear(screen.getByRole('searchbox', { name: 'Search files' }))
+    await user.click(screen.getByRole('button', { name: 'With uncovered lines' }))
+    await user.click(screen.getByRole('link', { name: 'src/' }))
+    expect(await screen.findByRole('link', { name: 'index.ts' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'generated/' })).not.toBeInTheDocument()
+  })
+
+  it('explains how to get coverage when the analysis has none', async () => {
+    renderAt('/projects/docs-site/coverage')
+    expect(await screen.findByText('No coverage per file in this analysis')).toBeInTheDocument()
+  })
+})
+
 describe('Analyses', () => {
   it('lists analyses newest first, filters by gate and project, and pages', async () => {
     const user = userEvent.setup()
