@@ -23,6 +23,12 @@ doc = false
 bench = false
 
 [[bin]]
+name = "lockfile"
+path = "fuzz_targets/lockfile.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "config"
 path = "fuzz_targets/config.rs"
 test = false

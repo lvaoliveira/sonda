@@ -230,6 +230,60 @@ fn sarif_report_is_valid_2_1_0() {
 }
 
 #[test]
+fn sbom_lists_lockfile_dependencies_in_both_formats() {
+    let dir = project(&[
+        (
+            "package-lock.json",
+            r#"{"lockfileVersion": 3, "packages": {"": {"dependencies": {"lodash": "^4"}},
+               "node_modules/lodash": {"version": "4.17.20", "license": "MIT"}}}"#,
+        ),
+        ("requirements.txt", "flask==3.0.0\nrequests>=2\n"),
+    ]);
+    let sbom = |format: &str| {
+        let out = sonda()
+            .env("SOURCE_DATE_EPOCH", "1793361600")
+            .args(["sbom", "--format", format])
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        (stdout(&out), stderr(&out))
+    };
+    let (cdx, warnings) = sbom("cyclonedx");
+    assert!(
+        warnings
+            .contains("requirements.txt: requirements without an exact `==` version: 1 not listed")
+    );
+    let cdx: Value = serde_json::from_str(&cdx).unwrap();
+    assert_eq!(cdx["specVersion"], "1.6");
+    assert_eq!(cdx["metadata"]["timestamp"], "2026-10-30T12:00:00Z");
+    let purls: Vec<&str> = cdx["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["purl"].as_str().unwrap())
+        .collect();
+    assert_eq!(purls, ["pkg:npm/lodash@4.17.20", "pkg:pypi/flask@3.0.0"]);
+    assert_eq!(
+        cdx["dependencies"][0]["dependsOn"],
+        serde_json::json!(["pkg:npm/lodash@4.17.20"])
+    );
+
+    let (spdx, _) = sbom("spdx");
+    let spdx: Value = serde_json::from_str(&spdx).unwrap();
+    assert_eq!(spdx["spdxVersion"], "SPDX-2.3");
+    assert_eq!(spdx["creationInfo"]["created"], "2026-10-30T12:00:00Z");
+    assert_eq!(spdx["packages"].as_array().unwrap().len(), 3);
+    // Reproducible with SOURCE_DATE_EPOCH.
+    assert_eq!(sbom("spdx").0, sbom("spdx").0);
+
+    // And in the scan report.
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    assert_eq!(report["dependencies"][0]["purl"], "pkg:npm/lodash@4.17.20");
+    assert_eq!(report["dependencies"][0]["direct"], true);
+}
+
+#[test]
 fn output_file_receives_the_report_and_stdout_stays_empty() {
     let dir = project(&[("app.js", "eval(x);\n")]);
     let target = dir.path().join("out.sarif");

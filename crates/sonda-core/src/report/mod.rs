@@ -1,11 +1,13 @@
 //! Interface: turns an [`Outcome`] into text, JSON or SARIF.
 
 mod sarif;
+pub mod sbom;
 mod text;
 
 pub use text::{terminal_safe, terminal_safe_lines};
 
 use crate::Outcome;
+use crate::deps::Dependency;
 use crate::gate::GateResult;
 use crate::lang::Lang;
 use crate::measures::Measures;
@@ -36,6 +38,8 @@ pub struct Report<'a> {
     pub files: Vec<FileReport<'a>>,
     pub duplications: Vec<DuplicationReport<'a>>,
     pub issues: Vec<&'a Issue>,
+    /// From the project's lockfiles (ADR-0009).
+    pub dependencies: &'a [Dependency],
     pub warnings: &'a [String],
 }
 
@@ -107,6 +111,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         files,
         duplications,
         issues,
+        dependencies: &scan.dependencies,
         warnings: &scan.warnings,
     }
 }

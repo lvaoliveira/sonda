@@ -29,6 +29,7 @@
 
 pub mod codeowners;
 pub mod config;
+pub mod deps;
 pub mod highlight;
 pub mod lang;
 pub mod model;
@@ -91,6 +92,22 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
         measures,
         gate,
     })
+}
+
+/// The dependencies `root`'s lockfiles pin (ADR-0009), and warnings about
+/// lockfiles that could not be read. Analyzes no code; `config` supplies
+/// the excluded paths.
+pub fn dependencies(
+    root: &Path,
+    config: &Config,
+) -> Result<(Vec<deps::Dependency>, Vec<String>), Error> {
+    if !root.is_dir() {
+        return Err(Error::InvalidArgument(format!(
+            "{} is not a directory",
+            root.display()
+        )));
+    }
+    scanner::dependencies(root, config)
 }
 
 /// Runs a worker process for [`Isolation::Workers`]: reads requests on
@@ -164,6 +181,27 @@ pub mod fuzzing {
     pub fn parse_config(text: &str) {
         let _ = Config::parse(text);
     }
+
+    /// Parses an untrusted lockfile of the kind `selector` picks, then
+    /// renders what it found as both SBOM formats, which must be valid
+    /// JSON. It may be rejected, but must not panic.
+    pub fn parse_lockfile(selector: u8, text: &str) {
+        use crate::deps::FileKind::*;
+        let kinds = [PackageLock, CargoLock, PoetryLock, UvLock, Requirements];
+        let kind = kinds[usize::from(selector) % kinds.len()];
+        // The same text doubles as poetry's pyproject.toml.
+        let Ok(parsed) = crate::deps::parse(kind, "fuzz.lock", text, Some(text)) else {
+            return;
+        };
+        for sbom in [
+            crate::report::sbom::cyclonedx("fuzz", &parsed.dependencies, "2026-01-01T00:00:00Z"),
+            crate::report::sbom::spdx("fuzz", &parsed.dependencies, "2026-01-01T00:00:00Z"),
+        ] {
+            if let Err(e) = serde_json::from_str::<serde_json::Value>(&sbom) {
+                panic!("{kind:?}: invalid SBOM JSON: {e}");
+            }
+        }
+    }
 }
 
 /// Shared test configuration.
@@ -220,6 +258,10 @@ mod architecture {
         ("codeowners.rs", include_str!("codeowners.rs")),
         ("semantic/mod.rs", include_str!("semantic/mod.rs")),
         ("semantic/js.rs", include_str!("semantic/js.rs")),
+        ("deps/mod.rs", include_str!("deps/mod.rs")),
+        ("deps/npm.rs", include_str!("deps/npm.rs")),
+        ("deps/cargo.rs", include_str!("deps/cargo.rs")),
+        ("deps/python.rs", include_str!("deps/python.rs")),
     ];
 
     /// The file without comment lines (docs may mention other layers). Test
