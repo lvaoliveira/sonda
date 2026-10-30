@@ -10,6 +10,7 @@ pub mod api;
 pub mod components;
 pub mod config;
 pub mod db;
+pub mod dependencies;
 pub mod drill;
 pub mod gates;
 mod health;

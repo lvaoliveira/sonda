@@ -21,6 +21,8 @@ pub enum Ecosystem {
 }
 
 impl Ecosystem {
+    pub const ALL: [Ecosystem; 3] = [Ecosystem::Npm, Ecosystem::Cargo, Ecosystem::Pypi];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Ecosystem::Npm => "npm",

@@ -169,6 +169,11 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- Server and web app (ADR-0009, phase 2): uploads store each analysis's
+  dependencies. `GET /api/projects/{key}/dependencies` lists them with
+  counts by ecosystem, lockfile and license, and what changed since the
+  branch's previous analysis; a project's page summarizes them and links to
+  a Dependencies page with search and ecosystem and direct-only filters.
 - Security standards: each vulnerability rule (and any other with one)
   records the CWE ids and OWASP Top 10 categories it relates to, in both
   the 2025 and 2021 editions. 2021 categories are as SonarQube reports

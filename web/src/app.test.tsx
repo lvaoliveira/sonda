@@ -184,6 +184,41 @@ describe('Projects', () => {
   })
 })
 
+describe('Dependencies', () => {
+  it('summarizes a project\'s dependencies and lists them with filters and changes', async () => {
+    renderAt('/projects/payments-platform')
+    const card = await screen.findByRole('region', { name: 'Dependencies' })
+    expect(card).toHaveTextContent('17 packages')
+    expect(card).toHaveTextContent('6 direct')
+    expect(within(card).getByRole('link', { name: 'All 17 →' })).toHaveAttribute('href', '/projects/payments-platform/dependencies')
+
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform/dependencies')
+    const packages = await screen.findByRole('region', { name: 'Packages' })
+    const rows = () => within(packages).getAllByRole('row').slice(1)
+    expect(rows()).toHaveLength(17)
+    await user.type(within(packages).getByRole('searchbox', { name: 'Search packages' }), 'lodash')
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]).toHaveTextContent('pkg:npm/lodash@4.17.21')
+    expect(rows()[0]).toHaveTextContent('package-lock.json, web/package-lock.json')
+    await user.clear(within(packages).getByRole('searchbox', { name: 'Search packages' }))
+    await user.click(within(packages).getByRole('button', { name: 'PyPI' }))
+    expect(rows()).toHaveLength(3)
+    await user.click(within(packages).getByRole('button', { name: 'All' }))
+    await user.click(within(packages).getByRole('button', { name: 'Direct only' }))
+    expect(rows()).toHaveLength(6)
+    expect(screen.getByRole('region', { name: 'Changed' })).toHaveTextContent('updated express 4.18.2 → 4.19.2')
+    expect(screen.getByRole('region', { name: 'Licenses' })).toHaveTextContent('not recorded')
+  })
+
+  it('says so when an analysis recorded none', async () => {
+    renderAt('/projects/payments-platform?branch=release%2F2.4')
+    const card = await screen.findByRole('region', { name: 'Dependencies' })
+    expect(card).toHaveTextContent('None recorded in this analysis')
+    expect(within(card).queryByRole('link')).not.toBeInTheDocument()
+  })
+})
+
 describe('Analyses', () => {
   it('lists analyses newest first, filters by gate and project, and pages', async () => {
     const user = userEvent.setup()

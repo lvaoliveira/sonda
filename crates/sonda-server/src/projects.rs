@@ -67,6 +67,8 @@ pub struct ProjectDetail {
     pub history: Vec<HistoryPoint>,
     /// Top-level directories.
     pub components: Vec<ComponentRow>,
+    /// From the analysis's lockfiles; null when it recorded none.
+    pub dependencies: Option<crate::dependencies::Summary>,
 }
 
 #[derive(Serialize)]
@@ -293,6 +295,7 @@ pub async fn get_project(
     let score = score(&ratings, coverage);
     let languages = language_shares(&files);
     let components = components(&files, &issues, codeowners.as_deref());
+    let dependencies = crate::dependencies::summary(pool, analysis).await?;
 
     Ok(Json(ProjectDetail {
         key,
@@ -320,6 +323,7 @@ pub async fn get_project(
         },
         history,
         components,
+        dependencies,
     }))
 }
 

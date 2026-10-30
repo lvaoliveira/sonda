@@ -447,6 +447,55 @@ export interface ProjectDetail {
   /** The branch's latest analyses, oldest first. */
   history: ProjectHistoryPoint[]
   components: ProjectComponent[]
+  /** From the analysis's lockfiles; null when it recorded none. */
+  dependencies: DependencySummary | null
+}
+
+// ------------------------------------------------------------ dependencies
+
+export interface DependencySummary {
+  total: number
+  direct: number
+  /** Most packages first. */
+  ecosystems: { id: string; count: number }[]
+}
+
+export interface DependencyRow {
+  ecosystem: string
+  name: string
+  version: string
+  purl: string
+  /** Null when no lockfile says. */
+  direct: boolean | null
+  license: string | null
+  lockfiles: string[]
+}
+
+export interface PackageVersions {
+  ecosystem: string
+  name: string
+  versions: string[]
+}
+
+/** The packages a branch's latest analysis pinned (ADR-0009). */
+export interface DependencyList {
+  project: string
+  branch: string
+  mainBranch: string
+  analysis: { id: number; sha: string; analyzedAt: string }
+  summary: DependencySummary
+  lockfiles: { id: string; count: number }[]
+  /** Most common first; null is no recorded license. */
+  licenses: { license: string | null; count: number }[]
+  /** One row per package URL, by ecosystem then name. */
+  dependencies: DependencyRow[]
+  /** Against the branch's previous analysis; null for its first. */
+  changes: {
+    previousAnalysis: number
+    added: PackageVersions[]
+    removed: PackageVersions[]
+    updated: { ecosystem: string; name: string; from: string[]; to: string[] }[]
+  } | null
 }
 
 // -------------------------------------------------------------- components
@@ -652,6 +701,8 @@ export interface SondaApi {
   /** Every project's components, or one project's. */
   components(project?: string): Promise<ComponentList>
   component(project: string, path: string, branch?: string): Promise<ComponentDetail>
+  /** The project's dependencies on `branch`, or on its main branch. */
+  dependencies(project: string, branch?: string): Promise<DependencyList>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>
   analysis(id: number): Promise<AnalysisDetail>
   issues(query: IssueQuery): Promise<IssuePage>
