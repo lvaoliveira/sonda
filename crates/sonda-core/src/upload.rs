@@ -41,6 +41,9 @@ pub struct Upload {
     /// The JSON report, forwarded as written; the server validates it fully.
     pub report: Value,
     pub sources: Vec<Source>,
+    /// The repository's CODEOWNERS file, if it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codeowners: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,6 +76,7 @@ pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Er
         commit: meta.commit.to_ascii_lowercase(),
         report,
         sources,
+        codeowners: read_codeowners(root),
     })
 }
 
@@ -184,27 +188,11 @@ fn read_source(
     expected: &Sha256,
     budget: &mut u64,
 ) -> Result<String, Error> {
-    let mut full = PathBuf::from(root);
-    for component in path.split('/') {
-        full.push(component);
-        let meta = std::fs::symlink_metadata(&full).map_err(|source| Error::Io {
-            path: full.clone(),
-            source,
-        })?;
-        if meta.file_type().is_symlink() {
-            return Err(Error::Upload(format!(
-                "{path}: refusing to follow a symlink"
-            )));
-        }
-    }
+    let (full, file) = open_in_root(root, path)?;
     let io = |source| Error::Io {
         path: full.clone(),
         source,
     };
-    let file = open_nonblocking(&full).map_err(io)?;
-    if !file.metadata().map_err(io)?.is_file() {
-        return Err(Error::Upload(format!("{path}: not a regular file")));
-    }
     let mut bytes = Vec::new();
     file.take(budget.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -225,6 +213,71 @@ fn read_source(
     }
     // Cannot fail in practice: the scanner only hashes UTF-8 files.
     String::from_utf8(bytes).map_err(|_| Error::Upload(format!("{path}: not valid UTF-8")))
+}
+
+/// Opens `root/path` for reading, refusing a symlink anywhere on the way
+/// (the scanner never follows them, so a listed file never needs one) and
+/// anything but a regular file.
+fn open_in_root(root: &Path, path: &str) -> Result<(PathBuf, std::fs::File), Error> {
+    let mut full = PathBuf::from(root);
+    for component in path.split('/') {
+        full.push(component);
+        let meta = std::fs::symlink_metadata(&full).map_err(|source| Error::Io {
+            path: full.clone(),
+            source,
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(Error::Upload(format!(
+                "{path}: refusing to follow a symlink"
+            )));
+        }
+    }
+    let file = open_nonblocking(&full).map_err(|source| Error::Io {
+        path: full.clone(),
+        source,
+    })?;
+    let regular = file
+        .metadata()
+        .map(|m| m.is_file())
+        .map_err(|source| Error::Io {
+            path: full.clone(),
+            source,
+        })?;
+    if !regular {
+        return Err(Error::Upload(format!("{path}: not a regular file")));
+    }
+    Ok((full, file))
+}
+
+/// The repository's CODEOWNERS file, from the first of GitHub's locations
+/// that has one. Like sources, it is read without following symlinks and
+/// capped. A missing, unreadable or non-UTF-8 file is simply left out: owners
+/// are a convenience, not part of the analysis.
+fn read_codeowners(root: &Path) -> Option<String> {
+    let path = crate::codeowners::LOCATIONS
+        .iter()
+        .find(|p| std::fs::symlink_metadata(root.join(p)).is_ok())?;
+    let read = || -> Result<Option<String>, Error> {
+        let (full, file) = open_in_root(root, path)?;
+        let mut bytes = Vec::new();
+        file.take(crate::codeowners::MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| Error::Io { path: full, source })?;
+        Ok((bytes.len() as u64 <= crate::codeowners::MAX_BYTES)
+            .then(|| String::from_utf8(bytes).ok())
+            .flatten())
+    };
+    match read() {
+        Ok(Some(text)) => Some(text),
+        Ok(None) => {
+            tracing::warn!(path = %path, "CODEOWNERS is too large or not UTF-8; owners left out");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(path = %path, error = %e, "CODEOWNERS not read; owners left out");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +319,44 @@ mod tests {
         assert_eq!(up.sources.len(), 1);
         assert_eq!(up.sources[0].path, "src/a.js");
         assert_eq!(up.sources[0].content, "var a;\n");
+    }
+
+    #[test]
+    fn codeowners_come_along_from_githubs_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = report_for(&[]);
+        assert_eq!(
+            prepare(&report, dir.path(), meta()).unwrap().codeowners,
+            None
+        );
+        std::fs::write(dir.path().join("CODEOWNERS"), "* @root\n").unwrap();
+        std::fs::create_dir(dir.path().join(".github")).unwrap();
+        std::fs::write(dir.path().join(".github/CODEOWNERS"), "* @github\n").unwrap();
+        // .github/ is looked at first, as GitHub does.
+        let up = prepare(&report, dir.path(), meta()).unwrap();
+        assert_eq!(up.codeowners.as_deref(), Some("* @github\n"));
+        // Too large: left out, the upload still works.
+        std::fs::write(dir.path().join(".github/CODEOWNERS"), "x".repeat(200_000)).unwrap();
+        assert_eq!(
+            prepare(&report, dir.path(), meta()).unwrap().codeowners,
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_codeowners_is_not_followed() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "* @leaked\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret"), dir.path().join("CODEOWNERS"))
+            .unwrap();
+        assert_eq!(
+            prepare(&report_for(&[]), dir.path(), meta())
+                .unwrap()
+                .codeowners,
+            None
+        );
     }
 
     #[test]

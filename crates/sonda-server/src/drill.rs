@@ -1,6 +1,7 @@
 //! `GET /api/drill/{metric}`: what is behind one Overview metric, by
 //! component (a project's top-level directory) and file, from each
-//! project's main branch. Owners are null: nothing records them yet.
+//! project's main branch. Owners come from the CODEOWNERS file uploaded
+//! with each project's latest analysis; null without one.
 
 use crate::api::ApiError;
 use crate::http::State;
@@ -8,7 +9,8 @@ use axum::Json;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use sonda_core::codeowners::CodeOwners;
+use std::collections::{BTreeMap, HashMap};
 
 const MAX_ITEMS: usize = 8;
 const MAX_FILES: usize = 5;
@@ -68,6 +70,7 @@ pub async fn get_drill(
         ));
     }
     let pool = &state.pool;
+    let owners = owners(pool).await?;
     let drill = match metric.as_str() {
         "critical" => {
             let rows = open_issues(pool, Some(&["blocker", "critical"]), None, None).await?;
@@ -75,6 +78,7 @@ pub async fn get_drill(
             by_component(
                 rows,
                 Measure::Count,
+                &owners,
                 Drill {
                     metric: "critical",
                     title: format!(
@@ -107,6 +111,7 @@ pub async fn get_drill(
             by_component(
                 rows,
                 Measure::Count,
+                &owners,
                 Drill {
                     metric: "vulns",
                     title: format!(
@@ -132,6 +137,7 @@ pub async fn get_drill(
             by_component(
                 rows,
                 Measure::Effort,
+                &owners,
                 Drill {
                     metric: "debt",
                     title: format!("{} of technical debt", effort_text(minutes)),
@@ -144,9 +150,9 @@ pub async fn get_drill(
                 },
             )
         }
-        "gate" => gate(pool).await?,
-        "dup" => duplication(pool).await?,
-        "coverage" => coverage(pool).await?,
+        "gate" => gate(pool, &owners).await?,
+        "dup" => duplication(pool, &owners).await?,
+        "coverage" => coverage(pool, &owners).await?,
         other => {
             return Err(ApiError::BadRequest(format!(
                 "unknown metric {other:?}; expected gate, critical, vulns, coverage, dup or debt"
@@ -154,6 +160,58 @@ pub async fn get_drill(
         }
     };
     Ok(Json(drill))
+}
+
+// ------------------------------------------------------------------ owners
+
+/// Owners by (project, component), and by (project, `*`) for a whole
+/// project: the owners most of their files share, per the CODEOWNERS file
+/// uploaded with the project's latest main-branch analysis.
+type Owners = HashMap<(String, String), String>;
+
+async fn owners(pool: &sqlx::PgPool) -> Result<Owners, sqlx::Error> {
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT p.key, last.codeowners, f.path
+         FROM projects p
+         JOIN LATERAL (SELECT a.id, a.codeowners FROM analyses a
+                       WHERE a.project_id = p.id AND a.branch = p.main_branch
+                       ORDER BY a.id DESC LIMIT 1) last ON true
+         JOIN analysis_files f ON f.analysis_id = last.id
+         WHERE last.codeowners IS NOT NULL
+         ORDER BY p.key, f.path",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut by_project: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for (project, text, path) in rows {
+        by_project
+            .entry(project)
+            .or_insert_with(|| (text, Vec::new()))
+            .1
+            .push(path);
+    }
+    let mut owners = Owners::new();
+    for (project, (text, paths)) in by_project {
+        let co = CodeOwners::parse(&text);
+        let mut components: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for path in &paths {
+            components.entry(component_of(path)).or_default().push(path);
+        }
+        for (component, files) in components {
+            if let Some(o) = co.majority(files) {
+                owners.insert((project.clone(), component.to_string()), o);
+            }
+        }
+        if let Some(o) = co.majority(paths.iter().map(String::as_str)) {
+            owners.insert((project, "*".into()), o);
+        }
+    }
+    Ok(owners)
+}
+
+/// A path's top-level directory, or `.` for files at the root.
+fn component_of(path: &str) -> &str {
+    path.split_once('/').map_or(".", |(c, _)| c)
 }
 
 // ------------------------------------------------------------ issue drills
@@ -218,7 +276,12 @@ enum Measure {
 
 /// Groups issues by (project, component), then by file: the largest first,
 /// each file with its most severe issue.
-fn by_component(rows: Vec<OpenIssue>, measure: Measure, mut drill: Drill) -> Drill {
+fn by_component(
+    rows: Vec<OpenIssue>,
+    measure: Measure,
+    owners: &Owners,
+    mut drill: Drill,
+) -> Drill {
     let weight = |r: &OpenIssue| match measure {
         Measure::Count => 1.0,
         Measure::Effort => f64::from(r.effort),
@@ -270,13 +333,13 @@ fn by_component(rows: Vec<OpenIssue>, measure: Measure, mut drill: Drill) -> Dri
                 .collect();
             files.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.base.cmp(&b.1.base)));
             DrillComponent {
+                owner: owners.get(&(project.clone(), component.clone())).cloned(),
                 component: if component == "." {
                     format!("{project} (root)")
                 } else {
                     component
                 },
                 project,
-                owner: None,
                 value: match measure {
                     Measure::Count => total,
                     Measure::Effort => (total / 60.0 * 10.0).round() / 10.0,
@@ -312,7 +375,7 @@ async fn latest(pool: &sqlx::PgPool) -> Result<Vec<LatestRow>, sqlx::Error> {
 
 /// Projects failing their gate, by failed conditions, with the files that
 /// hold the most new issues.
-async fn gate(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
+async fn gate(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx::Error> {
     let failing: Vec<LatestRow> = latest(pool).await?.into_iter().filter(|r| !r.5).collect();
     let ids: Vec<i64> = failing.iter().map(|r| r.0).collect();
     let new_issues = open_issues(pool, None, None, Some(&ids)).await?;
@@ -338,7 +401,7 @@ async fn gate(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
                     effort: r.effort,
                 })
                 .collect();
-            let files = by_component(mine, Measure::Count, empty_drill())
+            let files = by_component(mine, Measure::Count, &Owners::new(), empty_drill())
                 .items
                 .into_iter()
                 .flat_map(|c| c.files)
@@ -350,7 +413,7 @@ async fn gate(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
                     "{branch} · {failed} failing {}",
                     plural(failed, "condition", "conditions")
                 ),
-                owner: None,
+                owner: owners.get(&(key.clone(), "*".to_string())).cloned(),
                 value: failed as f64,
                 files,
             }
@@ -378,7 +441,7 @@ async fn gate(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
 type FileRow = (String, String, f64, f64);
 
 /// Duplicated lines per component and file, from the latest analyses.
-async fn duplication(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
+async fn duplication(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx::Error> {
     let rows: Vec<FileRow> = sqlx::query_as(
         "SELECT p.key, f.path, coalesce((f.metrics->>'lines')::float8, 0),
                 coalesce((f.metrics->>'duplicated_lines')::float8, 0)
@@ -392,7 +455,7 @@ async fn duplication(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
     let (lines, dup): (f64, f64) = rows.iter().fold((0.0, 0.0), |(l, d), r| (l + r.2, d + r.3));
     let mut groups: BTreeMap<(String, String), Vec<&FileRow>> = BTreeMap::new();
     for r in &rows {
-        let component = r.1.split_once('/').map_or(".", |(c, _)| c).to_string();
+        let component = component_of(&r.1).to_string();
         groups.entry((r.0.clone(), component)).or_default().push(r);
     }
     let mut items: Vec<DrillComponent> = groups
@@ -423,13 +486,13 @@ async fn duplication(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
                 .collect();
             files.sort_by(|a, b| b.0.total_cmp(&a.0));
             Some(DrillComponent {
+                owner: owners.get(&(project.clone(), component.clone())).cloned(),
                 component: if component == "." {
                     format!("{project} (root)")
                 } else {
                     component
                 },
                 project,
-                owner: None,
                 value: (d / l * 1000.0).round() / 10.0,
                 files: files.into_iter().take(MAX_FILES).map(|(_, f)| f).collect(),
             })
@@ -458,15 +521,15 @@ async fn duplication(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
 
 /// Coverage by project, worst first. Reports carry coverage per project
 /// only, so there are no files to show.
-async fn coverage(pool: &sqlx::PgPool) -> Result<Drill, sqlx::Error> {
+async fn coverage(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx::Error> {
     let mut items: Vec<DrillComponent> = latest(pool)
         .await?
         .into_iter()
         .filter_map(|(_, key, branch, measures, _, _)| {
             measures["coverage"].as_f64().map(|c| DrillComponent {
+                owner: owners.get(&(key.clone(), "*".to_string())).cloned(),
                 component: key,
                 project: branch,
-                owner: None,
                 value: (c * 10.0).round() / 10.0,
                 files: vec![],
             })

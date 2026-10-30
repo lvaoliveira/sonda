@@ -164,6 +164,10 @@ async fn tampered_uploads_are_rejected_and_store_nothing() {
             "files but",
             Box::new(|b| b["sources"] = Value::Array(vec![])),
         ),
+        (
+            "CODEOWNERS file is too large",
+            Box::new(|b| b["codeowners"] = "x".repeat(200_000).into()),
+        ),
     ];
     for (expected, tamper) in cases {
         let mut body = good.clone();

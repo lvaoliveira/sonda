@@ -38,6 +38,9 @@ struct Upload {
     commit: String,
     report: Report,
     sources: Vec<Source>,
+    /// The repository's CODEOWNERS file; older clients don't send it.
+    #[serde(default)]
+    codeowners: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +103,7 @@ pub struct Analysis {
     /// Distinct contents, keyed by SHA-256.
     pub sources: Vec<([u8; 32], String)>,
     pub issues: Vec<StoredIssue>,
+    pub codeowners: Option<String>,
 }
 
 pub struct StoredFile {
@@ -178,6 +182,13 @@ fn decode(body: &[u8], gzip: bool, max_json: u64) -> Result<Upload, ApiError> {
 
 fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     let invalid = |m: String| ApiError::Unprocessable(m);
+    if upload
+        .codeowners
+        .as_ref()
+        .is_some_and(|c| c.len() as u64 > sonda_core::codeowners::MAX_BYTES)
+    {
+        return Err(invalid("the CODEOWNERS file is too large".into()));
+    }
     let meta = Meta {
         project: upload.project,
         branch: upload.branch,
@@ -325,6 +336,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         files,
         sources: sources.into_iter().collect(),
         issues,
+        codeowners: upload.codeowners,
     })
 }
 

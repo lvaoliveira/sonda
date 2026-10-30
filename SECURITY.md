@@ -79,6 +79,9 @@ still validated), and the files they explicitly name (`--config`,
   - Every file must match the SHA-256 the scan recorded, so a file edited or
     swapped since the scan is refused, not uploaded.
   - All checks run before any connection is made.
+  - The repository's CODEOWNERS file, sent for owners, is read the same
+    way: no symlinks, regular files only, capped at 128 KiB. Otherwise it
+    is left out.
 - **The upload token does not leak.** It comes from `SONDA_TOKEN` or a file,
   never a command-line flag, because flags are visible in `ps` and CI logs.
   It is sent only over HTTPS, except to `localhost`. Redirects are not
