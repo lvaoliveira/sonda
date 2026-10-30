@@ -330,6 +330,12 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- "Where to focus" on the Overview opened the drawer of every blocker and
+  critical issue for an item about specific new issues. It now opens the
+  Issues page filtered to them (project, branch, severity, and file when
+  they share one), with the first one open. The Issues page reads `sev=`
+  and `issue=` from its URL for this.
+
 - Gates with fewer than 20 new lines no longer fail, or stay "partial",
   on coverage and duplication of new code: those conditions are
   `ignored`, as in SonarQube, in the CLI and on the server, and the report,

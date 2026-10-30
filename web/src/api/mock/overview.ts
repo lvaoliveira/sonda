@@ -178,6 +178,8 @@ export function overview(scope: Scope, range: Range): Overview {
         ],
         cta: 'Open',
         drill: 'critical',
+        // As the server links new issues: the Issues page, on this one.
+        link: '/issues?project=billing-service&branch=main&sev=blocker&file=src%2Fmain%2Fjava%2Fcom%2Facme%2Fbilling%2Fconfig%2FStripeConfig.java&issue=6',
       },
       {
         severity: 'major',

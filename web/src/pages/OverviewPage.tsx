@@ -234,6 +234,7 @@ function Live({
 }
 
 function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string; onDrill: (m: DrillMetric) => void }) {
+  const navigate = useNavigate()
   const emphasis = { muted: 'var(--sd-muted)', strong: 'var(--sd-text)', faint: 'var(--sd-faint)' }
   return (
     <Card
@@ -255,7 +256,7 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
             <button
               key={f.title}
               type="button"
-              onClick={() => onDrill(f.drill)}
+              onClick={() => (f.link ? navigate(f.link) : onDrill(f.drill))}
               className="grid cursor-pointer grid-cols-[4px_minmax(0,1fr)_auto] items-stretch gap-3.5 rounded-[9px] border-0 bg-panel py-3.5 pr-3.5 pl-2.5 text-left edge hover:bg-hover hover:edge-strong"
             >
               <span aria-hidden="true" className="rounded-sm" style={{ background: s.color }} />

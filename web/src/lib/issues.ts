@@ -61,13 +61,15 @@ export function issueSearchParams(q: IssueQuery): URLSearchParams {
 }
 
 const CATEGORIES: Category[] = ['bug', 'vulnerability', 'code_smell']
+const SEVERITIES: Severity[] = ['blocker', 'critical', 'major', 'minor', 'info']
 
 /**
  * Drill-down links from other screens arrive as query parameters:
- * `project=`, `branch=`, `new`, `me`, `cat=`, `comp=`, `file=`, combinable. Returns the filter and
- * a human description, or null when there is nothing to apply.
+ * `project=`, `branch=`, `new`, `me`, `cat=`, `sev=` (comma-separated), `comp=`, `file=`,
+ * combinable, and `issue=` to open one of the results. Returns the filter, a human description
+ * and the issue, or null when there is nothing to apply.
  */
-export function filterFromParams(params: URLSearchParams): { filter: IssueFilter; description: string } | null {
+export function filterFromParams(params: URLSearchParams): { filter: IssueFilter; description: string; issue: number | null } | null {
   const filter: IssueFilter = { ...DEFAULT_FILTER }
   const parts: string[] = []
   const project = params.get('project')
@@ -86,6 +88,11 @@ export function filterFromParams(params: URLSearchParams): { filter: IssueFilter
     filter.category = [cat as Category]
     parts.push(cat === 'code_smell' ? 'code smells' : `${cat === 'bug' ? 'bugs' : 'vulnerabilities'}`)
   }
+  const sev = (params.get('sev') ?? '').split(',').filter((s): s is Severity => (SEVERITIES as string[]).includes(s))
+  if (sev.length > 0) {
+    filter.severity = sev
+    parts.push(sev.join(' and '))
+  }
   const comp = params.get('comp')
   if (comp) {
     filter.component = [comp]
@@ -101,5 +108,6 @@ export function filterFromParams(params: URLSearchParams): { filter: IssueFilter
     parts.push('assigned to you')
   }
   if (parts.length === 0) return null
-  return { filter, description: `Showing ${parts.join(' · ')} — from the metric you clicked` }
+  const issue = Number(params.get('issue'))
+  return { filter, description: `Showing ${parts.join(' · ')} — from the metric you clicked`, issue: Number.isInteger(issue) && issue > 0 ? issue : null }
 }

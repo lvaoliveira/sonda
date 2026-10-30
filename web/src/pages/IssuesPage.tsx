@@ -63,7 +63,7 @@ function Issues({ me }: { me: string | null }) {
   const drill = useMemo(() => filterFromParams(params), [params])
   const [filter, setFilter] = useState<IssueFilter>(drill?.filter ?? DEFAULT_FILTER)
   const [offset, setOffset] = useState(0)
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(drill?.issue ?? null)
   const [checked, setChecked] = useState<number[]>([])
   const [overrides, setOverrides] = useState<Overrides>({})
   const [detailVersion, setDetailVersion] = useState(0)
@@ -82,7 +82,7 @@ function Issues({ me }: { me: string | null }) {
     if (drill) {
       setFilter(drill.filter)
       setOffset(0)
-      setSelectedId(null)
+      setSelectedId(drill.issue)
     }
   }
 
