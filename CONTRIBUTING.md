@@ -56,8 +56,9 @@ Please make sure your change also follows these:
 ## Adding a rule
 
 Most rules are a tree-sitter query that captures the offending node as
-`@match`, plus an optional filter function. Add the rule to
-`crates/sonda-core/src/rules/catalog.rs`:
+`@match`, plus an optional filter function. Add the rule to its language's
+file in `crates/sonda-core/src/rules/catalog/` (`js.rs`, `py.rs`, `java.rs`,
+`c.rs`; `common.rs` holds structural rules):
 
 ```rust
 Rule {
@@ -68,6 +69,7 @@ Rule {
     category: Vulnerability,
     severity: Critical,
     effort_minutes: 30,
+    sonar: &[related("S1523")],
     check: Check::Query {
         langs: JS_TS,
         query: r#"(call_expression function: (identifier) @f (#eq? @f "eval")) @match"#,
@@ -90,6 +92,26 @@ Rule {
   text with a node kind.
 - Regenerate the docs with
   `cargo run -q -p sonda -- rules --format markdown > docs/rules.md`.
+
+### Rules equivalent to SonarQube's
+
+sonda is working towards an equivalent for each SonarQube rule key
+([ADR-0007](docs/adr/0007-sonarqube-rule-parity.md)). What's covered and
+what's left is in [docs/sonar-parity/](docs/sonar-parity/), one CSV per
+language.
+
+- **Write your own.** Name, description, message, examples and check are
+  all sonda's own. **Never copy SonarSource's text, code or test cases.**
+- **Record the key** in `sonar`:
+  - `exact("S3504")` when the rule has the same intent and scope.
+  - `related("S1523")` when it overlaps but differs, for example a
+    syntactic check for what SonarQube does with taint analysis.
+
+  A JavaScript rule also covers the TypeScript key with the same number.
+- **Check it on real code.** Scan the reference projects and review every
+  finding. A rule that misfires doesn't ship.
+- **Refresh the compatibility table:**
+  `python3 scripts/sonar_parity.py --server URL --token-file FILE`.
 
 ## Fuzzing
 

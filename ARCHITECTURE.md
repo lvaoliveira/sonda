@@ -108,8 +108,11 @@ proven otherwise ([SECURITY.md](SECURITY.md)):
 
 ## Extension points
 
-- **A new rule** is a `Rule` entry in `crates/sonda-core/src/rules/catalog.rs`
-  ([CONTRIBUTING.md](CONTRIBUTING.md#adding-a-rule)).
+- **A new rule** is a `Rule` entry in its language's file under
+  `crates/sonda-core/src/rules/catalog/`
+  ([CONTRIBUTING.md](CONTRIBUTING.md#adding-a-rule)). Its `sonar` field
+  names the SonarQube rule keys it is equivalent to (ADR-0007). Compatibility is
+  tracked in `docs/sonar-parity/`.
 - **A new language** needs:
   - its grammar crate
   - a `Lang` variant with its extension mapping and grammar

@@ -119,6 +119,14 @@ file, the report formats and the public library API.
     symlink-safe from GitHub's three locations.
   - Drill-downs show each directory's majority owner, matched with
     GitHub's rules: gitignore patterns, last match wins.
+- Compatibility with SonarQube rules, groundwork (ADR-0007, ADR-0008):
+  - **Keys:** rules record the SonarQube rule keys they're equivalent to
+    (`sonar`), and `docs/rules.md` and `sonda rules --format json` show them.
+  - **Compatibility table:** `docs/sonar-parity/` tracks which keys sonda
+    covers, kept up to date by `scripts/sonar_parity.py`.
+  - **Catalog:** the rule catalog is split per language.
+  - **Semantic layer:** ADR-0008 plans scopes, control flow and data flow
+    for the rules that need them.
 
 ### Security
 
