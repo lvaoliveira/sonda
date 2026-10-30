@@ -456,6 +456,8 @@ export interface ProjectDetail {
 export interface DependencySummary {
   total: number
   direct: number
+  /** Packages with at least one known vulnerability. */
+  vulnerable: number
   /** Most packages first. */
   ecosystems: { id: string; count: number }[]
 }
@@ -469,6 +471,25 @@ export interface DependencyRow {
   direct: boolean | null
   license: string | null
   lockfiles: string[]
+  /** Known vulnerabilities affecting this version, most severe first. */
+  advisories: Advisory[]
+  /** Advisories for the package that couldn't be checked against this version. */
+  unchecked: string[]
+}
+
+/** A known vulnerability, from an OSV record (ADR-0009). */
+export interface Advisory {
+  id: string
+  aliases: string[]
+  summary: string
+  severity: Severity
+  score: number | null
+  cwe: number[]
+  /** The lowest later version that fixes it; null when none does yet. */
+  fixedIn: string | null
+  /** The database, for attribution. */
+  source: string
+  url: string
 }
 
 export interface PackageVersions {
@@ -496,6 +517,8 @@ export interface DependencyList {
     removed: PackageVersions[]
     updated: { ecosystem: string; name: string; from: string[]; to: string[] }[]
   } | null
+  /** When advisories were last imported; null before the first import. */
+  advisoryData: { importedAt: string; advisories: number } | null
 }
 
 // -------------------------------------------------------------- components

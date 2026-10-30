@@ -11,7 +11,7 @@ fn toml(text: &str) -> Result<Value, String> {
 
 /// PEP 503's normalized name, which purls for PyPI also use: lowercase,
 /// runs of `-`, `_` and `.` as one `-`.
-fn normalize(name: &str) -> String {
+pub(super) fn normalize(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {
         if matches!(c, '-' | '_' | '.') {

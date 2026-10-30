@@ -2,12 +2,14 @@
 //! analysis pinned (ADR-0009), with what changed since the analysis before
 //! it.
 
+use crate::advisories::{self, Finding};
 use crate::api::ApiError;
 use crate::health::rfc3339;
 use crate::http::State;
 use axum::Json;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
+use sonda_core::deps::Ecosystem;
 use sqlx::PgPool;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,6 +36,16 @@ pub struct DependencyList {
     pub dependencies: Vec<DependencyRow>,
     /// Against the branch's previous analysis; null for its first.
     pub changes: Option<Changes>,
+    /// When advisories were last imported; null before the first import,
+    /// when no package can be known vulnerable.
+    pub advisory_data: Option<AdvisoryData>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvisoryData {
+    pub imported_at: String,
+    pub advisories: i64,
 }
 
 #[derive(Serialize)]
@@ -50,6 +62,8 @@ pub struct AnalysisRef {
 pub struct Summary {
     pub total: usize,
     pub direct: usize,
+    /// Packages with at least one known vulnerability.
+    pub vulnerable: usize,
     pub ecosystems: Vec<Count>,
 }
 
@@ -76,6 +90,10 @@ pub struct DependencyRow {
     pub direct: Option<bool>,
     pub license: Option<String>,
     pub lockfiles: Vec<String>,
+    /// Known vulnerabilities affecting this version, most severe first.
+    pub advisories: Vec<Finding>,
+    /// Advisories for this package that couldn't be checked against it.
+    pub unchecked: Vec<String>,
 }
 
 #[derive(Serialize, Default, PartialEq, Debug)]
@@ -128,8 +146,30 @@ async fn rows(pool: &PgPool, analysis: i64) -> Result<Vec<Row>, sqlx::Error> {
 /// The latest analysis's summary, for the project page; None without
 /// dependencies.
 pub async fn summary(pool: &PgPool, analysis: i64) -> Result<Option<Summary>, sqlx::Error> {
-    let s = summarize(&merge(rows(pool, analysis).await?));
+    let mut deps = merge(rows(pool, analysis).await?);
+    annotate(pool, &mut deps).await?;
+    let s = summarize(&deps);
     Ok((s.total > 0).then_some(s))
+}
+
+/// Adds each dependency's known vulnerabilities.
+async fn annotate(pool: &PgPool, deps: &mut [DependencyRow]) -> Result<(), sqlx::Error> {
+    // Ingest only stores known ecosystems; anything else is left unchecked.
+    let known: Vec<(usize, Ecosystem)> = deps
+        .iter()
+        .enumerate()
+        .filter_map(|(i, d)| Some((i, Ecosystem::parse(&d.ecosystem)?)))
+        .collect();
+    let query: Vec<(Ecosystem, &str, &str)> = known
+        .iter()
+        .map(|&(i, e)| (e, deps[i].name.as_str(), deps[i].version.as_str()))
+        .collect();
+    let verdicts = advisories::check(pool, &query).await?;
+    for ((i, _), v) in known.into_iter().zip(verdicts) {
+        deps[i].advisories = v.advisories;
+        deps[i].unchecked = v.unchecked;
+    }
+    Ok(())
 }
 
 pub async fn get_dependencies(
@@ -158,7 +198,8 @@ pub async fn get_dependencies(
             "branch {branch:?} has no analyses"
         )));
     };
-    let current = merge(rows(pool, id).await?);
+    let mut current = merge(rows(pool, id).await?);
+    annotate(pool, &mut current).await?;
     let changes = match latest.get(1) {
         Some((previous, ..)) => Some(diff(
             *previous,
@@ -216,6 +257,12 @@ pub async fn get_dependencies(
         licenses,
         changes,
         dependencies: current,
+        advisory_data: advisories::status(pool)
+            .await?
+            .map(|(at, advisories)| AdvisoryData {
+                imported_at: rfc3339(at),
+                advisories,
+            }),
     }))
 }
 
@@ -241,6 +288,8 @@ fn merge(rows: Vec<Row>) -> Vec<DependencyRow> {
                 direct,
                 license,
                 lockfiles: vec![lockfile],
+                advisories: Vec::new(),
+                unchecked: Vec::new(),
             }),
         }
     }
@@ -263,6 +312,7 @@ fn summarize(deps: &[DependencyRow]) -> Summary {
     Summary {
         total: deps.len(),
         direct: deps.iter().filter(|d| d.direct == Some(true)).count(),
+        vulnerable: deps.iter().filter(|d| !d.advisories.is_empty()).count(),
         ecosystems,
     }
 }

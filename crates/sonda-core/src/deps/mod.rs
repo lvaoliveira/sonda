@@ -9,10 +9,10 @@ mod cargo;
 mod npm;
 mod python;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Ecosystem {
     Npm,
@@ -29,6 +29,20 @@ impl Ecosystem {
             Ecosystem::Cargo => "cargo",
             Ecosystem::Pypi => "pypi",
         }
+    }
+
+    /// The ecosystem `as_str` names.
+    pub fn parse(s: &str) -> Option<Ecosystem> {
+        Ecosystem::ALL.into_iter().find(|e| e.as_str() == s)
+    }
+}
+
+/// The name packages are matched by: PEP 503's normalized form for PyPI
+/// (`Flask_Login` → `flask-login`), as written elsewhere.
+pub fn package_key(ecosystem: Ecosystem, name: &str) -> String {
+    match ecosystem {
+        Ecosystem::Pypi => python::normalize(name),
+        Ecosystem::Npm | Ecosystem::Cargo => name.to_string(),
     }
 }
 

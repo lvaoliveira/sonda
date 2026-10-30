@@ -113,8 +113,10 @@ own groundwork, smallest first:
 
 ## Dependencies: SBOM and known vulnerabilities
 
-**Status:** proposed in [ADR-0009](adr/0009-dependencies-and-advisories.md),
-which supersedes the sketch below where they differ (2026-10-30). sonda
+**Status:** accepted in [ADR-0009](adr/0009-dependencies-and-advisories.md),
+which supersedes the sketch below where they differ. SBOMs, server storage
+and advisory matching are done; sync, gate metrics and review states
+remain (2026-10-30). sonda
 analyzes a project's own code only. Its third-party dependencies are a
 separate risk, and the one OWASP Top 10 2025 ranks third (A03, Software
 Supply Chain Failures; A06 in 2021). This item has two parts: list what a project depends on (an

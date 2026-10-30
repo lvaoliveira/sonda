@@ -61,20 +61,7 @@ impl Env for ProcessEnv {
 
 impl Config {
     pub fn load(listen: SocketAddr, web_dir: Option<PathBuf>, env: &dyn Env) -> Result<Self> {
-        let url = secret(env, "DATABASE_URL")?
-            .context("set DATABASE_URL or DATABASE_URL_FILE (postgres://user@host/db)")?;
-        // The URL may hold a password: errors never echo it. The scheme is
-        // checked here because sqlx accepts any, e.g. a mysql:// URL.
-        let invalid = || anyhow::anyhow!("DATABASE_URL is not a valid postgres:// URL");
-        if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
-            return Err(invalid());
-        }
-        let mut database = PgConnectOptions::from_str(&url).map_err(|_| invalid())?;
-        // Lets Docker Compose share one password file between Postgres and
-        // the server, instead of repeating the password inside a URL.
-        if let Some(password) = secret(env, "DATABASE_PASSWORD")? {
-            database = database.password(&password);
-        }
+        let database = database(env)?;
         let token = secret(env, "SONDA_TOKEN")?
             .context("set SONDA_TOKEN or SONDA_TOKEN_FILE: the API token clients upload with")?;
         let admin = match secret(env, "SONDA_ADMIN_PASSWORD")? {
@@ -98,6 +85,26 @@ impl Config {
             admin,
         })
     }
+}
+
+/// The database to connect to, from DATABASE_URL (or DATABASE_URL_FILE) and
+/// optionally DATABASE_PASSWORD (or DATABASE_PASSWORD_FILE).
+pub fn database(env: &dyn Env) -> Result<PgConnectOptions> {
+    let url = secret(env, "DATABASE_URL")?
+        .context("set DATABASE_URL or DATABASE_URL_FILE (postgres://user@host/db)")?;
+    // The URL may hold a password: errors never echo it. The scheme is
+    // checked here because sqlx accepts any, e.g. a mysql:// URL.
+    let invalid = || anyhow::anyhow!("DATABASE_URL is not a valid postgres:// URL");
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return Err(invalid());
+    }
+    let mut database = PgConnectOptions::from_str(&url).map_err(|_| invalid())?;
+    // Lets Docker Compose share one password file between Postgres and the
+    // server, instead of repeating the password inside a URL.
+    if let Some(password) = secret(env, "DATABASE_PASSWORD")? {
+        database = database.password(&password);
+    }
+    Ok(database)
 }
 
 /// `NAME`, or the contents of the file `NAME_FILE` names (trailing newline

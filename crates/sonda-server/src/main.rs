@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use sonda_server::config::{Config, ProcessEnv};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,6 +20,29 @@ struct Cli {
     /// Directory of the built web app (web/dist) to serve.
     #[arg(long, env = "SONDA_WEB_DIR")]
     web_dir: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Known-vulnerability data for dependencies (ADR-0009).
+    Advisories {
+        #[command(subcommand)]
+        action: AdvisoriesAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdvisoriesAction {
+    /// Import OSV records: JSON files, or directories of them such as an
+    /// unzipped export from osv-vulnerabilities (npm, crates.io, PyPI). Only
+    /// GitHub, RustSec, PyPA and Go advisories are kept. Needs only
+    /// DATABASE_URL.
+    Import {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -38,6 +61,26 @@ fn main() -> ExitCode {
 
 #[tokio::main]
 async fn start(cli: Cli) -> Result<()> {
-    let config = Config::load(cli.listen, cli.web_dir, &ProcessEnv)?;
-    sonda_server::run(config).await
+    match cli.command {
+        None => {
+            let config = Config::load(cli.listen, cli.web_dir, &ProcessEnv)?;
+            sonda_server::run(config).await
+        }
+        Some(Command::Advisories {
+            action: AdvisoriesAction::Import { paths },
+        }) => {
+            let pool =
+                sonda_server::db::connect(sonda_server::config::database(&ProcessEnv)?).await?;
+            sonda_server::db::migrate(&pool).await?;
+            let s = sonda_server::advisories::import(&pool, &paths).await?;
+            println!(
+                "read {} records: {} imported, {} unchanged, {} skipped (other databases or ecosystems), {} errors",
+                s.read, s.imported, s.unchanged, s.skipped, s.errors
+            );
+            for e in &s.first_errors {
+                println!("  {e}");
+            }
+            Ok(())
+        }
+    }
 }
