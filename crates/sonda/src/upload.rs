@@ -37,10 +37,11 @@ pub struct UploadArgs {
     /// The directory that was scanned: the report's paths are relative to it.
     #[arg(long, default_value = ".")]
     root: PathBuf,
-    /// File holding the API token; without it, the SONDA_TOKEN variable is
-    /// used. There is no flag for the token itself, because command lines
-    /// are visible to other users and in CI logs.
-    #[arg(long, value_name = "FILE")]
+    /// File holding the API token (or SONDA_TOKEN_FILE); without either, the
+    /// SONDA_TOKEN variable is used, as the server reads its secrets. There
+    /// is no flag for the token itself, because command lines are visible to
+    /// other users and in CI logs.
+    #[arg(long, value_name = "FILE", env = "SONDA_TOKEN_FILE")]
     token_file: Option<PathBuf>,
 }
 
@@ -155,11 +156,15 @@ fn endpoint(server: &str) -> Result<String> {
 }
 
 fn token(file: Option<&Path>) -> Result<String> {
+    // As the server does: never guess which of two tokens is meant.
+    if file.is_some() && std::env::var_os("SONDA_TOKEN").is_some() {
+        bail!("set SONDA_TOKEN or a token file (--token-file or SONDA_TOKEN_FILE), not both");
+    }
     let raw = match file {
         Some(path) => std::fs::read_to_string(path)
             .with_context(|| format!("reading the token from {}", path.display()))?,
         None => std::env::var("SONDA_TOKEN")
-            .context("no token: set SONDA_TOKEN or pass --token-file")?,
+            .context("no token: set SONDA_TOKEN or SONDA_TOKEN_FILE, or pass --token-file")?,
     };
     let token = raw.trim();
     if token.is_empty() || token.chars().any(|c| c.is_control() || c == ' ') {
