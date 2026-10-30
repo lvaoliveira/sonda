@@ -169,6 +169,10 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- `sonda upload` reads the token file from `SONDA_TOKEN_FILE` as well as
+  `--token-file`, as the server reads its secrets and as docs/server.md
+  already said; setting a token file and `SONDA_TOKEN` together is an
+  error.
 - Gate conditions on vulnerable dependencies: `vulnerable_dependencies`
   and `severe_vulnerable_dependencies` (packages with a blocker or critical
   finding). `sonda scan --advisories DIR` checks dependencies against the

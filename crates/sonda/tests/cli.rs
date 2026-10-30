@@ -704,6 +704,7 @@ fn upload(dir: &Path, out: &Path, server: &str) -> Command {
     .arg(dir)
     .arg(out.join("report.json"))
     .env("SONDA_TOKEN", "s3cret")
+    .env_remove("SONDA_TOKEN_FILE")
     .env_remove("SONDA_SERVER");
     // The fake server is on localhost; never route through a proxy.
     for var in [
@@ -801,6 +802,28 @@ fn upload_refuses_before_sending_anything() {
         stderr(&no_token).contains("SONDA_TOKEN"),
         "{}",
         stderr(&no_token)
+    );
+
+    // SONDA_TOKEN_FILE works like --token-file, and never alongside SONDA_TOKEN.
+    let token_file = out.path().join("token");
+    std::fs::write(&token_file, "s3cret\n").unwrap();
+    let both = stderr(
+        &upload(dir.path(), out.path(), nowhere)
+            .env("SONDA_TOKEN_FILE", &token_file)
+            .output()
+            .unwrap(),
+    );
+    assert!(both.contains("not both"), "{both}");
+    let from_file = stderr(
+        &upload(dir.path(), out.path(), nowhere)
+            .env_remove("SONDA_TOKEN")
+            .env("SONDA_TOKEN_FILE", &token_file)
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        !from_file.contains("token"),
+        "the token was read: {from_file}"
     );
 
     let report = out.path().join("report.json");

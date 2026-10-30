@@ -35,7 +35,7 @@ on the machine out.
 - **`secrets/sonda_token`:** the API token `sonda upload` needs:
 
 ```sh
-SONDA_TOKEN_FILE=secrets/sonda_token   # or: export SONDA_TOKEN=$(cat secrets/sonda_token)
+export SONDA_TOKEN_FILE=secrets/sonda_token   # or --token-file, or SONDA_TOKEN
 ```
 
 Stop with `docker compose down`. Data lives in the `pgdata` volume, so it
