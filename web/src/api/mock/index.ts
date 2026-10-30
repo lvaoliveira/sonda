@@ -169,9 +169,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     fileCoverage: async (project, path, branch) => {
       guard()
       const detail = projectDetail(project, branch)
-      const file = detail && fileCoverage(detail, path)
-      if (!file) throw new Error('not found')
-      return wait(file)
+      if (!detail) throw new Error('not found')
+      return wait(fileCoverage(detail, path))
     },
     setNewCodePeriod: async (project, analysis) => {
       guard()

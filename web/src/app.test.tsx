@@ -571,6 +571,29 @@ describe('Overview', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('repo.go')
   })
 
+  it('drills into coverage, then into a project’s report or a file’s lines', async () => {
+    const user = userEvent.setup()
+    renderAt('/')
+    const metrics = await screen.findByRole('region', { name: 'Key metrics' })
+    await user.click(within(metrics).getByRole('button', { name: /^Coverage/ }))
+    const dialog = await screen.findByRole('dialog')
+    // The lowest covered project's report.
+    await user.click(await within(dialog).findByRole('button', { name: 'Open ml-feature-store’s coverage report →' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Coverage' })).toBeInTheDocument()
+    expect(screen.getByText(/^ml-feature-store · main/)).toBeInTheDocument()
+  })
+
+  it('opens a file’s coverage from the coverage drill-down', async () => {
+    const user = userEvent.setup()
+    renderAt('/')
+    const metrics = await screen.findByRole('region', { name: 'Key metrics' })
+    await user.click(within(metrics).getByRole('button', { name: /^Coverage/ }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(await within(dialog).findByRole('button', { name: /backfill\.py/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'backfill.py' })).toBeInTheDocument()
+    expect(screen.getByText('feature_store/ingest/backfill.py')).toBeInTheDocument()
+  })
+
   it('says so honestly when the server has no overview yet', async () => {
     const api = createMockApi(0)
     renderAt('/', { ...api, overview: undefined, drill: undefined })

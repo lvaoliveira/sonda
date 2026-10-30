@@ -11,6 +11,7 @@ import { CoverageRing, HealthBar, PipMeter, Sparkline } from '@/components/sonda
 import { GateStatus, SeverityGlyph } from '@/components/sonda/status'
 import { waffleCells } from '@/lib/charts'
 import { formatNumber, shortDate } from '@/lib/format'
+import { coverageUrl, fileCoverageUrl } from '@/lib/links'
 import { GATE, levelColor, projectScore, scoreColor, SEVERITY } from '@/lib/visual'
 
 /** Where each metric's drill-down leads in the issue explorer. */
@@ -18,7 +19,8 @@ const DRILL_LINK: Record<DrillMetric, string> = {
   gate: '/issues?new',
   critical: '/issues',
   vulns: '/issues?cat=vulnerability',
-  coverage: '/issues?new',
+  // Replaced by the lowest covered project's report when there is one.
+  coverage: '/projects',
   dup: '/issues?cat=code_smell',
   debt: '/issues?cat=code_smell',
 }
@@ -739,6 +741,11 @@ function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope;
   const d: Drill | null = drill.state === 'ready' ? drill.data : null
   const color = d ? `var(--sd-${d.tone})` : 'var(--sd-accent)'
   const max = d ? Math.max(...d.items.map((i) => i.value)) : 1
+  // Coverage items are projects, lowest first: the button opens the first's
+  // coverage report, and each file its coverage.
+  const coverage = metric === 'coverage'
+  const first = coverage ? d?.items[0] : undefined
+  const cta = first ? { to: coverageUrl(first.component), label: `Open ${first.component}’s coverage report` } : { to: DRILL_LINK[metric], label: d?.cta }
   return (
     <DrillDrawer
       eyebrow={`Sounding · ${scope === 'all' ? 'all projects' : 'my team'}`}
@@ -750,10 +757,10 @@ function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope;
           <>
             <button
               type="button"
-              onClick={() => navigate(DRILL_LINK[metric])}
+              onClick={() => navigate(cta.to)}
               className="h-[38px] flex-1 cursor-pointer rounded-[9px] border-0 bg-brand px-4 text-left text-[13.5px] font-semibold text-brand-ink"
             >
-              {d.cta} →
+              {cta.label} →
             </button>
             <button type="button" onClick={onClose} className="h-[38px] cursor-pointer rounded-[9px] border-0 bg-transparent px-4 text-[13.5px] font-medium edge-strong">
               Close
@@ -797,8 +804,8 @@ function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope;
                   <button
                     key={f.dir + f.base}
                     type="button"
-                    title="Open this file's issues"
-                    onClick={() => navigate(`/issues?file=${encodeURIComponent(f.dir + f.base)}`)}
+                    title={coverage ? 'Open this file’s coverage' : 'Open this file’s issues'}
+                    onClick={() => navigate(coverage ? fileCoverageUrl(it.component, f.dir + f.base) : `/issues?file=${encodeURIComponent(f.dir + f.base)}`)}
                     className="flex cursor-pointer flex-col gap-[5px] rounded-lg border-0 bg-canvas px-3 py-2.5 text-left edge hover:edge-strong"
                   >
                     <span className="flex justify-between gap-2 font-mono text-[11px]">

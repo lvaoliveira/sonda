@@ -39,10 +39,11 @@ export function coverageList(p: ProjectDetail): CoverageList {
   }
 }
 
-export function fileCoverage(p: ProjectDetail, path: string): FileCoverage | null {
-  const row = FILES.find(([f]) => f === path)
-  const length = row?.[1] ?? (path === 'src/generated/schema.ts' ? 10 : null)
-  if (length == null) return null
+export function fileCoverage(p: ProjectDetail, path: string): FileCoverage {
+  // Other paths (the Overview's drill-down names some) get a short, half
+  // covered file; the generated schema is in no coverage report.
+  const row = FILES.find(([f]) => f === path) ?? (path === 'src/generated/schema.ts' ? undefined : ([path, 24, 9] as const))
+  const length = row?.[1] ?? 10
   const withData = row != null && p.measures.overall.coverage != null
   const lines: CodeLine[] = Array.from({ length }, (_, i) =>
     i % 4 === 3
