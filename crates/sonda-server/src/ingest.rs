@@ -28,6 +28,7 @@ pub const MAX_JSON_BYTES: u64 = 800 << 20;
 const MAX_FILES: usize = 200_000;
 const MAX_ISSUES: usize = 2_000_000;
 const MAX_TEXT: usize = 4_000;
+const MAX_DEPENDENCIES: usize = 200_000;
 
 // The envelope is sonda's own and fixed: unknown fields are mistakes.
 #[derive(Deserialize)]
@@ -63,6 +64,20 @@ struct Report {
     files: Vec<File>,
     issues: Vec<Issue>,
     warnings: Vec<String>,
+    /// Older CLIs don't send it (ADR-0009).
+    #[serde(default)]
+    dependencies: Vec<DependencyIn>,
+}
+
+#[derive(Deserialize)]
+struct DependencyIn {
+    ecosystem: String,
+    name: String,
+    version: String,
+    purl: String,
+    direct: Option<bool>,
+    source: String,
+    license: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +119,17 @@ pub struct Analysis {
     pub sources: Vec<([u8; 32], String)>,
     pub issues: Vec<StoredIssue>,
     pub codeowners: Option<String>,
+    pub dependencies: Vec<StoredDependency>,
+}
+
+pub struct StoredDependency {
+    pub ecosystem: &'static str,
+    pub name: String,
+    pub version: String,
+    pub purl: String,
+    pub direct: Option<bool>,
+    pub lockfile: String,
+    pub license: Option<String>,
 }
 
 pub struct StoredFile {
@@ -325,6 +351,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     if r.warnings.len() > MAX_FILES || r.warnings.iter().any(|w| w.len() > MAX_TEXT) {
         return Err(invalid("the report's warnings are too large".into()));
     }
+    let dependencies = validate_dependencies(r.dependencies).map_err(invalid)?;
     Ok(Analysis {
         meta,
         tool_version: r.version,
@@ -337,7 +364,53 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         sources: sources.into_iter().collect(),
         issues,
         codeowners: upload.codeowners,
+        dependencies,
     })
+}
+
+fn validate_dependencies(deps: Vec<DependencyIn>) -> Result<Vec<StoredDependency>, String> {
+    if deps.len() > MAX_DEPENDENCIES {
+        return Err("the report lists too many dependencies".into());
+    }
+    let mut seen = std::collections::HashSet::with_capacity(deps.len());
+    let mut stored = Vec::with_capacity(deps.len());
+    for d in deps {
+        let ecosystem = sonda_core::deps::Ecosystem::ALL
+            .iter()
+            .map(|e| e.as_str())
+            .find(|e| *e == d.ecosystem)
+            .ok_or_else(|| {
+                format!(
+                    "dependency {:?}: unknown ecosystem {:?}",
+                    d.name, d.ecosystem
+                )
+            })?;
+        let bounded = |s: &str, max: usize| !s.is_empty() && s.len() <= max;
+        if !bounded(&d.name, 512)
+            || !bounded(&d.version, 256)
+            || !(d.purl.len() <= 1024 && d.purl.starts_with("pkg:"))
+            || d.license.as_ref().is_some_and(|l| !bounded(l, 512))
+        {
+            return Err(format!(
+                "dependency {:?}: a field is empty, too long or malformed",
+                d.name
+            ));
+        }
+        check_relative_path(&d.source).map_err(|e| e.to_string())?;
+        if !seen.insert((d.purl.clone(), d.source.clone())) {
+            return Err(format!("{} is listed twice for {}", d.purl, d.source));
+        }
+        stored.push(StoredDependency {
+            ecosystem,
+            name: d.name,
+            version: d.version,
+            purl: d.purl,
+            direct: d.direct,
+            lockfile: d.source,
+            license: d.license,
+        });
+    }
+    Ok(stored)
 }
 
 fn parse_fingerprint(hex: &str) -> Option<[u8; 16]> {

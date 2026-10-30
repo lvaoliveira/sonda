@@ -6,6 +6,7 @@ import { analysisDetail, queryAnalyses } from './analyses'
 import { componentDetail, listComponents } from './components'
 import { GATES } from './gates'
 import { SECURITY } from './security'
+import { dependencyList } from './dependencies'
 import { PROJECT_LIST, projectDetail } from './projects'
 import { queryIssues } from './query'
 import rulesData from './rules.json'
@@ -151,6 +152,12 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       const detail = componentDetail(project, path, branch)
       if (!detail) throw new Error('not found')
       return wait(detail)
+    },
+    dependencies: async (project, branch) => {
+      guard()
+      const detail = projectDetail(project, branch)
+      if (!detail) throw new Error('not found')
+      return wait(dependencyList(detail))
     },
     analyses: async (query) => {
       guard()

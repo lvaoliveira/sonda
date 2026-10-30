@@ -8,9 +8,9 @@ import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { HealthBar, PipMeter, Sparkline } from '@/components/sonda/meters'
 import { GateConditions } from '@/components/sonda/gate'
 import { GateDot, GateStatus } from '@/components/sonda/status'
-import { componentLabel, componentUrl } from '@/lib/links'
+import { componentLabel, componentUrl, dependenciesUrl } from '@/lib/links'
 import { compactCount, formatAge, formatDebt, formatNumber, shortDate } from '@/lib/format'
-import { GATE, coverageColor, languageLabel, scoreColor } from '@/lib/visual'
+import { ECOSYSTEM_LABEL, GATE, coverageColor, languageLabel, scoreColor } from '@/lib/visual'
 
 export function ProjectPage() {
   const api = useApi()
@@ -81,7 +81,48 @@ function Project({ p }: { p: ProjectDetail }) {
       </div>
       <History history={p.history} branch={p.branch} />
       <Components p={p} />
+      <Dependencies p={p} />
     </>
+  )
+}
+
+function Dependencies({ p }: { p: ProjectDetail }) {
+  const d = p.dependencies
+  const url = dependenciesUrl(p.key, p.branch, p.mainBranch)
+  return (
+    <Card
+      id="dependencies"
+      title="Dependencies"
+      subtitle={d ? 'Packages the lockfiles pin, in this analysis' : 'None recorded in this analysis'}
+      aside={
+        d && (
+          <Link to={url} className="text-[13px]">
+            All {formatNumber(d.total)} →
+          </Link>
+        )
+      }
+    >
+      {d ? (
+        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 text-[13px] text-fg-muted">
+          <span>
+            <Mono className="text-[22px] text-fg">{formatNumber(d.total)}</Mono> packages
+          </span>
+          <span>
+            <Mono className="text-fg">{formatNumber(d.direct)}</Mono> direct
+          </span>
+          {d.ecosystems.map((e) => (
+            <span key={e.id}>
+              {ECOSYSTEM_LABEL[e.id] ?? e.id} <Mono className="text-fg">{formatNumber(e.count)}</Mono>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="m-0 text-[13px] text-fg-muted">
+          sonda reads <Mono className="text-xs">package-lock.json</Mono>, <Mono className="text-xs">Cargo.lock</Mono>, <Mono className="text-xs">poetry.lock</Mono>,{' '}
+          <Mono className="text-xs">uv.lock</Mono> and pinned <Mono className="text-xs">requirements*.txt</Mono>; analyses uploaded by an older sonda don't include them.
+        </p>
+      )}
+    </Card>
   )
 }
 

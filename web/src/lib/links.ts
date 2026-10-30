@@ -10,6 +10,12 @@ export function componentUrl(project: string, path: string, branch?: string, mai
   return branch && branch !== mainBranch ? `${base}?branch=${encodeURIComponent(branch)}` : base
 }
 
+/** A project's dependencies, on `branch` unless it's the main branch. */
+export function dependenciesUrl(project: string, branch?: string, mainBranch?: string): string {
+  const base = `/projects/${encodeURIComponent(project)}/dependencies`
+  return branch && branch !== mainBranch ? `${base}?branch=${encodeURIComponent(branch)}` : base
+}
+
 /** MITRE's page for a CWE weakness. */
 export function cweUrl(id: number): string {
   return `https://cwe.mitre.org/data/definitions/${id}.html`
