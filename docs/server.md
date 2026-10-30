@@ -251,6 +251,31 @@ the analyzed branches.
 `GET /api/issues` takes `project=` and `branch=` to list one project's
 issues, which is how the project page links to them.
 
+## Components
+
+A component is a project's top-level directory, or `.` for files at its
+root. Nothing records monorepo layouts or dependencies between components.
+
+`GET /api/components` lists every project's components on its main branch,
+optionally for one project (`project=`). Each row has the languages, files,
+lines, open issues, debt and owner. The response also lists every owner,
+for filters.
+
+`GET /api/projects/{key}/components/{component}?branch=` is one component on
+one branch (the main branch by default). It returns:
+- its languages, files and lines;
+- its owner, and every CODEOWNERS owner of its files with how many files
+  each owns;
+- its open issues by severity and category, how many are on new code, and
+  its debt;
+- open issues at the end of each of the last eight weeks (accepted issues
+  left out);
+- its files with their issues, debt and most severe issue;
+- the project's other components.
+
+An unknown project or component is `404`; a branch without analyses is
+`400`.
+
 ## Analyses
 
 `GET /api/analyses` lists stored analyses, newest first, 50 at a time

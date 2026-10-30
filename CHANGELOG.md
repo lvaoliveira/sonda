@@ -159,6 +159,12 @@ file, the report formats and the public library API.
   its components with owners, per branch. `GET /api/projects` and
   `GET /api/projects/{key}` serve them, and `GET /api/issues` takes
   `project=` and `branch=`.
+- Web app: the Components screen lists every project's top-level directories
+  with owners, files, lines, issues and debt, filtered by project, owner
+  and search. A component's page shows its open issues, an eight-week trend,
+  its CODEOWNERS owners and its files, next to the project's other
+  components. `GET /api/components` and
+  `GET /api/projects/{key}/components/{component}` serve them.
 - Web app: the Analyses screen lists every analysis, newest first, filtered
   by gate and project. An analysis's page shows its gate result, what it
   introduced and resolved, its warnings, its measures, and links to the

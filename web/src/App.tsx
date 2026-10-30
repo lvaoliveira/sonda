@@ -5,6 +5,8 @@ import type { SondaApi } from '@/api/types'
 import { AccountPage } from '@/pages/AccountPage'
 import { AnalysesPage } from '@/pages/AnalysesPage'
 import { AnalysisPage } from '@/pages/AnalysisPage'
+import { ComponentPage } from '@/pages/ComponentPage'
+import { ComponentsPage } from '@/pages/ComponentsPage'
 import { AdminPage } from '@/pages/AdminPage'
 import { IssuesPage } from '@/pages/IssuesPage'
 import { NotBuiltPage } from '@/pages/NotBuiltPage'
@@ -14,7 +16,6 @@ import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RulesPage } from '@/pages/RulesPage'
 
 const NOT_BUILT: [string, string][] = [
-  ['/components', 'Components'],
   ['/security', 'Security'],
   ['/gates', 'Quality gates'],
 ]
@@ -40,6 +41,8 @@ export function AppRoutes() {
           <Route path="/analyses/:id" element={<AnalysisPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
+          <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
+          <Route path="/components" element={<ComponentsPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/admin" element={<AdminPage />} />
