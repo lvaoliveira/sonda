@@ -19,7 +19,7 @@ async fn uploads_need_the_token() {
     for token in [None, Some("wrong"), Some(&TOKEN[1..])] {
         let (status, json) = post(app(), token, body.clone()).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{token:?}");
-        assert_eq!(json["error"], "missing or invalid token");
+        assert_eq!(json["error"], "sign in or send the API token");
     }
 }
 

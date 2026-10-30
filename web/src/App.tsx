@@ -2,6 +2,8 @@ import { BrowserRouter, Route, Routes } from 'react-router'
 import { ApiProvider } from '@/api/ApiProvider'
 import { SessionGate } from '@/components/shell/SessionGate'
 import type { SondaApi } from '@/api/types'
+import { AccountPage } from '@/pages/AccountPage'
+import { AdminPage } from '@/pages/AdminPage'
 import { IssuesPage } from '@/pages/IssuesPage'
 import { NotBuiltPage } from '@/pages/NotBuiltPage'
 import { OverviewPage } from '@/pages/OverviewPage'
@@ -13,7 +15,6 @@ const NOT_BUILT: [string, string][] = [
   ['/security', 'Security'],
   ['/analyses', 'Analyses'],
   ['/gates', 'Quality gates'],
-  ['/admin', 'Administration'],
 ]
 
 export function App({ api }: { api: SondaApi }) {
@@ -35,6 +36,8 @@ export function AppRoutes() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/rules" element={<RulesPage />} />
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/account" element={<AccountPage />} />
           {NOT_BUILT.map(([path, title]) => (
             <Route key={path} path={path} element={<NotBuiltPage title={title} />} />
           ))}

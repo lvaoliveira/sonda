@@ -479,7 +479,10 @@ function IssueView({
               <span className="text-fg-muted">
                 {e.oldValue ?? 'none'} → {e.newValue ?? 'none'}
               </span>
-              <span className="ml-auto text-[12px] text-fg-faint">{shortDate(e.at)}</span>
+              <span className="ml-auto text-[12px] text-fg-faint">
+                {e.actor && <>{e.actor === 'api-token' ? 'API token' : `@${e.actor}`} · </>}
+                {shortDate(e.at)}
+              </span>
             </div>
           ))}
         </section>

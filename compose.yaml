@@ -4,6 +4,7 @@
 #   mkdir -m 700 secrets
 #   openssl rand -hex 32 > secrets/db_password
 #   openssl rand -hex 32 > secrets/sonda_token
+#   openssl rand -base64 18 > secrets/admin_password   # the first admin's
 #   chmod 644 secrets/*    # readable by the containers' non-root users
 name: sonda
 
@@ -18,7 +19,10 @@ services:
       DATABASE_URL: postgres://sonda@db:5432/sonda
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
       SONDA_TOKEN_FILE: /run/secrets/sonda_token
-    secrets: [db_password, sonda_token]
+      # Creates the user `admin` with this password while no users exist
+      # (ADR-0006); ignored afterwards.
+      SONDA_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+    secrets: [db_password, sonda_token, admin_password]
     depends_on:
       db:
         condition: service_healthy
@@ -48,6 +52,8 @@ secrets:
     file: ./secrets/db_password
   sonda_token:
     file: ./secrets/sonda_token
+  admin_password:
+    file: ./secrets/admin_password
 
 volumes:
   pgdata:

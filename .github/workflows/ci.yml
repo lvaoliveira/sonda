@@ -126,6 +126,7 @@ jobs:
           mkdir -m 700 secrets
           openssl rand -hex 32 > secrets/db_password
           openssl rand -hex 32 > secrets/sonda_token
+          openssl rand -base64 18 > secrets/admin_password
           chmod 644 secrets/*
       - run: docker compose up -d --wait
       - name: Health, web app and API routing

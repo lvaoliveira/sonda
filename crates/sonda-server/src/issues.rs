@@ -289,6 +289,9 @@ pub struct IssueDetail {
 pub struct Event {
     /// UTC, ISO 8601.
     pub at: String,
+    /// A username, `api-token`, or null for changes made before users
+    /// existed.
+    pub actor: Option<String>,
     pub field: String,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
@@ -343,7 +346,7 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
         _ => Vec::new(),
     };
     let history: Vec<Event> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT to_char(at AT TIME ZONE 'UTC', {ISO_8601}) AS at, field, old_value, new_value
+        "SELECT to_char(at AT TIME ZONE 'UTC', {ISO_8601}) AS at, actor, field, old_value, new_value
              FROM issue_events WHERE issue_id = $1 ORDER BY id"
     )))
     .bind(id)
@@ -371,9 +374,11 @@ pub struct Patch {
 
 pub async fn patch_issue(
     axum::extract::State(state): axum::extract::State<State>,
+    axum::extract::Extension(caller): axum::extract::Extension<crate::api::Caller>,
     Path(id): Path<i64>,
     Json(patch): Json<Patch>,
 ) -> Result<Json<IssueDetail>, ApiError> {
+    let actor = caller.name().to_string();
     if let Some(s) = &patch.status
         && !["open", "confirmed", "accepted"].contains(&s.as_str())
     {
@@ -408,7 +413,7 @@ pub async fn patch_issue(
             .bind(&new)
             .execute(&mut *tx)
             .await?;
-        record(&mut tx, id, "status", Some(old_status), Some(new)).await?;
+        record(&mut tx, id, &actor, "status", Some(old_status), Some(new)).await?;
     }
     if let Some(new) = assignee.filter(|a| *a != old_assignee) {
         sqlx::query("UPDATE issues SET assignee = $2 WHERE id = $1")
@@ -416,7 +421,7 @@ pub async fn patch_issue(
             .bind(&new)
             .execute(&mut *tx)
             .await?;
-        record(&mut tx, id, "assignee", old_assignee, new).await?;
+        record(&mut tx, id, &actor, "assignee", old_assignee, new).await?;
     }
     tx.commit().await?;
     Ok(Json(detail(&state.pool, id).await?))
@@ -425,14 +430,17 @@ pub async fn patch_issue(
 async fn record(
     tx: &mut sqlx::PgConnection,
     id: i64,
+    actor: &str,
     field: &str,
     old: Option<String>,
     new: Option<String>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO issue_events (issue_id, field, old_value, new_value) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO issue_events (issue_id, actor, field, old_value, new_value)
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(id)
+    .bind(actor)
     .bind(field)
     .bind(old)
     .bind(new)

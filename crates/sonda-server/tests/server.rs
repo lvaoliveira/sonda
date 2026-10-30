@@ -33,7 +33,8 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "issues",
             "projects",
             "sessions",
-            "sources"
+            "sources",
+            "users"
         ]
     );
     db.drop().await;

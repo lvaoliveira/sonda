@@ -1,4 +1,5 @@
-import { AuthError, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, type RuleCatalog, type Session, type Shell, type SondaApi } from '../types'
+import { AuthError, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
 import { queryIssues } from './query'
@@ -10,8 +11,13 @@ export interface MockOptions {
   readsRequireAuth?: boolean
 }
 
-/** The token the mock accepts. */
-export const MOCK_TOKEN = 'mock-token'
+/** Every mock user's password. */
+export const MOCK_PASSWORD = 'correct horse battery'
+
+const MOCK_USERS: UserRow[] = [
+  { id: 1, username: 'mara', displayName: 'Mara Okafor', role: 'admin', disabled: false, hasPassword: true, createdAt: '2026-09-01T09:00:00Z', lastLoginAt: '2026-10-30T08:00:00Z' },
+  { id: 2, username: 'dev', displayName: 'Dev Patel', role: 'member', disabled: false, hasPassword: true, createdAt: '2026-09-14T09:00:00Z', lastLoginAt: null },
+]
 
 /**
  * In-memory implementation of the contract, seeded from the design
@@ -22,18 +28,36 @@ export const MOCK_TOKEN = 'mock-token'
 export function createMockApi(latency = 250, options: MockOptions = {}): SondaApi {
   const issues = structuredClone(issuesData) as IssueDetail[]
   const catalog = structuredClone(rulesData) as RuleCatalog
-  const session: Session = { authenticated: options.signedIn ?? true, readsRequireAuth: options.readsRequireAuth ?? false }
+  const users = structuredClone(MOCK_USERS)
+  const signedIn = options.signedIn ?? true
+  const session: Session = { user: signedIn ? users[0] : null, authenticated: signedIn, readsRequireAuth: options.readsRequireAuth ?? false }
+  const asUser = (u: UserRow): User => ({ id: u.id, username: u.username, displayName: u.displayName, role: u.role, disabled: u.disabled })
+  const findUser = (id: number) => {
+    const user = users.find((u) => u.id === id)
+    if (!user) throw new Error('not found')
+    return user
+  }
+  const requireAdmin = () => {
+    if (!session.user) throw new AuthError()
+    if (session.user.role !== 'admin') throw new Error('admins only')
+  }
+  const checkPassword = (password: string) => {
+    if (password.length < MIN_PASSWORD_LENGTH) throw new Error(`password must have at least ${MIN_PASSWORD_LENGTH} characters`)
+  }
   const wait = <T>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(structuredClone(value)), latency))
   const guard = () => {
     if (!session.authenticated && session.readsRequireAuth) throw new AuthError()
   }
 
-  const shell: Shell = {
+  const shell = (): Shell => ({
     org: { name: 'acme-corp', initials: 'AC', deployment: 'self-hosted', projectCount: 312 },
-    user: { name: 'Mara Okafor', handle: '@checkout', initials: 'MO' },
+    user: session.user
+      ? { name: session.user.displayName, handle: `@${session.user.username}`, initials: initials(session.user.displayName) }
+      : { name: 'Read-only', handle: 'not signed in', initials: '··' },
+    isAdmin: session.user?.role === 'admin',
     counts: { projects: 312, components: 611, issues: 1342, security: 23 },
-    me: 'Mara Okafor',
-  }
+    me: session.user?.username ?? null,
+  })
 
   const findIssue = (id: number) => {
     const issue = issues.find((i) => i.id === id)
@@ -45,13 +69,14 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     if (!session.authenticated) throw new AuthError()
     const issue = findIssue(id)
     const at = new Date().toISOString()
+    const actor = session.user?.username ?? null
     if (patch.status !== undefined && patch.status !== issue.status) {
-      issue.history.push({ at, field: 'status', oldValue: issue.status, newValue: patch.status })
+      issue.history.push({ at, actor, field: 'status', oldValue: issue.status, newValue: patch.status })
       issue.status = patch.status
     }
     const assignee = patch.assignee === '' ? null : patch.assignee
     if (assignee !== undefined && assignee !== issue.assignee) {
-      issue.history.push({ at, field: 'assignee', oldValue: issue.assignee, newValue: assignee })
+      issue.history.push({ at, actor, field: 'assignee', oldValue: issue.assignee, newValue: assignee })
       issue.assignee = assignee
     }
     return issue
@@ -59,16 +84,49 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
 
   return {
     session: () => wait(session),
-    signIn: async (token) => {
+    signIn: async (username, password) => {
       await wait(null)
-      if (token !== MOCK_TOKEN) throw new AuthError('That token is not valid')
+      const user = users.find((u) => u.username === username.toLowerCase())
+      if (!user || user.disabled || password !== MOCK_PASSWORD) throw new AuthError('Invalid username or password')
+      session.user = asUser(user)
       session.authenticated = true
     },
     signOut: async () => {
       await wait(null)
+      session.user = null
       session.authenticated = false
     },
-    shell: () => wait(shell),
+    changePassword: async (current, next) => {
+      await wait(null)
+      if (!session.user) throw new AuthError()
+      if (current !== MOCK_PASSWORD) throw new Error('the current password is wrong')
+      checkPassword(next)
+    },
+    users: async () => {
+      requireAdmin()
+      return wait(users)
+    },
+    createUser: async (input) => {
+      requireAdmin()
+      checkPassword(input.password)
+      if (users.some((u) => u.username === input.username)) throw new Error(`username "${input.username}" is taken`)
+      const user: UserRow = { ...input, id: users.length + 1, disabled: false, hasPassword: true, createdAt: new Date().toISOString(), lastLoginAt: null }
+      users.push(user)
+      return wait(asUser(user))
+    },
+    updateUser: async (id, patch) => {
+      requireAdmin()
+      if (patch.password !== undefined) checkPassword(patch.password)
+      const user = findUser(id)
+      const activeAdmins = users.filter((u) => u.role === 'admin' && !u.disabled)
+      const staysAdmin = (patch.role ?? 'admin') === 'admin' && patch.disabled !== true
+      if (activeAdmins.length === 1 && activeAdmins[0].id === id && !staysAdmin) throw new Error('the last active admin cannot be disabled or made a member')
+      if (patch.displayName !== undefined) user.displayName = patch.displayName
+      if (patch.role !== undefined) user.role = patch.role
+      if (patch.disabled !== undefined) user.disabled = patch.disabled
+      return wait(asUser(user))
+    },
+    shell: () => wait(shell()),
     overview: (scope, range) => wait(overview(scope, range)),
     drill: (metric: DrillMetric) => wait<Drill>(DRILLS[metric]),
     issues: async (query) => {

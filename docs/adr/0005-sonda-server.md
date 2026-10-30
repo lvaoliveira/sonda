@@ -250,6 +250,9 @@ blockers or criticals, ranked by severity and age.
   database for every contributor's build. sqlx 0.9 still refuses SQL built
   from strings unless it is explicitly marked as audited, so the
   parameterized-only rule stays enforced.
+- **2026-10-30, browsers sign in as users.** Browsers no longer sign in
+  with the API token, which now serves only machines.
+  [ADR-0006](0006-users.md) adds users, passwords and roles.
 - **2026-10-29, the server's minimum Rust version is 1.94**, above the
   workspace's 1.90, because sqlx 0.9 requires it. The CLI and core library
   keep 1.90.

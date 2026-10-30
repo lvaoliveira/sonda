@@ -97,6 +97,16 @@ file, the report formats and the public library API.
   A project's first analysis counts as its baseline. What the server
   doesn't know (teams, coverage when not uploaded, commit messages) is
   shown as such, never invented.
+- Users and roles (ADR-0006):
+  - **Sign-in:** username and password, with Argon2id hashes.
+  - **First admin:** created from `secrets/admin_password` while no users
+    exist.
+  - **Administration page:** create users, change roles, disable or enable
+    them, reset passwords. The last admin is protected.
+  - **Account page:** change your own password.
+  - **Audit:** triage history records who made each change.
+
+  The API token now serves only machines: uploads and scripts.
 
 ### Security
 

@@ -6,7 +6,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use common::{TOKEN, TestDb, state, state_with, upload, upload_json};
+use common::{
+    PASSWORD, TOKEN, TestDb, create_user, sign_in, state, state_with, upload, upload_json,
+};
 use serde_json::{Value, json};
 use sonda_server::{db, http};
 use tower::ServiceExt;
@@ -199,11 +201,8 @@ async fn triage_needs_authorization_and_is_audited() {
         StatusCode::UNAUTHORIZED
     );
 
-    let sign_in = Request::post("/api/session")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json!({ "token": TOKEN }).to_string()))
-        .unwrap();
-    let session = send(&app, sign_in).await.2.unwrap();
+    create_user(&db, "ann", "member").await;
+    let session = sign_in(&app, "ann", PASSWORD).await.unwrap();
     // A session alone, as a cross-site form would send it, changes nothing.
     let (status, body, _) = send(&app, patch(id, confirm.clone(), &[("cookie", &session)])).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
@@ -231,13 +230,15 @@ async fn triage_needs_authorization_and_is_audited() {
     let (_, issue, _) = send(&app, patch(id, json!({ "assignee": "" }), &csrf)).await;
     assert_eq!(issue["assignee"], Value::Null);
 
-    let history: Vec<(String, Option<String>, Option<String>)> = issue["history"]
+    // Each change records who made it: a user, or the API token.
+    let history: Vec<(String, String, Option<String>, Option<String>)> = issue["history"]
         .as_array()
         .unwrap()
         .iter()
         .map(|e| {
             assert!(e["at"].as_str().unwrap().ends_with('Z'));
             (
+                e["actor"].as_str().unwrap().to_string(),
                 e["field"].as_str().unwrap().to_string(),
                 e["oldValue"].as_str().map(String::from),
                 e["newValue"].as_str().map(String::from),
@@ -248,9 +249,9 @@ async fn triage_needs_authorization_and_is_audited() {
     assert_eq!(
         history,
         [
-            ("status".into(), s("open"), s("confirmed")),
-            ("assignee".into(), None, s("alice")),
-            ("assignee".into(), s("alice"), None),
+            ("ann".into(), "status".into(), s("open"), s("confirmed")),
+            ("api-token".into(), "assignee".into(), None, s("alice")),
+            ("ann".into(), "assignee".into(), s("alice"), None),
         ]
     );
     assert_eq!(

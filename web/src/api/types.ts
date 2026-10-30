@@ -24,7 +24,8 @@ export interface Org {
   projectCount: number | null
 }
 
-export interface User {
+/** The viewer, as the shell shows them. */
+export interface ShellUser {
   name: string
   handle: string
   initials: string
@@ -40,9 +41,11 @@ export interface NavCounts {
 
 export interface Shell {
   org: Org
-  user: User
+  user: ShellUser
+  /** Shows the administration screen. */
+  isAdmin: boolean
   counts: NavCounts
-  /** The name "Assign to me" uses; null until the viewer gives one at sign-in. */
+  /** The username "Assign to me" uses; null when browsing read-only. */
   me: string | null
 }
 
@@ -246,6 +249,8 @@ export interface IssuePage {
 
 export interface IssueEvent {
   at: string
+  /** Who made the change: a username, `api-token`, or null before users existed. */
+  actor: string | null
   field: 'status' | 'assignee'
   oldValue: string | null
   newValue: string | null
@@ -293,21 +298,65 @@ export interface RuleCatalog {
   rules: Rule[]
 }
 
-// ----------------------------------------------------------------- session
+// ----------------------------------------------------------- users, session
+
+export type Role = 'admin' | 'member'
+
+export interface User {
+  id: number
+  /** Stable; also what issues are assigned to. */
+  username: string
+  displayName: string
+  role: Role
+  disabled: boolean
+}
+
+/** A user as admins see them. */
+export interface UserRow extends User {
+  hasPassword: boolean
+  createdAt: string
+  lastLoginAt: string | null
+}
+
+export interface NewUser {
+  username: string
+  displayName: string
+  role: Role
+  password: string
+}
+
+export interface UserPatch {
+  displayName?: string
+  role?: Role
+  disabled?: boolean
+  /** An admin's password reset. */
+  password?: string
+}
 
 export interface Session {
+  /** The signed-in user, or null. */
+  user: User | null
   authenticated: boolean
   /** Whether anything can be read before signing in. */
   readsRequireAuth: boolean
 }
 
+/** Passwords need at least this many characters (ADR-0006). */
+export const MIN_PASSWORD_LENGTH = 12
+
 // ------------------------------------------------------------------ client
 
 export interface SondaApi {
   session(): Promise<Session>
-  /** Exchanges the API token for a session cookie; rejects with `AuthError` if wrong. */
-  signIn(token: string): Promise<void>
+  /** Starts a session cookie; rejects with `AuthError` on a wrong username or password. */
+  signIn(username: string, password: string): Promise<void>
   signOut(): Promise<void>
+  /** The signed-in user's own password; needs the current one. */
+  changePassword(current: string, next: string): Promise<void>
+  /** Admins only. */
+  users(): Promise<UserRow[]>
+  createUser(user: NewUser): Promise<User>
+  updateUser(id: number, patch: UserPatch): Promise<User>
   shell(): Promise<Shell>
   /** Absent until the server keeps analysis history for it (ADR-0005, phase 3). */
   overview?(scope: Scope, range: Range): Promise<Overview>

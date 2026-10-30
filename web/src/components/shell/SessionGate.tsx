@@ -4,7 +4,6 @@ import { UNAUTHORIZED_EVENT } from '@/api/http'
 import { SessionContext } from '@/api/session'
 import { AuthError } from '@/api/types'
 import { Button } from '@/components/sonda/controls'
-import { storeName, storedName } from '@/lib/identity'
 
 /**
  * Shows sign-in until the server has a session for this browser, when the
@@ -53,8 +52,8 @@ export function SessionGate({ children }: { children: ReactNode }) {
 
 function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () => void; onSignedIn: () => void }) {
   const api = useApi()
-  const [token, setToken] = useState('')
-  const [name, setName] = useState(storedName)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -63,8 +62,7 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
     setBusy(true)
     setError('')
     try {
-      await api.signIn(token.trim())
-      storeName(name.trim())
+      await api.signIn(username.trim(), password)
       onSignedIn()
     } catch (err) {
       setError(err instanceof AuthError ? err.message : `Could not sign in: ${(err as Error).message}`)
@@ -75,26 +73,29 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
   return (
     <Centered>
       <h1 className="m-0 text-[22px] font-semibold tracking-[-0.02em]">Sign in to sonda</h1>
-      <p className="m-0 text-[13.5px] text-fg-muted">
-        Paste the server's API token (<code className="font-mono text-[12px]">secrets/sonda_token</code> in a Docker setup). This browser keeps a session cookie, never the token.
-      </p>
       <form onSubmit={submit} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1.5 text-[13px]">
-          API token
+          Username
           <input
-            type="password"
-            autoComplete="off"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
             required
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            className="h-9 rounded-lg border-0 bg-canvas px-3 font-mono text-[13px] edge-strong"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] edge-strong"
           />
         </label>
         <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>
-            Your name <span className="text-fg-faint">(optional, for "Assign to me")</span>
-          </span>
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} className="h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] edge-strong" />
+          Password
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] edge-strong"
+          />
         </label>
         {error && (
           <p role="alert" className="m-0 text-[13px] text-crit">
@@ -102,7 +103,7 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
           </p>
         )}
         <div className="flex items-center gap-3">
-          <Button type="submit" primary disabled={busy || !token.trim()}>
+          <Button type="submit" primary disabled={busy || !username.trim() || !password}>
             {busy ? 'Signing in…' : 'Sign in'}
           </Button>
           {canSkip && (
@@ -112,6 +113,9 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
           )}
         </div>
       </form>
+      <p className="m-0 text-[12.5px] text-fg-faint">
+        First time? The server creates <code className="font-mono">admin</code> with the password in <code className="font-mono">secrets/admin_password</code>.
+      </p>
     </Centered>
   )
 }

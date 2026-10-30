@@ -2,6 +2,7 @@
 
 use crate::http::State;
 use crate::session;
+use crate::users::User;
 use axum::Json;
 use axum::extract::Request;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -14,6 +15,9 @@ use serde_json::json;
 #[derive(Debug)]
 pub enum ApiError {
     Unauthorized,
+    /// A failed sign-in. One message for every cause, so nothing reveals
+    /// whether the username exists.
+    SignInFailed,
     /// Authenticated, but the request is not allowed as sent.
     Forbidden(String),
     NotFound,
@@ -28,7 +32,14 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "missing or invalid token".into()),
+            Self::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "sign in or send the API token".into(),
+            ),
+            Self::SignInFailed => (
+                StatusCode::UNAUTHORIZED,
+                "invalid username or password".into(),
+            ),
             Self::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             Self::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             Self::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
@@ -58,13 +69,24 @@ impl From<sqlx::Error> for ApiError {
 }
 
 /// Who is calling, as far as the API cares.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Caller {
     /// The API token, as a bearer header: `sonda upload`, scripts.
     Token,
-    /// A browser signed in with the token (see `session`).
-    Session,
+    /// A signed-in user (see `session`).
+    User(User),
     Anonymous,
+}
+
+impl Caller {
+    /// For logs and the audit trail.
+    pub fn name(&self) -> &str {
+        match self {
+            Caller::Token => "api-token",
+            Caller::User(u) => &u.username,
+            Caller::Anonymous => "anonymous",
+        }
+    }
 }
 
 pub async fn caller(state: &State, headers: &HeaderMap) -> Result<Caller, ApiError> {
@@ -72,9 +94,9 @@ pub async fn caller(state: &State, headers: &HeaderMap) -> Result<Caller, ApiErr
         return Ok(Caller::Token);
     }
     if let Some(token) = session::from_headers(headers)
-        && session::is_valid(&state.pool, token).await?
+        && let Some(user) = session::user(&state.pool, token).await?
     {
-        return Ok(Caller::Session);
+        return Ok(Caller::User(user));
     }
     Ok(Caller::Anonymous)
 }
@@ -99,12 +121,14 @@ pub async fn require_token(
 /// server holds source code.
 pub async fn require_read(
     axum::extract::State(state): axum::extract::State<State>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    if state.reads_require_auth && caller(&state, request.headers()).await? == Caller::Anonymous {
+    let caller = caller(&state, request.headers()).await?;
+    if state.reads_require_auth && matches!(caller, Caller::Anonymous) {
         return Err(ApiError::Unauthorized);
     }
+    request.extensions_mut().insert(caller);
     Ok(next.run(request).await)
 }
 
@@ -114,23 +138,53 @@ pub async fn require_read(
 pub const CSRF_HEADER: &str = "sonda-csrf";
 
 /// Middleware for changes made from the web app (triage): the token, or a
-/// session plus `CSRF_HEADER`.
+/// signed-in user plus `CSRF_HEADER`. Handlers get the `Caller` as an
+/// extension, for the audit trail.
 pub async fn require_write(
     axum::extract::State(state): axum::extract::State<State>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    match caller(&state, request.headers()).await? {
-        Caller::Token => {}
-        Caller::Session if request.headers().contains_key(CSRF_HEADER) => {}
-        Caller::Session => {
-            return Err(ApiError::Forbidden(format!(
-                "missing the {CSRF_HEADER} header"
-            )));
+    let caller = caller(&state, request.headers()).await?;
+    check_write(&caller, request.headers())?;
+    request.extensions_mut().insert(caller);
+    Ok(next.run(request).await)
+}
+
+/// Middleware for user management: a signed-in admin, never the API token.
+/// Changes also need `CSRF_HEADER`.
+pub async fn require_admin(
+    axum::extract::State(state): axum::extract::State<State>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let caller = caller(&state, request.headers()).await?;
+    match &caller {
+        Caller::User(u) if u.is_admin() => {}
+        Caller::User(_) => return Err(ApiError::Forbidden("admins only".into())),
+        Caller::Token => {
+            return Err(ApiError::Forbidden(
+                "the API token cannot manage users; sign in as an admin".into(),
+            ));
         }
         Caller::Anonymous => return Err(ApiError::Unauthorized),
     }
+    if request.method() != axum::http::Method::GET {
+        check_write(&caller, request.headers())?;
+    }
+    request.extensions_mut().insert(caller);
     Ok(next.run(request).await)
+}
+
+fn check_write(caller: &Caller, headers: &HeaderMap) -> Result<(), ApiError> {
+    match caller {
+        Caller::Token => Ok(()),
+        Caller::User(_) if headers.contains_key(CSRF_HEADER) => Ok(()),
+        Caller::User(_) => Err(ApiError::Forbidden(format!(
+            "missing the {CSRF_HEADER} header"
+        ))),
+        Caller::Anonymous => Err(ApiError::Unauthorized),
+    }
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {

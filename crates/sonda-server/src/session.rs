@@ -1,6 +1,7 @@
 //! Browser sessions: signing in with the API token sets a session cookie, so
 //! the web app never holds the token itself (ADR-0005).
 
+use crate::users::{USER_COLUMNS, User};
 use axum::http::{HeaderMap, HeaderValue, header};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -12,8 +13,9 @@ pub const COOKIE: &str = "__Host-sonda_session";
 /// Sessions end after 12 hours, signed in or not; there is no refresh.
 pub const LIFETIME_SECS: i64 = 12 * 60 * 60;
 
-/// Starts a session and returns its token, which only the cookie holds.
-pub async fn create(pool: &PgPool) -> Result<String, sqlx::Error> {
+/// Starts a session for `user_id` and returns its token, which only the
+/// cookie holds.
+pub async fn create(pool: &PgPool, user_id: i64) -> Result<String, sqlx::Error> {
     let mut bytes = [0u8; 32];
     // The OS random source; failing it is not recoverable.
     getrandom::fill(&mut bytes).expect("the operating system's random source");
@@ -22,23 +24,28 @@ pub async fn create(pool: &PgPool) -> Result<String, sqlx::Error> {
         .execute(pool)
         .await?;
     sqlx::query(
-        "INSERT INTO sessions (token_sha256, expires_at)
-         VALUES ($1, now() + make_interval(secs => $2))",
+        "INSERT INTO sessions (token_sha256, user_id, expires_at)
+         VALUES ($1, $2, now() + make_interval(secs => $3))",
     )
     .bind(hash(&token))
+    .bind(user_id)
     .bind(LIFETIME_SECS as f64)
     .execute(pool)
     .await?;
     Ok(token)
 }
 
-pub async fn is_valid(pool: &PgPool, token: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM sessions WHERE token_sha256 = $1 AND expires_at > now())",
-    )
-    .bind(hash(token))
-    .fetch_one(pool)
-    .await
+/// The user a live session belongs to; none if it expired, was ended, or
+/// the user was disabled.
+pub async fn user(pool: &PgPool, token: &str) -> Result<Option<User>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {USER_COLUMNS} FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token_sha256 = $1 AND s.expires_at > now() AND NOT u.disabled"
+    );
+    sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(hash(token))
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn delete(pool: &PgPool, token: &str) -> Result<(), sqlx::Error> {
@@ -72,7 +79,7 @@ pub fn set_cookie(token: Option<&str>) -> HeaderValue {
     HeaderValue::from_str(&cookie).expect("valid header value")
 }
 
-fn hash(token: &str) -> Vec<u8> {
+pub fn hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
