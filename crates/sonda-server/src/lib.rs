@@ -6,6 +6,7 @@
 //! once at startup.
 
 pub mod advisories;
+pub mod advisory_sync;
 pub mod analyses;
 pub mod api;
 pub mod components;
@@ -37,6 +38,25 @@ pub async fn run(config: Config) -> Result<()> {
     let pool = db::connect(config.database).await?;
     db::migrate(&pool).await?;
     users::bootstrap_admin(&pool, config.admin).await?;
+    if let Some(base_url) = config.advisory_sync {
+        tracing::info!(source = %base_url, "syncing advisories daily");
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                match advisory_sync::sync_once(&pool, &base_url).await {
+                    Ok(s) => tracing::info!(
+                        read = s.read,
+                        imported = s.imported,
+                        errors = s.errors,
+                        first_errors = ?s.first_errors,
+                        "synced advisories"
+                    ),
+                    Err(e) => tracing::warn!(error = %e, "advisory sync failed; retrying later"),
+                }
+                tokio::time::sleep(advisory_sync::INTERVAL).await;
+            }
+        });
+    }
     let reads_require_auth = !config.listen.ip().is_loopback();
     if reads_require_auth {
         tracing::info!("reads require the token or a session (not listening on loopback only)");

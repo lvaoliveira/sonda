@@ -22,6 +22,9 @@ pub struct Config {
     /// Username and password for the first admin, used only while no users
     /// exist (ADR-0006).
     pub admin: Option<(String, String)>,
+    /// Where to sync advisories from daily, when SONDA_ADVISORY_SYNC=true
+    /// (ADR-0009); `None` keeps the server from connecting out.
+    pub advisory_sync: Option<String>,
 }
 
 /// The API token, kept only as a hash.
@@ -83,7 +86,25 @@ impl Config {
             token: Token::new(&token)?,
             web_dir,
             admin,
+            advisory_sync: advisory_sync(env)?,
         })
+    }
+}
+
+/// The advisory sync's base URL: off unless SONDA_ADVISORY_SYNC is `true`;
+/// SONDA_ADVISORY_SYNC_URL overrides OSV's (an HTTPS mirror, say).
+pub fn advisory_sync(env: &dyn Env) -> Result<Option<String>> {
+    let url = || {
+        let url = env
+            .var("SONDA_ADVISORY_SYNC_URL")
+            .unwrap_or_else(|| crate::advisory_sync::DEFAULT_BASE_URL.into());
+        crate::advisory_sync::check_base_url(&url)
+            .map_err(|e| anyhow::anyhow!("SONDA_ADVISORY_SYNC_URL: {e}"))
+    };
+    match env.var("SONDA_ADVISORY_SYNC").as_deref() {
+        None | Some("" | "false") => Ok(None),
+        Some("true") => url().map(Some),
+        Some(other) => bail!("SONDA_ADVISORY_SYNC must be true or false, not {other:?}"),
     }
 }
 
@@ -169,6 +190,35 @@ mod tests {
         assert!(load(&[url]).is_err());
         let both = load(&[url, ("SONDA_TOKEN", TOKEN), ("SONDA_TOKEN_FILE", "/x")]);
         assert!(both.err().unwrap().to_string().contains("not both"));
+    }
+
+    #[test]
+    fn advisory_sync_is_off_unless_asked() {
+        let base = [
+            ("DATABASE_URL", "postgres://sonda@db/sonda"),
+            ("SONDA_TOKEN", "0123456789abcdef0123456789abcdef"),
+        ];
+        assert_eq!(load(&base).unwrap().advisory_sync, None);
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut vars = base.to_vec();
+            vars.extend_from_slice(extra);
+            load(&vars)
+        };
+        assert_eq!(
+            with(&[("SONDA_ADVISORY_SYNC", "true")])
+                .unwrap()
+                .advisory_sync
+                .as_deref(),
+            Some(crate::advisory_sync::DEFAULT_BASE_URL)
+        );
+        assert!(with(&[("SONDA_ADVISORY_SYNC", "yes")]).is_err());
+        assert!(
+            with(&[
+                ("SONDA_ADVISORY_SYNC", "true"),
+                ("SONDA_ADVISORY_SYNC_URL", "http://mirror.example.com")
+            ])
+            .is_err()
+        );
     }
 
     #[test]

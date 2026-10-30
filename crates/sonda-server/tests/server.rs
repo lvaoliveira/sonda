@@ -30,6 +30,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "advisories",
             "advisory_imports",
             "advisory_packages",
+            "advisory_sync",
             "analyses",
             "analysis_dependencies",
             "analysis_files",

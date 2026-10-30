@@ -11,7 +11,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// One OSV record is a few kilobytes; this bounds a hostile one.
-const MAX_RECORD_BYTES: u64 = 4 << 20;
+pub(crate) const MAX_RECORD_BYTES: u64 = 4 << 20;
 /// Errors kept for the summary; the rest are only counted.
 const MAX_ERRORS_SHOWN: usize = 10;
 
@@ -32,44 +32,59 @@ pub struct ImportSummary {
 /// an unzipped OSV export).
 pub async fn import(pool: &PgPool, paths: &[PathBuf]) -> anyhow::Result<ImportSummary> {
     let mut summary = ImportSummary::default();
-    let error = |summary: &mut ImportSummary, msg: String| {
-        summary.errors += 1;
-        if summary.first_errors.len() < MAX_ERRORS_SHOWN {
-            summary.first_errors.push(msg);
-        }
-    };
     for file in json_files(paths)? {
         summary.read += 1;
         let text = match read_capped(&file) {
             Ok(t) => t,
             Err(e) => {
-                error(&mut summary, format!("{}: {e}", file.display()));
+                summary.error(format!("{}: {e}", file.display()));
                 continue;
             }
         };
-        let advisory = match advisories::parse(&text) {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                summary.skipped += 1;
-                continue;
-            }
-            Err(e) => {
-                error(&mut summary, format!("{}: {e}", file.display()));
-                continue;
-            }
-        };
-        match store(pool, &advisory).await {
-            Ok(true) => summary.imported += 1,
-            Ok(false) => summary.unchanged += 1,
-            Err(e) => error(&mut summary, format!("{}: {e}", advisory.id)),
-        }
+        record(pool, &file.display().to_string(), &text, &mut summary).await;
     }
+    finish(pool, &summary).await?;
+    Ok(summary)
+}
+
+/// Parses and stores one OSV record, counting the outcome in `summary`.
+/// `origin` names it in errors (a path or a URL).
+pub(crate) async fn record(pool: &PgPool, origin: &str, text: &str, summary: &mut ImportSummary) {
+    let advisory = match advisories::parse(text) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            summary.skipped += 1;
+            return;
+        }
+        Err(e) => {
+            summary.error(format!("{origin}: {e}"));
+            return;
+        }
+    };
+    match store(pool, &advisory).await {
+        Ok(true) => summary.imported += 1,
+        Ok(false) => summary.unchanged += 1,
+        Err(e) => summary.error(format!("{}: {e}", advisory.id)),
+    }
+}
+
+/// Records that an import (or sync) ran.
+pub(crate) async fn finish(pool: &PgPool, summary: &ImportSummary) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO advisory_imports (read, imported) VALUES ($1, $2)")
         .bind(i32::try_from(summary.read).unwrap_or(i32::MAX))
         .bind(i32::try_from(summary.imported).unwrap_or(i32::MAX))
         .execute(pool)
         .await?;
-    Ok(summary)
+    Ok(())
+}
+
+impl ImportSummary {
+    pub(crate) fn error(&mut self, msg: String) {
+        self.errors += 1;
+        if self.first_errors.len() < MAX_ERRORS_SHOWN {
+            self.first_errors.push(msg);
+        }
+    }
 }
 
 /// Every `*.json` file under `paths`, sorted, without following symlinks.
