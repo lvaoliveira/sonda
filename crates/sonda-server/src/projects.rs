@@ -295,7 +295,7 @@ pub async fn get_project(
     let score = score(&ratings, coverage);
     let languages = language_shares(&files);
     let components = components(&files, &issues, codeowners.as_deref());
-    let dependencies = crate::dependencies::summary(pool, analysis).await?;
+    let dependencies = crate::dependencies::summary(pool, project, analysis).await?;
 
     Ok(Json(ProjectDetail {
         key,

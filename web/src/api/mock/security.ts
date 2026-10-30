@@ -77,5 +77,15 @@ export const SECURITY: Security = {
       unmapped: 1,
     },
   ],
+  dependencies: {
+    bySeverity: { critical: 1, major: 1 },
+    vulnerablePackages: 2,
+    projectsAffected: 2,
+    top: [
+      { project: 'payments-platform', ecosystem: 'npm', package: 'lodash', version: '4.17.20', advisory: 'GHSA-35jh-r3h4-6jhm', summary: 'Command Injection in lodash', severity: 'critical', fixedIn: '4.17.21', url: 'https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm' },
+      { project: 'billing-service', ecosystem: 'pypi', package: 'requests', version: '2.31.0', advisory: 'GHSA-9wx4-h78v-vm56', summary: 'Requests `Session` object does not verify requests after making first request with verify=False', severity: 'major', fixedIn: '2.32.0', url: 'https://osv.dev/vulnerability/GHSA-9wx4-h78v-vm56' },
+    ],
+    advisoryData: { importedAt: days(0.3), advisories: 24_586 },
+  },
   remediation: { medianDaysSevere: 4.2, medianDaysAll: 9.5, fixedLast90Days: 88 },
 }

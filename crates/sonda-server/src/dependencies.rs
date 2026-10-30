@@ -2,16 +2,16 @@
 //! analysis pinned (ADR-0009), with what changed since the analysis before
 //! it.
 
-use crate::advisories::{self, Finding};
+use crate::advisories::{self, Finding, Review};
 use crate::api::ApiError;
 use crate::health::rfc3339;
 use crate::http::State;
 use axum::Json;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
-use sonda_core::deps::Ecosystem;
+use sonda_core::deps::{Ecosystem, package_key};
 use sqlx::PgPool;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Licenses listed by count; the rest are summed as "other".
 const TOP_LICENSES: usize = 8;
@@ -121,6 +121,30 @@ pub struct Update {
     pub to: Vec<String>,
 }
 
+/// An analysis id, then a [`Row`]'s fields.
+type AnalysisRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<bool>,
+    String,
+    Option<String>,
+);
+
+/// (project, ecosystem, name, advisory, status, reason, reviewed by, at)
+type ReviewRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    f64,
+);
+
 /// (ecosystem, name, version, purl, direct, lockfile, license)
 type Row = (
     String,
@@ -145,29 +169,80 @@ async fn rows(pool: &PgPool, analysis: i64) -> Result<Vec<Row>, sqlx::Error> {
 
 /// The latest analysis's summary, for the project page; None without
 /// dependencies.
-pub async fn summary(pool: &PgPool, analysis: i64) -> Result<Option<Summary>, sqlx::Error> {
+pub async fn summary(
+    pool: &PgPool,
+    project: i64,
+    analysis: i64,
+) -> Result<Option<Summary>, sqlx::Error> {
     let mut deps = merge(rows(pool, analysis).await?);
-    annotate(pool, &mut deps).await?;
+    annotate(pool, &mut [(project, &mut deps)]).await?;
     let s = summarize(&deps);
     Ok((s.total > 0).then_some(s))
 }
 
-/// Adds each dependency's known vulnerabilities.
-async fn annotate(pool: &PgPool, deps: &mut [DependencyRow]) -> Result<(), sqlx::Error> {
+/// Adds known vulnerabilities, and each project's reviews of them, to its
+/// dependencies: every project's in one query.
+async fn annotate(
+    pool: &PgPool,
+    projects: &mut [(i64, &mut Vec<DependencyRow>)],
+) -> Result<(), sqlx::Error> {
     // Ingest only stores known ecosystems; anything else is left unchecked.
-    let known: Vec<(usize, Ecosystem)> = deps
-        .iter()
-        .enumerate()
-        .filter_map(|(i, d)| Some((i, Ecosystem::parse(&d.ecosystem)?)))
-        .collect();
+    let mut known: Vec<(usize, usize, Ecosystem)> = Vec::new();
+    for (p, (_, deps)) in projects.iter().enumerate() {
+        for (i, d) in deps.iter().enumerate() {
+            if let Some(e) = Ecosystem::parse(&d.ecosystem) {
+                known.push((p, i, e));
+            }
+        }
+    }
     let query: Vec<(Ecosystem, &str, &str)> = known
         .iter()
-        .map(|&(i, e)| (e, deps[i].name.as_str(), deps[i].version.as_str()))
+        .map(|&(p, i, e)| {
+            let d = &projects[p].1[i];
+            (e, d.name.as_str(), d.version.as_str())
+        })
         .collect();
     let verdicts = advisories::check(pool, &query).await?;
-    for ((i, _), v) in known.into_iter().zip(verdicts) {
-        deps[i].advisories = v.advisories;
-        deps[i].unchecked = v.unchecked;
+
+    let ids: Vec<i64> = projects.iter().map(|(id, _)| *id).collect();
+    let reviews: Vec<ReviewRow> = sqlx::query_as(
+        "SELECT project_id, ecosystem, name, advisory_id, status::text, reason, reviewed_by,
+                extract(epoch FROM reviewed_at)::float8
+         FROM dependency_reviews WHERE project_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await?;
+    let reviews: HashMap<(i64, String, String, String), Review> = reviews
+        .into_iter()
+        .map(|(project, eco, name, advisory, status, reason, by, at)| {
+            (
+                (project, eco, name, advisory),
+                Review {
+                    status,
+                    reason,
+                    reviewed_by: by,
+                    reviewed_at: rfc3339(at),
+                },
+            )
+        })
+        .collect();
+
+    for ((p, i, e), v) in known.into_iter().zip(verdicts) {
+        let project = projects[p].0;
+        let d = &mut projects[p].1[i];
+        let key = package_key(e, &d.name);
+        d.advisories = v
+            .advisories
+            .into_iter()
+            .map(|mut f| {
+                f.review = reviews
+                    .get(&(project, e.as_str().to_string(), key.clone(), f.id.clone()))
+                    .cloned();
+                f
+            })
+            .collect();
+        d.unchecked = v.unchecked;
     }
     Ok(())
 }
@@ -199,7 +274,7 @@ pub async fn get_dependencies(
         )));
     };
     let mut current = merge(rows(pool, id).await?);
-    annotate(pool, &mut current).await?;
+    annotate(pool, &mut [(project, &mut current)]).await?;
     let changes = match latest.get(1) {
         Some((previous, ..)) => Some(diff(
             *previous,
@@ -312,7 +387,10 @@ fn summarize(deps: &[DependencyRow]) -> Summary {
     Summary {
         total: deps.len(),
         direct: deps.iter().filter(|d| d.direct == Some(true)).count(),
-        vulnerable: deps.iter().filter(|d| !d.advisories.is_empty()).count(),
+        vulnerable: deps
+            .iter()
+            .filter(|d| d.advisories.iter().any(|a| !a.accepted()))
+            .count(),
         ecosystems,
     }
 }
@@ -365,6 +443,232 @@ fn diff(previous_analysis: i64, before: &[DependencyRow], after: &[DependencyRow
         }
     }
     changes
+}
+
+#[derive(Deserialize)]
+pub struct ReviewPatch {
+    pub ecosystem: String,
+    /// The package's name, as listed.
+    pub name: String,
+    pub advisory: String,
+    /// `open`, `confirmed` or `accepted`.
+    pub status: String,
+    /// Required to accept.
+    pub reason: Option<String>,
+}
+
+/// `PATCH /api/projects/{key}/dependencies/reviews`: triages one known
+/// vulnerability in one of the project's packages, on every branch, for
+/// as long as the package has it.
+pub async fn patch_review(
+    axum::extract::State(state): axum::extract::State<State>,
+    axum::extract::Extension(caller): axum::extract::Extension<crate::api::Caller>,
+    Path(key): Path<String>,
+    Json(patch): Json<ReviewPatch>,
+) -> Result<Json<Review>, ApiError> {
+    let invalid = |m: &str| ApiError::Unprocessable(m.to_string());
+    if !["open", "confirmed", "accepted"].contains(&patch.status.as_str()) {
+        return Err(invalid("status must be open, confirmed or accepted"));
+    }
+    let ecosystem =
+        Ecosystem::parse(&patch.ecosystem).ok_or_else(|| invalid("unknown ecosystem"))?;
+    let reason = patch
+        .reason
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
+    if reason
+        .as_ref()
+        .is_some_and(|r| r.chars().count() > 500 || r.chars().any(|c| c.is_control() && c != '\n'))
+    {
+        return Err(invalid(
+            "the reason must be at most 500 characters, without control characters",
+        ));
+    }
+    if patch.status == "accepted" && reason.is_none() {
+        return Err(invalid("accepting a vulnerability needs a reason"));
+    }
+    let name = package_key(ecosystem, &patch.name);
+    let actor = caller.name().to_string();
+
+    let mut tx = state.pool.begin().await?;
+    let project: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE key = $1")
+        .bind(&key)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let known: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM advisories WHERE id = $1)")
+        .bind(&patch.advisory)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !known {
+        return Err(ApiError::NotFound);
+    }
+    let old: Option<String> = sqlx::query_scalar(
+        "SELECT status::text FROM dependency_reviews
+         WHERE project_id = $1 AND ecosystem = $2 AND name = $3 AND advisory_id = $4 FOR UPDATE",
+    )
+    .bind(project)
+    .bind(ecosystem.as_str())
+    .bind(&name)
+    .bind(&patch.advisory)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (status, reason, by, at): (String, Option<String>, String, f64) = sqlx::query_as(
+        "INSERT INTO dependency_reviews
+             (project_id, ecosystem, name, advisory_id, status, reason, reviewed_by)
+         VALUES ($1, $2, $3, $4, $5::issue_status, $6, $7)
+         ON CONFLICT (project_id, ecosystem, name, advisory_id) DO UPDATE
+             SET status = EXCLUDED.status, reason = EXCLUDED.reason,
+                 reviewed_by = EXCLUDED.reviewed_by, reviewed_at = now()
+         RETURNING status::text, reason, reviewed_by, extract(epoch FROM reviewed_at)::float8",
+    )
+    .bind(project)
+    .bind(ecosystem.as_str())
+    .bind(&name)
+    .bind(&patch.advisory)
+    .bind(&patch.status)
+    .bind(&reason)
+    .bind(&actor)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO dependency_review_events
+             (project_id, ecosystem, name, advisory_id, actor, old_status, new_status, reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(project)
+    .bind(ecosystem.as_str())
+    .bind(&name)
+    .bind(&patch.advisory)
+    .bind(&actor)
+    .bind(old.as_deref().unwrap_or("open"))
+    .bind(&status)
+    .bind(&reason)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(Review {
+        status,
+        reason,
+        reviewed_by: by,
+        reviewed_at: rfc3339(at),
+    }))
+}
+
+/// Vulnerable dependencies across every project's main branch, for the
+/// Security screen. Accepted findings are left out.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Portfolio {
+    /// Open or confirmed findings (package and advisory) by severity.
+    pub by_severity: BTreeMap<String, usize>,
+    pub vulnerable_packages: usize,
+    pub projects_affected: usize,
+    /// Most severe first.
+    pub top: Vec<PortfolioFinding>,
+    pub advisory_data: Option<AdvisoryData>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioFinding {
+    pub project: String,
+    pub ecosystem: String,
+    pub package: String,
+    pub version: String,
+    pub advisory: String,
+    pub summary: String,
+    pub severity: String,
+    pub fixed_in: Option<String>,
+    pub url: String,
+}
+
+/// Findings listed in `Portfolio::top`.
+const TOP_FINDINGS: usize = 10;
+
+pub async fn portfolio(pool: &PgPool) -> Result<Portfolio, sqlx::Error> {
+    let latest: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT DISTINCT ON (p.id) p.id, p.key, a.id
+         FROM projects p JOIN analyses a ON a.project_id = p.id AND a.branch = p.main_branch
+         ORDER BY p.id, a.id DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let analyses: Vec<i64> = latest.iter().map(|l| l.2).collect();
+    let all: Vec<AnalysisRow> = sqlx::query_as(
+        "SELECT analysis_id, ecosystem, name, version, purl, direct, lockfile, license
+             FROM analysis_dependencies WHERE analysis_id = ANY($1)
+             ORDER BY analysis_id, ecosystem, name, version, lockfile",
+    )
+    .bind(&analyses)
+    .fetch_all(pool)
+    .await?;
+    let mut by_analysis: HashMap<i64, Vec<Row>> = HashMap::new();
+    for (analysis, e, n, v, purl, direct, lockfile, license) in all {
+        by_analysis
+            .entry(analysis)
+            .or_default()
+            .push((e, n, v, purl, direct, lockfile, license));
+    }
+    let mut merged: Vec<(i64, Vec<DependencyRow>)> = latest
+        .iter()
+        .map(|(project, _, analysis)| {
+            (
+                *project,
+                merge(by_analysis.remove(analysis).unwrap_or_default()),
+            )
+        })
+        .collect();
+    let mut refs: Vec<(i64, &mut Vec<DependencyRow>)> =
+        merged.iter_mut().map(|(p, d)| (*p, d)).collect();
+    annotate(pool, &mut refs).await?;
+
+    let mut p = Portfolio {
+        advisory_data: advisories::status(pool).await?.map(|(at, n)| AdvisoryData {
+            imported_at: rfc3339(at),
+            advisories: n,
+        }),
+        ..Portfolio::default()
+    };
+    for ((_, key, _), (_, deps)) in latest.iter().zip(&merged) {
+        let mut affected = false;
+        for d in deps {
+            let open: Vec<&Finding> = d.advisories.iter().filter(|a| !a.accepted()).collect();
+            if open.is_empty() {
+                continue;
+            }
+            affected = true;
+            p.vulnerable_packages += 1;
+            for a in open {
+                *p.by_severity.entry(a.severity.clone()).or_default() += 1;
+                p.top.push(PortfolioFinding {
+                    project: key.clone(),
+                    ecosystem: d.ecosystem.clone(),
+                    package: d.name.clone(),
+                    version: d.version.clone(),
+                    advisory: a.id.clone(),
+                    summary: a.summary.clone(),
+                    severity: a.severity.clone(),
+                    fixed_in: a.fixed_in.clone(),
+                    url: a.url.clone(),
+                });
+            }
+        }
+        p.projects_affected += usize::from(affected);
+    }
+    let rank = |s: &str| {
+        ["blocker", "critical", "major", "minor", "info"]
+            .iter()
+            .position(|x| *x == s)
+            .unwrap_or(5)
+    };
+    p.top.sort_by(|a, b| {
+        rank(&a.severity).cmp(&rank(&b.severity)).then_with(|| {
+            (&a.project, &a.package, &a.advisory).cmp(&(&b.project, &b.package, &b.advisory))
+        })
+    });
+    p.top.truncate(TOP_FINDINGS);
+    Ok(p)
 }
 
 #[cfg(test)]

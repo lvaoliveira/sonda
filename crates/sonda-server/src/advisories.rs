@@ -184,6 +184,27 @@ pub struct Finding {
     /// The database, for attribution.
     pub source: String,
     pub url: String,
+    /// A person's triage; null while open and unreviewed.
+    pub review: Option<Review>,
+}
+
+/// A triage decision on a finding, for a project's package and advisory.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Review {
+    /// `open`, `confirmed` or `accepted`.
+    pub status: String,
+    /// Why it was accepted (or confirmed).
+    pub reason: Option<String>,
+    pub reviewed_by: String,
+    pub reviewed_at: String,
+}
+
+impl Finding {
+    /// Accepted findings stay listed but don't count.
+    pub fn accepted(&self) -> bool {
+        self.review.as_ref().is_some_and(|r| r.status == "accepted")
+    }
 }
 
 /// What the advisories say about one dependency.
@@ -252,6 +273,7 @@ pub async fn check(
                 cwe,
                 fixed_in: None,
                 source,
+                review: None,
             },
             package,
         ));
@@ -331,6 +353,7 @@ mod tests {
             fixed_in: None,
             source: String::new(),
             url: String::new(),
+            review: None,
         }
     }
 
