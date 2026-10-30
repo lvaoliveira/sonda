@@ -9,7 +9,7 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 59
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 93
   rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
@@ -133,6 +133,14 @@ file, the report formats and the public library API.
   tests, disabled TLS verification and weak hashes. Each was reviewed for
   false positives on real projects and about 120 MB of third-party
   JavaScript.
+- JavaScript/TypeScript: 34 rules equivalent to SonarQube's default-profile
+  code smells, such as switch fall-through, empty functions and blocks,
+  nested ternaries, labels, legacy octal, `isNaN()`, and bare
+  `eslint-disable` comments. The JSX loading/empty/list idiom
+  (`{a ? <X/> : b ? <Y/> : <Z/>}`) is not reported as a nested ternary.
+- Rules can report a node inside the one their query captures, so rules
+  that match a container (a switch, an object) point at the offending case
+  or member.
 - Each language's rule queries are matched in a single pass over the file
   instead of one pass per rule. With the 28 new rules, a scan of 120 MB of
   JavaScript is 30% faster than before them, and a 20,000-term expression

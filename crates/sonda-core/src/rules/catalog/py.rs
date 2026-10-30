@@ -118,7 +118,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: "(except_clause) @match",
-            filter: Some(bare_except),
+            filter: Some(Keep(bare_except)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -138,7 +138,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: "(comparison_operator (none)) @match",
-            filter: Some(has_equality_operator),
+            filter: Some(Keep(has_equality_operator)),
         },
         example: Some(Example {
             lang: Lang::Python,

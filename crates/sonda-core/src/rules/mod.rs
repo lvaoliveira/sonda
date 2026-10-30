@@ -14,9 +14,16 @@ pub(crate) const FUNCTION_LENGTH: &str = "common/function-length";
 pub(crate) const TOO_MANY_PARAMETERS: &str = "common/too-many-parameters";
 pub(crate) const TODO_COMMENT: &str = "common/todo-comment";
 
-/// Extra check on the node captured as `@match`; the issue is reported
-/// only when the filter returns true.
-pub(crate) type Filter = fn(Node, &[u8]) -> bool;
+/// Extra check on the node captured as `@match`.
+#[derive(Clone, Copy)]
+pub(crate) enum Filter {
+    /// Reports the captured node when this returns true.
+    Keep(fn(Node, &[u8]) -> bool),
+    /// Reports the node this returns, usually inside the captured one: a
+    /// rule can capture a container, which is cheap to match, and point at
+    /// the offending child.
+    Find(for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>),
+}
 
 pub(crate) enum Check {
     /// A tree-sitter query; every `@match` capture becomes an issue.

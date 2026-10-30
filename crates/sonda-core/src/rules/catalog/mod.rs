@@ -7,6 +7,7 @@ mod java;
 mod js;
 mod py;
 
+pub(super) use super::Filter::{Find, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
 pub(super) use crate::lang::{C_CPP, C_ONLY, JAVA, JS_TS, Lang, PYTHON, TS};
 pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
