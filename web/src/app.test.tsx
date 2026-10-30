@@ -578,6 +578,14 @@ describe('Overview', () => {
     expect(screen.queryByRole('region', { name: 'Key metrics' })).not.toBeInTheDocument()
   })
 
+  it('colors each metric by how its value stands, not by its trend', async () => {
+    renderAt('/')
+    const metrics = await screen.findByRole('region', { name: 'Key metrics' })
+    const tone = (label: string) => within(metrics).getByRole('button', { name: new RegExp(`^${label} `) }).dataset.tone
+    // 47 blocker or critical issues, 72.4% coverage, 3.1% duplication.
+    expect([tone('Blocker \\+ critical'), tone('Coverage'), tone('Duplication')]).toEqual(['crit', 'warn', 'warn'])
+  })
+
   it('opens the drill-down drawer from a metric and closes it with Escape', async () => {
     const user = userEvent.setup()
     renderAt('/')

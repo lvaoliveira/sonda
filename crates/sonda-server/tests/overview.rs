@@ -111,6 +111,13 @@ async fn the_overview_is_built_from_analysis_history() {
         (Some("50"), Some("%"))
     );
     assert_eq!(gate["sub"], "1 of 2 projects pass");
+    // Tones say how each value stands, whatever its trend. Debt is critical:
+    // a few lines carrying several issues.
+    let tones: Vec<&str> = ["gate", "critical", "vulns", "coverage", "dup", "debt"]
+        .iter()
+        .map(|m| kpi(&o, m)["tone"].as_str().unwrap())
+        .collect();
+    assert_eq!(tones, ["crit", "crit", "crit", "neutral", "ok", "crit"]);
     let coverage = kpi(&o, "coverage");
     assert_eq!(coverage["value"], "—");
     assert!(coverage["sub"].as_str().unwrap().contains("None uploaded"));

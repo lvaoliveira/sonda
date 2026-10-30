@@ -133,6 +133,9 @@ function gateDays() {
   }))
 }
 
+/** How each mock value stands, as the server judges it. */
+const KPI_TONE: Record<DrillMetric, Kpi['tone']> = { gate: 'warn', critical: 'crit', vulns: 'crit', coverage: 'warn', dup: 'warn', debt: 'warn' }
+
 export function overview(scope: Scope, range: Range): Overview {
   const mine = scope === 'mine'
   const kpis: Kpi[] = KPIS[scope].map(([metric, label, value, unit, delta, tone, sub, series]) => ({
@@ -142,6 +145,7 @@ export function overview(scope: Scope, range: Range): Overview {
     unit,
     delta,
     improving: tone === 'good',
+    tone: KPI_TONE[metric],
     sub,
     series,
   }))

@@ -325,6 +325,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The Overview's key metrics were colored by their trend only, so with no
+  change every tile was green, even a 0% gate pass rate. Each tile is now
+  colored by how its value stands (`tone` in `GET /api/overview`), and the
+  delta keeps the trend's color, gray when unchanged.
+
 - On the server's main-branch new code period, an issue first seen after
   the start no longer counts as new unless its line changed since then.
   Rules added in a sonda release made old, untouched code fail the gate
