@@ -1,8 +1,9 @@
 //! The main branch's new code period (ADR-0011): it starts at an analysis
-//! (the project's first, unless an admin moved it), and on the main branch
-//! an issue is new if it was first seen after that. The server recomputes
-//! the issue measures, `new_lines` and the gate of the branch's latest
-//! analysis from it, on upload and when the period moves.
+//! (the first of the project's current version, or the project's first,
+//! unless an admin moved it), and on the main branch an issue is new if it
+//! was first seen after that. The server recomputes the issue measures,
+//! `new_lines` and the gate of the branch's latest analysis from it, on
+//! upload and when the period moves.
 
 use crate::api::{ApiError, Caller};
 use crate::health::{evaluate_gate, rfc3339};
@@ -21,8 +22,11 @@ pub struct Period {
     pub analysis: i64,
     pub sha: String,
     pub analyzed_at: String,
-    /// Moved by an admin, rather than the project's first analysis.
+    /// Moved by an admin, rather than following the project's versions.
     pub reset: bool,
+    /// The version whose first analysis starts the period, when a version
+    /// change started it; otherwise it's the project's first analysis.
+    pub version: Option<String>,
     /// New-code measures the server can't recompute without per-line data;
     /// these keep the scan's own values.
     pub from_scan: &'static [&'static str],
@@ -31,25 +35,46 @@ pub struct Period {
 const FROM_SCAN: &[&str] = &["new_coverage", "new_duplicated_lines_density"];
 
 /// The project's period, if its main branch has an analysis.
+///
+/// Without an admin's start, it's "previous version": the first analysis
+/// of the latest version, after the last analysis with another version.
+/// Analyses without a version don't change it, so a project that never
+/// sends one keeps its first analysis.
 pub async fn period(pool: &PgPool, project: i64) -> Result<Option<Period>, sqlx::Error> {
-    let row: Option<(i64, bool, String, f64)> = sqlx::query_as(
-        "SELECT a.id, p.new_code_since IS NOT NULL, a.commit_sha,
-                extract(epoch FROM a.received_at)::float8
+    let row: Option<(i64, bool, Option<String>, String, f64)> = sqlx::query_as(
+        "WITH main AS (
+             SELECT a.id, a.project_version FROM analyses a JOIN projects p ON p.id = a.project_id
+             WHERE p.id = $1 AND a.branch = p.main_branch),
+         latest AS (
+             SELECT project_version AS v FROM main
+             WHERE project_version IS NOT NULL ORDER BY id DESC LIMIT 1),
+         change AS (
+             SELECT max(m.id) AS before, l.v FROM main m, latest l
+             WHERE m.project_version IS NOT NULL AND m.project_version <> l.v
+             GROUP BY l.v),
+         by_version AS (
+             SELECT min(m.id) AS id, c.v FROM main m, change c
+             WHERE m.id > c.before AND m.project_version = c.v
+             GROUP BY c.v)
+         SELECT a.id, p.new_code_since IS NOT NULL,
+                CASE WHEN p.new_code_since IS NULL THEN (SELECT v FROM by_version) END,
+                a.commit_sha, extract(epoch FROM a.received_at)::float8
          FROM projects p
          JOIN analyses a ON a.id = coalesce(
              p.new_code_since,
-             (SELECT min(f.id) FROM analyses f
-              WHERE f.project_id = p.id AND f.branch = p.main_branch))
+             (SELECT id FROM by_version),
+             (SELECT min(id) FROM main))
          WHERE p.id = $1",
     )
     .bind(project)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(analysis, reset, sha, at)| Period {
+    Ok(row.map(|(analysis, reset, version, sha, at)| Period {
         analysis,
         sha,
         analyzed_at: rfc3339(at),
         reset,
+        version,
         from_scan: FROM_SCAN,
     }))
 }
@@ -175,7 +200,8 @@ async fn new_lines(
 
 #[derive(Deserialize)]
 pub struct PeriodPatch {
-    /// An analysis of the main branch; null for the project's first.
+    /// An analysis of the main branch; null to follow the project's
+    /// versions again (its first analysis, if it has none).
     pub analysis: Option<i64>,
 }
 

@@ -413,6 +413,8 @@ export interface ProjectHistoryPoint {
   id: number
   sha: string
   analyzedAt: string
+  /** The project's version it was uploaded with (`sonda upload --project-version`). */
+  version: string | null
   gate: GateState
   issues: number | null
   coverage: number | null
@@ -439,7 +441,7 @@ export interface ProjectDetail {
   /** The main branch first. */
   branches: { name: string; gate: GateState; ago: string }[]
   languages: { id: string; ncloc: number }[]
-  analysis: { id: number; sha: string; analyzedAt: string; toolVersion: string; newCodeReference: string | null }
+  analysis: { id: number; sha: string; analyzedAt: string; toolVersion: string; newCodeReference: string | null; version: string | null }
   gate: { state: GateState; conditions: GateCondition[] }
   score: number
   ratings: { reliability: Level; security: Level; maintainability: Level; coverage: Level | null }
@@ -458,8 +460,10 @@ export interface NewCodePeriod {
   analysis: number
   sha: string
   analyzedAt: string
-  /** Moved by an admin, rather than the project's first analysis. */
+  /** Moved by an admin, rather than following the project's versions. */
   reset: boolean
+  /** The version whose first analysis starts the period; null when it's the project's first analysis. */
+  version: string | null
   /** New-code measures that keep the scan's values (no per-line data on the server). */
   fromScan: string[]
 }

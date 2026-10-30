@@ -335,9 +335,13 @@ a push, or the merge base (ADR-0010). The main branch also gets a long-term
 view, as in SonarQube: a **new code period** that starts at an analysis
 ([ADR-0011](adr/0011-new-code-period.md)).
 
-- **The default start is the project's first analysis.** What was there
-  then is accepted, and an issue first seen after it is new until it's
-  fixed. Nothing ages out.
+- **The default start is the first analysis of the project's current
+  version** ("previous version", SonarQube's default). Upload with
+  `--project-version 2.3.0`: the period restarts at the first main-branch
+  analysis after the last one with a different version. Uploads without a
+  version don't count, so without versions it's the project's first
+  analysis. What was there at the start is accepted, and an issue first
+  seen after it is new until it's fixed. Nothing ages out.
 - **What the server computes.** On each main-branch upload, it marks issues
   new or not (so the Issues page, drill-downs and filters agree) and
   recounts the new-issue measures. It also computes `new_lines`, by diffing
@@ -348,12 +352,13 @@ view, as in SonarQube: a **new code period** that starts at an analysis
   the server has no per-line data for them. The project page says so.
 - **Admins can move the start** to a later analysis of the main branch, for
   example after a cleanup: `PUT /api/projects/{key}/new-code` with
-  `{"analysis": id}`, or `null` for the first analysis. It's on the project
-  page under Measures → New code, and every move is recorded with who made
-  it.
+  `{"analysis": id}`. That start wins over versions until an admin sends
+  `null`, which goes back to following them. It's on the project page under
+  Measures → New code, and every move is recorded with who made it.
 - **The API:** `GET /api/projects/{key}` returns `newCodePeriod` on the
-  main branch (its starting analysis, whether an admin moved it, and which
-  measures come from the scan), and `null` on other branches.
+  main branch (its starting analysis, whether an admin moved it, the
+  version that started it, and which measures come from the scan), and
+  `null` on other branches. Analyses carry their `version`.
 
 ## Known vulnerabilities
 

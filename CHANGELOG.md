@@ -176,6 +176,11 @@ file, the report formats and the public library API.
   stored sources) and the gate on each main-branch upload; coverage and
   duplication on new code keep the scan's values. Admins move the start
   from the project page (`PUT /api/projects/{key}/new-code`), audited.
+- "Previous version" for the server's new code period:
+  `sonda upload --project-version` records the project's version, and on
+  the main branch each new version starts a new period at its first
+  analysis, unless an admin set the start. `sonda_core::upload::Meta` gains
+  a `version` field.
 - A default for new code (ADR-0010): without `--new-code`, `auto` judges
   what the run changed. In a GitHub Actions pull request, that's against
   its base branch; in a push, the commits it pushed; on a branch with

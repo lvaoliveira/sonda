@@ -39,9 +39,13 @@ an analysis of that branch:
   a new major version. This is admin-only, because it accepts the debt up
   to that point, and it's recorded in an audit table with who, when, and
   the old and new start.
-- **"Previous version"** (SonarQube's default) comes in a second phase,
-  once uploads carry a version (`sonda upload --project-version`). The
-  period then restarts at the first analysis of each new version.
+- **"Previous version"** (SonarQube's default) came in a second phase,
+  once uploads carried a version (`sonda upload --project-version`). The
+  period restarts at the first analysis of each new version: the first
+  main-branch analysis after the last one with a different version.
+  Uploads without a version don't count, so a project that never sends
+  one, or only starts to, keeps its first analysis. An admin's start
+  takes precedence until it's cleared.
 - **No "number of days".** It ages issues out, which ADR-0010 rejected.
 
 Other branches are unchanged: their new code is what the CLI computed (the
@@ -88,7 +92,8 @@ pull request, push or merge base), since that's what a branch is judged on.
   with blame data, which sonda doesn't collect.
 - **Cost.** Recomputing on upload means one source diff per changed file
   against the starting analysis, and one query over the branch's issues.
-- **Migration.** A `projects.new_code_since` column (an analysis, null for
-  the first one) and a `new_code_resets` audit table. Existing projects
+- **Migration.** A `projects.new_code_since` column (an analysis, null to
+  follow versions) and a `new_code_resets` audit table, then an
+  `analyses.project_version` column. Existing projects
   start at their first analysis, so their main-branch "new" counts change
   on the next upload.

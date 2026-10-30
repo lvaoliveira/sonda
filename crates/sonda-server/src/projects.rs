@@ -91,6 +91,8 @@ pub struct AnalysisRef {
     pub ago: String,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
+    /// The project's version it was uploaded with.
+    pub version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -108,6 +110,7 @@ pub struct HistoryPoint {
     pub id: i64,
     pub sha: String,
     pub analyzed_at: String,
+    pub version: Option<String>,
     pub gate: &'static str,
     pub issues: Option<f64>,
     pub coverage: Option<f64>,
@@ -198,6 +201,7 @@ type AnalysisRow = (
     Value,
     bool,
     Option<String>,
+    Option<String>,
 );
 
 pub async fn get_project(
@@ -238,7 +242,7 @@ pub async fn get_project(
 
     let mut recent: Vec<AnalysisRow> = sqlx::query_as(
         "SELECT id, commit_sha, extract(epoch FROM received_at)::float8, tool_version,
-                new_code_reference, measures, gate, gate_passed, codeowners
+                new_code_reference, measures, gate, gate_passed, codeowners, project_version
          FROM analyses WHERE project_id = $1 AND branch = $2 ORDER BY id DESC LIMIT $3",
     )
     .bind(project)
@@ -260,10 +264,11 @@ pub async fn get_project(
     let history = recent
         .iter()
         .map(
-            |(id, sha, at, _, _, measures, gate, passed, _)| HistoryPoint {
+            |(id, sha, at, _, _, measures, gate, passed, _, version)| HistoryPoint {
                 id: *id,
                 sha: sha.clone(),
                 analyzed_at: rfc3339(*at),
+                version: version.clone(),
                 gate: gate_state(*passed, gate),
                 issues: measures["issues"].as_f64(),
                 coverage: measures["coverage"].as_f64(),
@@ -272,8 +277,18 @@ pub async fn get_project(
             },
         )
         .collect();
-    let (analysis, sha, at, tool_version, new_code_reference, measures, gate, passed, codeowners) =
-        recent.pop().expect("checked non-empty");
+    let (
+        analysis,
+        sha,
+        at,
+        tool_version,
+        new_code_reference,
+        measures,
+        gate,
+        passed,
+        codeowners,
+        version,
+    ) = recent.pop().expect("checked non-empty");
 
     let files: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT path, language, coalesce((metrics->>'ncloc')::bigint, 0)
@@ -318,6 +333,7 @@ pub async fn get_project(
             ago: ago(now - at),
             tool_version,
             new_code_reference,
+            version,
         },
         gate: GateDetail {
             state: gate_state(passed, &gate),

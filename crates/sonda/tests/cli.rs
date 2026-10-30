@@ -830,7 +830,10 @@ fn upload_sends_the_report_and_sources() {
         "201 Created",
         r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":2}}"#,
     );
-    let result = upload(dir.path(), out.path(), &url).output().unwrap();
+    let result = upload(dir.path(), out.path(), &url)
+        .args(["--project-version", "2.3.0"])
+        .output()
+        .unwrap();
     assert_eq!(code(&result), 0, "{}", stderr(&result));
     assert!(
         stderr(&result).contains("uploaded 1 files for payments/main to http://127.0.0.1:"),
@@ -861,6 +864,7 @@ fn upload_sends_the_report_and_sources() {
     assert_eq!(body["project"], "payments");
     assert_eq!(body["branch"], "main");
     assert_eq!(body["commit"], "0123abc");
+    assert_eq!(body["version"], "2.3.0");
     let report: Value =
         serde_json::from_slice(&std::fs::read(out.path().join("report.json")).unwrap()).unwrap();
     assert_eq!(body["report"], report);

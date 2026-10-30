@@ -30,6 +30,9 @@ pub struct Meta {
     pub branch: String,
     /// The analyzed commit, as hex.
     pub commit: String,
+    /// The project's version, such as `2.3.0`. On the main branch, a new
+    /// version starts a new code period (ADR-0011).
+    pub version: Option<String>,
 }
 
 /// The body of `POST /api/analyses`.
@@ -38,6 +41,8 @@ pub struct Upload {
     pub project: String,
     pub branch: String,
     pub commit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// The JSON report, forwarded as written; the server validates it fully.
     pub report: Value,
     pub sources: Vec<Source>,
@@ -74,13 +79,15 @@ pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Er
         project: meta.project,
         branch: meta.branch,
         commit: meta.commit.to_ascii_lowercase(),
+        version: meta.version,
         report,
         sources,
         codeowners: read_codeowners(root),
     })
 }
 
-/// Checks project, branch and commit; the server applies the same rules.
+/// Checks project, branch, commit and version; the server applies the same
+/// rules.
 pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
     let bad = |msg: String| Err(Error::InvalidArgument(msg));
     let p = &meta.project;
@@ -105,6 +112,13 @@ pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
     let c = &meta.commit;
     if !(7..=64).contains(&c.len()) || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
         return bad(format!("invalid commit {c:?}: expected 7-64 hex digits"));
+    }
+    if let Some(v) = &meta.version
+        && (v.trim().is_empty() || v.len() > 100 || v.chars().any(char::is_control))
+    {
+        return bad(format!(
+            "invalid version {v:?}: use 1-100 characters, not only spaces, no control characters"
+        ));
     }
     Ok(())
 }
@@ -289,6 +303,7 @@ mod tests {
             project: "payments".into(),
             branch: "main".into(),
             commit: "ABCDEF1".into(),
+            version: None,
         }
     }
 
@@ -442,5 +457,9 @@ mod tests {
         assert!(with(|m| m.branch = String::new()).is_err());
         assert!(with(|m| m.commit = "xyz1234".into()).is_err());
         assert!(with(|m| m.commit = "abc".into()).is_err());
+        assert!(with(|m| m.version = Some("2.3.0-rc.1".into())).is_ok());
+        assert!(with(|m| m.version = Some("  ".into())).is_err());
+        assert!(with(|m| m.version = Some("1\n2".into())).is_err());
+        assert!(with(|m| m.version = Some("9".repeat(101))).is_err());
     }
 }

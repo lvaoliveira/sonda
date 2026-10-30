@@ -62,6 +62,7 @@ sonda scan . --sandbox require            # refuse to scan if workers cannot be 
 sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
 sonda upload report.json --server https://sonda.example.com \
   --project payments --branch main --commit "$GITHUB_SHA"   # token from SONDA_TOKEN or SONDA_TOKEN_FILE
+                                          # --project-version 2.3.0: a new version starts a new code period
 ```
 
 Without `--new-code`, sonda picks what new code is compared with ([ADR-0010](docs/adr/0010-default-new-code.md)): in a GitHub Actions pull request, its base branch; in a push, the commits it pushed; on a branch with commits its default branch lacks, their merge base; otherwise (a local run on `main`, say) uncommitted changes. The report says which it used. `--new-code none` (or `scan.new_code = "none"`) counts the whole project as new code.

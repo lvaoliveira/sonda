@@ -182,7 +182,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
       subtitle={
         scope === 'newCode'
           ? period
-            ? `${formatNumber(m.lines ?? 0)} new lines since ${shortDate(period.analyzedAt)} (${period.reset ? 'set by an admin' : 'the first analysis'})`
+            ? `${formatNumber(m.lines ?? 0)} new lines since ${shortDate(period.analyzedAt)} (${period.reset ? 'set by an admin' : period.version ? `version ${period.version}` : 'the first analysis'})`
             : `${formatNumber(m.lines ?? 0)} new lines${p.analysis.newCodeReference ? ` since ${p.analysis.newCodeReference}` : ''}`
           : `${formatNumber(m.lines ?? 0)} lines of code`
       }
@@ -265,7 +265,8 @@ function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCode
         <Link to={`/analyses/${period.analysis}`} className="font-mono text-xs">
           {period.sha.slice(0, 9)}
         </Link>{' '}
-        ({shortDate(period.analyzedAt)}) are new; what was there then is accepted. Coverage and duplication on new code come from the scan.
+        ({shortDate(period.analyzedAt)}) are new; what was there then is accepted. Unless an admin sets the start, each new version
+        (<code className="text-xs">sonda upload --project-version</code>) starts it again. Coverage and duplication on new code come from the scan.
       </p>
       {isAdmin && (
         <div className="flex flex-wrap items-center gap-2">
@@ -280,7 +281,8 @@ function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCode
           >
             {[...p.history].reverse().map((h) => (
               <option key={h.id} value={h.id}>
-                {h.sha.slice(0, 9)} · {shortDate(h.analyzedAt)}
+                {h.sha.slice(0, 9)} · {h.version ? `${h.version} · ` : ''}
+                {shortDate(h.analyzedAt)}
               </option>
             ))}
           </select>
@@ -289,7 +291,7 @@ function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCode
           </Button>
           {period.reset && (
             <Button onClick={() => void move(null)} disabled={busy}>
-              Back to the first analysis
+              Back to the default start
             </Button>
           )}
           <span className="text-xs text-fg-faint">Accepts the issues present then. Recorded with your name.</span>
