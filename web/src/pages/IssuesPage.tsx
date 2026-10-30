@@ -154,7 +154,12 @@ function Issues({ me }: { me: string | null }) {
 
   return (
     <>
-      <PageHeader title="Issues" summary={`${formatNumber(page.total)} ${page.total === 1 ? 'issue matches' : 'issues match'} · each project's main branch`}>
+      <PageHeader
+        title="Issues"
+        summary={`${formatNumber(page.total)} ${page.total === 1 ? 'issue matches' : 'issues match'} · ${
+          filter.project ? `${filter.project} on ${filter.branch ?? 'its main branch'}` : "each project's main branch"
+        }`}
+      >
         <div className="flex items-center gap-2">
           <Button onClick={() => setShowFacets(!showFacets)}>{showFacets ? 'Hide filters' : 'Filters'}</Button>
           <span className="text-xs text-fg-faint">

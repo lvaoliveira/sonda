@@ -224,6 +224,33 @@ CODEOWNERS file, owners are null.
 
 In the web app, a file opens its issues.
 
+## Projects
+
+`GET /api/projects` lists every project as of its main branch's latest
+analysis:
+- gate state, score and ratings (computed as the Overview computes them:
+  from the issue tracker, accepted issues excluded);
+- coverage, duplication, open issues, lines of code and languages;
+- when it was analyzed.
+
+The response also lists every language in any project, for filters.
+
+`GET /api/projects/{key}?branch=` is one project on one branch (its main
+branch by default). It returns:
+- the analyzed branches;
+- the latest analysis: commit, tool version, new-code reference;
+- the gate's conditions with their actual values;
+- the measures, overall and on new code;
+- the branch's last 12 analyses;
+- its components: top-level directories with languages, files, lines, open
+  issues, debt, and owners from the uploaded CODEOWNERS file.
+
+An unknown project is `404`; a branch without analyses is `400`, naming
+the analyzed branches.
+
+`GET /api/issues` takes `project=` and `branch=` to list one project's
+issues, which is how the project page links to them.
+
 ## Rules
 
 `GET /api/rules` returns sonda's rule catalog: name, description, languages

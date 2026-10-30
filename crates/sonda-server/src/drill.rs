@@ -4,6 +4,7 @@
 //! with each project's latest analysis; null without one.
 
 use crate::api::ApiError;
+use crate::health::component_of;
 use crate::http::State;
 use axum::Json;
 use axum::extract::{Path, Query};
@@ -207,11 +208,6 @@ async fn owners(pool: &sqlx::PgPool) -> Result<Owners, sqlx::Error> {
         }
     }
     Ok(owners)
-}
-
-/// A path's top-level directory, or `.` for files at the root.
-fn component_of(path: &str) -> &str {
-    path.split_once('/').map_or(".", |(c, _)| c)
 }
 
 // ------------------------------------------------------------ issue drills

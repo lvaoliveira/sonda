@@ -32,6 +32,8 @@ function matches(i: IssueSummary, q: IssueQuery, ignore?: FacetKey): boolean {
     const selected = q[key] as string[]
     if (key !== ignore && selected.length > 0 && !selected.includes(i[key])) return false
   }
+  if (q.project && i.project !== q.project) return false
+  if (q.branch && i.branch !== q.branch) return false
   if (q.file && !i.file.includes(q.file)) return false
   if (q.assignee && i.assignee !== q.assignee) return false
   if (q.isNew && !i.isNew) return false
