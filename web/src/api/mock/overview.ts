@@ -279,12 +279,12 @@ export const DRILLS: Record<DrillMetric, Drill> = {
     ['packages/web-checkout', 'payments-platform', '@web-platform', 3, [['src/components/', 'PromoBanner.tsx', 'CWE-79', 'critical', 'Stored XSS via campaign body HTML', 31]]],
     ['services/fraud-scoring', 'payments-platform', '@risk-ml', 2, [['scoring/', 'config.py', 'CWE-502', 'major', 'Unsafe YAML deserialization', 22]]],
   ]),
-  coverage: drill('coverage', 'Coverage 72.4% — where the gaps are', 'Components furthest below the 80% new-code threshold, with their least-covered files.', 'warn', 'Open coverage report', '%', [
-    ['feature_store/ingest', 'ml-feature-store', '@data-platform', 41.7, [['ingest/', 'backfill.py', '12.0%'], ['ingest/', 'kafka_consumer.py', '38.5%']]],
-    ['services/fraud-scoring', 'payments-platform', '@risk-ml', 48.9, [['scoring/', 'config.py', '22.0%'], ['scoring/', 'model.py', '51.3%']]],
-    ['pipelines/nightly', 'data-pipeline', '@data-platform', 52.3, [['dags/', 'reconcile_ledger.py', '30.4%']]],
-    ['billing-service', 'billing-service', '@billing', 58.4, [['invoice/', 'InvoiceCalculator.java', '44.9%']]],
-    ['services/checkout-api', 'payments-platform', '@checkout', 61.3, [['internal/tender/', 'split.go', '38.6%'], ['internal/orders/', 'repo.go', '42.1%']]],
+  // As the server sends it: one item per project (its branch below it), lowest first.
+  coverage: drill('coverage', 'Coverage by project', 'Lowest first, with each project’s least covered files.', 'warn', 'Open the coverage report', '%', [
+    ['ml-feature-store', 'main', '@data-platform', 41.7, [['feature_store/ingest/', 'backfill.py', '12.0%'], ['feature_store/ingest/', 'kafka_consumer.py', '38.5%']]],
+    ['data-pipeline', 'main', '@data-platform', 52.3, [['pipelines/nightly/dags/', 'reconcile_ledger.py', '30.4%']]],
+    ['billing-service', 'main', '@billing', 58.4, [['src/invoice/', 'InvoiceCalculator.java', '44.9%']]],
+    ['payments-platform', 'main', '@checkout', 69.8, [['src/billing/', 'refunds.ts', '0.0%'], ['scripts/', 'migrate.ts', '0.0%']]],
   ], true),
   dup: drill('dup', 'Duplication 3.1% of lines', 'Mostly copy-pasted request handlers.', 'warn', 'Open duplication report', '%', [
     ['mobile-bff', 'mobile-bff', '@mobile', 8.8, [['src/routes/', 'orders.ts', '14.2%'], ['src/routes/', 'returns.ts', '13.7%']]],
