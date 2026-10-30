@@ -93,7 +93,9 @@ Per-user or per-project tokens can replace it later.
 ### Later: SSO
 
 OpenID Connect will add an `identities` table (provider, subject, user id).
-A user can then sign in with a password, through SSO, or both. Nothing here
+A user can then sign in with a password, through SSO, or both. It's
+deferred: the design sketch and the decisions still open are in
+[docs/roadmap.md](../roadmap.md#single-sign-on-openid-connect). Nothing here
 needs to change for that, so the table is not created until it's used.
 
 ## Consequences
