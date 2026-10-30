@@ -68,6 +68,7 @@ describe('format', () => {
   it('compacts navigation counts', () => {
     expect(compactCount(312)).toBe('312')
     expect(compactCount(1342)).toBe('1.3k')
+    expect(compactCount(1_023_000)).toBe('1.0M')
     expect(compactCount(25_400)).toBe('25k')
   })
 })

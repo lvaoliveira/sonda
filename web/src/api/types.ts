@@ -202,6 +202,10 @@ export type FacetKey = 'severity' | 'category' | 'status' | 'component'
 
 /** Filters and paging for `issues()`. Empty lists match everything. */
 export interface IssueQuery {
+  /** A project key; all projects when absent. */
+  project?: string
+  /** A branch; each project's main branch when absent. */
+  branch?: string
   severity: Severity[]
   category: Category[]
   status: IssueStatus[]
@@ -345,6 +349,96 @@ export interface Session {
 /** Passwords need at least this many characters (ADR-0006). */
 export const MIN_PASSWORD_LENGTH = 12
 
+// ---------------------------------------------------------------- projects
+
+/** A project as of its main branch's latest analysis. */
+export interface ProjectRow {
+  key: string
+  mainBranch: string
+  /** Languages by lines of code, most first. */
+  languages: string[]
+  gate: GateState
+  score: number
+  reliability: Level
+  security: Level
+  maintainability: Level
+  /** Null without an uploaded coverage report. */
+  coverage: number | null
+  duplication: number | null
+  /** Open and confirmed issues on the main branch. */
+  issues: number
+  ncloc: number
+  analyzedAt: string
+}
+
+export interface ProjectList {
+  projects: ProjectRow[]
+  /** Every language in any project, most code first. */
+  languages: string[]
+}
+
+export type ConditionStatus = 'ok' | 'error' | 'no_data'
+
+export interface GateCondition {
+  /** "New vulnerabilities > 0". */
+  label: string
+  metric: string
+  actual: number | null
+  status: ConditionStatus
+}
+
+/** Null where the analysis has no value: no coverage uploaded, or no new code. */
+export interface MeasureSet {
+  lines: number | null
+  issues: number | null
+  bugs: number | null
+  vulnerabilities: number | null
+  codeSmells: number | null
+  coverage: number | null
+  duplication: number | null
+  debtMinutes: number | null
+}
+
+export interface ProjectHistoryPoint {
+  id: number
+  sha: string
+  analyzedAt: string
+  gate: GateState
+  issues: number | null
+  coverage: number | null
+  duplication: number | null
+  debtMinutes: number | null
+}
+
+/** A project's top-level directory. */
+export interface ProjectComponent {
+  path: string
+  languages: string[]
+  files: number
+  ncloc: number
+  /** From the CODEOWNERS file uploaded with the analysis. */
+  owner: string | null
+  issues: number
+  debtMinutes: number
+}
+
+export interface ProjectDetail {
+  key: string
+  mainBranch: string
+  branch: string
+  /** The main branch first. */
+  branches: { name: string; gate: GateState; ago: string }[]
+  languages: { id: string; ncloc: number }[]
+  analysis: { id: number; sha: string; analyzedAt: string; toolVersion: string; newCodeReference: string | null }
+  gate: { state: GateState; conditions: GateCondition[] }
+  score: number
+  ratings: { reliability: Level; security: Level; maintainability: Level; coverage: Level | null }
+  measures: { overall: MeasureSet; newCode: MeasureSet }
+  /** The branch's latest analyses, oldest first. */
+  history: ProjectHistoryPoint[]
+  components: ProjectComponent[]
+}
+
 // ------------------------------------------------------------------ client
 
 export interface SondaApi {
@@ -362,6 +456,9 @@ export interface SondaApi {
   /** Absent until the server keeps analysis history for it (ADR-0005, phase 3). */
   overview?(scope: Scope, range: Range): Promise<Overview>
   drill?(metric: DrillMetric, scope: Scope): Promise<Drill>
+  projects(): Promise<ProjectList>
+  /** The project on `branch`, or on its main branch. */
+  project(key: string, branch?: string): Promise<ProjectDetail>
   issues(query: IssueQuery): Promise<IssuePage>
   issue(id: number): Promise<IssueDetail>
   updateIssue(id: number, patch: IssuePatch): Promise<IssueDetail>

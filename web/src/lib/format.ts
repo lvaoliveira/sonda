@@ -6,8 +6,16 @@ export function formatEffort(minutes: number): string {
   return m ? `${h}h ${m}m` : `${h}h`
 }
 
-/** Compact counts for navigation badges: 1342 → "1.3k". */
+/** Debt like the Overview: working days (8 hours) or hours, "22d", "5h", "40min". */
+export function formatDebt(minutes: number): string {
+  if (minutes >= 480) return `${Math.round(minutes / 480)}d`
+  if (minutes >= 60) return `${Math.round(minutes / 60)}h`
+  return `${Math.round(minutes)}min`
+}
+
+/** Compact counts for navigation badges and sizes: 1342 → "1.3k", 1_023_000 → "1.0M". */
 export function compactCount(n: number): string {
+  if (n >= 999_500) return `${(n / 1_000_000).toFixed(1)}M`
   if (n < 1000) return String(n)
   const k = n / 1000
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`

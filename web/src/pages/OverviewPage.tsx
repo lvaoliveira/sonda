@@ -510,7 +510,13 @@ function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: n
             </span>
             <span className="flex min-w-0 flex-col leading-[1.3]">
               <span className="flex items-baseline gap-2">
-                <span className={child ? 'font-mono text-xs' : 'text-sm font-semibold'}>{p.name}</span>
+                {child ? (
+                  <span className="font-mono text-xs">{p.name}</span>
+                ) : (
+                  <Link to={`/projects/${encodeURIComponent(p.name)}`} onClick={(e) => e.stopPropagation()} className="text-sm font-semibold text-fg">
+                    {p.name}
+                  </Link>
+                )}
                 {!child && p.badge && <span className="rounded-[10px] bg-hover px-[7px] py-px text-[11px] text-fg-muted">{p.badge}</span>}
               </span>
               <span className="text-xs text-fg-faint">{p.sub}</span>

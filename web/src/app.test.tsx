@@ -117,6 +117,58 @@ describe('Rules', () => {
   })
 })
 
+describe('Projects', () => {
+  it('lists projects, filters them by gate, language and name, and keeps the filters in the URL', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects')
+    const table = await screen.findByRole('table')
+    const names = () => within(table).getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('link')[0].textContent)
+    // Lowest score first.
+    expect(names()[0]).toBe('billing-service')
+    expect(names()).toHaveLength(8)
+    await user.click(screen.getByRole('button', { name: /^Blocking/ }))
+    expect(names()).toEqual(['billing-service', 'ml-feature-store', 'payments-platform', 'mobile-bff'])
+    await user.click(screen.getByRole('button', { name: 'Java' }))
+    expect(names()).toEqual(['billing-service'])
+    await user.type(screen.getByRole('textbox', { name: 'Search projects' }), 'zzz')
+    expect(await screen.findByText('No projects match these filters')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(within(await screen.findByRole('table')).getAllByRole('row')).toHaveLength(9)
+  })
+
+  it('opens a project with its gate, measures, history and components', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects')
+    await user.click(await screen.findByRole('link', { name: 'payments-platform' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'payments-platform' })).toBeInTheDocument()
+    expect(screen.getByText(/2 of 4 conditions failing/)).toBeInTheDocument()
+    expect(screen.getAllByRole('img', { name: 'Failing' })).toHaveLength(2)
+    expect(screen.getByRole('heading', { name: 'History' })).toBeInTheDocument()
+    expect(screen.getByText('services/')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'New code' }))
+    expect(screen.getByText(/new lines since origin\/main/)).toBeInTheDocument()
+  })
+
+  it('switches branches through the URL and explains unknown ones', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform')
+    await user.selectOptions(await screen.findByRole('combobox'), 'release/2.4')
+    expect(await screen.findByText(/0 of 4 conditions failing/)).toBeInTheDocument()
+    renderAt('/projects/payments-platform?branch=gone')
+    expect(await screen.findByText(/analyzed branches: main, release\/2.4/)).toBeInTheDocument()
+  })
+
+  it("links a project's issues to the Issues page, filtered to it", async () => {
+    renderAt('/issues?project=billing-service')
+    expect(await screen.findByText(/Showing billing-service — from the metric you clicked/)).toBeInTheDocument()
+    expect(screen.getByText(/billing-service on its main branch/)).toBeInTheDocument()
+    // billing-service has two of the mock's issues; the accepted one is filtered out by default.
+    const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveTextContent('StripeConfig.java')
+  })
+})
+
 describe('Signing in', () => {
   it('requires a username and password when the server requires them to read', async () => {
     const user = userEvent.setup()

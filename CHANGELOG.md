@@ -152,6 +152,13 @@ file, the report formats and the public library API.
 - Vulnerability rules skip test files (`*.test.*`, `*.spec.*`, `test_*.py`,
   `*_test.*`, and `test`, `tests`, `__tests__`, `spec` or `__mocks__`
   directories), where credentials and weak settings are fixtures.
+- Web app: the Projects screen lists every project with its gate, score,
+  ratings, coverage, duplication, issues and size, filtered by gate,
+  language and name (kept in the URL). A project's page shows its gate
+  conditions, measures overall and on new code, its last 12 analyses, and
+  its components with owners, per branch. `GET /api/projects` and
+  `GET /api/projects/{key}` serve them, and `GET /api/issues` takes
+  `project=` and `branch=`.
 - Rules with the same query share one compiled pattern, so the tree is
   matched against it once.
 - Rules can report a node inside the one their query captures, so rules

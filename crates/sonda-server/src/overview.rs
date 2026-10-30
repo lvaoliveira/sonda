@@ -8,14 +8,15 @@
 //! days and weekly for 90.
 
 use crate::api::ApiError;
+use crate::health::{
+    self, DAY, ago, condition_label, coverage_level, debt_level, debt_text, iso_date, plural,
+};
 use crate::http::State;
 use axum::Json;
 use axum::extract::Query;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
-
-const DAY: f64 = 86_400.0;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -479,13 +480,7 @@ fn more(n: usize) -> String {
 
 /// Passed, failed, or partial: passed with some condition lacking data.
 fn gate_state(a: &Analysis) -> &'static str {
-    if !a.passed {
-        "failed"
-    } else if a.conditions("no_data").is_empty() {
-        "passed"
-    } else {
-        "partial"
-    }
+    health::gate_state(a.passed, &a.gate)
 }
 
 fn step(days: u32) -> f64 {
@@ -539,13 +534,7 @@ fn ratings(latest: &[&Analysis], issues: &[TrackedIssue]) -> Ratings {
                     && i.fixed_at.is_none()
                     && !i.accepted
             })
-            .map(|i| match i.severity.as_str() {
-                "blocker" => 1,
-                "critical" => 2,
-                "major" => 3,
-                "minor" => 4,
-                _ => 5,
-            })
+            .map(|i| health::severity_level(Some(&i.severity)))
             .min()
             .unwrap_or(5)
     };
@@ -655,34 +644,8 @@ fn ratings(latest: &[&Analysis], issues: &[TrackedIssue]) -> Ratings {
     }
 }
 
-fn debt_level(ratio: f64) -> u8 {
-    match ratio {
-        r if r <= 0.05 => 5,
-        r if r <= 0.10 => 4,
-        r if r <= 0.20 => 3,
-        r if r <= 0.50 => 2,
-        _ => 1,
-    }
-}
-
-fn coverage_level(pct: f64) -> u8 {
-    match pct {
-        p if p >= 80.0 => 5,
-        p if p >= 70.0 => 4,
-        p if p >= 60.0 => 3,
-        p if p >= 50.0 => 2,
-        _ => 1,
-    }
-}
-
-/// The web app's project score (`projectScore` in web/src/lib/visual.ts):
-/// ratings weigh 70% and coverage 30%, or ratings alone without coverage.
 fn project_score(p: &ProjectHealth) -> f64 {
-    let ratings = f64::from(p.reliability + p.security + p.maintainability) / 15.0;
-    match p.coverage {
-        Some(c) => ratings * 70.0 + c * 0.3,
-        None => ratings * 100.0,
-    }
+    health::project_score([p.reliability, p.security, p.maintainability], p.coverage)
 }
 
 // -------------------------------------------------------------------- KPIs
@@ -852,17 +815,6 @@ fn signed(change: f64, fmt: &dyn Fn(f64) -> String, unit: &str) -> String {
         return "no change".into();
     }
     format!("{}{text}{unit}", if change > 0.0 { "+" } else { "−" })
-}
-
-/// Debt in working days (8 hours) or hours: "12d", "5h", "40min".
-fn debt_text(minutes: f64) -> String {
-    if minutes >= 480.0 {
-        format!("{:.0}d", minutes / 480.0)
-    } else if minutes >= 60.0 {
-        format!("{:.0}h", minutes / 60.0)
-    } else {
-        format!("{minutes:.0}min")
-    }
 }
 
 // --------------------------------------------------------- flow, gates, focus
@@ -1069,139 +1021,10 @@ fn drill_for(metric: &str) -> &'static str {
     }
 }
 
-/// "New vulnerabilities > 0", from a stored gate condition.
-fn condition_label(c: &Value) -> String {
-    let metric = c["metric"].as_str().unwrap_or("?");
-    let name = match metric {
-        "new_coverage" => "Coverage on new code".to_string(),
-        "new_duplicated_lines_density" => "Duplication on new code".to_string(),
-        "duplicated_lines_density" => "Duplication".to_string(),
-        m => {
-            let words = m.replace('_', " ");
-            let mut chars = words.chars();
-            chars.next().map_or_else(String::new, |f| {
-                f.to_uppercase().collect::<String>() + chars.as_str()
-            })
-        }
-    };
-    let op = match c["op"].as_str().unwrap_or("") {
-        "gt" => ">",
-        "lt" => "<",
-        "ge" | "gte" => "≥",
-        "le" | "lte" => "≤",
-        "eq" => "=",
-        other => other,
-    };
-    let threshold = c["threshold"].as_f64().map_or_else(String::new, |t| {
-        if t.fract() == 0.0 {
-            format!("{t:.0}")
-        } else {
-            format!("{t}")
-        }
-    });
-    let unit = if metric.contains("coverage") || metric.contains("density") {
-        "%"
-    } else {
-        ""
-    };
-    format!("{name} {op} {threshold}{unit}")
-}
-
 // ----------------------------------------------------------------- formats
-
-fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
-    if n == 1 { one } else { many }
-}
-
-/// Compact age, as the web app's `formatAge`: "12m", "3h", "2d", "3w", "4mo", "2y".
-fn ago(seconds: f64) -> String {
-    let minutes = (seconds.max(0.0) / 60.0) as u64;
-    let (hours, days) = (minutes / 60, minutes / 1440);
-    match () {
-        _ if minutes < 60 => format!("{minutes}m"),
-        _ if hours < 24 => format!("{hours}h"),
-        _ if days < 14 => format!("{days}d"),
-        _ if days < 60 => format!("{}w", days / 7),
-        _ if days < 365 => format!("{}mo", days / 30),
-        _ => format!("{}y", days / 365),
-    }
-}
-
-/// The UTC date of `epoch` as midnight in ISO 8601, e.g.
-/// `2026-10-30T00:00:00.000Z` (civil-from-days, Howard Hinnant's algorithm).
-fn iso_date(epoch: f64) -> String {
-    let days = (epoch / DAY).floor() as i64;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}T00:00:00.000Z")
-}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn dates_and_ages() {
-        assert_eq!(iso_date(0.0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(
-            iso_date(1_793_318_400.0 + 3600.0),
-            "2026-10-30T00:00:00.000Z"
-        );
-        assert_eq!(iso_date(951_782_400.0), "2000-02-29T00:00:00.000Z");
-        assert_eq!(
-            [
-                30.0,
-                7_200.0,
-                3.0 * DAY,
-                20.0 * DAY,
-                100.0 * DAY,
-                800.0 * DAY
-            ]
-            .map(ago),
-            ["0m", "2h", "3d", "2w", "3mo", "2y"]
-        );
-    }
-
-    #[test]
-    fn rating_bands_follow_adr_0005() {
-        assert_eq!(
-            [0.05, 0.051, 0.10, 0.2, 0.5, 0.51].map(debt_level),
-            [5, 4, 4, 3, 2, 1]
-        );
-        assert_eq!(
-            [80.0, 79.9, 70.0, 60.0, 50.0, 49.9].map(coverage_level),
-            [5, 4, 4, 3, 2, 1]
-        );
-    }
-
-    #[test]
-    fn gate_conditions_read_like_the_design() {
-        let c =
-            |metric: &str, op: &str, t: f64| json!({ "metric": metric, "op": op, "threshold": t });
-        assert_eq!(
-            condition_label(&c("new_vulnerabilities", "gt", 0.0)),
-            "New vulnerabilities > 0"
-        );
-        assert_eq!(
-            condition_label(&c("new_coverage", "lt", 80.0)),
-            "Coverage on new code < 80%"
-        );
-        assert_eq!(
-            condition_label(&c("new_duplicated_lines_density", "gt", 3.0)),
-            "Duplication on new code > 3%"
-        );
-        assert_eq!(drill_for("new_vulnerabilities"), "vulns");
-        assert_eq!(drill_for("new_critical_issues"), "critical");
-    }
-
     #[test]
     fn deltas_are_signed_or_no_change() {
         let whole = |v: f64| format!("{v:.0}");
@@ -1210,7 +1033,13 @@ mod tests {
         assert_eq!(signed(-12.0, &whole, ""), "−12");
         assert_eq!(signed(0.0, &whole, ""), "no change");
         assert_eq!(signed(0.04, &tenth, " pts"), "no change");
-        assert_eq!(debt_text(4094.0), "9d");
-        assert_eq!(debt_text(90.0), "2h");
     }
+
+    #[test]
+    fn conditions_point_at_their_drill_down() {
+        assert_eq!(drill_for("new_vulnerabilities"), "vulns");
+        assert_eq!(drill_for("new_critical_issues"), "critical");
+    }
+
+    use super::*;
 }

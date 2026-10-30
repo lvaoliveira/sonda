@@ -82,16 +82,15 @@ user's `password_hash` is nullable, and accounts are never deleted.
 
 | Item | Why it waits | Where it plugs in |
 |---|---|---|
-| **Owners from CODEOWNERS** | Nothing records owners; drill-downs show none. | Upload `.github/CODEOWNERS` with the report and match paths. Fills `DrillComponent.owner`. |
 | **Teams** | No teams, so the Overview has no "My team" scope. | Teams as user groups and project ownership; the Overview's `teams` flag. |
 | **Health score change** | Needs ratings history, which the server does not reconstruct yet. | Compute ratings per stored analysis; fills `health.delta` and "vs N days ago". |
 | **Per-file coverage** | Reports carry coverage per project only. | Add per-file coverage to the report (from LCOV); the coverage drill-down lists files. |
 | **Commit messages and scan durations** | Not uploaded; Recent analyses shows "—". | `sonda upload` sends `git log -1` and the scan duration. |
-| **Overview layout gaps** | At widths that fit exactly two columns, three cards sit beside an empty half (the two-up grid). | `twoUp` in `OverviewPage.tsx`; mock data shows it too. |
-| **Remaining screens** | Projects, Components, Security, Analyses and Quality gates show "not built yet". | One per increment, from `docs/designs/`. |
+| **Remaining screens** | Components, Security, Analyses and Quality gates show "not built yet". | One per increment, from `docs/designs/`, built from the data the server has (decided 2026-10-30). |
+| **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, analysis stages and logs, hotspots, CWE/OWASP mapping and reachability. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
+| **Narrow screens** | The app shell keeps its sidebar at phone widths, so pages scroll sideways. | Collapse the sidebar into a menu below a breakpoint, in `AppShell`. |
 | **Server-managed rule profiles** | Rules are configured per repository in `sonda.toml`; the Rules page is read-only. | A profile `sonda scan` downloads; decide what wins over `sonda.toml`. |
 | **Per-user or per-project API tokens** | One server token serves every upload (ADR-0006). | Tokens owned by users or projects, revocable, shown once. |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |
-| **Branch protection on `main`** | Nothing requires CI to pass before merging (#9 merged a failing build). | A repository setting: required status checks. |
