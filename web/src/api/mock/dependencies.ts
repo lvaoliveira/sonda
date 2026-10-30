@@ -1,4 +1,4 @@
-import type { Advisory, DependencyList, DependencyRow, DependencySummary, ProjectDetail } from '../types'
+import type { Advisory, DependencyList, DependencyReview, DependencyReviewPatch, DependencyRow, DependencySummary, ProjectDetail } from '../types'
 
 type Seed = [ecosystem: string, name: string, version: string, direct: boolean | null, license: string | null, lockfiles: string[]]
 
@@ -44,6 +44,7 @@ const ADVISORIES: Record<string, Advisory[]> = {
       fixedIn: '4.17.21',
       source: 'GitHub Advisory Database (CC-BY 4.0)',
       url: 'https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm',
+      review: null,
     },
   ],
   requests: [
@@ -57,6 +58,7 @@ const ADVISORIES: Record<string, Advisory[]> = {
       fixedIn: '2.32.0',
       source: 'GitHub Advisory Database (CC-BY 4.0)',
       url: 'https://osv.dev/vulnerability/GHSA-9wx4-h78v-vm56',
+      review: null,
     },
   ],
 }
@@ -79,7 +81,7 @@ export function summarize(rows: DependencyRow[]): DependencySummary {
   return {
     total: rows.length,
     direct: rows.filter((r) => r.direct === true).length,
-    vulnerable: rows.filter((r) => r.advisories.length > 0).length,
+    vulnerable: rows.filter((r) => r.advisories.some((a) => a.review?.status !== 'accepted')).length,
     ecosystems: [...counts].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
   }
 }
@@ -115,4 +117,13 @@ export function dependencyList(p: ProjectDetail): DependencyList {
       ],
     },
   }
+}
+
+/** Records a review on the shared mock data, as the server would. */
+export function reviewDependency(patch: DependencyReviewPatch, by: string): DependencyReview {
+  if (patch.status === 'accepted' && !patch.reason?.trim()) throw new Error('accepting a vulnerability needs a reason')
+  const advisory = (ADVISORIES[patch.name] ?? []).find((a) => a.id === patch.advisory)
+  if (!advisory) throw new Error('not found')
+  advisory.review = { status: patch.status, reason: patch.reason?.trim() || null, reviewedBy: by, reviewedAt: new Date().toISOString() }
+  return advisory.review
 }

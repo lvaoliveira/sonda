@@ -65,6 +65,10 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         ));
     let triage = Router::new()
         .route("/issues/{id}", patch(issues::patch_issue))
+        .route(
+            "/projects/{key}/dependencies/reviews",
+            patch(dependencies::patch_review),
+        )
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

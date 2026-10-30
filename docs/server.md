@@ -384,6 +384,23 @@ advisories (id, aliases, summary, severity, CWE ids, source, and
 `advisoryData` (when advisories were last imported, and how many), and
 `summary.vulnerable`. The project summary carries `vulnerable` too.
 
+`PATCH /api/projects/{key}/dependencies/reviews` triages a finding, like
+an issue. The body is `{ecosystem, name, advisory, status, reason}`, where
+status is `open`, `confirmed` or `accepted`.
+- **Who:** it needs the same rights as changing an issue.
+- **Accepting** needs a reason of at most 500 characters.
+- **Scope:** a review covers the project's package and that advisory on
+  every branch, and lasts through rescans and through upgrades that stay
+  vulnerable.
+- **Counts:** accepted findings stay listed with their review, but don't
+  count as vulnerable.
+- **Audit:** every change is recorded with who made it.
+
+`GET /api/security` adds `dependencies`: open and confirmed findings
+across each project's main branch, by severity, with how many packages
+and projects they affect, the ten most severe, and when advisories were
+last imported.
+
 ## Analyses
 
 `GET /api/analyses` lists stored analyses, newest first, 50 at a time

@@ -490,6 +490,44 @@ export interface Advisory {
   /** The database, for attribution. */
   source: string
   url: string
+  /** A person's triage; null while open and unreviewed. */
+  review: DependencyReview | null
+}
+
+export interface DependencyReview {
+  status: 'open' | 'confirmed' | 'accepted'
+  /** Required when accepted. */
+  reason: string | null
+  reviewedBy: string
+  reviewedAt: string
+}
+
+export interface DependencyReviewPatch {
+  ecosystem: string
+  name: string
+  advisory: string
+  status: DependencyReview['status']
+  reason?: string
+}
+
+/** Known vulnerabilities across every project's main branch; accepted ones left out. */
+export interface DependencyPortfolio {
+  bySeverity: Partial<Record<Severity, number>>
+  vulnerablePackages: number
+  projectsAffected: number
+  /** Most severe first. */
+  top: {
+    project: string
+    ecosystem: string
+    package: string
+    version: string
+    advisory: string
+    summary: string
+    severity: Severity
+    fixedIn: string | null
+    url: string
+  }[]
+  advisoryData: { importedAt: string; advisories: number } | null
 }
 
 export interface PackageVersions {
@@ -618,6 +656,8 @@ export interface Security {
   rules: { rule: string; count: number }[]
   /** Per OWASP Top 10 edition, newest first: all ten categories in order (a vulnerability counts in every category its rule relates to), and how many have none. */
   owasp: { year: number; categories: { id: string; title: string; count: number; rules: string[] }[]; unmapped: number }[]
+  /** Known vulnerabilities in the projects' dependencies (ADR-0009). */
+  dependencies: DependencyPortfolio
   /** Medians over vulnerabilities fixed in the last 90 days; null when none was. */
   remediation: { medianDaysSevere: number | null; medianDaysAll: number | null; fixedLast90Days: number }
 }
@@ -726,6 +766,8 @@ export interface SondaApi {
   component(project: string, path: string, branch?: string): Promise<ComponentDetail>
   /** The project's dependencies on `branch`, or on its main branch. */
   dependencies(project: string, branch?: string): Promise<DependencyList>
+  /** Triages one known vulnerability in one of the project's packages. */
+  reviewDependency(project: string, patch: DependencyReviewPatch): Promise<DependencyReview>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>
   analysis(id: number): Promise<AnalysisDetail>
   issues(query: IssueQuery): Promise<IssuePage>

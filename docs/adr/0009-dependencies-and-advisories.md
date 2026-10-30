@@ -1,8 +1,8 @@
 # ADR-0009: Dependencies (SBOM) and known vulnerabilities
 
 - Status: **accepted.** Phases 1 and 2 are done. Phase 3 is in progress:
-  advisory import, the opt-in sync, matching and the web app are done; gate
-  metrics, review states, the Security screen and `--advisories` remain.
+  advisory import, the opt-in sync, matching, review states, the Security
+  screen and the web app are done; gate metrics and `--advisories` remain.
 - Date: 2026-10-30
 
 ## Context

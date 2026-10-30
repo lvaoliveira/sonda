@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { DependencyList, DependencyRow } from '@/api/types'
+import type { DependencyList, DependencyReview, DependencyRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
-import { Chip, Segmented } from '@/components/sonda/controls'
+import { Button, Chip, Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
 import { SeverityGlyph } from '@/components/sonda/status'
 import { formatAge, formatNumber } from '@/lib/format'
@@ -42,7 +42,17 @@ export function DependenciesPage() {
   )
 }
 
-function Dependencies({ d }: { d: DependencyList }) {
+function Dependencies({ d: loaded }: { d: DependencyList }) {
+  // Reviews update this copy in place, so the page doesn't reload.
+  const [d, setD] = useState(loaded)
+  const onReview = (name: string, advisory: string, review: DependencyReview) =>
+    setD((old) => ({
+      ...old,
+      dependencies: old.dependencies.map((r) =>
+        r.name !== name ? r : { ...r, advisories: r.advisories.map((a) => (a.id === advisory ? { ...a, review } : a)) },
+      ),
+    }))
+  const vulnerable = d.dependencies.filter((r) => r.advisories.some((a) => a.review?.status !== 'accepted')).length
   const [q, setQ] = useState('')
   const [ecosystem, setEcosystem] = useState('all')
   const [directOnly, setDirectOnly] = useState(false)
@@ -86,14 +96,14 @@ function Dependencies({ d }: { d: DependencyList }) {
           <AdvisoryData d={d} />
           <MetricGrid label="Dependency counts" minCell={150}>
             <Tile label="Packages" value={s.total} note={`in ${d.lockfiles.length} ${d.lockfiles.length === 1 ? 'lockfile' : 'lockfiles'}`} />
-            <Tile label="Vulnerable" value={s.vulnerable} note="with a known vulnerability" alarm />
+            <Tile label="Vulnerable" value={vulnerable} note="with an open known vulnerability" alarm />
             <Tile label="Direct" value={s.direct} note="declared by the project" />
             {s.ecosystems.map((e) => (
               <Tile key={e.id} label={ECOSYSTEM_LABEL[e.id] ?? e.id} value={e.count} note="packages" />
             ))}
           </MetricGrid>
 
-          <Vulnerabilities d={d} />
+          <Vulnerabilities d={d} onReview={onReview} />
           <div className="grid grid-cols-1 gap-5 min-[900px]:grid-cols-3">
             <Changes d={d} />
             <Card id="licenses" title="Licenses" subtitle="As the lockfiles record them">
@@ -266,43 +276,24 @@ function AdvisoryData({ d }: { d: DependencyList }) {
   )
 }
 
-/** Every known vulnerability in the project's packages, most severe first. */
-function Vulnerabilities({ d }: { d: DependencyList }) {
+/** Every known vulnerability in the project's packages, most severe first; accepted ones last. */
+function Vulnerabilities({ d, onReview }: { d: DependencyList; onReview: (name: string, advisory: string, review: DependencyReview) => void }) {
+  const accepted = (a: DependencyRow['advisories'][number]) => a.review?.status === 'accepted'
   const rows: { dep: DependencyRow; a: DependencyRow['advisories'][number] }[] = d.dependencies
     .flatMap((dep) => dep.advisories.map((a) => ({ dep, a })))
-    .sort((x, y) => SEVERITY_ORDER.indexOf(x.a.severity) - SEVERITY_ORDER.indexOf(y.a.severity) || x.dep.name.localeCompare(y.dep.name))
+    .sort(
+      (x, y) =>
+        Number(accepted(x.a)) - Number(accepted(y.a)) ||
+        SEVERITY_ORDER.indexOf(x.a.severity) - SEVERITY_ORDER.indexOf(y.a.severity) ||
+        x.dep.name.localeCompare(y.dep.name),
+    )
   const unchecked = d.dependencies.filter((r) => r.unchecked.length > 0)
   if (rows.length === 0 && unchecked.length === 0) return null
   return (
-    <Card id="vulnerabilities" padded={false} title="Vulnerabilities" subtitle="Known vulnerabilities in the pinned versions, most severe first">
+    <Card id="vulnerabilities" padded={false} title="Vulnerabilities" subtitle="Known vulnerabilities in the pinned versions, most severe first; accepted ones last">
       <ul className="m-0 list-none p-0">
         {rows.map(({ dep, a }) => (
-          <li key={`${dep.purl}${a.id}`} className="grid grid-cols-[16px_minmax(0,1fr)_auto] items-baseline gap-3 border-t border-line px-5 py-2.5 text-[13.5px]">
-            <SeverityGlyph severity={a.severity} />
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span>{a.summary}</span>
-              <span className="text-xs text-fg-faint">
-                <Mono className="text-[11.5px] text-fg-muted">
-                  {dep.name} {dep.version}
-                </Mono>{' '}
-                ·{' '}
-                <a href={a.url} target="_blank" rel="noreferrer" className="font-mono text-[11.5px]">
-                  {a.id}
-                </a>
-                {a.aliases
-                  .filter((x) => x.startsWith('CVE-'))
-                  .map((cve) => (
-                    <span key={cve}> · {cve}</span>
-                  ))}
-                {a.score != null && <span> · CVSS {a.score.toFixed(1)}</span>}
-                <span> · {a.source}</span>
-              </span>
-            </span>
-            <span className="text-right text-xs whitespace-nowrap">
-              <span style={{ color: SEVERITY[a.severity].color }}>{SEVERITY[a.severity].label}</span>
-              <span className="block text-fg-muted">{a.fixedIn ? `fixed in ${a.fixedIn}` : 'no fix yet'}</span>
-            </span>
-          </li>
+          <Finding key={`${dep.purl}${a.id}`} project={d.project} dep={dep} a={a} onReview={(r) => onReview(dep.name, a.id, r)} />
         ))}
       </ul>
       {unchecked.length > 0 && (
@@ -312,5 +303,130 @@ function Vulnerabilities({ d }: { d: DependencyList }) {
         </p>
       )}
     </Card>
+  )
+}
+
+const REVIEW_LABEL = { open: 'Open', confirmed: 'Confirmed', accepted: 'Accepted' } as const
+
+function Finding({
+  project,
+  dep,
+  a,
+  onReview,
+}: {
+  project: string
+  dep: DependencyRow
+  a: DependencyRow['advisories'][number]
+  onReview: (r: DependencyReview) => void
+}) {
+  const api = useApi()
+  const [accepting, setAccepting] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const status = a.review?.status ?? 'open'
+  const set = async (next: DependencyReview['status'], why?: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      onReview(await api.reviewDependency(project, { ecosystem: dep.ecosystem, name: dep.name, advisory: a.id, status: next, reason: why }))
+      setAccepting(false)
+      setReason('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <li
+      aria-label={`${a.id} in ${dep.name} ${dep.version}`}
+      className="grid grid-cols-[16px_minmax(0,1fr)_auto] items-baseline gap-3 border-t border-line px-5 py-2.5 text-[13.5px]"
+      style={{ opacity: status === 'accepted' ? 0.65 : 1 }}
+    >
+      <SeverityGlyph severity={a.severity} />
+      <span className="flex min-w-0 flex-col gap-1">
+        <span>{a.summary}</span>
+        <span className="text-xs text-fg-faint">
+          <Mono className="text-[11.5px] text-fg-muted">
+            {dep.name} {dep.version}
+          </Mono>{' '}
+          ·{' '}
+          <a href={a.url} target="_blank" rel="noreferrer" className="font-mono text-[11.5px]">
+            {a.id}
+          </a>
+          {a.aliases
+            .filter((x) => x.startsWith('CVE-'))
+            .map((cve) => (
+              <span key={cve}> · {cve}</span>
+            ))}
+          {a.score != null && <span> · CVSS {a.score.toFixed(1)}</span>}
+          <span> · {a.source}</span>
+        </span>
+        {a.review && a.review.status !== 'open' && (
+          <span className="text-xs text-fg-muted">
+            {REVIEW_LABEL[a.review.status]} by {a.review.reviewedBy}, {formatAge(a.review.reviewedAt)} ago
+            {a.review.reason && <>: “{a.review.reason}”</>}
+          </span>
+        )}
+        {accepting && (
+          <form
+            className="flex flex-col gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void set('accepted', reason)
+            }}
+          >
+            <label className="text-xs text-fg-muted" htmlFor={`reason-${dep.purl}-${a.id}`}>
+              Why is this acceptable? Shown to everyone with the finding.
+            </label>
+            <textarea
+              id={`reason-${dep.purl}-${a.id}`}
+              value={reason}
+              maxLength={500}
+              rows={2}
+              onChange={(e) => setReason(e.target.value)}
+              className="rounded-md border-0 bg-canvas px-2.5 py-1.5 text-[13px] edge"
+            />
+            <span className="flex gap-2">
+              <Button primary type="submit" disabled={busy || !reason.trim()}>
+                Accept
+              </Button>
+              <Button onClick={() => setAccepting(false)} disabled={busy}>
+                Cancel
+              </Button>
+            </span>
+          </form>
+        )}
+        {error && (
+          <span role="alert" className="text-xs text-crit">
+            {error}
+          </span>
+        )}
+      </span>
+      <span className="flex flex-col items-end gap-1.5 text-right text-xs whitespace-nowrap">
+        <span>
+          <span style={{ color: SEVERITY[a.severity].color }}>{SEVERITY[a.severity].label}</span>
+          <span className="text-fg-muted"> · {a.fixedIn ? `fixed in ${a.fixedIn}` : 'no fix yet'}</span>
+        </span>
+        <span className="flex gap-1.5">
+          {status === 'open' && (
+            <Button onClick={() => void set('confirmed')} disabled={busy}>
+              Confirm
+            </Button>
+          )}
+          {status !== 'accepted' && !accepting && (
+            <Button onClick={() => setAccepting(true)} disabled={busy}>
+              Accept…
+            </Button>
+          )}
+          {status !== 'open' && (
+            <Button onClick={() => void set('open')} disabled={busy}>
+              Reopen
+            </Button>
+          )}
+        </span>
+      </span>
+    </li>
   )
 }

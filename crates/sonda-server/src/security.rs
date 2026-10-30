@@ -55,6 +55,8 @@ pub struct Security {
     /// Open vulnerabilities by OWASP Top 10 category, per edition, newest
     /// first.
     pub owasp: Vec<OwaspEdition>,
+    /// Known vulnerabilities in the projects' dependencies (ADR-0009).
+    pub dependencies: crate::dependencies::Portfolio,
     pub remediation: Remediation,
 }
 
@@ -235,7 +237,9 @@ pub async fn get_security(
             },
         )
         .collect();
-    Ok(Json(build(now, &vulns)))
+    let mut security = build(now, &vulns);
+    security.dependencies = crate::dependencies::portfolio(&state.pool).await?;
+    Ok(Json(security))
 }
 
 fn median(mut values: Vec<f64>) -> Option<f64> {
@@ -467,6 +471,7 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
         components,
         rules,
         owasp,
+        dependencies: crate::dependencies::Portfolio::default(),
         remediation,
     }
 }

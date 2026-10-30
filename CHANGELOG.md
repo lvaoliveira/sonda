@@ -169,6 +169,13 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- Triage of vulnerable dependencies: confirm a finding, or accept it with
+  a reason (required), from the Dependencies page or
+  `PATCH /api/projects/{key}/dependencies/reviews`. Reviews are per
+  project, package and advisory, so they last through rescans; accepted
+  findings stay listed but don't count; every change is audited. The
+  Security screen adds open vulnerable dependencies across projects, by
+  severity, with the most severe and the version that fixes each.
 - Opt-in advisory sync: with `SONDA_ADVISORY_SYNC=true` the server fetches
   what changed in OSV daily (OSV's `modified_id.csv`, then only changed
   records from the allowed databases; HTTPS only, no redirects, capped

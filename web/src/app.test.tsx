@@ -222,6 +222,18 @@ describe('Dependencies', () => {
     await user.click(within(packages).getByRole('button', { name: 'Direct only' }))
     await user.click(within(packages).getByRole('button', { name: 'Vulnerable only' }))
     expect(rows()).toHaveLength(2)
+
+    // Accepting needs a reason; it then stops counting, and can be reopened.
+    const finding = within(vulns).getByRole('listitem', { name: 'GHSA-35jh-r3h4-6jhm in lodash 4.17.20' })
+    await user.click(within(finding).getByRole('button', { name: 'Accept…' }))
+    const accept = within(finding).getByRole('button', { name: 'Accept' })
+    expect(accept).toBeDisabled()
+    await user.type(within(finding).getByRole('textbox'), 'Only used by the build, never on user input.')
+    await user.click(accept)
+    expect(await within(finding).findByText(/Accepted by mara/)).toHaveTextContent('“Only used by the build, never on user input.”')
+    expect(screen.getByRole('region', { name: 'Dependency counts' })).toHaveTextContent('Vulnerable1')
+    await user.click(within(finding).getByRole('button', { name: 'Reopen' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Dependency counts' })).toHaveTextContent('Vulnerable2'))
   })
 
   it('says so when an analysis recorded none', async () => {
@@ -322,6 +334,10 @@ describe('Security', () => {
     expect(screen.getByRole('region', { name: /Risk · 12 weeks/ })).toHaveTextContent('−')
     expect(screen.getByRole('region', { name: 'High-risk components' })).toHaveTextContent('billing-service/src/')
     expect(screen.getByRole('region', { name: 'Remediation' })).toHaveTextContent('4.2 days')
+    const deps = screen.getByRole('region', { name: 'Vulnerable dependencies' })
+    expect(deps).toHaveTextContent('2 vulnerable packages in 2 projects')
+    expect(within(deps).getByRole('link', { name: 'payments-platform' })).toHaveAttribute('href', '/projects/payments-platform/dependencies')
+    expect(deps).toHaveTextContent('fixed in 4.17.21')
     expect(within(focus).getAllByRole('link', { name: 'CWE-798' })[0]).toHaveAttribute('href', 'https://cwe.mitre.org/data/definitions/798.html')
     // The 2025 edition by default, 2021 a click away.
     const owasp = screen.getByRole('region', { name: 'OWASP Top 10' })
