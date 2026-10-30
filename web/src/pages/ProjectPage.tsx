@@ -110,6 +110,11 @@ function Dependencies({ p }: { p: ProjectDetail }) {
           <span>
             <Mono className="text-fg">{formatNumber(d.direct)}</Mono> direct
           </span>
+          {d.vulnerable > 0 && (
+            <Link to={url} className="text-[13px]" style={{ color: 'var(--sd-crit)' }}>
+              {formatNumber(d.vulnerable)} with known vulnerabilities
+            </Link>
+          )}
           {d.ecosystems.map((e) => (
             <span key={e.id}>
               {ECOSYSTEM_LABEL[e.id] ?? e.id} <Mono className="text-fg">{formatNumber(e.count)}</Mono>

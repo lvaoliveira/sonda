@@ -169,6 +169,17 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- Known vulnerabilities in dependencies (ADR-0009, phase 3):
+  `sonda-server advisories import PATH...` imports OSV records (GitHub,
+  RustSec, PyPA and Go advisories; others skipped by license), and each
+  dependency is matched against them when read, with each ecosystem's own
+  version order (SemVer, PEP 440), so new advisories flag existing
+  analyses. Severity comes from the CVSS v3 base score; aliased records
+  count once; unparseable versions are reported as unchecked. The
+  Dependencies page lists vulnerabilities most severe first with the
+  version that fixes each, and filters vulnerable packages; the project
+  page counts them. A new `advisory` fuzz target covers the parser and
+  version ordering.
 - Server and web app (ADR-0009, phase 2): uploads store each analysis's
   dependencies. `GET /api/projects/{key}/dependencies` lists them with
   counts by ecosystem, lockfile and license, and what changed since the

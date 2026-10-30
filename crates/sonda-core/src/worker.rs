@@ -34,6 +34,10 @@ pub const WORKER_COMMAND: &str = "__worker";
 /// a worker: the worker enforces the timeout itself and normally answers.
 const GRACE: Duration = Duration::from_secs(5);
 
+/// The least time a worker gets to start: process startup and loading the
+/// grammars, slower under load or instrumentation (coverage builds).
+const MIN_STARTUP: Duration = Duration::from_secs(30);
+
 const MAX_CONFIG_FRAME: u64 = 1 << 20;
 
 const SEVERITIES: [Severity; 5] = [
@@ -468,6 +472,10 @@ pub(crate) struct WorkerPool<'a> {
     file_timeout: Duration,
     /// How long the parent waits for an answer before killing the worker.
     deadline: Duration,
+    /// How long a new worker may take to say it's ready. Separate from
+    /// `deadline`: a short per-file timeout must not fail the whole scan
+    /// because a worker started slowly on a loaded machine.
+    startup: Duration,
     /// Workers (and threads driving them); `None` uses every CPU.
     jobs: Option<NonZeroUsize>,
     sandbox: SandboxMode,
@@ -491,6 +499,7 @@ impl<'a> WorkerPool<'a> {
             max_response: max_response_bytes(config),
             file_timeout,
             deadline: file_timeout.saturating_add(GRACE),
+            startup: file_timeout.saturating_add(GRACE).max(MIN_STARTUP),
             jobs,
             sandbox,
             warned: AtomicBool::new(false),
@@ -558,7 +567,7 @@ impl<'a> WorkerPool<'a> {
                     self.sandbox,
                     &self.config_frame,
                     self.max_response,
-                    self.deadline,
+                    self.startup,
                 )?;
                 self.check_sandbox(status)?;
                 slot.insert(worker)

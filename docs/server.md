@@ -328,6 +328,47 @@ Uploads carry them in the report's `dependencies` (at most 200,000, each
 checked: a known ecosystem, a `pkg:` URL, bounded fields, a safe relative
 lockfile path, no duplicates). Reports from an older CLI have none.
 
+## Known vulnerabilities
+
+Dependencies are checked against advisories the server stores
+([ADR-0009](adr/0009-dependencies-and-advisories.md)). It has none until
+an administrator imports them, and it never downloads them itself (yet):
+
+```sh
+# OSV's exports per ecosystem, unzipped (about 1.3 GB for all three).
+for e in npm PyPI crates.io; do
+  curl -fsSLO "https://osv-vulnerabilities.storage.googleapis.com/$e/all.zip"
+  unzip -q -o all.zip -d "osv/$e" && rm all.zip
+done
+DATABASE_URL=... sonda-server advisories import osv/
+```
+
+- **What's kept.** The import reads every `*.json` record under the paths
+  it's given (each at most 4 MB). It keeps only advisories from databases
+  whose terms allow any use with attribution: the GitHub Advisory
+  Database, PyPA and Go (CC-BY 4.0), and RustSec (CC0). It keeps only
+  packages in ecosystems sonda reads lockfiles for. Everything else is
+  skipped, including OSV's other sources, some of them non-commercial.
+- **Re-importing.** Re-running the import replaces only records whose
+  `modified` time is newer, so a daily cron with fresh exports keeps the
+  data current. The full export imports in under a minute.
+- **When matching happens.** Matching runs whenever dependencies are read,
+  against each analysis's dependencies. So a newly imported advisory flags
+  projects without new analyses.
+- **How versions are compared.** Each ecosystem uses its own version order:
+  SemVer for npm and crates.io, PEP 440 for PyPI. A version that doesn't
+  parse leaves the advisory **unchecked**, which is listed, never guessed.
+- **Duplicates and withdrawals.** Records from several databases that alias
+  each other count once. Withdrawn advisories match nothing.
+- **Severity** comes from the CVSS v3 base score, computed from the
+  advisory's vector, else from the database's own rating.
+
+`GET /api/projects/{key}/dependencies` adds to each package its
+advisories (id, aliases, summary, severity, CWE ids, source, and
+`fixedIn`: the lowest later version that fixes it). It also returns
+`advisoryData` (when advisories were last imported, and how many), and
+`summary.vulnerable`. The project summary carries `vulnerable` too.
+
 ## Analyses
 
 `GET /api/analyses` lists stored analyses, newest first, 50 at a time

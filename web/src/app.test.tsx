@@ -190,6 +190,7 @@ describe('Dependencies', () => {
     const card = await screen.findByRole('region', { name: 'Dependencies' })
     expect(card).toHaveTextContent('17 packages')
     expect(card).toHaveTextContent('6 direct')
+    expect(within(card).getByRole('link', { name: '2 with known vulnerabilities' })).toHaveAttribute('href', '/projects/payments-platform/dependencies')
     expect(within(card).getByRole('link', { name: 'All 17 →' })).toHaveAttribute('href', '/projects/payments-platform/dependencies')
 
     const user = userEvent.setup()
@@ -199,7 +200,7 @@ describe('Dependencies', () => {
     expect(rows()).toHaveLength(17)
     await user.type(within(packages).getByRole('searchbox', { name: 'Search packages' }), 'lodash')
     expect(rows()).toHaveLength(1)
-    expect(rows()[0]).toHaveTextContent('pkg:npm/lodash@4.17.21')
+    expect(rows()[0]).toHaveTextContent('pkg:npm/lodash@4.17.20')
     expect(rows()[0]).toHaveTextContent('package-lock.json, web/package-lock.json')
     await user.clear(within(packages).getByRole('searchbox', { name: 'Search packages' }))
     await user.click(within(packages).getByRole('button', { name: 'PyPI' }))
@@ -209,6 +210,18 @@ describe('Dependencies', () => {
     expect(rows()).toHaveLength(6)
     expect(screen.getByRole('region', { name: 'Changed' })).toHaveTextContent('updated express 4.18.2 → 4.19.2')
     expect(screen.getByRole('region', { name: 'Licenses' })).toHaveTextContent('not recorded')
+
+    // Known vulnerabilities, from imported advisories.
+    expect(screen.getByRole('region', { name: 'Dependency counts' })).toHaveTextContent('Vulnerable2')
+    const vulns = screen.getByRole('region', { name: 'Vulnerabilities' })
+    const items = within(vulns).getAllByRole('listitem')
+    expect(items[0]).toHaveTextContent('Command Injection in lodash')
+    expect(items[0]).toHaveTextContent('fixed in 4.17.21')
+    expect(within(items[0]).getByRole('link', { name: 'GHSA-35jh-r3h4-6jhm' })).toHaveAttribute('href', 'https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm')
+    expect(items[1]).toHaveTextContent('requests 2.31.0')
+    await user.click(within(packages).getByRole('button', { name: 'Direct only' }))
+    await user.click(within(packages).getByRole('button', { name: 'Vulnerable only' }))
+    expect(rows()).toHaveLength(2)
   })
 
   it('says so when an analysis recorded none', async () => {

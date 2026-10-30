@@ -1,4 +1,4 @@
-import type { DependencyList, DependencyRow, DependencySummary, ProjectDetail } from '../types'
+import type { Advisory, DependencyList, DependencyRow, DependencySummary, ProjectDetail } from '../types'
 
 type Seed = [ecosystem: string, name: string, version: string, direct: boolean | null, license: string | null, lockfiles: string[]]
 
@@ -12,7 +12,7 @@ const SEEDS: Seed[] = [
   ['npm', 'debug', '4.3.4', false, 'MIT', NPM],
   ['npm', 'express', '4.19.2', true, 'MIT', NPM],
   ['npm', 'jsonwebtoken', '9.0.2', true, 'MIT', NPM],
-  ['npm', 'lodash', '4.17.21', true, 'MIT', BOTH],
+  ['npm', 'lodash', '4.17.20', true, 'MIT', BOTH],
   ['npm', 'ms', '2.1.3', false, 'MIT', NPM],
   ['npm', 'react', '18.3.1', true, 'MIT', WEB],
   ['npm', 'react-dom', '18.3.1', true, 'MIT', WEB],
@@ -31,6 +31,36 @@ function purl(ecosystem: string, name: string, version: string): string {
   return `pkg:${ecosystem}/${ns ? `${encodeURIComponent(ns)}/` : ''}${bare}@${version}`
 }
 
+/** Real advisories for the versions above. */
+const ADVISORIES: Record<string, Advisory[]> = {
+  lodash: [
+    {
+      id: 'GHSA-35jh-r3h4-6jhm',
+      aliases: ['CVE-2021-23337'],
+      summary: 'Command Injection in lodash',
+      severity: 'critical',
+      score: 7.2,
+      cwe: [77, 94],
+      fixedIn: '4.17.21',
+      source: 'GitHub Advisory Database (CC-BY 4.0)',
+      url: 'https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm',
+    },
+  ],
+  requests: [
+    {
+      id: 'GHSA-9wx4-h78v-vm56',
+      aliases: ['CVE-2024-35195'],
+      summary: 'Requests `Session` object does not verify requests after making first request with verify=False',
+      severity: 'major',
+      score: 5.6,
+      cwe: [670],
+      fixedIn: '2.32.0',
+      source: 'GitHub Advisory Database (CC-BY 4.0)',
+      url: 'https://osv.dev/vulnerability/GHSA-9wx4-h78v-vm56',
+    },
+  ],
+}
+
 const ROWS: DependencyRow[] = SEEDS.map(([ecosystem, name, version, direct, license, lockfiles]) => ({
   ecosystem,
   name,
@@ -39,6 +69,8 @@ const ROWS: DependencyRow[] = SEEDS.map(([ecosystem, name, version, direct, lice
   direct,
   license,
   lockfiles,
+  advisories: ADVISORIES[name] ?? [],
+  unchecked: [],
 })).sort((a, b) => a.ecosystem.localeCompare(b.ecosystem) || a.name.localeCompare(b.name))
 
 export function summarize(rows: DependencyRow[]): DependencySummary {
@@ -47,6 +79,7 @@ export function summarize(rows: DependencyRow[]): DependencySummary {
   return {
     total: rows.length,
     direct: rows.filter((r) => r.direct === true).length,
+    vulnerable: rows.filter((r) => r.advisories.length > 0).length,
     ecosystems: [...counts].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
   }
 }
@@ -71,6 +104,7 @@ export function dependencyList(p: ProjectDetail): DependencyList {
     lockfiles: [...tally(rows.flatMap((r) => r.lockfiles))].map(([id, count]) => ({ id, count })).sort((a, b) => a.id.localeCompare(b.id)),
     licenses: [...tally(rows.map((r) => r.license))].map(([license, count]) => ({ license, count })).sort((a, b) => b.count - a.count),
     dependencies: rows,
+    advisoryData: { importedAt: new Date(Date.parse(p.analysis.analyzedAt) - 3 * 3_600_000).toISOString(), advisories: 24_586 },
     changes: !p.dependencies ? null : {
       previousAnalysis: p.analysis.id - 1,
       added: [{ ecosystem: 'npm', name: 'jsonwebtoken', versions: ['9.0.2'] }],

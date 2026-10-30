@@ -27,6 +27,9 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
     assert_eq!(
         tables,
         [
+            "advisories",
+            "advisory_imports",
+            "advisory_packages",
             "analyses",
             "analysis_dependencies",
             "analysis_files",

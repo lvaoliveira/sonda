@@ -27,6 +27,7 @@
 //!   `rules`, `newcode`, `coverage`, `config`, `highlight`, `codeowners` — no I/O
 //! - shared types: `model`, `lang`
 
+pub mod advisories;
 pub mod codeowners;
 pub mod config;
 pub mod deps;
@@ -182,6 +183,38 @@ pub mod fuzzing {
         let _ = Config::parse(text);
     }
 
+    /// Parses an untrusted OSV record and checks every package against two
+    /// versions from the input, and that version ordering is consistent:
+    /// a version equals itself, and swapping operands reverses the order.
+    /// `selector` picks the ecosystem. Must not panic.
+    pub fn parse_advisory(selector: u8, text: &str) {
+        use crate::advisories::version::compare;
+        use crate::deps::Ecosystem;
+        let eco = Ecosystem::ALL[usize::from(selector) % Ecosystem::ALL.len()];
+        let mut lines = text.lines();
+        let (a, b) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+        if let Some(order) = compare(eco, a, b) {
+            assert_eq!(
+                compare(eco, b, a),
+                Some(order.reverse()),
+                "{eco:?}: {a:?} vs {b:?}"
+            );
+            assert_eq!(
+                compare(eco, a, a),
+                Some(std::cmp::Ordering::Equal),
+                "{eco:?}: {a:?}"
+            );
+        }
+        if let Ok(Some(advisory)) = crate::advisories::parse(text) {
+            for p in &advisory.packages {
+                for v in [a, b] {
+                    let _ = p.affects(v);
+                    let _ = p.fixed_in(v);
+                }
+            }
+        }
+    }
+
     /// Parses an untrusted lockfile of the kind `selector` picks, then
     /// renders what it found as both SBOM formats, which must be valid
     /// JSON. It may be rejected, but must not panic.
@@ -262,6 +295,12 @@ mod architecture {
         ("deps/npm.rs", include_str!("deps/npm.rs")),
         ("deps/cargo.rs", include_str!("deps/cargo.rs")),
         ("deps/python.rs", include_str!("deps/python.rs")),
+        ("advisories/mod.rs", include_str!("advisories/mod.rs")),
+        (
+            "advisories/version.rs",
+            include_str!("advisories/version.rs"),
+        ),
+        ("advisories/cvss.rs", include_str!("advisories/cvss.rs")),
     ];
 
     /// The file without comment lines (docs may mention other layers). Test
