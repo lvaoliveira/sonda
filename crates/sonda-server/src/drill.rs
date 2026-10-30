@@ -515,19 +515,57 @@ async fn duplication(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx
     })
 }
 
-/// Coverage by project, worst first. Reports carry coverage per project
-/// only, so there are no files to show.
+/// Coverage by project, worst first, with each project's least covered
+/// files when its report carried coverage per file.
 async fn coverage(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx::Error> {
+    // (project, path, covered, uncovered) for files with coverage.
+    let rows: Vec<(String, String, i32, i32)> = sqlx::query_as(
+        "SELECT p.key, f.path, jsonb_array_length(f.metrics->'coverage'->'covered'),
+                jsonb_array_length(f.metrics->'coverage'->'uncovered')
+         FROM projects p
+         JOIN LATERAL (SELECT a.id FROM analyses a WHERE a.project_id = p.id AND a.branch = p.main_branch
+                       ORDER BY a.id DESC LIMIT 1) last ON true
+         JOIN analysis_files f ON f.analysis_id = last.id
+         WHERE f.metrics ? 'coverage'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut files: HashMap<String, Vec<(f64, i32, DrillFile)>> = HashMap::new();
+    for (project, path, covered, uncovered) in rows {
+        if uncovered == 0 {
+            continue;
+        }
+        let pct = f64::from(covered) / f64::from(covered + uncovered) * 100.0;
+        let (dir, base) = split_path(&path);
+        files.entry(project).or_default().push((
+            pct,
+            uncovered,
+            DrillFile {
+                dir,
+                base,
+                value: format!("{pct:.1}%"),
+                issue: None,
+            },
+        ));
+    }
     let mut items: Vec<DrillComponent> = latest(pool)
         .await?
         .into_iter()
         .filter_map(|(_, key, branch, measures, _, _)| {
-            measures["coverage"].as_f64().map(|c| DrillComponent {
+            let c = measures["coverage"].as_f64()?;
+            // The least covered first; among equals, the most lines to cover.
+            let mut worst = files.remove(&key).unwrap_or_default();
+            worst.sort_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
+            Some(DrillComponent {
                 owner: owners.get(&(key.clone(), "*".to_string())).cloned(),
                 component: key,
                 project: branch,
                 value: (c * 10.0).round() / 10.0,
-                files: vec![],
+                files: worst
+                    .into_iter()
+                    .take(MAX_FILES)
+                    .map(|(_, _, f)| f)
+                    .collect(),
             })
         })
         .collect();
@@ -544,7 +582,7 @@ async fn coverage(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx::E
         sub: if empty {
             "Scan with sonda scan --coverage lcov.info to see coverage here.".into()
         } else {
-            "Lowest first. Reports carry coverage per project, so files are not listed.".into()
+            "Lowest first, with each project's least covered files.".into()
         },
         tone: "warn",
         cta: "Open new-code issues",

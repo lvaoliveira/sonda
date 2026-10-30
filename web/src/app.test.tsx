@@ -164,7 +164,9 @@ describe('Projects', () => {
     // The main branch: new code since its current version's first analysis (ADR-0011).
     expect(screen.getByText(/new lines since .* \(version 2\.4\.0\)/)).toBeInTheDocument()
     expect(screen.getByText(/Issues first seen after analysis/)).toBeInTheDocument()
-    expect(screen.getByText('on lines the scan changed')).toBeInTheDocument()
+    // Its coverage is per file, so the server computed it; duplication is the scan's.
+    expect(screen.getByText('on changed lines')).toBeInTheDocument()
+    expect(screen.getByText('in lines the scan changed')).toBeInTheDocument()
   })
 
   it('lets an admin start the main branch’s new code at a later analysis', async () => {

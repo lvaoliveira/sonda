@@ -161,7 +161,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   const pct = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}%`)
   const period = p.newCodePeriod
   // Without per-line data, the server keeps the scan's own values for these.
-  const fromScan = scope === 'newCode' && period != null
+  const fromScan = (metric: string) => scope === 'newCode' && period != null && period.fromScan.includes(metric)
   const tiles: { label: string; value: string; sub: string; to?: string; color?: string }[] = [
     { label: 'Bugs', value: count(m.bugs), sub: 'Reliability', to: issues('&cat=bug') },
     { label: 'Vulnerabilities', value: count(m.vulnerabilities), sub: 'Security', to: issues('&cat=vulnerability') },
@@ -169,10 +169,10 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
     {
       label: 'Coverage',
       value: pct(m.coverage),
-      sub: m.coverage == null ? 'No coverage uploaded' : fromScan ? 'on lines the scan changed' : scope === 'newCode' ? 'on changed lines' : 'of code lines',
+      sub: m.coverage == null ? 'No coverage uploaded' : fromScan('new_coverage') ? 'on lines the scan changed' : scope === 'newCode' ? 'on changed lines' : 'of code lines',
       color: m.coverage == null ? undefined : coverageColor(m.coverage),
     },
-    { label: 'Duplication', value: pct(m.duplication), sub: fromScan ? 'in lines the scan changed' : 'duplicated lines' },
+    { label: 'Duplication', value: pct(m.duplication), sub: fromScan('new_duplicated_lines_density') ? 'in lines the scan changed' : 'duplicated lines' },
     { label: 'Debt', value: m.debtMinutes == null ? '—' : formatDebt(m.debtMinutes), sub: 'to fix every issue', to: issues('') },
   ]
   return (

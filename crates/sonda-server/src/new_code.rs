@@ -2,8 +2,8 @@
 //! (the first of the project's current version, or the project's first,
 //! unless an admin moved it), and on the main branch an issue is new if it
 //! was first seen after that. The server recomputes the issue measures,
-//! `new_lines` and the gate of the branch's latest analysis from it, on
-//! upload and when the period moves.
+//! `new_lines`, `new_coverage` (from per-file coverage) and the gate of the
+//! branch's latest analysis from it, on upload and when the period moves.
 
 use crate::api::{ApiError, Caller};
 use crate::health::{evaluate_gate, rfc3339};
@@ -13,7 +13,7 @@ use axum::extract::{Extension, Path};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Where a project's period starts.
 #[derive(Serialize, Debug, PartialEq)]
@@ -28,11 +28,10 @@ pub struct Period {
     /// change started it; otherwise it's the project's first analysis.
     pub version: Option<String>,
     /// New-code measures the server can't recompute without per-line data;
-    /// these keep the scan's own values.
-    pub from_scan: &'static [&'static str],
+    /// these keep the scan's own values. Coverage is recomputed when the
+    /// latest analysis's report carries it per file.
+    pub from_scan: Vec<&'static str>,
 }
-
-const FROM_SCAN: &[&str] = &["new_coverage", "new_duplicated_lines_density"];
 
 /// The project's period, if its main branch has an analysis.
 ///
@@ -69,13 +68,30 @@ pub async fn period(pool: &PgPool, project: i64) -> Result<Option<Period>, sqlx:
     .bind(project)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(analysis, reset, version, sha, at)| Period {
+    let Some((analysis, reset, version, sha, at)) = row else {
+        return Ok(None);
+    };
+    let per_file_coverage: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM analysis_files f
+             WHERE f.metrics ? 'coverage' AND f.analysis_id = (
+                 SELECT a.id FROM analyses a JOIN projects p ON p.id = a.project_id
+                 WHERE p.id = $1 AND a.branch = p.main_branch ORDER BY a.id DESC LIMIT 1))",
+    )
+    .bind(project)
+    .fetch_one(pool)
+    .await?;
+    let mut from_scan = vec!["new_duplicated_lines_density"];
+    if !per_file_coverage {
+        from_scan.insert(0, "new_coverage");
+    }
+    Ok(Some(Period {
         analysis,
         sha,
         analyzed_at: rfc3339(at),
         reset,
         version,
-        from_scan: FROM_SCAN,
+        from_scan,
     }))
 }
 
@@ -129,13 +145,16 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
         ("new_critical_issues", count(&|i| i.1 == "critical")),
         ("new_major_issues", count(&|i| i.1 == "major")),
         ("new_debt_minutes", new.iter().map(|i| f64::from(i.2)).sum()),
-        (
-            "new_lines",
-            new_lines(&mut tx, start.analysis, latest).await?,
-        ),
     ];
     for (metric, value) in values {
         measures[metric] = Value::from(value);
+    }
+    let changed = changed_lines(&mut tx, start.analysis, latest).await?;
+    measures["new_lines"] = Value::from(changed.lines as f64);
+    // Without per-file coverage (an older CLI, or no --coverage), the scan's
+    // value stays.
+    if let Some(coverage) = changed.coverage {
+        measures["new_coverage"] = Value::from(coverage);
     }
     let passed = evaluate_gate(&mut gate, &measures);
     sqlx::query("UPDATE analyses SET measures = $2, gate = $3, gate_passed = $4 WHERE id = $1")
@@ -148,20 +167,51 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
     tx.commit().await
 }
 
-/// Non-blank lines of `latest`'s files that are new or changed since
-/// `start`. The CLI counts code lines (comments excluded), which needs
-/// parsing; the server doesn't parse uploaded code (ADR-0003).
-async fn new_lines(
+/// What changed in `latest` since `start`.
+struct Changed {
+    /// Non-blank lines of `latest`'s files that are new or changed. The CLI
+    /// counts code lines (comments excluded), which needs parsing; the
+    /// server doesn't parse uploaded code (ADR-0003).
+    lines: usize,
+    /// Coverage on those lines, as the CLI computes it: covered among the
+    /// lines the coverage reports list. `None` when `latest` has no
+    /// per-file coverage; `Some(None)` when no changed line is coverable.
+    coverage: Option<Option<f64>>,
+}
+
+/// A file's coverage in the report: (covered, uncovered) lines.
+#[derive(Deserialize, Default)]
+struct FileCoverage {
+    covered: Vec<usize>,
+    uncovered: Vec<usize>,
+}
+
+async fn changed_lines(
     tx: &mut sqlx::PgConnection,
     start: i64,
     latest: i64,
-) -> Result<f64, sqlx::Error> {
+) -> Result<Changed, sqlx::Error> {
+    let has_coverage: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM analysis_files WHERE analysis_id = $1 AND metrics ? 'coverage')",
+    )
+    .bind(latest)
+    .fetch_one(&mut *tx)
+    .await?;
     if start == latest {
-        return Ok(0.0);
+        return Ok(Changed {
+            lines: 0,
+            coverage: has_coverage.then_some(None),
+        });
     }
-    // (path, sha in latest, sha in start if the file existed there)
-    let files: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT f.path, f.sha256, s.sha256
+    // (path, sha in latest, sha in start if the file existed there, coverage)
+    type Row = (
+        String,
+        Vec<u8>,
+        Option<Vec<u8>>,
+        Option<sqlx::types::Json<FileCoverage>>,
+    );
+    let files: Vec<Row> = sqlx::query_as(
+        "SELECT f.path, f.sha256, s.sha256, f.metrics->'coverage'
          FROM analysis_files f
          LEFT JOIN analysis_files s ON s.analysis_id = $2 AND s.path = f.path
          WHERE f.analysis_id = $1 AND f.sha256 IS DISTINCT FROM s.sha256",
@@ -172,7 +222,7 @@ async fn new_lines(
     .await?;
     let shas: Vec<Vec<u8>> = files
         .iter()
-        .flat_map(|(_, new, old)| std::iter::once(new.clone()).chain(old.clone()))
+        .flat_map(|(_, new, old, _)| std::iter::once(new.clone()).chain(old.clone()))
         .collect();
     let contents: HashMap<Vec<u8>, String> =
         sqlx::query_as("SELECT sha256, content FROM sources WHERE sha256 = ANY($1)")
@@ -181,21 +231,34 @@ async fn new_lines(
             .await?
             .into_iter()
             .collect();
-    let mut total = 0usize;
-    for (_, new, old) in &files {
+    let (mut lines, mut coverable, mut covered) = (0usize, 0usize, 0usize);
+    for (_, new, old, coverage) in &files {
         let Some(new) = contents.get(new) else {
             continue;
         };
-        let non_blank = |n: &usize| new.lines().nth(n - 1).is_some_and(|l| !l.trim().is_empty());
-        total += match old.as_ref().and_then(|o| contents.get(o)) {
-            Some(old) => sonda_core::changed_lines(old, new)
-                .iter()
-                .filter(|n| non_blank(n))
-                .count(),
-            None => new.lines().filter(|l| !l.trim().is_empty()).count(),
-        };
+        // None: every line of a file that didn't exist at the start.
+        let changed: Option<HashSet<usize>> = old
+            .as_ref()
+            .and_then(|o| contents.get(o))
+            .map(|old| sonda_core::changed_lines(old, new));
+        let is_new = |n: usize| changed.as_ref().is_none_or(|c| c.contains(&n));
+        lines += new
+            .lines()
+            .enumerate()
+            .filter(|(i, l)| is_new(i + 1) && !l.trim().is_empty())
+            .count();
+        if let Some(c) = coverage {
+            let new_covered = c.covered.iter().filter(|n| is_new(**n)).count();
+            covered += new_covered;
+            coverable += new_covered + c.uncovered.iter().filter(|n| is_new(**n)).count();
+        }
     }
-    Ok(total as f64)
+    Ok(Changed {
+        lines,
+        coverage: has_coverage.then(|| {
+            (coverable > 0).then(|| (1000.0 * covered as f64 / coverable as f64).round() / 10.0)
+        }),
+    })
 }
 
 #[derive(Deserialize)]

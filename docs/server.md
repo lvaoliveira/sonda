@@ -348,8 +348,13 @@ view, as in SonarQube: a **new code period** that starts at an analysis
   each file's stored source against the start's. Lines here are non-blank
   ones, since the server doesn't parse code; the CLI counts code lines.
   Then it re-evaluates and stores the latest analysis's gate.
-- **Coverage and duplication on new code** keep the scan's values, because
-  the server has no per-line data for them. The project page says so.
+- **Coverage on new code** is computed the same way, from each file's
+  covered and uncovered lines in the report (`sonda scan --coverage`):
+  covered lines among the changed lines the coverage reports list. Reports
+  from older CLIs don't carry it per file, so their scan's value stays.
+- **Duplication on new code** keeps the scan's value, because the server
+  has no per-line data for it. The project page says which values come
+  from the scan.
 - **Admins can move the start** to a later analysis of the main branch, for
   example after a cleanup: `PUT /api/projects/{key}/new-code` with
   `{"analysis": id}`. That start wins over versions until an admin sends

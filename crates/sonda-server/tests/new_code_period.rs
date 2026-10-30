@@ -283,3 +283,63 @@ async fn a_new_version_starts_a_new_period() {
     body["version"] = json!("1\n2");
     assert_eq!(upload(&db, &body).await.0, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn coverage_on_new_code_comes_from_per_file_coverage() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    let bearer = format!("Bearer {TOKEN}");
+    let token = [("authorization", bearer.as_str())];
+    let dir = tempfile::tempdir().unwrap();
+    let a = ("a.js", "let a = 1;\nlet b = 2;\n");
+    let b = ("b.js", "let c = 3;\nlet d = 4;\n");
+
+    // Without per-file coverage, the scan's value stands.
+    upload(&db, &upload_json_for(dir.path(), &[a], "shop", "main")).await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(
+        p["newCodePeriod"]["fromScan"],
+        json!(["new_coverage", "new_duplicated_lines_density"])
+    );
+
+    // b.js is new and half covered; a.js is covered but old. The scan saw
+    // no git, so it called both new: 75%.
+    let lcov = (
+        "lcov.info",
+        "SF:a.js\nDA:1,1\nDA:2,1\nend_of_record\nSF:b.js\nDA:1,2\nDA:2,0\nend_of_record\n",
+    );
+    let body = upload_json_for(dir.path(), &[a, b, lcov], "shop", "main");
+    assert_eq!(body["report"]["measures"]["new_coverage"], 75.0);
+    upload(&db, &body).await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(p["measures"]["newCode"]["coverage"], 50.0);
+    assert_eq!(
+        p["newCodePeriod"]["fromScan"],
+        json!(["new_duplicated_lines_density"])
+    );
+    assert_eq!(condition(&p, "new_coverage")["actual"], 50.0);
+    assert_eq!(condition(&p, "new_coverage")["status"], "error");
+
+    // The Overview's drill-down lists the least covered files.
+    let (status, drill) = send(
+        &app,
+        Request::get("/api/drill/coverage")
+            .header(header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{drill}");
+    let shop = &drill["items"][0];
+    assert_eq!(
+        (shop["component"].as_str(), shop["value"].as_f64()),
+        (Some("shop"), Some(75.0))
+    );
+    assert_eq!(
+        shop["files"],
+        json!([{ "dir": "", "base": "b.js", "value": "50.0%" }])
+    );
+}

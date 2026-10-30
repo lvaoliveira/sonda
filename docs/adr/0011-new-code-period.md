@@ -66,7 +66,11 @@ pull request, push or merge base), since that's what a branch is judged on.
 - **`new_coverage` and `new_duplicated_lines_density`** need per-line data
   the server doesn't receive. Until reports carry it (the roadmap's
   per-file coverage), these keep the scan's own values, and the UI says
-  which values come from the scan.
+  which values come from the scan. Coverage came next: each file in the
+  JSON report carries its `coverage` (covered and uncovered lines), and
+  the server computes `new_coverage` on the lines that changed since the
+  start, as the CLI does against its reference. Duplication still keeps
+  the scan's value.
 - **The gate** for the main branch's latest analysis is re-evaluated with
   these values and stored. This is ADR-0009's pattern: on upload, and when
   the period is reset. Older analyses keep the gate they had.
