@@ -37,6 +37,9 @@ struct Upload {
     project: String,
     branch: String,
     commit: String,
+    /// The project's version; older clients don't send it.
+    #[serde(default)]
+    version: Option<String>,
     report: Report,
     sources: Vec<Source>,
     /// The repository's CODEOWNERS file; older clients don't send it.
@@ -235,6 +238,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         project: upload.project,
         branch: upload.branch,
         commit: upload.commit.to_ascii_lowercase(),
+        version: upload.version,
     };
     validate_meta(&meta).map_err(|e| invalid(e.to_string()))?;
     let r = upload.report;

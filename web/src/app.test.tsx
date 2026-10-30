@@ -161,8 +161,8 @@ describe('Projects', () => {
     expect(screen.getByRole('heading', { name: 'History' })).toBeInTheDocument()
     expect(screen.getByText('services/')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'New code' }))
-    // The main branch: new code since its period's start (ADR-0011).
-    expect(screen.getByText(/new lines since .* \(the first analysis\)/)).toBeInTheDocument()
+    // The main branch: new code since its current version's first analysis (ADR-0011).
+    expect(screen.getByText(/new lines since .* \(version 2\.4\.0\)/)).toBeInTheDocument()
     expect(screen.getByText(/Issues first seen after analysis/)).toBeInTheDocument()
     expect(screen.getByText('on lines the scan changed')).toBeInTheDocument()
   })
@@ -184,7 +184,7 @@ describe('Projects', () => {
     }
     await reopen('Start new code here')
     expect(await screen.findByText(/\(set by an admin\)/)).toBeInTheDocument()
-    await reopen('Back to the first analysis')
+    await reopen('Back to the default start')
     expect(await screen.findByText(/\(the first analysis\)/)).toBeInTheDocument()
   })
 

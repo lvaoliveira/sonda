@@ -34,6 +34,10 @@ pub struct UploadArgs {
     /// Analyzed commit, as hex (in GitHub Actions: $GITHUB_SHA).
     #[arg(long)]
     commit: String,
+    /// The project's version, such as 2.3.0. On the main branch, the server
+    /// starts a new code period at the first analysis of each new version.
+    #[arg(long)]
+    project_version: Option<String>,
     /// The directory that was scanned: the report's paths are relative to it.
     #[arg(long, default_value = ".")]
     root: PathBuf,
@@ -54,6 +58,7 @@ pub fn run(args: UploadArgs) -> Result<ExitCode> {
         project: args.project,
         branch: args.branch,
         commit: args.commit,
+        version: args.project_version,
     };
     let upload = upload::prepare(&report, &args.root, meta)?;
     let files = upload.sources.len();

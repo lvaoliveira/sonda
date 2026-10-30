@@ -184,3 +184,102 @@ async fn the_main_branch_judges_new_code_since_its_period() {
         [("ada".into(), None, latest), ("ada".into(), latest, None)]
     );
 }
+
+#[tokio::test]
+async fn a_new_version_starts_a_new_period() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    let bearer = format!("Bearer {TOKEN}");
+    let token = [("authorization", bearer.as_str())];
+    let dir = tempfile::tempdir().unwrap();
+    let analyze = async |files: &[(&str, &str)], version: Option<&str>| {
+        let mut body = upload_json_for(dir.path(), files, "shop", "main");
+        if let Some(v) = version {
+            body["version"] = json!(v);
+        }
+        let (status, s) = upload(&db, &body).await;
+        assert_eq!(status, StatusCode::CREATED, "{s}");
+        s["analysis_id"].clone()
+    };
+    let a = ("a.js", "var x = 1;\neval(x);\n");
+    let b = ("b.js", "let y = 2;\neval(y);\n");
+    let c = ("c.js", "let z = 3;\neval(z);\n");
+
+    // Versions that only start being sent don't move the period, and
+    // neither do uploads without one.
+    let first = analyze(&[a], None).await;
+    analyze(&[a, b], Some("1.0")).await;
+    analyze(&[a, b], None).await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(
+        (
+            p["newCodePeriod"]["analysis"].clone(),
+            p["newCodePeriod"]["version"].clone()
+        ),
+        (first.clone(), Value::Null)
+    );
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 1.0);
+
+    // A new version starts it again at its first analysis.
+    let v2 = analyze(&[a, b], Some("2.0")).await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(
+        (
+            p["newCodePeriod"]["analysis"].clone(),
+            p["newCodePeriod"]["version"].clone()
+        ),
+        (v2.clone(), json!("2.0"))
+    );
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 0.0);
+    assert_eq!(p["analysis"]["version"], "2.0");
+    analyze(&[a, b, c], Some("2.0")).await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(p["newCodePeriod"]["analysis"], v2);
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 1.0);
+    let versions: Vec<Value> = p["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["version"].clone())
+        .collect();
+    assert_eq!(
+        versions,
+        [
+            Value::Null,
+            json!("1.0"),
+            Value::Null,
+            json!("2.0"),
+            json!("2.0")
+        ]
+    );
+
+    // An admin's start wins over versions until it's cleared.
+    let admin = session_for(&db, "ada", "admin").await;
+    let as_admin = [("cookie", admin.as_str()), ("sonda-csrf", "1")];
+    let (_, period) = send(&app, reset(first.clone(), &as_admin)).await;
+    assert_eq!(
+        (
+            period["analysis"].clone(),
+            period["reset"].clone(),
+            period["version"].clone()
+        ),
+        (first, json!(true), Value::Null)
+    );
+    analyze(&[a, b, c], Some("3.0")).await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(p["newCodePeriod"]["reset"], true);
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 2.0);
+    let (_, period) = send(&app, reset(Value::Null, &as_admin)).await;
+    assert_eq!(
+        (period["reset"].clone(), period["version"].clone()),
+        (json!(false), json!("3.0"))
+    );
+
+    // The server checks versions as the CLI does.
+    let mut body = upload_json_for(dir.path(), &[a], "shop", "main");
+    body["version"] = json!("1\n2");
+    assert_eq!(upload(&db, &body).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+}

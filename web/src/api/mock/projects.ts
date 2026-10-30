@@ -59,6 +59,8 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
     id: 900 + i,
     sha: (0x9f3c2a1 + i * 7919).toString(16),
     analyzedAt: new Date(NOW - (11 - i) * 86_400_000).toISOString(),
+    // payments-platform sends versions; 2.4.0 started a new code period.
+    version: p.key === 'payments-platform' ? (i < 7 ? '2.3.0' : '2.4.0') : null,
     gate: (i === 11 ? p.gate : i % 4 === 1 ? 'failed' : 'passed') as GateState,
     issues: p.issues - 11 + i + (i % 3),
     coverage: p.coverage == null ? null : Math.round((p.coverage - 1.5 + i * 0.12) * 10) / 10,
@@ -72,7 +74,7 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
     branch: on,
     branches,
     languages: p.languages.map((id, i) => ({ id, ncloc: Math.round(p.ncloc / 2 ** (i + 1)) })),
-    analysis: { id: 911, sha: '9f3c2a1e7b04', analyzedAt: p.analyzedAt, toolVersion: '0.1.0', newCodeReference: 'origin/main' },
+    analysis: { id: 911, sha: '9f3c2a1e7b04', analyzedAt: p.analyzedAt, toolVersion: '0.1.0', newCodeReference: 'origin/main', version: history[history.length - 1].version },
     gate: {
       state: failing ? 'failed' : on === 'main' ? p.gate : 'passed',
       conditions: [
@@ -112,14 +114,19 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
 /** Where each project's new code starts, when an admin moved it. */
 const PERIODS = new Map<string, number>()
 
+/** As the server does: an admin's start, else the first analysis of the latest version. */
 function newCodePeriod(key: string, history: ProjectHistoryPoint[]): NewCodePeriod {
-  const moved = PERIODS.get(key)
-  const start = history.find((h) => h.id === moved) ?? history[0]
+  const moved = history.find((h) => h.id === PERIODS.get(key))
+  const latest = history.findLast((h) => h.version != null)?.version
+  const change = history.findLastIndex((h) => h.version != null && h.version !== latest)
+  const byVersion = change < 0 ? undefined : history.find((h, i) => i > change && h.version === latest)
+  const start = moved ?? byVersion ?? history[0]
   return {
     analysis: start.id,
     sha: start.sha,
     analyzedAt: start.analyzedAt,
-    reset: moved !== undefined && start.id === moved,
+    reset: moved !== undefined,
+    version: moved ? null : (byVersion?.version ?? null),
     fromScan: ['new_coverage', 'new_duplicated_lines_density'],
   }
 }
