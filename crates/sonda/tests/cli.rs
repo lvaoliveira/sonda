@@ -436,6 +436,56 @@ fn new_code_defaults_to_the_latest_tag_or_the_default_branch() {
 }
 
 #[test]
+fn a_baseline_starts_new_code_where_it_is_set() {
+    let dir = project(&[("old.js", "eval(a);\n")]);
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "old"]);
+
+    // No tag: the whole project, and how to fix that.
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
+    assert_eq!(report["new_code_basis"], "whole_project");
+    assert!(
+        report["new_code_description"]
+            .as_str()
+            .unwrap()
+            .contains("sonda baseline"),
+        "{}",
+        report["new_code_description"]
+    );
+
+    let out = run(&["baseline"], root);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("git push origin sonda-baseline"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        code(&run(&["baseline"], root)),
+        2,
+        "an existing baseline isn't moved by accident"
+    );
+
+    std::fs::write(root.join("new.js"), "eval(b);\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "new"]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
+    assert_eq!(report["new_code_reference"], "sonda-baseline");
+    let new_paths: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["is_new"] == true)
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(new_paths, ["new.js"]);
+}
+
+#[test]
 fn only_new_lists_new_issues_but_gate_sees_everything() {
     let dir = project(&[("old.js", "eval(a);\n")]);
     let root = dir.path();

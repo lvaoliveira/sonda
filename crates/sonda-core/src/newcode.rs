@@ -21,6 +21,10 @@ pub(crate) enum NewCode {
     },
 }
 
+/// The tag `sonda baseline` sets: the commit whose existing debt a project
+/// accepted when it adopted sonda (ADR-0010).
+pub const BASELINE_TAG: &str = "sonda-baseline";
+
 /// How the new-code reference was chosen (ADR-0010).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Basis {

@@ -171,9 +171,12 @@ file, the report formats and the public library API.
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
 - A default for new code (ADR-0010): without `--new-code`, `auto` compares
   a diverged branch with its merge base with the default branch, and the
-  default branch with the latest tag before HEAD, or without tags with the
-  last commit `scan.new_code_days` (30) older than HEAD, by commit date.
-  Otherwise the whole project, with the reason. `scan.new_code` sets it
+  default branch with the latest tag before HEAD. `sonda baseline` tags
+  HEAD `sonda-baseline` (with repository hooks off) for projects without
+  releases, so existing code is accepted and later changes are judged; it
+  applies at once and never ages out. Optionally, `scan.new_code_days`
+  compares with the last commit that many days older than HEAD (off by
+  default). Otherwise the whole project, with a hint to set a baseline. `scan.new_code` sets it
   (`auto`, `none` or a ref); reports add `new_code_basis` and
   `new_code_description`. Gates on existing projects now judge recent
   changes instead of all their debt.
