@@ -134,6 +134,7 @@ function Dependencies({ p }: { p: ProjectDetail }) {
 function Gate({ p }: { p: ProjectDetail }) {
   const failing = p.gate.conditions.filter((c) => c.status === 'error').length
   const noData = p.gate.conditions.filter((c) => c.status === 'no_data').length
+  const ignored = p.gate.conditions.filter((c) => c.status === 'ignored').length
   return (
     <Card
       id="gate"
@@ -141,7 +142,7 @@ function Gate({ p }: { p: ProjectDetail }) {
       subtitle={
         p.gate.conditions.length === 0
           ? 'The gate has no conditions'
-          : `${failing} of ${p.gate.conditions.length} conditions failing${noData ? ` · ${noData} without data` : ''}`
+          : `${failing} of ${p.gate.conditions.length} conditions failing${noData ? ` · ${noData} without data` : ''}${ignored ? ` · ${ignored} ignored on a small change` : ''}`
       }
       aside={<span className="text-xs text-fg-faint">from the repository’s sonda.toml</span>}
     >

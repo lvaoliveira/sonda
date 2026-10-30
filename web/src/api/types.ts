@@ -389,7 +389,8 @@ export interface ProjectList {
   languages: string[]
 }
 
-export type ConditionStatus = 'ok' | 'error' | 'no_data'
+/** `ignored`: coverage or duplication of new code, with fewer than 20 new lines. */
+export type ConditionStatus = 'ok' | 'error' | 'no_data' | 'ignored'
 
 export interface GateCondition {
   /** "New vulnerabilities > 0". */

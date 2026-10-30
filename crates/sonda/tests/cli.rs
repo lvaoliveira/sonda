@@ -531,11 +531,33 @@ fn coverage_report_feeds_the_coverage_measures() {
         .find(|f| f["path"] == "app.js")
         .unwrap();
     assert_eq!(app["coverage"], json!({ "covered": [1], "uncovered": [2] }));
+    // Two new lines: too few for coverage on new code to decide the gate.
+    let condition = report["gate"]["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["metric"] == "new_coverage")
+        .unwrap();
     assert_eq!(
-        code(&out),
-        1,
-        "50% < 80% on new code fails the default gate"
+        (condition["status"].as_str(), condition["actual"].as_f64()),
+        (Some("ignored"), Some(50.0))
     );
+    assert_eq!(code(&out), 0);
+
+    // Twenty, half of them covered: 50% < 80% fails the default gate.
+    let code_lines: String = (0..20).map(|i| format!("const v{i} = {i};\n")).collect();
+    let hits: String = (1..=20).map(|i| format!("DA:{i},{}\n", i % 2)).collect();
+    let dir = project(&[
+        ("app.js", code_lines.as_str()),
+        ("lcov.info", &format!("SF:app.js\n{hits}end_of_record\n")),
+    ]);
+    let out = sonda()
+        .args(["scan", "--coverage"])
+        .arg(dir.path().join("lcov.info"))
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 1, "{}", String::from_utf8_lossy(&out.stdout));
 }
 
 #[test]

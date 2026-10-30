@@ -81,8 +81,9 @@ async fn projects_are_listed_and_detailed_from_their_analyses() {
         pay_row["languages"],
         serde_json::json!(["javascript", "python"])
     );
-    // No coverage uploaded: the coverage condition has no data.
-    assert_eq!(rows[0]["gate"], "partial");
+    // No coverage uploaded, but a small project: coverage on new code is
+    // ignored (fewer than 20 new lines) rather than missing.
+    assert_eq!(rows[0]["gate"], "passed");
     assert!(pay_row["analyzedAt"].as_str().unwrap().ends_with('Z'));
     assert_eq!(
         list["languages"],

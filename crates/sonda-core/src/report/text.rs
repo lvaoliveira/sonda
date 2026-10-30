@@ -166,6 +166,14 @@ pub fn render(r: &Report) -> String {
             Status::Ok => ("✓", format!("{}", c.actual.unwrap_or_default())),
             Status::Error => ("✗", format!("{}", c.actual.unwrap_or_default())),
             Status::NoData => ("–", "no data".into()),
+            Status::Ignored => (
+                "–",
+                format!(
+                    "{}, ignored: fewer than {} new lines",
+                    c.actual.map_or("no data".into(), |v| v.to_string()),
+                    crate::gate::MIN_NEW_LINES
+                ),
+            ),
         };
         let _ = writeln!(
             out,

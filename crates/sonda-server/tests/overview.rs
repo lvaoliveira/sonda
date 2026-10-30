@@ -165,11 +165,12 @@ async fn the_overview_is_built_from_analysis_history() {
         &json!({ "severity": "critical", "open": 1, "newThisPeriod": 1 })
     );
 
-    // Lowest score first; billing passes but lacks coverage data.
+    // Lowest score first. Billing passes: without coverage data, but with
+    // too few new lines for coverage on new code to count anyway.
     let projects = o["projects"].as_array().unwrap();
     assert_eq!(projects[0]["name"], "payments");
     assert_eq!(projects[0]["gate"], "failed");
-    assert_eq!(projects[1]["gate"], "partial");
+    assert_eq!(projects[1]["gate"], "passed");
     assert_eq!(projects[0]["trend"].as_array().unwrap().len(), 30);
 
     let recent = o["recent"].as_array().unwrap();
@@ -177,8 +178,12 @@ async fn the_overview_is_built_from_analysis_history() {
     assert_eq!(recent[0]["note"], "Gate failed: New vulnerabilities > 0");
     assert_eq!(recent[0]["message"], Value::Null);
     let billing = recent.iter().find(|r| r["project"] == "billing").unwrap();
-    assert_eq!(billing["state"], "partial");
-    assert_eq!(billing["note"], "No data for: Coverage on new code < 80%");
+    // Few new lines: its coverage condition is ignored, so it passes.
+    assert_eq!(billing["state"], "passed");
+    assert!(
+        billing["note"].as_str().unwrap().contains("new issue"),
+        "{billing}"
+    );
 
     let history = &o["gateHistory"];
     assert_eq!(history["days"].as_array().unwrap().len(), 30);

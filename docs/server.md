@@ -383,7 +383,10 @@ view, as in SonarQube: a **new code period** that starts at an analysis
   recounts the new-issue measures. It also computes `new_lines`, by diffing
   each file's stored source against the start's. Lines here are non-blank
   ones, since the server doesn't parse code; the CLI counts code lines.
-  Then it re-evaluates and stores the latest analysis's gate.
+  Then it re-evaluates and stores the latest analysis's gate. As the CLI
+  does, with fewer than 20 new lines, conditions on coverage and
+  duplication of new code are `ignored` (shown as such) rather than
+  failing or missing data, so a quiet main branch passes.
 - **Coverage on new code** is computed the same way, from each file's
   covered and uncovered lines in the report (`sonda scan --coverage`):
   covered lines among the changed lines the coverage reports list. Reports

@@ -191,6 +191,84 @@ SBOM), then match that list against published vulnerabilities.
 - A new advisory synced into the mirror flags an already-analyzed project
   without a rescan.
 
+## AI auto-fix: issues, bugs and coverage gaps as pull requests
+
+**Status:** planned (2026-10-30), nothing built. An admin adds an AI API
+token and connects a GitHub or GitLab repository. From an issue (or a
+failing gate condition), the server asks the model for a fix and opens a
+pull request or merge request with it. A person reviews and merges; sonda
+never merges anything itself.
+
+### Design sketch
+
+- **What can be fixed.**
+  - Issues: rules with a mechanical fix first (`js/eqeqeq`, `js/no-var`,
+    unused imports and variables, `c/unsafe-string-function`), then bugs,
+    vulnerabilities and code smells such as cognitive complexity.
+  - Coverage: tests for uncovered new code, from the LCOV data the report
+    already carries.
+  - Entry points: a "Fix with AI" action on an issue, a bulk action on a
+    filtered list, and later an option to fix everything that fails the
+    gate on a branch.
+- **Integrations.** A GitHub App and a GitLab project or group token, per
+  project. The server clones the branch, applies the change on a new
+  `sonda/fix-<issue>` branch, and opens the PR or MR. The description
+  links the issue, its rule and the analysis that found it.
+- **AI provider.** One server-wide API token to start (Anthropic first,
+  behind a small provider trait so others can follow), set by an admin and
+  never returned by the API once saved.
+- **Verify before proposing.** Re-run `sonda scan` on the patched tree and
+  open the PR only if the original issue is gone and no new issue appears
+  in the changed files. Run the project's own tests where a command is
+  configured. For coverage fixes, require the new tests to pass and the
+  covered lines to rise. A fix that fails any check is reported on the
+  issue and not proposed.
+- **Review stays human.** Draft PRs by default, the diff and the model's
+  reasoning in the description, a per-run limit on files and lines
+  changed, and no auto-merge.
+
+### Decisions to make when starting
+
+- **An ADR**, since this adds outbound calls to a third party, stored
+  credentials for the AI provider and each forge, and the first write
+  path from the server back into a user's repository.
+- **The analyzed repository is untrusted input** (CLAUDE.md). Source,
+  comments and file names go into a prompt, so a repository can try to
+  steer the model. Treat the model's output as untrusted too: it may only
+  produce a patch, never run commands, and the patch is checked (paths
+  stay inside the repo, no changes to CI files, `sonda.toml`, lockfiles or
+  hooks unless allowed) before it is applied.
+- **Where code runs.** Cloning, applying the patch and running tests means
+  executing a repository's code on the server. Decide between a sandboxed
+  worker (as in ADR-0004), an external CI job the server triggers, or
+  patch-only fixes with no test run.
+- **What leaves the building.** Source is sent to an AI provider. Needs an
+  explicit per-project opt-in, a way to exclude paths (secrets, vendored
+  code), secret scanning of the prompt, and a statement about retention
+  and training terms in the docs.
+- **Credentials.** Encryption at rest for the AI and forge tokens, scopes
+  as narrow as possible (one repo, pull requests and contents write only),
+  rotation, and an audit log of every fix request, who made it and what it
+  cost.
+- **Cost and abuse.** Per-project and per-user budgets, rate limits, and a
+  cap on concurrent runs.
+- **Idempotence.** One open PR per issue; a later analysis that fixes the
+  issue closes it, and a re-detected issue reopens the discussion rather
+  than opening a second PR.
+
+### Done when
+
+- On a fixture repository, "Fix with AI" on a known issue opens a draft PR
+  whose branch, when scanned, no longer reports that issue, with no new
+  issues.
+- A coverage fix adds tests that pass and raise the file's covered lines.
+- A fix that does not verify, or a patch outside the allowed paths, opens
+  no PR and shows the reason on the issue.
+- A repository file that says to ignore its instructions and edit CI
+  config does not change the PR's files.
+- The AI and forge tokens never appear in an API response, a log line or
+  a PR description, and a request over budget is refused.
+
 ## Smaller items
 
 | Item | Why it waits | Where it plugs in |
