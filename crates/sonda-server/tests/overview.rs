@@ -180,10 +180,7 @@ async fn the_overview_is_built_from_analysis_history() {
     let billing = recent.iter().find(|r| r["project"] == "billing").unwrap();
     // Few new lines: its coverage condition is ignored, so it passes.
     assert_eq!(billing["state"], "passed");
-    assert!(
-        billing["note"].as_str().unwrap().contains("new issue"),
-        "{billing}"
-    );
+    assert!(billing["note"].as_str().unwrap().contains("new issue"));
 
     let history = &o["gateHistory"];
     assert_eq!(history["days"].as_array().unwrap().len(), 30);
