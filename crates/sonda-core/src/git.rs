@@ -8,7 +8,7 @@
 //! and diffs the working-tree files itself (see docs/adr/0002).
 
 use crate::error::Error;
-use crate::newcode::{Basis, Changed, NewCode, changed_lines};
+use crate::newcode::{BASELINE_TAG, Basis, Changed, NewCode, changed_lines};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -111,6 +111,16 @@ pub(crate) fn auto_reference(root: &Path, days: u32, timeout: Duration) -> Resul
     {
         return Ok(Auto::Found(branch.clone(), Basis::DefaultBranch(branch)));
     }
+    // A baseline set at HEAD (as `sonda baseline` just did) applies as is.
+    let baseline = format!("refs/tags/{BASELINE_TAG}^{{commit}}");
+    if git_ok(root, &["rev-parse", "--verify", "-q", &baseline], timeout)?
+        .is_some_and(|c| c.trim() == head)
+    {
+        return Ok(Auto::Found(
+            BASELINE_TAG.into(),
+            Basis::LatestTag(BASELINE_TAG.into()),
+        ));
+    }
     // HEAD^: on a release commit, its own tag would leave nothing new.
     if let Some(tag) = git_ok(
         root,
@@ -150,9 +160,38 @@ pub(crate) fn auto_reference(root: &Path, days: u32, timeout: Duration) -> Resul
             return Ok(Auto::Found(commit.clone(), Basis::Days { days, commit }));
         }
     }
+    let window = if days > 0 {
+        format!(", no commit {days} days older than HEAD")
+    } else {
+        String::new()
+    };
     Ok(Auto::Nothing(format!(
-        "no diverged default branch, no tag, and no commit {days} days older than HEAD"
+        "no diverged default branch and no tag{window}; set a baseline with `sonda baseline`"
     )))
+}
+
+/// Tags HEAD as [`BASELINE_TAG`]; with `force`, moves an existing one.
+/// Returns the commit. Hooks are off: tagging updates a ref, which runs the
+/// repository's reference-transaction hook (ADR-0002).
+pub(crate) fn tag_baseline(root: &Path, force: bool, timeout: Duration) -> Result<String, Error> {
+    let head = git(root, &["rev-parse", "--verify", "HEAD^{commit}"], timeout)?;
+    let head = head.trim().to_string();
+    let existing = format!("refs/tags/{BASELINE_TAG}^{{commit}}");
+    if let Some(at) = git_ok(root, &["rev-parse", "--verify", "-q", &existing], timeout)?
+        && !force
+    {
+        return Err(Error::InvalidArgument(format!(
+            "{BASELINE_TAG} already tags {}; --force moves it to HEAD",
+            &at.trim()[..12.min(at.trim().len())]
+        )));
+    }
+    let mut args = vec!["-c", "core.hooksPath=/dev/null", "tag"];
+    if force {
+        args.push("-f");
+    }
+    args.extend(["--end-of-options", BASELINE_TAG, &head]);
+    git(root, &args, timeout)?;
+    Ok(head)
 }
 
 /// The branch others merge into: what `origin/HEAD` points at, else
@@ -621,6 +660,47 @@ mod tests {
         // On a release commit, its own tag would leave nothing: the one before.
         git(root, &["tag", "v1.1"], TIMEOUT).unwrap();
         assert_eq!(found(auto(root)).0, "v1.0");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_baseline_tags_head_without_running_hooks_and_applies_at_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        // A hook that would run when the tag's ref is written.
+        let hooks = repo.root.join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let marker = repo.root.join("PWNED");
+        let hook = hooks.join("reference-transaction");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+
+        let head = git(&repo.root, &["rev-parse", "HEAD"], TIMEOUT).unwrap();
+        assert_eq!(
+            tag_baseline(&repo.root, false, TIMEOUT).unwrap(),
+            head.trim()
+        );
+        assert!(!marker.exists(), "a hook ran");
+        // Right away, on HEAD itself.
+        assert_eq!(
+            found(auto(&repo.root)),
+            (
+                BASELINE_TAG.to_string(),
+                Basis::LatestTag(BASELINE_TAG.into())
+            )
+        );
+        // Not moved by accident; moved on purpose.
+        assert!(tag_baseline(&repo.root, false, TIMEOUT).is_err());
+        repo.write("a.py", "a = 1\nb = 2\nc = 3\n");
+        repo.git(&["commit", "-qam", "after the baseline"]);
+        // That commit (the test's own git call) ran the hook; sonda's don't.
+        let _ = std::fs::remove_file(&marker);
+        assert_eq!(found(auto(&repo.root)).0, BASELINE_TAG, "found from HEAD^");
+        let moved = tag_baseline(&repo.root, true, TIMEOUT).unwrap();
+        assert_ne!(moved, head.trim());
+        assert!(!marker.exists(), "a hook ran");
     }
 
     #[test]

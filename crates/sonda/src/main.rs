@@ -36,6 +36,16 @@ enum Command {
         #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
         sandbox: SandboxArg,
     },
+    /// Mark HEAD as where new code starts: tags it sonda-baseline, so the
+    /// existing code is judged as accepted and later changes as new.
+    Baseline {
+        /// The repository (or a directory in it).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Move an existing baseline to HEAD.
+        #[arg(long)]
+        force: bool,
+    },
     /// Write an SBOM of the project's dependencies, from its lockfiles.
     Sbom(SbomArgs),
     /// Send a JSON report and the analyzed sources to a sonda server.
@@ -224,6 +234,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Scan(args) => scan(args),
         Command::Upload(args) => upload::run(args),
         Command::Sbom(args) => sbom(args),
+        Command::Baseline { path, force } => {
+            let commit = sonda_core::set_baseline(&path, force)?;
+            let tag = sonda_core::BASELINE_TAG;
+            eprintln!(
+                "sonda: tagged {} as {tag}; new code now starts there.\n\
+                 Push it so CI and teammates use it too: git push origin {tag}{}",
+                &commit[..12.min(commit.len())],
+                if force { " --force" } else { "" }
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Rules { format } => {
             print!("{}", list_rules(format));
             Ok(ExitCode::SUCCESS)
