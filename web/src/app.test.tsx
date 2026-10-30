@@ -324,6 +324,26 @@ describe('Coverage', () => {
     expect(screen.queryByRole('link', { name: 'generated/' })).not.toBeInTheDocument()
   })
 
+  it('shows branches and functions, in totals, per file and on the lines that miss them', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform/coverage?dir=src/billing')
+    expect(await screen.findByText('Branch coverage')).toBeInTheDocument()
+    expect(screen.getByText('Function coverage')).toBeInTheDocument()
+    const invoice = within(screen.getByRole('table')).getByRole('link', { name: 'invoice.ts' }).closest('tr')!
+    // 7 of 16 branches taken, 3 of 4 functions called.
+    expect(invoice).toHaveTextContent('43.8% 7/16')
+    expect(invoice).toHaveTextContent('75.0% 3/4')
+
+    await user.click(within(invoice).getByRole('link', { name: 'invoice.ts' }))
+    expect(await screen.findByText(/7 of 16 branches taken · 3 of 4 functions called/)).toBeInTheDocument()
+    expect(screen.getByText('1 uncovered block · 3 lines with untaken branches')).toBeInTheDocument()
+    const source = screen.getByRole('region', { name: 'Source code with coverage' })
+    // Lines that ran with a branch left over, and branches on lines never run.
+    expect(source.querySelectorAll('[data-branches="1/2"]')).toHaveLength(3)
+    expect(source.querySelectorAll('[data-branches="0/2"]')).toHaveLength(3)
+    expect(source.querySelector('[data-uncalled="step4"]')).toHaveTextContent('ƒ step4 never called')
+  })
+
   it('explains how to get coverage when the analysis has none', async () => {
     renderAt('/projects/docs-site/coverage')
     expect(await screen.findByText('No coverage per file in this analysis')).toBeInTheDocument()

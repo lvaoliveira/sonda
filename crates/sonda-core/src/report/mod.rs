@@ -64,6 +64,30 @@ pub struct FileReport<'a> {
     /// don't cover it, or without `--coverage`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<FileCoverage>,
+    /// Lines with branches and how many of them ran, from LCOV's `BRDA`;
+    /// absent when the coverage reports have none for this file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub branch_coverage: Vec<LineBranches>,
+    /// Functions and how often each was called, from LCOV's `FN` and
+    /// `FNDA`; absent when the coverage reports have none for this file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub function_coverage: Vec<FunctionCalls>,
+}
+
+/// The branches starting on one line, such as an `if`'s two outcomes.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct LineBranches {
+    pub line: usize,
+    /// Branches taken at least once.
+    pub taken: usize,
+    pub total: usize,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct FunctionCalls {
+    pub name: String,
+    pub line: usize,
+    pub calls: u64,
 }
 
 /// One file's coverage, as line numbers, ascending. The server computes
@@ -98,6 +122,41 @@ pub struct Location<'a> {
     pub end_line: usize,
 }
 
+type Branches = std::collections::BTreeMap<(usize, String, String), u64>;
+type Functions = std::collections::BTreeMap<(usize, String), u64>;
+
+fn line_branches(branches: Option<&Branches>) -> Vec<LineBranches> {
+    let mut lines: Vec<LineBranches> = Vec::new();
+    // Keys sort by line first, so each line's branches are adjacent.
+    for ((line, _, _), &taken) in branches.into_iter().flatten() {
+        match lines.last_mut() {
+            Some(l) if l.line == *line => {
+                l.total += 1;
+                l.taken += usize::from(taken > 0);
+            }
+            _ => lines.push(LineBranches {
+                line: *line,
+                taken: usize::from(taken > 0),
+                total: 1,
+            }),
+        }
+    }
+    lines
+}
+
+/// By line, then name.
+fn function_calls(functions: Option<&Functions>) -> Vec<FunctionCalls> {
+    functions
+        .into_iter()
+        .flatten()
+        .map(|((line, name), &calls)| FunctionCalls {
+            name: name.clone(),
+            line: *line,
+            calls,
+        })
+        .collect()
+}
+
 /// `only_new` limits the listed issues to new code; measures and gate are unaffected.
 pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
     let scan = &outcome.analysis;
@@ -116,6 +175,8 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
                 .files
                 .get(&f.path)
                 .map(FileCoverage::from_hits),
+            branch_coverage: line_branches(scan.coverage.branches.get(&f.path)),
+            function_coverage: function_calls(scan.coverage.functions.get(&f.path)),
         })
         .collect();
     let loc = |s: crate::duplication::Span| Location {

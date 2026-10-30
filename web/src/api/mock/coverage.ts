@@ -19,11 +19,38 @@ const FILES: [path: string, lines: number, missed: number][] = [
 function files(withData: boolean): CoverageFile[] {
   const rows = FILES.map(([path, lines, missed]) => {
     const coverable = lines - Math.floor(lines / 4)
-    return { path, language: 'typescript', covered: withData ? coverable - missed : null, uncovered: withData ? missed : null }
+    const f = details(lines, missed)
+    const count = <T,>(all: T[], ok: (x: T) => boolean) => ({ covered: all.filter(ok).length, total: all.length })
+    return {
+      path,
+      language: 'typescript',
+      covered: withData ? coverable - missed : null,
+      uncovered: withData ? missed : null,
+      branches: withData ? { covered: f.branches.reduce((n, b) => n + b.taken, 0), total: f.branches.reduce((n, b) => n + b.total, 0) } : null,
+      functions: withData ? count(f.functions, (x) => x.calls > 0) : null,
+    }
   })
   // A file the coverage reports didn't list.
-  rows.push({ path: 'src/generated/schema.ts', language: 'typescript', covered: null, uncovered: null })
+  rows.push({ path: 'src/generated/schema.ts', language: 'typescript', covered: null, uncovered: null, branches: null, functions: null })
   return rows.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+/**
+ * A file's branches and functions: an `if` every eight lines, one outcome
+ * never taken where the file has missed lines; a function every sixteen,
+ * never called once it starts in the untested tail.
+ */
+function details(length: number, missed: number) {
+  const tail = length - Math.ceil((missed * 4) / 3)
+  const branches = Array.from({ length: Math.floor(length / 8) }, (_, i) => {
+    const line = i * 8 + 2
+    return { line, taken: line > tail ? 0 : missed > 0 && i % 2 === 0 ? 1 : 2, total: 2 }
+  })
+  const functions = Array.from({ length: Math.ceil(length / 16) }, (_, i) => {
+    const line = i * 16 + 1
+    return { name: `step${i + 1}`, line, calls: line > tail ? 0 : 3 + i }
+  })
+  return { branches, functions }
 }
 
 export function coverageList(p: ProjectDetail): CoverageList {
@@ -69,6 +96,8 @@ export function fileCoverage(p: ProjectDetail, path: string): FileCoverage {
     language: 'typescript',
     covered: withData ? coverable.slice(0, coverable.length - missed) : null,
     uncovered: withData ? coverable.slice(coverable.length - missed) : null,
+    branches: withData ? details(length, missed).branches : null,
+    functions: withData ? details(length, missed).functions : null,
     lines,
     truncated: false,
   }

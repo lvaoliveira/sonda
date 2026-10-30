@@ -221,6 +221,45 @@ fn check_coverage(c: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// A positive line number, as the coverage fields carry them.
+fn line_number(v: &Value) -> Option<u64> {
+    v.as_u64().filter(|n| (1..=u64::from(u32::MAX)).contains(n))
+}
+
+/// `[{"line", "taken", "total"}]`, by ascending line, with
+/// `0 <= taken <= total` and at least one branch per line.
+fn check_branch_coverage(b: &Value) -> Result<(), String> {
+    let bad = || "branch_coverage must be [{line, taken, total}] by ascending line".to_string();
+    let mut last = 0;
+    for entry in b.as_array().ok_or_else(bad)? {
+        let e = entry.as_object().filter(|e| e.len() == 3).ok_or_else(bad)?;
+        let line = e.get("line").and_then(line_number).ok_or_else(bad)?;
+        let taken = e.get("taken").and_then(Value::as_u64).ok_or_else(bad)?;
+        let total = e.get("total").and_then(Value::as_u64).ok_or_else(bad)?;
+        if line <= last || total == 0 || taken > total || total > u64::from(u32::MAX) {
+            return Err(bad());
+        }
+        last = line;
+    }
+    Ok(())
+}
+
+/// `[{"name", "line", "calls"}]`: names of 1-1000 characters without
+/// control characters, positive lines.
+fn check_function_coverage(c: &Value) -> Result<(), String> {
+    let bad = || "function_coverage must be [{name, line, calls}]".to_string();
+    for entry in c.as_array().ok_or_else(bad)? {
+        let e = entry.as_object().filter(|e| e.len() == 3).ok_or_else(bad)?;
+        let name = e.get("name").and_then(Value::as_str).ok_or_else(bad)?;
+        if name.is_empty() || name.chars().count() > 1000 || name.chars().any(char::is_control) {
+            return Err(bad());
+        }
+        e.get("line").and_then(line_number).ok_or_else(bad)?;
+        e.get("calls").and_then(Value::as_u64).ok_or_else(bad)?;
+    }
+    Ok(())
+}
+
 fn decode(body: &[u8], gzip: bool, max_json: u64) -> Result<Upload, ApiError> {
     let json = if gzip {
         let mut out = Vec::new();
@@ -305,6 +344,12 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         }
         if let Some(c) = f.metrics.get("coverage") {
             check_coverage(c).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
+        }
+        if let Some(b) = f.metrics.get("branch_coverage") {
+            check_branch_coverage(b).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
+        }
+        if let Some(c) = f.metrics.get("function_coverage") {
+            check_function_coverage(c).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
         }
         files.push(StoredFile {
             path: f.path.clone(),
@@ -514,6 +559,38 @@ mod tests {
             json!({ "covered": [], "uncovered": [5_000_000_000u64] }),
         ] {
             assert!(check_coverage(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn branch_and_function_coverage_are_checked() {
+        use serde_json::json;
+        assert!(
+            check_branch_coverage(&json!([
+                { "line": 1, "taken": 0, "total": 2 },
+                { "line": 4, "taken": 2, "total": 2 }
+            ]))
+            .is_ok()
+        );
+        for bad in [
+            json!({}),
+            json!([{ "line": 1, "taken": 3, "total": 2 }]),
+            json!([{ "line": 1, "taken": 0, "total": 0 }]),
+            json!([{ "line": 0, "taken": 0, "total": 1 }]),
+            json!([{ "line": 2, "taken": 0, "total": 1 }, { "line": 2, "taken": 0, "total": 1 }]),
+            json!([{ "line": 1, "taken": 0, "total": 1, "x": 1 }]),
+        ] {
+            assert!(check_branch_coverage(&bad).is_err(), "{bad}");
+        }
+        assert!(check_function_coverage(&json!([{ "name": "f", "line": 3, "calls": 0 }])).is_ok());
+        for bad in [
+            json!([{ "name": "", "line": 3, "calls": 0 }]),
+            json!([{ "name": "a\nb", "line": 3, "calls": 0 }]),
+            json!([{ "name": "f", "line": 0, "calls": 0 }]),
+            json!([{ "name": "f", "line": 3, "calls": -1 }]),
+            json!([{ "name": "f", "line": 3 }]),
+        ] {
+            assert!(check_function_coverage(&bad).is_err(), "{bad}");
         }
     }
 }

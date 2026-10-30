@@ -490,6 +490,15 @@ export interface CoverageFile {
   /** Lines the coverage reports list as run and not run; null when they don't list the file. */
   covered: number | null
   uncovered: number | null
+  /** Branches taken at least once, of all; null without branch data. */
+  branches: CoverageCounts | null
+  /** Functions called at least once, of all; null without function data. */
+  functions: CoverageCounts | null
+}
+
+export interface CoverageCounts {
+  covered: number
+  total: number
 }
 
 /** One file's source with its covered and uncovered lines. */
@@ -502,6 +511,10 @@ export interface FileCoverage {
   /** Null when the coverage reports don't list the file. */
   covered: number[] | null
   uncovered: number[] | null
+  /** Lines with branches, and how many of them ran; null without branch data. */
+  branches: { line: number; taken: number; total: number }[] | null
+  /** Functions by line, and how often each was called; null without function data. */
+  functions: { name: string; line: number; calls: number }[] | null
   lines: CodeLine[]
   /** The file is longer than what `lines` shows. */
   truncated: boolean

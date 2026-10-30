@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { CoverageFile, CoverageList, FileCoverage } from '@/api/types'
+import type { CoverageCounts, CoverageFile, CoverageList, FileCoverage } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button, Chip, Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
@@ -27,10 +27,16 @@ interface Entry {
   dir: boolean
   covered: number
   uncovered: number
+  /** Branches taken and all; functions called and all (0 of 0 without data). */
+  branches: CoverageCounts
+  functions: CoverageCounts
   /** Files the coverage reports listed, and didn't. */
   files: number
   withoutData: number
 }
+
+const ZERO: CoverageCounts = { covered: 0, total: 0 }
+const add = (a: CoverageCounts, b: CoverageCounts | null): CoverageCounts => (b ? { covered: a.covered + b.covered, total: a.total + b.total } : a)
 
 const pctOf = (e: { covered: number; uncovered: number }) => (e.covered + e.uncovered === 0 ? null : (100 * e.covered) / (e.covered + e.uncovered))
 
@@ -46,7 +52,7 @@ function Failed({ what, error, back }: { what: string; error: Error; back: { to:
   )
 }
 
-/** Line coverage by directory and file, as an LCOV HTML report shows it. */
+/** Line, branch and function coverage by directory and file, as an LCOV HTML report shows it. */
 export function CoveragePage() {
   const api = useApi()
   const { key = '' } = useParams()
@@ -75,6 +81,8 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
   const [gapsOnly, setGapsOnly] = useState(false)
   const withData = c.files.filter((f) => f.covered != null)
   const total = withData.reduce((t, f) => ({ covered: t.covered + (f.covered ?? 0), uncovered: t.uncovered + (f.uncovered ?? 0) }), { covered: 0, uncovered: 0 })
+  const branches = c.files.reduce((t, f) => add(t, f.branches), ZERO)
+  const functions = c.files.reduce((t, f) => add(t, f.functions), ZERO)
   const prefix = dir ? `${dir}/` : ''
   const entries = useMemo(() => {
     const inDir = c.files.filter((f) => f.path.startsWith(prefix))
@@ -104,7 +112,7 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
         title="Coverage"
         summary={
           <>
-            {c.project} · {c.branch} · line coverage from analysis{' '}
+            {c.project} · {c.branch} · coverage from analysis{' '}
             <Link to={`/analyses/${c.analysis.id}`} className="font-mono text-xs">
               {c.analysis.sha.slice(0, 9)}
             </Link>
@@ -126,6 +134,8 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
           <MetricGrid label="Coverage totals" minCell={170}>
             <Tile label="Line coverage" value={c.coverage == null ? '—' : `${c.coverage.toFixed(1)}%`} note="of the lines the coverage reports list" color={c.coverage == null ? undefined : coverageColor(c.coverage)} />
             <Tile label="Covered lines" value={formatNumber(total.covered)} note={`of ${formatNumber(total.covered + total.uncovered)} coverable`} />
+            <CountTile label="Branch coverage" counts={branches} what="branches taken" />
+            <CountTile label="Function coverage" counts={functions} what="functions called" />
             <Tile label="Uncovered lines" value={formatNumber(total.uncovered)} note={`in ${withData.filter((f) => (f.uncovered ?? 0) > 0).length} files`} color={total.uncovered > 0 ? 'var(--sd-crit)' : undefined} />
             <Tile label="Files without data" value={formatNumber(c.files.length - withData.length)} note={`of ${formatNumber(c.files.length)} analyzed`} />
           </MetricGrid>
@@ -176,10 +186,11 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
                 <thead className="text-xs text-fg-muted">
                   <tr>
                     <th className={`${th} pl-5`}>{q.trim() ? 'File' : 'Name'}</th>
-                    <th className={`${th} w-[180px]`}>Coverage</th>
+                    <th className={`${th} w-[190px]`}>Lines</th>
                     <th className={`${th} text-right`}>Covered</th>
-                    <th className={`${th} text-right`}>Coverable</th>
-                    <th className={`${th} pr-5 text-right`}>Uncovered</th>
+                    <th className={`${th} text-right`}>Branches</th>
+                    <th className={`${th} text-right`}>Functions</th>
+                    <th className={`${th} pr-5 text-right`}>Uncovered lines</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -199,8 +210,13 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
                           {e.dir && e.withoutData > 0 && <span className="ml-2 text-xs text-fg-faint">{e.withoutData} without data</span>}
                         </td>
                         <td className={td}>{noData ? <span className="text-xs text-fg-faint">no data</span> : <Bar pct={pct} />}</td>
-                        <td className={`${td} text-right font-mono`}>{noData ? '—' : formatNumber(e.covered)}</td>
-                        <td className={`${td} text-right font-mono`}>{noData ? '—' : formatNumber(e.covered + e.uncovered)}</td>
+                        <td className={`${td} text-right font-mono text-fg-muted`}>{noData ? '—' : `${formatNumber(e.covered)}/${formatNumber(e.covered + e.uncovered)}`}</td>
+                        <td className={`${td} text-right`}>
+                          <Fraction counts={e.branches} />
+                        </td>
+                        <td className={`${td} text-right`}>
+                          <Fraction counts={e.functions} />
+                        </td>
                         <td className={`${td} pr-5 text-right font-mono`} style={{ color: e.uncovered > 0 ? 'var(--sd-crit)' : undefined }}>
                           {noData ? '—' : formatNumber(e.uncovered)}
                         </td>
@@ -224,7 +240,17 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
 }
 
 function fileEntry(f: CoverageFile, name: string): Entry {
-  return { name, path: f.path, dir: false, covered: f.covered ?? 0, uncovered: f.uncovered ?? 0, files: f.covered == null ? 0 : 1, withoutData: f.covered == null ? 1 : 0 }
+  return {
+    name,
+    path: f.path,
+    dir: false,
+    covered: f.covered ?? 0,
+    uncovered: f.uncovered ?? 0,
+    branches: f.branches ?? ZERO,
+    functions: f.functions ?? ZERO,
+    files: f.covered == null ? 0 : 1,
+    withoutData: f.covered == null ? 1 : 0,
+  }
 }
 
 /** The files under `prefix`, as its direct subdirectories (with totals) and files. */
@@ -239,10 +265,12 @@ function group(files: CoverageFile[], prefix: string): Entry[] {
       continue
     }
     const name = rest.slice(0, slash)
-    const e = dirs.get(name) ?? { name, path: prefix + name, dir: true, covered: 0, uncovered: 0, files: 0, withoutData: 0 }
+    const e = dirs.get(name) ?? { name, path: prefix + name, dir: true, covered: 0, uncovered: 0, branches: ZERO, functions: ZERO, files: 0, withoutData: 0 }
     const one = fileEntry(f, name)
     e.covered += one.covered
     e.uncovered += one.uncovered
+    e.branches = add(e.branches, one.branches)
+    e.functions = add(e.functions, one.functions)
     e.files += one.files
     e.withoutData += one.withoutData
     dirs.set(name, e)
@@ -259,6 +287,32 @@ function Bar({ pct }: { pct: number | null }) {
       </span>
       <Mono className="text-xs">{pct.toFixed(1)}%</Mono>
     </span>
+  )
+}
+
+/** "50.0% 1/2", colored as coverage is; a dash without data. */
+function Fraction({ counts }: { counts: CoverageCounts }) {
+  if (counts.total === 0) return <span className="text-xs text-fg-faint">—</span>
+  const pct = (100 * counts.covered) / counts.total
+  return (
+    <span className="font-mono text-xs whitespace-nowrap">
+      <span style={{ color: coverageColor(pct) }}>{pct.toFixed(1)}%</span>{' '}
+      <span className="text-fg-faint">
+        {formatNumber(counts.covered)}/{formatNumber(counts.total)}
+      </span>
+    </span>
+  )
+}
+
+function CountTile({ label, counts, what }: { label: string; counts: CoverageCounts; what: string }) {
+  const pct = counts.total === 0 ? null : (100 * counts.covered) / counts.total
+  return (
+    <Tile
+      label={label}
+      value={pct == null ? '—' : `${pct.toFixed(1)}%`}
+      note={pct == null ? 'not in the coverage reports' : `${formatNumber(counts.covered)} of ${formatNumber(counts.total)} ${what}`}
+      color={pct == null ? undefined : coverageColor(pct)}
+    />
   )
 }
 
@@ -302,9 +356,15 @@ export function FileCoveragePage() {
 function FileView({ f }: { f: FileCoverage }) {
   const covered = useMemo(() => new Set(f.covered ?? []), [f.covered])
   const uncovered = useMemo(() => new Set(f.uncovered ?? []), [f.uncovered])
-  // The first line of each block of uncovered lines, to step through them.
-  // Only a covered line ends a block; comments and blank lines don't.
-  const gaps = useMemo(
+  const branchAt = useMemo(() => new Map((f.branches ?? []).map((b) => [b.line, b])), [f.branches])
+  const uncalledAt = useMemo(() => {
+    const at = new Map<number, string[]>()
+    for (const fn of f.functions ?? []) if (fn.calls === 0) at.set(fn.line, [...(at.get(fn.line) ?? []), fn.name])
+    return at
+  }, [f.functions])
+  // The first line of each block of uncovered lines. Only a covered line
+  // ends a block; comments and blank lines don't.
+  const blocks = useMemo(
     () =>
       (f.uncovered ?? []).filter((n, i, all) => {
         if (i === 0) return true
@@ -313,6 +373,10 @@ function FileView({ f }: { f: FileCoverage }) {
       }),
     [f.uncovered, covered],
   )
+  // Lines that ran but left a branch untaken: an `if` whose `else` never ran.
+  const partial = useMemo(() => (f.branches ?? []).filter((b) => b.taken < b.total && !uncovered.has(b.line)).map((b) => b.line), [f.branches, uncovered])
+  // Both, in order, to step through.
+  const gaps = useMemo(() => [...blocks, ...partial].sort((a, b) => a - b), [blocks, partial])
   const [at, setAt] = useState(-1)
   const source = useRef<HTMLDivElement>(null)
   const go = (i: number) => {
@@ -321,6 +385,10 @@ function FileView({ f }: { f: FileCoverage }) {
   }
   const n = covered.size + uncovered.size
   const pct = n === 0 ? null : (100 * covered.size) / n
+  const count = (items: { ok: boolean }[] | null, what: string) =>
+    items && items.length > 0 ? ` · ${items.filter((i) => i.ok).length} of ${items.length} ${what}` : ''
+  const branchesTaken = f.branches && f.branches.flatMap((b) => Array.from({ length: b.total }, (_, i) => ({ ok: i < b.taken })))
+  const functionsCalled = f.functions && f.functions.map((fn) => ({ ok: fn.calls > 0 }))
   return (
     <>
       <PageHeader
@@ -333,13 +401,17 @@ function FileView({ f }: { f: FileCoverage }) {
               : pct == null
                 ? 'no coverable lines'
                 : `${pct.toFixed(1)}% · ${formatNumber(covered.size)} of ${formatNumber(n)} lines covered`}
+            {count(branchesTaken, 'branches taken')}
+            {count(functionsCalled, 'functions called')}
           </>
         }
       >
         {gaps.length > 0 && (
           <div className="flex items-center gap-2">
             <span className="text-[13px] text-fg-muted">
-              {gaps.length} uncovered {gaps.length === 1 ? 'block' : 'blocks'}
+              {blocks.length > 0 && `${blocks.length} uncovered ${blocks.length === 1 ? 'block' : 'blocks'}`}
+              {blocks.length > 0 && partial.length > 0 && ' · '}
+              {partial.length > 0 && `${partial.length} ${partial.length === 1 ? 'line' : 'lines'} with untaken branches`}
               {at >= 0 && ` · ${at + 1} of ${gaps.length}`}
             </span>
             <Button onClick={() => go(at <= 0 ? gaps.length - 1 : at - 1)}>Previous uncovered</Button>
@@ -359,6 +431,8 @@ function FileView({ f }: { f: FileCoverage }) {
         <div className="flex flex-wrap gap-4 border-b border-line px-5 py-2.5 text-xs text-fg-muted">
           <Legend color="var(--sd-ok)" glyph="✓" label="Covered: run by the tests" />
           <Legend color="var(--sd-crit)" glyph="✗" label="Uncovered: never run" />
+          {f.branches && <Legend color="var(--sd-warn)" glyph="◆" label="Branches taken, of the line’s" />}
+          {f.functions && <Legend color="var(--sd-crit)" glyph="ƒ" label="Function never called" />}
           <span>Unmarked lines aren’t coverable (comments, declarations, blank lines).</span>
         </div>
         <div ref={source} role="region" aria-label="Source code with coverage" className="overflow-auto bg-canvas py-2 font-mono text-[11.5px] leading-[1.85]">
@@ -393,6 +467,7 @@ function FileView({ f }: { f: FileCoverage }) {
                     </span>
                   ))}
                 </span>
+                <Marks branches={branchAt.get(line.number)} uncalled={uncalledAt.get(line.number)} />
               </div>
             )
           })}
@@ -401,6 +476,32 @@ function FileView({ f }: { f: FileCoverage }) {
         {f.truncated && <p className="m-0 border-t border-line px-5 py-3 text-xs text-fg-faint">The file is longer; only its first {formatNumber(f.lines.length)} lines are shown.</p>}
       </Card>
     </>
+  )
+}
+
+/** A line's untaken branches and never-called functions, after its code. */
+function Marks({ branches, uncalled }: { branches?: { taken: number; total: number }; uncalled?: string[] }) {
+  const partly = branches && branches.taken < branches.total
+  if (!partly && !uncalled) return null
+  const mark = 'rounded px-1.5 font-sans text-[11px] whitespace-nowrap select-none'
+  return (
+    <span className="flex flex-none items-center gap-1.5 pr-5">
+      {partly && (
+        <span
+          data-branches={`${branches.taken}/${branches.total}`}
+          title={`${branches.taken} of ${branches.total} branches taken`}
+          className={mark}
+          style={{ color: 'var(--sd-warn)', background: 'color-mix(in oklch, var(--sd-warn) 14%, transparent)' }}
+        >
+          ◆ {branches.taken}/{branches.total} branches
+        </span>
+      )}
+      {uncalled && (
+        <span data-uncalled={uncalled.join(', ')} className={mark} style={{ color: 'var(--sd-crit)', background: 'color-mix(in oklch, var(--sd-crit) 14%, transparent)' }}>
+          ƒ {uncalled.join(', ')} never called
+        </span>
+      )}
+    </span>
   )
 }
 
