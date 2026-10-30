@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::lang::Lang;
 use crate::model::{Category, Severity};
 use std::sync::OnceLock;
-use tree_sitter::{Node, Query};
+use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
 
@@ -92,11 +92,14 @@ pub(crate) struct ActiveRule {
     pub(crate) severity: Severity,
 }
 
-pub(crate) struct CompiledQuery {
-    pub(crate) active: usize,
+/// The active rules' queries for one language, compiled into one query, so
+/// a file's tree is walked once rather than once per rule.
+pub(crate) struct CompiledQueries {
     pub(crate) query: Query,
     pub(crate) match_capture: u32,
-    pub(crate) filter: Option<Filter>,
+    /// For each pattern of `query`: the index of its rule in
+    /// `RuleSet::active`, and the rule's filter.
+    pub(crate) patterns: Vec<(usize, Option<Filter>)>,
 }
 
 /// The enabled rules with their effective severity. Queries are compiled
@@ -105,8 +108,9 @@ pub(crate) struct CompiledQuery {
 /// process would pay it again).
 pub(crate) struct RuleSet {
     pub(crate) active: Vec<ActiveRule>,
-    /// Indexed by `Lang::index`.
-    queries: Vec<OnceLock<Result<Vec<CompiledQuery>, String>>>,
+    /// Indexed by `Lang::index`; None when no active rule has a query for
+    /// the language.
+    queries: Vec<OnceLock<Result<Option<CompiledQueries>, String>>>,
 }
 
 impl RuleSet {
@@ -134,15 +138,19 @@ impl RuleSet {
 
     /// The compiled queries of the active rules for `lang`. An error means a
     /// built-in query does not compile: a bug, which tests guard against.
-    pub(crate) fn queries(&self, lang: Lang) -> Result<&[CompiledQuery], String> {
+    pub(crate) fn queries(&self, lang: Lang) -> Result<Option<&CompiledQueries>, String> {
         let slot = &self.queries[usize::from(lang.index())];
-        slot.get_or_init(|| self.compile_for(lang))
-            .as_deref()
+        slot.get_or_init(|| self.compile_for(lang).map_err(|e| e.to_string()))
+            .as_ref()
+            .map(Option::as_ref)
             .map_err(Clone::clone)
     }
 
-    fn compile_for(&self, lang: Lang) -> Result<Vec<CompiledQuery>, String> {
-        let mut compiled = Vec::new();
+    fn compile_for(&self, lang: Lang) -> Result<Option<CompiledQueries>, Error> {
+        // Each rule's query, one after another; `starts` records where each
+        // begins, to find which rule a pattern (or an error) belongs to.
+        let mut source = String::new();
+        let mut starts: Vec<(usize, usize, Option<Filter>)> = Vec::new();
         for (idx, a) in self.active.iter().enumerate() {
             if let Check::Query {
                 langs,
@@ -151,40 +159,55 @@ impl RuleSet {
             } = a.rule.check
                 && langs.contains(&lang)
             {
-                compiled
-                    .push(compile(a.rule.id, lang, query, idx, filter).map_err(|e| e.to_string())?);
+                starts.push((source.len(), idx, filter));
+                source.push_str(query);
+                source.push('\n');
             }
         }
-        Ok(compiled)
+        if starts.is_empty() {
+            return Ok(None);
+        }
+        let owner = |byte: usize| starts[starts.partition_point(|s| s.0 <= byte) - 1];
+        let rule = |byte: usize| self.active[owner(byte).1].rule;
+        let query = Query::new(&lang.grammar(), &source).map_err(|e| {
+            let r = rule(e.offset);
+            // Compiled alone, the rule's error points into its own query.
+            let detail = match r.check {
+                Check::Query { query, .. } => Query::new(&lang.grammar(), query).err(),
+                Check::Structural => None,
+            }
+            .unwrap_or(e);
+            Error::Internal(format!(
+                "rule {}: query does not compile for {}: {detail}",
+                r.id,
+                lang.name()
+            ))
+        })?;
+        let match_capture = query.capture_index_for_name("match");
+        let mut patterns = Vec::with_capacity(query.pattern_count());
+        for i in 0..query.pattern_count() {
+            let (_, idx, filter) = owner(query.start_byte_for_pattern(i));
+            let captures_match = match_capture.is_some_and(|m| {
+                query.capture_quantifiers(i)[m as usize] != CaptureQuantifier::Zero
+            });
+            if !captures_match {
+                return Err(Error::Internal(format!(
+                    "rule {}: query has a pattern without a @match capture",
+                    self.active[idx].rule.id
+                )));
+            }
+            patterns.push((idx, filter));
+        }
+        Ok(Some(CompiledQueries {
+            query,
+            match_capture: match_capture.unwrap_or_default(),
+            patterns,
+        }))
     }
 
     pub(crate) fn get(&self, id: &str) -> Option<&ActiveRule> {
         self.active.iter().find(|a| a.rule.id == id)
     }
-}
-
-fn compile(
-    id: &str,
-    lang: Lang,
-    source: &str,
-    active: usize,
-    filter: Option<Filter>,
-) -> Result<CompiledQuery, Error> {
-    let query = Query::new(&lang.grammar(), source).map_err(|e| {
-        Error::Internal(format!(
-            "rule {id}: query does not compile for {}: {e}",
-            lang.name()
-        ))
-    })?;
-    let match_capture = query
-        .capture_index_for_name("match")
-        .ok_or_else(|| Error::Internal(format!("rule {id}: query has no @match capture")))?;
-    Ok(CompiledQuery {
-        active,
-        query,
-        match_capture,
-        filter,
-    })
 }
 
 #[cfg(test)]
@@ -275,11 +298,15 @@ mod tests {
             let compiled = rules
                 .queries(lang)
                 .unwrap_or_else(|e| panic!("{lang:?}: {e}"));
+            let mut covered: Vec<usize> = compiled
+                .map(|c| c.patterns.iter().map(|p| p.0).collect())
+                .unwrap_or_default();
+            covered.dedup();
             let expected = RULES
                 .iter()
                 .filter(|r| matches!(r.check, Check::Query { langs, .. } if langs.contains(&lang)))
                 .count();
-            assert_eq!(compiled.len(), expected, "{lang:?}");
+            assert_eq!(covered.len(), expected, "{lang:?}");
         }
     }
 

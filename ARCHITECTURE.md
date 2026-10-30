@@ -7,7 +7,8 @@ in the ADRs in [`docs/adr/`](docs/adr/).
 
 ```
 sonda_core::run
-  ├─ RuleSet::new           compile each enabled rule's tree-sitter query (once)
+  ├─ RuleSet::new           enabled rules; per language, their tree-sitter queries are
+  │                         combined into one, compiled on first use, matched in one pass
   └─ scanner::scan
        ├─ collect_files     walk the root (.gitignore + scan.exclude, no symlinks), sort by path
        ├─ load_coverage     read the LCOV files the user named
@@ -46,7 +47,7 @@ The `architecture` tests in `crates/sonda-core/src/lib.rs` enforce this.
 | Application | `lib.rs` | `run`, `load_config`, `Outcome`: the public entry points |
 | Infrastructure | `scanner.rs`, `git.rs`, `worker.rs`, `upload.rs` | Filesystem walk and capped reads, coverage files, git object reads, the analysis worker pool and its protocol, reading and checking sources for `sonda upload` (no networking: the CLI's `upload.rs` does the HTTP) |
 | Domain | `analysis.rs` | One file: parse, rules, complexity, metrics, tokens, suppressions |
-| | `rules/` | Rule catalog (`catalog.rs`) and compiled queries (`RuleSet`) |
+| | `rules/` | Rule catalog (`catalog/`, one file per language) and compiled queries (`RuleSet`) |
 | | `duplication.rs` | Cross-file copy-paste detection |
 | | `newcode.rs`, `coverage.rs` | Changed-line diff, LCOV parsing |
 | | `project.rs`, `measures.rs`, `gate.rs` | Analysis result, metrics, quality gate |

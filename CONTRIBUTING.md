@@ -93,6 +93,22 @@ Rule {
 - Regenerate the docs with
   `cargo run -q -p sonda -- rules --format markdown > docs/rules.md`.
 
+Rules run on every file, including generated and minified ones, so keep
+them linear in the file's size:
+
+- **Look down, not up.** `Node::parent()` and sibling lookups walk from the
+  root, so calling them for a common node (every `if`, every object member)
+  is quadratic on deep or wide code. Capture the container instead (the
+  object, the switch body, the `finally` block) and walk its children.
+- **Prefer patterns without later child steps on deep nodes.** A pattern
+  like `(binary_expression right: ...)` or `operator: ...` stays in progress
+  while the left operand's subtree is matched, which is quadratic on long
+  `a + b + ...` chains. Match `(binary_expression) @match` and check the
+  operator in the filter.
+- **Compare text in the filter, lengths first**, rather than `#eq?` on
+  captures that can be large.
+- `large_and_deep_code_stays_fast` in `catalog/js.rs` guards these shapes.
+
 ### Rules equivalent to SonarQube's
 
 sonda is working towards an equivalent for each SonarQube rule key

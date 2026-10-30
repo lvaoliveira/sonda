@@ -206,21 +206,23 @@ fn run_queries(
         timed_out.set(flow.is_break());
         flow
     };
-    for cq in rules.queries(lang).map_err(FileError::Rules)? {
-        let active = &rules.active[cq.active];
-        let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
-        let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
-        while let Some(m) = matches.next() {
-            for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
-                if cq.filter.is_none_or(|f| f(cap.node, bytes)) {
-                    let msg = active.rule.message.to_string();
-                    issues.push(ctx.issue(active, cap.node, msg, active.rule.effort_minutes));
-                }
+    let Some(cq) = rules.queries(lang).map_err(FileError::Rules)? else {
+        return Ok(issues);
+    };
+    let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
+    let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
+    while let Some(m) = matches.next() {
+        let (idx, filter) = cq.patterns[m.pattern_index];
+        let active = &rules.active[idx];
+        for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
+            if filter.is_none_or(|f| f(cap.node, bytes)) {
+                let msg = active.rule.message.to_string();
+                issues.push(ctx.issue(active, cap.node, msg, active.rule.effort_minutes));
             }
         }
-        if timed_out.get() {
-            return Err(FileError::QueryTimeout);
-        }
+    }
+    if timed_out.get() {
+        return Err(FileError::QueryTimeout);
     }
     Ok(issues)
 }
