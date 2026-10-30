@@ -43,15 +43,16 @@ The `architecture` tests in `crates/sonda-core/src/lib.rs` enforce this.
 
 | Layer | Modules | Responsibility |
 |---|---|---|
-| Interface | `main.rs`, `report/` | CLI arguments, logging setup, exit codes; text/JSON/SARIF rendering and terminal escaping |
+| Interface | `main.rs`, `report/` | CLI arguments, logging setup, exit codes; text/JSON/SARIF rendering, CycloneDX/SPDX SBOMs (`report/sbom.rs`) and terminal escaping |
 | Application | `lib.rs` | `run`, `load_config`, `Outcome`: the public entry points |
-| Infrastructure | `scanner.rs`, `git.rs`, `worker.rs`, `upload.rs` | Filesystem walk and capped reads, coverage files, git object reads, the analysis worker pool and its protocol, reading and checking sources for `sonda upload` (no networking: the CLI's `upload.rs` does the HTTP) |
+| Infrastructure | `scanner.rs`, `git.rs`, `worker.rs`, `upload.rs` | Filesystem walk and capped reads (sources and lockfiles), coverage files, git object reads, the analysis worker pool and its protocol, reading and checking sources for `sonda upload` (no networking: the CLI's `upload.rs` does the HTTP) |
 | Domain | `analysis.rs` | One file: parse, rules, complexity, metrics, tokens, suppressions |
 | | `rules/` | Rule catalog (`catalog/`, one file per language) and compiled queries (`RuleSet`) |
 | | `duplication.rs` | Cross-file copy-paste detection |
 | | `newcode.rs`, `coverage.rs` | Changed-line diff, LCOV parsing |
 | | `project.rs`, `measures.rs`, `gate.rs` | Analysis result, metrics, quality gate |
 | | `config.rs` | Configuration types, parsing and validation |
+| | `deps/` | Lockfile parsing into dependencies with package URLs (ADR-0009) |
 | Shared | `model.rs`, `lang.rs` | Plain data (`Issue`, `Metric`, `Condition`, ...), language table |
 
 ## Web app

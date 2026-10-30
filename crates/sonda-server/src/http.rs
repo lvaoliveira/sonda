@@ -5,8 +5,8 @@ use crate::api::{ApiError, Caller};
 use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
-    analyses, api, components, db, drill, gates, ingest, issues, overview, projects, rules,
-    security, session, throttle,
+    analyses, api, components, db, dependencies, drill, gates, ingest, issues, overview, projects,
+    rules, security, session, throttle,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -49,6 +49,10 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route(
             "/projects/{key}/components/{component}",
             get(components::get_component),
+        )
+        .route(
+            "/projects/{key}/dependencies",
+            get(dependencies::get_dependencies),
         )
         .route("/components", get(components::list_components))
         .route("/security", get(security::get_security))

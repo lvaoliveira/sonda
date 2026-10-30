@@ -1,5 +1,6 @@
 use crate::analysis::FileAnalysis;
 use crate::coverage::Coverage;
+use crate::deps::Dependency;
 use crate::duplication::Duplication;
 use crate::newcode::NewCode;
 
@@ -14,4 +15,6 @@ pub struct ProjectAnalysis {
     pub(crate) new_code: NewCode,
     /// Files that were skipped or only partly analyzed. Sorted.
     pub(crate) warnings: Vec<String>,
+    /// From the project's lockfiles (ADR-0009). Sorted.
+    pub(crate) dependencies: Vec<Dependency>,
 }

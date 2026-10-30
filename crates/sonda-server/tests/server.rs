@@ -28,6 +28,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
         tables,
         [
             "analyses",
+            "analysis_dependencies",
             "analysis_files",
             "issue_events",
             "issues",

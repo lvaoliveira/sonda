@@ -243,7 +243,9 @@ branch by default). It returns:
 - the measures, overall and on new code;
 - the branch's last 12 analyses;
 - its components: top-level directories with languages, files, lines, open
-  issues, debt, and owners from the uploaded CODEOWNERS file.
+  issues, debt, and owners from the uploaded CODEOWNERS file;
+- a summary of its dependencies (total, direct, by ecosystem), or null when
+  the analysis recorded none.
 
 An unknown project is `404`; a branch without analyses is `400`, naming
 the analyzed branches.
@@ -312,6 +314,19 @@ one branch (the main branch by default). It returns:
 
 An unknown project or component is `404`; a branch without analyses is
 `400`.
+
+`GET /api/projects/{key}/dependencies?branch=` lists the packages the
+branch's latest analysis pinned, from the lockfiles in its report
+([ADR-0009](adr/0009-dependencies-and-advisories.md)):
+- one row per package URL, with its version, whether it's direct, its
+  license, and every lockfile that pins it;
+- counts by ecosystem, lockfile and license;
+- what changed since the branch's previous analysis: packages added,
+  removed, or pinned at different versions (null for the first analysis).
+
+Uploads carry them in the report's `dependencies` (at most 200,000, each
+checked: a known ecosystem, a `pkg:` URL, bounded fields, a safe relative
+lockfile path, no duplicates). Reports from an older CLI have none.
 
 ## Analyses
 

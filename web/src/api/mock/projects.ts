@@ -1,4 +1,5 @@
 import type { GateState, Level, ProjectDetail, ProjectList, ProjectRow } from '../types'
+import { DEPENDENCY_SUMMARY } from './dependencies'
 
 type Row = [key: string, languages: string[], gate: GateState, levels: [Level, Level, Level], coverage: number | null, dup: number, issues: number, ncloc: number, hoursAgo: number]
 
@@ -102,5 +103,7 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
       issues: Math.max(0, Math.round(p.issues / 2 ** (i + 1))),
       debtMinutes: 4_000 / (i + 1),
     })),
+    // A release branch analyzed before lockfiles were read.
+    dependencies: on === p.mainBranch ? DEPENDENCY_SUMMARY : null,
   }
 }

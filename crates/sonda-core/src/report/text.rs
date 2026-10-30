@@ -125,6 +125,9 @@ pub fn render(r: &Report) -> String {
         pct(Metric::NewCoverage),
         format_minutes(m(Metric::DebtMinutes).unwrap_or(0.0) as u64)
     );
+    if !r.dependencies.is_empty() {
+        let _ = writeln!(out, "  {}", dependency_summary(r.dependencies));
+    }
 
     let _ = writeln!(
         out,
@@ -158,6 +161,43 @@ fn format_minutes(total: u64) -> String {
         (d, 0, _) => format!("{d}d"),
         (d, h, _) => format!("{d}d {h}h"),
     }
+}
+
+/// `Dependencies 182 (npm 120, cargo 62) from 2 lockfiles · 14 direct`.
+fn dependency_summary(deps: &[crate::deps::Dependency]) -> String {
+    let mut by_ecosystem: Vec<(&str, usize)> = Vec::new();
+    for d in deps {
+        match by_ecosystem
+            .iter_mut()
+            .find(|(e, _)| *e == d.ecosystem.as_str())
+        {
+            Some((_, n)) => *n += 1,
+            None => by_ecosystem.push((d.ecosystem.as_str(), 1)),
+        }
+    }
+    let mut lockfiles: Vec<&str> = deps.iter().map(|d| d.source.as_str()).collect();
+    lockfiles.sort_unstable();
+    lockfiles.dedup();
+    let ecosystems: Vec<String> = by_ecosystem
+        .iter()
+        .map(|(e, n)| format!("{e} {n}"))
+        .collect();
+    let mut line = format!(
+        "Dependencies {} ({}) from {} {}",
+        deps.len(),
+        ecosystems.join(", "),
+        lockfiles.len(),
+        if lockfiles.len() == 1 {
+            "lockfile"
+        } else {
+            "lockfiles"
+        }
+    );
+    let direct = deps.iter().filter(|d| d.direct == Some(true)).count();
+    if direct > 0 {
+        let _ = write!(line, " · {direct} direct");
+    }
+    line
 }
 
 #[cfg(test)]

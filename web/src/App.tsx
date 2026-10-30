@@ -6,6 +6,7 @@ import { AccountPage } from '@/pages/AccountPage'
 import { AnalysesPage } from '@/pages/AnalysesPage'
 import { AnalysisPage } from '@/pages/AnalysisPage'
 import { ComponentPage } from '@/pages/ComponentPage'
+import { DependenciesPage } from '@/pages/DependenciesPage'
 import { ComponentsPage } from '@/pages/ComponentsPage'
 import { GatesPage } from '@/pages/GatesPage'
 import { AdminPage } from '@/pages/AdminPage'
@@ -39,6 +40,7 @@ export function AppRoutes() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
+          <Route path="/projects/:key/dependencies" element={<DependenciesPage />} />
           <Route path="/components" element={<ComponentsPage />} />
           <Route path="/security" element={<SecurityPage />} />
           <Route path="/gates" element={<GatesPage />} />

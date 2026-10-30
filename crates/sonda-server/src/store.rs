@@ -109,6 +109,40 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     .execute(&mut *tx)
     .await?;
 
+    let n = a.dependencies.len();
+    let mut ecosystems = Vec::with_capacity(n);
+    let mut names = Vec::with_capacity(n);
+    let mut versions = Vec::with_capacity(n);
+    let mut purls = Vec::with_capacity(n);
+    let mut direct = Vec::with_capacity(n);
+    let mut lockfiles = Vec::with_capacity(n);
+    let mut licenses = Vec::with_capacity(n);
+    for d in a.dependencies {
+        ecosystems.push(d.ecosystem);
+        names.push(d.name);
+        versions.push(d.version);
+        purls.push(d.purl);
+        direct.push(d.direct);
+        lockfiles.push(d.lockfile);
+        licenses.push(d.license);
+    }
+    sqlx::query(
+        "INSERT INTO analysis_dependencies
+             (analysis_id, ecosystem, name, version, purl, direct, lockfile, license)
+         SELECT $1, * FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[],
+                                  $6::bool[], $7::text[], $8::text[])",
+    )
+    .bind(analysis_id)
+    .bind(ecosystems)
+    .bind(names)
+    .bind(versions)
+    .bind(purls)
+    .bind(direct)
+    .bind(lockfiles)
+    .bind(licenses)
+    .execute(&mut *tx)
+    .await?;
+
     let n = a.issues.len();
     let mut cols = IssueColumns::with_capacity(n);
     for i in a.issues {

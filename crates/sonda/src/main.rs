@@ -36,6 +36,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
         sandbox: SandboxArg,
     },
+    /// Write an SBOM of the project's dependencies, from its lockfiles.
+    Sbom(SbomArgs),
     /// Send a JSON report and the analyzed sources to a sonda server.
     Upload(upload::UploadArgs),
     /// Write a default sonda.toml.
@@ -85,6 +87,30 @@ struct ScanArgs {
     /// debugging; a parser crash then aborts the whole scan).
     #[arg(long)]
     no_isolation: bool,
+}
+
+#[derive(Args)]
+struct SbomArgs {
+    /// Project directory.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Config file (default: <path>/sonda.toml if present); its
+    /// scan.exclude applies.
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    #[arg(short, long, value_enum, default_value_t = SbomFormat::Cyclonedx)]
+    format: SbomFormat,
+    /// Write the SBOM to a file instead of stdout.
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SbomFormat {
+    /// CycloneDX 1.6 JSON.
+    Cyclonedx,
+    /// SPDX 2.3 JSON.
+    Spdx,
 }
 
 /// CLI mirror of `SandboxMode`, keeping clap out of the library API.
@@ -189,6 +215,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Scan(args) => scan(args),
         Command::Upload(args) => upload::run(args),
+        Command::Sbom(args) => sbom(args),
         Command::Rules { format } => {
             print!("{}", list_rules(format));
             Ok(ExitCode::SUCCESS)
@@ -252,6 +279,73 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
     } else {
         ExitCode::from(1)
     })
+}
+
+fn sbom(args: SbomArgs) -> Result<ExitCode> {
+    let cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
+    let (dependencies, warnings) = sonda_core::dependencies(&args.path, &cfg)?;
+    for w in &warnings {
+        eprintln!("sonda: {}", report::terminal_safe(w));
+    }
+    let project = std::fs::canonicalize(&args.path)
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "project".into());
+    let timestamp = rfc3339(sbom_time()?);
+    let rendered = match args.format {
+        SbomFormat::Cyclonedx => report::sbom::cyclonedx(&project, &dependencies, &timestamp),
+        SbomFormat::Spdx => report::sbom::spdx(&project, &dependencies, &timestamp),
+    };
+    match &args.output {
+        Some(path) => {
+            std::fs::write(path, rendered)
+                .with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "sonda: {} dependencies — SBOM written to {}",
+                dependencies.len(),
+                path.display()
+            );
+        }
+        None => print!("{rendered}"),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Seconds since the epoch for the SBOM's timestamp: `SOURCE_DATE_EPOCH`
+/// when set, for reproducible builds, else now.
+fn sbom_time() -> Result<u64> {
+    match std::env::var("SOURCE_DATE_EPOCH") {
+        Ok(v) => v
+            .trim()
+            .parse()
+            .with_context(|| format!("SOURCE_DATE_EPOCH is not a number of seconds: {v:?}")),
+        Err(_) => Ok(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("the system clock is before 1970")?
+            .as_secs()),
+    }
+}
+
+/// `2026-10-30T12:00:00Z` (UTC, whole seconds, as SPDX requires).
+fn rfc3339(secs: u64) -> String {
+    let days = secs / 86_400;
+    let rem = secs % 86_400;
+    // Howard Hinnant's civil_from_days, for days since 1970-01-01.
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    )
 }
 
 fn list_rules(format: RulesFormat) -> String {
@@ -368,4 +462,16 @@ fn list_rules(format: RulesFormat) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rfc3339;
+
+    #[test]
+    fn formats_utc_timestamps() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(rfc3339(1_793_361_600), "2026-10-30T12:00:00Z");
+    }
 }

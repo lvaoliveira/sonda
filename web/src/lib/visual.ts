@@ -94,3 +94,6 @@ const LANGUAGE_LABEL: Record<string, string> = {
 export function languageLabel(id: string): string {
   return LANGUAGE_LABEL[id] ?? id
 }
+
+/** Package ecosystems, as dependencies report them. */
+export const ECOSYSTEM_LABEL: Record<string, string> = { npm: 'npm', cargo: 'Cargo', pypi: 'PyPI' }

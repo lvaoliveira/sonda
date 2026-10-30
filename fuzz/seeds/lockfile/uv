@@ -1,0 +1,12 @@
+version = 1
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [{ name = "idna" }]
+
+[[package]]
+name = "idna"
+version = "3.7"
+source = { registry = "https://pypi.org/simple" }
