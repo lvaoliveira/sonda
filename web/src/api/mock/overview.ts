@@ -146,6 +146,7 @@ export function overview(scope: Scope, range: Range): Overview {
     series,
   }))
   return {
+    teams: true,
     summary: { projects: 312, components: 611, lastSounding: '12m ago' },
     focus: [
       {

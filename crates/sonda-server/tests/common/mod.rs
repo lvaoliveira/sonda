@@ -102,6 +102,11 @@ pub const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 /// What `sonda upload` would send for `files`, as plain JSON.
 pub fn upload_json(dir: &Path, files: &[(&str, &str)], branch: &str) -> Value {
+    upload_json_for(dir, files, "payments", branch)
+}
+
+/// As `upload_json`, for any project.
+pub fn upload_json_for(dir: &Path, files: &[(&str, &str)], project: &str, branch: &str) -> Value {
     for (path, content) in files {
         let full = dir.join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -116,7 +121,7 @@ pub fn upload_json(dir: &Path, files: &[(&str, &str)], branch: &str) -> Value {
     let outcome = sonda_core::run(&options, &config).unwrap();
     let json = report::render(&report::build(&outcome, false), report::Format::Json);
     let meta = Meta {
-        project: "payments".into(),
+        project: project.into(),
         branch: branch.into(),
         commit: "0123abc".into(),
     };

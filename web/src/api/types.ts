@@ -61,8 +61,9 @@ export interface FocusItem {
 
 export interface HealthDimension {
   label: 'Reliability' | 'Security' | 'Maintainability' | 'Coverage'
-  level: Level
-  score: number
+  /** Null without data, e.g. no coverage uploaded. */
+  level: Level | null
+  score: number | null
   note: string
   drill: DrillMetric
 }
@@ -102,7 +103,8 @@ export interface ProjectHealth {
   reliability: Level
   security: Level
   maintainability: Level
-  coverage: number
+  /** Null when no coverage is uploaded. */
+  coverage: number | null
   newIssues: number
   /** Open issues over the last 30 days. */
   trend: number[]
@@ -111,7 +113,8 @@ export interface ProjectHealth {
 
 export interface GateDay {
   date: string
-  passRate: number
+  /** Null on days without an analysis. */
+  passRate: number | null
 }
 
 export interface FailingCondition {
@@ -124,25 +127,30 @@ export interface AnalysisSummary {
   project: string
   branch: string
   sha: string
-  message: string
+  /** Null where unknown: commit messages and durations are not uploaded. */
+  message: string | null
   note: string
-  duration: string
+  duration: string | null
   ago: string
   /** 0–100 while running. */
   progress?: number
 }
 
 export interface Overview {
-  summary: { projects: number; components: number; lastSounding: string }
+  /** Whether teams exist, so the "My team" scope means something. */
+  teams: boolean
+  summary: { projects: number; components: number | null; lastSounding: string }
   focus: FocusItem[]
   focusTotal: number
-  health: { score: number; delta: string; dimensions: HealthDimension[] }
+  /** `delta` is null until the server keeps ratings history. */
+  health: { score: number; delta: string | null; dimensions: HealthDimension[] }
   kpis: Kpi[]
   flow: FlowBucket[]
   severities: SeverityCount[]
   projects: ProjectHealth[]
   projectTotal: number
-  gateHistory: { rate: number; delta: number; days: GateDay[]; failing: FailingCondition[] }
+  /** `rate` is null without analyses in the range; `delta` without a previous range. */
+  gateHistory: { rate: number | null; delta: number | null; days: GateDay[]; failing: FailingCondition[] }
   recent: AnalysisSummary[]
 }
 

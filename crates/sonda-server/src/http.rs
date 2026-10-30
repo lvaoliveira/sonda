@@ -3,7 +3,7 @@
 
 use crate::api::{ApiError, Caller};
 use crate::config::Token;
-use crate::{api, db, ingest, issues, rules, session};
+use crate::{api, db, ingest, issues, overview, rules, session};
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware;
@@ -36,6 +36,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         ));
     let reads = Router::new()
         .route("/rules", get(rules::list))
+        .route("/overview", get(overview::get_overview))
         .route("/issues", get(issues::list_issues))
         .route("/issues/{id}", get(issues::get_issue))
         .route_layer(middleware::from_fn_with_state(

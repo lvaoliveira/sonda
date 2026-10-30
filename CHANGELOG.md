@@ -87,6 +87,16 @@ file, the report formats and the public library API.
   The Overview stays on sample data under `pnpm dev`, and says it comes
   next when running against the server. The production build no longer
   contains any sample data.
+- The Overview is built from real history (`GET /api/overview`):
+  - KPIs with trends.
+  - Ratings per ADR-0005.
+  - Where to focus, issue flow, open issues by severity, and project
+    health.
+  - Gate history and recent analyses.
+
+  A project's first analysis counts as its baseline. What the server
+  doesn't know (teams, coverage when not uploaded, commit messages) is
+  shown as such, never invented.
 
 ### Security
 

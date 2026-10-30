@@ -6,9 +6,10 @@ the design handoff in [`../docs/designs/`](../docs/designs/).
 **Status:**
 - **Against `sonda server`:** sign-in, Issues (filtered and paginated by the
   server, with triage) and Rules (read-only) show real data.
-- **Overview:** works against the mock only, until the server keeps analysis
-  history for it. Against the server it says so instead of showing sample
-  numbers.
+- **Overview:** built from the server's analysis history. Data the server
+  doesn't have is shown as missing. Examples: no "My team" scope without
+  teams, and "No data" for coverage that was never uploaded. Without the
+  per-metric drill-down data, a metric opens the matching issues.
 - **The other six screens:** show a "not built yet" page.
 
 ```sh
@@ -91,3 +92,5 @@ viewer types at sign-in, kept in `localStorage`.
   repository's `sonda.toml`, and the page shows how.
 - **Counts the server doesn't have yet** (projects, components) are left out
   of the navigation rather than shown as numbers.
+- **Overview:** no "Live" badge, since the page doesn't refresh itself, and
+  no "vs N days ago" without a comparison to show.
