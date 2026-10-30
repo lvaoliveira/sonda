@@ -1552,6 +1552,920 @@ pub(super) static RULES: &[Rule] = &[
             good: "const s = input.trimStart();",
         }),
     },
+    // ---- React ----
+    Rule {
+        id: "js/jsx-comment-as-text",
+        name: "Comments in JSX should be inside braces",
+        description: "In JSX, `// note` between tags is text, not a comment: it's rendered \
+                      on the page.",
+        message: "Wrap this comment in braces, {/* like this */}, or it is rendered as text.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6438")],
+        check: Check::Query {
+            langs: JSX,
+            query: "(jsx_text) @match",
+            filter: Some(Keep(text_looks_like_comment)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <div>\n  // the user's name\n  {name}\n</div>;",
+            good: "const v = <div>\n  {/* the user's name */}\n  {name}\n</div>;\nconst u = <a href=\"x\">see http://example.com</a>;",
+        }),
+    },
+    Rule {
+        id: "js/jsx-missing-key",
+        name: "Elements rendered from a list should have a key",
+        description: "React uses `key` to match list items between renders. Without it, \
+                      items can lose their state or be re-rendered needlessly when the list \
+                      changes.",
+        message: "Add a 'key' prop that identifies this item, such as its id.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6477")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"((property_identifier) @match (#eq? @match "map"))"#,
+            filter: Some(Find(mapped_element_without_key)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <ul>{rows.map((r) => <li>{r.name}</li>)}</ul>;",
+            good: "const v = <ul>{rows.map((r) => <li key={r.id}>{r.name}</li>)}</ul>;\nconst w = rows.map((r) => { return <Row key={r.id} {...r} />; });",
+        }),
+    },
+    Rule {
+        id: "js/jsx-index-key",
+        name: "Array indexes should not be used as keys",
+        description: "An index identifies a position, not an item: when the list is \
+                      reordered, filtered or prepended, React matches the wrong items and \
+                      their state moves with the position.",
+        message: "Use a stable id from the item as its key, not the array index.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6479")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"((property_identifier) @match (#eq? @match "map"))"#,
+            filter: Some(Find(mapped_element_keyed_by_index)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = rows.map((r, i) => <li key={i}>{r.name}</li>);",
+            good: "const v = rows.map((r, i) => <li key={r.id}>{i + 1}. {r.name}</li>);",
+        }),
+    },
+    Rule {
+        id: "js/children-with-inner-html",
+        name: "children and dangerouslySetInnerHTML should not be used together",
+        description: "React throws when an element has both children and \
+                      dangerouslySetInnerHTML.",
+        message: "Use either children or dangerouslySetInnerHTML on this element, not both.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6761")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "dangerouslySetInnerHTML")) @match"#,
+            filter: Some(Keep(element_also_has_children)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <div dangerouslySetInnerHTML={{ __html: html }}>fallback</div>;",
+            good: "const v = <div dangerouslySetInnerHTML={{ __html: html }} />;",
+        }),
+    },
+    Rule {
+        id: "js/children-prop",
+        name: "children should be nested, not passed as a prop",
+        description: "`<Box children={x} />` hides the content in an attribute; nesting it \
+                      is the idiom readers expect, and both together conflict.",
+        message: "Nest the content between the tags instead of passing a 'children' prop.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6748")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "children")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <Box children={<Title />} />;",
+            good: "const v = <Box><Title /></Box>;",
+        }),
+    },
+    Rule {
+        id: "js/redundant-fragment",
+        name: "Fragments around a single element should be removed",
+        description: "A fragment exists to group several children; around one element it \
+                      only adds nesting. Fragments with a key are needed and fine.",
+        message: "Remove this fragment: it wraps a single element.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S6749")],
+        check: Check::Query {
+            langs: JSX,
+            query: "(jsx_element) @match",
+            filter: Some(Keep(is_redundant_fragment)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <><Header /></>;",
+            good: "const v = <><Header /><Body /></>;\nconst w = <Fragment key={id}><Row /></Fragment>;\nconst t = <>{label}</>;",
+        }),
+    },
+    Rule {
+        id: "js/find-dom-node",
+        name: "findDOMNode should not be used",
+        description: "findDOMNode breaks component abstraction, is deprecated, and is \
+                      removed in React 19. A ref on the element gives the DOM node.",
+        message: "Attach a ref to the element instead of calling findDOMNode().",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 15,
+        sonar: &[exact("S6788")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"([(identifier) (property_identifier)] @match (#eq? @match "findDOMNode"))"#,
+            filter: Some(Keep(is_called)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const node = ReactDOM.findDOMNode(this);",
+            good: "const node = this.ref.current;",
+        }),
+    },
+    Rule {
+        id: "js/is-mounted",
+        name: "isMounted should not be used",
+        description: "`this.isMounted()` is deprecated and hides leaks: cancel subscriptions \
+                      and requests in componentWillUnmount instead.",
+        message: "Remove isMounted(): cancel pending work when the component unmounts instead.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 15,
+        sonar: &[exact("S6789")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match (#eq? @match "isMounted"))"#,
+            filter: Some(Keep(is_called_on_this)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (this.isMounted()) { this.setState({ data }); }",
+            good: "componentWillUnmount() { this.request.abort(); }",
+        }),
+    },
+    Rule {
+        id: "js/string-ref",
+        name: "String refs should not be used",
+        description: "`ref=\"name\"` is a legacy API, removed in React 19. Use useRef or \
+                      createRef, or a callback ref.",
+        message: "Replace this string ref with useRef(), createRef() or a callback ref.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S6790")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (string) (#eq? @a "ref")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <input ref=\"name\" />;",
+            good: "const v = <input ref={nameRef} />;",
+        }),
+    },
+    Rule {
+        id: "js/legacy-lifecycle",
+        name: "Legacy React lifecycle methods should not be used",
+        description: "componentWillMount, componentWillReceiveProps and componentWillUpdate \
+                      are unsafe with async rendering and removed in React 19.",
+        message: "Move this logic to componentDidMount, componentDidUpdate or getDerivedStateFromProps.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 30,
+        sonar: &[exact("S6791")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(method_definition
+                        name: (property_identifier) @n
+                        (#any-of? @n "componentWillMount" "componentWillReceiveProps" "componentWillUpdate")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class A extends Component { componentWillMount() { this.load(); } }",
+            good: "class A extends Component { componentDidMount() { this.load(); } }",
+        }),
+    },
+    Rule {
+        id: "js/state-mutation",
+        name: "this.state should not be changed directly",
+        description: "Assigning to `this.state` outside the constructor doesn't re-render \
+                      and is overwritten by the next setState.",
+        message: "Call this.setState() instead of assigning to this.state.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6746")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(member_expression object: (this) property: (property_identifier) @p (#eq? @p "state")) @match"#,
+            filter: Some(Find(state_assignment_outside_constructor)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class A extends Component { onClick() { this.state.count = 1; } }",
+            good: "class A extends Component { constructor(p) { super(p); this.state = { count: 0 }; } onClick() { this.setState({ count: 1 }); } }",
+        }),
+    },
+    Rule {
+        id: "js/set-state-from-state",
+        name: "setState should use a callback when it reads this.state",
+        description: "State updates are batched, so `this.state` may already be stale when \
+                      the update applies. The callback form receives the current state.",
+        message: "Pass a function to setState, (prev) => ({ ... }), instead of reading this.state.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6756")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match (#eq? @match "setState"))"#,
+            filter: Some(Find(set_state_reading_state)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "this.setState({ count: this.state.count + 1 });",
+            good: "this.setState((prev) => ({ count: prev.count + 1 }));\nthis.setState({ open: true });",
+        }),
+    },
+    Rule {
+        id: "js/state-setter-same-value",
+        name: "A state setter should not be called with its own state",
+        description: "`setCount(count)` sets the state to the value it already has: nothing \
+                      happens. Another value was probably meant.",
+        message: "This sets the state to its current value; pass the new value instead.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6443")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(variable_declarator name: (array_pattern) value: (call_expression)) @match",
+            filter: Some(Find(setter_called_with_own_state)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function C() { const [open, setOpen] = useState(false); return <b onClick={() => setOpen(open)} />; }",
+            good: "function C() { const [open, setOpen] = useState(false); return <b onClick={() => setOpen(!open)} />; }",
+        }),
+    },
+    Rule {
+        id: "js/set-state-in-render",
+        name: "State setters should not be called while rendering",
+        description: "Calling a useState setter in the component body triggers another \
+                      render, which calls it again: an infinite loop. Call it from an event \
+                      handler or an effect.",
+        message: "Move this state update into an event handler or a useEffect.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S6442")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(variable_declarator name: (array_pattern) value: (call_expression)) @match",
+            filter: Some(Find(setter_called_in_render)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function C({ v }) { const [x, setX] = useState(0); setX(v); return x; }",
+            good: "function C({ v }) { const [x, setX] = useState(0); useEffect(() => { setX(v); }, [v]); return x; }",
+        }),
+    },
+    Rule {
+        id: "js/use-state-naming",
+        name: "useState results should be destructured as [value, setValue]",
+        description: "The `[thing, setThing]` convention tells readers which setter belongs \
+                      to which state at a glance.",
+        message: "Name the pair [value, setValue], matching the setter to the state.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S6754")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(variable_declarator value: (call_expression)) @match",
+            filter: Some(Keep(use_state_badly_named)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const [count, update] = useState(0);",
+            good: "const [count, setCount] = useState(0);\nconst [, setTick] = useState(0);",
+        }),
+    },
+    Rule {
+        id: "js/hook-in-condition",
+        name: "Hooks should not be called conditionally or in loops",
+        description: "React matches hooks by call order, so a hook inside an if, a loop, a \
+                      ternary or after `&&` gets another hook's state when the condition \
+                      changes.",
+        message: "Call this hook unconditionally at the top level of the component, and put the condition inside it.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 15,
+        sonar: &[related("S6440")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(call_expression function: (identifier) @f (#match? @f "^use[A-Z]")) @match"#,
+            filter: Some(Keep(is_called_conditionally)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function C({ id }) { if (id) { useEffect(() => load(id)); } }",
+            good: "function C({ id }) { useEffect(() => { if (id) { load(id); } }); const f = () => (ok ? 1 : 2); }",
+        }),
+    },
+    Rule {
+        id: "js/render-without-return",
+        name: "React render methods should return a value",
+        description: "A class component's render() that never returns anything renders \
+                      nothing; usually a `return` was forgotten. Return null to render \
+                      nothing on purpose.",
+        message: "Return the rendered elements from render() (or null on purpose).",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6435")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(method_definition name: (property_identifier) @n (#eq? @n "render")) @match"#,
+            filter: Some(Keep(component_render_returns_nothing)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class A extends React.Component { render() { <div />; } }",
+            good: "class A extends React.Component { render() { return <div />; } }\nclass Chart { render() { this.draw(); } }",
+        }),
+    },
+    Rule {
+        id: "js/react-dom-render-result",
+        name: "The return value of ReactDOM.render should not be used",
+        description: "ReactDOM.render's return value is a legacy, unreliable reference. Use \
+                      a callback ref on the root element instead.",
+        message: "Don't use what ReactDOM.render() returns; attach a ref to the root element.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S6750")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(member_expression
+                        object: (identifier) @o
+                        property: (property_identifier) @p
+                        (#eq? @o "ReactDOM")
+                        (#eq? @p "render")) @match"#,
+            filter: Some(Find(used_call_result)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const app = ReactDOM.render(<App />, root);",
+            good: "ReactDOM.render(<App />, root);",
+        }),
+    },
+    Rule {
+        id: "js/pure-component-scu",
+        name: "PureComponent should not define shouldComponentUpdate",
+        description: "PureComponent exists to implement shouldComponentUpdate with a \
+                      shallow comparison; defining it again overrides that.",
+        message: "Extend Component instead of PureComponent, or remove shouldComponentUpdate.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6763")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(method_definition name: (property_identifier) @n (#eq? @n "shouldComponentUpdate")) @match"#,
+            filter: Some(Keep(in_pure_component)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class A extends React.PureComponent { shouldComponentUpdate() { return true; } }",
+            good: "class A extends React.Component { shouldComponentUpdate() { return true; } }",
+        }),
+    },
+    // ---- Accessibility (JSX) ----
+    Rule {
+        id: "js/img-alt",
+        name: "Images should have alternative text",
+        description: "Screen readers read `alt` in place of an image. Without it they read \
+                      the file name. Use alt=\"\" for decorative images.",
+        message: "Add an 'alt' attribute describing the image, or alt=\"\" if it's decorative.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S1077")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_self_closing_element name: (identifier) @n (#any-of? @n "img" "area" "input")) @match
+                      (jsx_element open_tag: (jsx_opening_element name: (identifier) @n (#any-of? @n "img" "area" "input"))) @match"#,
+            filter: Some(Keep(image_without_alt)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <img src={logo} />;",
+            good: "const v = <img src={logo} alt=\"Company logo\" />;\nconst d = <img src={line} alt=\"\" />;\nconst p = <img {...props} />;\nconst i = <input type=\"text\" />;",
+        }),
+    },
+    Rule {
+        id: "js/iframe-title",
+        name: "iframes should have a title",
+        description: "Screen readers announce an iframe by its title; without one, users \
+                      can't tell what it contains.",
+        message: "Add a 'title' attribute describing this iframe's content.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S1090")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_self_closing_element name: (identifier) @n (#eq? @n "iframe")) @match
+                      (jsx_element open_tag: (jsx_opening_element name: (identifier) @n (#eq? @n "iframe"))) @match"#,
+            filter: Some(Keep(lacks_title)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <iframe src={url} />;",
+            good: "const v = <iframe src={url} title=\"Payment form\" />;",
+        }),
+    },
+    Rule {
+        id: "js/accesskey",
+        name: "accessKey should not be used",
+        description: "Access keys conflict with shortcuts of browsers and assistive \
+                      technologies, and aren't announced to users.",
+        message: "Remove 'accessKey'; provide visible, documented shortcuts if they're needed.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6846")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "accessKey")) @match"#,
+            filter: Some(Keep(on_dom_element)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <button accessKey=\"s\">Save</button>;",
+            good: "const v = <button>Save</button>;\nconst w = <Shortcut accessKey=\"s\" />;",
+        }),
+    },
+    Rule {
+        id: "js/tabindex-positive",
+        name: "tabIndex should be 0 or -1",
+        description: "A positive tabIndex moves the element ahead of the page's natural \
+                      order, which confuses keyboard users.",
+        message: "Use tabIndex 0 (natural order) or -1 (focusable by script only).",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6841")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "tabIndex")) @match"#,
+            filter: Some(Keep(positive_value)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <div tabIndex={2} />;",
+            good: "const v = <div tabIndex={0} />;\nconst w = <div tabIndex=\"-1\" />;",
+        }),
+    },
+    Rule {
+        id: "js/aria-hidden-focusable",
+        name: "Focusable elements should not be aria-hidden",
+        description: "A focusable element hidden from screen readers can still receive \
+                      focus, leaving users on something that isn't announced.",
+        message: "Remove aria-hidden, or make the element unfocusable (tabIndex={-1}).",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6825")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "aria-hidden")) @match"#,
+            filter: Some(Keep(hides_focusable_element)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <button aria-hidden=\"true\">x</button>;",
+            good: "const v = <span aria-hidden=\"true\">x</span>;\nconst w = <button aria-hidden=\"true\" tabIndex={-1}>x</button>;",
+        }),
+    },
+    Rule {
+        id: "js/anchor-as-button",
+        name: "Links should not be used as buttons",
+        description: "An `<a>` with an onClick and no real href doesn't behave like a button \
+                      for keyboard and screen-reader users, and breaks opening in a new tab.",
+        message: "Use a <button> for this action, or give the link a real href.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6844")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_self_closing_element name: (identifier) @n (#eq? @n "a")) @match
+                      (jsx_element open_tag: (jsx_opening_element name: (identifier) @n (#eq? @n "a"))) @match"#,
+            filter: Some(Keep(link_used_as_button)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <a href=\"#\" onClick={save}>Save</a>;",
+            good: "const v = <button onClick={save}>Save</button>;\nconst w = <a href=\"/docs\" onClick={track}>Docs</a>;",
+        }),
+    },
+    Rule {
+        id: "js/anchor-content",
+        name: "Links should have content",
+        description: "A link with no text and no aria-label is announced as just \"link\"; \
+                      users can't tell where it goes.",
+        message: "Give this link text content, or an aria-label.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S6827")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_self_closing_element name: (identifier) @n (#eq? @n "a")) @match
+                      (jsx_element open_tag: (jsx_opening_element name: (identifier) @n (#eq? @n "a"))) @match"#,
+            filter: Some(Keep(has_no_accessible_content)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <a href=\"/home\"></a>;",
+            good: "const v = <a href=\"/home\">Home</a>;\nconst w = <a href=\"/home\" aria-label=\"Home\" />;",
+        }),
+    },
+    Rule {
+        id: "js/heading-content",
+        name: "Headings should have content",
+        description: "Screen-reader users navigate by headings; an empty heading is a stop \
+                      that says nothing.",
+        message: "Give this heading text content, or remove it.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6850")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_self_closing_element name: (identifier) @n (#match? @n "^h[1-6]$")) @match
+                      (jsx_element open_tag: (jsx_opening_element name: (identifier) @n (#match? @n "^h[1-6]$"))) @match"#,
+            filter: Some(Keep(has_no_accessible_content)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <h2 className=\"title\"></h2>;",
+            good: "const v = <h2 className=\"title\">{title}</h2>;",
+        }),
+    },
+    Rule {
+        id: "js/redundant-alt",
+        name: "Alternative text should not say it's an image",
+        description: "Screen readers already announce an image as one; \"image of\" or \
+                      \"photo\" in alt text repeats that.",
+        message: "Describe what the image shows, without words like 'image', 'photo' or 'picture'.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6851")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (string) (#eq? @a "alt")) @match"#,
+            filter: Some(Keep(alt_says_image)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <img src={p} alt=\"Photo of the team\" />;",
+            good: "const v = <img src={p} alt=\"The team at the 2026 offsite\" />;\nconst w = <img src={p} alt=\"Photographer at work\" />;",
+        }),
+    },
+    Rule {
+        id: "js/mouse-without-keyboard",
+        name: "Mouse events should have keyboard equivalents",
+        description: "onMouseOver and onMouseOut only fire for mouse users; keyboard users \
+                      need the same behavior on onFocus and onBlur.",
+        message: "Add onFocus next to onMouseOver, and onBlur next to onMouseOut.",
+        category: Bug,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S1082")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#any-of? @a "onMouseOver" "onMouseOut")) @match"#,
+            filter: Some(Keep(mouse_handler_without_keyboard)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <div onMouseOver={show}>i</div>;",
+            good: "const v = <div onMouseOver={show} onFocus={show}>i</div>;\nconst w = <Tip onMouseOver={show} />;",
+        }),
+    },
+    // ---- Test frameworks ----
+    Rule {
+        id: "js/test-empty-title",
+        name: "Tests and suites should have a title",
+        description: "An empty title makes failures impossible to locate in the report.",
+        message: "Give this test or suite a title that says what it checks.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S8781")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(call_expression
+                        function: (identifier) @f
+                        arguments: (arguments . (string) @match)
+                        (#any-of? @f "describe" "it" "test" "context" "suite"))"#,
+            filter: Some(Keep(is_blank_string)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "it('', () => { expect(sum(1, 2)).toBe(3); });",
+            good: "it('adds two numbers', () => { expect(sum(1, 2)).toBe(3); });",
+        }),
+    },
+    Rule {
+        id: "js/async-describe",
+        name: "Suite callbacks should be synchronous",
+        description: "describe() collects tests synchronously and doesn't wait for a \
+                      returned promise: tests registered after an await are lost.",
+        message: "Make this describe callback synchronous; do asynchronous setup in beforeAll or beforeEach.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S8785")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "describe" "context" "suite"))"#,
+            filter: Some(Find(async_suite_callback)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "describe('db', async () => { const db = await open(); it('reads', () => {}); });",
+            good: "describe('db', () => { let db; beforeAll(async () => { db = await open(); }); it('reads', async () => { await db.read(); }); });",
+        }),
+    },
+    Rule {
+        id: "js/assertion-same-argument",
+        name: "Assertions should not compare a value with itself",
+        description: "`expect(x).toBe(x)` always passes; one side was meant to be the \
+                      expected value.",
+        message: "Compare with the expected value: both sides of this assertion are the same.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S5863")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "expect" "assert"))"#,
+            filter: Some(Find(same_argument_assertion)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "expect(total).toBe(total);\nassert.equal(a.length, a.length);",
+            good: "expect(total).toBe(10);\nassert.equal(a.length, b.length);",
+        }),
+    },
+    Rule {
+        id: "js/assertion-constant",
+        name: "Assertions should not compare constants",
+        description: "`expect(true).toBe(true)` or `assert(true)` can't fail, so they test \
+                      nothing.",
+        message: "Assert on the value under test, not on a constant.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S5914")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "expect" "assert"))"#,
+            filter: Some(Find(constant_assertion)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "expect(true).toBe(true);",
+            good: "expect(isReady()).toBe(true);\nassert.fail('unreachable');",
+        }),
+    },
+    Rule {
+        id: "js/assertion-order",
+        name: "Assertions should put the actual value first",
+        description: "expect(actual).toBe(expected) and assert.equal(actual, expected): \
+                      swapping them gives failure messages that say the opposite of what \
+                      happened.",
+        message: "Swap the arguments: the value under test goes first, the expected value second.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S3415")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "expect" "assert"))"#,
+            filter: Some(Find(reversed_assertion)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "expect(3).toBe(sum(1, 2));\nassert.equal(3, sum(1, 2));",
+            good: "expect(sum(1, 2)).toBe(3);\nassert.equal(sum(1, 2), 3);",
+        }),
+    },
+    Rule {
+        id: "js/assertion-specific",
+        name: "The most specific assertion should be used",
+        description: "`expect(a.length).toBe(3)` reports \"expected 3, got 2\"; \
+                      `toHaveLength(3)` also shows the array. Likewise `expect(a === b)` \
+                      and `assert(a === b)` lose the values being compared.",
+        message: "Use the specific assertion (toHaveLength, toBe/toEqual on the values, assert.strictEqual) so failures show the values.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5906")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "expect" "assert"))"#,
+            filter: Some(Find(unspecific_assertion)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "expect(items.length).toBe(3);\nassert(a === b);",
+            good: "expect(items).toHaveLength(3);\nassert.strictEqual(a, b);",
+        }),
+    },
+    Rule {
+        id: "js/incomplete-assertion",
+        name: "Assertions should be complete",
+        description: "`expect(x);` or `expect(x).not;` asserts nothing: the matcher call is \
+                      missing, so the test can't fail.",
+        message: "Complete this assertion with a matcher call, such as .toBe(...).",
+        category: CodeSmell,
+        severity: Blocker,
+        effort_minutes: 2,
+        sonar: &[exact("S2970")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(expression_statement [(call_expression) (member_expression)] @match)",
+            filter: Some(Keep(is_incomplete_expect)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "expect(result).not;",
+            good: "expect(result).not.toBeNull();\nexpect(flag).to.be.true;",
+        }),
+    },
+    Rule {
+        id: "js/unspecified-throw",
+        name: "Tests should check which error is thrown",
+        description: "`toThrow()` with no argument passes for any error, including a \
+                      TypeError from a typo in the test itself.",
+        message: "Say which error is expected: pass its class, message or a pattern.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S5958")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "expect" "assert"))"#,
+            filter: Some(Find(any_error_assertion)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "expect(() => parse('')).toThrow();",
+            good: "expect(() => parse('')).toThrow(SyntaxError);\nassert.throws(() => parse(''), /empty/);",
+        }),
+    },
+    Rule {
+        id: "js/async-assertion-not-awaited",
+        name: "Assertions on promises should be awaited",
+        description: "`expect(p).resolves...` returns a promise. If it isn't awaited or \
+                      returned, the test ends before it settles and passes regardless.",
+        message: "Await (or return) this assertion, so the test waits for it.",
+        category: Bug,
+        severity: Critical,
+        effort_minutes: 2,
+        sonar: &[exact("S8780")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match (#any-of? @match "resolves" "rejects"))"#,
+            filter: Some(Find(unawaited_promise_assertion)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "it('loads', () => { expect(load()).resolves.toBe(1); });",
+            good: "it('loads', async () => { await expect(load()).resolves.toBe(1); });\nit('fails', () => expect(load()).rejects.toThrow(E));",
+        }),
+    },
+    Rule {
+        id: "js/skipped-test-without-reason",
+        name: "Skipped tests should say why",
+        description: "A skipped test with no explanation tends to stay skipped forever; a \
+                      comment saying why (and when to re-enable it) keeps it honest.",
+        message: "Add a comment on the line above explaining why this test is skipped.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S1607")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(call_expression
+                        function: (member_expression object: (identifier) @o property: (property_identifier) @p)
+                        (#any-of? @o "describe" "it" "test" "context" "suite")
+                        (#eq? @p "skip")) @match
+                      (call_expression function: (identifier) @f (#any-of? @f "xit" "xdescribe" "xtest")) @match"#,
+            filter: Some(Keep(no_comment_above)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "it.skip('syncs', () => {});",
+            good: "// Flaky on CI until the mock server is fixed (#123).\nit.skip('syncs', () => {});",
+        }),
+    },
+    Rule {
+        id: "js/duplicate-test-title",
+        name: "Test titles should be unique within a suite",
+        description: "Two tests with the same title in one suite can't be told apart in \
+                      reports, and one is often a copy that was never renamed.",
+        message: "Rename this test: another test in the same suite has the same title.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S8754")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "describe" "context" "suite"))
+                      (program) @match"#,
+            filter: Some(Find(duplicate_test_title_in_suite)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "describe('sum', () => {\n  it('adds', () => {});\n  it('adds', () => {});\n});",
+            good: "describe('sum', () => {\n  it('adds', () => {});\n  it('adds negatives', () => {});\n});\ndescribe('other', () => { it('adds', () => {}); });",
+        }),
+    },
+    Rule {
+        id: "js/hook-after-test",
+        name: "Setup and teardown hooks should come before the tests",
+        description: "beforeEach and friends apply to every test in the suite regardless of \
+                      position; placed after tests, they read as if they only applied to \
+                      what follows.",
+        message: "Move this hook above the tests and suites in this block.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S8782")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((identifier) @match (#any-of? @match "describe" "context" "suite"))
+                      (program) @match"#,
+            filter: Some(Find(hook_after_test_in_suite)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "describe('db', () => {\n  it('reads', () => {});\n  beforeEach(() => reset());\n});",
+            good: "describe('db', () => {\n  beforeEach(() => reset());\n  it('reads', () => {});\n});",
+        }),
+    },
+    Rule {
+        id: "js/fixed-wait",
+        name: "Tests should not use fixed waits or debug pauses",
+        description: "`cy.wait(1000)` or `page.waitForTimeout(500)` makes tests slow and \
+                      flaky; `cy.pause()` and `page.pause()` stop a CI run.",
+        message: "Wait for a condition (an element, a request) instead of a fixed time, and remove debug pauses.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S2925")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(call_expression
+                        function: (member_expression object: (identifier) @o)
+                        (#any-of? @o "cy" "page" "browser")) @match"#,
+            filter: Some(Keep(is_fixed_wait)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "cy.wait(2000);",
+            good: "cy.wait('@save');\ncy.get('[data-test=done]').should('be.visible');",
+        }),
+    },
     Rule {
         id: "ts/no-explicit-any",
         name: "The 'any' type should not be used",
@@ -1604,23 +2518,34 @@ fn text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
 }
 
 /// Whether any node below `node`, not looking inside nested functions,
-/// satisfies `pred`. Iterative, like every tree walk in sonda.
+/// satisfies `pred`.
 fn contains(node: Node, pred: impl Fn(Node) -> bool) -> bool {
+    find_below(node, false, pred).is_some()
+}
+
+/// The first node below `node` that satisfies `pred`, looking inside
+/// nested functions only when `into_functions` is set. Iterative, like
+/// every tree walk in sonda.
+fn find_below<'t>(
+    node: Node<'t>,
+    into_functions: bool,
+    pred: impl Fn(Node) -> bool,
+) -> Option<Node<'t>> {
     let mut cursor = node.walk();
     if !cursor.goto_first_child() {
-        return false;
+        return None;
     }
     loop {
         let n = cursor.node();
         if pred(n) {
-            return true;
+            return Some(n);
         }
-        if !FUNCTIONS.contains(&n.kind()) && cursor.goto_first_child() {
+        if (into_functions || !FUNCTIONS.contains(&n.kind())) && cursor.goto_first_child() {
             continue;
         }
         while !cursor.goto_next_sibling() {
             if !cursor.goto_parent() {
-                return false;
+                return None;
             }
         }
     }
@@ -2498,6 +3423,997 @@ fn declared_without_const(undefined: Node, _: &[u8]) -> bool {
         .is_some_and(|d| d.kind() == "variable_declaration" || has_token(d, "let"))
 }
 
+// ---------------------------------------------------- JSX helpers
+
+/// The node holding an element's name and attributes.
+fn opening_tag(element: Node) -> Option<Node> {
+    match element.kind() {
+        "jsx_element" => element.child_by_field_name("open_tag"),
+        "jsx_self_closing_element" => Some(element),
+        _ => None,
+    }
+}
+
+/// A plain tag name (`div`, `Button`); None for `Foo.Bar` and fragments.
+fn tag_name<'s>(opening: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    opening
+        .child_by_field_name("name")
+        .filter(|n| n.kind() == "identifier")
+        .map(|n| text(n, src))
+}
+
+/// HTML elements are lowercase; components start with a capital.
+fn is_dom_tag(name: &[u8]) -> bool {
+    name.first().is_some_and(u8::is_ascii_lowercase)
+}
+
+fn attributes<'t>(opening: Node<'t>) -> Vec<Node<'t>> {
+    let mut cursor = opening.walk();
+    opening
+        .children_by_field_name("attribute", &mut cursor)
+        .collect()
+}
+
+/// `{...props}` may set any attribute, so checks for a missing one stop.
+fn has_spread(opening: Node) -> bool {
+    attributes(opening)
+        .iter()
+        .any(|a| a.kind() == "jsx_expression")
+}
+
+fn attribute<'t>(opening: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> {
+    attributes(opening).into_iter().find(|a| {
+        a.kind() == "jsx_attribute"
+            && a.named_child(0)
+                .is_some_and(|n| text(n, src) == name.as_bytes())
+    })
+}
+
+/// A value known without running the code: the text of `"x"`, `{1}`,
+/// `{true}` or `{'x'}`, and `true` for a bare attribute (`disabled`).
+fn static_value<'s>(attr: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let Some(value) = attr.named_child(1) else {
+        return Some(b"true");
+    };
+    let value = if value.kind() == "jsx_expression" {
+        value.named_child(0)?
+    } else {
+        value
+    };
+    match value.kind() {
+        "string" => {
+            let t = text(value, src);
+            t.get(1..t.len().checked_sub(1)?)
+        }
+        "number" | "true" | "false" => Some(text(value, src)),
+        "unary_expression" => Some(text(value, src)), // -1
+        _ => None,
+    }
+}
+
+/// Whether an element has children worth announcing: text, expressions or
+/// elements, not just whitespace or a comment.
+fn has_content(element: Node, src: &[u8]) -> bool {
+    if element.kind() != "jsx_element" {
+        return false;
+    }
+    let open = element.child_by_field_name("open_tag");
+    let close = element.child_by_field_name("close_tag");
+    let mut cursor = element.walk();
+    element.named_children(&mut cursor).any(|c| {
+        if Some(c) == open || Some(c) == close {
+            return false;
+        }
+        match c.kind() {
+            "jsx_text" => !text(c, src).iter().all(u8::is_ascii_whitespace),
+            "jsx_expression" => c.named_child(0).is_some_and(|e| e.kind() != "comment"),
+            _ => true,
+        }
+    })
+}
+
+// ---------------------------------------------------- React filters
+
+fn text_looks_like_comment(jsx_text: Node, src: &[u8]) -> bool {
+    text(jsx_text, src).split(|&b| b == b'\n').any(|line| {
+        let line = line.trim_ascii_start();
+        line.starts_with(b"//") || line.starts_with(b"/*")
+    })
+}
+
+/// For the `map` in `xs.map(cb)`: the callback and the JSX elements it
+/// returns (its expression body, or its top-level `return`s).
+fn mapped_elements<'t>(map: Node<'t>) -> Option<(Node<'t>, Vec<Node<'t>>)> {
+    let member = map.parent().filter(|m| m.kind() == "member_expression")?;
+    let call = member
+        .parent()
+        .filter(|c| c.child_by_field_name("function") == Some(member))?;
+    let callback = call
+        .child_by_field_name("arguments")?
+        .named_child(0)
+        .filter(|c| matches!(c.kind(), "arrow_function" | "function_expression"))?;
+    let body = callback.child_by_field_name("body")?;
+    let returned: Vec<Node> = if body.kind() == "statement_block" {
+        let mut cursor = body.walk();
+        body.named_children(&mut cursor)
+            .filter(|s| s.kind() == "return_statement")
+            .filter_map(|r| r.named_child(0))
+            .collect()
+    } else {
+        vec![body]
+    };
+    let elements = returned
+        .into_iter()
+        .map(|mut e| {
+            while e.kind() == "parenthesized_expression" {
+                match e.named_child(0) {
+                    Some(inner) => e = inner,
+                    None => break,
+                }
+            }
+            e
+        })
+        .filter(|e| matches!(e.kind(), "jsx_element" | "jsx_self_closing_element"))
+        .collect();
+    Some((callback, elements))
+}
+
+fn mapped_element_without_key<'t>(map: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let (_, elements) = mapped_elements(map)?;
+    elements.into_iter().find(|&e| {
+        opening_tag(e).is_some_and(|o| !has_spread(o) && attribute(o, "key", src).is_none())
+    })
+}
+
+fn mapped_element_keyed_by_index<'t>(map: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let (callback, elements) = mapped_elements(map)?;
+    let index = callback
+        .child_by_field_name("parameters")?
+        .named_child(1)
+        .map(|p| p.child_by_field_name("pattern").unwrap_or(p))
+        .filter(|p| p.kind() == "identifier")?;
+    elements.into_iter().find_map(|e| {
+        let key = attribute(opening_tag(e)?, "key", src)?;
+        let value = key
+            .named_child(1)
+            .filter(|v| v.kind() == "jsx_expression")?;
+        value
+            .named_child(0)
+            .is_some_and(|v| same_text(v, index, src))
+            .then_some(key)
+    })
+}
+
+fn element_also_has_children(attr: Node, src: &[u8]) -> bool {
+    let Some(opening) = attr.parent() else {
+        return false;
+    };
+    attribute(opening, "children", src).is_some()
+        || (opening.kind() == "jsx_opening_element"
+            && opening.parent().is_some_and(|e| has_content(e, src)))
+}
+
+fn is_redundant_fragment(element: Node, src: &[u8]) -> bool {
+    let Some(open) = element.child_by_field_name("open_tag") else {
+        return false;
+    };
+    let is_fragment = open
+        .child_by_field_name("name")
+        .is_none_or(|n| matches!(text(n, src), b"Fragment" | b"React.Fragment"));
+    if !is_fragment || !attributes(open).is_empty() {
+        return false;
+    }
+    let close = element.child_by_field_name("close_tag");
+    let mut cursor = element.walk();
+    let children: Vec<Node> = element
+        .named_children(&mut cursor)
+        .filter(|&c| Some(c) != Some(open) && Some(c) != close)
+        // JSX drops whitespace that contains a newline; a plain space renders.
+        .filter(|c| {
+            c.kind() != "jsx_text" || {
+                let t = text(*c, src);
+                !t.iter().all(u8::is_ascii_whitespace) || !t.contains(&b'\n')
+            }
+        })
+        .collect();
+    matches!(children.as_slice(), [only] if matches!(only.kind(), "jsx_element" | "jsx_self_closing_element"))
+}
+
+/// `name(...)` or `x.name(...)`. Checked only on rare names.
+fn is_called(name: Node, _: &[u8]) -> bool {
+    let Some(parent) = name.parent() else {
+        return false;
+    };
+    let callee = match parent.kind() {
+        "member_expression" if parent.child_by_field_name("property") == Some(name) => parent,
+        _ => name,
+    };
+    callee.parent().is_some_and(|c| {
+        c.kind() == "call_expression" && c.child_by_field_name("function") == Some(callee)
+    })
+}
+
+fn is_called_on_this(name: Node, src: &[u8]) -> bool {
+    is_called(name, src)
+        && name
+            .parent()
+            .and_then(|m| m.child_by_field_name("object"))
+            .is_some_and(|o| o.kind() == "this")
+}
+
+/// The assignment to `this.state` (or a property of it), unless it's in a
+/// constructor, where initializing state is the norm.
+fn state_assignment_outside_constructor<'t>(state: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut target = state;
+    while let Some(p) = target.parent().filter(|p| {
+        p.kind() == "member_expression" && p.child_by_field_name("object") == Some(target)
+    }) {
+        target = p;
+    }
+    let write = target.parent().filter(|p| match p.kind() {
+        "assignment_expression" | "augmented_assignment_expression" => {
+            p.child_by_field_name("left") == Some(target)
+        }
+        "update_expression" => true,
+        _ => false,
+    })?;
+    let mut ancestor = write.parent();
+    while let Some(a) = ancestor {
+        if FUNCTIONS.contains(&a.kind()) {
+            // Only React components: other classes may have a `state` field.
+            let component = a.kind() == "method_definition"
+                && superclass(a, src).is_some_and(|h| h.ends_with(b"Component"));
+            let constructor = a
+                .child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"constructor");
+            return (component && !constructor).then_some(write);
+        }
+        ancestor = a.parent();
+    }
+    None
+}
+
+fn set_state_reading_state<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let member = name.parent().filter(|m| m.kind() == "member_expression")?;
+    let call = member
+        .parent()
+        .filter(|c| c.child_by_field_name("function") == Some(member))?;
+    let update = call.child_by_field_name("arguments")?.named_child(0)?;
+    if update.kind() != "object" {
+        return None;
+    }
+    find_below(update, false, |n| {
+        n.kind() == "member_expression"
+            && n.child_by_field_name("object")
+                .is_some_and(|o| o.kind() == "this")
+            && n.child_by_field_name("property")
+                .is_some_and(|p| text(p, src) == b"state")
+    })
+    .map(|_| call)
+}
+
+/// For `const [value, setValue] = useState(...)`: both names.
+fn use_state_pair<'t>(declarator: Node<'t>, src: &[u8]) -> Option<(Node<'t>, Node<'t>)> {
+    if !is_use_state_call(declarator.child_by_field_name("value")?, src) {
+        return None;
+    }
+    let [value, setter] = array_pattern_slots(declarator.child_by_field_name("name")?)[..] else {
+        return None;
+    };
+    Some((value?, setter?))
+}
+
+fn is_use_state_call(call: Node, src: &[u8]) -> bool {
+    call.kind() == "call_expression"
+        && call.child_by_field_name("function").is_some_and(|f| {
+            let name = match f.kind() {
+                "member_expression" => f.child_by_field_name("property"),
+                _ => Some(f),
+            };
+            name.is_some_and(|n| text(n, src) == b"useState")
+        })
+}
+
+/// The elements of `[a, , b]` by position, None for holes.
+fn array_pattern_slots(pattern: Node) -> Vec<Option<Node>> {
+    let mut slots = Vec::new();
+    let mut current = None;
+    let mut cursor = pattern.walk();
+    for c in pattern.children(&mut cursor) {
+        match c.kind() {
+            "[" | "comment" => {}
+            "," => slots.push(current.take()),
+            // A trailing comma leaves nothing to push.
+            "]" => slots.extend(current.take().map(Some)),
+            _ => current = Some(c),
+        }
+    }
+    slots
+}
+
+/// The body of the function `node` is in. Walks up: call it on rare nodes.
+fn enclosing_body(node: Node) -> Option<Node> {
+    let mut ancestor = node.parent();
+    while let Some(a) = ancestor {
+        if FUNCTIONS.contains(&a.kind()) {
+            return a.child_by_field_name("body");
+        }
+        ancestor = a.parent();
+    }
+    None
+}
+
+fn calls_named<'t>(call: Node<'t>, name: Node, src: &[u8]) -> bool {
+    call.kind() == "call_expression"
+        && call
+            .child_by_field_name("function")
+            .is_some_and(|f| f.kind() == "identifier" && same_text(f, name, src))
+}
+
+fn setter_called_with_own_state<'t>(declarator: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let (value, setter) = use_state_pair(declarator, src)?;
+    let body = enclosing_body(declarator)?;
+    find_below(body, true, |n| {
+        calls_named(n, setter, src)
+            && n.child_by_field_name("arguments").is_some_and(|a| {
+                a.named_child_count() == 1
+                    && a.named_child(0)
+                        .is_some_and(|v| v.kind() == "identifier" && same_text(v, value, src))
+            })
+    })
+}
+
+fn setter_called_in_render<'t>(declarator: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let (_, setter) = use_state_pair(declarator, src)?;
+    let body = enclosing_body(declarator)?;
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor)
+        .filter(|s| s.kind() == "expression_statement")
+        .filter_map(|s| s.named_child(0))
+        .find(|&e| calls_named(e, setter, src))
+}
+
+fn use_state_badly_named(declarator: Node, src: &[u8]) -> bool {
+    let (Some(value), Some(name)) = (
+        declarator.child_by_field_name("value"),
+        declarator.child_by_field_name("name"),
+    ) else {
+        return false;
+    };
+    if !is_use_state_call(value, src) {
+        return false;
+    }
+    if name.kind() != "array_pattern" {
+        return name.kind() == "identifier";
+    }
+    let [Some(state), Some(setter)] = array_pattern_slots(name)[..] else {
+        return false;
+    };
+    if state.kind() != "identifier" || setter.kind() != "identifier" {
+        return false;
+    }
+    let state = text(state, src);
+    let mut expected = b"set".to_vec();
+    expected.extend(state.first().map(u8::to_ascii_uppercase));
+    expected.extend(state.iter().skip(1));
+    text(setter, src) != expected.as_slice()
+}
+
+/// Whether a hook call depends on a condition or runs in a loop, within a
+/// component (capitalized) or a custom hook (`useX`): elsewhere `useX` is
+/// just a name. Walks up to the function: hook calls are few.
+fn is_called_conditionally(call: Node, src: &[u8]) -> bool {
+    let mut conditional = false;
+    let mut child = call;
+    while let Some(parent) = child.parent() {
+        let kind = parent.kind();
+        if FUNCTIONS.contains(&kind) {
+            return conditional && is_component_or_hook(parent, src);
+        }
+        if kind == "program" {
+            return false;
+        }
+        let branch = |f: &str| parent.child_by_field_name(f) == Some(child);
+        conditional |= match kind {
+            "if_statement" | "ternary_expression" => branch("consequence") || branch("alternative"),
+            "binary_expression" => {
+                branch("right")
+                    && parent
+                        .child_by_field_name("operator")
+                        .is_some_and(|o| matches!(o.kind(), "&&" | "||" | "??"))
+            }
+            "switch_case" | "switch_default" | "catch_clause" => true,
+            _ => LOOPS.contains(&kind),
+        };
+        child = parent;
+    }
+    false
+}
+
+/// A function named like a component (`Panel`) or a hook (`usePanel`),
+/// by its own name or the variable it's assigned to.
+fn is_component_or_hook(function: Node, src: &[u8]) -> bool {
+    let name = function.child_by_field_name("name").or_else(|| {
+        function
+            .parent()
+            .filter(|p| p.kind() == "variable_declarator")
+            .and_then(|p| p.child_by_field_name("name"))
+    });
+    name.is_some_and(|n| {
+        let t = text(n, src);
+        t.first().is_some_and(u8::is_ascii_uppercase)
+            || (t.starts_with(b"use") && t.get(3).is_some_and(u8::is_ascii_uppercase))
+    })
+}
+
+/// The `extends ...` text of the class a method belongs to.
+fn superclass<'s>(method: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let class = method.parent()?.parent()?;
+    let mut cursor = class.walk();
+    let heritage = class
+        .children(&mut cursor)
+        .find(|c| c.kind() == "class_heritage")?;
+    Some(text(heritage, src))
+}
+
+fn component_render_returns_nothing(method: Node, src: &[u8]) -> bool {
+    method.child_by_field_name("body").is_some_and(|body| {
+        !contains(body, |n| {
+            n.kind() == "return_statement"
+                && n.named_child(0).is_some_and(|v| v.kind() != "comment")
+        })
+    }) && superclass(method, src).is_some_and(|h| h.ends_with(b"Component"))
+}
+
+fn used_call_result<'t>(callee: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let call = callee.parent().filter(|c| {
+        c.kind() == "call_expression" && c.child_by_field_name("function") == Some(callee)
+    })?;
+    call.parent()
+        .is_some_and(|p| p.kind() != "expression_statement")
+        .then_some(call)
+}
+
+fn in_pure_component(method: Node, src: &[u8]) -> bool {
+    superclass(method, src).is_some_and(|h| h.ends_with(b"PureComponent"))
+}
+
+// ---------------------------------------------------- accessibility filters
+
+fn image_without_alt(element: Node, src: &[u8]) -> bool {
+    let Some(open) = opening_tag(element) else {
+        return false;
+    };
+    if has_spread(open) || attribute(open, "alt", src).is_some() {
+        return false;
+    }
+    match tag_name(open, src) {
+        Some(b"input") => attribute(open, "type", src)
+            .and_then(|t| static_value(t, src))
+            .is_some_and(|t| t == b"image"),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn lacks_title(element: Node, src: &[u8]) -> bool {
+    opening_tag(element).is_some_and(|o| !has_spread(o) && attribute(o, "title", src).is_none())
+}
+
+/// The attribute is on an HTML element, not a component, whose props may
+/// mean anything.
+fn on_dom_element(attr: Node, src: &[u8]) -> bool {
+    attr.parent()
+        .and_then(|o| tag_name(o, src))
+        .is_some_and(is_dom_tag)
+}
+
+fn as_number(value: &[u8]) -> Option<i64> {
+    std::str::from_utf8(value).ok()?.trim().parse().ok()
+}
+
+fn positive_value(attr: Node, src: &[u8]) -> bool {
+    on_dom_element(attr, src)
+        && static_value(attr, src)
+            .and_then(as_number)
+            .is_some_and(|n| n > 0)
+}
+
+fn hides_focusable_element(attr: Node, src: &[u8]) -> bool {
+    if static_value(attr, src) != Some(b"true") {
+        return false;
+    }
+    let Some(open) = attr.parent() else {
+        return false;
+    };
+    let Some(tag) = tag_name(open, src).filter(|t| is_dom_tag(t)) else {
+        return false;
+    };
+    let tab_index =
+        attribute(open, "tabIndex", src).map(|t| static_value(t, src).and_then(as_number));
+    match tab_index {
+        Some(Some(n)) => n >= 0,
+        Some(None) => false, // dynamic: unknown
+        None => {
+            matches!(tag, b"button" | b"input" | b"select" | b"textarea")
+                || (tag == b"a" && attribute(open, "href", src).is_some())
+        }
+    }
+}
+
+fn link_used_as_button(element: Node, src: &[u8]) -> bool {
+    let Some(open) = opening_tag(element) else {
+        return false;
+    };
+    if has_spread(open) || attribute(open, "onClick", src).is_none() {
+        return false;
+    }
+    match attribute(open, "href", src) {
+        None => true,
+        Some(href) => static_value(href, src)
+            .is_some_and(|h| h == b"#" || h.trim_ascii_start().starts_with(b"javascript:")),
+    }
+}
+
+fn has_no_accessible_content(element: Node, src: &[u8]) -> bool {
+    let Some(open) = opening_tag(element) else {
+        return false;
+    };
+    !has_spread(open)
+        && [
+            "aria-label",
+            "aria-labelledby",
+            "title",
+            "dangerouslySetInnerHTML",
+            "children",
+        ]
+        .iter()
+        .all(|a| attribute(open, a, src).is_none())
+        && !has_content(element, src)
+}
+
+fn alt_says_image(attr: Node, src: &[u8]) -> bool {
+    static_value(attr, src).is_some_and(|alt| {
+        alt.split(|b| !b.is_ascii_alphanumeric()).any(|w| {
+            w.eq_ignore_ascii_case(b"image")
+                || w.eq_ignore_ascii_case(b"photo")
+                || w.eq_ignore_ascii_case(b"picture")
+        })
+    })
+}
+
+fn mouse_handler_without_keyboard(attr: Node, src: &[u8]) -> bool {
+    let Some(open) = attr.parent() else {
+        return false;
+    };
+    if !on_dom_element(attr, src) || has_spread(open) {
+        return false;
+    }
+    let needed = match attr.named_child(0).map(|n| text(n, src)) {
+        Some(b"onMouseOver") => "onFocus",
+        Some(b"onMouseOut") => "onBlur",
+        _ => return false,
+    };
+    attribute(open, needed, src).is_none()
+}
+
+// ---------------------------------------------------- test-framework filters
+
+const EQUALITY_MATCHERS: &[&[u8]] = &[b"toBe", b"toEqual", b"toStrictEqual"];
+const EQUALITY_ASSERTS: &[&[u8]] = &[
+    b"equal",
+    b"strictEqual",
+    b"deepEqual",
+    b"deepStrictEqual",
+    b"notEqual",
+    b"notStrictEqual",
+    b"notDeepEqual",
+    b"notDeepStrictEqual",
+];
+
+fn arguments_of(call: Node) -> Vec<Node> {
+    call.child_by_field_name("arguments")
+        .filter(|a| a.kind() == "arguments")
+        .map(|a| {
+            let mut cursor = a.walk();
+            a.named_children(&mut cursor)
+                .filter(|c| c.kind() != "comment")
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// For `expect(subject)` itself.
+fn is_expect_call(node: Node, src: &[u8]) -> bool {
+    node.kind() == "call_expression"
+        && node
+            .child_by_field_name("function")
+            .is_some_and(|f| f.kind() == "identifier" && text(f, src) == b"expect")
+}
+
+/// `expect(subject).<matcher>(args)`, through `.not`, `.resolves` and
+/// `.rejects`: the subject, the matcher's name and its arguments.
+fn expect_matcher<'t, 's>(
+    call: Node<'t>,
+    src: &'s [u8],
+) -> Option<(Node<'t>, &'s [u8], Vec<Node<'t>>)> {
+    let function = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_expression")?;
+    let matcher = text(function.child_by_field_name("property")?, src);
+    let mut object = function.child_by_field_name("object")?;
+    while object.kind() == "member_expression"
+        && object
+            .child_by_field_name("property")
+            .is_some_and(|p| matches!(text(p, src), b"not" | b"resolves" | b"rejects"))
+    {
+        object = object.child_by_field_name("object")?;
+    }
+    if !is_expect_call(object, src) {
+        return None;
+    }
+    let subject = *arguments_of(object).first()?;
+    Some((subject, matcher, arguments_of(call)))
+}
+
+/// `assert(args)` or `assert.<method>(args)`; the method is empty for the
+/// former.
+fn assert_call<'t, 's>(call: Node<'t>, src: &'s [u8]) -> Option<(&'s [u8], Vec<Node<'t>>)> {
+    let function = call.child_by_field_name("function")?;
+    let method: &[u8] = match function.kind() {
+        "identifier" if text(function, src) == b"assert" => b"",
+        "member_expression"
+            if function
+                .child_by_field_name("object")
+                .is_some_and(|o| o.kind() == "identifier" && text(o, src) == b"assert") =>
+        {
+            text(function.child_by_field_name("property")?, src)
+        }
+        _ => return None,
+    };
+    Some((method, arguments_of(call)))
+}
+
+fn is_literal(node: Node) -> bool {
+    match node.kind() {
+        "string" | "number" | "true" | "false" | "null" | "undefined" => true,
+        "unary_expression" => node.named_child(0).is_some_and(|n| n.kind() == "number"),
+        _ => false,
+    }
+}
+
+/// The assertion an `expect` or `assert` identifier starts:
+/// `expect(x).matcher(...)` (through `.not`, `.resolves`, `.rejects`),
+/// `assert(...)` or `assert.method(...)`. Anchoring on these rare names
+/// keeps the assertion rules off the hot path of every call.
+fn assertion_call<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let parent = name.parent()?;
+    let is_call_of = |c: Node, callee: Node| {
+        c.kind() == "call_expression" && c.child_by_field_name("function") == Some(callee)
+    };
+    if text(name, src) == b"assert" {
+        let callee = if parent.kind() == "member_expression"
+            && parent.child_by_field_name("object") == Some(name)
+        {
+            parent
+        } else {
+            name
+        };
+        return callee.parent().filter(|&c| is_call_of(c, callee));
+    }
+    let mut node = Some(parent).filter(|&c| is_call_of(c, name))?;
+    loop {
+        let member = node.parent().filter(|m| {
+            m.kind() == "member_expression" && m.child_by_field_name("object") == Some(node)
+        })?;
+        let up = member.parent()?;
+        if is_call_of(up, member) {
+            return Some(up);
+        }
+        node = member;
+    }
+}
+
+fn same_argument_assertion<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    assertion_call(name, src).filter(|&c| asserts_value_against_itself(c, src))
+}
+
+fn constant_assertion<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    assertion_call(name, src).filter(|&c| asserts_constants(c, src))
+}
+
+fn reversed_assertion<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    assertion_call(name, src).filter(|&c| expected_value_first(c, src))
+}
+
+fn unspecific_assertion<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    assertion_call(name, src).filter(|&c| has_more_specific_assertion(c, src))
+}
+
+fn any_error_assertion<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    assertion_call(name, src).filter(|&c| checks_any_error(c, src))
+}
+
+fn asserts_value_against_itself(call: Node, src: &[u8]) -> bool {
+    if let Some((subject, matcher, args)) = expect_matcher(call, src) {
+        // Two equal literals are the constant-assertion rule's case.
+        return EQUALITY_MATCHERS.contains(&matcher)
+            && !is_literal(subject)
+            && matches!(args.as_slice(), [expected] if same_text(*expected, subject, src));
+    }
+    matches!(assert_call(call, src), Some((method, args))
+        if EQUALITY_ASSERTS.contains(&method) && args.len() >= 2 && !is_literal(args[0]) && same_text(args[0], args[1], src))
+}
+
+fn asserts_constants(call: Node, src: &[u8]) -> bool {
+    if let Some((subject, matcher, args)) = expect_matcher(call, src) {
+        return is_literal(subject)
+            && match args.as_slice() {
+                [] => true,
+                [expected] => EQUALITY_MATCHERS.contains(&matcher) && is_literal(*expected),
+                _ => false,
+            };
+    }
+    match assert_call(call, src) {
+        Some((b"" | b"ok" | b"isTrue" | b"isOk", args)) => args
+            .first()
+            .is_some_and(|a| matches!(a.kind(), "true" | "number" | "string")),
+        Some((method, args)) => {
+            EQUALITY_ASSERTS.contains(&method)
+                && args.len() >= 2
+                && is_literal(args[0])
+                && is_literal(args[1])
+        }
+        None => false,
+    }
+}
+
+fn expected_value_first(call: Node, src: &[u8]) -> bool {
+    if let Some((subject, matcher, args)) = expect_matcher(call, src) {
+        return EQUALITY_MATCHERS.contains(&matcher)
+            && is_literal(subject)
+            && matches!(args.as_slice(), [actual] if !is_literal(*actual));
+    }
+    matches!(assert_call(call, src), Some((method, args))
+        if EQUALITY_ASSERTS.contains(&method) && args.len() >= 2 && is_literal(args[0]) && !is_literal(args[1]))
+}
+
+fn is_equality(node: Node) -> bool {
+    node.kind() == "binary_expression"
+        && node
+            .child_by_field_name("operator")
+            .is_some_and(|o| EQUALITY.contains(&o.kind()))
+}
+
+fn has_more_specific_assertion(call: Node, src: &[u8]) -> bool {
+    if let Some((subject, matcher, args)) = expect_matcher(call, src) {
+        if !EQUALITY_MATCHERS.contains(&matcher) {
+            return false;
+        }
+        let length = subject.kind() == "member_expression"
+            && subject
+                .child_by_field_name("property")
+                .is_some_and(|p| text(p, src) == b"length");
+        let boolean_of_comparison = is_equality(subject)
+            && matches!(args.as_slice(), [b] if matches!(b.kind(), "true" | "false"));
+        return length || boolean_of_comparison;
+    }
+    matches!(assert_call(call, src), Some((b"" | b"ok", args)) if args.first().is_some_and(|a| is_equality(*a)))
+}
+
+/// Words that only continue an assertion chain (Jest's modifiers and
+/// Chai's language chains): one of them last means no check was made.
+const CHAIN_WORDS: &[&[u8]] = &[
+    b"not",
+    b"resolves",
+    b"rejects",
+    b"to",
+    b"be",
+    b"been",
+    b"is",
+    b"that",
+    b"which",
+    b"and",
+    b"has",
+    b"have",
+    b"with",
+    b"at",
+    b"of",
+    b"same",
+    b"but",
+    b"does",
+    b"deep",
+];
+
+fn is_incomplete_expect(node: Node, src: &[u8]) -> bool {
+    if node.kind() == "call_expression" {
+        return is_expect_call(node, src);
+    }
+    let mut n = node;
+    while n.kind() == "member_expression" {
+        if !n
+            .child_by_field_name("property")
+            .is_some_and(|p| CHAIN_WORDS.contains(&text(p, src)))
+        {
+            return false;
+        }
+        match n.child_by_field_name("object") {
+            Some(o) => n = o,
+            None => return false,
+        }
+    }
+    is_expect_call(n, src)
+}
+
+fn checks_any_error(call: Node, src: &[u8]) -> bool {
+    if let Some((_, matcher, args)) = expect_matcher(call, src) {
+        // `.not.toThrow()` rightly takes no argument.
+        let negated = call
+            .child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("object"))
+            .and_then(|o| o.child_by_field_name("property"))
+            .is_some_and(|p| text(p, src) == b"not");
+        return matches!(matcher, b"toThrow" | b"toThrowError") && args.is_empty() && !negated;
+    }
+    matches!(assert_call(call, src), Some((b"throws" | b"rejects", args)) if args.len() == 1)
+}
+
+/// The whole `expect(p).resolves.toBe(x)` expression when it's a statement
+/// of its own: neither awaited nor returned.
+fn unawaited_promise_assertion<'t>(word: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let member = word.parent().filter(|m| {
+        m.kind() == "member_expression" && m.child_by_field_name("property") == Some(word)
+    })?;
+    let mut root = member.child_by_field_name("object")?;
+    while root.kind() == "member_expression" {
+        root = root.child_by_field_name("object")?;
+    }
+    if !is_expect_call(root, src) {
+        return None;
+    }
+    let mut top = member;
+    while let Some(p) = top.parent().filter(|p| {
+        (p.kind() == "member_expression" && p.child_by_field_name("object") == Some(top))
+            || (p.kind() == "call_expression" && p.child_by_field_name("function") == Some(top))
+    }) {
+        top = p;
+    }
+    top.parent()
+        .is_some_and(|p| p.kind() == "expression_statement")
+        .then_some(top)
+}
+
+fn is_blank_string(string: Node, src: &[u8]) -> bool {
+    let t = text(string, src);
+    t.get(1..t.len().saturating_sub(1))
+        .is_some_and(|inner| inner.iter().all(u8::is_ascii_whitespace))
+}
+
+fn is_async(function: Node, _: &[u8]) -> bool {
+    has_token(function, "async")
+}
+
+/// Whether the line above `node` (skipping blank lines) is or ends a comment.
+fn no_comment_above(node: Node, src: &[u8]) -> bool {
+    let line_start = src[..node.start_byte()]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |i| i + 1);
+    let above = src[..line_start]
+        .split(|&b| b == b'\n')
+        .rev()
+        .map(<[u8]>::trim_ascii)
+        .find(|l| !l.is_empty());
+    !above.is_some_and(|l| l.starts_with(b"//") || l.starts_with(b"*") || l.ends_with(b"*/"))
+}
+
+/// The name a test-framework call starts with: `it` for `it(...)` and
+/// `it.only(...)`.
+fn test_callee<'t, 's>(statement: Node<'t>, src: &'s [u8]) -> Option<(&'s [u8], Node<'t>)> {
+    let call = statement
+        .named_child(0)
+        .filter(|c| statement.kind() == "expression_statement" && c.kind() == "call_expression")?;
+    let mut function = call.child_by_field_name("function")?;
+    if function.kind() == "member_expression" {
+        function = function.child_by_field_name("object")?;
+    }
+    (function.kind() == "identifier").then(|| (text(function, src), call))
+}
+
+/// The callback of the `describe(title, () => {...})` call that `name`
+/// starts. Anchored on the name rather than matched as a call pattern: a
+/// pattern with a child step inside the arguments stays open over every
+/// callback body in the file.
+fn suite_callback<'t>(name: Node<'t>) -> Option<Node<'t>> {
+    let call = name.parent().filter(|c| {
+        c.kind() == "call_expression" && c.child_by_field_name("function") == Some(name)
+    })?;
+    let mut cursor = call.child_by_field_name("arguments")?.walk();
+    let args = call.child_by_field_name("arguments")?;
+    args.named_children(&mut cursor)
+        .find(|a| matches!(a.kind(), "arrow_function" | "function_expression"))
+}
+
+/// The statements a suite's tests are listed in: a describe callback's
+/// body, or the file itself.
+fn suite_block<'t>(node: Node<'t>) -> Option<Node<'t>> {
+    match node.kind() {
+        "program" => Some(node),
+        _ => suite_callback(node)?
+            .child_by_field_name("body")
+            .filter(|b| b.kind() == "statement_block"),
+    }
+}
+
+fn async_suite_callback<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    suite_callback(name).filter(|&f| is_async(f, src))
+}
+
+fn duplicate_test_title_in_suite<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    duplicate_test_title(suite_block(node)?, src)
+}
+
+fn hook_after_test_in_suite<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    hook_after_test(suite_block(node)?, src)
+}
+
+fn duplicate_test_title<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = block.walk();
+    block.named_children(&mut cursor).find_map(|s| {
+        let (name, call) = test_callee(s, src)?;
+        if !matches!(name, b"it" | b"test") {
+            return None;
+        }
+        let title = arguments_of(call)
+            .into_iter()
+            .next()
+            .filter(|t| t.kind() == "string")?;
+        (!seen.insert(text(title, src))).then_some(title)
+    })
+}
+
+fn hook_after_test<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut seen_test = false;
+    let mut cursor = block.walk();
+    for s in block.named_children(&mut cursor) {
+        let Some((name, call)) = test_callee(s, src) else {
+            continue;
+        };
+        match name {
+            b"it" | b"test" | b"describe" | b"context" | b"suite" => seen_test = true,
+            b"beforeEach" | b"afterEach" | b"beforeAll" | b"afterAll" | b"before" | b"after"
+                if seen_test =>
+            {
+                return Some(call);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_fixed_wait(call: Node, src: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let (Some(object), Some(method)) = (
+        function.child_by_field_name("object"),
+        function.child_by_field_name("property"),
+    ) else {
+        return false;
+    };
+    match (text(object, src), text(method, src)) {
+        (b"cy", b"wait") => arguments_of(call)
+            .first()
+            .is_some_and(|a| a.kind() == "number"),
+        (b"cy", b"pause" | b"debug")
+        | (b"page", b"waitForTimeout" | b"pause")
+        | (b"browser", b"pause") => true,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -2659,6 +4575,92 @@ v = load
         assert_eq!(flagged("js/call-arguments-new-line", JS, src), [9]);
         let jumps = "const f = () => { g(); return; };\nwhile (a) { b(); continue; }\nfunction h() { return; /* done */ }";
         assert_eq!(flagged("js/redundant-jump", TS, jumps), [1, 2]);
+    }
+
+    const TSX: Lang = Lang::Tsx;
+
+    #[test]
+    fn react_rules_in_tsx() {
+        let src = "const L = ({ rows }: P) => (
+  <ul>
+    {rows.map((r: Row, i: number) => <li key={i}>{r.name}</li>)}
+    {rows.map((r) => (
+      <Item {...r} />
+    ))}
+    {rows.map((r) => {
+      if (r.hidden) { return null; }
+      return <Item name={r.name} />;
+    })}
+  </ul>
+);";
+        assert_eq!(flagged("js/jsx-index-key", TSX, src), [3]);
+        assert_eq!(flagged("js/jsx-missing-key", TSX, src), [9]);
+    }
+
+    #[test]
+    fn hooks_and_state() {
+        let src = "function C({ a }) {
+  const [v, setV] = React.useState(0);
+  const x = a && useMemo(() => 1, []);
+  for (const k of ks) { useRef(k); }
+  const ok = useCallback(() => (a ? 1 : 2), [a]);
+  if (useFlag()) { f(); }
+  setV(v);
+  return <b onClick={() => setV(v)} />;
+}";
+        assert_eq!(flagged("js/hook-in-condition", JS, src), [3, 4]);
+        let helpers = "function build(gen) { return ok ? useFunc(gen) : null; }\nconst useThing = (a) => (a ? useMemo(f) : 1);";
+        assert_eq!(flagged("js/hook-in-condition", JS, helpers), [2]);
+        assert_eq!(flagged("js/set-state-in-render", JS, src), [7]);
+        assert_eq!(flagged("js/state-setter-same-value", JS, src), [7]);
+    }
+
+    #[test]
+    fn test_framework_rules() {
+        let src = "describe('s', () => {
+  it('a', () => { expect(x).not.toBe(x); expect(3).not.toEqual(y); });
+  describe('inner', () => { it('a', () => {}); });
+  it('a', () => {});
+  afterEach(() => {});
+});
+it('a', () => {});
+/* waiting on the vendor fix,
+   see #12 */
+xit('later', () => {});
+test.skip('soon', () => {});";
+        assert_eq!(flagged("js/duplicate-test-title", JS, src), [4]);
+        assert_eq!(flagged("js/hook-after-test", JS, src), [5]);
+        assert_eq!(flagged("js/assertion-same-argument", JS, src), [2]);
+        assert_eq!(flagged("js/assertion-order", JS, src), [2]);
+        assert_eq!(flagged("js/skipped-test-without-reason", JS, src), [11]);
+        let throws = "expect(() => f()).not.toThrow();\nexpect(() => g()).toThrow();";
+        assert_eq!(flagged("js/unspecified-throw", JS, throws), [2]);
+        let state = "class Machine { go() { this.state = 1; } }\nclass C extends React.Component { go() { this.state = 1; } }";
+        assert_eq!(flagged("js/state-mutation", JS, state), [2]);
+        let spaced = "const v = <p>Text<> <button /></></p>;";
+        assert!(flagged("js/redundant-fragment", JS, spaced).is_empty());
+    }
+
+    #[test]
+    fn accessibility_on_components_is_left_alone() {
+        let src = "const v = <>
+  <Link accessKey=\"k\" onMouseOver={f} tabIndex={3} />
+  <a href=\"/x\" aria-hidden>x</a>
+  <a href={url}>{label}</a>
+  <h1 aria-label=\"Title\" />
+  <img alt={alt} src={s} />
+</>;";
+        for rule in [
+            "js/accesskey",
+            "js/mouse-without-keyboard",
+            "js/tabindex-positive",
+            "js/anchor-content",
+            "js/heading-content",
+            "js/img-alt",
+        ] {
+            assert!(flagged(rule, JS, src).is_empty(), "{rule}");
+        }
+        assert_eq!(flagged("js/aria-hidden-focusable", JS, src), [3]);
     }
 
     #[test]

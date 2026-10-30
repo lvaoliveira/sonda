@@ -9,7 +9,7 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 93
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 135
   rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
@@ -138,6 +138,13 @@ file, the report formats and the public library API.
   nested ternaries, labels, legacy octal, `isNaN()`, and bare
   `eslint-disable` comments. The JSX loading/empty/list idiom
   (`{a ? <X/> : b ? <Y/> : <Z/>}`) is not reported as a nested ternary.
+- JavaScript/TypeScript: 42 rules equivalent to SonarQube's default-profile
+  React, accessibility and test-framework rules: list keys, hook and state
+  misuse, legacy React APIs, alt text and link/heading content, assertions
+  that can't fail or check the wrong thing, and test-suite structure. JSX
+  rules run on `.js`, `.jsx` and `.tsx` files.
+- Rules with the same query share one compiled pattern, so the tree is
+  matched against it once.
 - Rules can report a node inside the one their query captures, so rules
   that match a container (a switch, an object) point at the offending case
   or member.

@@ -212,17 +212,18 @@ fn run_queries(
     let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
     let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
     while let Some(m) = matches.next() {
-        let (idx, filter) = cq.patterns[m.pattern_index];
-        let active = &rules.active[idx];
-        for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
-            let node = match filter {
-                None => Some(cap.node),
-                Some(Filter::Keep(keep)) => keep(cap.node, bytes).then_some(cap.node),
-                Some(Filter::Find(find)) => find(cap.node, bytes),
-            };
-            if let Some(node) = node {
-                let msg = active.rule.message.to_string();
-                issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
+        for &(idx, filter) in &cq.patterns[m.pattern_index] {
+            let active = &rules.active[idx];
+            for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
+                let node = match filter {
+                    None => Some(cap.node),
+                    Some(Filter::Keep(keep)) => keep(cap.node, bytes).then_some(cap.node),
+                    Some(Filter::Find(find)) => find(cap.node, bytes),
+                };
+                if let Some(node) = node {
+                    let msg = active.rule.message.to_string();
+                    issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
+                }
             }
         }
     }
