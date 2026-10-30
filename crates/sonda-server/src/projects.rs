@@ -6,16 +6,16 @@
 //! (see `health`), from the issue tracker: accepted issues don't count.
 
 use crate::api::ApiError;
+use crate::components::{ComponentRow, LanguageShare, components, language_shares};
 use crate::health::{
-    GateDetail, Measures, ago, component_of, conditions, coverage_level, debt_level, gate_state,
-    measure_set, project_score, rfc3339, severity_level,
+    GateDetail, Measures, ago, conditions, coverage_level, debt_level, gate_state, measure_set,
+    project_score, rfc3339, severity_level,
 };
 use crate::http::State;
 use axum::Json;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sonda_core::codeowners::CodeOwners;
 use std::collections::{BTreeMap, HashMap};
 
 /// Analyses the project page charts.
@@ -78,12 +78,6 @@ pub struct BranchRow {
 }
 
 #[derive(Serialize)]
-pub struct LanguageShare {
-    pub id: String,
-    pub ncloc: i64,
-}
-
-#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisRef {
     pub id: i64,
@@ -114,19 +108,6 @@ pub struct HistoryPoint {
     pub coverage: Option<f64>,
     pub duplication: Option<f64>,
     pub debt_minutes: Option<f64>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentRow {
-    pub path: String,
-    pub languages: Vec<String>,
-    pub files: usize,
-    pub ncloc: i64,
-    pub owner: Option<String>,
-    /// Open and confirmed issues.
-    pub issues: i64,
-    pub debt_minutes: i64,
 }
 
 #[derive(Deserialize)]
@@ -419,93 +400,9 @@ fn score(r: &Ratings, coverage: Option<f64>) -> u32 {
     project_score([r.reliability, r.security, r.maintainability], coverage).round() as u32
 }
 
-fn language_shares(files: &[(String, String, i64)]) -> Vec<LanguageShare> {
-    let mut totals: BTreeMap<&str, i64> = BTreeMap::new();
-    for (_, language, ncloc) in files {
-        *totals.entry(language).or_default() += ncloc;
-    }
-    let mut shares: Vec<LanguageShare> = totals
-        .into_iter()
-        .map(|(id, ncloc)| LanguageShare {
-            id: id.to_string(),
-            ncloc,
-        })
-        .collect();
-    shares.sort_by(|a, b| b.ncloc.cmp(&a.ncloc).then_with(|| a.id.cmp(&b.id)));
-    shares
-}
-
-fn components(
-    files: &[(String, String, i64)],
-    issues: &[(String, String, String, i32)],
-    codeowners: Option<&str>,
-) -> Vec<ComponentRow> {
-    let owners = codeowners.map(CodeOwners::parse);
-    let mut by_component: BTreeMap<&str, Vec<&(String, String, i64)>> = BTreeMap::new();
-    for f in files {
-        by_component.entry(component_of(&f.0)).or_default().push(f);
-    }
-    let mut open: HashMap<&str, (i64, i64)> = HashMap::new();
-    for (path, _, _, effort) in issues {
-        let e = open.entry(component_of(path)).or_default();
-        e.0 += 1;
-        e.1 += i64::from(*effort);
-    }
-    let mut rows: Vec<ComponentRow> = by_component
-        .into_iter()
-        .map(|(path, files)| {
-            let languages =
-                language_shares(&files.iter().map(|f| (*f).clone()).collect::<Vec<_>>())
-                    .into_iter()
-                    .map(|l| l.id)
-                    .collect();
-            let (issues, debt_minutes) = open.get(path).copied().unwrap_or_default();
-            ComponentRow {
-                path: path.to_string(),
-                languages,
-                files: files.len(),
-                ncloc: files.iter().map(|f| f.2).sum(),
-                owner: owners
-                    .as_ref()
-                    .and_then(|o| o.majority(files.iter().map(|f| f.0.as_str()))),
-                issues,
-                debt_minutes,
-            }
-        })
-        .collect();
-    // Most issues first, then the largest.
-    rows.sort_by(|a, b| {
-        b.issues
-            .cmp(&a.issues)
-            .then_with(|| b.ncloc.cmp(&a.ncloc))
-            .then_with(|| a.path.cmp(&b.path))
-    });
-    rows
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn components_group_files_issues_and_owners() {
-        let file = |p: &str, l: &str, n: i64| (p.to_string(), l.to_string(), n);
-        let files = [
-            file("api/a.js", "javascript", 100),
-            file("api/b.ts", "typescript", 300),
-            file("web/c.ts", "typescript", 50),
-            file("README.js", "javascript", 1),
-        ];
-        let issue = |p: &str, e: i32| (p.to_string(), "bug".to_string(), "major".to_string(), e);
-        let issues = [issue("web/c.ts", 5), issue("web/c.ts", 10)];
-        let rows = components(&files, &issues, Some("/api/ @team-api\n"));
-        let paths: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
-        assert_eq!(paths, ["web", "api", "."]);
-        assert_eq!((rows[0].issues, rows[0].debt_minutes), (2, 15));
-        assert_eq!(rows[1].languages, ["typescript", "javascript"]);
-        assert_eq!(rows[1].owner.as_deref(), Some("@team-api"));
-        assert_eq!(rows[0].owner, None);
-    }
 
     #[test]
     fn the_worst_open_issue_sets_the_rating() {

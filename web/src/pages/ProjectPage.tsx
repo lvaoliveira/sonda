@@ -8,6 +8,7 @@ import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { HealthBar, PipMeter, Sparkline } from '@/components/sonda/meters'
 import { GateConditions } from '@/components/sonda/gate'
 import { GateDot, GateStatus } from '@/components/sonda/status'
+import { componentLabel, componentUrl } from '@/lib/links'
 import { compactCount, formatAge, formatDebt, formatNumber, shortDate } from '@/lib/format'
 import { GATE, coverageColor, languageLabel, scoreColor } from '@/lib/visual'
 
@@ -279,7 +280,9 @@ function Components({ p }: { p: ProjectDetail }) {
               <tr key={c.path} className="hover:bg-hover">
                 <td className={`${td} px-5`}>
                   <span className="flex flex-col leading-[1.3]">
-                    <Mono className="text-[12.5px]">{c.path === '.' ? '(root)' : `${c.path}/`}</Mono>
+                    <Link to={componentUrl(p.key, c.path, p.branch, p.mainBranch)} className="font-mono text-[12.5px] text-fg">
+                      {componentLabel(c.path)}
+                    </Link>
                     <span className="text-xs text-fg-faint">{c.languages.map(languageLabel).join(', ')}</span>
                   </span>
                 </td>

@@ -441,6 +441,46 @@ export interface ProjectDetail {
   components: ProjectComponent[]
 }
 
+// -------------------------------------------------------------- components
+
+/** A project's component, in the list across projects. */
+export interface ComponentListRow extends ProjectComponent {
+  project: string
+}
+
+export interface ComponentList {
+  components: ComponentListRow[]
+  /** Every owner of any listed component. */
+  owners: string[]
+}
+
+export interface ComponentDetail {
+  project: string
+  branch: string
+  mainBranch: string
+  /** A top-level directory, or `.` for files at the project's root. */
+  path: string
+  analyzedAt: string
+  languages: { id: string; ncloc: number }[]
+  files: number
+  ncloc: number
+  owner: string | null
+  /** Every owner of any of its files, with how many files each owns. */
+  owners: { owner: string; files: number }[]
+  issues: {
+    total: number
+    new: number
+    bySeverity: Partial<Record<Severity, number>>
+    byCategory: Partial<Record<Category, number>>
+    debtMinutes: number
+  }
+  /** The project's components, this one included. */
+  siblings: ProjectComponent[]
+  /** Open issues at the end of each of the last eight weeks, oldest first. */
+  trend: { date: string; open: number }[]
+  fileList: { path: string; language: string; ncloc: number; issues: number; debtMinutes: number; worst: Severity | null }[]
+}
+
 // ---------------------------------------------------------------- analyses
 
 export interface AnalysisQuery {
@@ -537,6 +577,9 @@ export interface SondaApi {
   projects(): Promise<ProjectList>
   /** The project on `branch`, or on its main branch. */
   project(key: string, branch?: string): Promise<ProjectDetail>
+  /** Every project's components, or one project's. */
+  components(project?: string): Promise<ComponentList>
+  component(project: string, path: string, branch?: string): Promise<ComponentDetail>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>
   analysis(id: number): Promise<AnalysisDetail>
   issues(query: IssueQuery): Promise<IssuePage>

@@ -86,7 +86,7 @@ user's `password_hash` is nullable, and accounts are never deleted.
 | **Health score change** | Needs ratings history, which the server does not reconstruct yet. | Compute ratings per stored analysis; fills `health.delta` and "vs N days ago". |
 | **Per-file coverage** | Reports carry coverage per project only. | Add per-file coverage to the report (from LCOV); the coverage drill-down lists files. |
 | **Commit messages and scan durations** | Not uploaded; Recent analyses shows "—". | `sonda upload` sends `git log -1` and the scan duration. |
-| **Remaining screens** | Components, Security and Quality gates show "not built yet". | One per increment, from `docs/designs/`, built from the data the server has (decided 2026-10-30). |
+| **Remaining screens** | Security and Quality gates show "not built yet". | One per increment, from `docs/designs/`, built from the data the server has (decided 2026-10-30). |
 | **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, analysis stages and logs, hotspots, CWE/OWASP mapping and reachability. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
 | **Narrow screens** | The app shell keeps its sidebar at phone widths, so pages scroll sideways. | Collapse the sidebar into a menu below a breakpoint, in `AppShell`. |
 | **Server-managed rule profiles** | Rules are configured per repository in `sonda.toml`; the Rules page is read-only. | A profile `sonda scan` downloads; decide what wins over `sonda.toml`. |

@@ -213,6 +213,39 @@ describe('Analyses', () => {
   })
 })
 
+describe('Components', () => {
+  it('lists components across projects, filtered by project, owner and search', async () => {
+    const user = userEvent.setup()
+    renderAt('/components')
+    const table = await screen.findByRole('table')
+    expect(within(table).getAllByRole('row').length).toBeGreaterThan(20)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Owner' }), '@checkout')
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1)
+    for (const row of rows) expect(row).toHaveTextContent('@checkout')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Project' }), 'billing-service')
+    expect(within(screen.getByRole('table')).getAllByRole('row').slice(1)).toHaveLength(1)
+    await user.type(screen.getByRole('textbox', { name: 'Search components' }), 'nothing-here')
+    expect(await screen.findByText('No components match these filters')).toBeInTheDocument()
+  })
+
+  it('opens a component from its project, with issues, trend, owners and files', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform')
+    await user.click(await screen.findByRole('link', { name: 'services/' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'services/' })).toBeInTheDocument()
+    expect(screen.getByText('Component · payments-platform')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'payments-platform components' })).toHaveTextContent('packages/')
+    expect(screen.getByRole('heading', { name: 'Open issues · 8 weeks' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Owners' })).toHaveTextContent('@checkout')
+    const files = screen.getByRole('region', { name: 'Files' })
+    expect(within(files).getAllByRole('link')[0]).toHaveAttribute('href', '/issues?project=payments-platform&branch=main&file=services%2Finternal%2Fhandlers.go')
+    await user.click(within(files).getByRole('button', { name: 'Path' }))
+    expect(within(files).getAllByRole('link')[0]).toHaveTextContent('config.go')
+    await user.click(screen.getByRole('link', { name: /packages\// }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'packages/' })).toBeInTheDocument()
+  })
+})
+
 describe('Signing in', () => {
   it('requires a username and password when the server requires them to read', async () => {
     const user = userEvent.setup()

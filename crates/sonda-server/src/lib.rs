@@ -7,6 +7,7 @@
 
 pub mod analyses;
 pub mod api;
+pub mod components;
 pub mod config;
 pub mod db;
 pub mod drill;
