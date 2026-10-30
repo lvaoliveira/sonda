@@ -4,12 +4,11 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 ([ADR-0005](adr/0005-sonda-server.md)). It runs as two containers: `sonda`
 (the server and the web app) and `db` (PostgreSQL).
 
-**Status:**
-- **Server:** receives uploads, tracks issues across them, signs browsers
-  in, and serves issues (with triage) and the rule catalog.
-- **Web app:** shows them. Open http://127.0.0.1:9000 and sign in with the
-  token.
-- **Overview:** comes next, built from the stored analysis history.
+**Status:** the server receives uploads, tracks issues across them, signs
+browsers in, and serves the Overview, issues (with triage) and the rule
+catalog. The web app shows all of it: open http://127.0.0.1:9000 and sign in
+with the token. The Overview's per-metric drill-down drawer comes next;
+until then, a metric opens the matching issues.
 
 ## Quick start (Docker Compose)
 
@@ -129,6 +128,44 @@ C parsers (ADR-0003 keeps them in sandboxed workers).
 Each change is recorded in the issue's history. `fixed` cannot be set: it
 is decided by analyses. A change needs the token, or a browser session plus
 a `Sonda-Csrf` header.
+
+## Overview
+
+`GET /api/overview?range=7d|30d|90d` (default `90d`) builds the portfolio
+from stored analyses.
+
+**Snapshots.** Each chart point is a snapshot: every project's latest
+main-branch analysis received by then. Points are daily for 7 and 30 days
+and weekly for 90. Points from before any project was analyzed are left
+out, so a trend never compares against "nothing existed yet".
+
+**A project's first analysis is its baseline.** Its issues count as open,
+but not as introduced or new. Otherwise, uploading an existing project would
+look like a flood of new problems. SonarQube does the same.
+
+**Ratings** follow ADR-0005's table:
+- **Reliability and Security:** the worst open bug or vulnerability. Issues
+  marked *accepted* don't count. None is 5, minor 4, major 3, critical 2,
+  blocker 1.
+- **Maintainability:** the debt ratio, debt ÷ (lines of code × 30 min):
+  ≤ 5% is 5, ≤ 10% 4, ≤ 20% 3, ≤ 50% 2, otherwise 1.
+- **Coverage:** ≥ 80% is 5, ≥ 70% 4, ≥ 60% 3, ≥ 50% 2, otherwise 1. With
+  no coverage uploaded, the level is null ("no data"), never a guess.
+- **Portfolio:** each dimension is the average of the project levels,
+  weighted by lines of code. Its score is that level scaled to 0-100. The
+  health score is the average of the dimensions that have data.
+
+**Where to focus** lists two kinds of items, most severe first:
+- projects whose main branch fails its gate, with the number of
+  consecutive failing analyses;
+- new blocker or critical issues in the range, per project.
+
+**What the server doesn't know** is null, and the page leaves it out:
+- teams, so the response says `teams: false` and the "My team" scope is
+  not offered;
+- components;
+- commit messages and scan durations;
+- the change in health score, which would need ratings history.
 
 ## Rules
 

@@ -11,6 +11,7 @@ pub mod db;
 pub mod http;
 pub mod ingest;
 pub mod issues;
+pub mod overview;
 pub mod rules;
 pub mod session;
 pub mod store;

@@ -48,6 +48,12 @@ describe('the HTTP API client', () => {
     window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   })
 
+  it('asks for the overview of a range; there are no teams to scope by', async () => {
+    const { fn, calls } = fakeFetch(() => json({ teams: false }))
+    await createHttpApi('/api', fn).overview!('all', '30d')
+    expect(calls[0].url).toBe('/api/overview?range=30d')
+  })
+
   it("shows the server's error message", async () => {
     const { fn } = fakeFetch(() => json({ error: 'unknown severity "fatal"' }, 400))
     await expect(createHttpApi('/api', fn).issue(1)).rejects.toThrow('unknown severity "fatal"')

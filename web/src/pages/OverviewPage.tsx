@@ -25,7 +25,7 @@ const DRILL_LINK: Record<DrillMetric, string> = {
 
 export function OverviewPage() {
   const api = useApi()
-  return api.overview ? <OverviewScreen load={api.overview} /> : <OverviewNotYet />
+  return api.overview ? <OverviewScreen load={api.overview} canDrill={!!api.drill} /> : <OverviewNotYet />
 }
 
 /** Against a real server: the Overview needs analysis history it does not serve yet. */
@@ -44,11 +44,17 @@ function OverviewNotYet() {
   )
 }
 
-function OverviewScreen({ load }: { load: NonNullable<SondaApi['overview']> }) {
+function OverviewScreen({ load, canDrill }: { load: NonNullable<SondaApi['overview']>; canDrill: boolean }) {
+  const navigate = useNavigate()
   const [scope, setScope] = useState<Scope>('all')
   const [range, setRange] = useState<Range>('90d')
   const [drill, setDrill] = useState<DrillMetric | null>(null)
   const data = useAsync(() => load(scope, range), [load, scope, range])
+  // Offer "My team" only where teams exist; remembered while a range reloads.
+  const [teams, setTeams] = useState(false)
+  if (data.state === 'ready' && data.data.teams !== teams) setTeams(data.data.teams)
+  // Without drill-down data, a metric opens the issues it is about.
+  const onDrill = (metric: DrillMetric) => (canDrill ? setDrill(metric) : navigate(DRILL_LINK[metric]))
 
   return (
     <AppShell crumbs={[{ label: 'Overview', to: '/' }]}>
@@ -57,7 +63,7 @@ function OverviewScreen({ load }: { load: NonNullable<SondaApi['overview']> }) {
         summary={
           data.state === 'ready' ? (
             <>
-              {data.data.summary.projects} projects · {data.data.summary.components} components · last sounding{' '}
+              {data.data.summary.projects} projects{data.data.summary.components != null && ` · ${data.data.summary.components} components`} · last sounding{' '}
               <Mono className="text-xs text-fg">{data.data.summary.lastSounding}</Mono>
             </>
           ) : (
@@ -66,15 +72,17 @@ function OverviewScreen({ load }: { load: NonNullable<SondaApi['overview']> }) {
         }
       >
         <div className="flex flex-wrap items-center gap-2.5">
-          <Segmented
-            label="Scope"
-            value={scope}
-            onChange={setScope}
-            options={[
-              { value: 'all', label: 'All projects' },
-              { value: 'mine', label: 'My team' },
-            ]}
-          />
+          {teams && (
+            <Segmented
+              label="Scope"
+              value={scope}
+              onChange={setScope}
+              options={[
+                { value: 'all', label: 'All projects' },
+                { value: 'mine', label: 'My team' },
+              ]}
+            />
+          )}
           <Segmented label="Time range" mono value={range} onChange={setRange} options={(['7d', '30d', '90d'] as const).map((r) => ({ value: r, label: r }))} />
         </div>
       </PageHeader>
@@ -83,7 +91,7 @@ function OverviewScreen({ load }: { load: NonNullable<SondaApi['overview']> }) {
       {data.state === 'error' && <ErrorState message={data.error.message} retry={data.retry} />}
       {data.state === 'ready' && data.data.summary.projects === 0 && <Empty />}
       {data.state === 'ready' && data.data.summary.projects > 0 && (
-        <Live data={data.data} range={range} scopeName={scope === 'all' ? 'all projects' : 'my team'} onDrill={setDrill} active={drill} />
+        <Live data={data.data} range={range} scopeName={scope === 'all' ? 'all projects' : 'my team'} onDrill={onDrill} active={drill} />
       )}
       {drill && <Drawer metric={drill} scope={scope} onClose={() => setDrill(null)} />}
     </AppShell>
@@ -231,6 +239,7 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
       }
     >
       <div className="flex flex-col gap-1.5 px-2.5 pb-2.5">
+        {data.focus.length === 0 && <p className="m-0 px-2.5 py-4 text-[13px] text-fg-muted">Nothing needs attention: every gate passes and no new blocker or critical issues appeared.</p>}
         {data.focus.map((f) => {
           const s = SEVERITY[f.severity]
           return (
@@ -276,16 +285,23 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
   )
 }
 
+/** ", driven up by X, held back by Y", from the best and worst dimensions with data. */
+function healthDrivers(dimensions: Overview['health']['dimensions']): string {
+  const rated = dimensions.filter((d) => d.score != null).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+  if (rated.length < 2 || rated[0].score === rated[rated.length - 1].score) return ''
+  return ` · driven up by ${rated[0].label.toLowerCase()}, held back by ${rated[rated.length - 1].label.toLowerCase()}`
+}
+
 function Health({ data, rangeLong, onDrill }: { data: Overview; rangeLong: string; onDrill: (m: DrillMetric) => void }) {
   return (
-    <Card id="health" title="Code health" aside={<span className="text-[12.5px] text-fg-muted">{rangeLong}</span>}>
+    <Card id="health" title="Code health" aside={data.health.delta && <span className="text-[12.5px] text-fg-muted">{rangeLong}</span>}>
       <div className="flex flex-col gap-2.5">
         <div className="flex items-baseline gap-2.5">
           <span className="font-mono text-[52px] leading-[.95] font-light tracking-[-0.06em]">{data.health.score}</span>
-          <Mono className={`text-xs ${data.health.delta.startsWith('+') ? 'text-ok' : 'text-crit'}`}>{data.health.delta}</Mono>
+          {data.health.delta && <Mono className={`text-xs ${data.health.delta.startsWith('+') ? 'text-ok' : 'text-crit'}`}>{data.health.delta}</Mono>}
         </div>
         <HealthBar score={data.health.score} />
-        <span className="text-[12.5px] text-fg-muted">Health index out of 100 · driven up by maintainability, held back by security</span>
+        <span className="text-[12.5px] text-fg-muted">Health index out of 100{healthDrivers(data.health.dimensions)}</span>
       </div>
       <div className="flex flex-col gap-0.5">
         {data.health.dimensions.map((d) => (
@@ -299,9 +315,9 @@ function Health({ data, rangeLong, onDrill }: { data: Overview; rangeLong: strin
               <span>{d.label}</span>
               <span className="overflow-hidden text-xs text-ellipsis whitespace-nowrap text-fg-faint">{d.note}</span>
             </span>
-            <PipMeter level={d.level} label={d.label} />
-            <span className="text-right font-mono text-xs" style={{ color: levelColor(d.level) }}>
-              {d.score}
+            {d.level == null ? <span className="text-xs text-fg-faint">No data</span> : <PipMeter level={d.level} label={d.label} />}
+            <span className="text-right font-mono text-xs" style={{ color: d.level == null ? 'var(--sd-faint)' : levelColor(d.level) }}>
+              {d.score ?? '—'}
             </span>
           </button>
         ))}
@@ -312,11 +328,13 @@ function Health({ data, rangeLong, onDrill }: { data: Overview; rangeLong: strin
 
 function IssueFlow({ flow, range }: { flow: FlowBucket[]; range: Range }) {
   const [hover, setHover] = useState<number | null>(null)
-  const maxBar = Math.max(...flow.map((d) => Math.max(d.introduced, d.resolved))) * 1.15
+  // `|| 1` keeps an empty or flat history (no issues yet) from dividing by zero.
+  const maxBar = Math.max(...flow.map((d) => Math.max(d.introduced, d.resolved))) * 1.15 || 1
   const opens = flow.map((d) => d.open)
   const oMin = Math.min(...opens) * 0.985
   const oMax = Math.max(...opens) * 1.01
-  const openLine = flow.map((d, i) => `${(((i + 0.5) / flow.length) * 100).toFixed(2)},${(4 + (1 - (d.open - oMin) / (oMax - oMin)) * 34).toFixed(2)}`).join(' ')
+  const oRange = oMax - oMin || 1
+  const openLine = flow.map((d, i) => `${(((i + 0.5) / flow.length) * 100).toFixed(2)},${(4 + (1 - (d.open - oMin) / oRange) * 34).toFixed(2)}`).join(' ')
   const gridMax = Math.round(maxBar * 0.62)
   const introduced = flow.reduce((a, d) => a + d.introduced, 0)
   const resolved = flow.reduce((a, d) => a + d.resolved, 0)
@@ -511,7 +529,7 @@ function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: n
           </span>
         </td>
         <td className="border-b border-line px-2 py-[11px]">
-          <CoverageRing pct={p.coverage} />
+          {p.coverage == null ? <span className="text-xs text-fg-faint" title="No coverage uploaded">—</span> : <CoverageRing pct={p.coverage} />}
         </td>
         <td className="border-b border-line px-2 py-[11px] text-right font-mono text-xs" style={{ color: p.newIssues >= 5 ? 'var(--sd-crit)' : 'var(--sd-muted)' }}>
           {p.newIssues ? `+${p.newIssues}` : '—'}
@@ -592,12 +610,16 @@ function GateHistory({ history }: { history: Overview['gateHistory'] }) {
       subtitle="Share of main-branch evaluations passing, per day"
       aside={
         <Mono className="text-[11.5px]">
-          {history.rate}% <span className={history.delta < 0 ? 'text-crit' : 'text-ok'}>{history.delta < 0 ? `−${-history.delta}` : `+${history.delta}`}</span>
+          {history.rate == null ? '—' : `${history.rate}%`}{' '}
+          {history.delta != null && <span className={history.delta < 0 ? 'text-crit' : 'text-ok'}>{history.delta < 0 ? `−${-history.delta}` : `+${history.delta}`}</span>}
         </Mono>
       }
     >
       <div className="grid grid-cols-10 gap-1">
         {history.days.map((d) => {
+          if (d.passRate == null) {
+            return <span key={d.date} title={`${shortDate(d.date)} · no analyses`} className="aspect-square rounded bg-pip-off/40" />
+          }
           const bad = d.passRate < 80
           return (
             <span
@@ -606,7 +628,7 @@ function GateHistory({ history }: { history: Overview['gateHistory'] }) {
               className="grid aspect-square place-items-center rounded font-mono text-[8.5px]"
               style={{
                 background: bad
-                  ? `color-mix(in oklch, var(--sd-crit) ${30 + (80 - d.passRate) * 5}%, transparent)`
+                  ? `color-mix(in oklch, var(--sd-crit) ${Math.min(100, 30 + (80 - d.passRate) * 5)}%, transparent)`
                   : `color-mix(in oklch, var(--sd-accent) ${Math.min(90, 15 + (d.passRate - 78) * 6)}%, transparent)`,
               }}
             >
@@ -621,6 +643,7 @@ function GateHistory({ history }: { history: Overview['gateHistory'] }) {
       </div>
       <div className="flex flex-col gap-0.5 border-t border-line pt-3">
         <span className="mb-1 text-[12.5px] text-fg-muted">Most-failed conditions</span>
+        {history.failing.length === 0 && <span className="text-[13px] text-fg-faint">None failed in this range.</span>}
         {history.failing.map((c) => (
           <div key={c.label} className="grid grid-cols-[minmax(0,1fr)_60px_28px] items-center gap-2.5 py-1 text-[13px]">
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{c.label}</span>
@@ -641,13 +664,7 @@ function Recent({ data }: { data: Overview }) {
       id="ra"
       padded={false}
       title={
-        <span className="flex items-center gap-3">
-          Recent analyses
-          <span className="flex items-center gap-1.5 font-mono text-[10px] font-normal tracking-[.06em] text-brand uppercase">
-            <span className="size-1.5 rounded-full bg-brand" style={{ boxShadow: '0 0 0 3px var(--sd-accent-soft)' }} />
-            Live
-          </span>
-        </span>
+        <span className="flex items-center gap-3">Recent analyses</span>
       }
       aside={
         <Link to="/analyses" className="text-[12.5px] font-medium">
@@ -673,7 +690,7 @@ function Recent({ data }: { data: Overview }) {
                   {a.branch} · {a.sha}
                 </Mono>
               </span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap text-fg-muted">{a.message}</span>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap text-fg-muted">{a.message ?? <span className="text-fg-faint">—</span>}</span>
               <span className="flex min-w-0 flex-col gap-[5px]">
                 <span className="overflow-hidden text-[13px] text-ellipsis whitespace-nowrap" style={{ color: noteColor }}>
                   {a.note}
@@ -691,7 +708,7 @@ function Recent({ data }: { data: Overview }) {
                   </span>
                 )}
               </span>
-              <Mono className="text-[11px] text-fg-muted">{a.duration}</Mono>
+              <Mono className="text-[11px] text-fg-muted">{a.duration ?? '—'}</Mono>
               <Mono className="text-right text-[11px] text-fg-faint">{a.ago}</Mono>
             </div>
           )

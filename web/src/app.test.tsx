@@ -149,6 +149,37 @@ describe('Signing in', () => {
 })
 
 describe('Overview', () => {
+  it('shows what a server knows, and only that', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi(0)
+    const real = api.overview!
+    // What sonda-server returns: no teams, no coverage, no commit messages,
+    // and no drill-down data yet.
+    const overview: SondaApi['overview'] = async (scope, range) => {
+      const o = await real(scope, range)
+      return {
+        ...o,
+        teams: false,
+        summary: { ...o.summary, components: null },
+        health: { ...o.health, delta: null, dimensions: o.health.dimensions.map((d) => (d.label === 'Coverage' ? { ...d, level: null, score: null } : d)) },
+        projects: o.projects.map((p) => ({ ...p, coverage: null, components: undefined })),
+        recent: o.recent.map((r) => ({ ...r, message: null, duration: null })),
+      }
+    }
+    renderAt('/', { ...api, overview, drill: undefined })
+    const metrics = await screen.findByRole('region', { name: 'Key metrics' })
+    expect(screen.queryByRole('button', { name: 'My team' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/components ·/)).not.toBeInTheDocument()
+    const coverage = screen.getAllByRole('button').find((b) => b.textContent?.startsWith('Coverage'))
+    expect(coverage).toHaveTextContent('No data')
+    // No comparison is shown, so no "vs 90 days ago" either.
+    expect(screen.queryByText(/days ago$/)).not.toBeInTheDocument()
+    // Without drill-down data, a metric opens the issues it is about.
+    await user.click(within(metrics).getByRole('button', { name: /^Vulnerabilities/ }))
+    // The banner exists only once the Issues page has loaded (not its skeleton).
+    expect(await screen.findByRole('status')).toHaveTextContent('Showing vulnerabilities')
+  })
+
   it('says so honestly when the server has no overview yet', async () => {
     const api = createMockApi(0)
     renderAt('/', { ...api, overview: undefined, drill: undefined })

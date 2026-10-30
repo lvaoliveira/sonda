@@ -72,9 +72,10 @@ export function scoreColor(score: number): string {
 }
 
 /** The design's project score: ratings weigh 70%, coverage 30%. */
-export function projectScore(levels: Level[], coverage: number): number {
+/** Ratings weigh 70% and coverage 30%; without coverage, ratings alone. The server sorts projects the same way. */
+export function projectScore(levels: Level[], coverage: number | null): number {
   const ratings = levels.reduce((sum, l) => sum + l, 0) / (levels.length * 5)
-  return Math.round(ratings * 70 + coverage * 0.3)
+  return Math.round(coverage == null ? ratings * 100 : ratings * 70 + coverage * 0.3)
 }
 
 const LANGUAGE_LABEL: Record<string, string> = {

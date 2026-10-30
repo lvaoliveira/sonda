@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials, storedName } from '@/lib/identity'
-import { AuthError, type IssueDetail, type IssuePage, type RuleCatalog, type Session, type Shell, type SondaApi } from './types'
+import { AuthError, type IssueDetail, type IssuePage, type Overview, type RuleCatalog, type Session, type Shell, type SondaApi } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -49,6 +49,8 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
         me: name || null,
       } satisfies Shell
     },
+    // There are no teams yet (`teams: false`), so the scope is always "all".
+    overview: (_scope, range) => call<Overview>('GET', `/overview?range=${range}`),
     issues: (query) => call<IssuePage>('GET', `/issues?${issueSearchParams(query)}`),
     issue: (id) => call<IssueDetail>('GET', `/issues/${id}`),
     updateIssue: (id, patch) => call<IssueDetail>('PATCH', `/issues/${id}`, patch),
