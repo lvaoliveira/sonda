@@ -33,6 +33,11 @@ pub struct Report<'a> {
     pub report_version: u32,
     /// The branch new code is compared against; `None` means the whole project is new code.
     pub new_code_reference: Option<&'a str>,
+    /// How it was chosen: `given`, `default_branch`, `latest_tag`, `days`
+    /// or `whole_project` (ADR-0010).
+    pub new_code_basis: &'static str,
+    /// What counts as new code, in words.
+    pub new_code_description: String,
     pub measures: &'a Measures,
     pub gate: &'a GateResult,
     pub files: Vec<FileReport<'a>>,
@@ -110,6 +115,8 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         version: env!("CARGO_PKG_VERSION"),
         report_version: REPORT_VERSION,
         new_code_reference: scan.new_code.reference(),
+        new_code_basis: scan.new_code_basis.kind(),
+        new_code_description: scan.new_code_basis.describe(),
         measures: &outcome.measures,
         gate: &outcome.gate,
         files,

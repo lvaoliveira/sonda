@@ -64,7 +64,7 @@ sonda upload report.json --server https://sonda.example.com \
   --project payments --branch main --commit "$GITHUB_SHA"   # token from SONDA_TOKEN or SONDA_TOKEN_FILE
 ```
 
-Without `--new-code`, the whole project counts as new code.
+Without `--new-code`, sonda picks what new code is compared with ([ADR-0010](docs/adr/0010-default-new-code.md)): on a branch, its merge base with the default branch; on the default branch, the latest tag before HEAD, or without tags, the last 30 days of commits (`scan.new_code_days`). The report says which it used. `--new-code none` (or `scan.new_code = "none"`) counts the whole project as new code.
 
 Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed. The JSON format is versioned by `report_version`. Its `dependencies` list each package's ecosystem, name, version, package URL, lockfile, whether it's direct where the lockfile says, and its license where recorded. `sonda sbom` stamps the SBOM with the current time, or with `SOURCE_DATE_EPOCH` when set, for reproducible output.
 
@@ -86,9 +86,9 @@ It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
 ```yaml
 - uses: actions/checkout@v4
   with:
-    fetch-depth: 0            # sonda needs history to find the merge base
+    fetch-depth: 0            # sonda needs history and tags to find new code
 - run: cargo install --git <this repo> sonda
-- run: sonda scan . --new-code origin/${{ github.base_ref }} --format sarif -o sonda.sarif
+- run: sonda scan . --format sarif -o sonda.sarif   # new code: the PR's changes, or the last release on main
 - uses: github/codeql-action/upload-sarif@v3
   if: always()
   with:
@@ -105,7 +105,9 @@ exclude = ["**/node_modules/**", "**/dist/**", "**/*.min.js"]
 max_file_size_kb = 1024    # larger files are skipped with a warning
 skip_minified = true       # skip JS/TS that looks minified (average line > 200 chars)
 file_timeout_secs = 10     # per-file parse + rule-matching budget
-git_timeout_secs = 120     # each git process used by --new-code
+git_timeout_secs = 120     # each git process used for new code
+new_code = "auto"          # or "none", or a git ref such as "origin/main" (ADR-0010)
+new_code_days = 30         # auto's time window when there's no tag; 0 turns it off
 
 [rules]
 enabled = ["js/prefer-const"]   # rules that are off by default (`sonda rules` marks them)

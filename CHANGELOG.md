@@ -169,6 +169,14 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- A default for new code (ADR-0010): without `--new-code`, `auto` compares
+  a diverged branch with its merge base with the default branch, and the
+  default branch with the latest tag before HEAD, or without tags with the
+  last commit `scan.new_code_days` (30) older than HEAD, by commit date.
+  Otherwise the whole project, with the reason. `scan.new_code` sets it
+  (`auto`, `none` or a ref); reports add `new_code_basis` and
+  `new_code_description`. Gates on existing projects now judge recent
+  changes instead of all their debt.
 - `sonda upload` reads the token file from `SONDA_TOKEN_FILE` as well as
   `--token-file`, as the server reads its secrets and as docs/server.md
   already said; setting a token file and `SONDA_TOKEN` together is an
