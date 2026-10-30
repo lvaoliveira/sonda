@@ -107,6 +107,10 @@ file, the report formats and the public library API.
   - **Audit:** triage history records who made each change.
 
   The API token now serves only machines: uploads and scripts.
+- Overview drill-downs from real data (`GET /api/drill/{metric}`): each
+  metric opens what's behind it, by directory and file, with each file's
+  most severe issue. A file opens its issues. Owners and per-file coverage
+  are left out rather than invented.
 
 ### Security
 

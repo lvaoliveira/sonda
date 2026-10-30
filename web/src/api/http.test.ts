@@ -51,7 +51,8 @@ describe('the HTTP API client', () => {
   it('asks for the overview of a range; there are no teams to scope by', async () => {
     const { fn, calls } = fakeFetch(() => json({ teams: false }))
     await createHttpApi('/api', fn).overview!('all', '30d')
-    expect(calls[0].url).toBe('/api/overview?range=30d')
+    await createHttpApi('/api', fn).drill!('vulns', 'all')
+    expect(calls.map((c) => c.url)).toEqual(['/api/overview?range=30d', '/api/drill/vulns'])
   })
 
   it("shows the server's error message", async () => {

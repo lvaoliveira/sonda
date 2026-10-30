@@ -7,8 +7,7 @@ The server stores analyses uploaded by `sonda upload` and serves the web app
 **Status:** the server receives uploads, tracks issues across them, has
 users with roles, and serves the Overview, issues (with triage) and the rule
 catalog. The web app shows all of it: open http://127.0.0.1:9000 and sign in
-as `admin`. The Overview's per-metric drill-down drawer comes next;
-until then, a metric opens the matching issues.
+as `admin`.
 
 ## Quick start (Docker Compose)
 
@@ -195,6 +194,24 @@ look like a flood of new problems. SonarQube does the same.
 - components;
 - commit messages and scan durations;
 - the change in health score, which would need ratings history.
+
+## Drill-downs
+
+`GET /api/drill/{metric}`, for `gate`, `critical`, `vulns`, `coverage`, `dup`
+or `debt`, is what's behind one Overview metric. It's grouped by component
+(a project's top-level directory) and then by file, from each project's main
+branch. Accepted issues don't count.
+
+| Metric | Components by | Files show |
+|---|---|---|
+| `critical`, `vulns` | open blocker and critical issues, or vulnerabilities | count, and the most severe issue |
+| `debt` | hours of fix effort | effort, and the most severe issue |
+| `gate` | failed conditions, per project failing its gate | files with the most new issues |
+| `dup` | share of duplicated lines | duplicated share per file |
+| `coverage` | coverage per project, lowest first | none: reports carry coverage per project only |
+
+Owners are null: nothing records them yet. In the web app, a file opens its
+issues.
 
 ## Rules
 

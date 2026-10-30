@@ -63,7 +63,8 @@ function OverviewScreen({ load, canDrill }: { load: NonNullable<SondaApi['overvi
         summary={
           data.state === 'ready' ? (
             <>
-              {data.data.summary.projects} projects{data.data.summary.components != null && ` · ${data.data.summary.components} components`} · last sounding{' '}
+              {data.data.summary.projects} {data.data.summary.projects === 1 ? 'project' : 'projects'}
+              {data.data.summary.components != null && ` · ${data.data.summary.components} components`} · last sounding{' '}
               <Mono className="text-xs text-fg">{data.data.summary.lastSounding}</Mono>
             </>
           ) : (
@@ -765,7 +766,8 @@ function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope;
               <span className="flex min-w-0 flex-col leading-[1.35]">
                 <Mono className="text-xs">{it.component}</Mono>
                 <span className="text-[12.5px] text-fg-faint">
-                  {it.project} · {it.owner}
+                  {it.project}
+                  {it.owner && ` · ${it.owner}`}
                 </span>
               </span>
               <span className="h-1 overflow-hidden rounded-sm bg-pip-off">
@@ -778,8 +780,15 @@ function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope;
             </button>
             {expanded && (
               <div className="flex flex-col gap-1.5 px-3.5 pb-3.5">
+                {it.files.length === 0 && <span className="px-1 text-[12.5px] text-fg-faint">No file-level data for this metric.</span>}
                 {it.files.map((f) => (
-                  <div key={f.dir + f.base} className="flex flex-col gap-[5px] rounded-lg bg-canvas px-3 py-2.5 edge">
+                  <button
+                    key={f.dir + f.base}
+                    type="button"
+                    title="Open this file's issues"
+                    onClick={() => navigate(`/issues?file=${encodeURIComponent(f.dir + f.base)}`)}
+                    className="flex cursor-pointer flex-col gap-[5px] rounded-lg border-0 bg-canvas px-3 py-2.5 text-left edge hover:edge-strong"
+                  >
                     <span className="flex justify-between gap-2 font-mono text-[11px]">
                       <span className="overflow-hidden text-ellipsis whitespace-nowrap">
                         <span className="text-fg-faint">{f.dir}</span>
@@ -794,7 +803,7 @@ function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope;
                         <Mono className="text-[10px] text-fg-faint">L{f.issue.line}</Mono>
                       </span>
                     )}
-                  </div>
+                  </button>
                 ))}
               </div>
             )}

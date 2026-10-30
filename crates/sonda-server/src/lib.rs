@@ -8,6 +8,7 @@
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod drill;
 pub mod http;
 pub mod ingest;
 pub mod issues;
