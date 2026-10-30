@@ -53,8 +53,12 @@ pull request, push or merge base), since that's what a branch is judged on.
 
 ### What it decides on the main branch
 
-- **Issues:** an issue first seen after the period's starting analysis is
-  new. Issues already present in the starting analysis are accepted debt.
+- **Issues:** an issue first seen after the period's starting analysis,
+  on a line changed since then, is new. Issues already present in the
+  starting analysis are accepted debt, and so are issues a newly added
+  rule finds on unchanged lines (first used on arandu, where a release
+  with new rules turned 56 issues in untouched code "new" and failed the
+  gate). SonarQube does the same by dating such issues from blame.
   The server sets `issues.is_new` from this, instead of from the upload, so
   the Issues page, drill-downs and filters agree.
 - **Issue measures:** `new_issues`, `new_bugs`, `new_vulnerabilities`,

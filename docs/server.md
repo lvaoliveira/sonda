@@ -341,7 +341,9 @@ view, as in SonarQube: a **new code period** that starts at an analysis
   analysis after the last one with a different version. Uploads without a
   version don't count, so without versions it's the project's first
   analysis. What was there at the start is accepted, and an issue first
-  seen after it is new until it's fixed. Nothing ages out.
+  seen after it, on a line changed since, is new until it's fixed. Issues a
+  newly added rule finds on unchanged lines are old debt, not new code.
+  Nothing ages out.
 - **What the server computes.** On each main-branch upload, it marks issues
   new or not (so the Issues page, drill-downs and filters agree) and
   recounts the new-issue measures. It also computes `new_lines`, by diffing
