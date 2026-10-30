@@ -183,12 +183,16 @@ function Live({
       <MetricGrid label="Key metrics">
         {data.kpis.map((k) => {
           const on = active === k.metric
-          const tone = k.improving ? 'var(--sd-ok)' : 'var(--sd-crit)'
+          // The color says how the value stands; the delta, where it's heading.
+          const tone = k.tone === 'neutral' ? 'var(--sd-muted)' : `var(--sd-${k.tone})`
+          const steady = k.series.length < 2 || k.series[0] === k.series[k.series.length - 1]
+          const trend = steady ? 'var(--sd-faint)' : k.improving ? 'var(--sd-ok)' : 'var(--sd-crit)'
           return (
             <button
               key={k.metric}
               type="button"
               onClick={() => onDrill(k.metric)}
+              data-tone={k.tone}
               aria-label={`${k.label} ${k.value}${k.unit}, ${k.delta}. Show affected components`}
               className="relative flex min-w-0 cursor-pointer flex-col gap-1.5 overflow-hidden border-0 px-[18px] pt-4 pb-11 text-left hover:bg-hover"
               style={{ background: on ? 'var(--sd-hover)' : 'var(--sd-panel-2)' }}
@@ -196,7 +200,7 @@ function Live({
               <span className="flex w-full items-center justify-between gap-2">
                 <span className="text-[13px] text-fg-muted">{k.label}</span>
                 <Mono className="text-[10.5px]">
-                  <span style={{ color: tone }}>{k.delta}</span>
+                  <span style={{ color: trend }}>{k.delta}</span>
                 </Mono>
               </span>
               <span className="flex items-baseline gap-[5px]">

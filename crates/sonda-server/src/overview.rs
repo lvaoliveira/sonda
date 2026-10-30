@@ -97,6 +97,9 @@ pub struct Kpi {
     pub unit: &'static str,
     pub delta: String,
     pub improving: bool,
+    /// How the value itself stands, whatever its trend: `ok`, `warn`,
+    /// `crit`, or `neutral` without data.
+    pub tone: &'static str,
     pub sub: String,
     pub series: Vec<f64>,
 }
@@ -706,7 +709,8 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
                 higher_is_better: bool,
                 fmt: &dyn Fn(f64) -> String,
                 delta_unit: &str,
-                sub: String| {
+                sub: String,
+                tone: &dyn Fn(f64) -> &'static str| {
         let change = match (series.first(), series.last()) {
             (Some(a), Some(b)) => b - a,
             _ => 0.0,
@@ -718,6 +722,7 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
             unit: if value.is_some() { unit } else { "" },
             delta: signed(change, fmt, delta_unit),
             improving: change == 0.0 || (change > 0.0) == higher_is_better,
+            tone: value.map_or("neutral", tone),
             sub,
             series,
         }
@@ -739,6 +744,7 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
             &whole,
             " pts",
             format!("{passing} of {n} {} pass", plural(n, "project", "projects")),
+            &|v| tone_of(v >= 90.0, v >= 60.0),
         ),
         make(
             "critical",
@@ -750,6 +756,7 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
             &whole,
             "",
             "Blocker and critical, latest analyses".into(),
+            &|v| tone_of(v == 0.0, false),
         ),
         make(
             "vulns",
@@ -764,6 +771,7 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
                 "In {vuln_projects} {}",
                 plural(vuln_projects, "project", "projects")
             ),
+            &|v| tone_of(v == 0.0, false),
         ),
         make(
             "coverage",
@@ -779,6 +787,8 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
             } else {
                 "None uploaded: sonda scan --coverage".into()
             },
+            // As the coverage bars color it.
+            &|v| tone_of(v >= 80.0, v >= 60.0),
         ),
         make(
             "dup",
@@ -793,6 +803,8 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
                 "{:.0} duplicated lines",
                 sum(now, &|a| a.m("duplicated_lines"))
             ),
+            // The default gate allows 3% on new code.
+            &|v| tone_of(v <= 3.0, v <= 5.0),
         ),
         make(
             "debt",
@@ -811,8 +823,31 @@ fn kpis(snapshots: &[Vec<&Analysis>]) -> Vec<Kpi> {
                     0.0
                 }
             ),
+            // The maintainability rating's ratio bands: A, then B or C.
+            &|_| {
+                let ratio = if lines > 0.0 {
+                    debt(now).unwrap_or(0.0) / (lines * 30.0)
+                } else {
+                    0.0
+                };
+                match debt_level(ratio) {
+                    5 => "ok",
+                    3 | 4 => "warn",
+                    _ => "crit",
+                }
+            },
         ),
     ]
+}
+
+fn tone_of(ok: bool, warn: bool) -> &'static str {
+    if ok {
+        "ok"
+    } else if warn {
+        "warn"
+    } else {
+        "crit"
+    }
 }
 
 /// "+3 pts", "−12", or "no change". Uses a real minus sign, as the design does.

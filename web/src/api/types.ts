@@ -79,6 +79,8 @@ export interface Kpi {
   delta: string
   /** Whether the change is an improvement. */
   improving: boolean
+  /** How the value itself stands, whatever its trend; neutral without data. */
+  tone: 'ok' | 'warn' | 'crit' | 'neutral'
   sub: string
   series: number[]
 }

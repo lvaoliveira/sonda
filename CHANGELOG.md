@@ -320,6 +320,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The Overview's key metrics were colored by their trend only, so with no
+  change every tile was green, even a 0% gate pass rate. Each tile is now
+  colored by how its value stands (`tone` in `GET /api/overview`), and the
+  delta keeps the trend's color, gray when unchanged.
+
 - When `git cat-file` exited early, its empty answer was read as "blob
   missing", which silently marked files as entirely new code. It is now an
   error.

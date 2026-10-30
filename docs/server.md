@@ -187,6 +187,19 @@ look like a flood of new problems. SonarQube does the same.
   weighted by lines of code. Its score is that level scaled to 0-100. The
   health score is the average of the dimensions that have data.
 
+**Key metrics** each carry a `tone` for how the value stands, whatever
+its trend, and the page colors the tile by it (the delta beside it is the
+trend: green improving, red worsening, gray unchanged):
+- **Gate pass rate:** ≥ 90% ok, ≥ 60% warn, otherwise crit.
+- **Critical issues and vulnerabilities:** ok at 0, otherwise crit.
+- **Coverage:** ≥ 80% ok, ≥ 60% warn, otherwise crit, as the coverage bars
+  color it.
+- **Duplication:** ≤ 3% ok (the default gate's limit on new code), ≤ 5%
+  warn, otherwise crit.
+- **Technical debt:** the maintainability bands: ratio ≤ 5% ok, ≤ 20%
+  warn, otherwise crit.
+- `neutral` without data.
+
 **Where to focus** lists two kinds of items, most severe first:
 - projects whose main branch fails its gate, with the number of
   consecutive failing analyses;
