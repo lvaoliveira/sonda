@@ -47,6 +47,7 @@ mod newcode;
 mod project;
 mod sandbox;
 mod scanner;
+mod semantic;
 mod worker;
 
 pub use error::Error;
@@ -198,6 +199,10 @@ mod architecture {
             include_str!("rules/catalog/common.rs"),
         ),
         ("rules/catalog/js.rs", include_str!("rules/catalog/js.rs")),
+        (
+            "rules/catalog/js_semantic.rs",
+            include_str!("rules/catalog/js_semantic.rs"),
+        ),
         ("rules/catalog/py.rs", include_str!("rules/catalog/py.rs")),
         (
             "rules/catalog/java.rs",
@@ -213,6 +218,8 @@ mod architecture {
         ("gate.rs", include_str!("gate.rs")),
         ("highlight.rs", include_str!("highlight.rs")),
         ("codeowners.rs", include_str!("codeowners.rs")),
+        ("semantic/mod.rs", include_str!("semantic/mod.rs")),
+        ("semantic/js.rs", include_str!("semantic/js.rs")),
     ];
 
     /// The file without comment lines (docs may mention other layers). Test

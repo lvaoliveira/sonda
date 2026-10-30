@@ -5,6 +5,7 @@ mod c;
 mod common;
 mod java;
 mod js;
+mod js_semantic;
 mod py;
 
 pub(super) use super::Filter::{Find, Keep};
@@ -18,10 +19,17 @@ pub(super) use tree_sitter::Node;
 /// Every rule, in a fixed order (structural rules first, then by language),
 /// so reports and docs/rules.md stay deterministic.
 pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
-    [common::RULES, js::RULES, py::RULES, java::RULES, c::RULES]
-        .into_iter()
-        .flatten()
-        .collect()
+    [
+        common::RULES,
+        js::RULES,
+        js_semantic::RULES,
+        py::RULES,
+        java::RULES,
+        c::RULES,
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 });
 
 // ---------------------------------------------------- shared filters

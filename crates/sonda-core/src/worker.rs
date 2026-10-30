@@ -228,6 +228,7 @@ fn encode_response(result: &Result<FileAnalysis, FileError>) -> Vec<u8> {
         e.usize(t.line);
     }
     e.u8(u8::from(a.has_syntax_errors));
+    e.u8(u8::from(a.semantic_incomplete));
     e.digest(&a.sha256);
     e.0
 }
@@ -298,11 +299,13 @@ fn decode_response(
             line: d.usize()?,
         });
     }
-    let has_syntax_errors = match d.u8()? {
-        0 => false,
-        1 => true,
-        _ => return Err("invalid flag".into()),
+    let flag = |b: u8| match b {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err("invalid flag".to_string()),
     };
+    let has_syntax_errors = flag(d.u8()?)?;
+    let semantic_incomplete = flag(d.u8()?)?;
     let sha256 = d.digest()?;
     d.finish()?;
     let analysis = FileAnalysis {
@@ -313,6 +316,7 @@ fn decode_response(
         code_lines,
         tokens,
         has_syntax_errors,
+        semantic_incomplete,
         sha256,
     };
     // Positions out of range would corrupt measures and reports.
@@ -824,7 +828,8 @@ mod tests {
         }
         e.usize(0);
         e.usize(0);
-        e.u8(0);
+        e.u8(0); // syntax errors
+        e.u8(0); // semantic analysis incomplete
         e.digest(&Digest([0; 32]));
         assert!(
             decode_response(&e.0, "a.js", Lang::JavaScript)

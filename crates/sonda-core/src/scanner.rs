@@ -154,6 +154,13 @@ fn scan_files(
                 f.path
             ));
         }
+        if f.semantic_incomplete {
+            warnings.push(format!(
+                "{}: semantic analysis did not finish before the per-file timeout; \
+                 rules such as unused variables found nothing in it",
+                f.path
+            ));
+        }
         for issue in &mut f.issues {
             issue.is_new = new_code.is_new(&f.path, issue.line);
         }

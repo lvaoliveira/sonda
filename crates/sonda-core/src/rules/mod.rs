@@ -34,7 +34,16 @@ pub(crate) enum Check {
     },
     /// Implemented in `analysis.rs`, applies to every language.
     Structural,
+    /// A check over the file's semantic model (ADR-0008): returns the nodes
+    /// to report.
+    Semantic {
+        langs: &'static [Lang],
+        find: SemanticFind,
+    },
 }
+
+/// Finds a semantic rule's issues in a file's model.
+pub(crate) type SemanticFind = for<'t> fn(&crate::semantic::Model<'t>, &[u8]) -> Vec<Node<'t>>;
 
 /// Snippets that the rule must flag (`bad`) and must leave alone (`good`).
 /// Every query rule has one; the test suite runs them all.
@@ -84,7 +93,7 @@ pub struct Rule {
 impl Rule {
     pub fn langs(&self) -> &'static [Lang] {
         match self.check {
-            Check::Query { langs, .. } => langs,
+            Check::Query { langs, .. } | Check::Semantic { langs, .. } => langs,
             Check::Structural => crate::lang::ALL,
         }
     }
@@ -191,7 +200,7 @@ impl RuleSet {
             // Compiled alone, the rule's error points into its own query.
             let detail = match r.check {
                 Check::Query { query, .. } => Query::new(&lang.grammar(), query).err(),
-                Check::Structural => None,
+                Check::Structural | Check::Semantic { .. } => None,
             }
             .unwrap_or(e);
             Error::Internal(format!(
@@ -268,7 +277,7 @@ mod tests {
     #[test]
     fn every_query_rule_has_an_example_in_one_of_its_languages() {
         for r in RULES.iter() {
-            if let Check::Query { langs, .. } = r.check {
+            if let Check::Query { langs, .. } | Check::Semantic { langs, .. } = r.check {
                 let ex = r
                     .example
                     .as_ref()
