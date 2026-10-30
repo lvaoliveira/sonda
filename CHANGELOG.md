@@ -9,7 +9,7 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 135
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 169
   rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
@@ -143,6 +143,15 @@ file, the report formats and the public library API.
   misuse, legacy React APIs, alt text and link/heading content, assertions
   that can't fail or check the wrong thing, and test-suite structure. JSX
   rules run on `.js`, `.jsx` and `.tsx` files.
+- JavaScript/TypeScript: 34 more rules equivalent to SonarQube's
+  default-profile bugs and vulnerabilities: unreachable code, infinite
+  loops, unsafe optional chaining, misplaced `super()`, recursive accessors,
+  weak TLS versions, ciphers, modes and keys, `jwt` with `none`,
+  world-writable files, hard-coded passwords and secrets, insecure cookies,
+  CORS for every origin, and disabled helmet protections.
+- Vulnerability rules skip test files (`*.test.*`, `*.spec.*`, `test_*.py`,
+  `*_test.*`, and `test`, `tests`, `__tests__`, `spec` or `__mocks__`
+  directories), where credentials and weak settings are fixtures.
 - Rules with the same query share one compiled pattern, so the tree is
   matched against it once.
 - Rules can report a node inside the one their query captures, so rules

@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::lang::{Lang, Syntax};
-use crate::model::{Digest, FileMetrics, Fingerprint, Issue, Sha256};
+use crate::model::{Category, Digest, FileMetrics, Fingerprint, Issue, Sha256};
 use crate::rules::{self, ActiveRule, Filter, RuleSet};
 use sha2::Digest as _;
 use std::cell::Cell;
@@ -209,11 +209,18 @@ fn run_queries(
     let Some(cq) = rules.queries(lang).map_err(FileError::Rules)? else {
         return Ok(issues);
     };
+    // Credentials, weak settings and the like are fixtures in tests, not
+    // vulnerabilities, so vulnerability rules skip test files (as SonarQube
+    // does with test code).
+    let test_file = is_test_file(ctx.path);
     let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
     let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
     while let Some(m) = matches.next() {
         for &(idx, filter) in &cq.patterns[m.pattern_index] {
             let active = &rules.active[idx];
+            if test_file && active.rule.category == Category::Vulnerability {
+                continue;
+            }
             for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
                 let node = match filter {
                     None => Some(cap.node),
@@ -231,6 +238,20 @@ fn run_queries(
         return Err(FileError::QueryTimeout);
     }
     Ok(issues)
+}
+
+/// Whether `path` (relative, `/`-separated) looks like a test file, by
+/// the common conventions: `*.test.*`, `*.spec.*`, `test_*.py`, `*_test.*`,
+/// or a `test`, `tests`, `__tests__`, `spec` or `__mocks__` directory.
+pub(crate) fn is_test_file(path: &str) -> bool {
+    let mut segments = path.split('/').rev();
+    let name = segments.next().unwrap_or("");
+    let stem = name.split('.').next().unwrap_or("");
+    name.contains(".test.")
+        || name.contains(".spec.")
+        || stem.starts_with("test_")
+        || stem.ends_with("_test")
+        || segments.any(|d| matches!(d, "test" | "tests" | "__tests__" | "spec" | "__mocks__"))
 }
 
 fn measure_functions(
@@ -770,6 +791,44 @@ pub(crate) mod tests {
         assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(fnv1a(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn test_files_are_recognized() {
+        for path in [
+            "src/a.test.ts",
+            "src/a.spec.js",
+            "test/helpers.js",
+            "pkg/__tests__/x.tsx",
+            "tests/test_api.py",
+            "app/test_api.py",
+            "src/test/java/AppTest.java",
+            "x/handler_test.go",
+        ] {
+            assert!(is_test_file(path), "{path}");
+        }
+        for path in [
+            "src/latest.js",
+            "src/contest/a.ts",
+            "testing.py",
+            "src/attest.js",
+        ] {
+            assert!(!is_test_file(path), "{path}");
+        }
+        // Vulnerability rules skip them; others don't.
+        let src = "const db = connect({ password: 'hunter2' });\nvar x = 1;";
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let rules_in = |path| {
+            analyze(path, Lang::JavaScript, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .map(|i| i.rule)
+                .collect::<Vec<_>>()
+        };
+        assert!(rules_in("src/db.js").contains(&"js/hardcoded-password"));
+        assert_eq!(rules_in("src/db.test.js"), ["js/no-var"]);
     }
 
     #[test]
