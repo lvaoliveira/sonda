@@ -585,7 +585,7 @@ async fn coverage(pool: &sqlx::PgPool, owners: &Owners) -> Result<Drill, sqlx::E
             "Lowest first, with each project's least covered files.".into()
         },
         tone: "warn",
-        cta: "Open new-code issues",
+        cta: "Open the coverage report",
         unit: "%",
         invert: true,
         items,
