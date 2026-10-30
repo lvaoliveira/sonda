@@ -481,6 +481,27 @@ export interface ComponentDetail {
   fileList: { path: string; language: string; ncloc: number; issues: number; debtMinutes: number; worst: Severity | null }[]
 }
 
+// ------------------------------------------------------------------- gates
+
+/**
+ * A quality gate as projects use it: defined in each repository's
+ * sonda.toml, so projects whose latest analysis used the same conditions
+ * share one. Read-only on the server.
+ */
+export interface QualityGate {
+  /** Stable for the same conditions. */
+  id: string
+  name: string
+  isDefault: boolean
+  conditions: { label: string; metric: string; op: 'gt' | 'lt'; threshold: number; failing: number; noData: number }[]
+  projects: { project: string; state: GateState; analyzedAt: string }[]
+  /** The latest evaluations on its projects' main branches, newest first (up to 40). */
+  evaluations: { analysis: number; project: string; state: GateState; analyzedAt: string }[]
+  /** Percent of `evaluations` that passed; partial counts as passing. */
+  passRate: number | null
+  mostCommonFailure: string | null
+}
+
 // ---------------------------------------------------------------- security
 
 export interface SecurityFinding {
@@ -613,6 +634,8 @@ export interface SondaApi {
   projects(): Promise<ProjectList>
   /** The project on `branch`, or on its main branch. */
   project(key: string, branch?: string): Promise<ProjectDetail>
+  /** The default gate first, then by how many projects use each. */
+  gates(): Promise<QualityGate[]>
   security(): Promise<Security>
   /** Every project's components, or one project's. */
   components(project?: string): Promise<ComponentList>

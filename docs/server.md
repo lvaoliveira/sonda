@@ -251,6 +251,23 @@ the analyzed branches.
 `GET /api/issues` takes `project=` and `branch=` to list one project's
 issues, which is how the project page links to them.
 
+## Quality gates
+
+`GET /api/gates` lists the quality gates projects use, read-only. A gate is
+defined in each repository's `sonda.toml` and stored with every analysis.
+Projects whose latest main-branch analysis used the same conditions share
+a gate, whatever their order in the file. The one equal to sonda's
+built-in default is named "Default"; others are "Custom gate 1", "2", and
+so on. The default comes first, then the rest by how many projects use them.
+
+Each gate has:
+- an `id`: a short hash of its conditions, stable while they don't change;
+- its conditions, each with how many of the gate's projects fail it now
+  and how many lack data;
+- its projects with their current gate state;
+- its last 40 evaluations on those projects' main branches, the share that
+  passed (partial counts as passing), and its most common failure.
+
 ## Security
 
 `GET /api/security` summarizes vulnerabilities across projects, each

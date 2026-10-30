@@ -7,18 +7,15 @@ import { AnalysesPage } from '@/pages/AnalysesPage'
 import { AnalysisPage } from '@/pages/AnalysisPage'
 import { ComponentPage } from '@/pages/ComponentPage'
 import { ComponentsPage } from '@/pages/ComponentsPage'
+import { GatesPage } from '@/pages/GatesPage'
 import { AdminPage } from '@/pages/AdminPage'
 import { IssuesPage } from '@/pages/IssuesPage'
-import { NotBuiltPage } from '@/pages/NotBuiltPage'
+import { NotFoundPage } from '@/pages/NotFoundPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { ProjectPage } from '@/pages/ProjectPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RulesPage } from '@/pages/RulesPage'
 import { SecurityPage } from '@/pages/SecurityPage'
-
-const NOT_BUILT: [string, string][] = [
-  ['/gates', 'Quality gates'],
-]
 
 export function App({ api }: { api: SondaApi }) {
   return (
@@ -44,14 +41,12 @@ export function AppRoutes() {
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
           <Route path="/components" element={<ComponentsPage />} />
           <Route path="/security" element={<SecurityPage />} />
+          <Route path="/gates" element={<GatesPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/account" element={<AccountPage />} />
-          {NOT_BUILT.map(([path, title]) => (
-            <Route key={path} path={path} element={<NotBuiltPage title={title} />} />
-          ))}
-          <Route path="*" element={<NotBuiltPage title="Not found" />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
   )
 }

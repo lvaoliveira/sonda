@@ -262,6 +262,30 @@ describe('Security', () => {
   })
 })
 
+describe('Quality gates', () => {
+  it('shows each gate with its conditions, projects and evaluations, read-only', async () => {
+    const user = userEvent.setup()
+    renderAt('/gates')
+    const list = await screen.findByRole('list', { name: 'Gates' })
+    const [first, second] = within(list).getAllByRole('button')
+    expect(first).toHaveTextContent('Default')
+    expect(first).toHaveTextContent('sonda default')
+    expect(screen.getByRole('region', { name: 'Default' })).toHaveTextContent('Coverage on new code < 80%')
+    expect(screen.getByRole('region', { name: 'Configure' })).toHaveTextContent('metric = "new_coverage"')
+    await user.click(second)
+    expect(screen.getByRole('region', { name: 'Custom gate 1' })).toHaveTextContent('Coverage < 70%')
+    expect(screen.getByRole('region', { name: 'Assigned to' })).toHaveTextContent('payments-platform')
+    const evaluations = screen.getByRole('list', { name: 'Evaluations, newest first' })
+    expect(within(evaluations).getAllByRole('link')).toHaveLength(40)
+    expect(screen.getByText('New vulnerabilities > 0', { selector: 'span' })).toBeInTheDocument()
+  })
+
+  it('says so for an unknown address', async () => {
+    renderAt('/nowhere')
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
+  })
+})
+
 describe('Signing in', () => {
   it('requires a username and password when the server requires them to read', async () => {
     const user = userEvent.setup()
@@ -422,13 +446,17 @@ describe('Overview', () => {
 })
 
 describe('Shell', () => {
-  it('marks the current page and links unbuilt screens to an honest placeholder', async () => {
+  it('marks the current page, and every screen in the navigation exists', async () => {
     const user = userEvent.setup()
     renderAt('/rules')
     const nav = await screen.findByRole('complementary', { name: 'Primary' })
     expect(within(nav).getByRole('link', { name: /Rules/ })).toHaveAttribute('aria-current', 'page')
     await user.click(within(nav).getByRole('link', { name: /Quality gates/ }))
-    expect(await screen.findByText('Designed, not built yet.')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Quality gates' })).toBeInTheDocument()
+    // Each screen mounts its own shell, so find the navigation again.
+    const after = screen.getByRole('complementary', { name: 'Primary' })
+    expect(within(after).getByRole('link', { name: /Quality gates/ })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByText('Page not found')).not.toBeInTheDocument()
   })
 
   it('toggles and remembers the theme', async () => {
