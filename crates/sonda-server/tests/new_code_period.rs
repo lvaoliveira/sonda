@@ -114,6 +114,30 @@ async fn the_main_branch_judges_new_code_since_its_period() {
     .unwrap();
     assert_eq!(new_rules, ["new.js"]);
 
+    // A rule added to sonda finds issues in old code: first seen now, but on
+    // unchanged lines, so old debt. Simulated by moving old.js's issue's
+    // first sighting. An issue on an edited line is new.
+    sqlx::query("UPDATE issues SET first_analysis_id = $1 WHERE path = 'old.js'")
+        .bind(second["analysis_id"].as_i64())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let edited = ("old.js", "var x = 1;\neval(x);\neval(x + 1);\n");
+    let (_, second) = upload(
+        &db,
+        &upload_json_for(dir.path(), &[edited, new], "shop", "main"),
+    )
+    .await;
+    let new_issues: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT path, line FROM issues WHERE is_new AND fixed_analysis_id IS NULL ORDER BY path, line",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(new_issues, [("new.js".into(), 3), ("old.js".into(), 3)]);
+    let p = project(&app, &token, None).await;
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 2.0);
+
     // Only an admin moves the period.
     let latest = second["analysis_id"].clone();
     assert_eq!(
@@ -154,7 +178,7 @@ async fn the_main_branch_judges_new_code_since_its_period() {
     );
     let p = project(&app, &token, None).await;
     assert_eq!(p["newCodePeriod"]["reset"], false);
-    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 1.0);
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 2.0);
 
     // Another branch's analysis can't start the main branch's period, and
     // other branches keep the scan's own new code.

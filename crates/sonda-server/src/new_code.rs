@@ -116,13 +116,37 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
     };
 
     let mut tx = pool.begin().await?;
+    let changed = changed_lines(&mut tx, start.analysis, latest).await?;
+    // An issue is new if it was first seen after the start and sits on a
+    // line changed since then. First seen alone isn't enough: a rule added
+    // to sonda finds issues in old code too, and those are old debt.
+    // Fixed issues have no line in the latest analysis, so they keep the
+    // first-seen test.
+    let present: Vec<(i64, String, i32)> = sqlx::query_as(
+        "SELECT id, path, line FROM issues
+         WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL
+           AND first_analysis_id > $3",
+    )
+    .bind(project)
+    .bind(&branch)
+    .bind(start.analysis)
+    .fetch_all(&mut *tx)
+    .await?;
+    let new_ids: Vec<i64> = present
+        .into_iter()
+        .filter(|(_, path, line)| changed.contains(path, *line as usize))
+        .map(|(id, _, _)| id)
+        .collect();
     sqlx::query(
-        "UPDATE issues SET is_new = (first_analysis_id > $3)
+        "UPDATE issues
+         SET is_new = CASE WHEN fixed_analysis_id IS NULL THEN id = ANY($4)
+                           ELSE first_analysis_id > $3 END
          WHERE project_id = $1 AND branch = $2",
     )
     .bind(project)
     .bind(&branch)
     .bind(start.analysis)
+    .bind(&new_ids)
     .execute(&mut *tx)
     .await?;
     // The issues present in the latest analysis that are new.
@@ -149,7 +173,6 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
     for (metric, value) in values {
         measures[metric] = Value::from(value);
     }
-    let changed = changed_lines(&mut tx, start.analysis, latest).await?;
     measures["new_lines"] = Value::from(changed.lines as f64);
     // Without per-file coverage (an older CLI, or no --coverage), the scan's
     // value stays.
@@ -177,6 +200,17 @@ struct Changed {
     /// lines the coverage reports list. `None` when `latest` has no
     /// per-file coverage; `Some(None)` when no changed line is coverable.
     coverage: Option<Option<f64>>,
+    /// The files that changed: their changed lines, or `None` for a file
+    /// that didn't exist at the start.
+    files: HashMap<String, Option<HashSet<usize>>>,
+}
+
+impl Changed {
+    fn contains(&self, path: &str, line: usize) -> bool {
+        self.files
+            .get(path)
+            .is_some_and(|lines| lines.as_ref().is_none_or(|l| l.contains(&line)))
+    }
 }
 
 /// A file's coverage in the report: (covered, uncovered) lines.
@@ -201,6 +235,7 @@ async fn changed_lines(
         return Ok(Changed {
             lines: 0,
             coverage: has_coverage.then_some(None),
+            files: HashMap::new(),
         });
     }
     // (path, sha in latest, sha in start if the file existed there, coverage)
@@ -232,8 +267,9 @@ async fn changed_lines(
             .into_iter()
             .collect();
     let (mut lines, mut coverable, mut covered) = (0usize, 0usize, 0usize);
-    for (_, new, old, coverage) in &files {
-        let Some(new) = contents.get(new) else {
+    let mut changed_files = HashMap::with_capacity(files.len());
+    for (path, new, old, coverage) in files {
+        let Some(new) = contents.get(&new) else {
             continue;
         };
         // None: every line of a file that didn't exist at the start.
@@ -252,9 +288,11 @@ async fn changed_lines(
             covered += new_covered;
             coverable += new_covered + c.uncovered.iter().filter(|n| is_new(**n)).count();
         }
+        changed_files.insert(path, changed);
     }
     Ok(Changed {
         lines,
+        files: changed_files,
         coverage: has_coverage.then(|| {
             (coverable > 0).then(|| (1000.0 * covered as f64 / coverable as f64).round() / 10.0)
         }),

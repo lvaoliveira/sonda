@@ -320,6 +320,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- On the server's main-branch new code period, an issue first seen after
+  the start no longer counts as new unless its line changed since then.
+  Rules added in a sonda release made old, untouched code fail the gate
+  with "new" issues.
+
 - When `git cat-file` exited early, its empty answer was read as "blob
   missing", which silently marked files as entirely new code. It is now an
   error.
