@@ -316,6 +316,23 @@ fn list_rules(format: RulesFormat) -> String {
                         .collect();
                     let _ = writeln!(out, "\nSonarQube: {}", refs.join(", "));
                 }
+                let standards = r.standards();
+                if !standards.cwe.is_empty() || !standards.owasp.is_empty() {
+                    let refs: Vec<String> = standards
+                        .cwe
+                        .iter()
+                        .map(|c| {
+                            format!("[CWE-{c}](https://cwe.mitre.org/data/definitions/{c}.html)")
+                        })
+                        .chain(
+                            standards
+                                .owasp
+                                .iter()
+                                .map(|o| format!("OWASP {}:2021 {}", o.id(), o.title())),
+                        )
+                        .collect();
+                    let _ = writeln!(out, "\nStandards: {}", refs.join(", "));
+                }
                 if let Some(ex) = &r.example {
                     let lang = ex.lang.name();
                     let _ = writeln!(
@@ -340,6 +357,8 @@ fn list_rules(format: RulesFormat) -> String {
                         "category": r.category.as_str(),
                         "severity": r.severity.as_str(),
                         "on_by_default": r.on_by_default(),
+                        "cwe": r.standards().cwe,
+                        "owasp_2021": r.standards().owasp.iter().map(|o| o.id()).collect::<Vec<_>>(),
                         "sonar": r.sonar.iter().map(|s| serde_json::json!({ "key": s.key, "exact": s.exact })).collect::<Vec<_>>(),
                     })
                 })

@@ -1,17 +1,18 @@
 //! `GET /api/security`: vulnerabilities across projects, each project's main
 //! branch. What's open by severity, what to fix first, a twelve-week risk
-//! trend, where vulnerabilities concentrate (projects, components, rules)
-//! and how fast they get fixed.
+//! trend, where vulnerabilities concentrate (projects, components, rules,
+//! OWASP Top 10 categories) and how fast they get fixed. CWE ids and OWASP
+//! categories come from each rule's standards in sonda's catalog.
 //!
-//! Hotspots, CWE/OWASP mappings and reachability are not recorded, so none
-//! is reported.
+//! Hotspots and reachability are not recorded, so neither is reported.
 
 use crate::api::ApiError;
 use crate::health::{DAY, component_of, rfc3339};
 use crate::http::State;
 use axum::Json;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use sonda_core::rules::{Owasp, Standards};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const TREND_WEEKS: usize = 12;
 const FOCUS: usize = 10;
@@ -51,6 +52,12 @@ pub struct Security {
     pub projects: Vec<ProjectRisk>,
     pub components: Vec<ComponentRisk>,
     pub rules: Vec<RuleCount>,
+    /// The OWASP Top 10 2021, all ten in order, with the open
+    /// vulnerabilities in each. One whose rule relates to two categories
+    /// counts in both.
+    pub owasp: Vec<OwaspCount>,
+    /// Open vulnerabilities whose rule has no OWASP category.
+    pub owasp_unmapped: usize,
     pub remediation: Remediation,
 }
 
@@ -77,6 +84,7 @@ pub struct Finding {
     pub line: i32,
     pub first_seen: String,
     pub age_days: u32,
+    pub cwe: Vec<u16>,
 }
 
 #[derive(Serialize)]
@@ -108,6 +116,16 @@ pub struct ComponentRisk {
     pub count: usize,
     pub worst: String,
     pub weighted: u32,
+}
+
+#[derive(Serialize)]
+pub struct OwaspCount {
+    /// `A01` to `A10`.
+    pub id: &'static str,
+    pub title: &'static str,
+    pub count: usize,
+    /// The rules behind `count`, by id.
+    pub rules: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -226,6 +244,10 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     })
 }
 
+fn standards(rule: &str) -> Standards {
+    sonda_core::rules::find(rule).map_or_else(Standards::default, |r| r.standards())
+}
+
 fn build(now: f64, vulns: &[Vuln]) -> Security {
     // Open: present and not accepted (accepted is a decision, not a fix).
     let is_open = |v: &&Vuln| v.fixed_at.is_none() && v.status != "accepted";
@@ -258,6 +280,7 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
             line: v.line,
             first_seen: rfc3339(v.first_at),
             age_days: ((now - v.first_at) / DAY).max(0.0) as u32,
+            cwe: standards(&v.rule).cwe.to_vec(),
         })
         .collect();
 
@@ -355,6 +378,32 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
     rules.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.rule.cmp(&b.rule)));
     rules.truncate(TOP);
 
+    let mut by_owasp: BTreeMap<Owasp, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    let mut owasp_unmapped = 0;
+    for v in &open {
+        let categories = standards(&v.rule).owasp;
+        if categories.is_empty() {
+            owasp_unmapped += 1;
+        }
+        for &o in categories {
+            let entry = by_owasp.entry(o).or_default();
+            entry.0 += 1;
+            entry.1.insert(v.rule.as_str());
+        }
+    }
+    let owasp = Owasp::ALL
+        .iter()
+        .map(|&o| {
+            let (count, rules) = by_owasp.remove(&o).unwrap_or_default();
+            OwaspCount {
+                id: o.id(),
+                title: o.title(),
+                count,
+                rules: rules.into_iter().map(str::to_string).collect(),
+            }
+        })
+        .collect();
+
     let fixed_since = |days: f64| -> Vec<&Vuln> {
         vulns
             .iter()
@@ -400,6 +449,8 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
         projects,
         components,
         rules,
+        owasp,
+        owasp_unmapped,
         remediation,
     }
 }
@@ -464,6 +515,42 @@ mod tests {
         // Ten days ago the critical in lib/w.js was still open.
         let fixed_week = &s.trend[s.trend.len() - 2];
         assert_eq!(fixed_week.fixed, 1);
+    }
+
+    #[test]
+    fn groups_open_vulnerabilities_by_owasp_category() {
+        let now = 100.0 * DAY;
+        let with_rule = |id, rule: &str, fixed| Vuln {
+            rule: rule.into(),
+            ..vuln(id, "a", "src/x.js", "critical", "open", 5.0, fixed)
+        };
+        let vulns = [
+            with_rule(1, "js/hardcoded-password", None),
+            with_rule(2, "js/hardcoded-secret", None),
+            with_rule(3, "js/tls-unverified", None),
+            with_rule(4, "c/no-gets", None),
+            with_rule(5, "js/hardcoded-secret", Some(1.0)),
+        ];
+        let s = build(now, &vulns);
+        let count = |id: &str| s.owasp.iter().find(|o| o.id == id).unwrap();
+        assert_eq!(s.owasp.len(), 10);
+        assert_eq!(count("A07").count, 3);
+        assert_eq!(
+            count("A07").rules,
+            [
+                "js/hardcoded-password",
+                "js/hardcoded-secret",
+                "js/tls-unverified"
+            ]
+        );
+        assert_eq!((count("A02").count, count("A03").count), (1, 0));
+        assert_eq!(
+            count("A07").title,
+            "Identification and Authentication Failures"
+        );
+        assert_eq!(s.owasp_unmapped, 1);
+        let gets = s.focus.iter().find(|f| f.id == 4).unwrap();
+        assert_eq!(gets.cwe, [120, 242]);
     }
 
     #[test]

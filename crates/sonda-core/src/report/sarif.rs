@@ -2,26 +2,53 @@
 
 use super::Report;
 use crate::model::{Category, Severity};
-use crate::rules::RULES;
+use crate::rules::{Owasp, RULES};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 pub fn render(r: &Report) -> String {
     let rules: Vec<Value> = RULES
         .iter()
         .map(|rule| {
-            let mut properties = json!({ "tags": [rule.category.as_str()] });
+            let standards = rule.standards();
+            let mut tags = vec![rule.category.as_str().to_string()];
             if rule.category == Category::Vulnerability {
-                properties["tags"] = json!([rule.category.as_str(), "security"]);
+                tags.push("security".into());
+            }
+            // GitHub code scanning shows and filters by these.
+            tags.extend(
+                standards
+                    .cwe
+                    .iter()
+                    .map(|c| format!("external/cwe/cwe-{c:03}")),
+            );
+            let mut properties = json!({ "tags": tags });
+            if rule.category == Category::Vulnerability {
                 properties["security-severity"] = json!(security_severity(rule.severity));
             }
-            json!({
+            let relationships: Vec<Value> = standards
+                .cwe
+                .iter()
+                .map(|c| relationship(c.to_string(), CWE))
+                .chain(
+                    standards
+                        .owasp
+                        .iter()
+                        .map(|o| relationship(o.id().into(), OWASP)),
+                )
+                .collect();
+            let mut rule_json = json!({
                 "id": rule.id,
                 "name": rule.id,
                 "shortDescription": { "text": rule.name },
                 "fullDescription": { "text": rule.description },
                 "defaultConfiguration": { "level": level(rule.severity) },
                 "properties": properties,
-            })
+            });
+            if !relationships.is_empty() {
+                rule_json["relationships"] = json!(relationships);
+            }
+            rule_json
         })
         .collect();
 
@@ -63,11 +90,56 @@ pub fn render(r: &Report) -> String {
         "version": "2.1.0",
         "runs": [{
             "tool": { "driver": { "name": "sonda", "version": r.version, "rules": rules } },
+            "taxonomies": taxonomies(),
             "results": results,
         }]
     });
     // Cannot fail: `doc` is already a `serde_json::Value`.
     serde_json::to_string_pretty(&doc).expect("sarif serializes") + "\n"
+}
+
+/// Indexes into the run's `taxonomies`.
+const CWE: usize = 0;
+const OWASP: usize = 1;
+
+fn relationship(id: String, taxonomy: usize) -> Value {
+    json!({
+        "target": {
+            "id": id,
+            "toolComponent": { "name": if taxonomy == CWE { "CWE" } else { "OWASP Top 10" }, "index": taxonomy },
+        },
+        "kinds": ["relevant"],
+    })
+}
+
+/// CWE and the OWASP Top 10 2021, with the entries the rules refer to.
+fn taxonomies() -> Value {
+    let cwe: BTreeSet<u16> = RULES
+        .iter()
+        .flat_map(|r| r.standards().cwe.iter().copied())
+        .collect();
+    let owasp: BTreeSet<Owasp> = RULES
+        .iter()
+        .flat_map(|r| r.standards().owasp.iter().copied())
+        .collect();
+    json!([
+        {
+            "name": "CWE",
+            "organization": "MITRE",
+            "informationUri": "https://cwe.mitre.org/",
+            "taxa": cwe.iter().map(|c| json!({
+                "id": c.to_string(),
+                "helpUri": format!("https://cwe.mitre.org/data/definitions/{c}.html"),
+            })).collect::<Vec<_>>(),
+        },
+        {
+            "name": "OWASP Top 10",
+            "version": "2021",
+            "organization": "OWASP",
+            "informationUri": "https://owasp.org/Top10/",
+            "taxa": owasp.iter().map(|o| json!({ "id": o.id(), "name": o.title() })).collect::<Vec<_>>(),
+        },
+    ])
 }
 
 fn level(s: Severity) -> &'static str {

@@ -160,6 +160,15 @@ file, the report formats and the public library API.
   outside the block that declares it, collections that are only added to,
   unused private class fields, and, off by default, unused trailing
   parameters, shadowed variables, and `let` that could be `const`.
+- Security standards: each vulnerability rule (and any other with one)
+  records the CWE ids and OWASP Top 10 2021 categories it relates to.
+  `sonda rules` shows them (JSON `cwe` and `owasp_2021`); SARIF reports
+  carry them as CWE and OWASP Top 10 taxonomies with rule relationships,
+  plus `external/cwe/cwe-NNN` tags for GitHub code scanning. In the web
+  app, rules are searchable by `cwe-89` or `owasp-a03` and show their
+  standards, the Security screen groups open vulnerabilities by OWASP
+  category, and each finding to fix first shows its CWE ids.
+  `scripts/sonar_parity.py` reports where they differ from SonarQube's.
 - Rules can be off by default, like rules outside SonarQube's default
   profile: `rules.enabled` in sonda.toml turns them on. `sonda rules`, the
   JSON catalog (`on_by_default`), docs/rules.md and the web app's Rules page

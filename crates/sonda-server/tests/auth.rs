@@ -477,6 +477,15 @@ async fn rules_report_live_counts_on_main_branches() {
     assert_eq!(rule("js/no-eval")["openIssues"], 0);
     assert_eq!(no_var["onByDefault"], true);
     assert_eq!(rule("js/prefer-const")["onByDefault"], false);
+    // Searchable by CWE and OWASP category.
+    let eval = rule("js/no-eval");
+    assert_eq!(eval["cwe"], json!([95]));
+    assert_eq!(
+        eval["owasp"],
+        json!([{ "id": "A03", "title": "Injection" }])
+    );
+    let tags = eval["tags"].as_array().unwrap();
+    assert!(tags.contains(&json!("cwe-95")) && tags.contains(&json!("owasp-a03")));
     assert_eq!(
         catalog["total"].as_u64(),
         Some(catalog["rules"].as_array().unwrap().len() as u64)

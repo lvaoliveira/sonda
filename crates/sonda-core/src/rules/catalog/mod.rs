@@ -7,6 +7,7 @@ mod java;
 mod js;
 mod js_semantic;
 mod py;
+pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
@@ -31,6 +32,16 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
     .flatten()
     .collect()
 });
+
+/// CWE ids and OWASP categories by rule id.
+pub(super) fn standards(id: &str) -> super::Standards {
+    standards::STANDARDS
+        .iter()
+        .find(|(rule, ..)| *rule == id)
+        .map_or_else(super::Standards::default, |&(_, cwe, owasp)| {
+            super::Standards { cwe, owasp }
+        })
+}
 
 /// Rules that are off unless `rules.enabled` lists them: those outside
 /// SonarQube's default profile that report style choices many codebases

@@ -6,7 +6,7 @@ import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
 import { Sparkline } from '@/components/sonda/meters'
 import { SeverityGlyph } from '@/components/sonda/status'
 import { formatNumber, shortDate } from '@/lib/format'
-import { componentLabel, componentUrl, projectUrl } from '@/lib/links'
+import { componentLabel, componentUrl, cweUrl, projectUrl } from '@/lib/links'
 import { SEVERITY } from '@/lib/visual'
 
 export function SecurityPage() {
@@ -81,6 +81,7 @@ function SecurityView({ s }: { s: Security }) {
         <Remediation s={s} />
         <Components s={s} />
         <Rules s={s} />
+        <OwaspTop10 s={s} />
       </div>
     </>
   )
@@ -113,6 +114,14 @@ function FixFirst({ s }: { s: Security }) {
                   <Link to={`/rules#${encodeURIComponent(f.rule)}`} className="font-mono text-[11px] text-fg-faint">
                     {f.rule}
                   </Link>
+                  {f.cwe.map((c) => (
+                    <span key={c}>
+                      {' · '}
+                      <a href={cweUrl(c)} target="_blank" rel="noreferrer" className="font-mono text-[11px] text-fg-faint">
+                        CWE-{c}
+                      </a>
+                    </span>
+                  ))}
                 </span>
               </span>
               <span className="text-right text-xs whitespace-nowrap">
@@ -283,6 +292,49 @@ function Rules({ s }: { s: Security }) {
           </li>
         ))}
       </ul>
+    </Card>
+  )
+}
+
+function OwaspTop10({ s }: { s: Security }) {
+  const max = Math.max(1, ...s.owasp.map((o) => o.count))
+  return (
+    <Card
+      id="owasp"
+      className="min-[900px]:col-span-2"
+      title="OWASP Top 10 · 2021"
+      subtitle="Open vulnerabilities by category; one whose rule relates to two categories counts in both"
+    >
+      <ol aria-label="OWASP Top 10 categories" className="m-0 grid list-none grid-cols-1 gap-x-8 p-0 min-[900px]:grid-cols-2">
+        {s.owasp.map((o) => (
+          <li key={o.id} className="flex flex-col gap-1 border-t border-line py-2 text-[13px]">
+            <span className="flex items-baseline gap-2.5">
+              <Mono className="text-[11px] text-fg-faint">{o.id}</Mono>
+              <span className={`min-w-0 flex-1 ${o.count ? 'text-fg' : 'text-fg-faint'}`}>{o.title}</span>
+              <Mono className={`text-xs ${o.count ? 'text-fg' : 'text-fg-faint'}`}>{o.count}</Mono>
+            </span>
+            {o.count > 0 && (
+              <>
+                <span className="h-1 rounded-full bg-hover" aria-hidden="true">
+                  <span className="block h-full rounded-full" style={{ width: `${(o.count / max) * 100}%`, background: 'var(--sd-crit)' }} />
+                </span>
+                <span className="flex flex-wrap gap-x-2 text-xs">
+                  {o.rules.map((r) => (
+                    <Link key={r} to={`/rules#${encodeURIComponent(r)}`} className="font-mono text-[11px] text-fg-faint">
+                      {r}
+                    </Link>
+                  ))}
+                </span>
+              </>
+            )}
+          </li>
+        ))}
+      </ol>
+      {s.owaspUnmapped > 0 && (
+        <p className="m-0 mt-3 text-xs text-fg-faint">
+          {s.owaspUnmapped} open {s.owaspUnmapped === 1 ? 'vulnerability has' : 'vulnerabilities have'} no OWASP category (memory-safety rules in C and C++).
+        </p>
+      )}
     </Card>
   )
 }

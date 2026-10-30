@@ -4,7 +4,10 @@
 Compares sonda's rules (`sonda rules --format json`) with the rule keys of a
 SonarQube server you have access to, using its standard rules API, and writes
 one CSV per language plus a summary. Only rule keys and a few facts (type,
-default severity, whether enabled by default) are written.
+default severity, whether enabled by default, and the CWE ids and OWASP Top
+10 2021 categories a rule relates to) are written. It also reports where
+sonda's catalog records different CWE or OWASP references than SonarQube for
+the rules it covers.
 
     python3 scripts/sonar_parity.py --server http://sonarqube:9000 \\
         --token-file ~/.sonar_token
@@ -14,6 +17,7 @@ printed.
 """
 
 import argparse
+import concurrent.futures
 import csv
 import datetime
 import json
@@ -49,6 +53,19 @@ def all_rules(server, token, **query):
         if page * 500 >= result["total"]:
             return rules
         page += 1
+
+
+def standards(server, token, key):
+    """The CWE ids and OWASP Top 10 2021 categories of one rule, from the
+    search facets (rules don't list them as fields)."""
+    result = fetch(server, token, "/api/rules/search", rule_key=key, ps=1,
+                   facets="cwe,owaspTop10-2021")
+    values = {f["property"]: sorted((v["val"] for v in f["values"] if v["count"]),
+                                    key=lambda v: (len(v), v))
+              for f in result["facets"]}
+    cwe = [v for v in values.get("cwe", []) if v.isdigit()]
+    owasp = [f"A{int(v[1:]):02d}" for v in values.get("owaspTop10-2021", [])]
+    return cwe, owasp
 
 
 def tier(rule):
@@ -89,6 +106,8 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     summary = []
+    # sonda rule id -> (CWE ids, OWASP categories) SonarQube gives its exact keys.
+    expected = {}
     for lang, (label, sonda_langs) in LANGUAGES.items():
         if lang not in available:
             summary.append((label, None))
@@ -98,6 +117,9 @@ def main():
         active = {r["key"] for r in all_rules(args.server, token, languages=lang, f="name",
                                               qprofile=profiles[lang], activation="true")} \
             if lang in profiles else set()
+        live = [r["key"] for r in rules if r["status"] != "DEPRECATED"]
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            found = dict(zip(live, pool.map(lambda k: standards(args.server, token, k), live)))
         rows = []
         for r in sorted(rules, key=lambda r: number(r["key"])):
             short = r["key"].split(":")[1]
@@ -115,6 +137,11 @@ def main():
                 status = "partial"
             else:
                 status = "todo"
+            cwe, owasp = found.get(r["key"], ([], []))
+            for rule in exact:
+                seen = expected.setdefault(rule, (set(), set()))
+                seen[0].update(cwe)
+                seen[1].update(owasp)
             rows.append({
                 "key": r["key"],
                 "type": r["type"].lower(),
@@ -124,6 +151,8 @@ def main():
                 "tier": tier(r),
                 "status": status,
                 "sonda_rule": " ".join(exact or related),
+                "cwe": " ".join(cwe),
+                "owasp_2021": " ".join(owasp),
             })
         with open(os.path.join(args.out, f"{lang}.csv"), "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
@@ -159,10 +188,40 @@ def main():
         lines.append(f"| {label} | {len(live)} | {count(lambda r: r['status'] == 'done')} | "
                      f"{count(lambda r: r['status'] == 'partial')} | {todo('syntactic')} | "
                      f"{todo('types')} | {todo('dataflow')} |")
+    # Standards drift: what sonda records against what SonarQube says.
+    drift = []
+    for s in sonda:
+        # Rules with no exact key record standards of their own choosing.
+        if s["id"] not in expected:
+            continue
+        want = expected[s["id"]]
+        have = ({str(c) for c in s.get("cwe", [])}, set(s.get("owasp_2021", [])))
+        if have != want:
+            drift.append(f"| `{s['id']}` | {fmt(have)} | {fmt(want)} |")
+    lines += [
+        "",
+        "## Security standards",
+        "",
+        "CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with",
+        "SonarQube's for the keys each rule covers exactly. Rules without an exact key",
+        "aren't compared.",
+        "",
+    ]
+    if drift:
+        lines += [f"{len(drift)} rules differ:", "",
+                  "| Rule | sonda | SonarQube |", "|---|---|---|", *drift]
+    else:
+        lines.append("All match.")
     lines += ["", "Per-language details: the `.csv` files in this directory."]
     with open(os.path.join(args.out, "README.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
-    print("\n".join(lines[-len(summary) - 2:]))
+    print("\n".join(lines[14:]))
+
+
+def fmt(standards):
+    cwe, owasp = standards
+    parts = [f"CWE-{c}" for c in sorted(cwe, key=int)] + sorted(owasp)
+    return ", ".join(parts) or "none"
 
 
 if __name__ == "__main__":

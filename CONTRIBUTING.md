@@ -128,6 +128,10 @@ language.
     syntactic check for what SonarQube does with taint analysis.
 
   A JavaScript rule also covers the TypeScript key with the same number.
+- **Record its standards** in `rules/catalog/standards.rs`: the CWE ids
+  and OWASP Top 10 2021 categories the rule relates to. Every
+  vulnerability rule needs at least one CWE id (a test checks), and for an
+  exact key they should match SonarQube's, which the refresh below reports.
 - **Check it on real code.** Scan the reference projects and review every
   finding. A rule that misfires doesn't ship.
 - **Refresh the compatibility table:**

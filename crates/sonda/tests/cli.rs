@@ -178,7 +178,44 @@ fn sarif_report_is_valid_2_1_0() {
     assert_eq!(result["level"], "error");
     // ruleIndex must point at the rule it names.
     let index = result["ruleIndex"].as_u64().unwrap() as usize;
-    assert_eq!(run0["tool"]["driver"]["rules"][index]["id"], "js/no-eval");
+    let rule = &run0["tool"]["driver"]["rules"][index];
+    assert_eq!(rule["id"], "js/no-eval");
+    // CWE-95 and OWASP A03, as GitHub's tag and as taxa the run declares.
+    assert!(
+        rule["properties"]["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&"external/cwe/cwe-095".into())
+    );
+    let targets: Vec<(String, String)> = rule["relationships"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rel| {
+            let target = &rel["target"];
+            let taxonomy =
+                &run0["taxonomies"][target["toolComponent"]["index"].as_u64().unwrap() as usize];
+            assert!(
+                taxonomy["taxa"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t["id"] == target["id"]),
+                "{target}"
+            );
+            (
+                taxonomy["name"].as_str().unwrap().to_string(),
+                target["id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            ("CWE".into(), "95".into()),
+            ("OWASP Top 10".into(), "A03".into())
+        ]
+    );
     let location = &result["locations"][0]["physicalLocation"];
     assert_eq!(location["artifactLocation"]["uri"], "app.js");
     assert_eq!(location["region"]["startLine"], 1);

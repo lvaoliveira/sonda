@@ -297,6 +297,10 @@ export interface Rule {
   openIssues: number
   projects: number
   tags: string[]
+  /** CWE ids the rule relates to. */
+  cwe: number[]
+  /** OWASP Top 10 2021 categories. */
+  owasp: { id: string; title: string }[]
   noncompliant: string | null
   compliant: string | null
 }
@@ -518,6 +522,8 @@ export interface SecurityFinding {
   line: number
   firstSeen: string
   ageDays: number
+  /** CWE ids of its rule. */
+  cwe: number[]
 }
 
 /** Vulnerabilities across projects, each project's main branch. */
@@ -536,6 +542,10 @@ export interface Security {
   projects: { project: string; severe: number; other: number }[]
   components: { project: string; path: string; count: number; worst: Severity; weighted: number }[]
   rules: { rule: string; count: number }[]
+  /** OWASP Top 10 2021, all ten in order; a vulnerability counts in every category its rule relates to. */
+  owasp: { id: string; title: string; count: number; rules: string[] }[]
+  /** Open vulnerabilities whose rule has no OWASP category. */
+  owaspUnmapped: number
   /** Medians over vulnerabilities fixed in the last 90 days; null when none was. */
   remediation: { medianDaysSevere: number | null; medianDaysAll: number | null; fixedLast90Days: number }
 }

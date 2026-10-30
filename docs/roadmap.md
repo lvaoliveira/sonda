@@ -80,20 +80,18 @@ user's `password_hash` is nullable, and accounts are never deleted.
 
 ## Security: CWE/OWASP mapping, hotspots, reachability
 
-**Status:** planned, not started (2026-10-30). The Security screen shows
-what the issue tracker records: vulnerabilities by severity, age, project,
-component and rule. The design also groups findings by standard, has a
-hotspot review queue, and ranks findings by whether they can be reached
-from a public entry point. Each needs its own groundwork, smallest first:
+**Status:** the CWE/OWASP mapping is done (2026-10-30); hotspots and
+reachability are planned, not started. The Security screen shows
+vulnerabilities by severity, age, project, component, rule and OWASP
+category. The design also has a hotspot review queue, and ranks findings
+by whether they can be reached from a public entry point. Each needs its
+own groundwork, smallest first:
 
-1. **CWE and OWASP Top 10 mapping.** A security rule records the CWE ids
-   and OWASP categories it relates to, next to its `sonar` references
-   (ADR-0007): a fact about the rule, not SonarSource content.
-   - SonarQube's rules API reports them as security standards, so
-     `scripts/sonar_parity.py` can list them for review.
-   - Plugs into: `sonda rules --format json` and docs/rules.md; Rules page
-     search (its placeholder already says CWE); the Security screen grouped
-     by OWASP category; SARIF `taxa`.
+1. **CWE and OWASP Top 10 mapping. Done.** Each rule records its CWE ids
+   and OWASP Top 10 2021 categories (`rules/catalog/standards.rs`), shown
+   in `sonda rules`, SARIF taxonomies, the Rules page and the Security
+   screen. `scripts/sonar_parity.py` reports drift from SonarQube's.
+   OWASP Top 10 2025 waits until SonarQube reports it.
 2. **Hotspots.** A fourth kind of finding: security-sensitive code that a
    person reviews (to review → safe, or → fix), rather than a confirmed
    vulnerability.

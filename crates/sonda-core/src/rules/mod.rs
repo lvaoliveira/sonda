@@ -55,6 +55,75 @@ pub struct Example {
     pub good: &'static str,
 }
 
+/// The OWASP Top 10, 2021 edition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Owasp {
+    A01,
+    A02,
+    A03,
+    A04,
+    A05,
+    A06,
+    A07,
+    A08,
+    A09,
+    A10,
+}
+
+impl Owasp {
+    pub const ALL: [Owasp; 10] = [
+        Owasp::A01,
+        Owasp::A02,
+        Owasp::A03,
+        Owasp::A04,
+        Owasp::A05,
+        Owasp::A06,
+        Owasp::A07,
+        Owasp::A08,
+        Owasp::A09,
+        Owasp::A10,
+    ];
+
+    /// `A01` to `A10`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Owasp::A01 => "A01",
+            Owasp::A02 => "A02",
+            Owasp::A03 => "A03",
+            Owasp::A04 => "A04",
+            Owasp::A05 => "A05",
+            Owasp::A06 => "A06",
+            Owasp::A07 => "A07",
+            Owasp::A08 => "A08",
+            Owasp::A09 => "A09",
+            Owasp::A10 => "A10",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Owasp::A01 => "Broken Access Control",
+            Owasp::A02 => "Cryptographic Failures",
+            Owasp::A03 => "Injection",
+            Owasp::A04 => "Insecure Design",
+            Owasp::A05 => "Security Misconfiguration",
+            Owasp::A06 => "Vulnerable and Outdated Components",
+            Owasp::A07 => "Identification and Authentication Failures",
+            Owasp::A08 => "Software and Data Integrity Failures",
+            Owasp::A09 => "Security Logging and Monitoring Failures",
+            Owasp::A10 => "Server-Side Request Forgery",
+        }
+    }
+}
+
+/// The security standards a rule relates to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Standards {
+    /// CWE ids, ascending.
+    pub cwe: &'static [u16],
+    pub owasp: &'static [Owasp],
+}
+
 /// A SonarQube rule this one corresponds to, by its key without the
 /// language prefix (`S3776`). Keys are references only: no SonarSource text
 /// or code is used (ADR-0007).
@@ -94,6 +163,11 @@ impl Rule {
     /// Whether the rule runs without being listed in `rules.enabled`.
     pub fn on_by_default(&self) -> bool {
         !catalog::OFF_BY_DEFAULT.contains(&self.id)
+    }
+
+    /// The CWE weaknesses and OWASP Top 10 categories it relates to.
+    pub fn standards(&self) -> Standards {
+        catalog::standards(self.id)
     }
 
     pub fn langs(&self) -> &'static [Lang] {
@@ -350,6 +424,33 @@ mod tests {
                 .count();
             assert_eq!(covered.len(), expected, "{lang:?}");
         }
+    }
+
+    #[test]
+    fn standards_cover_every_vulnerability_and_name_real_rules() {
+        let mut seen = std::collections::HashSet::new();
+        for (id, cwe, owasp) in catalog::standards::STANDARDS {
+            assert!(find(id).is_some(), "{id}");
+            assert!(seen.insert(*id), "{id} listed twice");
+            assert!(
+                cwe.windows(2).all(|w| w[0] < w[1]),
+                "{id}: CWE ids ascending"
+            );
+            assert!(
+                owasp.windows(2).all(|w| w[0] < w[1]),
+                "{id}: OWASP ascending"
+            );
+        }
+        for r in RULES
+            .iter()
+            .filter(|r| r.category == Category::Vulnerability)
+        {
+            assert!(!r.standards().cwe.is_empty(), "{} has no CWE", r.id);
+        }
+        let hardcoded = find("js/hardcoded-password").unwrap().standards();
+        assert_eq!(hardcoded.cwe, [259, 798]);
+        assert_eq!(hardcoded.owasp, [Owasp::A07]);
+        assert_eq!(find("js/no-var").unwrap().standards(), Standards::default());
     }
 
     #[test]
