@@ -328,6 +328,33 @@ Uploads carry them in the report's `dependencies` (at most 200,000, each
 checked: a known ecosystem, a `pkg:` URL, bounded fields, a safe relative
 lockfile path, no duplicates). Reports from an older CLI have none.
 
+## New code on the main branch
+
+Branches are judged on the change their scan compared with: a pull request,
+a push, or the merge base (ADR-0010). The main branch also gets a long-term
+view, as in SonarQube: a **new code period** that starts at an analysis
+([ADR-0011](adr/0011-new-code-period.md)).
+
+- **The default start is the project's first analysis.** What was there
+  then is accepted, and an issue first seen after it is new until it's
+  fixed. Nothing ages out.
+- **What the server computes.** On each main-branch upload, it marks issues
+  new or not (so the Issues page, drill-downs and filters agree) and
+  recounts the new-issue measures. It also computes `new_lines`, by diffing
+  each file's stored source against the start's. Lines here are non-blank
+  ones, since the server doesn't parse code; the CLI counts code lines.
+  Then it re-evaluates and stores the latest analysis's gate.
+- **Coverage and duplication on new code** keep the scan's values, because
+  the server has no per-line data for them. The project page says so.
+- **Admins can move the start** to a later analysis of the main branch, for
+  example after a cleanup: `PUT /api/projects/{key}/new-code` with
+  `{"analysis": id}`, or `null` for the first analysis. It's on the project
+  page under Measures → New code, and every move is recorded with who made
+  it.
+- **The API:** `GET /api/projects/{key}` returns `newCodePeriod` on the
+  main branch (its starting analysis, whether an admin moved it, and which
+  measures come from the scan), and `null` on other branches.
+
 ## Known vulnerabilities
 
 Dependencies are checked against advisories the server stores

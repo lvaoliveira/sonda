@@ -95,6 +95,13 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
     })
 }
 
+/// Lines of `new` (1-based) that were added or changed relative to `old`:
+/// the line diff new code uses (ADR-0002), for the server's new code period
+/// (ADR-0011).
+pub fn changed_lines(old: &str, new: &str) -> std::collections::HashSet<usize> {
+    newcode::changed_lines(old, new)
+}
+
 /// The dependencies `root`'s lockfiles pin (ADR-0009), and warnings about
 /// lockfiles that could not be read. Analyzes no code; `config` supplies
 /// the excluded paths.

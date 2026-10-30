@@ -746,28 +746,10 @@ pub async fn refresh_gates(pool: &PgPool, scope: GateScope) -> Result<usize, sql
             ("vulnerable_dependencies", count(false)),
             ("severe_vulnerable_dependencies", count(true)),
         ];
-        for c in gate["conditions"].as_array_mut().into_iter().flatten() {
-            let Some(&(_, value)) = values.iter().find(|(m, _)| c["metric"] == *m) else {
-                continue;
-            };
-            let threshold = c["threshold"].as_f64().unwrap_or(0.0);
-            let failing = match c["op"].as_str() {
-                Some("gt") => value > threshold,
-                Some("lt") => value < threshold,
-                _ => false,
-            };
-            c["actual"] = serde_json::json!(value);
-            c["status"] = serde_json::json!(if failing { "error" } else { "ok" });
-        }
-        let passed = gate["conditions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .all(|c| c["status"] != "error");
-        gate["passed"] = serde_json::json!(passed);
         for (metric, value) in values {
             measures[metric] = serde_json::json!(value);
         }
+        let passed = crate::health::evaluate_gate(&mut gate, &measures);
         sqlx::query("UPDATE analyses SET gate = $2, gate_passed = $3, measures = $4 WHERE id = $1")
             .bind(id)
             .bind(&gate)

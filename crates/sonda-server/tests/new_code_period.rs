@@ -1,0 +1,186 @@
+//! The main branch's new code period (ADR-0011). Database tests skip
+//! without SONDA_TEST_DATABASE_URL (see server.rs).
+
+mod common;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
+use common::{TOKEN, TestDb, state_with, upload, upload_json_for};
+use serde_json::{Value, json};
+use sonda_server::{db, http, session};
+use tower::ServiceExt;
+
+async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 << 20)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A signed-in user, without a password: sessions straight from the store.
+async fn session_for(db: &TestDb, username: &str, role: &str) -> String {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (username, display_name, role) VALUES ($1, $1, $2::user_role) RETURNING id",
+    )
+    .bind(username)
+    .bind(role)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    let token = session::create(&db.pool, id).await.unwrap();
+    format!("{}={token}", session::COOKIE)
+}
+
+async fn project(app: &axum::Router, auth: &[(&str, &str)], branch: Option<&str>) -> Value {
+    let path = match branch {
+        Some(b) => format!("/api/projects/shop?branch={b}"),
+        None => "/api/projects/shop".into(),
+    };
+    let mut r = Request::get(path);
+    for (k, v) in auth {
+        r = r.header(*k, *v);
+    }
+    let (status, p) = send(app, r.body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    p
+}
+
+fn condition<'a>(p: &'a Value, metric: &str) -> &'a Value {
+    p["gate"]["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["metric"] == metric)
+        .unwrap()
+}
+
+fn reset(analysis: Value, auth: &[(&str, &str)]) -> Request<Body> {
+    let mut r = Request::put("/api/projects/shop/new-code")
+        .header(header::CONTENT_TYPE, "application/json");
+    for (k, v) in auth {
+        r = r.header(*k, *v);
+    }
+    r.body(Body::from(json!({ "analysis": analysis }).to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_main_branch_judges_new_code_since_its_period() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    let bearer = format!("Bearer {TOKEN}");
+    let token = [("authorization", bearer.as_str())];
+    let dir = tempfile::tempdir().unwrap();
+
+    // The first analysis: its debt is accepted, so nothing is new. (The
+    // scan itself saw no git, so it called everything new.)
+    let old = ("old.js", "var x = 1;\neval(x);\n");
+    let (status, first) = upload(&db, &upload_json_for(dir.path(), &[old], "shop", "main")).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let p = project(&app, &token, None).await;
+    assert_eq!(p["newCodePeriod"]["analysis"], first["analysis_id"]);
+    assert_eq!(p["newCodePeriod"]["reset"], false);
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 0.0);
+    assert_eq!(p["measures"]["newCode"]["issues"], 0.0);
+
+    // A later analysis adds a file: only its issue is new, and the gate fails.
+    let new = ("new.js", "\nlet y = 2;\neval(y);\n");
+    let (_, second) = upload(
+        &db,
+        &upload_json_for(dir.path(), &[old, new], "shop", "main"),
+    )
+    .await;
+    let p = project(&app, &token, None).await;
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 1.0);
+    assert_eq!(condition(&p, "new_vulnerabilities")["status"], "error");
+    assert_eq!(p["gate"]["state"], "failed");
+    assert_eq!(
+        p["measures"]["newCode"]["lines"], 2.0,
+        "new.js's non-blank lines"
+    );
+    let new_rules: Vec<String> = sqlx::query_scalar(
+        "SELECT path FROM issues WHERE is_new AND fixed_analysis_id IS NULL ORDER BY path",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(new_rules, ["new.js"]);
+
+    // Only an admin moves the period.
+    let latest = second["analysis_id"].clone();
+    assert_eq!(
+        send(&app, reset(latest.clone(), &[])).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(&app, reset(latest.clone(), &token)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let member = session_for(&db, "max", "member").await;
+    let as_member = [("cookie", member.as_str()), ("sonda-csrf", "1")];
+    assert_eq!(
+        send(&app, reset(latest.clone(), &as_member)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let admin = session_for(&db, "ada", "admin").await;
+    let as_admin = [("cookie", admin.as_str()), ("sonda-csrf", "1")];
+
+    // Starting at the latest analysis accepts new.js too.
+    let (status, period) = send(&app, reset(latest.clone(), &as_admin)).await;
+    assert_eq!(status, StatusCode::OK, "{period}");
+    assert_eq!(
+        (period["analysis"].clone(), period["reset"].clone()),
+        (latest.clone(), json!(true))
+    );
+    let p = project(&app, &token, None).await;
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 0.0);
+    assert_eq!(
+        p["gate"]["state"], "partial",
+        "only coverage without data is left"
+    );
+
+    // Back to the first analysis.
+    assert_eq!(
+        send(&app, reset(Value::Null, &as_admin)).await.0,
+        StatusCode::OK
+    );
+    let p = project(&app, &token, None).await;
+    assert_eq!(p["newCodePeriod"]["reset"], false);
+    assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 1.0);
+
+    // Another branch's analysis can't start the main branch's period, and
+    // other branches keep the scan's own new code.
+    let (_, feature) = upload(
+        &db,
+        &upload_json_for(dir.path(), &[old, new], "shop", "feature"),
+    )
+    .await;
+    let (status, _) = send(&app, reset(feature["analysis_id"].clone(), &as_admin)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let p = project(&app, &token, Some("feature")).await;
+    assert_eq!(p["newCodePeriod"], Value::Null);
+    assert_eq!(
+        condition(&p, "new_vulnerabilities")["actual"],
+        2.0,
+        "the scan's whole-project view"
+    );
+
+    let resets: Vec<(String, Option<i64>, Option<i64>)> =
+        sqlx::query_as("SELECT actor, old_since, new_since FROM new_code_resets ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    let latest = latest.as_i64();
+    assert_eq!(
+        resets,
+        [("ada".into(), None, latest), ("ada".into(), latest, None)]
+    );
+}

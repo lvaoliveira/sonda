@@ -38,6 +38,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "dependency_reviews",
             "issue_events",
             "issues",
+            "new_code_resets",
             "projects",
             "sessions",
             "sign_in_failures",

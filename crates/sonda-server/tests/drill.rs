@@ -42,6 +42,13 @@ async fn each_metric_drills_into_components_and_files() {
         ("lib/c.py", "eval(input())\n".to_string()),
     ];
     let files: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();
+    // A first, clean analysis starts the main branch's new code period
+    // (ADR-0011), so the issues uploaded next are new.
+    upload(
+        &db,
+        &upload_json(dir.path(), &[("src/api/keep.js", "let k = 1;\n")], "main"),
+    )
+    .await;
     upload(&db, &upload_json(dir.path(), &files, "main")).await;
 
     // Critical issues: three eval() calls, src/ first (two of them).
