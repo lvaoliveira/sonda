@@ -158,6 +158,7 @@ pub struct FailingCondition {
 
 #[derive(Serialize)]
 pub struct AnalysisSummary {
+    pub id: i64,
     pub state: &'static str,
     pub project: String,
     pub branch: String,
@@ -225,6 +226,9 @@ type IssueRow = (i64, String, String, bool, f64, Option<f64>, bool);
 type SevereRow = (i64, String, String, String, i32, f64);
 
 type AnalysisRow = (i64, String, String, String, f64, Value, Value, bool);
+
+/// An analysis id, then the same columns as `AnalysisRow`.
+type RecentRow = (i64, i64, String, String, String, f64, Value, Value, bool);
 
 pub async fn get_overview(
     axum::extract::State(state): axum::extract::State<State>,
@@ -321,8 +325,8 @@ pub async fn get_overview(
     .bind(now - f64::from(days) * DAY)
     .fetch_all(pool)
     .await?;
-    let recent: Vec<AnalysisRow> = sqlx::query_as(
-        "SELECT p.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
+    let recent: Vec<RecentRow> = sqlx::query_as(
+        "SELECT a.id, p.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
                 a.measures, a.gate, a.gate_passed
          FROM analyses a JOIN projects p ON p.id = a.project_id
          ORDER BY a.received_at DESC, a.id DESC LIMIT 8",
@@ -348,7 +352,7 @@ fn build(
     analyses: &[Analysis],
     issues: &[TrackedIssue],
     new_severe: &[SevereRow],
-    recent: Vec<AnalysisRow>,
+    recent: Vec<RecentRow>,
 ) -> Overview {
     let window_start = now - f64::from(days) * DAY;
     let points = points(now, days);
@@ -431,41 +435,44 @@ fn build(
         gate_history: gate_history(now, days, analyses),
         recent: recent
             .into_iter()
-            .map(|(project, key, branch, sha, at, measures, gate, passed)| {
-                let a = Analysis {
-                    project,
-                    key,
-                    branch,
-                    sha,
-                    at,
-                    measures,
-                    gate,
-                    passed,
-                };
-                let failed = a.conditions("error");
-                let no_data = a.conditions("no_data");
-                let note = if let Some(first) = failed.first() {
-                    format!("Gate failed: {first}{}", more(failed.len()))
-                } else if let Some(first) = no_data.first() {
-                    format!("No data for: {first}{}", more(no_data.len()))
-                } else {
-                    match a.m("new_issues") as u32 {
-                        0 => "No new issues".into(),
-                        1 => "1 new issue".into(),
-                        n => format!("{n} new issues"),
+            .map(
+                |(id, project, key, branch, sha, at, measures, gate, passed)| {
+                    let a = Analysis {
+                        project,
+                        key,
+                        branch,
+                        sha,
+                        at,
+                        measures,
+                        gate,
+                        passed,
+                    };
+                    let failed = a.conditions("error");
+                    let no_data = a.conditions("no_data");
+                    let note = if let Some(first) = failed.first() {
+                        format!("Gate failed: {first}{}", more(failed.len()))
+                    } else if let Some(first) = no_data.first() {
+                        format!("No data for: {first}{}", more(no_data.len()))
+                    } else {
+                        match a.m("new_issues") as u32 {
+                            0 => "No new issues".into(),
+                            1 => "1 new issue".into(),
+                            n => format!("{n} new issues"),
+                        }
+                    };
+                    AnalysisSummary {
+                        id,
+                        state: gate_state(&a),
+                        project: a.key,
+                        branch: a.branch,
+                        sha: a.sha.chars().take(7).collect(),
+                        message: None,
+                        note,
+                        duration: None,
+                        ago: ago(now - a.at),
                     }
-                };
-                AnalysisSummary {
-                    state: gate_state(&a),
-                    project: a.key,
-                    branch: a.branch,
-                    sha: a.sha.chars().take(7).collect(),
-                    message: None,
-                    note,
-                    duration: None,
-                    ago: ago(now - a.at),
-                }
-            })
+                },
+            )
             .collect(),
     }
 }

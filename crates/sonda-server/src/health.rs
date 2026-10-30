@@ -1,6 +1,7 @@
 //! What several endpoints compute the same way from stored analyses:
 //! ratings (ADR-0005), gate states, condition labels, and formats.
 
+use serde::Serialize;
 use serde_json::Value;
 
 pub(crate) const DAY: f64 = 86_400.0;
@@ -150,9 +151,101 @@ pub(crate) fn iso_date(epoch: f64) -> String {
     format!("{y:04}-{m:02}-{d:02}T00:00:00.000Z")
 }
 
+// ------------------------------------------------- a stored analysis
+
+#[derive(Serialize)]
+pub struct GateDetail {
+    pub state: &'static str,
+    pub conditions: Vec<ConditionRow>,
+}
+
+#[derive(Serialize)]
+pub struct ConditionRow {
+    /// "New vulnerabilities > 0".
+    pub label: String,
+    pub metric: String,
+    pub actual: Option<f64>,
+    /// `ok`, `error` or `no_data`.
+    pub status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Measures {
+    pub overall: MeasureSet,
+    pub new_code: MeasureSet,
+}
+
+/// Null where the analysis has no value (coverage not uploaded, no new code).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureSet {
+    pub lines: Option<f64>,
+    pub issues: Option<f64>,
+    pub bugs: Option<f64>,
+    pub vulnerabilities: Option<f64>,
+    pub code_smells: Option<f64>,
+    pub coverage: Option<f64>,
+    pub duplication: Option<f64>,
+    pub debt_minutes: Option<f64>,
+}
+
+pub(crate) fn conditions(gate: &Value) -> Vec<ConditionRow> {
+    gate["conditions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| ConditionRow {
+            label: condition_label(c),
+            metric: c["metric"].as_str().unwrap_or_default().to_string(),
+            actual: c["actual"].as_f64(),
+            status: c["status"].as_str().unwrap_or("no_data").to_string(),
+        })
+        .collect()
+}
+
+pub(crate) fn measure_set(m: &Value, prefix: &str) -> MeasureSet {
+    let get = |name: &str| m[format!("{prefix}{name}")].as_f64();
+    MeasureSet {
+        lines: if prefix.is_empty() {
+            m["ncloc"].as_f64()
+        } else {
+            get("lines")
+        },
+        issues: get("issues"),
+        bugs: get("bugs"),
+        vulnerabilities: get("vulnerabilities"),
+        code_smells: get("code_smells"),
+        coverage: get("coverage"),
+        duplication: get("duplicated_lines_density"),
+        debt_minutes: get("debt_minutes"),
+    }
+}
+
+/// RFC 3339 in UTC with milliseconds, as `Date.toISOString()` writes it.
+pub(crate) fn rfc3339(epoch: f64) -> String {
+    let day = iso_date(epoch);
+    let seconds = epoch.rem_euclid(DAY);
+    let (h, m, s) = (
+        (seconds / 3600.0) as u32,
+        (seconds % 3600.0 / 60.0) as u32,
+        seconds % 60.0,
+    );
+    format!("{}T{h:02}:{m:02}:{s:06.3}Z", &day[..10])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamps_read_like_iso_strings() {
+        assert_eq!(rfc3339(0.0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(
+            rfc3339(1_793_318_400.0 + 3_723.5),
+            "2026-10-30T01:02:03.500Z"
+        );
+    }
     use serde_json::json;
 
     #[test]

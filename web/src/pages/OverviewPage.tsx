@@ -692,7 +692,9 @@ function Recent({ data }: { data: Overview }) {
                 {g.glyph}
               </span>
               <span className="flex min-w-0 flex-col leading-[1.3]">
-                <span className="font-semibold">{a.project}</span>
+                <Link to={`/analyses/${a.id}`} className="font-semibold text-fg">
+                  {a.project}
+                </Link>
                 <Mono className="text-[10.5px] text-fg-faint">
                   {a.branch} · {a.sha}
                 </Mono>

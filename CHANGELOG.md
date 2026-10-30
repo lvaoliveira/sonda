@@ -159,6 +159,12 @@ file, the report formats and the public library API.
   its components with owners, per branch. `GET /api/projects` and
   `GET /api/projects/{key}` serve them, and `GET /api/issues` takes
   `project=` and `branch=`.
+- Web app: the Analyses screen lists every analysis, newest first, filtered
+  by gate and project. An analysis's page shows its gate result, what it
+  introduced and resolved, its warnings, its measures, and links to the
+  previous and next analyses on the branch. `GET /api/analyses` and
+  `GET /api/analyses/{id}` serve them. The Overview's recent analyses and a
+  project's history link to them.
 - Rules with the same query share one compiled pattern, so the tree is
   matched against it once.
 - Rules can report a node inside the one their query captures, so rules

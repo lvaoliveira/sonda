@@ -2,6 +2,7 @@ import { AuthError, type Drill, type DrillMetric, type IssueDetail, type IssuePa
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
+import { analysisDetail, queryAnalyses } from './analyses'
 import { PROJECT_LIST, projectDetail } from './projects'
 import { queryIssues } from './query'
 import rulesData from './rules.json'
@@ -130,6 +131,16 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     shell: () => wait(shell()),
     overview: (scope, range) => wait(overview(scope, range)),
     drill: (metric: DrillMetric) => wait<Drill>(DRILLS[metric]),
+    analyses: async (query) => {
+      guard()
+      return wait(queryAnalyses(query))
+    },
+    analysis: async (id) => {
+      guard()
+      const detail = analysisDetail(id)
+      if (!detail) throw new Error('not found')
+      return wait(detail)
+    },
     projects: async () => {
       guard()
       return wait(PROJECT_LIST)
