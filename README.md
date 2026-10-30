@@ -56,7 +56,6 @@ sonda sbom . -o sbom.cdx.json             # SBOM of the lockfiles' dependencies 
 sonda sbom . --format spdx                # the same as SPDX 2.3 JSON
 sonda rules                               # list rules
 sonda init                                # write a default sonda.toml
-sonda baseline                            # judge only changes from now on (tags HEAD sonda-baseline)
 sonda -v scan .                           # log progress to stderr (-vv, -vvv for more)
 sonda scan . --jobs 4                     # limit parallelism (default: every CPU)
 sonda scan . --sandbox require            # refuse to scan if workers cannot be sandboxed
@@ -65,7 +64,7 @@ sonda upload report.json --server https://sonda.example.com \
   --project payments --branch main --commit "$GITHUB_SHA"   # token from SONDA_TOKEN or SONDA_TOKEN_FILE
 ```
 
-Without `--new-code`, sonda picks what new code is compared with ([ADR-0010](docs/adr/0010-default-new-code.md)): on a branch, its merge base with the default branch; on the default branch, the latest tag before HEAD. A project without tags counts as new code as a whole until you set a baseline: `sonda baseline` tags HEAD `sonda-baseline`, so the code as it is now is accepted and only later changes are judged (push the tag so CI sees it). The report says which it used. `--new-code none` (or `scan.new_code = "none"`) counts the whole project as new code.
+Without `--new-code`, sonda picks what new code is compared with ([ADR-0010](docs/adr/0010-default-new-code.md)): in a GitHub Actions pull request, its base branch; in a push, the commits it pushed; on a branch with commits its default branch lacks, their merge base; otherwise (a local run on `main`, say) uncommitted changes. The report says which it used. `--new-code none` (or `scan.new_code = "none"`) counts the whole project as new code.
 
 Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed. The JSON format is versioned by `report_version`. Its `dependencies` list each package's ecosystem, name, version, package URL, lockfile, whether it's direct where the lockfile says, and its license where recorded. `sonda sbom` stamps the SBOM with the current time, or with `SOURCE_DATE_EPOCH` when set, for reproducible output.
 
@@ -87,9 +86,9 @@ It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
 ```yaml
 - uses: actions/checkout@v4
   with:
-    fetch-depth: 0            # sonda needs history and tags to find new code
+    fetch-depth: 0            # sonda needs the base branch or the pushed range
 - run: cargo install --git <this repo> sonda
-- run: sonda scan . --format sarif -o sonda.sarif   # new code: the PR's changes, or the last release on main
+- run: sonda scan . --format sarif -o sonda.sarif   # new code: the PR's or the push's changes
 - uses: github/codeql-action/upload-sarif@v3
   if: always()
   with:
@@ -108,7 +107,6 @@ skip_minified = true       # skip JS/TS that looks minified (average line > 200 
 file_timeout_secs = 10     # per-file parse + rule-matching budget
 git_timeout_secs = 120     # each git process used for new code
 new_code = "auto"          # or "none", or a git ref such as "origin/main" (ADR-0010)
-new_code_days = 0          # opt-in: without a tag, compare with the commit this many days older than HEAD
 
 [rules]
 enabled = ["js/prefer-const"]   # rules that are off by default (`sonda rules` marks them)

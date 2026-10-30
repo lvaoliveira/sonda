@@ -169,17 +169,13 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
-- A default for new code (ADR-0010): without `--new-code`, `auto` compares
-  a diverged branch with its merge base with the default branch, and the
-  default branch with the latest tag before HEAD. `sonda baseline` tags
-  HEAD `sonda-baseline` (with repository hooks off) for projects without
-  releases, so existing code is accepted and later changes are judged; it
-  applies at once and never ages out. Optionally, `scan.new_code_days`
-  compares with the last commit that many days older than HEAD (off by
-  default). Otherwise the whole project, with a hint to set a baseline. `scan.new_code` sets it
-  (`auto`, `none` or a ref); reports add `new_code_basis` and
-  `new_code_description`. Gates on existing projects now judge recent
-  changes instead of all their debt.
+- A default for new code (ADR-0010): without `--new-code`, `auto` judges
+  what the run changed. In a GitHub Actions pull request, that's against
+  its base branch; in a push, the commits it pushed; on a branch with
+  commits its default branch lacks, their merge base; otherwise
+  uncommitted changes. `scan.new_code` sets it (`auto`, `none` or a ref);
+  reports add `new_code_basis` and `new_code_description`. Gates on
+  existing projects now judge changes instead of all their debt.
 - `sonda upload` reads the token file from `SONDA_TOKEN_FILE` as well as
   `--token-file`, as the server reads its secrets and as docs/server.md
   already said; setting a token file and `SONDA_TOKEN` together is an

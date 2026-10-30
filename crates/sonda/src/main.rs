@@ -36,16 +36,6 @@ enum Command {
         #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
         sandbox: SandboxArg,
     },
-    /// Mark HEAD as where new code starts: tags it sonda-baseline, so the
-    /// existing code is judged as accepted and later changes as new.
-    Baseline {
-        /// The repository (or a directory in it).
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        /// Move an existing baseline to HEAD.
-        #[arg(long)]
-        force: bool,
-    },
     /// Write an SBOM of the project's dependencies, from its lockfiles.
     Sbom(SbomArgs),
     /// Send a JSON report and the analyzed sources to a sonda server.
@@ -74,10 +64,11 @@ struct ScanArgs {
     #[arg(short, long)]
     output: Option<PathBuf>,
     /// What new code is compared with: a git ref (via merge base), such as
-    /// origin/main or v1.2.0; `auto` picks the default branch on a branch,
-    /// else the latest tag, else the last scan.new_code_days days; `none`
-    /// makes the whole project new code. Default: scan.new_code in
-    /// sonda.toml, which defaults to `auto`.
+    /// origin/main; `auto` uses a GitHub Actions pull request's base or
+    /// push range, else the merge base with the default branch on a branch
+    /// that has diverged from it, else uncommitted changes; `none` makes the
+    /// whole project new code. Default: scan.new_code in sonda.toml, which
+    /// defaults to `auto`.
     #[arg(long, value_name = "REF")]
     new_code: Option<String>,
     /// LCOV coverage report(s) to import.
@@ -234,17 +225,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Scan(args) => scan(args),
         Command::Upload(args) => upload::run(args),
         Command::Sbom(args) => sbom(args),
-        Command::Baseline { path, force } => {
-            let commit = sonda_core::set_baseline(&path, force)?;
-            let tag = sonda_core::BASELINE_TAG;
-            eprintln!(
-                "sonda: tagged {} as {tag}; new code now starts there.\n\
-                 Push it so CI and teammates use it too: git push origin {tag}{}",
-                &commit[..12.min(commit.len())],
-                if force { " --force" } else { "" }
-            );
-            Ok(ExitCode::SUCCESS)
-        }
         Command::Rules { format } => {
             print!("{}", list_rules(format));
             Ok(ExitCode::SUCCESS)

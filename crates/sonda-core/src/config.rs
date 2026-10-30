@@ -25,17 +25,12 @@ file_timeout_secs = 10
 # Each git process (used for new code) is killed after this many seconds.
 git_timeout_secs = 120
 # What new code is compared with (--new-code overrides it):
-# "auto": on a branch, its merge base with the default branch (origin/HEAD,
-#   else main or master); on the default branch, the latest tag before HEAD,
-#   else (if new_code_days is set) the last commit that many days older than
-#   HEAD; else everything.
+# "auto": in a GitHub Actions pull request, its base branch; in a push, the
+#   commits it pushed; on a branch with commits its default branch lacks,
+#   their merge base; otherwise uncommitted changes, against HEAD.
 # "none": the whole project is new code.
-# Any other value is a git ref, such as "origin/main" or "v1.2.0".
+# Any other value is a git ref, such as "origin/main".
 new_code = "auto"
-# Without a tag, "auto" can compare with the last commit this many days
-# older than HEAD. Off (0) by default: a window lets issues age out of new
-# code without being fixed. `sonda baseline` sets a fixed starting point.
-new_code_days = 0
 
 [rules]
 # Rules that are off by default to turn on. `sonda rules` lists them all,
@@ -101,7 +96,6 @@ pub struct ScanConfig {
     pub git_timeout_secs: u64,
     /// `auto`, `none`, or a git ref (ADR-0010).
     pub new_code: String,
-    pub new_code_days: u32,
 }
 
 impl Default for ScanConfig {
@@ -121,7 +115,6 @@ impl Default for ScanConfig {
             file_timeout_secs: 10,
             git_timeout_secs: 120,
             new_code: "auto".into(),
-            new_code_days: 0,
         }
     }
 }
