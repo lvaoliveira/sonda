@@ -190,6 +190,20 @@ describe('Projects', () => {
     expect(await screen.findByText(/\(the first analysis\)/)).toBeInTheDocument()
   })
 
+  it('says when a small change leaves coverage out of the gate', async () => {
+    const api = createMockApi(0)
+    const real = api.project
+    const project: SondaApi['project'] = async (key, branch) => {
+      const p = await real(key, branch)
+      const conditions = p.gate.conditions.map((c) => (c.metric === 'new_coverage' ? { ...c, status: 'ignored' as const } : { ...c, status: 'ok' as const }))
+      return { ...p, gate: { state: 'passed', conditions } }
+    }
+    renderAt('/projects/payments-platform', { ...api, project })
+    expect(await screen.findByText('0 of 4 conditions failing · 1 ignored on a small change')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Ignored' })).toBeInTheDocument()
+    expect(screen.getByText('· ignored: fewer than 20 new lines')).toBeInTheDocument()
+  })
+
   it('switches branches through the URL and explains unknown ones', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')

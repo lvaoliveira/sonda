@@ -325,6 +325,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Gates with fewer than 20 new lines no longer fail, or stay "partial",
+  on coverage and duplication of new code: those conditions are
+  `ignored`, as in SonarQube, in the CLI and on the server, and the report,
+  the project page and `sonda scan`'s text say so. A two-line change with
+  one uncovered line used to fail at 50% coverage; a main branch with no
+  new lines showed "partial" for lack of coverage on new code.
+
 - The Overview's key metrics were colored by their trend only, so with no
   change every tile was green, even a 0% gate pass rate. Each tile is now
   colored by how its value stands (`tone` in `GET /api/overview`), and the

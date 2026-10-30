@@ -53,7 +53,7 @@ mod semantic;
 mod worker;
 
 pub use error::Error;
-pub use gate::{ConditionResult, GateResult, Status};
+pub use gate::{ConditionResult, GateResult, MIN_NEW_LINES, Status, ignored_on_small_changes};
 pub use measures::Measures;
 pub use project::ProjectAnalysis;
 pub use sandbox::SandboxMode;

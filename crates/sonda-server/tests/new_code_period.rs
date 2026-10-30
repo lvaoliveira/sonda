@@ -167,9 +167,10 @@ async fn the_main_branch_judges_new_code_since_its_period() {
     let p = project(&app, &token, None).await;
     assert_eq!(condition(&p, "new_vulnerabilities")["actual"], 0.0);
     assert_eq!(
-        p["gate"]["state"], "partial",
-        "only coverage without data is left"
+        p["gate"]["state"], "passed",
+        "no new lines: coverage on new code is ignored, not missing"
     );
+    assert_eq!(condition(&p, "new_coverage")["status"], "ignored");
 
     // Back to the first analysis.
     assert_eq!(
@@ -319,7 +320,9 @@ async fn coverage_on_new_code_comes_from_per_file_coverage() {
     let token = [("authorization", bearer.as_str())];
     let dir = tempfile::tempdir().unwrap();
     let a = ("a.js", "let a = 1;\nlet b = 2;\n");
-    let b = ("b.js", "let c = 3;\nlet d = 4;\n");
+    // Twenty lines: enough for coverage on new code to count (MIN_NEW_LINES).
+    let b_src: String = (0..20).map(|i| format!("let v{i} = {i};\n")).collect();
+    let b = ("b.js", b_src.as_str());
 
     // Without per-file coverage, the scan's value stands.
     upload(&db, &upload_json_for(dir.path(), &[a], "shop", "main")).await;
@@ -330,13 +333,13 @@ async fn coverage_on_new_code_comes_from_per_file_coverage() {
     );
 
     // b.js is new and half covered; a.js is covered but old. The scan saw
-    // no git, so it called both new: 75%.
-    let lcov = (
-        "lcov.info",
-        "SF:a.js\nDA:1,1\nDA:2,1\nend_of_record\nSF:b.js\nDA:1,2\nDA:2,0\nend_of_record\n",
-    );
+    // no git, so it called both new: 12 of 22 lines, 54.5%.
+    let b_hits: String = (1..=20).map(|i| format!("DA:{i},{}\n", i % 2)).collect();
+    let lcov_src =
+        format!("SF:a.js\nDA:1,1\nDA:2,1\nend_of_record\nSF:b.js\n{b_hits}end_of_record\n");
+    let lcov = ("lcov.info", lcov_src.as_str());
     let body = upload_json_for(dir.path(), &[a, b, lcov], "shop", "main");
-    assert_eq!(body["report"]["measures"]["new_coverage"], 75.0);
+    assert_eq!(body["report"]["measures"]["new_coverage"], 54.5);
     upload(&db, &body).await;
     let p = project(&app, &token, None).await;
     assert_eq!(p["measures"]["newCode"]["coverage"], 50.0);
@@ -360,7 +363,7 @@ async fn coverage_on_new_code_comes_from_per_file_coverage() {
     let shop = &drill["items"][0];
     assert_eq!(
         (shop["component"].as_str(), shop["value"].as_f64()),
-        (Some("shop"), Some(75.0))
+        (Some("shop"), Some(54.5))
     );
     assert_eq!(
         shop["files"],
