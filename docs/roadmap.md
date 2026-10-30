@@ -197,7 +197,6 @@ SBOM), then match that list against published vulnerabilities.
 |---|---|---|
 | **Teams** | No teams, so the Overview has no "My team" scope. | Teams as user groups and project ownership; the Overview's `teams` flag. |
 | **Health score change** | Needs ratings history, which the server does not reconstruct yet. | Compute ratings per stored analysis; fills `health.delta` and "vs N days ago". |
-| **Per-file coverage** | Reports carry coverage per project only. | Add per-file coverage to the report (from LCOV); the coverage drill-down lists files. |
 | **Commit messages and scan durations** | Not uploaded; Recent analyses shows "—". | `sonda upload` sends `git log -1` and the scan duration. |
 | **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, and analysis stages and logs. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
 | **Narrow screens** | The app shell keeps its sidebar at phone widths, so pages scroll sideways. | Collapse the sidebar into a menu below a breakpoint, in `AppShell`. |

@@ -105,7 +105,8 @@ pub fn upload_json(dir: &Path, files: &[(&str, &str)], branch: &str) -> Value {
     upload_json_for(dir, files, "payments", branch)
 }
 
-/// As `upload_json`, for any project.
+/// As `upload_json`, for any project. An `lcov.info` among `files` is
+/// passed as `--coverage`.
 pub fn upload_json_for(dir: &Path, files: &[(&str, &str)], project: &str, branch: &str) -> Value {
     for (path, content) in files {
         let full = dir.join(path);
@@ -115,6 +116,11 @@ pub fn upload_json_for(dir: &Path, files: &[(&str, &str)], project: &str, branch
     let options = ScanOptions {
         root: dir.to_path_buf(),
         isolation: Isolation::InProcess,
+        coverage: files
+            .iter()
+            .filter(|(p, _)| p.ends_with("lcov.info"))
+            .map(|(p, _)| dir.join(p))
+            .collect(),
         ..Default::default()
     };
     let config = sonda_core::config::Config::default();

@@ -1,7 +1,7 @@
 //! End-to-end tests of the `sonda` binary: exit codes, output formats and
 //! commands, as a user or CI pipeline sees them.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -523,6 +523,14 @@ fn coverage_report_feeds_the_coverage_measures() {
     let report = json(&out);
     assert_eq!(report["measures"]["coverage"], 50.0);
     assert_eq!(report["measures"]["new_coverage"], 50.0);
+    // Per file too, for the server's new code period (ADR-0011).
+    let app = report["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "app.js")
+        .unwrap();
+    assert_eq!(app["coverage"], json!({ "covered": [1], "uncovered": [2] }));
     assert_eq!(
         code(&out),
         1,

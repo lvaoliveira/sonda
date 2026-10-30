@@ -464,7 +464,7 @@ export interface NewCodePeriod {
   reset: boolean
   /** The version whose first analysis starts the period; null when it's the project's first analysis. */
   version: string | null
-  /** New-code measures that keep the scan's values (no per-line data on the server). */
+  /** New-code measures that keep the scan's values: duplication, and coverage unless the report carried it per file. */
   fromScan: string[]
 }
 

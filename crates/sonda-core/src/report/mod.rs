@@ -33,8 +33,8 @@ pub struct Report<'a> {
     pub report_version: u32,
     /// The branch new code is compared against; `None` means the whole project is new code.
     pub new_code_reference: Option<&'a str>,
-    /// How it was chosen: `given`, `default_branch`, `latest_tag`, `days`
-    /// or `whole_project` (ADR-0010).
+    /// How it was chosen: `given`, `pull_request`, `push`,
+    /// `default_branch`, `uncommitted` or `whole_project` (ADR-0010).
     pub new_code_basis: &'static str,
     /// What counts as new code, in words.
     pub new_code_description: String,
@@ -60,6 +60,29 @@ pub struct FileReport<'a> {
     pub metrics: FileMetrics,
     pub duplicated_lines: usize,
     pub sha256: Sha256,
+    /// The lines the coverage reports list for this file; absent when they
+    /// don't cover it, or without `--coverage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<FileCoverage>,
+}
+
+/// One file's coverage, as line numbers, ascending. The server computes
+/// coverage on its own new code from them (ADR-0011).
+#[derive(Serialize, Debug, PartialEq)]
+pub struct FileCoverage {
+    pub covered: Vec<usize>,
+    pub uncovered: Vec<usize>,
+}
+
+impl FileCoverage {
+    fn from_hits(hits: &std::collections::BTreeMap<usize, u64>) -> Self {
+        let (covered, uncovered) = hits.iter().partition::<Vec<_>, _>(|(_, h)| **h > 0);
+        let lines = |v: Vec<(&usize, &u64)>| v.into_iter().map(|(l, _)| *l).collect();
+        FileCoverage {
+            covered: lines(covered),
+            uncovered: lines(uncovered),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -88,6 +111,11 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
             metrics: f.metrics,
             duplicated_lines: dup.len(),
             sha256: f.sha256,
+            coverage: scan
+                .coverage
+                .files
+                .get(&f.path)
+                .map(FileCoverage::from_hits),
         })
         .collect();
     let loc = |s: crate::duplication::Span| Location {

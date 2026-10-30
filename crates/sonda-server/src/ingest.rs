@@ -203,6 +203,24 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
+/// A file's coverage, which the new code period reads (ADR-0011):
+/// `{"covered": [..], "uncovered": [..]}`, each strictly ascending lines.
+fn check_coverage(c: &Value) -> Result<(), String> {
+    let bad = || "coverage must be {\"covered\": [lines], \"uncovered\": [lines]}".to_string();
+    let c = c.as_object().filter(|c| c.len() == 2).ok_or_else(bad)?;
+    for key in ["covered", "uncovered"] {
+        let lines = c.get(key).and_then(Value::as_array).ok_or_else(bad)?;
+        let mut last = 0;
+        for line in lines {
+            match line.as_u64() {
+                Some(n) if n > last && n <= u64::from(u32::MAX) => last = n,
+                _ => return Err(format!("coverage {key} must be ascending line numbers")),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn decode(body: &[u8], gzip: bool, max_json: u64) -> Result<Upload, ApiError> {
     let json = if gzip {
         let mut out = Vec::new();
@@ -284,6 +302,9 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
             .0;
         if by_path.insert(&f.path, sha256).is_some() {
             return Err(invalid(format!("{} is listed twice", f.path)));
+        }
+        if let Some(c) = f.metrics.get("coverage") {
+            check_coverage(c).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
         }
         files.push(StoredFile {
             path: f.path.clone(),
@@ -475,6 +496,24 @@ mod tests {
             "+4d724dbbd800b9d4c64c4649cd55415",
         ] {
             assert!(parse_fingerprint(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn coverage_is_two_ascending_line_lists() {
+        use serde_json::json;
+        assert!(check_coverage(&json!({ "covered": [1, 4], "uncovered": [] })).is_ok());
+        for bad in [
+            json!([1, 2]),
+            json!({ "covered": [1] }),
+            json!({ "covered": [1], "uncovered": [2], "extra": [] }),
+            json!({ "covered": [2, 1], "uncovered": [] }),
+            json!({ "covered": [0], "uncovered": [] }),
+            json!({ "covered": [1.5], "uncovered": [] }),
+            json!({ "covered": ["1"], "uncovered": [] }),
+            json!({ "covered": [], "uncovered": [5_000_000_000u64] }),
+        ] {
+            assert!(check_coverage(&bad).is_err(), "{bad}");
         }
     }
 }

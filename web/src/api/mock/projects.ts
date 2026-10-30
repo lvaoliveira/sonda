@@ -127,7 +127,8 @@ function newCodePeriod(key: string, history: ProjectHistoryPoint[]): NewCodePeri
     analyzedAt: start.analyzedAt,
     reset: moved !== undefined,
     version: moved ? null : (byVersion?.version ?? null),
-    fromScan: ['new_coverage', 'new_duplicated_lines_density'],
+    // Projects without coverage keep the scan's (empty) value.
+    fromScan: key === 'payments-platform' ? ['new_duplicated_lines_density'] : ['new_coverage', 'new_duplicated_lines_density'],
   }
 }
 

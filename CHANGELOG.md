@@ -181,6 +181,11 @@ file, the report formats and the public library API.
   the main branch each new version starts a new period at its first
   analysis, unless an admin set the start. `sonda_core::upload::Meta` gains
   a `version` field.
+- Per-file coverage: with `--coverage`, each file in the JSON report has
+  `coverage` (`covered` and `uncovered` line numbers). The server uses it
+  to compute coverage on its main-branch new code period, instead of
+  keeping the scan's value, and the Overview's coverage drill-down lists
+  each project's least covered files.
 - A default for new code (ADR-0010): without `--new-code`, `auto` judges
   what the run changed. In a GitHub Actions pull request, that's against
   its base branch; in a push, the commits it pushed; on a branch with
