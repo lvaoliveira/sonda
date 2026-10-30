@@ -126,6 +126,8 @@ export interface FailingCondition {
 }
 
 export interface AnalysisSummary {
+  /** Opens the analysis page. */
+  id: number
   state: GateState
   project: string
   branch: string
@@ -439,6 +441,82 @@ export interface ProjectDetail {
   components: ProjectComponent[]
 }
 
+// ---------------------------------------------------------------- analyses
+
+export interface AnalysisQuery {
+  project?: string
+  branch?: string
+  /** `passed` includes partial. */
+  gate?: 'failed' | 'passed'
+  offset: number
+  limit: number
+}
+
+export interface AnalysisRow {
+  id: number
+  project: string
+  branch: string
+  sha: string
+  analyzedAt: string
+  toolVersion: string
+  gate: GateState
+  /** Labels of the conditions that failed. */
+  failing: string[]
+  issues: number | null
+  newIssues: number | null
+  warnings: number
+}
+
+export interface AnalysisPage {
+  total: number
+  offset: number
+  limit: number
+  items: AnalysisRow[]
+}
+
+/** An issue an analysis introduced or fixed. */
+export interface IssueRef {
+  id: number
+  severity: Severity
+  category: Category
+  rule: string
+  message: string
+  path: string
+  line: number
+}
+
+export interface AnalysisChanges {
+  total: number
+  /** Counts for every issue, not only the listed ones. */
+  bySeverity: Partial<Record<Severity, number>>
+  /** The first 50, most severe first. */
+  items: IssueRef[]
+}
+
+export interface AnalysisDetail {
+  id: number
+  project: string
+  branch: string
+  mainBranch: string
+  sha: string
+  analyzedAt: string
+  toolVersion: string
+  newCodeReference: string | null
+  gate: { state: GateState; conditions: GateCondition[] }
+  measures: { overall: MeasureSet; newCode: MeasureSet }
+  files: number
+  languages: { id: string; files: number }[]
+  components: number
+  /** As the CLI reported them: skipped files, syntax errors, timeouts. */
+  warnings: string[]
+  /** The branch's first analysis: its issues are the baseline, not new. */
+  baseline: boolean
+  introduced: AnalysisChanges
+  fixed: AnalysisChanges
+  previous: { id: number; sha: string } | null
+  next: { id: number; sha: string } | null
+}
+
 // ------------------------------------------------------------------ client
 
 export interface SondaApi {
@@ -459,6 +537,8 @@ export interface SondaApi {
   projects(): Promise<ProjectList>
   /** The project on `branch`, or on its main branch. */
   project(key: string, branch?: string): Promise<ProjectDetail>
+  analyses(query: AnalysisQuery): Promise<AnalysisPage>
+  analysis(id: number): Promise<AnalysisDetail>
   issues(query: IssueQuery): Promise<IssuePage>
   issue(id: number): Promise<IssueDetail>
   updateIssue(id: number, patch: IssuePatch): Promise<IssueDetail>

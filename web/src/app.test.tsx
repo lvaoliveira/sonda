@@ -169,6 +169,50 @@ describe('Projects', () => {
   })
 })
 
+describe('Analyses', () => {
+  it('lists analyses newest first, filters by gate and project, and pages', async () => {
+    const user = userEvent.setup()
+    renderAt('/analyses')
+    const list = await screen.findByRole('list', { name: 'Analyses' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(16)
+    expect(screen.getByText('16 analyses · newest first · every branch')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Blocking' }))
+    const failed = within(await screen.findByRole('list', { name: 'Analyses' })).getAllByRole('listitem')
+    expect(failed).toHaveLength(4)
+    for (const row of failed) expect(row).toHaveTextContent('Gate failed: New vulnerabilities > 0 (+1)')
+    await user.selectOptions(screen.getByRole('combobox'), 'billing-service')
+    expect(within(await screen.findByRole('list', { name: 'Analyses' })).getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+  })
+
+  it('shows an analysis: result, what changed, warnings, and its neighbors', async () => {
+    const user = userEvent.setup()
+    renderAt('/analyses')
+    await user.click(within(await screen.findByRole('list', { name: 'Analyses' })).getAllByRole('link', { name: 'payments-platform' })[0])
+    expect(await screen.findByText('Analysis · payments-platform')).toBeInTheDocument()
+    expect(screen.getByText(/2 of 4 conditions failing/)).toBeInTheDocument()
+    expect(screen.getByText('+14')).toBeInTheDocument()
+    expect(screen.getByText('2 critical · 5 major')).toBeInTheDocument()
+    const introduced = screen.getByRole('region', { name: /Introduced/ })
+    expect(within(introduced).getByText('Remove this use of eval().')).toBeInTheDocument()
+    expect(within(introduced).getByRole('link', { name: 'js/no-eval' })).toHaveAttribute('href', '/rules#js%2Fno-eval')
+    expect(within(introduced).getByRole('link', { name: 'services/checkout-api/handlers.js:88' })).toHaveAttribute(
+      'href',
+      '/issues?project=payments-platform&branch=main&file=services%2Fcheckout-api%2Fhandlers.js',
+    )
+    expect(screen.getByRole('region', { name: 'Warnings' })).toHaveTextContent('skipped, looks minified')
+    await user.click(screen.getByRole('link', { name: /^← / }))
+    expect(await screen.findByText(/0 of 4 conditions failing/)).toBeInTheDocument()
+  })
+
+  it('is reached from the Overview and from a project', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform')
+    await user.click(await screen.findByRole('link', { name: '9f3c2a1e7' }))
+    expect(await screen.findByText('Analysis · payments-platform')).toBeInTheDocument()
+  })
+})
+
 describe('Signing in', () => {
   it('requires a username and password when the server requires them to read', async () => {
     const user = userEvent.setup()

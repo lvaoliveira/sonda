@@ -251,6 +251,30 @@ the analyzed branches.
 `GET /api/issues` takes `project=` and `branch=` to list one project's
 issues, which is how the project page links to them.
 
+## Analyses
+
+`GET /api/analyses` lists stored analyses, newest first, 50 at a time
+(`offset=`, `limit=` up to 100). Filters: `project=`, `branch=`, and
+`gate=failed` or `gate=passed` (passing includes partial). Each row has:
+- the project, branch, commit and tool version;
+- the gate state and the labels of the conditions that failed;
+- issue counts and the number of warnings.
+
+`GET /api/analyses/{id}` is one analysis. It returns:
+- the gate's conditions;
+- the measures, overall and on new code;
+- the files analyzed, per language, and the components;
+- the warnings the CLI reported (skipped files, syntax errors, timeouts);
+- the issues it introduced and the issues it fixed, with exact counts per
+  severity and the 50 most severe listed;
+- the previous and next analyses on the same branch.
+
+A branch's first analysis is its **baseline**: its issues are what was
+there, not new.
+
+Commit messages, scan durations and stage logs aren't uploaded, so they
+aren't reported.
+
 ## Rules
 
 `GET /api/rules` returns sonda's rule catalog: name, description, languages

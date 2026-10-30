@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { GateCondition, MeasureSet, ProjectDetail, ProjectHistoryPoint } from '@/api/types'
+import type { MeasureSet, ProjectDetail, ProjectHistoryPoint } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { HealthBar, PipMeter, Sparkline } from '@/components/sonda/meters'
+import { GateConditions } from '@/components/sonda/gate'
 import { GateDot, GateStatus } from '@/components/sonda/status'
 import { compactCount, formatAge, formatDebt, formatNumber, shortDate } from '@/lib/format'
 import { GATE, coverageColor, languageLabel, scoreColor } from '@/lib/visual'
@@ -60,7 +61,11 @@ function Project({ p }: { p: ProjectDetail }) {
           <span>{p.languages.map((l) => languageLabel(l.id)).join(' · ')}</span>
           <span>{compactCount(lines)} lines</span>
           <span>
-            Analysis <Mono className="text-xs text-fg">{p.analysis.sha.slice(0, 9)}</Mono> ·{' '}
+            Analysis{' '}
+            <Link to={`/analyses/${p.analysis.id}`} className="font-mono text-xs">
+              {p.analysis.sha.slice(0, 9)}
+            </Link>{' '}
+            ·{' '}
             <time dateTime={p.analysis.analyzedAt} title={new Date(p.analysis.analyzedAt).toUTCString()}>
               {formatAge(p.analysis.analyzedAt)} ago
             </time>{' '}
@@ -93,34 +98,8 @@ function Gate({ p }: { p: ProjectDetail }) {
       }
       aside={<span className="text-xs text-fg-faint">from the repository’s sonda.toml</span>}
     >
-      <ul className="m-0 flex list-none flex-col p-0">
-        {p.gate.conditions.map((c) => (
-          <ConditionRow key={c.metric} c={c} />
-        ))}
-      </ul>
+      <GateConditions conditions={p.gate.conditions} />
     </Card>
-  )
-}
-
-const CONDITION_MARK: Record<GateCondition['status'], { glyph: string; color: string; label: string }> = {
-  ok: { glyph: '✓', color: 'var(--sd-ok)', label: 'Passing' },
-  error: { glyph: '✕', color: 'var(--sd-crit)', label: 'Failing' },
-  no_data: { glyph: '–', color: 'var(--sd-faint)', label: 'No data' },
-}
-
-function ConditionRow({ c }: { c: GateCondition }) {
-  const m = CONDITION_MARK[c.status]
-  const unit = /coverage|density/.test(c.metric) ? '%' : ''
-  return (
-    <li className="grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 border-t border-line py-2 text-[13.5px] first:border-t-0">
-      <span role="img" aria-label={m.label} className="text-center text-xs font-bold" style={{ color: m.color }}>
-        {m.glyph}
-      </span>
-      <span>{c.label}</span>
-      <Mono className="text-xs" >
-        <span style={{ color: m.color }}>{c.actual == null ? 'no data' : `${Number.isInteger(c.actual) ? c.actual : c.actual.toFixed(1)}${unit}`}</span>
-      </Mono>
-    </li>
   )
 }
 
@@ -247,9 +226,15 @@ function History({ history, branch }: { history: ProjectHistoryPoint[]; branch: 
         <span className="text-[12.5px] text-fg-muted">Gate per analysis</span>
         <ol className="m-0 flex list-none flex-wrap gap-1.5 p-0">
           {history.map((h) => (
-            <li key={h.id} title={`${h.sha.slice(0, 9)} · ${shortDate(h.analyzedAt)} · ${GATE[h.gate].label}`} className="flex items-center gap-1.5 rounded-md bg-canvas px-2 py-1 edge">
-              <GateDot state={h.gate} />
-              <Mono className="text-[10.5px] text-fg-muted">{h.sha.slice(0, 7)}</Mono>
+            <li key={h.id}>
+              <Link
+                to={`/analyses/${h.id}`}
+                title={`${h.sha.slice(0, 9)} · ${shortDate(h.analyzedAt)} · ${GATE[h.gate].label}`}
+                className="flex items-center gap-1.5 rounded-md bg-canvas px-2 py-1 edge hover:bg-hover"
+              >
+                <GateDot state={h.gate} />
+                <Mono className="text-[10.5px] text-fg-muted">{h.sha.slice(0, 7)}</Mono>
+              </Link>
             </li>
           ))}
         </ol>

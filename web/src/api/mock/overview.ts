@@ -94,12 +94,12 @@ const SEVERITIES: Record<Scope, [Severity, number, number][]> = {
 }
 
 const RECENT: AnalysisSummary[] = [
-  { state: 'running', project: 'inventory-service', branch: 'feat/reservations', sha: '3be71d0', message: 'reservations: hold stock for 15 min on cart add', note: 'Running rules · stage 6 of 9', duration: '2:41', ago: 'now', progress: 64 },
-  { state: 'failed', project: 'payments-platform', branch: 'main', sha: '9f3c2a1', message: 'checkout: support split tender for gift cards', note: '+14 new issues · 2 critical', duration: '4m 12s', ago: '12m' },
-  { state: 'passed', project: 'web-console', branch: 'main', sha: '77a0c4e', message: 'settings: migrate billing tab to new table', note: '−6 issues · coverage +0.4%', duration: '2m 03s', ago: '26m' },
-  { state: 'failed', project: 'mobile-bff', branch: 'main', sha: 'c01d9e2', message: 'auth: accept tokens from legacy issuer', note: 'Security level 3 → 2', duration: '1m 18s', ago: '40m' },
-  { state: 'passed', project: 'auth-gateway', branch: 'release/1.8', sha: 'a4d0f19', message: 'release: 1.8.3', note: 'No new issues', duration: '48s', ago: '1h' },
-  { state: 'partial', project: 'data-pipeline', branch: 'main', sha: '5e2f8b4', message: 'dags: nightly ledger reconciliation', note: 'Coverage report missing for 2 modules', duration: '3m 56s', ago: '4h' },
+  { id: 911, state: 'running', project: 'inventory-service', branch: 'feat/reservations', sha: '3be71d0', message: 'reservations: hold stock for 15 min on cart add', note: 'Running rules · stage 6 of 9', duration: '2:41', ago: 'now', progress: 64 },
+  { id: 912, state: 'failed', project: 'payments-platform', branch: 'main', sha: '9f3c2a1', message: 'checkout: support split tender for gift cards', note: '+14 new issues · 2 critical', duration: '4m 12s', ago: '12m' },
+  { id: 913, state: 'passed', project: 'web-console', branch: 'main', sha: '77a0c4e', message: 'settings: migrate billing tab to new table', note: '−6 issues · coverage +0.4%', duration: '2m 03s', ago: '26m' },
+  { id: 914, state: 'failed', project: 'mobile-bff', branch: 'main', sha: 'c01d9e2', message: 'auth: accept tokens from legacy issuer', note: 'Security level 3 → 2', duration: '1m 18s', ago: '40m' },
+  { id: 915, state: 'passed', project: 'auth-gateway', branch: 'release/1.8', sha: 'a4d0f19', message: 'release: 1.8.3', note: 'No new issues', duration: '48s', ago: '1h' },
+  { id: 916, state: 'partial', project: 'data-pipeline', branch: 'main', sha: '5e2f8b4', message: 'dags: nightly ledger reconciliation', note: 'Coverage report missing for 2 modules', duration: '3m 56s', ago: '4h' },
 ]
 
 /** Ported from the prototype's flowData(): weekly buckets for 90d, daily otherwise. */

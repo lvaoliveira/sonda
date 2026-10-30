@@ -4,7 +4,9 @@
 use crate::api::{ApiError, Caller};
 use crate::config::Token;
 use crate::users::{self, User};
-use crate::{api, db, drill, ingest, issues, overview, projects, rules, session, throttle};
+use crate::{
+    analyses, api, db, drill, ingest, issues, overview, projects, rules, session, throttle,
+};
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware;
@@ -39,6 +41,8 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/rules", get(rules::list))
         .route("/overview", get(overview::get_overview))
         .route("/drill/{metric}", get(drill::get_drill))
+        .route("/analyses", get(analyses::list_analyses))
+        .route("/analyses/{id}", get(analyses::get_analysis))
         .route("/projects", get(projects::list_projects))
         .route("/projects/{key}", get(projects::get_project))
         .route("/issues", get(issues::list_issues))

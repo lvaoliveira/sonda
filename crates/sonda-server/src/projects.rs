@@ -7,8 +7,8 @@
 
 use crate::api::ApiError;
 use crate::health::{
-    ago, component_of, condition_label, coverage_level, debt_level, gate_state, project_score,
-    severity_level,
+    GateDetail, Measures, ago, component_of, conditions, coverage_level, debt_level, gate_state,
+    measure_set, project_score, rfc3339, severity_level,
 };
 use crate::http::State;
 use axum::Json;
@@ -95,49 +95,12 @@ pub struct AnalysisRef {
 }
 
 #[derive(Serialize)]
-pub struct GateDetail {
-    pub state: &'static str,
-    pub conditions: Vec<ConditionRow>,
-}
-
-#[derive(Serialize)]
-pub struct ConditionRow {
-    /// "New vulnerabilities > 0".
-    pub label: String,
-    pub metric: String,
-    pub actual: Option<f64>,
-    /// `ok`, `error` or `no_data`.
-    pub status: String,
-}
-
-#[derive(Serialize)]
 pub struct Ratings {
     pub reliability: u8,
     pub security: u8,
     pub maintainability: u8,
     /// Null without coverage.
     pub coverage: Option<u8>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Measures {
-    pub overall: MeasureSet,
-    pub new_code: MeasureSet,
-}
-
-/// Null where the analysis has no value (coverage not uploaded, no new code).
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MeasureSet {
-    pub lines: Option<f64>,
-    pub issues: Option<f64>,
-    pub bugs: Option<f64>,
-    pub vulnerabilities: Option<f64>,
-    pub code_smells: Option<f64>,
-    pub coverage: Option<f64>,
-    pub duplication: Option<f64>,
-    pub debt_minutes: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -456,38 +419,6 @@ fn score(r: &Ratings, coverage: Option<f64>) -> u32 {
     project_score([r.reliability, r.security, r.maintainability], coverage).round() as u32
 }
 
-fn conditions(gate: &Value) -> Vec<ConditionRow> {
-    gate["conditions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|c| ConditionRow {
-            label: condition_label(c),
-            metric: c["metric"].as_str().unwrap_or_default().to_string(),
-            actual: c["actual"].as_f64(),
-            status: c["status"].as_str().unwrap_or("no_data").to_string(),
-        })
-        .collect()
-}
-
-fn measure_set(m: &Value, prefix: &str) -> MeasureSet {
-    let get = |name: &str| m[format!("{prefix}{name}")].as_f64();
-    MeasureSet {
-        lines: if prefix.is_empty() {
-            m["ncloc"].as_f64()
-        } else {
-            get("lines")
-        },
-        issues: get("issues"),
-        bugs: get("bugs"),
-        vulnerabilities: get("vulnerabilities"),
-        code_smells: get("code_smells"),
-        coverage: get("coverage"),
-        duplication: get("duplicated_lines_density"),
-        debt_minutes: get("debt_minutes"),
-    }
-}
-
 fn language_shares(files: &[(String, String, i64)]) -> Vec<LanguageShare> {
     let mut totals: BTreeMap<&str, i64> = BTreeMap::new();
     for (_, language, ncloc) in files {
@@ -552,30 +483,9 @@ fn components(
     rows
 }
 
-/// RFC 3339 in UTC with milliseconds, as `Date.toISOString()` writes it.
-fn rfc3339(epoch: f64) -> String {
-    let day = crate::health::iso_date(epoch);
-    let seconds = epoch.rem_euclid(crate::health::DAY);
-    let (h, m, s) = (
-        (seconds / 3600.0) as u32,
-        (seconds % 3600.0 / 60.0) as u32,
-        seconds % 60.0,
-    );
-    format!("{}T{h:02}:{m:02}:{s:06.3}Z", &day[..10])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn timestamps_read_like_iso_strings() {
-        assert_eq!(rfc3339(0.0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(
-            rfc3339(1_793_318_400.0 + 3_723.5),
-            "2026-10-30T01:02:03.500Z"
-        );
-    }
 
     #[test]
     fn components_group_files_issues_and_owners() {

@@ -5,6 +5,7 @@
 //! auth, validation) → `store` and `db` (infrastructure); `config` is read
 //! once at startup.
 
+pub mod analyses;
 pub mod api;
 pub mod config;
 pub mod db;
