@@ -68,9 +68,14 @@ Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an err
 
 ### Server
 
-`sonda-server` keeps analyses over time and serves the web app. It runs with
-Docker Compose, as a `sonda` container plus PostgreSQL. It's still being
-built; see [docs/server.md](docs/server.md).
+`sonda-server` keeps analyses over time and serves the web app:
+- the Overview and its drill-downs;
+- issues with triage;
+- the rule catalog;
+- users with roles.
+
+It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
+[docs/server.md](docs/server.md).
 
 ### GitHub Actions
 
@@ -157,7 +162,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), including [how to add a rule](CONTRIBUTI
 
 sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate the build. It does not (yet) have:
 
-- a server with history, a dashboard, or PR decoration (SARIF upload covers PR annotations on GitHub)
+- PR decoration (SARIF upload covers PR annotations on GitHub), single sign-on, or several of the server's screens yet (see [docs/roadmap.md](docs/roadmap.md))
 - data-flow or taint analysis: the rules are syntactic, so they are fast and predictable but miss deeper bugs
 - SonarQube's rule depth: it ships thousands of rules per language, while sonda currently has 31
 - coverage formats other than LCOV (JaCoCo and Cobertura XML are planned)
@@ -168,9 +173,12 @@ sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate t
 - [ ] JaCoCo and Cobertura coverage import
 - [ ] Caching, to skip re-analyzing unchanged files
 - [ ] Baseline file to accept existing issues without suppressing them line by line
-- [ ] Server: store analyses, track trends, web dashboard
+- [x] Server: store analyses, track trends, web dashboard, users and roles
+- [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md))
 - [ ] More languages (Go, Rust, C#, PHP, Ruby, Kotlin)
 - [ ] Data-flow analysis for injection-style vulnerabilities
+
+Smaller deferred items, with why each waits, are in [docs/roadmap.md](docs/roadmap.md).
 
 ## License
 
