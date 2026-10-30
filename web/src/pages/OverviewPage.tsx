@@ -170,9 +170,12 @@ function Live({
   onDrill: (m: DrillMetric) => void
   active: DrillMetric | null
 }) {
-  const twoUp = 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,460px),1fr))] gap-5'
+  // Each row pairs a wide card with a narrow one. Side by side when the
+  // page area fits both (a container query, so the sidebar counts), else
+  // stacked at full width: never a card next to an empty half.
+  const twoUp = 'grid grid-cols-1 gap-5 @min-[1000px]:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]'
   return (
-    <div className="flex flex-col gap-5">
+    <div className="@container flex flex-col gap-5">
       <div className={`${twoUp} items-stretch`}>
         <Focus data={data} scopeName={scopeName} onDrill={onDrill} />
         <Health data={data} rangeLong={`vs ${range.replace('d', '')} days ago`} onDrill={onDrill} />
@@ -230,7 +233,6 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
     <Card
       id="focus"
       padded={false}
-      className="col-span-2 max-[980px]:col-span-1"
       title="Where to focus"
       subtitle={`Ranked by gate impact, exposure and age · ${scopeName}`}
       aside={
@@ -346,7 +348,6 @@ function IssueFlow({ flow, range }: { flow: FlowBucket[]; range: Range }) {
   return (
     <Card
       id="trend"
-      className="col-span-2 max-[980px]:col-span-1"
       title="Issue flow"
       subtitle={`Introduced vs. resolved per ${range === '90d' ? 'week' : 'day'} · open backlog`}
       aside={
@@ -550,7 +551,6 @@ function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: n
     <Card
       id="cmp"
       padded={false}
-      className="col-span-2 max-[980px]:col-span-1"
       title="Project health"
       subtitle="Lowest scores first · monorepos expand to components"
       aside={
