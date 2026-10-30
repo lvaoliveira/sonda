@@ -106,6 +106,10 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
 - **Passwords:** at least 12 characters, stored as Argon2id hashes.
 - **Failed sign-ins:** every failure gets the same answer after the same
   amount of hashing, so nobody can probe which usernames exist.
+- **Throttling:** after 5 failures for a username within 15 minutes,
+  further attempts wait 1, 2, 4 ... seconds (up to 15 minutes) and get
+  `429` with `Retry-After`. Usernames that don't exist are throttled the
+  same way.
 - **Users are disabled, never deleted,** so the audit trail keeps their
   names.
 - **Ending sessions:** disabling a user or resetting their password signs

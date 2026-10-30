@@ -18,6 +18,8 @@ pub enum ApiError {
     /// A failed sign-in. One message for every cause, so nothing reveals
     /// whether the username exists.
     SignInFailed,
+    /// Too many failed sign-ins for this username; the seconds to wait.
+    TooManyAttempts(i64),
     /// Authenticated, but the request is not allowed as sent.
     Forbidden(String),
     NotFound,
@@ -31,6 +33,10 @@ pub enum ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let retry_after = match self {
+            Self::TooManyAttempts(secs) => Some(secs),
+            _ => None,
+        };
         let (status, message) = match self {
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
@@ -39,6 +45,13 @@ impl IntoResponse for ApiError {
             Self::SignInFailed => (
                 StatusCode::UNAUTHORIZED,
                 "invalid username or password".into(),
+            ),
+            Self::TooManyAttempts(secs) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "too many failed sign-ins; try again in {secs} {}",
+                    if secs == 1 { "second" } else { "seconds" }
+                ),
             ),
             Self::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             Self::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
@@ -57,6 +70,11 @@ impl IntoResponse for ApiError {
                 header::WWW_AUTHENTICATE,
                 header::HeaderValue::from_static("Bearer"),
             );
+        }
+        if let Some(secs) = retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, header::HeaderValue::from(secs));
         }
         response
     }

@@ -101,8 +101,10 @@ needs to change for that, so the table is not created until it's used.
 - **Upgrading needs an admin.** Existing deployments must add
   `SONDA_ADMIN_PASSWORD_FILE` (compose.yaml does) to create one.
   Token-based browser sessions are ended by the migration.
-- **No login throttling yet.** Argon2 makes each attempt cost about 50 ms
-  of server CPU, and the uniform responses give away nothing, but nothing
-  limits attempts per username. Until that exists, a deployment exposed
-  beyond a private network should rate-limit `POST /api/session` at its
-  reverse proxy. This is a known limitation, listed in SECURITY.md.
+- **Sign-in throttling** was added after this ADR was accepted (migration
+  0004). Failures are counted per normalized username, whether or not the
+  user exists. After 5 in 15 minutes, each attempt waits 1, 2, 4 ... up to
+  900 seconds, refused with `429` before any hashing. It's a wait rather
+  than a lockout, so an attacker can slow a user down but not shut them
+  out. There's no per-address limit: behind a proxy the server can't trust
+  client addresses, so that belongs at the proxy.

@@ -481,3 +481,69 @@ async fn rules_report_live_counts_on_main_branches() {
     );
     db.drop().await;
 }
+
+#[tokio::test]
+async fn repeated_failures_are_throttled_whether_or_not_the_user_exists() {
+    let Some(db) = migrated().await else { return };
+    create_user(&db, "ann", "member").await;
+    let app = http::router(state(db.pool.clone()), None);
+    let attempt = |username: &str, password: &str| {
+        request(
+            "POST",
+            "/api/session",
+            None,
+            Some(json!({ "username": username, "password": password })),
+        )
+    };
+
+    for username in ["ann", "nobody"] {
+        // The free failures: ordinary answers.
+        for _ in 0..sonda_server::throttle::FREE_FAILURES {
+            assert_eq!(
+                send(&app, attempt(username, "wrong guess")).await.0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        // One more failure starts a wait...
+        assert_eq!(
+            send(&app, attempt(username, "wrong guess")).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        // ...during which even the right password is refused, before hashing.
+        let response = app
+            .clone()
+            .oneshot(attempt(username, PASSWORD))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "{username}"
+        );
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+    }
+    // The same for real and unknown usernames: throttling reveals nothing.
+    let blocked: Vec<(String, i32)> =
+        sqlx::query_as("SELECT username, failures FROM sign_in_failures ORDER BY username")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(blocked, [("ann".into(), 6), ("nobody".into(), 6)]);
+
+    // Once the wait is over, the right password works and clears the count.
+    sqlx::query("UPDATE sign_in_failures SET blocked_until = now() - interval '1 second'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(
+        sign_in(&app, " Ann", PASSWORD).await.is_some(),
+        "throttled by the normalized name"
+    );
+    let left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sign_in_failures WHERE username = 'ann'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(left, 0);
+    db.drop().await;
+}

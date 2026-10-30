@@ -4,7 +4,7 @@
 use crate::api::{ApiError, Caller};
 use crate::config::Token;
 use crate::users::{self, User};
-use crate::{api, db, drill, ingest, issues, overview, rules, session};
+use crate::{api, db, drill, ingest, issues, overview, rules, session, throttle};
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware;
@@ -157,9 +157,15 @@ async fn sign_in(
     axum::extract::State(state): axum::extract::State<State>,
     Json(body): Json<SignIn>,
 ) -> Result<Response, ApiError> {
+    // Throttled names are refused before any hashing, so a flood of guesses
+    // costs the server almost nothing.
+    let key = throttle::key(&body.username);
+    if let Some(wait) = throttle::blocked_for(&state.pool, &key).await? {
+        return Err(ApiError::TooManyAttempts(wait));
+    }
     let found: Option<(i64, Option<String>, bool)> =
         sqlx::query_as("SELECT id, password_hash, disabled FROM users WHERE username = $1")
-            .bind(body.username.trim().to_lowercase())
+            .bind(&key)
             .fetch_optional(&state.pool)
             .await?;
     let (id, stored, disabled) = match found {
@@ -169,8 +175,10 @@ async fn sign_in(
     let valid = users::verify_password(stored, body.password).await;
     let Some(id) = id.filter(|_| valid && !disabled) else {
         tracing::warn!("failed sign-in");
+        throttle::record_failure(&state.pool, &key).await?;
         return Err(ApiError::SignInFailed);
     };
+    throttle::clear(&state.pool, &key).await?;
     sqlx::query("UPDATE users SET last_login_at = now() WHERE id = $1")
         .bind(id)
         .execute(&state.pool)

@@ -107,6 +107,9 @@ file, the report formats and the public library API.
   - **Audit:** triage history records who made each change.
 
   The API token now serves only machines: uploads and scripts.
+- Sign-in throttling: after 5 failed sign-ins for a username in 15 minutes,
+  each attempt waits longer, up to 15 minutes (`429` with `Retry-After`).
+  Unknown usernames are throttled alike, and refused before hashing.
 - Overview drill-downs from real data (`GET /api/drill/{metric}`): each
   metric opens what's behind it, by directory and file, with each file's
   most severe issue. A file opens its issues. Owners and per-file coverage
