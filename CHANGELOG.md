@@ -159,6 +159,13 @@ file, the report formats and the public library API.
   its components with owners, per branch. `GET /api/projects` and
   `GET /api/projects/{key}` serve them, and `GET /api/issues` takes
   `project=` and `branch=`.
+- Web app: the Quality gates screen shows the gates projects use, read-only:
+  projects with the same `sonda.toml` conditions share one, and sonda's
+  default is recognized. Each gate shows its conditions with how many
+  projects fail each now, its projects, its last 40 evaluations and its
+  most common failure, and the `sonda.toml` that sets it. `GET /api/gates`
+  serves it. Every screen in the design is now built; unknown addresses
+  show "Page not found".
 - Web app: the Security screen shows open vulnerabilities by severity, the
   ten to fix first, a twelve-week risk trend, affected projects, the
   riskiest components, the most common rules, and time to fix.

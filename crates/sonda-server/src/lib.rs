@@ -11,6 +11,7 @@ pub mod components;
 pub mod config;
 pub mod db;
 pub mod drill;
+pub mod gates;
 mod health;
 pub mod http;
 pub mod ingest;

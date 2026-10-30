@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type AnalysisPage, type ComponentDetail, type ComponentList, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type AnalysisPage, type ComponentDetail, type ComponentList, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -56,6 +56,7 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     // There are no teams yet (`teams: false`), so the scope is always "all".
     overview: (_scope, range) => call<Overview>('GET', `/overview?range=${range}`),
     drill: (metric) => call<Drill>('GET', `/drill/${metric}`),
+    gates: async () => (await call<{ gates: QualityGate[] }>('GET', '/gates')).gates,
     security: () => call<Security>('GET', '/security'),
     components: (project) => call<ComponentList>('GET', `/components${project ? `?project=${encodeURIComponent(project)}` : ''}`),
     component: (project, path, branch) =>

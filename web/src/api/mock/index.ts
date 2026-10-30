@@ -4,6 +4,7 @@ import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
 import { analysisDetail, queryAnalyses } from './analyses'
 import { componentDetail, listComponents } from './components'
+import { GATES } from './gates'
 import { SECURITY } from './security'
 import { PROJECT_LIST, projectDetail } from './projects'
 import { queryIssues } from './query'
@@ -133,6 +134,10 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     shell: () => wait(shell()),
     overview: (scope, range) => wait(overview(scope, range)),
     drill: (metric: DrillMetric) => wait<Drill>(DRILLS[metric]),
+    gates: async () => {
+      guard()
+      return wait(GATES)
+    },
     security: async () => {
       guard()
       return wait(SECURITY)
