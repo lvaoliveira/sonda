@@ -220,6 +220,25 @@ describe('Overview', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Showing vulnerabilities')
   })
 
+  it('drills into a metric, then into the issues of one file', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi(0)
+    const real = api.drill!
+    // As sonda-server answers: no owners recorded.
+    const drill: SondaApi['drill'] = async (metric, scope) => {
+      const d = await real(metric, scope)
+      return { ...d, items: d.items.map((i) => ({ ...i, owner: null })) }
+    }
+    renderAt('/', { ...api, drill })
+    const metrics = await screen.findByRole('region', { name: 'Key metrics' })
+    await user.click(within(metrics).getByRole('button', { name: /^Vulnerabilities/ }))
+    const dialog = await screen.findByRole('dialog')
+    const first = await within(dialog).findByRole('button', { expanded: true })
+    expect(first).not.toHaveTextContent('·')
+    await user.click(within(dialog).getAllByRole('button', { name: /repo\.go/ })[0])
+    expect(await screen.findByRole('status')).toHaveTextContent('repo.go')
+  })
+
   it('says so honestly when the server has no overview yet', async () => {
     const api = createMockApi(0)
     renderAt('/', { ...api, overview: undefined, drill: undefined })

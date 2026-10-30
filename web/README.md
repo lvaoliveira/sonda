@@ -8,8 +8,9 @@ the design handoff in [`../docs/designs/`](../docs/designs/).
   server, with triage) and Rules (read-only) show real data.
 - **Overview:** built from the server's analysis history. Data the server
   doesn't have is shown as missing. Examples: no "My team" scope without
-  teams, and "No data" for coverage that was never uploaded. Without the
-  per-metric drill-down data, a metric opens the matching issues.
+  teams, and "No data" for coverage that was never uploaded.
+- **Drill-downs:** a metric opens what's behind it, by directory and file,
+  and a file opens its issues.
 - **The other six screens:** show a "not built yet" page.
 
 ```sh

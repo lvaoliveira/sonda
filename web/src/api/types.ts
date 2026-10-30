@@ -167,7 +167,8 @@ export interface DrillFile {
 export interface DrillComponent {
   component: string
   project: string
-  owner: string
+  /** Null where nothing records owners (sonda-server, for now). */
+  owner: string | null
   value: number
   files: DrillFile[]
 }
