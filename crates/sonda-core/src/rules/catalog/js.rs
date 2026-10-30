@@ -5873,7 +5873,12 @@ mod tests {
         );
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Release builds must fit the default per-file timeout (10 s). Debug
+        // builds run several times slower: a busy CI runner (Windows, tests in
+        // parallel) reached 10 s here. The test guards against quadratic
+        // blowups, not small slowdowns, so debug gets 30 s.
+        let limit = if cfg!(debug_assertions) { 30 } else { 10 };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(limit);
         let file = analyze("t", JS, &src, &rules, &cfg, deadline).expect("finishes in time");
         assert!(file.issues.iter().any(|i| i.rule == "js/jump-in-finally"));
     }
