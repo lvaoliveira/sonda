@@ -161,7 +161,7 @@ function RuleDetail({ rule }: { rule: Rule }) {
         </div>
         <h2 className="m-0 text-[22px] leading-[1.25] font-semibold tracking-[-0.025em]">{rule.name}</h2>
         <p className="m-0 max-w-[70ch] text-sm text-fg-muted">{rule.description}</p>
-        {(rule.cwe.length > 0 || rule.owasp.length > 0) && (
+        {(rule.cwe.length > 0 || rule.owasp2025.length > 0 || rule.owasp2021.length > 0) && (
           <p className="m-0 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-fg-muted">
             <span className="micro-label">Standards</span>
             {rule.cwe.map((c) => (
@@ -169,9 +169,14 @@ function RuleDetail({ rule }: { rule: Rule }) {
                 CWE-{c}
               </a>
             ))}
-            {rule.owasp.map((o) => (
-              <span key={o.id}>
-                OWASP {o.id}:2021 {o.title}
+            {rule.owasp2025.map((o) => (
+              <span key={`2025${o.id}`}>
+                OWASP {o.id}:2025 {o.title}
+              </span>
+            ))}
+            {rule.owasp2021.map((o) => (
+              <span key={`2021${o.id}`} className="text-fg-faint">
+                {o.id}:2021 {o.title}
               </span>
             ))}
           </p>

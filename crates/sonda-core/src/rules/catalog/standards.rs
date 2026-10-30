@@ -3,9 +3,11 @@
 //! For rules that cover a SonarQube key exactly, `scripts/sonar_parity.py`
 //! reports where these differ from SonarQube's.
 
-use crate::rules::Owasp::{self, *};
+use crate::rules::Owasp;
+use crate::rules::owasp::y2021::*;
 
-/// (rule id, CWE ids, OWASP Top 10 2021 categories), in catalog order.
+/// (rule id, CWE ids, OWASP Top 10 2021 categories), in catalog order. The
+/// 2025 categories are derived from the CWE ids.
 pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("js/no-eval", &[95], &[A03]),
     ("js/no-new-function", &[95], &[A03]),

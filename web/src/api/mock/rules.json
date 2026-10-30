@@ -37,13 +37,20 @@
       "openIssues": 7,
       "projects": 3,
       "tags": [
-        "owasp-a03",
+        "owasp-a05",
+        "owasp2021-a03",
         "cwe-89"
       ],
       "cwe": [
         89
       ],
-      "owasp": [
+      "owasp2025": [
+        {
+          "id": "A05",
+          "title": "Injection"
+        }
+      ],
+      "owasp2021": [
         {
           "id": "A03",
           "title": "Injection"
@@ -67,12 +74,19 @@
       "projects": 2,
       "tags": [
         "owasp-a07",
+        "owasp2021-a07",
         "cwe-798"
       ],
       "cwe": [
         798
       ],
-      "owasp": [
+      "owasp2025": [
+        {
+          "id": "A07",
+          "title": "Authentication Failures"
+        }
+      ],
+      "owasp2021": [
         {
           "id": "A07",
           "title": "Identification and Authentication Failures"
@@ -95,13 +109,20 @@
       "openIssues": 2,
       "projects": 1,
       "tags": [
-        "owasp-a02",
+        "owasp-a04",
+        "owasp2021-a02",
         "cwe-347"
       ],
       "cwe": [
         347
       ],
-      "owasp": [
+      "owasp2025": [
+        {
+          "id": "A04",
+          "title": "Cryptographic Failures"
+        }
+      ],
+      "owasp2021": [
         {
           "id": "A02",
           "title": "Cryptographic Failures"
@@ -124,14 +145,21 @@
       "openIssues": 4,
       "projects": 2,
       "tags": [
-        "owasp-a03",
+        "owasp-a05",
+        "owasp2021-a03",
         "cwe-79",
         "react"
       ],
       "cwe": [
         79
       ],
-      "owasp": [
+      "owasp2025": [
+        {
+          "id": "A05",
+          "title": "Injection"
+        }
+      ],
+      "owasp2021": [
         {
           "id": "A03",
           "title": "Injection"
@@ -154,12 +182,19 @@
       "openIssues": 2,
       "projects": 2,
       "tags": [
+        "owasp-a08",
         "cwe-502"
       ],
       "cwe": [
         502
       ],
-      "owasp": [],
+      "owasp2025": [
+        {
+          "id": "A08",
+          "title": "Software or Data Integrity Failures"
+        }
+      ],
+      "owasp2021": [],
       "noncompliant": "cfg = yaml.load(fh, Loader=yaml.Loader)",
       "compliant": "cfg = yaml.safe_load(fh)"
     },
@@ -181,7 +216,8 @@
         "robustness"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "let acct = accounts.get(&id).unwrap();",
       "compliant": "let acct = accounts.get(&id)\n    .ok_or(Error::UnknownAccount(id))?;"
     },
@@ -202,7 +238,8 @@
         "async"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "onExpire() { this.refresh(); }",
       "compliant": "onExpire() {\n  this.refresh().catch(this.report);\n}"
     },
@@ -223,7 +260,8 @@
         "errcheck"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "json.NewEncoder(w).Encode(out)",
       "compliant": "if err := json.NewEncoder(w).Encode(out); err != nil {\n    log.Warn(\"encode\", \"err\", err)\n}"
     },
@@ -244,7 +282,8 @@
         "error-handling"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "try:\n    score = model(x)\nexcept Exception:\n    score = 0.0",
       "compliant": "try:\n    score = model(x)\nexcept ModelUnavailable:\n    score = FALLBACK"
     },
@@ -265,7 +304,8 @@
         "complexity"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "// complexity 31\npublic Money calculate(Invoice inv) { … }",
       "compliant": "// complexity 6\npublic Money calculate(Invoice inv) {\n  return taxes.apply(inv);\n}"
     },
@@ -286,7 +326,8 @@
         "unsafe"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "unsafe { ptr.read() }",
       "compliant": "// SAFETY: ptr is non-null and aligned;\n// we hold the only reference.\nunsafe { ptr.read() }"
     },
@@ -307,7 +348,8 @@
         "duplication"
       ],
       "cwe": [],
-      "owasp": [],
+      "owasp2025": [],
+      "owasp2021": [],
       "noncompliant": "// same 14 lines in 4 files",
       "compliant": "// one shared helper"
     }

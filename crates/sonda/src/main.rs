@@ -317,19 +317,18 @@ fn list_rules(format: RulesFormat) -> String {
                     let _ = writeln!(out, "\nSonarQube: {}", refs.join(", "));
                 }
                 let standards = r.standards();
-                if !standards.cwe.is_empty() || !standards.owasp.is_empty() {
+                if !standards.cwe.is_empty() || !standards.owasp_2021.is_empty() {
                     let refs: Vec<String> = standards
                         .cwe
                         .iter()
                         .map(|c| {
                             format!("[CWE-{c}](https://cwe.mitre.org/data/definitions/{c}.html)")
                         })
-                        .chain(
-                            standards
-                                .owasp
-                                .iter()
-                                .map(|o| format!("OWASP {}:2021 {}", o.id(), o.title())),
-                        )
+                        .chain(rules::Edition::ALL.iter().flat_map(|&e| {
+                            standards.owasp(e).iter().map(move |o| {
+                                format!("OWASP {}:{} {}", o.id(), e.year(), o.title())
+                            })
+                        }))
                         .collect();
                     let _ = writeln!(out, "\nStandards: {}", refs.join(", "));
                 }
@@ -358,7 +357,8 @@ fn list_rules(format: RulesFormat) -> String {
                         "severity": r.severity.as_str(),
                         "on_by_default": r.on_by_default(),
                         "cwe": r.standards().cwe,
-                        "owasp_2021": r.standards().owasp.iter().map(|o| o.id()).collect::<Vec<_>>(),
+                        "owasp_2025": r.standards().owasp_2025.iter().map(|o| o.id()).collect::<Vec<_>>(),
+                        "owasp_2021": r.standards().owasp_2021.iter().map(|o| o.id()).collect::<Vec<_>>(),
                         "sonar": r.sonar.iter().map(|s| serde_json::json!({ "key": s.key, "exact": s.exact })).collect::<Vec<_>>(),
                     })
                 })
