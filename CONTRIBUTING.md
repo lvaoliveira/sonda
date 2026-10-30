@@ -135,6 +135,17 @@ other processes, and say why in a comment.
 - Mention breaking changes (CLI flags, config keys, report formats, the
   public library API) in the PR and in `CHANGELOG.md`.
 - Contributions are licensed under MIT OR Apache-2.0, the project's license.
+- `main` is protected. A PR merges only when these CI checks pass, and
+  that applies to admins too:
+  - `lint`
+  - `test` on Linux, macOS and Windows
+  - both `msrv` checks
+  - `supply-chain`, `coverage`, `web`, `server` and `docker`
+
+  The fuzz jobs are not required: they run only when library code changes.
+  **If you add or rename a CI job, update the required checks** (Settings
+  → Branches, or `gh api repos/{owner}/{repo}/branches/main/protection`).
+  A required check that never reports blocks every PR.
 
 ## AI-assisted contributions
 
