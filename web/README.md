@@ -10,7 +10,8 @@ the design handoff in [`../docs/designs/`](../docs/designs/).
   doesn't have is shown as missing. Examples: no "My team" scope without
   teams, and "No data" for coverage that was never uploaded.
 - **Drill-downs:** a metric opens what's behind it, by directory and file,
-  and a file opens its issues.
+  and a file opens its issues. Owners come from the repository's CODEOWNERS
+  file when it has one.
 - **The other six screens:** show a "not built yet" page.
 
 ```sh

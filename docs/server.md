@@ -214,8 +214,15 @@ branch. Accepted issues don't count.
 | `dup` | share of duplicated lines | duplicated share per file |
 | `coverage` | coverage per project, lowest first | none: reports carry coverage per project only |
 
-Owners are null: nothing records them yet. In the web app, a file opens its
-issues.
+**Owners** come from the repository's CODEOWNERS file, which `sonda upload`
+sends along. It looks in `.github/`, the root, then `docs/`, as GitHub does,
+and reads the file like a source: symlinks are never followed, and files over
+128 KiB are left out. A directory's owner is whoever owns most of its files,
+under GitHub's rules (gitignore patterns, last matching line wins). A
+project's owner, on project-level rows, is worked out the same way. Without a
+CODEOWNERS file, owners are null.
+
+In the web app, a file opens its issues.
 
 ## Rules
 

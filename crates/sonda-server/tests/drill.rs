@@ -109,6 +109,33 @@ async fn each_metric_drills_into_components_and_files() {
         "2 blocker & critical issues"
     );
 
+    // With a CODEOWNERS file in the next upload, owners appear: each
+    // directory's majority owner, and the project's for project rows.
+    std::fs::create_dir_all(dir.path().join(".github")).unwrap();
+    std::fs::write(
+        dir.path().join(".github/CODEOWNERS"),
+        "src/ @web\nlib/ @py @data\n",
+    )
+    .unwrap();
+    upload(&db, &upload_json(dir.path(), &files, "main")).await;
+    let (_, critical) = drill(&db, "critical").await;
+    let owner = |c: &str| {
+        critical["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["component"] == c)
+            .map(|i| i["owner"].clone())
+    };
+    assert_eq!(owner("src"), Some("@web".into()));
+    // lib/ is gone: its only issue was accepted above.
+    assert_eq!(owner("lib"), None);
+    let (_, gate) = drill(&db, "gate").await;
+    assert_eq!(
+        gate["items"][0]["owner"], "@web",
+        "two of the project's three files"
+    );
+
     for bad in ["nonsense", "critical?scope=mine", "critical?colour=red"] {
         assert_eq!(drill(&db, bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }

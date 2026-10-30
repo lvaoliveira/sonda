@@ -114,6 +114,11 @@ file, the report formats and the public library API.
   metric opens what's behind it, by directory and file, with each file's
   most severe issue. A file opens its issues. Owners and per-file coverage
   are left out rather than invented.
+- Owners from CODEOWNERS:
+  - `sonda upload` sends the repository's CODEOWNERS file, read
+    symlink-safe from GitHub's three locations.
+  - Drill-downs show each directory's majority owner, matched with
+    GitHub's rules: gitignore patterns, last match wins.
 
 ### Security
 
