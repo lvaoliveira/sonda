@@ -2,12 +2,12 @@
 //! reports and asks `git` for new code, then runs the domain analysis.
 
 use crate::analysis::{self, FileAnalysis};
-use crate::config::Config;
+use crate::config::{Config, ScanConfig};
 use crate::coverage::Coverage;
 use crate::duplication;
 use crate::error::Error;
 use crate::git;
-use crate::lang::Lang;
+use crate::lang::{JS_TS, Lang};
 use crate::newcode::NewCode;
 use crate::project::ProjectAnalysis;
 use crate::rules::RuleSet;
@@ -102,7 +102,7 @@ fn scan_files(
     };
 
     let started = Instant::now();
-    let load = |c: &Candidate| load_source(c, max_bytes, cfg.scan.max_file_size_kb);
+    let load = |c: &Candidate| load_source(c, max_bytes, &cfg.scan);
     // Same warning text in both modes, so reports do not depend on the mode.
     let results: Vec<Result<FileAnalysis, String>> = match &opts.isolation {
         Isolation::InProcess => {
@@ -268,12 +268,30 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<(Vec<Candidate>, Vec<Strin
 }
 
 /// A candidate's source text, or the warning explaining why it is skipped.
-fn load_source(c: &Candidate, max_bytes: u64, max_kb: u64) -> Result<String, String> {
+fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<String, String> {
     let rel = &c.rel;
+    let max_kb = scan.max_file_size_kb;
     let bytes = read_capped(c, max_bytes)
         .map_err(|e| format!("{rel}: {e}"))?
         .ok_or_else(|| format!("{rel}: skipped, larger than {max_kb} KB"))?;
-    String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))
+    let src = String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))?;
+    if scan.skip_minified && JS_TS.contains(&c.lang) && looks_minified(&src) {
+        return Err(format!(
+            "{rel}: skipped, looks minified (average line over \
+             {MINIFIED_AVERAGE_LINE} characters; scan.skip_minified = false analyzes it)"
+        ));
+    }
+    Ok(src)
+}
+
+/// The average line length above which a file counts as minified, as
+/// SonarQube's JavaScript analyzer decides. Bundlers that keep newlines
+/// between modules still land far above it; hand-written code far below.
+const MINIFIED_AVERAGE_LINE: usize = 200;
+
+fn looks_minified(src: &str) -> bool {
+    let lines = src.lines().count().max(1);
+    src.len() / lines > MINIFIED_AVERAGE_LINE
 }
 
 fn ms(since: Instant) -> u128 {
@@ -409,6 +427,44 @@ mod tests {
         assert_eq!(m[&Metric::Vulnerabilities], Some(1.0));
         assert_eq!(m[&Metric::NewBugs], Some(2.0)); // no reference: everything is new
         assert_eq!(m[&Metric::Coverage], Some(50.0));
+    }
+
+    #[test]
+    fn minified_scripts_are_skipped_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = format!("var a=[{}0];\n", "f(1),".repeat(300)).repeat(3);
+        std::fs::write(dir.path().join("bundle.js"), &bundle).unwrap();
+        std::fs::write(dir.path().join("app.js"), "var x = 1;\n").unwrap();
+        // Only scripts: long lines elsewhere are not a minification sign.
+        let long_py = format!("x = '{}'\n", "a".repeat(400));
+        std::fs::write(dir.path().join("data.py"), long_py).unwrap();
+        let analyzed = |skip_minified| {
+            let cfg = Config {
+                scan: crate::config::ScanConfig {
+                    skip_minified,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let rules = RuleSet::new(&cfg.rules).unwrap();
+            let opts = ScanOptions {
+                root: dir.path().to_path_buf(),
+                new_code_ref: None,
+                coverage: vec![],
+                isolation: Isolation::InProcess,
+                jobs: None,
+            };
+            let r = scan(&opts, &cfg, &rules).unwrap();
+            let paths: Vec<_> = r.files.iter().map(|f| f.path.clone()).collect();
+            (paths, r.warnings)
+        };
+        let (paths, warnings) = analyzed(true);
+        assert_eq!(paths, ["app.js", "data.py"]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("bundle.js: skipped, looks minified"));
+        let (paths, warnings) = analyzed(false);
+        assert_eq!(paths, ["app.js", "bundle.js", "data.py"]);
+        assert!(warnings.is_empty());
     }
 
     #[test]
