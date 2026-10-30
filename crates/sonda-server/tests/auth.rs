@@ -481,11 +481,17 @@ async fn rules_report_live_counts_on_main_branches() {
     let eval = rule("js/no-eval");
     assert_eq!(eval["cwe"], json!([95]));
     assert_eq!(
-        eval["owasp"],
+        eval["owasp2025"],
+        json!([{ "id": "A05", "title": "Injection" }])
+    );
+    assert_eq!(
+        eval["owasp2021"],
         json!([{ "id": "A03", "title": "Injection" }])
     );
     let tags = eval["tags"].as_array().unwrap();
-    assert!(tags.contains(&json!("cwe-95")) && tags.contains(&json!("owasp-a03")));
+    for tag in ["cwe-95", "owasp-a05", "owasp2021-a03"] {
+        assert!(tags.contains(&json!(tag)), "{tag}");
+    }
     assert_eq!(
         catalog["total"].as_u64(),
         Some(catalog["rules"].as_array().unwrap().len() as u64)

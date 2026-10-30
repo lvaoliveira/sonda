@@ -42,11 +42,14 @@ pub struct RuleView {
     pub open_issues: i64,
     /// Projects with at least one of those.
     pub projects: i64,
-    /// The category, `security`, then `cwe-<id>` and `owasp-a01` style tags.
+    /// The category, `security`, then `cwe-89`, `owasp-a05` (2025) and
+    /// `owasp2021-a03` style tags.
     pub tags: Vec<String>,
     pub cwe: &'static [u16],
-    /// OWASP Top 10 2021 categories.
-    pub owasp: Vec<OwaspRef>,
+    /// OWASP Top 10 2025 categories, from the CWE ids.
+    pub owasp2025: Vec<OwaspRef>,
+    /// OWASP Top 10 2021 categories, as SonarQube reports them.
+    pub owasp2021: Vec<OwaspRef>,
     pub noncompliant: Option<&'static str>,
     pub compliant: Option<&'static str>,
 }
@@ -56,6 +59,16 @@ pub struct OwaspRef {
     /// `A01` to `A10`.
     pub id: &'static str,
     pub title: &'static str,
+}
+
+fn owasp_refs(categories: &[sonda_core::rules::Owasp]) -> Vec<OwaspRef> {
+    categories
+        .iter()
+        .map(|o| OwaspRef {
+            id: o.id(),
+            title: o.title(),
+        })
+        .collect()
 }
 
 pub async fn list(
@@ -85,11 +98,18 @@ pub async fn list(
             let standards = r.standards();
             let mut tags: Vec<String> = tags.into_iter().map(String::from).collect();
             tags.extend(standards.cwe.iter().map(|c| format!("cwe-{c}")));
+            // `owasp-a05` is the current (2025) edition; `owasp2021-a03` the older one.
             tags.extend(
                 standards
-                    .owasp
+                    .owasp_2025
                     .iter()
                     .map(|o| format!("owasp-{}", o.id().to_lowercase())),
+            );
+            tags.extend(
+                standards
+                    .owasp_2021
+                    .iter()
+                    .map(|o| format!("owasp2021-{}", o.id().to_lowercase())),
             );
             RuleView {
                 id: r.id,
@@ -104,14 +124,8 @@ pub async fn list(
                 projects,
                 tags,
                 cwe: standards.cwe,
-                owasp: standards
-                    .owasp
-                    .iter()
-                    .map(|o| OwaspRef {
-                        id: o.id(),
-                        title: o.title(),
-                    })
-                    .collect(),
+                owasp2025: owasp_refs(standards.owasp_2025),
+                owasp2021: owasp_refs(standards.owasp_2021),
                 noncompliant: r.example.as_ref().map(|e| e.bad),
                 compliant: r.example.as_ref().map(|e| e.good),
             }

@@ -121,7 +121,8 @@ describe('Rules', () => {
     renderAt('/rules#go/sql-string-concat')
     const detail = await screen.findByRole('article')
     expect(within(detail).getByRole('link', { name: 'CWE-89' })).toHaveAttribute('href', 'https://cwe.mitre.org/data/definitions/89.html')
-    expect(detail).toHaveTextContent('OWASP A03:2021 Injection')
+    expect(detail).toHaveTextContent('OWASP A05:2025 Injection')
+    expect(detail).toHaveTextContent('A03:2021 Injection')
   })
 
   it('selects the rule named in the URL hash', async () => {
@@ -274,12 +275,17 @@ describe('Security', () => {
     expect(screen.getByRole('region', { name: 'High-risk components' })).toHaveTextContent('billing-service/src/')
     expect(screen.getByRole('region', { name: 'Remediation' })).toHaveTextContent('4.2 days')
     expect(within(focus).getAllByRole('link', { name: 'CWE-798' })[0]).toHaveAttribute('href', 'https://cwe.mitre.org/data/definitions/798.html')
-    const owasp = screen.getByRole('region', { name: 'OWASP Top 10 · 2021' })
-    const categories = within(owasp).getAllByRole('listitem')
+    // The 2025 edition by default, 2021 a click away.
+    const owasp = screen.getByRole('region', { name: 'OWASP Top 10' })
+    let categories = within(within(owasp).getByRole('list', { name: 'OWASP Top 10 2025 categories' })).getAllByRole('listitem')
     expect(categories).toHaveLength(10)
-    expect(categories[6]).toHaveTextContent('A07Identification and Authentication Failures11')
+    expect(categories[4]).toHaveTextContent('A05Injection3')
+    expect(categories[6]).toHaveTextContent('A07Authentication Failures11')
     expect(within(categories[6]).getByRole('link', { name: 'js/hardcoded-password' })).toHaveAttribute('href', '/rules#js%2Fhardcoded-password')
-    expect(owasp).toHaveTextContent('1 open vulnerability has no OWASP category')
+    expect(owasp).toHaveTextContent('1 open vulnerability has no category in the 2025 edition')
+    await userEvent.setup().click(within(owasp).getByRole('button', { name: '2021' }))
+    categories = within(within(owasp).getByRole('list', { name: 'OWASP Top 10 2021 categories' })).getAllByRole('listitem')
+    expect(categories[2]).toHaveTextContent('A03Injection3')
   })
 })
 

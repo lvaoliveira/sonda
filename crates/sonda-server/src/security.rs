@@ -11,7 +11,7 @@ use crate::health::{DAY, component_of, rfc3339};
 use crate::http::State;
 use axum::Json;
 use serde::Serialize;
-use sonda_core::rules::{Owasp, Standards};
+use sonda_core::rules::{Edition, Owasp, Standards};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const TREND_WEEKS: usize = 12;
@@ -52,12 +52,9 @@ pub struct Security {
     pub projects: Vec<ProjectRisk>,
     pub components: Vec<ComponentRisk>,
     pub rules: Vec<RuleCount>,
-    /// The OWASP Top 10 2021, all ten in order, with the open
-    /// vulnerabilities in each. One whose rule relates to two categories
-    /// counts in both.
-    pub owasp: Vec<OwaspCount>,
-    /// Open vulnerabilities whose rule has no OWASP category.
-    pub owasp_unmapped: usize,
+    /// Open vulnerabilities by OWASP Top 10 category, per edition, newest
+    /// first.
+    pub owasp: Vec<OwaspEdition>,
     pub remediation: Remediation,
 }
 
@@ -116,6 +113,16 @@ pub struct ComponentRisk {
     pub count: usize,
     pub worst: String,
     pub weighted: u32,
+}
+
+#[derive(Serialize)]
+pub struct OwaspEdition {
+    pub year: u16,
+    /// All ten, in order. A vulnerability whose rule relates to two
+    /// categories counts in both.
+    pub categories: Vec<OwaspCount>,
+    /// Open vulnerabilities whose rule has no category in this edition.
+    pub unmapped: usize,
 }
 
 #[derive(Serialize)]
@@ -248,6 +255,37 @@ fn standards(rule: &str) -> Standards {
     sonda_core::rules::find(rule).map_or_else(Standards::default, |r| r.standards())
 }
 
+fn owasp_edition(edition: Edition, open: &[&Vuln]) -> OwaspEdition {
+    let mut by_category: BTreeMap<Owasp, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    let mut unmapped = 0;
+    for v in open {
+        let categories = standards(&v.rule).owasp(edition);
+        if categories.is_empty() {
+            unmapped += 1;
+        }
+        for &o in categories {
+            let entry = by_category.entry(o).or_default();
+            entry.0 += 1;
+            entry.1.insert(v.rule.as_str());
+        }
+    }
+    OwaspEdition {
+        year: edition.year(),
+        categories: Owasp::all(edition)
+            .map(|o| {
+                let (count, rules) = by_category.remove(&o).unwrap_or_default();
+                OwaspCount {
+                    id: o.id(),
+                    title: o.title(),
+                    count,
+                    rules: rules.into_iter().map(str::to_string).collect(),
+                }
+            })
+            .collect(),
+        unmapped,
+    }
+}
+
 fn build(now: f64, vulns: &[Vuln]) -> Security {
     // Open: present and not accepted (accepted is a decision, not a fix).
     let is_open = |v: &&Vuln| v.fixed_at.is_none() && v.status != "accepted";
@@ -378,30 +416,9 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
     rules.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.rule.cmp(&b.rule)));
     rules.truncate(TOP);
 
-    let mut by_owasp: BTreeMap<Owasp, (usize, BTreeSet<&str>)> = BTreeMap::new();
-    let mut owasp_unmapped = 0;
-    for v in &open {
-        let categories = standards(&v.rule).owasp;
-        if categories.is_empty() {
-            owasp_unmapped += 1;
-        }
-        for &o in categories {
-            let entry = by_owasp.entry(o).or_default();
-            entry.0 += 1;
-            entry.1.insert(v.rule.as_str());
-        }
-    }
-    let owasp = Owasp::ALL
+    let owasp = Edition::ALL
         .iter()
-        .map(|&o| {
-            let (count, rules) = by_owasp.remove(&o).unwrap_or_default();
-            OwaspCount {
-                id: o.id(),
-                title: o.title(),
-                count,
-                rules: rules.into_iter().map(str::to_string).collect(),
-            }
-        })
+        .map(|&edition| owasp_edition(edition, &open))
         .collect();
 
     let fixed_since = |days: f64| -> Vec<&Vuln> {
@@ -450,7 +467,6 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
         components,
         rules,
         owasp,
-        owasp_unmapped,
         remediation,
     }
 }
@@ -532,8 +548,23 @@ mod tests {
             with_rule(5, "js/hardcoded-secret", Some(1.0)),
         ];
         let s = build(now, &vulns);
-        let count = |id: &str| s.owasp.iter().find(|o| o.id == id).unwrap();
-        assert_eq!(s.owasp.len(), 10);
+        assert_eq!(
+            s.owasp.iter().map(|e| e.year).collect::<Vec<_>>(),
+            [2025, 2021]
+        );
+        let (y2025, y2021) = (&s.owasp[0], &s.owasp[1]);
+        let count = |e: &OwaspEdition, id: &str| -> (usize, Vec<String>) {
+            let c = e.categories.iter().find(|o| o.id == id).unwrap();
+            (c.count, c.rules.clone())
+        };
+        assert_eq!(y2021.categories.len(), 10);
+        // 2025: TLS without verification is an authentication failure only;
+        // its CWE-295 sits in A07:2025.
+        assert_eq!(count(y2025, "A07").0, 3);
+        assert_eq!(count(y2025, "A04").0, 0);
+        assert_eq!(y2025.categories[6].title, "Authentication Failures");
+        assert_eq!(y2025.unmapped, 1);
+        let count = |id: &str| y2021.categories.iter().find(|o| o.id == id).unwrap();
         assert_eq!(count("A07").count, 3);
         assert_eq!(
             count("A07").rules,
@@ -548,7 +579,7 @@ mod tests {
             count("A07").title,
             "Identification and Authentication Failures"
         );
-        assert_eq!(s.owasp_unmapped, 1);
+        assert_eq!(y2021.unmapped, 1);
         let gets = s.focus.iter().find(|f| f.id == 4).unwrap();
         assert_eq!(gets.cwe, [120, 242]);
     }

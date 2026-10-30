@@ -2,7 +2,7 @@
 
 use super::Report;
 use crate::model::{Category, Severity};
-use crate::rules::{Owasp, RULES};
+use crate::rules::{Edition, Owasp, RULES};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -30,12 +30,12 @@ pub fn render(r: &Report) -> String {
                 .cwe
                 .iter()
                 .map(|c| relationship(c.to_string(), CWE))
-                .chain(
+                .chain(Edition::ALL.iter().flat_map(|&e| {
                     standards
-                        .owasp
+                        .owasp(e)
                         .iter()
-                        .map(|o| relationship(o.id().into(), OWASP)),
-                )
+                        .map(move |o| relationship(o.id().into(), owasp_index(e)))
+                }))
                 .collect();
             let mut rule_json = json!({
                 "id": rule.id,
@@ -98,9 +98,13 @@ pub fn render(r: &Report) -> String {
     serde_json::to_string_pretty(&doc).expect("sarif serializes") + "\n"
 }
 
-/// Indexes into the run's `taxonomies`.
+/// Indexes into the run's `taxonomies`: CWE, then each OWASP Top 10
+/// edition in `Edition::ALL` order.
 const CWE: usize = 0;
-const OWASP: usize = 1;
+
+fn owasp_index(edition: Edition) -> usize {
+    1 + Edition::ALL.iter().position(|&e| e == edition).unwrap_or(0)
+}
 
 fn relationship(id: String, taxonomy: usize) -> Value {
     json!({
@@ -112,17 +116,13 @@ fn relationship(id: String, taxonomy: usize) -> Value {
     })
 }
 
-/// CWE and the OWASP Top 10 2021, with the entries the rules refer to.
+/// CWE and the OWASP Top 10 editions, with the entries the rules refer to.
 fn taxonomies() -> Value {
     let cwe: BTreeSet<u16> = RULES
         .iter()
         .flat_map(|r| r.standards().cwe.iter().copied())
         .collect();
-    let owasp: BTreeSet<Owasp> = RULES
-        .iter()
-        .flat_map(|r| r.standards().owasp.iter().copied())
-        .collect();
-    json!([
+    let mut taxonomies = vec![json!(
         {
             "name": "CWE",
             "organization": "MITRE",
@@ -131,15 +131,22 @@ fn taxonomies() -> Value {
                 "id": c.to_string(),
                 "helpUri": format!("https://cwe.mitre.org/data/definitions/{c}.html"),
             })).collect::<Vec<_>>(),
-        },
-        {
+        }
+    )];
+    for edition in Edition::ALL {
+        let owasp: BTreeSet<Owasp> = RULES
+            .iter()
+            .flat_map(|r| r.standards().owasp(edition).iter().copied())
+            .collect();
+        taxonomies.push(json!({
             "name": "OWASP Top 10",
-            "version": "2021",
+            "version": edition.year().to_string(),
             "organization": "OWASP",
-            "informationUri": "https://owasp.org/Top10/",
+            "informationUri": format!("https://owasp.org/Top10/{}/", edition.year()),
             "taxa": owasp.iter().map(|o| json!({ "id": o.id(), "name": o.title() })).collect::<Vec<_>>(),
-        },
-    ])
+        }));
+    }
+    Value::Array(taxonomies)
 }
 
 fn level(s: Severity) -> &'static str {

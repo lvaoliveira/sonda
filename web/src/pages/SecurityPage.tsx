@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { Security } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
+import { Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
 import { Sparkline } from '@/components/sonda/meters'
 import { SeverityGlyph } from '@/components/sonda/status'
@@ -297,16 +299,20 @@ function Rules({ s }: { s: Security }) {
 }
 
 function OwaspTop10({ s }: { s: Security }) {
-  const max = Math.max(1, ...s.owasp.map((o) => o.count))
+  const [year, setYear] = useState(() => String(s.owasp[0]?.year ?? ''))
+  const edition = s.owasp.find((e) => String(e.year) === year) ?? s.owasp[0]
+  if (!edition) return null
+  const max = Math.max(1, ...edition.categories.map((o) => o.count))
   return (
     <Card
       id="owasp"
       className="min-[900px]:col-span-2"
-      title="OWASP Top 10 · 2021"
+      title="OWASP Top 10"
       subtitle="Open vulnerabilities by category; one whose rule relates to two categories counts in both"
+      aside={<Segmented label="OWASP Top 10 edition" mono value={year} onChange={setYear} options={s.owasp.map((e) => ({ value: String(e.year), label: String(e.year) }))} />}
     >
-      <ol aria-label="OWASP Top 10 categories" className="m-0 grid list-none grid-cols-1 gap-x-8 p-0 min-[900px]:grid-cols-2">
-        {s.owasp.map((o) => (
+      <ol aria-label={`OWASP Top 10 ${edition.year} categories`} className="m-0 grid list-none grid-cols-1 gap-x-8 p-0 min-[900px]:grid-cols-2">
+        {edition.categories.map((o) => (
           <li key={o.id} className="flex flex-col gap-1 border-t border-line py-2 text-[13px]">
             <span className="flex items-baseline gap-2.5">
               <Mono className="text-[11px] text-fg-faint">{o.id}</Mono>
@@ -330,9 +336,9 @@ function OwaspTop10({ s }: { s: Security }) {
           </li>
         ))}
       </ol>
-      {s.owaspUnmapped > 0 && (
+      {edition.unmapped > 0 && (
         <p className="m-0 mt-3 text-xs text-fg-faint">
-          {s.owaspUnmapped} open {s.owaspUnmapped === 1 ? 'vulnerability has' : 'vulnerabilities have'} no OWASP category (memory-safety rules in C and C++).
+          {edition.unmapped} open {edition.unmapped === 1 ? 'vulnerability has' : 'vulnerabilities have'} no category in the {edition.year} edition (memory-safety rules in C and C++).
         </p>
       )}
     </Card>

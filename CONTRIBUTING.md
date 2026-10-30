@@ -132,6 +132,8 @@ language.
   and OWASP Top 10 2021 categories the rule relates to. Every
   vulnerability rule needs at least one CWE id (a test checks), and for an
   exact key they should match SonarQube's, which the refresh below reports.
+  The 2025 categories follow from the CWE ids; a test checks that every
+  rule with a 2021 category gets one.
 - **Check it on real code.** Scan the reference projects and review every
   finding. A rule that misfires doesn't ship.
 - **Refresh the compatibility table:**

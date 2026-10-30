@@ -88,10 +88,12 @@ by whether they can be reached from a public entry point. Each needs its
 own groundwork, smallest first:
 
 1. **CWE and OWASP Top 10 mapping. Done.** Each rule records its CWE ids
-   and OWASP Top 10 2021 categories (`rules/catalog/standards.rs`), shown
-   in `sonda rules`, SARIF taxonomies, the Rules page and the Security
-   screen. `scripts/sonar_parity.py` reports drift from SonarQube's.
-   OWASP Top 10 2025 waits until SonarQube reports it.
+   and OWASP Top 10 2021 categories (`rules/catalog/standards.rs`); its
+   2025 categories are derived from the CWE ids with OWASP's own lists
+   (`rules/owasp.rs`). Shown in `sonda rules`, SARIF taxonomies, the Rules
+   page and the Security screen. `scripts/sonar_parity.py` reports drift
+   of the 2021 categories from SonarQube's (SonarQube reports 2025 only in
+   paid editions).
 2. **Hotspots.** A fourth kind of finding: security-sensitive code that a
    person reviews (to review → safe, or → fix), rather than a confirmed
    vulnerability.

@@ -35,12 +35,27 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
 
 /// CWE ids and OWASP categories by rule id.
 pub(super) fn standards(id: &str) -> super::Standards {
-    standards::STANDARDS
+    // The 2025 categories, derived once from each rule's CWE ids.
+    static DERIVED: LazyLock<Vec<Vec<super::Owasp>>> = LazyLock::new(|| {
+        standards::STANDARDS
+            .iter()
+            .map(|(_, cwe, _)| super::owasp::from_cwe_2025(cwe))
+            .collect()
+    });
+    match standards::STANDARDS
         .iter()
-        .find(|(rule, ..)| *rule == id)
-        .map_or_else(super::Standards::default, |&(_, cwe, owasp)| {
-            super::Standards { cwe, owasp }
-        })
+        .position(|(rule, ..)| *rule == id)
+    {
+        Some(i) => {
+            let (_, cwe, owasp_2021) = standards::STANDARDS[i];
+            super::Standards {
+                cwe,
+                owasp_2021,
+                owasp_2025: &DERIVED[i],
+            }
+        }
+        None => super::Standards::default(),
+    }
 }
 
 /// Rules that are off unless `rules.enabled` lists them: those outside

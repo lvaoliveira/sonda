@@ -1,4 +1,5 @@
 mod catalog;
+pub mod owasp;
 
 use crate::config::RulesConfig;
 use crate::error::Error;
@@ -8,6 +9,7 @@ use std::sync::OnceLock;
 use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
+pub use owasp::{Edition, Owasp};
 
 pub(crate) const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
 pub(crate) const FUNCTION_LENGTH: &str = "common/function-length";
@@ -55,73 +57,24 @@ pub struct Example {
     pub good: &'static str,
 }
 
-/// The OWASP Top 10, 2021 edition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Owasp {
-    A01,
-    A02,
-    A03,
-    A04,
-    A05,
-    A06,
-    A07,
-    A08,
-    A09,
-    A10,
-}
-
-impl Owasp {
-    pub const ALL: [Owasp; 10] = [
-        Owasp::A01,
-        Owasp::A02,
-        Owasp::A03,
-        Owasp::A04,
-        Owasp::A05,
-        Owasp::A06,
-        Owasp::A07,
-        Owasp::A08,
-        Owasp::A09,
-        Owasp::A10,
-    ];
-
-    /// `A01` to `A10`.
-    pub fn id(self) -> &'static str {
-        match self {
-            Owasp::A01 => "A01",
-            Owasp::A02 => "A02",
-            Owasp::A03 => "A03",
-            Owasp::A04 => "A04",
-            Owasp::A05 => "A05",
-            Owasp::A06 => "A06",
-            Owasp::A07 => "A07",
-            Owasp::A08 => "A08",
-            Owasp::A09 => "A09",
-            Owasp::A10 => "A10",
-        }
-    }
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Owasp::A01 => "Broken Access Control",
-            Owasp::A02 => "Cryptographic Failures",
-            Owasp::A03 => "Injection",
-            Owasp::A04 => "Insecure Design",
-            Owasp::A05 => "Security Misconfiguration",
-            Owasp::A06 => "Vulnerable and Outdated Components",
-            Owasp::A07 => "Identification and Authentication Failures",
-            Owasp::A08 => "Software and Data Integrity Failures",
-            Owasp::A09 => "Security Logging and Monitoring Failures",
-            Owasp::A10 => "Server-Side Request Forgery",
-        }
-    }
-}
-
 /// The security standards a rule relates to.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Standards {
     /// CWE ids, ascending.
     pub cwe: &'static [u16],
-    pub owasp: &'static [Owasp],
+    /// As SonarQube reports them for the rule's keys.
+    pub owasp_2021: &'static [Owasp],
+    /// The 2025 categories its CWE ids fall into.
+    pub owasp_2025: &'static [Owasp],
+}
+
+impl Standards {
+    pub fn owasp(&self, edition: Edition) -> &'static [Owasp] {
+        match edition {
+            Edition::Y2021 => self.owasp_2021,
+            Edition::Y2025 => self.owasp_2025,
+        }
+    }
 }
 
 /// A SonarQube rule this one corresponds to, by its key without the
@@ -449,7 +402,17 @@ mod tests {
         }
         let hardcoded = find("js/hardcoded-password").unwrap().standards();
         assert_eq!(hardcoded.cwe, [259, 798]);
-        assert_eq!(hardcoded.owasp, [Owasp::A07]);
+        assert_eq!(hardcoded.owasp_2021, [owasp::y2021::A07]);
+        assert_eq!(hardcoded.owasp_2025, [Owasp::new(Edition::Y2025, 7)]);
+        // Every rule with a 2021 category has a 2025 one too.
+        for r in RULES.iter() {
+            let s = r.standards();
+            assert!(
+                s.owasp_2021.is_empty() || !s.owasp_2025.is_empty(),
+                "{}",
+                r.id
+            );
+        }
         assert_eq!(find("js/no-var").unwrap().standards(), Standards::default());
     }
 
