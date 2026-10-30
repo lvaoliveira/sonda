@@ -99,6 +99,7 @@ It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
 [scan]
 exclude = ["**/node_modules/**", "**/dist/**", "**/*.min.js"]
 max_file_size_kb = 1024    # larger files are skipped with a warning
+skip_minified = true       # skip JS/TS that looks minified (average line > 200 chars)
 file_timeout_secs = 10     # per-file parse + rule-matching budget
 git_timeout_secs = 120     # each git process used by --new-code
 

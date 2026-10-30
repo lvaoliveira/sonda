@@ -5,6 +5,7 @@
 exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/vendor/**", "**/*.min.js"]
 # Files larger than this are skipped (usually generated or minified).
 max_file_size_kb = 1024
+skip_minified = true
 # Parsing and rule matching of one file give up after this many seconds
 # (the file is then reported as a warning instead of analyzed).
 file_timeout_secs = 10

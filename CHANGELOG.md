@@ -141,6 +141,9 @@ file, the report formats and the public library API.
 - Rules can report a node inside the one their query captures, so rules
   that match a container (a switch, an object) point at the offending case
   or member.
+- JavaScript/TypeScript files that look minified (an average line longer than
+  200 characters, as SonarQube decides) are skipped with a warning, like
+  `*.min.js` already was by name. `scan.skip_minified = false` analyzes them.
 - Each language's rule queries are matched in a single pass over the file
   instead of one pass per rule. With the 28 new rules, a scan of 120 MB of
   JavaScript is 30% faster than before them, and a 20,000-term expression

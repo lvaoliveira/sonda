@@ -16,6 +16,9 @@ pub const DEFAULT_TOML: &str = r#"# sonda configuration
 exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/vendor/**", "**/*.min.js"]
 # Files larger than this are skipped (usually generated or minified).
 max_file_size_kb = 1024
+# Skip JavaScript/TypeScript files that look minified (average line longer
+# than 200 characters), as their issues are not actionable.
+skip_minified = true
 # Parsing and rule matching of one file give up after this many seconds
 # (the file is then reported as a warning instead of analyzed).
 file_timeout_secs = 10
@@ -78,6 +81,7 @@ pub struct Config {
 pub struct ScanConfig {
     pub exclude: Vec<String>,
     pub max_file_size_kb: u64,
+    pub skip_minified: bool,
     pub file_timeout_secs: u64,
     pub git_timeout_secs: u64,
 }
@@ -95,6 +99,7 @@ impl Default for ScanConfig {
             .map(String::from)
             .to_vec(),
             max_file_size_kb: 1024,
+            skip_minified: true,
             file_timeout_secs: 10,
             git_timeout_secs: 120,
         }
