@@ -88,10 +88,6 @@ still validated), and the files they explicitly name (`--config`,
 
 ### Known limitations
 
-- **No sign-in throttling yet.** Each attempt costs an Argon2 hash (tens of
-  milliseconds), but nothing limits attempts per username or address. On a
-  server exposed beyond a private network, rate-limit `POST /api/session` at
-  the reverse proxy.
 
 - **Windows workers are not sandboxed.** tree-sitter's runtime and grammars
   are C, called through FFI. They run in worker processes
@@ -161,6 +157,16 @@ What holds today:
   - **Accounts:** users are disabled, never deleted. Disabling a user or
     resetting their password ends their sessions. The last active admin
     can't be removed.
+  - **Throttling:** after 5 failed sign-ins for a username within 15
+    minutes, each further attempt must wait. The wait doubles from 1 second
+    up to 15 minutes, and the answer is `429` with `Retry-After`.
+    - It applies the same to usernames that don't exist, so it reveals
+      nothing.
+    - Throttled attempts are refused before any hashing.
+    - It's a wait, not a lockout, so an attacker can't lock a real user
+      out for long.
+    - Counts are kept in PostgreSQL and survive restarts. Rate limiting per
+      client address at a reverse proxy still adds depth.
   - **Roles:** only admins manage users. The API token is for machines and
     can't manage users or sign browsers in.
 - **Browsers hold only a session cookie.** It is `__Host-` prefixed,

@@ -15,6 +15,7 @@ pub mod overview;
 pub mod rules;
 pub mod session;
 pub mod store;
+pub mod throttle;
 pub mod users;
 
 use anyhow::{Context, Result};
