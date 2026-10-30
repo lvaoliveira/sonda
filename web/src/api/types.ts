@@ -291,6 +291,8 @@ export interface Rule {
   category: Category
   severity: Severity
   effortMinutes: number
+  /** False for rules a repository must list in `rules.enabled`. */
+  onByDefault: boolean
   /** Open or confirmed issues on each project's main branch. */
   openIssues: number
   projects: number

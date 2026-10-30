@@ -1115,7 +1115,7 @@ pub(crate) mod tests {
         // Inserting code between them changes neither.
         assert_eq!(
             two,
-            fingerprints_of("t", "eval(x);\nlet y = 2;\neval(x);\n")
+            fingerprints_of("t", "eval(x);\nconst y = 2;\neval(x);\n")
         );
     }
 }

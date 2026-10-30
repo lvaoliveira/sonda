@@ -91,6 +91,11 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// Whether the rule runs without being listed in `rules.enabled`.
+    pub fn on_by_default(&self) -> bool {
+        !catalog::OFF_BY_DEFAULT.contains(&self.id)
+    }
+
     pub fn langs(&self) -> &'static [Lang] {
         match self.check {
             Check::Query { langs, .. } | Check::Semantic { langs, .. } => langs,
@@ -136,7 +141,12 @@ pub(crate) struct RuleSet {
 impl RuleSet {
     pub(crate) fn new(cfg: &RulesConfig) -> Result<Self, Error> {
         // Sorted, so the reported unknown id does not depend on HashMap order.
-        let mut ids: Vec<&String> = cfg.disabled.iter().chain(cfg.severity.keys()).collect();
+        let mut ids: Vec<&String> = cfg
+            .enabled
+            .iter()
+            .chain(&cfg.disabled)
+            .chain(cfg.severity.keys())
+            .collect();
         ids.sort();
         if let Some(id) = ids.into_iter().find(|id| find(id).is_none()) {
             return Err(Error::Config(format!(
@@ -145,6 +155,7 @@ impl RuleSet {
         }
         let active: Vec<ActiveRule> = RULES
             .iter()
+            .filter(|r| r.on_by_default() || cfg.enabled.iter().any(|e| e == r.id))
             .filter(|r| !cfg.disabled.iter().any(|d| d == r.id))
             .map(|&rule| ActiveRule {
                 rule,
@@ -293,7 +304,11 @@ mod tests {
 
     #[test]
     fn examples_flag_bad_code_and_accept_good_code() {
-        let cfg = Config::default();
+        let mut cfg = Config::default();
+        cfg.rules.enabled = catalog::OFF_BY_DEFAULT
+            .iter()
+            .map(|&id| id.into())
+            .collect();
         let rules = RuleSet::new(&cfg.rules).expect("all queries compile");
         for r in RULES.iter() {
             let Some(ex) = &r.example else { continue };
@@ -335,6 +350,33 @@ mod tests {
                 .count();
             assert_eq!(covered.len(), expected, "{lang:?}");
         }
+    }
+
+    #[test]
+    fn off_by_default_rules_run_only_when_enabled() {
+        let active = |cfg: &RulesConfig| {
+            RuleSet::new(cfg)
+                .unwrap()
+                .active
+                .iter()
+                .any(|a| a.rule.id == "js/prefer-const")
+        };
+        assert!(!active(&RulesConfig::default()));
+        let mut cfg = RulesConfig {
+            enabled: vec!["js/prefer-const".into()],
+            ..Default::default()
+        };
+        assert!(active(&cfg));
+        cfg.disabled = cfg.enabled.clone();
+        assert!(!active(&cfg));
+        for id in catalog::OFF_BY_DEFAULT {
+            assert!(find(id).is_some(), "{id}");
+        }
+        cfg = RulesConfig {
+            enabled: vec!["js/does-not-exist".into()],
+            ..Default::default()
+        };
+        assert!(RuleSet::new(&cfg).is_err());
     }
 
     #[test]

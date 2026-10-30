@@ -36,6 +36,8 @@ pub struct RuleView {
     pub category: Category,
     pub severity: sonda_core::model::Severity,
     pub effort_minutes: u32,
+    /// False for rules a repository must list in `rules.enabled`.
+    pub on_by_default: bool,
     /// Open or confirmed issues on each project's main branch.
     pub open_issues: i64,
     /// Projects with at least one of those.
@@ -77,6 +79,7 @@ pub async fn list(
                 category: r.category,
                 severity: r.severity,
                 effort_minutes: r.effort_minutes,
+                on_by_default: r.on_by_default(),
                 open_issues,
                 projects,
                 tags,

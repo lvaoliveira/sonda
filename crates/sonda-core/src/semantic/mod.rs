@@ -30,6 +30,8 @@ pub(crate) enum ScopeKind {
 pub(crate) struct Scope {
     pub(crate) parent: Option<ScopeId>,
     pub(crate) kind: ScopeKind,
+    /// A function scope whose body (or a nested arrow's) reads `arguments`.
+    pub(crate) uses_arguments: bool,
     /// Declarations by name, in source order.
     names: HashMap<String, Vec<DeclId>>,
 }
@@ -55,6 +57,12 @@ pub(crate) struct Decl<'t> {
     /// The name where it is declared.
     pub(crate) node: Node<'t>,
     pub(crate) scope: ScopeId,
+    /// The scope it is written in: `scope`, except for a `var` in a block,
+    /// which belongs to the function around it.
+    pub(crate) block: ScopeId,
+    /// The `variable_declarator` whose name is this declaration's node, for
+    /// a variable declared with a plain name (`let x = ...`).
+    pub(crate) declarator: Option<Node<'t>>,
     pub(crate) reads: u32,
     pub(crate) writes: u32,
     /// Declared next to a `...rest` element (`const { a, ...rest } = o`):
@@ -72,10 +80,23 @@ pub(crate) struct Ref<'t> {
     pub(crate) decl: Option<DeclId>,
 }
 
+/// A function and what its parameters declare.
+pub(crate) struct Function<'t> {
+    pub(crate) node: Node<'t>,
+    /// The scope of its parameters and body.
+    pub(crate) scope: ScopeId,
+    /// Per parameter, in order, the names it declares (several when
+    /// destructured, none for `this: T`).
+    pub(crate) params: Vec<Vec<DeclId>>,
+}
+
 pub(crate) struct Model<'t> {
     pub(crate) scopes: Vec<Scope>,
     pub(crate) decls: Vec<Decl<'t>>,
     pub(crate) refs: Vec<Ref<'t>>,
+    pub(crate) functions: Vec<Function<'t>>,
+    /// Every `class_body`, in source order.
+    pub(crate) classes: Vec<Node<'t>>,
     /// The file contains JSX, which classic React runtimes compile to
     /// `React.createElement` without naming `React`.
     pub(crate) has_jsx: bool,
@@ -87,10 +108,13 @@ impl<'t> Model<'t> {
             scopes: vec![Scope {
                 parent: None,
                 kind: ScopeKind::Module,
+                uses_arguments: false,
                 names: HashMap::new(),
             }],
             decls: Vec::new(),
             refs: Vec::new(),
+            functions: Vec::new(),
+            classes: Vec::new(),
             has_jsx: false,
         }
     }
@@ -99,6 +123,7 @@ impl<'t> Model<'t> {
         self.scopes.push(Scope {
             parent: Some(parent),
             kind,
+            uses_arguments: false,
             names: HashMap::new(),
         });
         self.scopes.len() - 1
@@ -124,10 +149,35 @@ impl<'t> Model<'t> {
             kind,
             node,
             scope,
+            block: scope,
+            declarator: None,
             reads: 0,
             writes: 0,
             rest_sibling: false,
         });
+    }
+
+    /// Whether `scope` is `outer` or nested inside it.
+    pub(crate) fn within(&self, mut scope: ScopeId, outer: ScopeId) -> bool {
+        loop {
+            if scope == outer {
+                return true;
+            }
+            match self.scopes[scope].parent {
+                Some(p) => scope = p,
+                None => return false,
+            }
+        }
+    }
+
+    /// The first declaration of `name` visible from `scope`.
+    pub(crate) fn lookup(&self, mut scope: ScopeId, name: &str) -> Option<DeclId> {
+        loop {
+            if let Some(&first) = self.scopes[scope].names.get(name).and_then(|d| d.first()) {
+                return Some(first);
+            }
+            scope = self.scopes[scope].parent?;
+        }
     }
 
     /// Every scope's declarations grouped by name, for redeclaration checks.
@@ -142,15 +192,10 @@ impl<'t> Model<'t> {
     /// counts reads and writes. Declarations are visible in their whole scope
     /// (hoisting), which is what matters for finding unused or misused ones.
     fn resolve(&mut self) {
-        for r in &mut self.refs {
-            let mut scope = Some(r.scope);
-            while let Some(s) = scope {
-                if let Some(&first) = self.scopes[s].names.get(&r.name).and_then(|d| d.first()) {
-                    r.decl = Some(first);
-                    break;
-                }
-                scope = self.scopes[s].parent;
-            }
+        for i in 0..self.refs.len() {
+            let decl = self.lookup(self.refs[i].scope, &self.refs[i].name);
+            let r = &mut self.refs[i];
+            r.decl = decl;
             if let Some(d) = r.decl {
                 self.decls[d].reads += u32::from(r.read);
                 self.decls[d].writes += u32::from(r.write);

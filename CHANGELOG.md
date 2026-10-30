@@ -9,7 +9,7 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 175
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 181
   rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
@@ -156,6 +156,14 @@ file, the report formats and the public library API.
   imports, redeclared names, and assignments to undeclared names.
   Declaration files (`.d.ts`) are skipped. A file whose model can't be built
   within the per-file timeout keeps its other findings, with a warning.
+- JavaScript/TypeScript: six more rules on the semantic layer: a `var` used
+  outside the block that declares it, collections that are only added to,
+  unused private class fields, and, off by default, unused trailing
+  parameters, shadowed variables, and `let` that could be `const`.
+- Rules can be off by default, like rules outside SonarQube's default
+  profile: `rules.enabled` in sonda.toml turns them on. `sonda rules`, the
+  JSON catalog (`on_by_default`), docs/rules.md and the web app's Rules page
+  mark them.
 - Vulnerability rules skip test files (`*.test.*`, `*.spec.*`, `test_*.py`,
   `*_test.*`, and `test`, `tests`, `__tests__`, `spec` or `__mocks__`
   directories), where credentials and weak settings are fixtures.

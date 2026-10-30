@@ -33,6 +33,7 @@
       "category": "vulnerability",
       "severity": "critical",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 7,
       "projects": 3,
       "tags": [
@@ -52,6 +53,7 @@
       "category": "vulnerability",
       "severity": "blocker",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 3,
       "projects": 2,
       "tags": [
@@ -71,6 +73,7 @@
       "category": "vulnerability",
       "severity": "critical",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 2,
       "projects": 1,
       "tags": [
@@ -90,6 +93,7 @@
       "category": "vulnerability",
       "severity": "critical",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 4,
       "projects": 2,
       "tags": [
@@ -110,6 +114,7 @@
       "category": "vulnerability",
       "severity": "critical",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 2,
       "projects": 2,
       "tags": [
@@ -128,6 +133,7 @@
       "category": "bug",
       "severity": "major",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 23,
       "projects": 4,
       "tags": [
@@ -147,6 +153,7 @@
       "category": "bug",
       "severity": "major",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 41,
       "projects": 6,
       "tags": [
@@ -165,6 +172,7 @@
       "category": "bug",
       "severity": "minor",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 88,
       "projects": 9,
       "tags": [
@@ -183,6 +191,7 @@
       "category": "code_smell",
       "severity": "major",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 57,
       "projects": 5,
       "tags": [
@@ -201,6 +210,7 @@
       "category": "code_smell",
       "severity": "major",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 132,
       "projects": 6,
       "tags": [
@@ -219,6 +229,7 @@
       "category": "code_smell",
       "severity": "minor",
       "effortMinutes": 15,
+      "onByDefault": false,
       "openIssues": 6,
       "projects": 2,
       "tags": [
@@ -237,6 +248,7 @@
       "category": "code_smell",
       "severity": "minor",
       "effortMinutes": 15,
+      "onByDefault": true,
       "openIssues": 0,
       "projects": 0,
       "tags": [
