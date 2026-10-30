@@ -346,19 +346,25 @@ lockfile path, no duplicates). Reports from an older CLI have none.
 The project page's Coverage tile opens a line coverage report like an
 LCOV HTML report (Istanbul's, genhtml's): directories add up their files,
 each opens to its subdirectories and files, and a file shows its source
-with uncovered lines in red and covered ones marked, stepping through the
-uncovered blocks. It's built from the per-file coverage in the report
-(`sonda scan --coverage lcov.info`), so it counts lines only, not branches
-or functions. Files the coverage reports don't list show "no data":
+with uncovered lines in red and covered ones marked, lines that left a
+branch untaken ("◆ 1/2 branches") and functions never called, stepping
+through the uncovered blocks and untaken branches. It's built from the
+per-file coverage in the report (`sonda scan --coverage lcov.info`): lines
+from LCOV's `DA` records, branches from `BRDA`, functions from `FN` and
+`FNDA`, shown as Lines, Branches and Functions columns like Istanbul's.
+Reports without branch or function records show "—" for them. Files the
+coverage reports don't list show "no data":
 Istanbul and c8 list only the files the tests loaded unless told to
 include all.
 
 - `GET /api/projects/{key}/coverage?branch=` lists every file of the
-  branch's latest analysis with its covered and uncovered line counts
-  (null without data), and the analysis's `coverage` measure.
+  branch's latest analysis with its covered and uncovered line counts,
+  and `branches` and `functions` as `{covered, total}` (each null without
+  data), and the analysis's `coverage` measure.
 - `GET /api/projects/{key}/coverage/file?path=&branch=` returns one file's
   highlighted source (at most 20,000 lines; `truncated` says when it's
-  longer) with its `covered` and `uncovered` line numbers.
+  longer) with its `covered` and `uncovered` line numbers, its `branches`
+  (`{line, taken, total}`) and its `functions` (`{name, line, calls}`).
 
 An unknown project or file is `404`; a branch without analyses is `400`.
 

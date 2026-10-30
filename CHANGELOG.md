@@ -186,6 +186,11 @@ file, the report formats and the public library API.
   to compute coverage on its main-branch new code period, instead of
   keeping the scan's value, and the Overview's coverage drill-down lists
   each project's least covered files.
+- Branch and function coverage: `sonda scan --coverage` reads LCOV's
+  `BRDA`, `FN` and `FNDA` records into each file's `branch_coverage` and
+  `function_coverage` in the JSON report, and the coverage report shows
+  Branches and Functions columns and totals, like Istanbul's, and marks the
+  lines that left a branch untaken and the functions never called.
 - A coverage report in the web app, like an LCOV HTML report: line
   coverage by directory and file, and each file's source with uncovered
   lines in red and a way to step through them. The project page's

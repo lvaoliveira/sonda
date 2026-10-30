@@ -39,7 +39,8 @@ async fn coverage_per_file_and_per_line() {
         ("src/b.js", "let b = 2;\n"),
         (
             "lcov.info",
-            "SF:src/a.js\nDA:1,1\nDA:2,1\nDA:3,0\nend_of_record\n",
+            "SF:src/a.js\nFN:2,bump\nFNDA:0,bump\nBRDA:2,0,0,1\nBRDA:2,0,1,0\n\
+             DA:1,1\nDA:2,1\nDA:3,0\nend_of_record\n",
         ),
     ];
     let (status, _) = upload(&db, &upload_json_for(dir.path(), &files, "shop", "main")).await;
@@ -52,8 +53,10 @@ async fn coverage_per_file_and_per_line() {
     assert_eq!(
         list["files"],
         json!([
-            { "path": "src/a.js", "language": "javascript", "covered": 2, "uncovered": 1 },
-            { "path": "src/b.js", "language": "javascript", "covered": null, "uncovered": null },
+            { "path": "src/a.js", "language": "javascript", "covered": 2, "uncovered": 1,
+              "branches": { "covered": 1, "total": 2 }, "functions": { "covered": 0, "total": 1 } },
+            { "path": "src/b.js", "language": "javascript", "covered": null, "uncovered": null,
+              "branches": null, "functions": null },
         ])
     );
 
@@ -64,12 +67,23 @@ async fn coverage_per_file_and_per_line() {
         (&json!([1, 2]), &json!([3]), &json!(false))
     );
     assert_eq!(file["lines"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        (&file["branches"], &file["functions"]),
+        (
+            &json!([{ "line": 2, "taken": 1, "total": 2 }]),
+            &json!([{ "name": "bump", "line": 2, "calls": 0 }])
+        )
+    );
     assert_eq!(file["lines"][2]["number"], 3);
 
     // A file without data says so; unknown files and branches don't exist.
     let (_, b) = get(&app, "/api/projects/shop/coverage/file?path=src/b.js").await;
     assert_eq!(
         (&b["covered"], &b["uncovered"]),
+        (&Value::Null, &Value::Null)
+    );
+    assert_eq!(
+        (&b["branches"], &b["functions"]),
         (&Value::Null, &Value::Null)
     );
     for (path, expected) in [

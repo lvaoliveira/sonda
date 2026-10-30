@@ -511,7 +511,10 @@ fn only_new_lists_new_issues_but_gate_sees_everything() {
 fn coverage_report_feeds_the_coverage_measures() {
     let dir = project(&[
         ("app.js", "const a = 1;\nconst b = 2;\n"),
-        ("lcov.info", "SF:app.js\nDA:1,3\nDA:2,0\nend_of_record\n"),
+        (
+            "lcov.info",
+            "SF:app.js\nFN:1,setup\nFNDA:0,setup\nBRDA:1,0,0,3\nBRDA:1,0,1,-\nDA:1,3\nDA:2,0\nend_of_record\n",
+        ),
     ]);
     let lcov = dir.path().join("lcov.info");
     let out = sonda()
@@ -531,6 +534,14 @@ fn coverage_report_feeds_the_coverage_measures() {
         .find(|f| f["path"] == "app.js")
         .unwrap();
     assert_eq!(app["coverage"], json!({ "covered": [1], "uncovered": [2] }));
+    assert_eq!(
+        app["branch_coverage"],
+        json!([{ "line": 1, "taken": 1, "total": 2 }])
+    );
+    assert_eq!(
+        app["function_coverage"],
+        json!([{ "name": "setup", "line": 1, "calls": 0 }])
+    );
     // Two new lines: too few for coverage on new code to decide the gate.
     let condition = report["gate"]["conditions"]
         .as_array()
