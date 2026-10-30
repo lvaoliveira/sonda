@@ -11,12 +11,12 @@ export const SECURITY: Security = {
   projectsAffected: 6,
   status: { open: 15, confirmed: 8, accepted: 4, fixedLast30Days: 31 },
   focus: [
-    { id: 101, severity: 'blocker', rule: 'js/hardcoded-secret', message: 'Revoke this secret and read it from the environment or a secret store.', project: 'billing-service', branch: 'main', component: 'src', path: 'src/main/java/com/acme/billing/config/StripeConfig.java', line: 14, firstSeen: days(1), ageDays: 1 },
-    { id: 102, severity: 'blocker', rule: 'js/xxe', message: "Remove 'noent: true' so external entities aren't expanded.", project: 'billing-service', branch: 'main', component: 'src', path: 'src/pdf/render.js', line: 41, firstSeen: days(9), ageDays: 9 },
-    { id: 103, severity: 'critical', rule: 'js/no-eval', message: 'Remove this use of eval().', project: 'payments-platform', branch: 'main', component: 'services', path: 'services/checkout-api/handlers.js', line: 88, firstSeen: days(26), ageDays: 26 },
-    { id: 104, severity: 'critical', rule: 'js/tls-unverified', message: "Remove 'rejectUnauthorized: false'; trust a private CA with the 'ca' option instead.", project: 'mobile-bff', branch: 'main', component: 'src', path: 'src/clients/legacy.ts', line: 12, firstSeen: days(4), ageDays: 4 },
-    { id: 105, severity: 'critical', rule: 'js/weak-hash', message: 'Use a stronger algorithm such as SHA-256.', project: 'payments-platform', branch: 'main', component: 'packages', path: 'packages/sdk-js/sign.js', line: 7, firstSeen: days(3), ageDays: 3 },
-    { id: 106, severity: 'major', rule: 'js/cors-any-origin', message: 'List the trusted origins instead of allowing every origin.', project: 'data-pipeline', branch: 'main', component: 'src', path: 'src/api/server.js', line: 22, firstSeen: days(40), ageDays: 40 },
+    { id: 101, severity: 'blocker', rule: 'js/hardcoded-secret', message: 'Revoke this secret and read it from the environment or a secret store.', project: 'billing-service', branch: 'main', component: 'src', path: 'src/main/java/com/acme/billing/config/StripeConfig.java', line: 14, firstSeen: days(1), ageDays: 1, cwe: [798] },
+    { id: 102, severity: 'blocker', rule: 'js/xxe', message: "Remove 'noent: true' so external entities aren't expanded.", project: 'billing-service', branch: 'main', component: 'src', path: 'src/pdf/render.js', line: 41, firstSeen: days(9), ageDays: 9, cwe: [611, 827] },
+    { id: 103, severity: 'critical', rule: 'js/no-eval', message: 'Remove this use of eval().', project: 'payments-platform', branch: 'main', component: 'services', path: 'services/checkout-api/handlers.js', line: 88, firstSeen: days(26), ageDays: 26, cwe: [95] },
+    { id: 104, severity: 'critical', rule: 'js/tls-unverified', message: "Remove 'rejectUnauthorized: false'; trust a private CA with the 'ca' option instead.", project: 'mobile-bff', branch: 'main', component: 'src', path: 'src/clients/legacy.ts', line: 12, firstSeen: days(4), ageDays: 4, cwe: [295] },
+    { id: 105, severity: 'critical', rule: 'js/weak-hash', message: 'Use a stronger algorithm such as SHA-256.', project: 'payments-platform', branch: 'main', component: 'packages', path: 'packages/sdk-js/sign.js', line: 7, firstSeen: days(3), ageDays: 3, cwe: [1240] },
+    { id: 106, severity: 'major', rule: 'js/cors-any-origin', message: 'List the trusted origins instead of allowing every origin.', project: 'data-pipeline', branch: 'main', component: 'src', path: 'src/api/server.js', line: 22, firstSeen: days(40), ageDays: 40, cwe: [346, 942] },
   ],
   trend: Array.from({ length: 12 }, (_, i) => {
     const open = [31, 30, 32, 33, 31, 30, 29, 28, 27, 25, 24, 23][i]
@@ -43,5 +43,18 @@ export const SECURITY: Security = {
     { rule: 'js/cors-any-origin', count: 3 },
     { rule: 'js/tls-unverified', count: 2 },
   ],
+  owasp: [
+    { id: 'A01', title: 'Broken Access Control', count: 0, rules: [] },
+    { id: 'A02', title: 'Cryptographic Failures', count: 6, rules: ['js/tls-unverified', 'js/weak-hash'] },
+    { id: 'A03', title: 'Injection', count: 3, rules: ['js/no-eval'] },
+    { id: 'A04', title: 'Insecure Design', count: 0, rules: [] },
+    { id: 'A05', title: 'Security Misconfiguration', count: 7, rules: ['js/cors-any-origin', 'js/tls-unverified', 'js/xxe'] },
+    { id: 'A06', title: 'Vulnerable and Outdated Components', count: 0, rules: [] },
+    { id: 'A07', title: 'Identification and Authentication Failures', count: 11, rules: ['js/cors-any-origin', 'js/hardcoded-password', 'js/hardcoded-secret', 'js/tls-unverified'] },
+    { id: 'A08', title: 'Software and Data Integrity Failures', count: 0, rules: [] },
+    { id: 'A09', title: 'Security Logging and Monitoring Failures', count: 0, rules: [] },
+    { id: 'A10', title: 'Server-Side Request Forgery', count: 0, rules: [] },
+  ],
+  owaspUnmapped: 1,
   remediation: { medianDaysSevere: 4.2, medianDaysAll: 9.5, fixedLast90Days: 88 },
 }

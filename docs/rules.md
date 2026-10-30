@@ -216,6 +216,8 @@ SonarQube: S1134, S1135
 
 SonarQube: S1523 (related)
 
+Standards: [CWE-95](https://cwe.mitre.org/data/definitions/95.html), OWASP A03:2021 Injection
+
 Noncompliant:
 
 ```javascript
@@ -234,6 +236,8 @@ JSON.parse(userInput);
 
 SonarQube: S1523 (related)
 
+Standards: [CWE-95](https://cwe.mitre.org/data/definitions/95.html), OWASP A03:2021 Injection
+
 Noncompliant:
 
 ```javascript
@@ -249,6 +253,8 @@ const f = (a) => a;
 ## js/inner-html
 
 **HTML should not be assigned through innerHTML/outerHTML.** Assigning strings to innerHTML or outerHTML can lead to cross-site scripting.
+
+Standards: [CWE-79](https://cwe.mitre.org/data/definitions/79.html), OWASP A03:2021 Injection
 
 Noncompliant:
 
@@ -848,6 +854,8 @@ function f(...args) { const n = arguments.length; return undefined === n || isNa
 
 SonarQube: S4830
 
+Standards: [CWE-295](https://cwe.mitre.org/data/definitions/295.html), OWASP A02:2021 Cryptographic Failures, OWASP A05:2021 Security Misconfiguration, OWASP A07:2021 Identification and Authentication Failures
+
 Noncompliant:
 
 ```javascript
@@ -865,6 +873,8 @@ https.request({ host, ca: fs.readFileSync('ca.pem') });
 **Weak hashing algorithms should not be used.** MD2, MD4, MD5, SHA-1 and RIPEMD-160 are broken for security purposes.
 
 SonarQube: S4790
+
+Standards: [CWE-1240](https://cwe.mitre.org/data/definitions/1240.html), OWASP A02:2021 Cryptographic Failures
 
 Noncompliant:
 
@@ -2615,6 +2625,8 @@ const all = [...(user?.tags ?? [])];
 
 SonarQube: S4423
 
+Standards: [CWE-295](https://cwe.mitre.org/data/definitions/295.html), [CWE-326](https://cwe.mitre.org/data/definitions/326.html), [CWE-327](https://cwe.mitre.org/data/definitions/327.html), OWASP A02:2021 Cryptographic Failures, OWASP A07:2021 Identification and Authentication Failures
+
 Noncompliant:
 
 ```javascript
@@ -2632,6 +2644,8 @@ tls.connect({ host, minVersion: 'TLSv1.2' });
 **Cryptographic keys should be long enough.** RSA and DSA keys shorter than 2048 bits, and elliptic curves under 224 bits, can be broken.
 
 SonarQube: S4426
+
+Standards: [CWE-326](https://cwe.mitre.org/data/definitions/326.html), OWASP A02:2021 Cryptographic Failures
 
 Noncompliant:
 
@@ -2652,6 +2666,8 @@ crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
 
 SonarQube: S5527
 
+Standards: [CWE-297](https://cwe.mitre.org/data/definitions/297.html), OWASP A02:2021 Cryptographic Failures, OWASP A05:2021 Security Misconfiguration, OWASP A07:2021 Identification and Authentication Failures
+
 Noncompliant:
 
 ```javascript
@@ -2669,6 +2685,8 @@ https.request({ host, checkServerIdentity: (h, cert) => pinned(cert) ? undefined
 **Weak ciphers should not be used.** DES, 3DES, RC2, RC4 and Blowfish have small keys or blocks and practical attacks. AES is the standard choice.
 
 SonarQube: S5547
+
+Standards: [CWE-326](https://cwe.mitre.org/data/definitions/326.html), [CWE-327](https://cwe.mitre.org/data/definitions/327.html), OWASP A02:2021 Cryptographic Failures
 
 Noncompliant:
 
@@ -2688,6 +2706,8 @@ crypto.createCipheriv('aes-256-gcm', key, iv);
 
 SonarQube: S5542
 
+Standards: [CWE-327](https://cwe.mitre.org/data/definitions/327.html), [CWE-780](https://cwe.mitre.org/data/definitions/780.html), OWASP A02:2021 Cryptographic Failures
+
 Noncompliant:
 
 ```javascript
@@ -2706,6 +2726,8 @@ crypto.createCipheriv('aes-128-gcm', key, iv);
 
 SonarQube: S5659
 
+Standards: [CWE-347](https://cwe.mitre.org/data/definitions/347.html), OWASP A02:2021 Cryptographic Failures
+
 Noncompliant:
 
 ```javascript
@@ -2723,6 +2745,8 @@ jwt.verify(token, key, { algorithms: ['RS256'] });
 **Files should not be made writable by everyone.** A mode that lets "others" write (like 0o777 or 0o666) lets every user on the machine change the file. Read and execute for others (0o755) are left alone: executables and public files need them.
 
 SonarQube: S2612 (related)
+
+Standards: [CWE-266](https://cwe.mitre.org/data/definitions/266.html), [CWE-732](https://cwe.mitre.org/data/definitions/732.html), OWASP A01:2021 Broken Access Control, OWASP A04:2021 Insecure Design
 
 Noncompliant:
 
@@ -2743,6 +2767,8 @@ fs.chmodSync(bin, 0o755);
 
 SonarQube: S5443
 
+Standards: [CWE-377](https://cwe.mitre.org/data/definitions/377.html), [CWE-379](https://cwe.mitre.org/data/definitions/379.html), OWASP A01:2021 Broken Access Control
+
 Noncompliant:
 
 ```javascript
@@ -2761,6 +2787,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'report-'));
 
 SonarQube: S5148
 
+Standards: [CWE-1022](https://cwe.mitre.org/data/definitions/1022.html), OWASP A05:2021 Security Misconfiguration
+
 Noncompliant:
 
 ```javascript
@@ -2778,6 +2806,8 @@ window.open(link, '_blank', 'noopener,noreferrer');
 **Links opening a new tab should not give it access to this page.** `target="_blank"` to another site without `rel="noopener"` lets that page navigate this one through window.opener in older browsers.
 
 SonarQube: S5148
+
+Standards: [CWE-1022](https://cwe.mitre.org/data/definitions/1022.html), OWASP A05:2021 Security Misconfiguration
 
 Noncompliant:
 
@@ -2798,6 +2828,8 @@ const w = <a href="/help" target="_blank">Help</a>;
 
 SonarQube: S4036
 
+Standards: [CWE-426](https://cwe.mitre.org/data/definitions/426.html), [CWE-427](https://cwe.mitre.org/data/definitions/427.html), OWASP A08:2021 Software and Data Integrity Failures
+
 Noncompliant:
 
 ```javascript
@@ -2816,6 +2848,8 @@ const m = re.exec(line);
 **Passwords should not be hard-coded.** A password in the source is visible to everyone with access to the repository, and stays in its history. Read it from the environment or a secret store.
 
 SonarQube: S2068
+
+Standards: [CWE-259](https://cwe.mitre.org/data/definitions/259.html), [CWE-798](https://cwe.mitre.org/data/definitions/798.html), OWASP A07:2021 Identification and Authentication Failures
 
 Noncompliant:
 
@@ -2837,6 +2871,8 @@ const field = { password: '' };
 
 SonarQube: S6418
 
+Standards: [CWE-798](https://cwe.mitre.org/data/definitions/798.html), OWASP A07:2021 Identification and Authentication Failures
+
 Noncompliant:
 
 ```javascript
@@ -2856,6 +2892,8 @@ const tokenHeader = 'Authorization';
 
 SonarQube: S2755
 
+Standards: [CWE-611](https://cwe.mitre.org/data/definitions/611.html), [CWE-827](https://cwe.mitre.org/data/definitions/827.html), OWASP A05:2021 Security Misconfiguration
+
 Noncompliant:
 
 ```javascript
@@ -2873,6 +2911,8 @@ libxmljs.parseXml(xml, { noblanks: true });
 **Cookies should have the secure flag.** Without `secure`, the cookie is also sent over plain HTTP, where anyone on the network can read it.
 
 SonarQube: S2092
+
+Standards: [CWE-311](https://cwe.mitre.org/data/definitions/311.html), [CWE-315](https://cwe.mitre.org/data/definitions/315.html), [CWE-614](https://cwe.mitre.org/data/definitions/614.html), OWASP A04:2021 Insecure Design, OWASP A05:2021 Security Misconfiguration
 
 Noncompliant:
 
@@ -2893,6 +2933,8 @@ nodemailer.createTransport({ host, secure: false });
 
 SonarQube: S3330
 
+Standards: [CWE-1004](https://cwe.mitre.org/data/definitions/1004.html), OWASP A05:2021 Security Misconfiguration
+
 Noncompliant:
 
 ```javascript
@@ -2910,6 +2952,8 @@ app.use(session({ secret, cookie: { httpOnly: true, secure: true } }));
 **CORS should not allow every origin.** `Access-Control-Allow-Origin: *` (also cors() with no options) lets any website read this server's responses from a visitor's browser.
 
 SonarQube: S5122
+
+Standards: [CWE-346](https://cwe.mitre.org/data/definitions/346.html), [CWE-942](https://cwe.mitre.org/data/definitions/942.html), OWASP A05:2021 Security Misconfiguration, OWASP A07:2021 Identification and Authentication Failures
 
 Noncompliant:
 
@@ -2930,6 +2974,8 @@ app.use(cors({ origin: ['https://app.example.com'] }));
 
 SonarQube: S5728
 
+Standards: [CWE-79](https://cwe.mitre.org/data/definitions/79.html), OWASP A05:2021 Security Misconfiguration
+
 Noncompliant:
 
 ```javascript
@@ -2947,6 +2993,8 @@ app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"] }
 **MIME type sniffing should stay disabled.** Without `X-Content-Type-Options: nosniff`, browsers may run an upload or response as a script despite its declared type.
 
 SonarQube: S5734
+
+Standards: [CWE-79](https://cwe.mitre.org/data/definitions/79.html), [CWE-436](https://cwe.mitre.org/data/definitions/436.html), OWASP A05:2021 Security Misconfiguration
 
 Noncompliant:
 
@@ -2966,6 +3014,8 @@ app.use(helmet());
 
 SonarQube: S5736
 
+Standards: [CWE-200](https://cwe.mitre.org/data/definitions/200.html), OWASP A01:2021 Broken Access Control
+
 Noncompliant:
 
 ```javascript
@@ -2983,6 +3033,8 @@ app.use(helmet.referrerPolicy({ policy: 'no-referrer' }));
 **HTTP Strict-Transport-Security should not be disabled.** HSTS tells browsers to use HTTPS only; without it, a first plain-HTTP request can be intercepted and downgraded.
 
 SonarQube: S5739
+
+Standards: [CWE-319](https://cwe.mitre.org/data/definitions/319.html), [CWE-693](https://cwe.mitre.org/data/definitions/693.html), OWASP A05:2021 Security Misconfiguration
 
 Noncompliant:
 
@@ -3265,6 +3317,8 @@ class Cache { private hits = 0; #size = 0; constructor(private readonly store: M
 
 **eval() and exec() should not be used.** eval()/exec() run arbitrary code and are a common injection vector.
 
+Standards: [CWE-95](https://cwe.mitre.org/data/definitions/95.html), OWASP A03:2021 Injection
+
 Noncompliant:
 
 ```python
@@ -3281,6 +3335,8 @@ ast.literal_eval(user_input)
 
 **Commands should not be run through a shell.** shell=True passes the command through /bin/sh, enabling command injection.
 
+Standards: [CWE-78](https://cwe.mitre.org/data/definitions/78.html), OWASP A03:2021 Injection
+
 Noncompliant:
 
 ```python
@@ -3296,6 +3352,8 @@ subprocess.run(['ls', '-l'])
 ## py/pickle-load
 
 **Untrusted data should not be unpickled.** pickle.load()/loads() can execute arbitrary code embedded in the data.
+
+Standards: [CWE-502](https://cwe.mitre.org/data/definitions/502.html), OWASP A08:2021 Software and Data Integrity Failures
 
 Noncompliant:
 
@@ -3413,6 +3471,8 @@ class A { boolean f(String s) { return "x".equals(s); } }
 
 SonarQube: S4790
 
+Standards: [CWE-1240](https://cwe.mitre.org/data/definitions/1240.html), OWASP A02:2021 Cryptographic Failures
+
 Noncompliant:
 
 ```java
@@ -3499,6 +3559,8 @@ class A { void f() { log.info("x"); } }
 
 **gets() should never be used.** gets() cannot limit input size and always allows a buffer overflow.
 
+Standards: [CWE-120](https://cwe.mitre.org/data/definitions/120.html), [CWE-242](https://cwe.mitre.org/data/definitions/242.html)
+
 Noncompliant:
 
 ```c
@@ -3514,6 +3576,8 @@ void f(char *b, int n) { fgets(b, n, stdin); }
 ## c/unsafe-string-function
 
 **Unbounded string functions should not be used.** strcpy, strcat, sprintf and vsprintf do not check the destination size.
+
+Standards: [CWE-120](https://cwe.mitre.org/data/definitions/120.html), [CWE-676](https://cwe.mitre.org/data/definitions/676.html)
 
 Noncompliant:
 

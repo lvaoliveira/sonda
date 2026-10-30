@@ -8,6 +8,7 @@ import { Chip } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
 import { SeverityGlyph, SeverityPill } from '@/components/sonda/status'
 import { formatNumber } from '@/lib/format'
+import { cweUrl } from '@/lib/links'
 import { CATEGORY_LABEL, languageLabel } from '@/lib/visual'
 
 export function RulesPage() {
@@ -160,6 +161,21 @@ function RuleDetail({ rule }: { rule: Rule }) {
         </div>
         <h2 className="m-0 text-[22px] leading-[1.25] font-semibold tracking-[-0.025em]">{rule.name}</h2>
         <p className="m-0 max-w-[70ch] text-sm text-fg-muted">{rule.description}</p>
+        {(rule.cwe.length > 0 || rule.owasp.length > 0) && (
+          <p className="m-0 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-fg-muted">
+            <span className="micro-label">Standards</span>
+            {rule.cwe.map((c) => (
+              <a key={c} href={cweUrl(c)} target="_blank" rel="noreferrer" className="font-mono text-[12px]">
+                CWE-{c}
+              </a>
+            ))}
+            {rule.owasp.map((o) => (
+              <span key={o.id}>
+                OWASP {o.id}:2021 {o.title}
+              </span>
+            ))}
+          </p>
+        )}
         <div className="flex flex-wrap gap-1.5">
           {rule.tags.map((t) => (
             <Mono key={t} className="rounded-[10px] bg-hover px-2 py-0.5 text-[10.5px] text-fg-muted">

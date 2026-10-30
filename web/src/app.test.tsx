@@ -117,6 +117,13 @@ describe('Rules', () => {
     expect(within(detail).getByText(/enabled = \["rust\/undocumented-unsafe"\]/)).toBeInTheDocument()
   })
 
+  it('shows the CWE and OWASP standards a rule relates to', async () => {
+    renderAt('/rules#go/sql-string-concat')
+    const detail = await screen.findByRole('article')
+    expect(within(detail).getByRole('link', { name: 'CWE-89' })).toHaveAttribute('href', 'https://cwe.mitre.org/data/definitions/89.html')
+    expect(detail).toHaveTextContent('OWASP A03:2021 Injection')
+  })
+
   it('selects the rule named in the URL hash', async () => {
     renderAt('/rules#py/broad-except')
     const detail = await screen.findByRole('heading', { level: 2, name: /bare or broad except/ })
@@ -266,6 +273,13 @@ describe('Security', () => {
     expect(screen.getByRole('region', { name: /Risk · 12 weeks/ })).toHaveTextContent('−')
     expect(screen.getByRole('region', { name: 'High-risk components' })).toHaveTextContent('billing-service/src/')
     expect(screen.getByRole('region', { name: 'Remediation' })).toHaveTextContent('4.2 days')
+    expect(within(focus).getAllByRole('link', { name: 'CWE-798' })[0]).toHaveAttribute('href', 'https://cwe.mitre.org/data/definitions/798.html')
+    const owasp = screen.getByRole('region', { name: 'OWASP Top 10 · 2021' })
+    const categories = within(owasp).getAllByRole('listitem')
+    expect(categories).toHaveLength(10)
+    expect(categories[6]).toHaveTextContent('A07Identification and Authentication Failures11')
+    expect(within(categories[6]).getByRole('link', { name: 'js/hardcoded-password' })).toHaveAttribute('href', '/rules#js%2Fhardcoded-password')
+    expect(owasp).toHaveTextContent('1 open vulnerability has no OWASP category')
   })
 })
 

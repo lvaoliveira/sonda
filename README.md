@@ -31,7 +31,7 @@ Quality gate: FAILED
 - **Coverage**: imported from LCOV, which istanbul/c8/vitest, coverage.py, gcov/lcov and llvm-cov all produce.
 - **New code**: everything changed since the merge base with a branch (committed or not), plus untracked files. Each issue and metric is reported both overall and for new code, the "clean as you code" approach.
 - **Quality gate**: configurable conditions on any metric. Exit code 1 when it fails.
-- **Output**: human-readable text, JSON, or SARIF 2.1.0 for GitHub code scanning, GitLab and IDEs.
+- **Output**: human-readable text, JSON, or SARIF 2.1.0 for GitHub code scanning, GitLab and IDEs. Security rules carry their CWE ids and OWASP Top 10 categories.
 - **Suppression**: put `// NOSONAR` or `// sonda-ignore` on a line to suppress every issue on it. Put `// sonda-ignore: js/no-var, js/eqeqeq` to suppress only the listed rules.
 - **Fast**: files are analyzed in parallel, and `.gitignore` is respected.
 - **Deterministic**: the same code and config produce byte-identical reports, whatever the thread count or filesystem order. The one exception is a file that hits its time budget, which is reported as a warning.

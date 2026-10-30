@@ -42,9 +42,20 @@ pub struct RuleView {
     pub open_issues: i64,
     /// Projects with at least one of those.
     pub projects: i64,
-    pub tags: Vec<&'static str>,
+    /// The category, `security`, then `cwe-<id>` and `owasp-a01` style tags.
+    pub tags: Vec<String>,
+    pub cwe: &'static [u16],
+    /// OWASP Top 10 2021 categories.
+    pub owasp: Vec<OwaspRef>,
     pub noncompliant: Option<&'static str>,
     pub compliant: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+pub struct OwaspRef {
+    /// `A01` to `A10`.
+    pub id: &'static str,
+    pub title: &'static str,
 }
 
 pub async fn list(
@@ -71,6 +82,15 @@ pub async fn list(
             if r.category == Category::Vulnerability {
                 tags.push("security");
             }
+            let standards = r.standards();
+            let mut tags: Vec<String> = tags.into_iter().map(String::from).collect();
+            tags.extend(standards.cwe.iter().map(|c| format!("cwe-{c}")));
+            tags.extend(
+                standards
+                    .owasp
+                    .iter()
+                    .map(|o| format!("owasp-{}", o.id().to_lowercase())),
+            );
             RuleView {
                 id: r.id,
                 name: r.name,
@@ -83,6 +103,15 @@ pub async fn list(
                 open_issues,
                 projects,
                 tags,
+                cwe: standards.cwe,
+                owasp: standards
+                    .owasp
+                    .iter()
+                    .map(|o| OwaspRef {
+                        id: o.id(),
+                        title: o.title(),
+                    })
+                    .collect(),
                 noncompliant: r.example.as_ref().map(|e| e.bad),
                 compliant: r.example.as_ref().map(|e| e.good),
             }
