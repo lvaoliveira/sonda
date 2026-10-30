@@ -212,7 +212,7 @@ branch. Accepted issues don't count.
 | `debt` | hours of fix effort | effort, and the most severe issue |
 | `gate` | failed conditions, per project failing its gate | files with the most new issues |
 | `dup` | share of duplicated lines | duplicated share per file |
-| `coverage` | coverage per project, lowest first | none: reports carry coverage per project only |
+| `coverage` | coverage per project, lowest first | each project's least covered files (from per-file coverage) |
 
 **Owners** come from the repository's CODEOWNERS file, which `sonda upload`
 sends along. It looks in `.github/`, the root, then `docs/`, as GitHub does,
@@ -327,6 +327,27 @@ branch's latest analysis pinned, from the lockfiles in its report
 Uploads carry them in the report's `dependencies` (at most 200,000, each
 checked: a known ecosystem, a `pkg:` URL, bounded fields, a safe relative
 lockfile path, no duplicates). Reports from an older CLI have none.
+
+## Coverage
+
+The project page's Coverage tile opens a line coverage report like an
+LCOV HTML report (Istanbul's, genhtml's): directories add up their files,
+each opens to its subdirectories and files, and a file shows its source
+with uncovered lines in red and covered ones marked, stepping through the
+uncovered blocks. It's built from the per-file coverage in the report
+(`sonda scan --coverage lcov.info`), so it counts lines only, not branches
+or functions. Files the coverage reports don't list show "no data":
+Istanbul and c8 list only the files the tests loaded unless told to
+include all.
+
+- `GET /api/projects/{key}/coverage?branch=` lists every file of the
+  branch's latest analysis with its covered and uncovered line counts
+  (null without data), and the analysis's `coverage` measure.
+- `GET /api/projects/{key}/coverage/file?path=&branch=` returns one file's
+  highlighted source (at most 20,000 lines; `truncated` says when it's
+  longer) with its `covered` and `uncovered` line numbers.
+
+An unknown project or file is `404`; a branch without analyses is `400`.
 
 ## New code on the main branch
 

@@ -1,16 +1,5 @@
-import type { CodeLine, Severity, TokenRole } from '@/api/types'
-import { SEVERITY } from '@/lib/visual'
-
-/** Token roles map to theme colors, as in the design handoff. */
-const ROLE_COLOR: Record<TokenRole, string> = {
-  keyword: 'var(--sd-info)',
-  string: 'var(--sd-ok)',
-  number: 'var(--sd-warn)',
-  comment: 'var(--sd-faint)',
-  type: 'var(--sd-accent)',
-  punct: 'var(--sd-muted)',
-  plain: 'var(--sd-text)',
-}
+import type { CodeLine, Severity } from '@/api/types'
+import { ROLE_COLOR, SEVERITY } from '@/lib/visual'
 
 /**
  * Source excerpt with line numbers. Highlighted lines are tinted with the

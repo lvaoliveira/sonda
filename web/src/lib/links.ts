@@ -16,6 +16,22 @@ export function dependenciesUrl(project: string, branch?: string, mainBranch?: s
   return branch && branch !== mainBranch ? `${base}?branch=${encodeURIComponent(branch)}` : base
 }
 
+/** A project's coverage report, in directory `dir` (the root by default). */
+export function coverageUrl(project: string, branch?: string, mainBranch?: string, dir?: string): string {
+  const params = new URLSearchParams()
+  if (branch && branch !== mainBranch) params.set('branch', branch)
+  if (dir) params.set('dir', dir)
+  const query = params.toString()
+  return `/projects/${encodeURIComponent(project)}/coverage${query ? `?${query}` : ''}`
+}
+
+/** One file's covered and uncovered lines. */
+export function fileCoverageUrl(project: string, path: string, branch?: string, mainBranch?: string): string {
+  const params = new URLSearchParams({ path })
+  if (branch && branch !== mainBranch) params.set('branch', branch)
+  return `/projects/${encodeURIComponent(project)}/coverage/file?${params}`
+}
+
 /** MITRE's page for a CWE weakness. */
 export function cweUrl(id: number): string {
   return `https://cwe.mitre.org/data/definitions/${id}.html`

@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type AnalysisPage, type ComponentDetail, type ComponentList, type DependencyList, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -67,6 +67,13 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     dependencies: (project, branch) =>
       call<DependencyList>('GET', `/projects/${encodeURIComponent(project)}/dependencies${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
     setNewCodePeriod: (project, analysis) => call<NewCodePeriod>('PUT', `/projects/${encodeURIComponent(project)}/new-code`, { analysis }),
+    coverage: (project, branch) =>
+      call<CoverageList>('GET', `/projects/${encodeURIComponent(project)}/coverage${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
+    fileCoverage: (project, path, branch) =>
+      call<FileCoverage>(
+        'GET',
+        `/projects/${encodeURIComponent(project)}/coverage/file?path=${encodeURIComponent(path)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`,
+      ),
     reviewDependency: (project, patch) =>
       call<DependencyReview>('PATCH', `/projects/${encodeURIComponent(project)}/dependencies/reviews`, patch),
     analyses: (q) => {

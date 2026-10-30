@@ -468,6 +468,42 @@ export interface NewCodePeriod {
   fromScan: string[]
 }
 
+// ---------------------------------------------------------------- coverage
+
+/** Line coverage per file of a branch's latest analysis (`sonda scan --coverage`). */
+export interface CoverageList {
+  project: string
+  branch: string
+  analysis: { id: number; sha: string; analyzedAt: string }
+  /** The analysis's coverage measure; null without coverage. */
+  coverage: number | null
+  /** Every analyzed file, by path. */
+  files: CoverageFile[]
+}
+
+export interface CoverageFile {
+  path: string
+  language: string
+  /** Lines the coverage reports list as run and not run; null when they don't list the file. */
+  covered: number | null
+  uncovered: number | null
+}
+
+/** One file's source with its covered and uncovered lines. */
+export interface FileCoverage {
+  project: string
+  branch: string
+  analysis: { id: number; sha: string; analyzedAt: string }
+  path: string
+  language: string
+  /** Null when the coverage reports don't list the file. */
+  covered: number[] | null
+  uncovered: number[] | null
+  lines: CodeLine[]
+  /** The file is longer than what `lines` shows. */
+  truncated: boolean
+}
+
 // ------------------------------------------------------------ dependencies
 
 export interface DependencySummary {
@@ -783,6 +819,10 @@ export interface SondaApi {
   component(project: string, path: string, branch?: string): Promise<ComponentDetail>
   /** The project's dependencies on `branch`, or on its main branch. */
   dependencies(project: string, branch?: string): Promise<DependencyList>
+  /** Line coverage per file on `branch`, or on the main branch. */
+  coverage(project: string, branch?: string): Promise<CoverageList>
+  /** One file's covered and uncovered lines. */
+  fileCoverage(project: string, path: string, branch?: string): Promise<FileCoverage>
   /** Admins: starts the main branch's new code at `analysis`, or at the first analysis (null). */
   setNewCodePeriod(project: string, analysis: number | null): Promise<NewCodePeriod>
   /** Triages one known vulnerability in one of the project's packages. */

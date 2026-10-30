@@ -8,7 +8,7 @@ import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { HealthBar, PipMeter, Sparkline } from '@/components/sonda/meters'
 import { GateConditions } from '@/components/sonda/gate'
 import { GateDot, GateStatus } from '@/components/sonda/status'
-import { componentLabel, componentUrl, dependenciesUrl } from '@/lib/links'
+import { componentLabel, componentUrl, coverageUrl, dependenciesUrl } from '@/lib/links'
 import { compactCount, formatAge, formatDebt, formatNumber, shortDate } from '@/lib/format'
 import { ECOSYSTEM_LABEL, GATE, coverageColor, languageLabel, scoreColor } from '@/lib/visual'
 
@@ -171,6 +171,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
       value: pct(m.coverage),
       sub: m.coverage == null ? 'No coverage uploaded' : fromScan('new_coverage') ? 'on lines the scan changed' : scope === 'newCode' ? 'on changed lines' : 'of code lines',
       color: m.coverage == null ? undefined : coverageColor(m.coverage),
+      to: coverageUrl(p.key, p.branch, p.mainBranch),
     },
     { label: 'Duplication', value: pct(m.duplication), sub: fromScan('new_duplicated_lines_density') ? 'in lines the scan changed' : 'duplicated lines' },
     { label: 'Debt', value: m.debtMinutes == null ? '—' : formatDebt(m.debtMinutes), sub: 'to fix every issue', to: issues('') },
