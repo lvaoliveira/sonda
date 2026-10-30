@@ -251,6 +251,26 @@ the analyzed branches.
 `GET /api/issues` takes `project=` and `branch=` to list one project's
 issues, which is how the project page links to them.
 
+## Security
+
+`GET /api/security` summarizes vulnerabilities across projects, each
+project's main branch. Open means present and not accepted. It returns:
+- open vulnerabilities by severity, how many appeared in the last 7 days,
+  and how many projects have any;
+- counts by status: open, confirmed, accepted, and fixed in the last 30
+  days;
+- the ten to fix first: most severe, then longest open;
+- twelve weekly points: open count, a severity-weighted risk (blocker 10,
+  critical 5, major 2, minor 1), and how many were found and fixed that
+  week (baseline issues don't count as found);
+- affected projects (blocker and critical, then the rest), the six riskiest
+  components, and the six most common rules;
+- median days from first seen to fixed, over the last 90 days: for blockers
+  and criticals, and for all.
+
+Hotspots, CWE/OWASP mappings and reachability aren't recorded; see the
+roadmap.
+
 ## Components
 
 A component is a project's top-level directory, or `.` for files at its

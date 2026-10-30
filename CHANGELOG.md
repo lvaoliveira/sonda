@@ -159,6 +159,11 @@ file, the report formats and the public library API.
   its components with owners, per branch. `GET /api/projects` and
   `GET /api/projects/{key}` serve them, and `GET /api/issues` takes
   `project=` and `branch=`.
+- Web app: the Security screen shows open vulnerabilities by severity, the
+  ten to fix first, a twelve-week risk trend, affected projects, the
+  riskiest components, the most common rules, and time to fix.
+  `GET /api/security` serves it. The roadmap now plans CWE/OWASP mapping,
+  hotspots and reachability.
 - Web app: the Components screen lists every project's top-level directories
   with owners, files, lines, issues and debt, filtered by project, owner
   and search. A component's page shows its open issues, an eight-week trend,

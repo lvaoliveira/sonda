@@ -18,6 +18,7 @@ pub mod issues;
 pub mod overview;
 pub mod projects;
 pub mod rules;
+pub mod security;
 pub mod session;
 pub mod store;
 pub mod throttle;

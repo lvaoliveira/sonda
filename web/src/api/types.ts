@@ -481,6 +481,42 @@ export interface ComponentDetail {
   fileList: { path: string; language: string; ncloc: number; issues: number; debtMinutes: number; worst: Severity | null }[]
 }
 
+// ---------------------------------------------------------------- security
+
+export interface SecurityFinding {
+  id: number
+  severity: Severity
+  rule: string
+  message: string
+  project: string
+  branch: string
+  component: string
+  path: string
+  line: number
+  firstSeen: string
+  ageDays: number
+}
+
+/** Vulnerabilities across projects, each project's main branch. */
+export interface Security {
+  /** Open and confirmed, by severity. */
+  openBySeverity: Partial<Record<Severity, number>>
+  open: number
+  newThisWeek: number
+  projectsAffected: number
+  status: { open: number; confirmed: number; accepted: number; fixedLast30Days: number }
+  /** Most severe first, then oldest. */
+  focus: SecurityFinding[]
+  /** Twelve weeks, oldest first; `weighted` weighs blocker 10, critical 5, major 2, minor 1. */
+  trend: { date: string; open: number; weighted: number; introduced: number; fixed: number }[]
+  /** `severe` is blocker and critical. */
+  projects: { project: string; severe: number; other: number }[]
+  components: { project: string; path: string; count: number; worst: Severity; weighted: number }[]
+  rules: { rule: string; count: number }[]
+  /** Medians over vulnerabilities fixed in the last 90 days; null when none was. */
+  remediation: { medianDaysSevere: number | null; medianDaysAll: number | null; fixedLast90Days: number }
+}
+
 // ---------------------------------------------------------------- analyses
 
 export interface AnalysisQuery {
@@ -577,6 +613,7 @@ export interface SondaApi {
   projects(): Promise<ProjectList>
   /** The project on `branch`, or on its main branch. */
   project(key: string, branch?: string): Promise<ProjectDetail>
+  security(): Promise<Security>
   /** Every project's components, or one project's. */
   components(project?: string): Promise<ComponentList>
   component(project: string, path: string, branch?: string): Promise<ComponentDetail>
