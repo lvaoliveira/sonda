@@ -169,6 +169,12 @@ file, the report formats and the public library API.
   or SPDX 2.3 JSON, honoring `SOURCE_DATE_EPOCH`. Lockfiles are read
   offline, never by running a package manager; ones sonda recognizes but
   doesn't read yet (pnpm, Yarn, Bun, Go, Gradle) are named in a warning.
+- Opt-in advisory sync: with `SONDA_ADVISORY_SYNC=true` the server fetches
+  what changed in OSV daily (OSV's `modified_id.csv`, then only changed
+  records from the allowed databases; HTTPS only, no redirects, capped
+  sizes; a failed run is retried from where the last complete one ended).
+  `sonda-server advisories sync` runs it once, for cron.
+  `SONDA_ADVISORY_SYNC_URL` points it at a mirror.
 - Known vulnerabilities in dependencies (ADR-0009, phase 3):
   `sonda-server advisories import PATH...` imports OSV records (GitHub,
   RustSec, PyPA and Go advisories; others skipped by license), and each

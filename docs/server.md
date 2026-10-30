@@ -332,7 +332,21 @@ lockfile path, no duplicates). Reports from an older CLI have none.
 
 Dependencies are checked against advisories the server stores
 ([ADR-0009](adr/0009-dependencies-and-advisories.md)). It has none until
-an administrator imports them, and it never downloads them itself (yet):
+they're synced or imported. The server only connects out if you ask it to:
+
+- **Daily sync, opt-in.** With `SONDA_ADVISORY_SYNC=true`, the server
+  fetches what changed in OSV since its last sync, at startup and then every
+  24 hours.
+  - **The first sync** fetches every advisory sonda keeps, about 26,000
+    records, in about 10 minutes. Later ones take seconds.
+  - **What it fetches:** per ecosystem, OSV's `modified_id.csv`, then only
+    the records modified since the last sync, from the databases below.
+  - **Failures:** if any record can't be fetched or stored, that
+    ecosystem's progress isn't saved and the next sync retries.
+  - **Limits:** redirects are refused and responses are size-capped.
+- **Once, from cron.** `sonda-server advisories sync` does the same in one
+  run, for installs that prefer cron to the server's own schedule.
+- **Offline.** Import exports carried in by hand:
 
 ```sh
 # OSV's exports per ecosystem, unzipped (about 1.3 GB for all three).
@@ -351,7 +365,8 @@ DATABASE_URL=... sonda-server advisories import osv/
   skipped, including OSV's other sources, some of them non-commercial.
 - **Re-importing.** Re-running the import replaces only records whose
   `modified` time is newer, so a daily cron with fresh exports keeps the
-  data current. The full export imports in under a minute.
+  data current. The full export imports in under a minute. Sync and import
+  can be mixed: both store the same records.
 - **When matching happens.** Matching runs whenever dependencies are read,
   against each analysis's dependencies. So a newly imported advisory flags
   projects without new analyses.
@@ -424,6 +439,8 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The API token, at least 32 characters. Required. Kept in memory only as a SHA-256 hash and compared in constant time. |
 | `SONDA_ADMIN_PASSWORD` / `SONDA_ADMIN_PASSWORD_FILE` | Creates the first admin while no users exist; ignored afterwards. At least 12 characters. |
 | `SONDA_ADMIN_USERNAME` | That admin's username. Default `admin`. |
+| `SONDA_ADVISORY_SYNC` | `true` syncs advisories from OSV daily (see [Known vulnerabilities](#known-vulnerabilities)). Off by default: the server makes no outbound connections. |
+| `SONDA_ADVISORY_SYNC_URL` | A mirror of OSV's exports to sync from instead: `https://`, or `http://` to localhost only. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
 | `RUST_LOG` | Log filter. Default `sonda=info,sqlx=warn`. |
