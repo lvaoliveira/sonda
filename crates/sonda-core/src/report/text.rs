@@ -84,6 +84,26 @@ pub fn render(r: &Report) -> String {
         }
     }
 
+    if let Some(v) = r.vulnerabilities.filter(|v| !v.is_empty()) {
+        let _ = writeln!(out, "\nVulnerable dependencies");
+        for f in v {
+            let fix = f.fixed_in.as_deref().map_or_else(
+                || "no fix yet".to_string(),
+                |v| format!("fixed in {}", terminal_safe(v)),
+            );
+            let _ = writeln!(
+                out,
+                "  {:<9} {} {}  {}  {} ({})",
+                f.severity.as_str().to_uppercase(),
+                terminal_safe(&f.name),
+                terminal_safe(&f.version),
+                terminal_safe(&f.advisory),
+                terminal_safe(&f.summary),
+                fix
+            );
+        }
+    }
+
     if !r.warnings.is_empty() {
         let _ = writeln!(out, "\nWarnings");
         for w in r.warnings {
@@ -126,7 +146,14 @@ pub fn render(r: &Report) -> String {
         format_minutes(m(Metric::DebtMinutes).unwrap_or(0.0) as u64)
     );
     if !r.dependencies.is_empty() {
-        let _ = writeln!(out, "  {}", dependency_summary(r.dependencies));
+        let mut line = dependency_summary(r.dependencies);
+        if let Some(v) = r.vulnerabilities {
+            let _ = write!(line, " · {} vulnerable", n(Metric::VulnerableDependencies));
+            if v.is_empty() {
+                line.push_str(" (none known)");
+            }
+        }
+        let _ = writeln!(out, "  {line}");
     }
 
     let _ = writeln!(

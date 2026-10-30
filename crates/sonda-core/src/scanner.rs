@@ -39,6 +39,9 @@ pub struct ScanOptions {
     pub isolation: Isolation,
     /// Files analyzed in parallel; `None` uses every CPU.
     pub jobs: Option<NonZeroUsize>,
+    /// A directory of OSV records to check dependencies against (ADR-0009);
+    /// without it, dependency metrics have no data.
+    pub advisories: Option<PathBuf>,
 }
 
 /// Where files are parsed.
@@ -70,9 +73,26 @@ pub(crate) fn scan(
         "discovered files"
     );
     let (dependencies, dependency_warnings) = load_dependencies(&found.dependency_files);
+    let vulnerabilities = match &opts.advisories {
+        Some(dir) => {
+            let (advisories, warnings) = load_advisories(dir)?;
+            let found = crate::advisories::check(&dependencies, &advisories);
+            info!(
+                advisories = advisories.len(),
+                vulnerabilities = found.len(),
+                "checked dependencies"
+            );
+            Some((found, warnings))
+        }
+        None => None,
+    };
     let mut analysis = scan_files(opts, cfg, rules, found.files, found.warnings)?;
     analysis.dependencies = dependencies;
     analysis.warnings.extend(dependency_warnings);
+    if let Some((found, warnings)) = vulnerabilities {
+        analysis.vulnerabilities = Some(found);
+        analysis.warnings.extend(warnings);
+    }
     analysis.warnings.sort();
     analysis.warnings.dedup();
     Ok(analysis)
@@ -90,6 +110,80 @@ pub(crate) fn dependencies(
     warnings.sort();
     warnings.dedup();
     Ok((dependencies, warnings))
+}
+
+/// One OSV record is a few kilobytes; this bounds a hostile one.
+const ADVISORY_MAX_BYTES: u64 = 4 << 20;
+
+/// Every OSV record (`*.json`) under `dir`, such as an unzipped OSV export,
+/// that sonda imports; records that can't be read are counted in a warning.
+/// A missing directory is an error: the gate would silently lack data.
+fn load_advisories(dir: &Path) -> Result<(Vec<crate::advisories::Advisory>, Vec<String>), Error> {
+    let started = Instant::now();
+    if !dir.is_dir() {
+        return Err(Error::InvalidArgument(format!(
+            "--advisories {}: not a directory",
+            dir.display()
+        )));
+    }
+    let mut stack = vec![dir.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(d) = stack.pop() {
+        let entries = std::fs::read_dir(&d)
+            .map_err(|e| Error::InvalidArgument(format!("{}: {e}", d.display())))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => stack.push(path),
+                // OSV names each record after its id: skip databases sonda
+                // doesn't import (most of npm's are malicious-package
+                // reports) without reading them.
+                Ok(t)
+                    if t.is_file()
+                        && path.extension().is_some_and(|e| e == "json")
+                        && path.file_stem().and_then(|s| s.to_str()).is_none_or(|id| {
+                            crate::advisories::Source::of(id).is_some() || !id.contains('-')
+                        }) =>
+                {
+                    files.push(path)
+                }
+                _ => {}
+            }
+        }
+    }
+    files.sort();
+    let mut advisories = Vec::new();
+    let mut unreadable = 0;
+    for path in &files {
+        let text = read_listed(path, None, ADVISORY_MAX_BYTES)
+            .ok()
+            .flatten()
+            .and_then(|b| String::from_utf8(b).ok());
+        match text.as_deref().map(crate::advisories::parse) {
+            Some(Ok(Some(a))) => advisories.push(a),
+            Some(Ok(None)) => {}
+            _ => unreadable += 1,
+        }
+    }
+    // The same record can be in two ecosystems' directories.
+    advisories.sort_by(|a, b| a.id.cmp(&b.id));
+    advisories.dedup_by(|a, b| a.id == b.id);
+    info!(
+        records = files.len(),
+        advisories = advisories.len(),
+        elapsed_ms = ms(started),
+        "read advisories"
+    );
+    let warnings = (unreadable > 0)
+        .then(|| {
+            format!(
+                "{}: {unreadable} advisory records could not be read",
+                dir.display()
+            )
+        })
+        .into_iter()
+        .collect();
+    Ok((advisories, warnings))
 }
 
 /// Lockfiles are machine-written and can be much larger than source files
@@ -279,6 +373,7 @@ fn scan_files(
         new_code,
         warnings,
         dependencies: Vec::new(),
+        vulnerabilities: None,
     })
 }
 
@@ -623,6 +718,7 @@ mod tests {
             coverage: vec![root.join("lcov.info")],
             isolation: Isolation::InProcess,
             jobs: None,
+            advisories: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
 
@@ -671,6 +767,7 @@ mod tests {
                 coverage: vec![],
                 isolation: Isolation::InProcess,
                 jobs: None,
+                advisories: None,
             };
             let r = scan(&opts, &cfg, &rules).unwrap();
             let paths: Vec<_> = r.files.iter().map(|f| f.path.clone()).collect();
@@ -704,6 +801,7 @@ mod tests {
             coverage: vec![],
             isolation: Isolation::InProcess,
             jobs: None,
+            advisories: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         assert_eq!(r.files.len(), 1);
@@ -721,6 +819,7 @@ mod tests {
             coverage: vec![],
             isolation: Isolation::InProcess,
             jobs: None,
+            advisories: None,
         };
         let mut paths = collect_files(root, cfg).unwrap().files;
         let mut walk_warnings = vec!["z: walk error".to_string(), "a: walk error".to_string()];
@@ -804,6 +903,7 @@ mod tests {
             coverage: vec![],
             isolation: Isolation::InProcess,
             jobs: None,
+            advisories: None,
         };
         let out = outcome(scan(&opts, &cfg, &rules).unwrap(), &cfg);
         let text = report::render(&report::build(&out, false), Format::Text);
@@ -878,6 +978,7 @@ mod tests {
             coverage: vec![],
             isolation: Isolation::InProcess,
             jobs: None,
+            advisories: None,
         };
         let r = scan_files(&opts, &cfg, &rules, paths, warnings).unwrap();
         assert!(r.files.is_empty(), "nothing outside the root was analyzed");

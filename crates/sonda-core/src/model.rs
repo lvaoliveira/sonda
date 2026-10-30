@@ -67,6 +67,10 @@ metrics! {
     NewDuplicatedLines => "new_duplicated_lines",
     NewDuplicatedLinesDensity => "new_duplicated_lines_density",
     NewCoverage => "new_coverage",
+    // Dependencies with a known vulnerability (ADR-0009): no data unless
+    // checked against advisories.
+    VulnerableDependencies => "vulnerable_dependencies",
+    SevereVulnerableDependencies => "severe_vulnerable_dependencies",
 }
 
 /// A quality-gate condition: the gate fails when `metric <op> threshold` holds.

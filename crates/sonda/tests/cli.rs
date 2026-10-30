@@ -284,6 +284,76 @@ fn sbom_lists_lockfile_dependencies_in_both_formats() {
 }
 
 #[test]
+fn advisories_fill_the_dependency_gate_metrics() {
+    let dir = project(&[
+        (
+            "package-lock.json",
+            r#"{"lockfileVersion": 3, "packages": {"": {"dependencies": {"lodash": "^4"}},
+               "node_modules/lodash": {"version": "4.17.20"}}}"#,
+        ),
+        (
+            "sonda.toml",
+            "[[gate.conditions]]\nmetric = \"severe_vulnerable_dependencies\"\nop = \"gt\"\nthreshold = 0\n",
+        ),
+    ]);
+    let osv = project(&[(
+        "npm/GHSA-35jh-r3h4-6jhm.json",
+        r#"{"id": "GHSA-35jh-r3h4-6jhm", "modified": "2024-01-01T00:00:00Z",
+            "summary": "Command Injection in lodash", "aliases": ["CVE-2021-23337"],
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"}],
+            "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
+                          "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "4.17.21"}]}]}]}"#,
+    )]);
+
+    // Without advisories: no data, so the gate passes.
+    let out = run(&["scan", "-f", "json"], dir.path());
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = json(&out);
+    assert_eq!(report["gate"]["conditions"][0]["status"], "no_data");
+    assert!(report.get("vulnerabilities").is_none());
+
+    let out = sonda()
+        .args(["scan", "-f", "json", "--advisories"])
+        .arg(osv.path())
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        code(&out),
+        1,
+        "the severe vulnerability fails the gate: {}",
+        stderr(&out)
+    );
+    let report = json(&out);
+    assert_eq!(report["measures"]["severe_vulnerable_dependencies"], 1.0);
+    assert_eq!(
+        report["vulnerabilities"][0]["advisory"],
+        "GHSA-35jh-r3h4-6jhm"
+    );
+    assert_eq!(report["vulnerabilities"][0]["fixed_in"], "4.17.21");
+
+    let text = stdout(
+        &sonda()
+            .args(["scan", "--no-gate", "--advisories"])
+            .arg(osv.path())
+            .arg(dir.path())
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        text.contains("CRITICAL  lodash 4.17.20  GHSA-35jh-r3h4-6jhm"),
+        "{text}"
+    );
+
+    let missing = sonda()
+        .args(["scan", "--advisories", "/nonexistent/osv"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+}
+
+#[test]
 fn output_file_receives_the_report_and_stdout_stays_empty() {
     let dir = project(&[("app.js", "eval(x);\n")]);
     let target = dir.path().join("out.sarif");

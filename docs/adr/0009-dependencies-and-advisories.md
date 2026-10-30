@@ -1,8 +1,7 @@
 # ADR-0009: Dependencies (SBOM) and known vulnerabilities
 
-- Status: **accepted.** Phases 1 and 2 are done. Phase 3 is in progress:
-  advisory import, the opt-in sync, matching, review states, the Security
-  screen and the web app are done; gate metrics and `--advisories` remain.
+- Status: **accepted.** Phases 1 to 3 are done, with one change to
+  decision 4 (below). Phase 4 (more lockfile formats) remains.
 - Date: 2026-10-30
 
 ## Context
@@ -146,6 +145,18 @@ The CLI's gate and exit code stay about code only, because the CLI has no
 advisories. `sonda scan --advisories DIR` can evaluate them against a
 pinned local export instead. It's deterministic for that snapshot, for CI
 that wants a failing build.
+
+**As built:**
+- **The metrics.** They're `vulnerable_dependencies` and
+  `severe_vulnerable_dependencies` (packages with a blocker or critical
+  finding), counted in packages. `new_vulnerable_dependencies` waits: "new"
+  needs a base to compare against, and on the server that would be another
+  branch's analysis. It's on the roadmap.
+- **Where the gate lives.** The server keeps the stored gate current
+  instead of overlaying it when read. It re-evaluates these conditions,
+  reviews included, when an analysis is uploaded, when advisories are
+  imported or synced, and when a finding is reviewed. Every page then shows
+  the same gate, and older analyses keep the gate they had.
 
 ## Phases
 

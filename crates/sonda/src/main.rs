@@ -70,6 +70,11 @@ struct ScanArgs {
     /// LCOV coverage report(s) to import.
     #[arg(long, value_name = "LCOV")]
     coverage: Vec<PathBuf>,
+    /// Check dependencies against the OSV records in DIR (an unzipped OSV
+    /// export): fills the vulnerable_dependencies gate metrics and lists
+    /// the vulnerabilities. Same records, same result.
+    #[arg(long, value_name = "DIR")]
+    advisories: Option<PathBuf>,
     /// Only list issues on new code (measures and gate still cover everything).
     #[arg(long)]
     only_new: bool,
@@ -257,6 +262,7 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         coverage: args.coverage,
         isolation,
         jobs: args.jobs,
+        advisories: args.advisories,
     };
     let outcome = sonda_core::run(&opts, &cfg)?;
     let passed = outcome.gate.passed;
