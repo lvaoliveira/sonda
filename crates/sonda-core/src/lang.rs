@@ -16,6 +16,8 @@ pub enum Lang {
 
 pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
 pub(crate) const TS: &[Lang] = &[Lang::TypeScript, Lang::Tsx];
+/// The grammars that parse JSX: `.ts` files can't contain it.
+pub(crate) const JSX: &[Lang] = &[Lang::JavaScript, Lang::Tsx];
 pub(crate) const PYTHON: &[Lang] = &[Lang::Python];
 pub(crate) const JAVA: &[Lang] = &[Lang::Java];
 pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];

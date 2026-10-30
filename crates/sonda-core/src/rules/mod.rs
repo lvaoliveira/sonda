@@ -104,10 +104,14 @@ pub(crate) struct ActiveRule {
 pub(crate) struct CompiledQueries {
     pub(crate) query: Query,
     pub(crate) match_capture: u32,
-    /// For each pattern of `query`: the index of its rule in
-    /// `RuleSet::active`, and the rule's filter.
-    pub(crate) patterns: Vec<(usize, Option<Filter>)>,
+    /// For each pattern of `query`: the rules it belongs to, as their index
+    /// in `RuleSet::active` and their filter. Rules with the same query text
+    /// share its patterns, so the tree is matched against it once.
+    pub(crate) patterns: Vec<PatternRules>,
 }
+
+/// The rules sharing one pattern: index in `RuleSet::active`, and filter.
+pub(crate) type PatternRules = Vec<(usize, Option<Filter>)>;
 
 /// The enabled rules with their effective severity. Queries are compiled
 /// per language on first use: compiling all of them costs ~70 ms, mostly for
@@ -154,10 +158,11 @@ impl RuleSet {
     }
 
     fn compile_for(&self, lang: Lang) -> Result<Option<CompiledQueries>, Error> {
-        // Each rule's query, one after another; `starts` records where each
-        // begins, to find which rule a pattern (or an error) belongs to.
+        // Each distinct query, one after another; `starts` records where
+        // each begins and the rules using it, to find which rules a pattern
+        // (or an error) belongs to.
         let mut source = String::new();
-        let mut starts: Vec<(usize, usize, Option<Filter>)> = Vec::new();
+        let mut starts: Vec<(usize, &str, PatternRules)> = Vec::new();
         for (idx, a) in self.active.iter().enumerate() {
             if let Check::Query {
                 langs,
@@ -166,16 +171,21 @@ impl RuleSet {
             } = a.rule.check
                 && langs.contains(&lang)
             {
-                starts.push((source.len(), idx, filter));
-                source.push_str(query);
-                source.push('\n');
+                match starts.iter_mut().find(|s| s.1 == query) {
+                    Some(shared) => shared.2.push((idx, filter)),
+                    None => {
+                        starts.push((source.len(), query, vec![(idx, filter)]));
+                        source.push_str(query);
+                        source.push('\n');
+                    }
+                }
             }
         }
         if starts.is_empty() {
             return Ok(None);
         }
-        let owner = |byte: usize| starts[starts.partition_point(|s| s.0 <= byte) - 1];
-        let rule = |byte: usize| self.active[owner(byte).1].rule;
+        let owner = |byte: usize| &starts[starts.partition_point(|s| s.0 <= byte) - 1];
+        let rule = |byte: usize| self.active[owner(byte).2[0].0].rule;
         let query = Query::new(&lang.grammar(), &source).map_err(|e| {
             let r = rule(e.offset);
             // Compiled alone, the rule's error points into its own query.
@@ -193,17 +203,17 @@ impl RuleSet {
         let match_capture = query.capture_index_for_name("match");
         let mut patterns = Vec::with_capacity(query.pattern_count());
         for i in 0..query.pattern_count() {
-            let (_, idx, filter) = owner(query.start_byte_for_pattern(i));
+            let rules = &owner(query.start_byte_for_pattern(i)).2;
             let captures_match = match_capture.is_some_and(|m| {
                 query.capture_quantifiers(i)[m as usize] != CaptureQuantifier::Zero
             });
             if !captures_match {
                 return Err(Error::Internal(format!(
                     "rule {}: query has a pattern without a @match capture",
-                    self.active[idx].rule.id
+                    self.active[rules[0].0].rule.id
                 )));
             }
-            patterns.push((idx, filter));
+            patterns.push(rules.clone());
         }
         Ok(Some(CompiledQueries {
             query,
@@ -306,8 +316,9 @@ mod tests {
                 .queries(lang)
                 .unwrap_or_else(|e| panic!("{lang:?}: {e}"));
             let mut covered: Vec<usize> = compiled
-                .map(|c| c.patterns.iter().map(|p| p.0).collect())
+                .map(|c| c.patterns.iter().flatten().map(|p| p.0).collect())
                 .unwrap_or_default();
+            covered.sort();
             covered.dedup();
             let expected = RULES
                 .iter()
