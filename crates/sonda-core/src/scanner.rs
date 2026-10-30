@@ -7,9 +7,9 @@ use crate::coverage::Coverage;
 use crate::deps::{self, Dependency, FileKind};
 use crate::duplication;
 use crate::error::Error;
-use crate::git;
+use crate::git::{self, Auto};
 use crate::lang::{JS_TS, Lang};
-use crate::newcode::NewCode;
+use crate::newcode::{Basis, NewCode};
 use crate::project::ProjectAnalysis;
 use crate::rules::RuleSet;
 use crate::sandbox::SandboxMode;
@@ -30,8 +30,9 @@ use tracing::{debug, info};
 pub struct ScanOptions {
     /// Project directory.
     pub root: PathBuf,
-    /// Git ref new code is compared against (via merge base); `None` makes
-    /// the whole project new code.
+    /// What new code is compared with: a git ref (via merge base), `auto`
+    /// or `none`, as `scan.new_code` takes them; `None` uses `scan.new_code`
+    /// (ADR-0010).
     pub new_code_ref: Option<String>,
     /// LCOV reports to import.
     pub coverage: Vec<PathBuf>,
@@ -269,15 +270,27 @@ fn scan_files(
     let max_bytes = cfg.scan.max_file_size_kb.saturating_mul(1024);
     let timeout = Duration::from_secs(cfg.scan.file_timeout_secs);
 
-    let new_code = match &opts.new_code_ref {
+    let git_timeout = Duration::from_secs(cfg.scan.git_timeout_secs);
+    let (reference, new_code_basis) =
+        match opts.new_code_ref.as_deref().unwrap_or(&cfg.scan.new_code) {
+            "none" => (
+                None,
+                Basis::WholeProject("new code is set to \"none\"".into()),
+            ),
+            "auto" => match git::auto_reference(root, cfg.scan.new_code_days, git_timeout)? {
+                Auto::Found(r, basis) => (Some(r), basis),
+                Auto::Nothing(why) => (None, Basis::WholeProject(why)),
+            },
+            r => (Some(r.to_string()), Basis::Given(r.to_string())),
+        };
+    let new_code = match &reference {
         Some(r) => {
             let started = Instant::now();
             let contents = paths
                 .iter()
                 .map(|c| (c.rel.as_str(), read_capped(c, max_bytes).ok().flatten()));
-            let git_timeout = Duration::from_secs(cfg.scan.git_timeout_secs);
             let new_code = git::new_code(root, r, max_bytes, git_timeout, contents)?;
-            info!(reference = %r, elapsed_ms = ms(started), "computed new code");
+            info!(reference = %r, basis = new_code_basis.kind(), elapsed_ms = ms(started), "computed new code");
             new_code
         }
         None => NewCode::Everything,
@@ -374,6 +387,7 @@ fn scan_files(
         warnings,
         dependencies: Vec::new(),
         vulnerabilities: None,
+        new_code_basis,
     })
 }
 

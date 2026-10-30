@@ -115,8 +115,8 @@ pub fn render(r: &Report) -> String {
     let n = |k: Metric| m(k).map_or("n/a".into(), |v| format!("{v}"));
     let pct = |k: Metric| m(k).map_or("n/a".into(), |v| format!("{v:.1}%"));
     let scope = match r.new_code_reference {
-        Some(reference) => format!("new code = changes since {reference}, marked *"),
-        None => "no --new-code reference: the whole project counts as new code".into(),
+        Some(_) => format!("new code = {}, marked *", r.new_code_description),
+        None => format!("new code = {}", r.new_code_description),
     };
     let _ = writeln!(out, "\nSummary ({scope})");
     let _ = writeln!(

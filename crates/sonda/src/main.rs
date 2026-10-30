@@ -63,8 +63,11 @@ struct ScanArgs {
     /// Write the report to a file instead of stdout.
     #[arg(short, long)]
     output: Option<PathBuf>,
-    /// Git ref new code is compared against (via merge base), e.g. origin/main.
-    /// Without it, the whole project counts as new code.
+    /// What new code is compared with: a git ref (via merge base), such as
+    /// origin/main or v1.2.0; `auto` picks the default branch on a branch,
+    /// else the latest tag, else the last scan.new_code_days days; `none`
+    /// makes the whole project new code. Default: scan.new_code in
+    /// sonda.toml, which defaults to `auto`.
     #[arg(long, value_name = "REF")]
     new_code: Option<String>,
     /// LCOV coverage report(s) to import.

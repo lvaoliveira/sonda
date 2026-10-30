@@ -1,6 +1,7 @@
 # ADR-0002: Compute new code from git objects, not `git diff`
 
-- Status: accepted
+- Status: accepted; [ADR-0010](0010-default-new-code.md) adds a default
+  reference when none is given.
 - Date: 2026-10-28
 
 ## Context

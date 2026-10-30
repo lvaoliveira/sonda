@@ -371,6 +371,71 @@ fn output_file_receives_the_report_and_stdout_stays_empty() {
 }
 
 #[test]
+fn new_code_defaults_to_the_latest_tag_or_the_default_branch() {
+    let dir = project(&[("old.js", "eval(a);\n")]);
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "old"]);
+    git(root, &["tag", "v1.0"]);
+    std::fs::write(root.join("new.js"), "eval(b);\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "after the release"]);
+
+    // On main: changes since the latest tag.
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
+    assert_eq!(report["new_code_basis"], "latest_tag");
+    assert_eq!(report["new_code_reference"], "v1.0");
+    assert_eq!(report["new_code_description"], "changes since tag v1.0");
+    let new_paths: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["is_new"] == true)
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(new_paths, ["new.js"]);
+    let text = stdout(&run(&["scan", "--no-gate"], root));
+    assert!(
+        text.contains("new code = changes since tag v1.0, marked *"),
+        "{text}"
+    );
+
+    // On a branch: its merge base with main.
+    git(root, &["checkout", "-qb", "feature"]);
+    std::fs::write(root.join("feature.js"), "eval(c);\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feature"]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
+    assert_eq!(
+        (
+            report["new_code_basis"].as_str(),
+            report["new_code_reference"].as_str()
+        ),
+        (Some("default_branch"), Some("main"))
+    );
+
+    // `none`, and a sonda.toml setting, win over auto.
+    let report = json(&run(
+        &["scan", "--no-gate", "-f", "json", "--new-code", "none"],
+        root,
+    ));
+    assert_eq!(report["new_code_basis"], "whole_project");
+    assert_eq!(report["new_code_reference"], serde_json::Value::Null);
+    std::fs::write(root.join("sonda.toml"), "[scan]\nnew_code = \"v1.0\"\n").unwrap();
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], root));
+    assert_eq!(
+        (
+            report["new_code_basis"].as_str(),
+            report["new_code_reference"].as_str()
+        ),
+        (Some("given"), Some("v1.0"))
+    );
+}
+
+#[test]
 fn only_new_lists_new_issues_but_gate_sees_everything() {
     let dir = project(&[("old.js", "eval(a);\n")]);
     let root = dir.path();

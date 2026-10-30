@@ -22,8 +22,17 @@ skip_minified = true
 # Parsing and rule matching of one file give up after this many seconds
 # (the file is then reported as a warning instead of analyzed).
 file_timeout_secs = 10
-# Each git process (used by --new-code) is killed after this many seconds.
+# Each git process (used for new code) is killed after this many seconds.
 git_timeout_secs = 120
+# What new code is compared with (--new-code overrides it):
+# "auto": on a branch, its merge base with the default branch (origin/HEAD,
+#   else main or master); on the default branch, the latest tag before HEAD,
+#   else the last commit new_code_days older than HEAD; else everything.
+# "none": the whole project is new code.
+# Any other value is a git ref, such as "origin/main" or "v1.2.0".
+new_code = "auto"
+# The time window "auto" falls back to without a tag; 0 turns it off.
+new_code_days = 30
 
 [rules]
 # Rules that are off by default to turn on. `sonda rules` lists them all,
@@ -87,6 +96,9 @@ pub struct ScanConfig {
     pub skip_minified: bool,
     pub file_timeout_secs: u64,
     pub git_timeout_secs: u64,
+    /// `auto`, `none`, or a git ref (ADR-0010).
+    pub new_code: String,
+    pub new_code_days: u32,
 }
 
 impl Default for ScanConfig {
@@ -105,6 +117,8 @@ impl Default for ScanConfig {
             skip_minified: true,
             file_timeout_secs: 10,
             git_timeout_secs: 120,
+            new_code: "auto".into(),
+            new_code_days: 30,
         }
     }
 }
@@ -187,6 +201,18 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), Error> {
+        // A ref git could read as an option, or that isn't one at all.
+        let r = &self.scan.new_code;
+        if r.is_empty()
+            || r.len() > 256
+            || r.starts_with('-')
+            || r.chars().any(|c| c.is_control() || c.is_whitespace())
+        {
+            return Err(Error::Config(format!(
+                "scan.new_code must be \"auto\", \"none\" or a git ref, not {:?}",
+                r
+            )));
+        }
         let t = &self.thresholds;
         let positive = [
             (
@@ -209,6 +235,22 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_code_must_be_a_plain_ref() {
+        for ok in ["auto", "none", "origin/main", "v1.2.0"] {
+            assert!(
+                Config::parse(&format!("[scan]\nnew_code = {ok:?}\n")).is_ok(),
+                "{ok}"
+            );
+        }
+        for bad in ["", "--output=/tmp/x", "a b", "main\nHEAD"] {
+            assert!(
+                Config::parse(&format!("[scan]\nnew_code = {bad:?}\n")).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
 
     #[test]
     fn default_toml_matches_default_config() {

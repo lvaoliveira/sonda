@@ -8,7 +8,7 @@
 //! and diffs the working-tree files itself (see docs/adr/0002).
 
 use crate::error::Error;
-use crate::newcode::{Changed, NewCode, changed_lines};
+use crate::newcode::{Basis, Changed, NewCode, changed_lines};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -75,6 +75,140 @@ pub(crate) fn new_code<'a>(
         reference: reference.to_string(),
         files: changed,
     })
+}
+
+/// What `auto` found to compare with (ADR-0010).
+pub(crate) enum Auto {
+    /// A reference for [`new_code`], and how it was chosen.
+    Found(String, Basis),
+    /// Nothing to compare with, and why.
+    Nothing(String),
+}
+
+/// Picks the new-code reference when none is given: the default branch's
+/// merge base on a branch that has diverged from it; on the default branch,
+/// the latest tag before HEAD; without a tag, the last commit `days` or more
+/// older than HEAD. Reads refs and commits only (ADR-0002).
+pub(crate) fn auto_reference(root: &Path, days: u32, timeout: Duration) -> Result<Auto, Error> {
+    let Some(head) = git_ok(
+        root,
+        &["rev-parse", "--verify", "-q", "HEAD^{commit}"],
+        timeout,
+    )?
+    else {
+        return Ok(Auto::Nothing(
+            "not a git repository with commits, or git is not installed".into(),
+        ));
+    };
+    let head = head.trim();
+    if let Some(branch) = default_branch(root, timeout)?
+        && let Some(base) = git_ok(
+            root,
+            &["merge-base", "--end-of-options", "HEAD", &branch],
+            timeout,
+        )?
+        && base.trim() != head
+    {
+        return Ok(Auto::Found(branch.clone(), Basis::DefaultBranch(branch)));
+    }
+    // HEAD^: on a release commit, its own tag would leave nothing new.
+    if let Some(tag) = git_ok(
+        root,
+        &[
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--end-of-options",
+            "HEAD^",
+        ],
+        timeout,
+    )? {
+        let tag = tag.trim().to_string();
+        if validate_ref(&tag).is_ok() {
+            return Ok(Auto::Found(tag.clone(), Basis::LatestTag(tag)));
+        }
+    }
+    if days > 0
+        && let Some(time) = commit_time(root, head, timeout)?
+    {
+        let before = time.saturating_sub(i64::from(days) * 86_400);
+        let found = git_ok(
+            root,
+            &[
+                "rev-list",
+                "-1",
+                "--first-parent",
+                &format!("--before={before}"),
+                "HEAD",
+            ],
+            timeout,
+        )?;
+        if let Some(commit) = found
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+        {
+            return Ok(Auto::Found(commit.clone(), Basis::Days { days, commit }));
+        }
+    }
+    Ok(Auto::Nothing(format!(
+        "no diverged default branch, no tag, and no commit {days} days older than HEAD"
+    )))
+}
+
+/// The branch others merge into: what `origin/HEAD` points at, else
+/// `origin/main`, `origin/master`, `main` or `master`, whichever exists.
+fn default_branch(root: &Path, timeout: Duration) -> Result<Option<String>, Error> {
+    if let Some(r) = git_ok(
+        root,
+        &["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+        timeout,
+    )? {
+        let r = r.trim().to_string();
+        if validate_ref(&r).is_ok() {
+            return Ok(Some(r));
+        }
+    }
+    for candidate in ["origin/main", "origin/master", "main", "master"] {
+        let full = if candidate.starts_with("origin/") {
+            format!("refs/remotes/{candidate}")
+        } else {
+            format!("refs/heads/{candidate}")
+        };
+        if git_ok(root, &["rev-parse", "--verify", "-q", &full], timeout)?.is_some() {
+            return Ok(Some(candidate.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// A commit's committer time, in seconds, from the object itself: `git log`
+/// would honor `log.showSignature` and run gpg.
+fn commit_time(root: &Path, commit: &str, timeout: Duration) -> Result<Option<i64>, Error> {
+    let Some(object) = git_ok(root, &["cat-file", "commit", commit], timeout)? else {
+        return Ok(None);
+    };
+    Ok(object
+        .lines()
+        .take_while(|l| !l.is_empty())
+        .find_map(|l| l.strip_prefix("committer "))
+        .and_then(|l| l.rsplit(' ').nth(1))
+        .and_then(|t| t.parse().ok()))
+}
+
+/// Like [`git`], but a failing command (an unknown ref, not a repository)
+/// is `None`; only a timeout or a missing git is an error.
+fn git_ok(dir: &Path, args: &[&str], timeout: Duration) -> Result<Option<String>, Error> {
+    tracing::debug!(?args, "running git");
+    let out = match run_with_timeout(git_command(dir).args(args), timeout) {
+        Ok(out) => out,
+        // No git at all is like no repository: nothing to compare with.
+        Err(Error::Git(e)) if e.starts_with("failed to run git") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    Ok(out
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
 /// Rejects anything git could read as an option. `--end-of-options` is also
@@ -402,6 +536,97 @@ mod tests {
             );
         }
         assert!(new_code(&repo.root, "no-such-branch", 1024, TIMEOUT, []).is_err());
+    }
+
+    /// `git` with fixed dates, so commits have known times.
+    fn git_at(root: &Path, date: &str, args: &[&str]) {
+        let out = git_command(root)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn auto(root: &Path) -> Auto {
+        auto_reference(root, 30, TIMEOUT).unwrap()
+    }
+
+    fn found(a: Auto) -> (String, Basis) {
+        match a {
+            Auto::Found(r, b) => (r, b),
+            Auto::Nothing(why) => panic!("nothing found: {why}"),
+        }
+    }
+
+    #[test]
+    fn auto_compares_a_branch_with_its_default_branch() {
+        let repo = Repo::new();
+        repo.write("a.py", "a = 1\nb = 2\nc = 3\n");
+        repo.git(&["commit", "-qam", "on feature"]);
+        let (reference, basis) = found(auto(&repo.root));
+        assert_eq!(reference, "main");
+        assert_eq!(basis, Basis::DefaultBranch("main".into()));
+        // origin/HEAD, when there is one, names the default branch.
+        repo.git(&["update-ref", "refs/remotes/origin/trunk", "main"]);
+        repo.git(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ]);
+        assert_eq!(found(auto(&repo.root)).0, "origin/trunk");
+    }
+
+    #[test]
+    fn auto_on_the_default_branch_uses_the_latest_tag_then_a_time_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"], TIMEOUT).unwrap();
+        git(root, &["config", "user.email", "t@example.com"], TIMEOUT).unwrap();
+        git(root, &["config", "user.name", "t"], TIMEOUT).unwrap();
+        // So `git log` here would run a program; auto must not use it.
+        git(root, &["config", "log.showSignature", "true"], TIMEOUT).unwrap();
+        let commit = |date: &str, msg: &str| {
+            std::fs::write(root.join("a.py"), msg).unwrap();
+            git_at(root, date, &["add", "."]);
+            git_at(root, date, &["commit", "-qm", msg]);
+        };
+        commit("2026-01-01T00:00:00Z", "old");
+        assert!(
+            matches!(auto(root), Auto::Nothing(_)),
+            "one commit: nothing before it"
+        );
+        commit("2026-03-01T00:00:00Z", "middle");
+        commit("2026-03-20T00:00:00Z", "recent");
+        let old = git(root, &["rev-parse", "HEAD~2"], TIMEOUT).unwrap();
+        // No tag: the last commit 30 days or more before HEAD's date.
+        let (reference, basis) = found(auto(root));
+        assert_eq!(reference, old.trim());
+        assert!(matches!(basis, Basis::Days { days: 30, .. }), "{basis:?}");
+        assert!(
+            matches!(auto_reference(root, 0, TIMEOUT).unwrap(), Auto::Nothing(_)),
+            "0 days turns the window off"
+        );
+        // A tag before HEAD wins.
+        git(root, &["tag", "v1.0", "HEAD~1"], TIMEOUT).unwrap();
+        assert_eq!(
+            found(auto(root)),
+            ("v1.0".into(), Basis::LatestTag("v1.0".into()))
+        );
+        // On a release commit, its own tag would leave nothing: the one before.
+        git(root, &["tag", "v1.1"], TIMEOUT).unwrap();
+        assert_eq!(found(auto(root)).0, "v1.0");
+    }
+
+    #[test]
+    fn auto_outside_a_repository_finds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(auto(dir.path()), Auto::Nothing(_)));
     }
 
     /// Regression: `git diff` against the working tree used to run the
