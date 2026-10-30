@@ -169,7 +169,7 @@ sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate t
 
 ## Roadmap
 
-- [ ] More rules per language, plus a security hotspot category
+- [ ] An equivalent for every SonarQube rule key in the supported languages ([ADR-0007](docs/adr/0007-sonarqube-rule-parity.md); progress in [docs/sonar-parity/](docs/sonar-parity/README.md))
 - [ ] JaCoCo and Cobertura coverage import
 - [ ] Caching, to skip re-analyzing unchanged files
 - [ ] Baseline file to accept existing issues without suppressing them line by line

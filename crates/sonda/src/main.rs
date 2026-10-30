@@ -127,6 +127,8 @@ impl From<OutputFormat> for Format {
 enum RulesFormat {
     Text,
     Markdown,
+    /// For tools, e.g. scripts/sonar_parity.py.
+    Json,
 }
 
 fn main() -> ExitCode {
@@ -261,7 +263,7 @@ fn list_rules(format: RulesFormat) -> String {
     let mut out = String::new();
     match format {
         RulesFormat::Text => {
-            for r in RULES {
+            for r in RULES.iter() {
                 let _ = writeln!(
                     out,
                     "{:<32} {:<9} {:<14} {}",
@@ -279,7 +281,7 @@ fn list_rules(format: RulesFormat) -> String {
             );
             let _ = writeln!(out, "| Rule | Type | Severity | Languages |");
             let _ = writeln!(out, "|---|---|---|---|");
-            for r in RULES {
+            for r in RULES.iter() {
                 let _ = writeln!(
                     out,
                     "| [`{}`](#{}) | {} | {} | {} |",
@@ -290,8 +292,16 @@ fn list_rules(format: RulesFormat) -> String {
                     langs(r)
                 );
             }
-            for r in RULES {
+            for r in RULES.iter() {
                 let _ = writeln!(out, "\n## {}\n\n**{}.** {}", r.id, r.name, r.description);
+                if !r.sonar.is_empty() {
+                    let refs: Vec<String> = r
+                        .sonar
+                        .iter()
+                        .map(|s| format!("{}{}", s.key, if s.exact { "" } else { " (related)" }))
+                        .collect();
+                    let _ = writeln!(out, "\nSonarQube: {}", refs.join(", "));
+                }
                 if let Some(ex) = &r.example {
                     let lang = ex.lang.name();
                     let _ = writeln!(
@@ -302,6 +312,25 @@ fn list_rules(format: RulesFormat) -> String {
                     );
                 }
             }
+        }
+        RulesFormat::Json => {
+            let rules: Vec<serde_json::Value> = RULES
+                .iter()
+                .map(|r| {
+                    let mut langs: Vec<&str> = r.langs().iter().map(|l| l.name()).collect();
+                    langs.dedup();
+                    serde_json::json!({
+                        "id": r.id,
+                        "name": r.name,
+                        "languages": langs,
+                        "category": r.category.as_str(),
+                        "severity": r.severity.as_str(),
+                        "sonar": r.sonar.iter().map(|s| serde_json::json!({ "key": s.key, "exact": s.exact })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            // Cannot fail: built from plain JSON values.
+            out = serde_json::to_string_pretty(&rules).expect("rules serialize") + "\n";
         }
     }
     out

@@ -39,6 +39,25 @@ pub struct Example {
     pub good: &'static str,
 }
 
+/// A SonarQube rule this one corresponds to, by its key without the
+/// language prefix (`S3776`). Keys are references only: no SonarSource text
+/// or code is used (ADR-0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SonarRef {
+    pub key: &'static str,
+    /// Same intent and scope. False when the rules overlap but differ, for
+    /// example a syntactic check for what SonarQube does with taint analysis.
+    pub exact: bool,
+}
+
+pub(crate) const fn exact(key: &'static str) -> SonarRef {
+    SonarRef { key, exact: true }
+}
+
+pub(crate) const fn related(key: &'static str) -> SonarRef {
+    SonarRef { key, exact: false }
+}
+
 pub struct Rule {
     pub id: &'static str,
     pub name: &'static str,
@@ -49,6 +68,8 @@ pub struct Rule {
     pub severity: Severity,
     /// Estimated time to fix one occurrence, summed into technical debt.
     pub effort_minutes: u32,
+    /// The SonarQube rules this one corresponds to, in the languages it covers.
+    pub sonar: &'static [SonarRef],
     pub(crate) check: Check,
     pub example: Option<Example>,
 }
@@ -63,7 +84,7 @@ impl Rule {
 }
 
 pub fn find(id: &str) -> Option<&'static Rule> {
-    RULES.iter().find(|r| r.id == id)
+    RULES.iter().find(|r| r.id == id).copied()
 }
 
 pub(crate) struct ActiveRule {
@@ -101,7 +122,7 @@ impl RuleSet {
         let active: Vec<ActiveRule> = RULES
             .iter()
             .filter(|r| !cfg.disabled.iter().any(|d| d == r.id))
-            .map(|rule| ActiveRule {
+            .map(|&rule| ActiveRule {
                 rule,
                 severity: cfg.severity.get(rule.id).copied().unwrap_or(rule.severity),
             })
@@ -173,20 +194,40 @@ mod tests {
     use crate::analysis::tests::far_deadline;
     use crate::config::Config;
 
+    /// ADR-0007: keys are bare (`S3504`, not `javascript:S3504`), and a rule
+    /// names each one once.
+    #[test]
+    fn sonar_references_are_well_formed() {
+        for r in RULES.iter() {
+            let mut seen = std::collections::HashSet::new();
+            for s in r.sonar {
+                assert!(
+                    !s.key.is_empty()
+                        && !s.key.contains(':')
+                        && s.key.chars().all(|c| c.is_ascii_alphanumeric()),
+                    "{}: bad SonarQube key {:?}",
+                    r.id,
+                    s.key
+                );
+                assert!(seen.insert(s.key), "{}: {} listed twice", r.id, s.key);
+            }
+        }
+    }
+
     #[test]
     fn rule_ids_are_unique_and_prefixed() {
         let mut ids: Vec<_> = RULES.iter().map(|r| r.id).collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), RULES.len(), "duplicate rule id");
-        for r in RULES {
+        for r in RULES.iter() {
             assert!(r.id.contains('/'), "{} needs a family prefix", r.id);
         }
     }
 
     #[test]
     fn every_query_rule_has_an_example_in_one_of_its_languages() {
-        for r in RULES {
+        for r in RULES.iter() {
             if let Check::Query { langs, .. } = r.check {
                 let ex = r
                     .example
@@ -205,7 +246,7 @@ mod tests {
     fn examples_flag_bad_code_and_accept_good_code() {
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).expect("all queries compile");
-        for r in RULES {
+        for r in RULES.iter() {
             let Some(ex) = &r.example else { continue };
             let bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
             assert!(
