@@ -2466,6 +2466,757 @@ pub(super) static RULES: &[Rule] = &[
             good: "cy.wait('@save');\ncy.get('[data-test=done]').should('be.visible');",
         }),
     },
+    // ---- Bugs (batch 4) ----
+    Rule {
+        id: "js/float-equality",
+        name: "Floating-point numbers should not be tested for equality",
+        description: "Decimal fractions like 0.1 aren't exact in binary, so `0.1 + 0.2 === \
+                      0.3` is false. Compare within a tolerance instead.",
+        message: "Compare with a tolerance, e.g. Math.abs(a - b) < Number.EPSILON, instead of testing a fraction for equality.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S1244")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((number) @match (#match? @match "\\.[0-9]*[1-9]"))"#,
+            filter: Some(Find(fraction_compared_for_equality)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (total === 0.3) { done(); }",
+            good: "if (Math.abs(total - 0.3) < 1e-9) { done(); }\nif (n === 3) { done(); }\nconst half = 0.5;",
+        }),
+    },
+    Rule {
+        id: "js/new-result-dropped",
+        name: "Objects should not be created only to be dropped",
+        description: "`new Thing();` on its own line throws the object away. If the \
+                      constructor is called for its side effects, a function would say so; \
+                      otherwise the result was meant to be stored. Errors are the \
+                      error-not-thrown rule's case, and `new URL(s)` inside a try block \
+                      (to validate) is fine.",
+        message: "Store the new object, or call a function instead if only the side effect is wanted.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S1848")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(expression_statement (new_expression) @match)",
+            filter: Some(Keep(is_not_an_error)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "new Logger(config);",
+            good: "const logger = new Logger(config);\nnew Error('x');",
+        }),
+    },
+    Rule {
+        id: "js/single-iteration-loop",
+        name: "Loops should not always exit on their first iteration",
+        description: "A loop whose body always ends in return, throw or break runs at most \
+                      once: either the exit is misplaced or it should be an if.",
+        message: "This loop always exits during its first iteration; use an if, or fix the misplaced exit.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S1751")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(for_statement) (for_in_statement) (while_statement) (do_statement)] @match",
+            filter: Some(Keep(always_exits_first_iteration)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "for (const user of users) { notify(user); return; }",
+            good: "for (const user of users) { if (user.admin) { return user; } }\nwhile (q.length) { const x = q.pop(); if (!x) { continue; } return x; }",
+        }),
+    },
+    Rule {
+        id: "js/unreachable-code",
+        name: "Code after return, throw, break or continue should be removed",
+        description: "Statements after an unconditional jump never run. Function \
+                      declarations are hoisted and fine.",
+        message: "Remove this unreachable code, or move it before the jump.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[related("S1763")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(statement_block) (switch_case) (switch_default)] @match",
+            filter: Some(Find(statement_after_jump)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function f() { return 1; cleanup(); }",
+            good: "function f() { cleanup(); return 1; function helper() {} }",
+        }),
+    },
+    Rule {
+        id: "js/useless-expression",
+        name: "Statements should have an effect",
+        description: "`a === b;` or `x;` computes a value and drops it: usually an \
+                      assignment, call or return was meant.",
+        message: "This statement has no effect; did you mean an assignment, a call or a return?",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S905")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(expression_statement
+                        [(identifier) (number) (binary_expression) (unary_expression)
+                         (true) (false) (null) (this)] @match)",
+            filter: Some(Keep(has_no_effect)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function reset(state) { state.count === 0; }",
+            good: "function reset(state) { state.count = 0; }\nready && start();\nvoid run();",
+        }),
+    },
+    Rule {
+        id: "js/super-call",
+        name: "super() should be called in derived constructors, and only there",
+        description: "A derived class's constructor must call super() before using `this`; \
+                      a class that extends nothing can't call it at all.",
+        message: "Call super() in this derived class's constructor, or remove super() from a class that extends nothing.",
+        category: Bug,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[related("S3854")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(method_definition name: (property_identifier) @n (#eq? @n "constructor")) @match"#,
+            filter: Some(Find(misplaced_super)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class Admin extends User { constructor(name) { this.role = 'admin'; } }",
+            good: "class Admin extends User { constructor(name) { super(name); this.role = 'admin'; } }\nclass Box { constructor() { this.items = []; } }",
+        }),
+    },
+    Rule {
+        id: "js/overwritten-element",
+        name: "Elements should not be overwritten right after being set",
+        description: "`a[k] = x; a[k] = y;` or two `map.set(k, ...)` in a row discard the \
+                      first value: one key is probably wrong.",
+        message: "This overwrites the value set on the previous line; is the key right?",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S4143")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(statement_block) (program) (switch_case)] @match",
+            filter: Some(Find(overwritten_element)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "names[0] = 'a';\nnames[0] = 'b';",
+            good: "names[0] = 'a';\nnames[1] = 'b';\ncount[k] = 1;\ncount[k] = count[k] + 1;",
+        }),
+    },
+    Rule {
+        id: "js/constant-comparison",
+        name: "Comparisons should not have a constant result",
+        description: "`x === {}` compares with a brand-new object, so it's always false, and \
+                      `'a' ?? b` never uses `b`.",
+        message: "This expression always gives the same result; compare with an existing value, or remove it.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[related("S6638")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(binary_expression) @match",
+            filter: Some(Keep(has_constant_result)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "if (options === {}) { useDefaults(); }",
+            good: "if (Object.keys(options).length === 0) { useDefaults(); }\nconst n = value ?? 0;",
+        }),
+    },
+    Rule {
+        id: "js/accessor-recursion",
+        name: "Getters and setters should not access their own property",
+        description: "`get name() { return this.name; }` calls itself until the stack \
+                      overflows; the value belongs in another field, like `this._name`.",
+        message: "This accessor calls itself; store the value in a separate field, such as this._name.",
+        category: Bug,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S7725")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(method_definition "get") @match
+                      (method_definition "set") @match"#,
+            filter: Some(Find(accessor_self_access)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "class U { get name() { return this.name; } }",
+            good: "class U { get name() { return this._name; } set name(v) { this._name = v; } }",
+        }),
+    },
+    Rule {
+        id: "js/get-with-body",
+        name: "GET and HEAD requests should not have a body",
+        description: "Browsers reject a body on GET and HEAD (fetch throws), and servers may \
+                      ignore it.",
+        message: "Remove the body, or use POST/PUT if the request needs one.",
+        category: Bug,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S7733")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k (#eq? @k "body")) @match"#,
+            filter: Some(Keep(in_get_request)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "fetch(url, { method: 'GET', body: JSON.stringify(q) });",
+            good: "fetch(url, { method: 'POST', body: JSON.stringify(q) });",
+        }),
+    },
+    Rule {
+        id: "js/then-property",
+        name: "Objects should not have a then property",
+        description: "An object with a `then` method is treated as a promise: `await obj` \
+                      or returning it from an async function calls it.",
+        message: "Rename 'then': objects with it are taken for promises by await and async functions.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7739")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k (#eq? @k "then")) @match
+                      (method_definition name: (property_identifier) @k (#eq? @k "then")) @match"#,
+            filter: Some(Keep(in_object_literal)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const step = { then: () => next() };",
+            good: "const step = { andThen: () => next() };\np.then(f);",
+        }),
+    },
+    Rule {
+        id: "js/infinite-loop",
+        name: "Loops should be able to end",
+        description: "`while (true)` or `for (;;)` without a break, return or throw never \
+                      ends. Loops that await or yield are left alone: they wait between \
+                      iterations on purpose.",
+        message: "Add an exit to this loop (break, return or throw), or a condition that can become false.",
+        category: Bug,
+        severity: Blocker,
+        effort_minutes: 10,
+        sonar: &[related("S2189")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "[(for_statement) (while_statement) (do_statement)] @match",
+            filter: Some(Keep(never_ends)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "while (true) { tick(); }",
+            good: "while (true) { if (tick()) { break; } }\nwhile (true) { await next(); }\nfor (;;) { for (;;) { break; } return; }",
+        }),
+    },
+    Rule {
+        id: "js/unsafe-optional-chaining",
+        name: "Optional chaining should not be used where undefined throws",
+        description: "`(a?.b).c`, `(a?.f)()`, `[...a?.list]` and `for (x of a?.list)` throw \
+                      a TypeError when the chain short-circuits, which defeats the `?.`.",
+        message: "Continue the chain with ?. (or provide a default with ??) so a short-circuit doesn't throw.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S6523")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: "(optional_chain) @match",
+            filter: Some(Find(unsafe_chain_use)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const n = (user?.address).street;",
+            good: "const n = user?.address?.street;\nconst all = [...(user?.tags ?? [])];",
+        }),
+    },
+    // ---- Vulnerabilities (batch 4) ----
+    Rule {
+        id: "js/weak-tls",
+        name: "Weak TLS versions should not be allowed",
+        description: "SSL 3, TLS 1.0 and TLS 1.1 have known attacks. Require TLS 1.2 or \
+                      later.",
+        message: "Require TLS 1.2 or later (minVersion: 'TLSv1.2').",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S4423")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair
+                        key: (property_identifier) @k
+                        value: (string) @v
+                        (#any-of? @k "secureProtocol" "minVersion")
+                        (#match? @v "^['\"](SSLv2_method|SSLv3_method|SSLv23_method|TLSv1_method|TLSv1_1_method|TLSv1|TLSv1\\.1)['\"]$")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "tls.connect({ host, minVersion: 'TLSv1' });",
+            good: "tls.connect({ host, minVersion: 'TLSv1.2' });",
+        }),
+    },
+    Rule {
+        id: "js/weak-key",
+        name: "Cryptographic keys should be long enough",
+        description: "RSA and DSA keys shorter than 2048 bits, and elliptic curves under 224 \
+                      bits, can be broken.",
+        message: "Use at least 2048-bit RSA/DSA keys, or a curve of 224 bits or more (e.g. P-256).",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S4426")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k (#any-of? @k "modulusLength" "namedCurve")) @match"#,
+            filter: Some(Keep(is_weak_key_size)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "crypto.generateKeyPairSync('rsa', { modulusLength: 1024 });",
+            good: "crypto.generateKeyPairSync('rsa', { modulusLength: 4096 });\ncrypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });",
+        }),
+    },
+    Rule {
+        id: "js/tls-hostname-unverified",
+        name: "TLS server hostnames should be verified",
+        description: "A checkServerIdentity that accepts everything lets any certificate \
+                      for any host through, so anyone on the path can impersonate the server.",
+        message: "Remove this checkServerIdentity override, or make it reject hostnames that don't match.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 15,
+        sonar: &[exact("S5527")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k (#eq? @k "checkServerIdentity")) @match"#,
+            filter: Some(Keep(accepts_any_identity)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "https.request({ host, checkServerIdentity: () => {} });",
+            good: "https.request({ host, checkServerIdentity: (h, cert) => pinned(cert) ? undefined : new Error('pin') });",
+        }),
+    },
+    Rule {
+        id: "js/weak-cipher",
+        name: "Weak ciphers should not be used",
+        description: "DES, 3DES, RC2, RC4 and Blowfish have small keys or blocks and \
+                      practical attacks. AES is the standard choice.",
+        message: "Use AES (for example aes-256-gcm) instead of this cipher.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 15,
+        sonar: &[exact("S5547")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((string) @match
+                        (#match? @match "(?i)^['\"](des|des-[a-z0-9-]*|des3|rc2[a-z0-9-]*|rc4[a-z0-9-]*|bf|bf-[a-z0-9-]*|blowfish|cast[a-z0-9-]*)['\"]$"))"#,
+            filter: Some(Keep(is_cipher_algorithm)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "crypto.createCipheriv('des-ede3-cbc', key, iv);",
+            good: "crypto.createCipheriv('aes-256-gcm', key, iv);",
+        }),
+    },
+    Rule {
+        id: "js/insecure-cipher-mode",
+        name: "Encryption should use a secure mode and padding",
+        description: "ECB leaks patterns in the data, and CBC (and RSA's PKCS#1 v1.5 \
+                      padding) allows padding-oracle attacks. Use GCM, or OAEP for RSA.",
+        message: "Use an authenticated mode such as GCM (or OAEP padding for RSA).",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 15,
+        sonar: &[exact("S5542")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((string) @match (#match? @match "(?i)^['\"][a-z0-9-]*-(ecb|cbc)['\"]$"))
+                      ((property_identifier) @match (#eq? @match "RSA_PKCS1_PADDING"))"#,
+            filter: Some(Keep(is_cipher_algorithm_or_padding)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "crypto.createCipheriv('aes-128-ecb', key, null);",
+            good: "crypto.createCipheriv('aes-128-gcm', key, iv);",
+        }),
+    },
+    Rule {
+        id: "js/jwt-none",
+        name: "JWTs should be signed and verified with a real algorithm",
+        description: "The 'none' algorithm means unsigned tokens: anyone can forge one, and \
+                      a verifier that accepts it trusts them.",
+        message: "Use a signing algorithm such as RS256 or HS256, never 'none'.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 10,
+        sonar: &[exact("S5659")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k (#any-of? @k "algorithm" "algorithms")) @match"#,
+            filter: Some(Keep(allows_none_algorithm)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "jwt.verify(token, key, { algorithms: ['RS256', 'none'] });",
+            good: "jwt.verify(token, key, { algorithms: ['RS256'] });",
+        }),
+    },
+    Rule {
+        id: "js/world-permissions",
+        name: "Files should not be made writable by everyone",
+        description: "A mode that lets \"others\" write (like 0o777 or 0o666) lets every user \
+                      on the machine change the file. Read and execute for others (0o755) \
+                      are left alone: executables and public files need them.",
+        message: "Remove write permission for others from this mode (e.g. 0o755 or 0o644).",
+        category: Vulnerability,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[related("S2612")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((property_identifier) @match
+                        (#any-of? @match "chmod" "chmodSync" "fchmod" "fchmodSync" "lchmod" "lchmodSync"))"#,
+            filter: Some(Find(world_accessible_mode)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "fs.chmodSync(file, 0o777);",
+            good: "fs.chmodSync(file, 0o750);\nfs.chmodSync(bin, 0o755);",
+        }),
+    },
+    Rule {
+        id: "js/public-tmp",
+        name: "Files should not be created in shared temporary directories by name",
+        description: "Paths like /tmp/app.log can be guessed: another user can create or \
+                      link the file first. Use fs.mkdtemp() under os.tmpdir().",
+        message: "Create a private directory with fs.mkdtemp(path.join(os.tmpdir(), ...)) instead of a fixed /tmp path.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 10,
+        sonar: &[exact("S5443")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((string) @match (#match? @match "^['\"]/(tmp|var/tmp|usr/tmp|dev/shm)(/|['\"])"))"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "fs.writeFileSync('/tmp/report.csv', data);",
+            good: "const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'report-'));",
+        }),
+    },
+    Rule {
+        id: "js/window-open-opener",
+        name: "Windows opened by window.open should not get access to the opener",
+        description: "Without 'noopener', the opened page can navigate this one through \
+                      window.opener (reverse tabnabbing).",
+        message: "Pass 'noopener,noreferrer' as window.open's third argument.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5148")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(member_expression
+                        object: (identifier) @o
+                        property: (property_identifier) @p
+                        (#eq? @o "window")
+                        (#eq? @p "open")) @match"#,
+            filter: Some(Find(open_without_noopener)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "window.open(link, '_blank');",
+            good: "window.open(link, '_blank', 'noopener,noreferrer');",
+        }),
+    },
+    Rule {
+        id: "js/jsx-target-blank",
+        name: "Links opening a new tab should not give it access to this page",
+        description: "`target=\"_blank\"` to another site without `rel=\"noopener\"` lets \
+                      that page navigate this one through window.opener in older browsers.",
+        message: "Add rel=\"noopener noreferrer\" to this link.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5148")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "target")) @match"#,
+            filter: Some(Keep(blank_target_without_noopener)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const v = <a href=\"https://example.com\" target=\"_blank\">Docs</a>;",
+            good: "const v = <a href=\"https://example.com\" target=\"_blank\" rel=\"noopener noreferrer\">Docs</a>;\nconst w = <a href=\"/help\" target=\"_blank\">Help</a>;",
+        }),
+    },
+    Rule {
+        id: "js/command-path",
+        name: "OS commands should be run by absolute path",
+        description: "A bare command name is looked up in PATH, which whoever controls the \
+                      environment can point at another program.",
+        message: "Run the command by its absolute path (e.g. /usr/bin/git).",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S4036")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"([(identifier) (property_identifier)] @match
+                        (#any-of? @match "exec" "execSync" "execFile" "execFileSync" "spawn" "spawnSync"))"#,
+            filter: Some(Find(command_by_name)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "child_process.execSync('git status');",
+            good: "child_process.execFileSync('/usr/bin/git', ['status']);\nconst m = re.exec(line);",
+        }),
+    },
+    Rule {
+        id: "js/hardcoded-password",
+        name: "Passwords should not be hard-coded",
+        description: "A password in the source is visible to everyone with access to the \
+                      repository, and stays in its history. Read it from the environment \
+                      or a secret store.",
+        message: "Read this password from the environment or a secret store instead of the source code.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2068")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(variable_declarator name: (identifier) @n value: (string) @match
+                        (#match? @n "(?i)(password|passwd|pwd|passphrase)$"))
+                      (pair key: [(property_identifier) (string)] @n value: (string) @match
+                        (#match? @n "(?i)(password|passwd|pwd|passphrase)['\"]?$"))
+                      (assignment_expression
+                        left: (member_expression property: (property_identifier) @n)
+                        right: (string) @match
+                        (#match? @n "(?i)(password|passwd|pwd|passphrase)$"))"#,
+            filter: Some(Keep(looks_like_a_secret_value)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const db = connect({ user: 'app', password: 'hunter2' });",
+            good: "const db = connect({ user: 'app', password: process.env.DB_PASSWORD });\nconst labels = { password: 'Your password' };\nconst field = { password: '' };",
+        }),
+    },
+    Rule {
+        id: "js/hardcoded-secret",
+        name: "Secrets should not be hard-coded",
+        description: "Tokens and API keys in the source leak with every copy of the \
+                      repository. Only random-looking values are flagged: at least 16 \
+                      characters, mixing letters and digits.",
+        message: "Revoke this secret and read it from the environment or a secret store.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S6418")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(variable_declarator name: (identifier) @n value: (string) @match
+                        (#match? @n "(?i)(secret|token|api_?key|access_?key|private_?key|auth_?key|client_?secret)$"))
+                      (pair key: [(property_identifier) (string)] @n value: (string) @match
+                        (#match? @n "(?i)(secret|token|api_?key|access_?key|private_?key|auth_?key|client_?secret)['\"]?$"))"#,
+            filter: Some(Keep(looks_random)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const apiKey = 'x9Fq2LmZ7vR4tK8wB1nC6pD3';",
+            good: "const apiKey = process.env.API_KEY;\nconst tokenHeader = 'Authorization';",
+        }),
+    },
+    Rule {
+        id: "js/xxe",
+        name: "XML parsers should not expand external entities",
+        description: "With `noent: true`, libxmljs resolves external entities, so a crafted \
+                      document can read local files or reach internal hosts (XXE).",
+        message: "Remove 'noent: true' so external entities aren't expanded.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 10,
+        sonar: &[exact("S2755")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (true) (#eq? @k "noent")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "libxmljs.parseXml(xml, { noent: true });",
+            good: "libxmljs.parseXml(xml, { noblanks: true });",
+        }),
+    },
+    Rule {
+        id: "js/cookie-not-secure",
+        name: "Cookies should have the secure flag",
+        description: "Without `secure`, the cookie is also sent over plain HTTP, where \
+                      anyone on the network can read it.",
+        message: "Set 'secure: true' so the cookie is only sent over HTTPS.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S2092")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (false) (#eq? @k "secure")) @match"#,
+            filter: Some(Keep(in_cookie_options)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "res.cookie('sid', id, { secure: false });",
+            good: "res.cookie('sid', id, { secure: true, httpOnly: true });\nnodemailer.createTransport({ host, secure: false });",
+        }),
+    },
+    Rule {
+        id: "js/cookie-not-httponly",
+        name: "Cookies should have the HttpOnly flag",
+        description: "Without `httpOnly`, scripts on the page can read the cookie, so any \
+                      XSS can steal the session.",
+        message: "Set 'httpOnly: true' so scripts can't read this cookie.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S3330")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (false) (#eq? @k "httpOnly")) @match"#,
+            filter: Some(Keep(in_cookie_options)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.use(session({ secret, cookie: { httpOnly: false } }));",
+            good: "app.use(session({ secret, cookie: { httpOnly: true, secure: true } }));",
+        }),
+    },
+    Rule {
+        id: "js/cors-any-origin",
+        name: "CORS should not allow every origin",
+        description: "`Access-Control-Allow-Origin: *` (also cors() with no options) lets any \
+                      website read this server's responses from a visitor's browser.",
+        message: "List the trusted origins instead of allowing every origin.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 10,
+        sonar: &[exact("S5122")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (string) (#eq? @k "origin")) @match
+                      ((string) @match (#match? @match "(?i)^['\"]access-control-allow-origin['\"]$"))
+                      ((identifier) @match (#eq? @match "cors"))"#,
+            filter: Some(Find(allows_any_origin)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "res.setHeader('Access-Control-Allow-Origin', '*');",
+            good: "res.setHeader('Access-Control-Allow-Origin', 'https://app.example.com');\napp.use(cors({ origin: ['https://app.example.com'] }));",
+        }),
+    },
+    Rule {
+        id: "js/csp-disabled",
+        name: "The Content-Security-Policy should not be disabled",
+        description: "helmet's CSP limits where scripts and other content can load from; \
+                      turning it off removes a key defense against XSS.",
+        message: "Configure the CSP directives instead of disabling contentSecurityPolicy.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 15,
+        sonar: &[exact("S5728")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (false) (#eq? @k "contentSecurityPolicy")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.use(helmet({ contentSecurityPolicy: false }));",
+            good: "app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: [\"'self'\"] } } }));",
+        }),
+    },
+    Rule {
+        id: "js/nosniff-disabled",
+        name: "MIME type sniffing should stay disabled",
+        description: "Without `X-Content-Type-Options: nosniff`, browsers may run an upload \
+                      or response as a script despite its declared type.",
+        message: "Keep helmet's noSniff (X-Content-Type-Options) enabled.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5734")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (false) (#any-of? @k "noSniff" "xContentTypeOptions")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.use(helmet({ noSniff: false }));",
+            good: "app.use(helmet());",
+        }),
+    },
+    Rule {
+        id: "js/unsafe-referrer-policy",
+        name: "The Referrer-Policy should not leak full URLs",
+        description: "'unsafe-url' and 'no-referrer-when-downgrade' send the full URL, \
+                      including paths and query strings, to other sites.",
+        message: "Use a stricter policy such as 'strict-origin-when-cross-origin' or 'no-referrer'.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5736")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"((string) @match (#match? @match "^['\"](unsafe-url|no-referrer-when-downgrade)['\"]$"))"#,
+            filter: Some(Keep(is_referrer_policy)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.use(helmet.referrerPolicy({ policy: 'unsafe-url' }));",
+            good: "app.use(helmet.referrerPolicy({ policy: 'no-referrer' }));",
+        }),
+    },
+    Rule {
+        id: "js/hsts-disabled",
+        name: "HTTP Strict-Transport-Security should not be disabled",
+        description: "HSTS tells browsers to use HTTPS only; without it, a first plain-HTTP \
+                      request can be intercepted and downgraded.",
+        message: "Keep helmet's HSTS enabled.",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5739")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(pair key: (property_identifier) @k value: (false) (#any-of? @k "hsts" "strictTransportSecurity")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.use(helmet({ hsts: false }));",
+            good: "app.use(helmet({ hsts: { maxAge: 31536000 } }));",
+        }),
+    },
     Rule {
         id: "ts/no-explicit-any",
         name: "The 'any' type should not be used",
@@ -2573,56 +3324,9 @@ fn has_side_effects(node: Node) -> bool {
     effect(node) || contains(node, effect)
 }
 
-/// The first return, throw, break or continue that leaves `block`. Walks
-/// down, keeping the loops, switches and labels around the current node,
-/// since looking up a node's parent costs a walk from the root.
+/// The first return, throw, break or continue that leaves a finally block.
 fn jump_out_of_finally<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut around: Vec<(usize, Node)> = Vec::new();
-    let mut cursor = block.walk();
-    if !cursor.goto_first_child() {
-        return None;
-    }
-    let mut depth = 1;
-    loop {
-        let n = cursor.node();
-        while around.last().is_some_and(|(d, _)| *d >= depth) {
-            around.pop();
-        }
-        match n.kind() {
-            "return_statement" | "throw_statement" => return Some(n),
-            kind @ ("break_statement" | "continue_statement") => {
-                let label = n
-                    .named_child(0)
-                    .filter(|l| l.kind() == "statement_identifier")
-                    .map(|l| text(l, src));
-                let stays = around.iter().any(|(_, a)| match label {
-                    Some(l) => {
-                        a.kind() == "labeled_statement"
-                            && a.child_by_field_name("label").map(|x| text(x, src)) == Some(l)
-                    }
-                    None => {
-                        LOOPS.contains(&a.kind())
-                            || (kind == "break_statement" && a.kind() == "switch_statement")
-                    }
-                });
-                if !stays {
-                    return Some(n);
-                }
-            }
-            _ => {}
-        }
-        if !FUNCTIONS.contains(&n.kind()) && cursor.goto_first_child() {
-            around.push((depth, n));
-            depth += 1;
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return None;
-            }
-            depth -= 1;
-        }
-    }
+    first_escape(block, src, false)
 }
 
 fn has_duplicate_parameter(params: Node, src: &[u8]) -> bool {
@@ -2747,15 +3451,7 @@ fn compares_with_nan(expr: Node, src: &[u8]) -> bool {
 
 /// The algorithm string is the first argument of a `.createHash(...)` call.
 fn is_create_hash_algorithm(string: Node, src: &[u8]) -> bool {
-    let Some(args) = string.parent().filter(|a| a.kind() == "arguments") else {
-        return false;
-    };
-    args.named_child(0) == Some(string)
-        && args
-            .parent()
-            .and_then(|call| call.child_by_field_name("function"))
-            .and_then(|f| f.child_by_field_name("property"))
-            .is_some_and(|p| text(p, src) == b"createHash")
+    is_first_argument_of(string, &[b"createHash"], src)
 }
 
 fn glued_to_equals_sign(unary: Node, src: &[u8]) -> bool {
@@ -4414,6 +5110,666 @@ fn is_fixed_wait(call: Node, src: &[u8]) -> bool {
     }
 }
 
+// ---------------------------------------------------- batch 4 filters
+
+fn fraction_compared_for_equality<'t>(number: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    number.parent().filter(|p| {
+        p.kind() == "binary_expression"
+            && p.child_by_field_name("operator")
+                .is_some_and(|o| EQUALITY.contains(&o.kind()))
+    })
+}
+
+fn is_not_an_error(new: Node, src: &[u8]) -> bool {
+    // `try { new URL(s); } catch { ... }` constructs to validate.
+    let validates = new
+        .parent()
+        .and_then(|statement| statement.parent())
+        .and_then(|block| block.parent())
+        .is_some_and(|t| t.kind() == "try_statement");
+    !validates
+        && new
+            .child_by_field_name("constructor")
+            .is_some_and(|c| !text(c, src).ends_with(b"Error"))
+}
+
+fn always_exits_first_iteration(lp: Node, _: &[u8]) -> bool {
+    let Some(body) = lp
+        .child_by_field_name("body")
+        .filter(|b| b.kind() == "statement_block")
+    else {
+        return false;
+    };
+    last_statement(body).is_some_and(|last| {
+        matches!(
+            last.kind(),
+            "return_statement" | "throw_statement" | "break_statement"
+        )
+    }) && !contains(body, |n| n.kind() == "continue_statement")
+}
+
+/// The first statement after an unconditional jump in a block. Hoisted
+/// declarations (functions, TypeScript types) are fine there.
+fn statement_after_jump<'t>(block: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let mut jumped = false;
+    let mut cursor = block.walk();
+    for c in block.named_children(&mut cursor) {
+        match c.kind() {
+            "comment"
+            | "function_declaration"
+            | "generator_function_declaration"
+            | "type_alias_declaration"
+            | "interface_declaration"
+            | "empty_statement" => {}
+            "return_statement" | "throw_statement" | "break_statement" | "continue_statement" => {
+                if jumped {
+                    return Some(c);
+                }
+                jumped = true;
+            }
+            _ if jumped => return Some(c),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn has_no_effect(expr: Node, src: &[u8]) -> bool {
+    // `let // note` before a declaration's name parses as a bare `let`, and
+    // statements next to a syntax error are the parser's guesses.
+    if text(expr, src) == b"let"
+        || expr
+            .parent()
+            .and_then(|statement| statement.parent())
+            .is_some_and(|block| block.has_error())
+    {
+        return false;
+    }
+    match expr.kind() {
+        "binary_expression" => {
+            expr.child_by_field_name("operator")
+                .is_some_and(|o| !matches!(o.kind(), "&&" | "||" | "??"))
+                && !has_side_effects(expr)
+        }
+        "unary_expression" => {
+            expr.child_by_field_name("operator")
+                .is_some_and(|o| matches!(o.kind(), "!" | "-" | "+" | "~" | "typeof"))
+                && !has_side_effects(expr)
+        }
+        _ => true,
+    }
+}
+
+fn misplaced_super<'t>(constructor: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let body = constructor.child_by_field_name("body")?;
+    let derived = superclass(constructor, src).is_some_and(|h| h.starts_with(b"extends"));
+    let is_super_call = |n: Node| {
+        n.kind() == "call_expression"
+            && n.child_by_field_name("function")
+                .is_some_and(|f| f.kind() == "super")
+    };
+    if derived {
+        (!contains(body, is_super_call)).then_some(constructor)
+    } else {
+        find_below(body, false, is_super_call)
+    }
+}
+
+/// What a statement sets, and the value it sets: `a[k] = v` and
+/// `m.set(k, v)`.
+fn element_write<'t>(statement: Node<'t>, src: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Node<'t>)> {
+    let expr = statement
+        .named_child(0)
+        .filter(|_| statement.kind() == "expression_statement")?;
+    match expr.kind() {
+        "assignment_expression" => {
+            // `a[++i] = x` writes a different element each time.
+            let left = expr
+                .child_by_field_name("left")
+                .filter(|l| l.kind() == "subscript_expression" && !has_side_effects(*l))?;
+            let target = text(left, src).to_vec();
+            Some((target.clone(), target, expr.child_by_field_name("right")?))
+        }
+        "call_expression" => {
+            let function = expr
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "member_expression")?;
+            if text(function.child_by_field_name("property")?, src) != b"set" {
+                return None;
+            }
+            let args = arguments_of(expr);
+            let [key, value] = args[..] else {
+                return None;
+            };
+            let object = text(function.child_by_field_name("object")?, src).to_vec();
+            let mut target = object.clone();
+            target.extend_from_slice(b"|");
+            target.extend_from_slice(text(key, src));
+            Some((target, object, value))
+        }
+        _ => None,
+    }
+}
+
+fn overwritten_element<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut cursor = block.walk();
+    let statements: Vec<Node> = block
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() != "comment")
+        .collect();
+    statements.windows(2).find_map(|pair| {
+        let (first, _, _) = element_write(pair[0], src)?;
+        let (second, read, value) = element_write(pair[1], src)?;
+        // `a[k] = a[k] + 1` reads the first value, so it isn't lost.
+        let reads_it = text(value, src)
+            .windows(read.len())
+            .any(|w| w == read.as_slice());
+        (first == second && !reads_it).then_some(pair[1])
+    })
+}
+
+fn has_constant_result(expr: Node, _: &[u8]) -> bool {
+    let (Some(op), Some(left), Some(right)) = (
+        expr.child_by_field_name("operator"),
+        expr.child_by_field_name("left"),
+        expr.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    let fresh = |n: Node| {
+        matches!(
+            n.kind(),
+            "object"
+                | "array"
+                | "arrow_function"
+                | "function_expression"
+                | "class"
+                | "regex"
+                | "new_expression"
+        )
+    };
+    match op.kind() {
+        "==" | "!=" | "===" | "!==" => fresh(left) || fresh(right),
+        "??" => {
+            fresh(left)
+                || matches!(
+                    left.kind(),
+                    "string" | "number" | "template_string" | "true" | "false"
+                )
+        }
+        _ => false,
+    }
+}
+
+fn accessor_self_access<'t>(accessor: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let name = accessor.child_by_field_name("name")?;
+    let body = accessor.child_by_field_name("body")?;
+    let is_own_property = |m: Node| {
+        m.kind() == "member_expression"
+            && m.child_by_field_name("object")
+                .is_some_and(|o| o.kind() == "this")
+            && m.child_by_field_name("property")
+                .is_some_and(|p| same_text(p, name, src))
+    };
+    if has_token(accessor, "get") {
+        // A lazy getter replaces itself first (`defineLazy(this, "shape")`,
+        // Object.defineProperty), so reading the property afterwards is fine.
+        let redefines_itself = contains(body, |n| {
+            n.kind() == "string" && string_content(n, src) == text(name, src)
+        });
+        if redefines_itself {
+            return None;
+        }
+        find_below(body, false, is_own_property)
+    } else {
+        find_below(body, false, |n| {
+            n.kind() == "assignment_expression"
+                && n.child_by_field_name("left").is_some_and(is_own_property)
+        })
+    }
+}
+
+fn in_get_request(body: Node, src: &[u8]) -> bool {
+    let Some(object) = body.parent() else {
+        return false;
+    };
+    let mut cursor = object.walk();
+    object.named_children(&mut cursor).any(|p| {
+        p.kind() == "pair"
+            && p.child_by_field_name("key")
+                .is_some_and(|k| text(k, src) == b"method")
+            && p.child_by_field_name("value")
+                .filter(|v| v.kind() == "string")
+                .is_some_and(|v| {
+                    let t = text(v, src);
+                    let inner = t.get(1..t.len().saturating_sub(1)).unwrap_or(b"");
+                    inner.eq_ignore_ascii_case(b"get") || inner.eq_ignore_ascii_case(b"head")
+                })
+    })
+}
+
+fn in_object_literal(node: Node, _: &[u8]) -> bool {
+    node.kind() == "pair" || node.parent().is_some_and(|p| p.kind() == "object")
+}
+
+/// The first jump that leaves `block`, walking down with the loops,
+/// switches and labels around the current node. For a loop's body, an
+/// unlabeled `continue` stays in the loop, and `yield` and `await` count
+/// as exits: such loops wait between iterations on purpose.
+fn first_escape<'t>(block: Node<'t>, src: &[u8], loop_body: bool) -> Option<Node<'t>> {
+    let mut around: Vec<(usize, Node)> = Vec::new();
+    let mut cursor = block.walk();
+    if !cursor.goto_first_child() {
+        return None;
+    }
+    let mut depth = 1;
+    loop {
+        let n = cursor.node();
+        while around.last().is_some_and(|(d, _)| *d >= depth) {
+            around.pop();
+        }
+        match n.kind() {
+            "return_statement" | "throw_statement" => return Some(n),
+            "yield_expression" | "await_expression" if loop_body => return Some(n),
+            kind @ ("break_statement" | "continue_statement") => {
+                let label = n
+                    .named_child(0)
+                    .filter(|l| l.kind() == "statement_identifier")
+                    .map(|l| text(l, src));
+                let stays = around.iter().any(|(_, a)| match label {
+                    Some(l) => {
+                        a.kind() == "labeled_statement"
+                            && a.child_by_field_name("label").map(|x| text(x, src)) == Some(l)
+                    }
+                    None => {
+                        LOOPS.contains(&a.kind())
+                            || (kind == "break_statement" && a.kind() == "switch_statement")
+                    }
+                });
+                let continues_this_loop =
+                    loop_body && kind == "continue_statement" && label.is_none();
+                if !stays && !continues_this_loop {
+                    return Some(n);
+                }
+            }
+            _ => {}
+        }
+        if !FUNCTIONS.contains(&n.kind()) && cursor.goto_first_child() {
+            around.push((depth, n));
+            depth += 1;
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return None;
+            }
+            depth -= 1;
+        }
+    }
+}
+
+fn never_ends(lp: Node, src: &[u8]) -> bool {
+    let always = match lp.child_by_field_name("condition") {
+        None => lp.kind() == "for_statement",
+        Some(c) => {
+            let mut c = c;
+            while matches!(
+                c.kind(),
+                "parenthesized_expression" | "expression_statement"
+            ) {
+                match c.named_child(0) {
+                    Some(inner) => c = inner,
+                    None => break,
+                }
+            }
+            matches!(c.kind(), "true" | "empty_statement")
+        }
+    };
+    always
+        && lp
+            .child_by_field_name("body")
+            .is_some_and(|b| first_escape(b, src, true).is_none())
+}
+
+/// Where a short-circuited optional chain is used in a way that throws.
+fn unsafe_chain_use<'t>(token: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let mut chain = token.parent()?;
+    while let Some(p) = chain.parent().filter(|p| {
+        let continues = |f: &str| p.child_by_field_name(f) == Some(chain);
+        match p.kind() {
+            "member_expression" | "subscript_expression" => continues("object"),
+            "call_expression" => continues("function"),
+            _ => false,
+        }
+    }) {
+        chain = p;
+    }
+    let parent = chain.parent()?;
+    match parent.kind() {
+        "parenthesized_expression" => {
+            let user = parent.parent()?;
+            let uses = |f: &str| user.child_by_field_name(f) == Some(parent);
+            let throws = match user.kind() {
+                "member_expression" | "subscript_expression" => uses("object"),
+                "call_expression" => uses("function"),
+                "new_expression" => uses("constructor"),
+                _ => false,
+            };
+            throws.then_some(user)
+        }
+        "spread_element" => parent
+            .parent()
+            .filter(|g| matches!(g.kind(), "array" | "arguments"))
+            .map(|_| parent),
+        "for_in_statement" => (parent.child_by_field_name("right") == Some(chain)
+            && has_token(parent, "of"))
+        .then_some(chain),
+        "variable_declarator" => (parent.child_by_field_name("value") == Some(chain)
+            && parent
+                .child_by_field_name("name")
+                .is_some_and(|n| matches!(n.kind(), "object_pattern" | "array_pattern")))
+        .then_some(parent),
+        _ => None,
+    }
+}
+
+fn string_content<'s>(string: Node, src: &'s [u8]) -> &'s [u8] {
+    let t = text(string, src);
+    t.get(1..t.len().saturating_sub(1)).unwrap_or(b"")
+}
+
+fn is_weak_key_size(pair: Node, src: &[u8]) -> bool {
+    let (Some(key), Some(value)) = (
+        pair.child_by_field_name("key"),
+        pair.child_by_field_name("value"),
+    ) else {
+        return false;
+    };
+    match text(key, src) {
+        b"modulusLength" => {
+            value.kind() == "number" && as_number(text(value, src)).is_some_and(|n| n < 2048)
+        }
+        _ => {
+            value.kind() == "string"
+                && matches!(
+                    string_content(value, src),
+                    b"secp112r1"
+                        | b"secp112r2"
+                        | b"secp128r1"
+                        | b"secp128r2"
+                        | b"secp160k1"
+                        | b"secp160r1"
+                        | b"secp160r2"
+                        | b"secp192k1"
+                        | b"prime192v1"
+                        | b"P-192"
+                        | b"sect163k1"
+                        | b"sect163r1"
+                        | b"sect163r2"
+                        | b"sect193r1"
+                        | b"sect193r2"
+                )
+        }
+    }
+}
+
+fn accepts_any_identity(pair: Node, _: &[u8]) -> bool {
+    let Some(f) = pair
+        .child_by_field_name("value")
+        .filter(|v| matches!(v.kind(), "arrow_function" | "function_expression"))
+    else {
+        return false;
+    };
+    match f.child_by_field_name("body") {
+        Some(b) if b.kind() == "statement_block" => !contains(b, |n| {
+            n.kind() == "return_statement"
+                && n.named_child(0)
+                    .is_some_and(|v| !matches!(v.kind(), "undefined" | "null" | "comment"))
+        }),
+        Some(b) => matches!(b.kind(), "undefined" | "null"),
+        None => false,
+    }
+}
+
+/// `node` is the first argument of a call to one of `names` (as a function
+/// or a method). Checked only on rare strings, so the parent lookups stay
+/// cheap.
+fn is_first_argument_of(node: Node, names: &[&[u8]], src: &[u8]) -> bool {
+    let Some(args) = node.parent().filter(|a| a.kind() == "arguments") else {
+        return false;
+    };
+    args.named_child(0) == Some(node)
+        && args
+            .parent()
+            .and_then(|call| call.child_by_field_name("function"))
+            .map(|f| f.child_by_field_name("property").unwrap_or(f))
+            .is_some_and(|name| names.contains(&text(name, src)))
+}
+
+const CIPHER_FACTORIES: &[&[u8]] = &[
+    b"createCipheriv",
+    b"createCipher",
+    b"createDecipheriv",
+    b"createDecipher",
+];
+
+fn is_cipher_algorithm(string: Node, src: &[u8]) -> bool {
+    is_first_argument_of(string, CIPHER_FACTORIES, src)
+}
+
+fn is_cipher_algorithm_or_padding(node: Node, src: &[u8]) -> bool {
+    match node.kind() {
+        "string" => is_cipher_algorithm(node, src),
+        _ => is_member_property(node, src),
+    }
+}
+
+fn allows_none_algorithm(pair: Node, src: &[u8]) -> bool {
+    let is_none =
+        |n: Node| n.kind() == "string" && string_content(n, src).eq_ignore_ascii_case(b"none");
+    pair.child_by_field_name("value")
+        .is_some_and(|v| match v.kind() {
+            "array" => {
+                let mut cursor = v.walk();
+                v.named_children(&mut cursor).any(is_none)
+            }
+            _ => is_none(v),
+        })
+}
+
+/// A file mode literal: 0o755, 0755, 493 or "755".
+fn file_mode(node: Node, src: &[u8]) -> Option<u32> {
+    let t = std::str::from_utf8(text(node, src)).ok()?.replace('_', "");
+    match node.kind() {
+        "number" => {
+            let lower = t.to_ascii_lowercase();
+            if let Some(octal) = lower.strip_prefix("0o") {
+                u32::from_str_radix(octal, 8).ok()
+            } else if lower.len() > 1 && lower.starts_with('0') {
+                u32::from_str_radix(&lower[1..], 8).ok()
+            } else {
+                lower.parse().ok()
+            }
+        }
+        "string" => u32::from_str_radix(t.trim_matches(['\'', '"']), 8).ok(),
+        _ => None,
+    }
+}
+
+fn world_accessible_mode<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !is_called(name, src) {
+        return None;
+    }
+    let parent = name.parent()?;
+    let call = if parent.kind() == "member_expression" {
+        parent.parent()?
+    } else {
+        parent
+    };
+    let mode = *arguments_of(call).get(1)?;
+    file_mode(mode, src)
+        .is_some_and(|m| m & 0o002 != 0)
+        .then_some(mode)
+}
+
+fn open_without_noopener<'t>(callee: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let call = callee.parent().filter(|c| {
+        c.kind() == "call_expression" && c.child_by_field_name("function") == Some(callee)
+    })?;
+    let args = arguments_of(call);
+    let safe = args.get(2).is_some_and(|features| {
+        features.kind() == "string" && {
+            let f = string_content(*features, src);
+            f.windows(8).any(|w| w == b"noopener") || f.windows(10).any(|w| w == b"noreferrer")
+        }
+    });
+    (!safe).then_some(call)
+}
+
+fn blank_target_without_noopener(target: Node, src: &[u8]) -> bool {
+    if static_value(target, src) != Some(b"_blank") {
+        return false;
+    }
+    let Some(open) = target.parent() else {
+        return false;
+    };
+    if has_spread(open) {
+        return false;
+    }
+    let rel_ok = attribute(open, "rel", src)
+        .and_then(|r| static_value(r, src))
+        .is_some_and(|r| {
+            r.windows(8).any(|w| w == b"noopener") || r.windows(10).any(|w| w == b"noreferrer")
+        });
+    let external = attribute(open, "href", src).is_some_and(|h| match static_value(h, src) {
+        Some(v) => v.starts_with(b"http://") || v.starts_with(b"https://") || v.starts_with(b"//"),
+        None => true, // dynamic: may be external
+    });
+    external && !rel_ok
+}
+
+fn command_by_name<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !is_called(name, src) {
+        return None;
+    }
+    let parent = name.parent()?;
+    let call = if parent.kind() == "member_expression" {
+        let object = parent.child_by_field_name("object")?;
+        if !matches!(
+            text(object, src),
+            b"child_process" | b"childProcess" | b"cp"
+        ) {
+            return None;
+        }
+        parent.parent()?
+    } else {
+        parent
+    };
+    let command = arguments_of(call)
+        .into_iter()
+        .next()
+        .filter(|a| a.kind() == "string")?;
+    let first_word = string_content(command, src)
+        .split(u8::is_ascii_whitespace)
+        .next()
+        .unwrap_or(b"");
+    (!first_word.is_empty() && !first_word.contains(&b'/')).then_some(command)
+}
+
+fn looks_like_a_secret_value(string: Node, src: &[u8]) -> bool {
+    let v = string_content(string, src);
+    v.len() >= 4
+        && !v.iter().any(u8::is_ascii_whitespace)
+        && !matches!(v.first(), Some(b'$' | b'<' | b'{' | b'/' | b'.' | b'*'))
+        && !v.windows(2).all(|w| w[0] == w[1])
+}
+
+/// Long, mixed letters and digits, and varied: what generated keys look
+/// like, unlike names, URLs or messages.
+fn looks_random(string: Node, src: &[u8]) -> bool {
+    let v = string_content(string, src);
+    if v.len() < 16
+        || v.iter().any(u8::is_ascii_whitespace)
+        || v.windows(3).any(|w| w == b"://")
+        || !v.iter().any(u8::is_ascii_digit)
+        || !v.iter().any(u8::is_ascii_alphabetic)
+    {
+        return false;
+    }
+    let mut counts = [0usize; 256];
+    for &b in v {
+        counts[b as usize] += 1;
+    }
+    let n = v.len() as f64;
+    let entropy: f64 = counts
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / n;
+            -p * p.log2()
+        })
+        .sum();
+    entropy >= 3.5
+}
+
+/// The options object of `res.cookie(...)`, or a `cookie: {...}` option.
+fn in_cookie_options(pair: Node, src: &[u8]) -> bool {
+    let Some(holder) = pair.parent().and_then(|o| o.parent()) else {
+        return false;
+    };
+    match holder.kind() {
+        "pair" => holder
+            .child_by_field_name("key")
+            .is_some_and(|k| text(k, src) == b"cookie"),
+        "arguments" => holder
+            .parent()
+            .and_then(|c| c.child_by_field_name("function"))
+            .and_then(|f| f.child_by_field_name("property"))
+            .is_some_and(|p| text(p, src) == b"cookie"),
+        _ => false,
+    }
+}
+
+fn allows_any_origin<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    match node.kind() {
+        "pair" => node
+            .child_by_field_name("value")
+            .is_some_and(|v| string_content(v, src) == b"*")
+            .then_some(node),
+        "string" => {
+            let args = node.parent().filter(|a| a.kind() == "arguments")?;
+            (args.named_child(0) == Some(node)
+                && args
+                    .named_child(1)
+                    .is_some_and(|v| v.kind() == "string" && string_content(v, src) == b"*"))
+            .then(|| args.parent())
+            .flatten()
+        }
+        _ => {
+            // `cors()` with no options allows every origin.
+            let call = node.parent().filter(|c| {
+                c.kind() == "call_expression" && c.child_by_field_name("function") == Some(node)
+            })?;
+            arguments_of(call).is_empty().then_some(call)
+        }
+    }
+}
+
+fn is_referrer_policy(string: Node, src: &[u8]) -> bool {
+    let Some(parent) = string.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "pair" => parent
+            .child_by_field_name("key")
+            .is_some_and(|k| matches!(text(k, src), b"policy" | b"referrerPolicy")),
+        "arguments" => parent.named_child(0).is_some_and(|h| {
+            h.kind() == "string" && string_content(h, src).eq_ignore_ascii_case(b"referrer-policy")
+        }),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -4661,6 +6017,78 @@ test.skip('soon', () => {});";
             assert!(flagged(rule, JS, src).is_empty(), "{rule}");
         }
         assert_eq!(flagged("js/aria-hidden-focusable", JS, src), [3]);
+    }
+
+    #[test]
+    fn control_flow_bugs() {
+        let src = "function f(x) {
+  switch (x) { case 1: return 1; g(); }
+  outer: while (true) { while (true) { break outer; } }
+  while (true) { if (a) { continue; } tick(); }
+  while (true) { yield next(); }
+  for (;;) { for (const y of ys) { break; } }
+  return 2;
+  type T = number;
+  function h() {}
+}";
+        assert_eq!(flagged("js/unreachable-code", TS, src), [2]);
+        assert_eq!(flagged("js/infinite-loop", TS, src), [4, 6]);
+    }
+
+    #[test]
+    fn optional_chains_and_super() {
+        let src = "const a = (o?.p)();
+const { b } = o?.q;
+for (const c of o?.list) {}
+f(...o?.args);
+const d = { ...o?.rest };
+const e = o?.p.q.r;";
+        assert_eq!(
+            flagged("js/unsafe-optional-chaining", JS, src),
+            [1, 2, 3, 4]
+        );
+        let classes = "class A implements I { constructor() { super(); } }
+class B extends C { constructor() { const f = () => 1; } }
+class D extends C { constructor() { super(); } }";
+        assert_eq!(flagged("js/super-call", TS, classes), [1, 2]);
+    }
+
+    #[test]
+    fn secrets_and_options() {
+        let src = "const token = 'Authorization';
+const apiKey = 'https://api.example.com/v1/keys';
+const secret = 'aB3dE5fG7hJ9kL1mN3pQ';
+const pwd = '/usr/local/bin';
+mailer.createTransport({ host, secure: false });
+res.cookie('a', 'b', { secure: false });
+m.set(k, 1);
+m.set(k, 2);
+m.set(j, m.get(j) + 1);
+m.set(j, 3);";
+        assert_eq!(flagged("js/hardcoded-secret", JS, src), [3]);
+        assert!(flagged("js/hardcoded-password", JS, src).is_empty());
+        assert_eq!(flagged("js/cookie-not-secure", JS, src), [6]);
+        // One finding per block: Find reports the first.
+        assert_eq!(flagged("js/overwritten-element", JS, src), [8]);
+    }
+
+    #[test]
+    fn corpus_idioms_in_bug_rules() {
+        let src =
+            "class S { get shape() { defineLazy(this, 'shape', () => 1); return this.shape; } }
+function ok(s) { try { new URL(s); return true; } catch { return false; } }
+buf[++i] = x;
+buf[++i] = y;
+let // the value
+  v = 1;";
+        for rule in [
+            "js/accessor-recursion",
+            "js/new-result-dropped",
+            "js/overwritten-element",
+            "js/useless-expression",
+        ] {
+            assert!(flagged(rule, JS, src).is_empty(), "{rule}");
+        }
     }
 
     #[test]
