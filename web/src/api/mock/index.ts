@@ -6,6 +6,7 @@ import { analysisDetail, queryAnalyses } from './analyses'
 import { componentDetail, listComponents } from './components'
 import { GATES } from './gates'
 import { SECURITY } from './security'
+import { coverageList, fileCoverage } from './coverage'
 import { dependencyList, reviewDependency } from './dependencies'
 import { PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
 import { queryIssues } from './query'
@@ -158,6 +159,19 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       const detail = projectDetail(project, branch)
       if (!detail) throw new Error('not found')
       return wait(dependencyList(detail))
+    },
+    coverage: async (project, branch) => {
+      guard()
+      const detail = projectDetail(project, branch)
+      if (!detail) throw new Error('not found')
+      return wait(coverageList(detail))
+    },
+    fileCoverage: async (project, path, branch) => {
+      guard()
+      const detail = projectDetail(project, branch)
+      const file = detail && fileCoverage(detail, path)
+      if (!file) throw new Error('not found')
+      return wait(file)
     },
     setNewCodePeriod: async (project, analysis) => {
       guard()

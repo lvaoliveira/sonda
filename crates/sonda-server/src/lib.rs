@@ -11,6 +11,7 @@ pub mod analyses;
 pub mod api;
 pub mod components;
 pub mod config;
+pub mod coverage;
 pub mod db;
 pub mod dependencies;
 pub mod drill;
