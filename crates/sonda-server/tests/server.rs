@@ -33,6 +33,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "issues",
             "projects",
             "sessions",
+            "sign_in_failures",
             "sources",
             "users"
         ]
