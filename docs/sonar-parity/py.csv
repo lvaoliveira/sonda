@@ -56,18 +56,18 @@ python:S1871,code_smell,major,yes,main,syntactic,todo,,,
 python:S1940,code_smell,minor,yes,all,syntactic,todo,,,
 python:S2053,vulnerability,critical,yes,main,syntactic,todo,,759 760,A02
 python:S2068,vulnerability,major,yes,main,syntactic,todo,,259 798,A07
-python:S2077,vulnerability,major,yes,main,syntactic,todo,,89 943,A03
-python:S2092,vulnerability,minor,yes,main,syntactic,todo,,311 315 614,A04 A05
-python:S2115,vulnerability,blocker,yes,main,syntactic,todo,,521,A07
+python:S2077,vulnerability,major,yes,main,syntactic,partial,py/sql-built-dynamically,89 943,A03
+python:S2092,vulnerability,minor,yes,main,syntactic,done,py/cookie-not-secure,311 315 614,A04 A05
+python:S2115,vulnerability,blocker,yes,main,syntactic,done,py/empty-db-password,521,A07
 python:S2159,bug,blocker,yes,main,syntactic,todo,,,
 python:S2190,bug,blocker,yes,all,syntactic,todo,,,
 python:S2201,bug,major,yes,main,syntactic,todo,,,
 python:S2208,code_smell,critical,yes,all,syntactic,todo,,,
-python:S2245,vulnerability,major,yes,main,syntactic,todo,,326 330 338 1241,A02
+python:S2245,vulnerability,major,yes,main,syntactic,partial,py/random-secret,326 330 338 1241,A02
 python:S2257,vulnerability,critical,yes,main,syntactic,todo,,327,A02
 python:S2275,bug,blocker,yes,all,syntactic,todo,,,
 python:S2325,code_smell,minor,no,all,syntactic,todo,,,
-python:S2612,vulnerability,major,yes,main,syntactic,todo,,266 732,A01 A04
+python:S2612,vulnerability,major,yes,main,syntactic,done,py/world-permissions,266 732,A01 A04
 python:S2638,code_smell,critical,yes,main,syntactic,todo,,,
 python:S2710,code_smell,critical,yes,main,syntactic,todo,,,
 python:S2711,bug,blocker,yes,main,syntactic,todo,,,
@@ -75,7 +75,7 @@ python:S2712,bug,blocker,no,main,syntactic,todo,,,
 python:S2733,bug,blocker,no,main,syntactic,deprecated,,,
 python:S2734,bug,blocker,yes,main,syntactic,todo,,,
 python:S2737,code_smell,minor,yes,main,syntactic,todo,,,
-python:S2755,vulnerability,blocker,yes,main,syntactic,todo,,611 827,A05
+python:S2755,vulnerability,blocker,yes,main,syntactic,done,py/xxe,611 827,A05
 python:S2757,bug,major,yes,all,syntactic,todo,,,
 python:S2761,code_smell,major,yes,all,syntactic,todo,,,
 python:S2772,code_smell,minor,yes,main,syntactic,todo,,,
@@ -83,7 +83,7 @@ python:S2823,bug,blocker,yes,all,syntactic,todo,,,
 python:S2836,code_smell,major,yes,main,syntactic,todo,,,
 python:S2876,bug,blocker,yes,main,syntactic,todo,,,
 python:S3329,vulnerability,critical,yes,main,syntactic,todo,,327 780,A02
-python:S3330,vulnerability,minor,yes,main,syntactic,todo,,1004,A05
+python:S3330,vulnerability,minor,yes,main,syntactic,done,py/cookie-not-httponly,1004,A05
 python:S3358,code_smell,major,yes,all,syntactic,todo,,,
 python:S3403,bug,blocker,yes,main,syntactic,todo,,,
 python:S3457,code_smell,major,yes,all,syntactic,todo,,,
@@ -101,27 +101,27 @@ python:S3984,bug,major,yes,all,syntactic,todo,,,
 python:S3985,code_smell,major,yes,all,syntactic,todo,,,
 python:S4143,bug,major,yes,all,syntactic,todo,,,
 python:S4144,code_smell,major,yes,all,syntactic,todo,,,
-python:S4423,vulnerability,critical,yes,main,syntactic,todo,,295 326 327,A02 A07
-python:S4426,vulnerability,critical,yes,main,syntactic,todo,,326,A02
+python:S4423,vulnerability,critical,yes,main,syntactic,done,py/weak-tls-version,295 326 327,A02 A07
+python:S4426,vulnerability,critical,yes,main,syntactic,done,py/weak-key-size,326,A02
 python:S4433,vulnerability,critical,yes,main,syntactic,todo,,521,A07
 python:S4487,code_smell,critical,yes,all,syntactic,todo,,,
-python:S4502,vulnerability,critical,yes,main,syntactic,todo,,352,A01
-python:S4507,vulnerability,minor,yes,main,syntactic,todo,,215 489,A05
-python:S4790,vulnerability,critical,yes,main,syntactic,todo,,1240,A02
+python:S4502,vulnerability,critical,yes,main,syntactic,partial,py/csrf-disabled,352,A01
+python:S4507,vulnerability,minor,yes,main,syntactic,partial,py/debug-enabled,215 489,A05
+python:S4790,vulnerability,critical,yes,main,syntactic,done,py/weak-hash,1240,A02
 python:S4828,code_smell,critical,no,main,syntactic,deprecated,,,
-python:S4830,vulnerability,critical,yes,main,syntactic,todo,,295,A02 A05 A07
+python:S4830,vulnerability,critical,yes,main,syntactic,done,py/tls-unverified,295,A02 A05 A07
 python:S5042,code_smell,major,no,main,syntactic,deprecated,,,
-python:S5122,vulnerability,major,yes,main,syntactic,todo,,346 942,A05 A07
-python:S5247,vulnerability,major,yes,main,syntactic,todo,,79,A03
-python:S5332,vulnerability,minor,yes,main,syntactic,todo,,200 319,A02
+python:S5122,vulnerability,major,yes,main,syntactic,partial,py/cors-any-origin,346 942,A05 A07
+python:S5247,vulnerability,major,yes,main,syntactic,done,py/autoescape-disabled,79,A03
+python:S5332,vulnerability,minor,yes,main,syntactic,partial,py/cleartext-url,200 319,A02
 python:S5344,vulnerability,critical,yes,main,syntactic,todo,,256 916,A02 A04
 python:S5361,code_smell,critical,yes,all,syntactic,todo,,,
 python:S5439,vulnerability,blocker,no,main,syntactic,deprecated,,,
-python:S5443,vulnerability,critical,yes,main,syntactic,todo,,377 379,A01
-python:S5445,vulnerability,critical,yes,main,syntactic,todo,,377 379,A01
-python:S5527,vulnerability,critical,yes,main,syntactic,todo,,297,A02 A05 A07
+python:S5443,vulnerability,critical,yes,main,syntactic,done,py/public-tmp,377 379,A01
+python:S5445,vulnerability,critical,yes,main,syntactic,done,py/mktemp,377 379,A01
+python:S5527,vulnerability,critical,yes,main,syntactic,done,py/hostname-unverified,297,A02 A05 A07
 python:S5542,vulnerability,critical,yes,main,syntactic,todo,,327 780,A02
-python:S5547,vulnerability,critical,yes,main,syntactic,todo,,326 327,A02
+python:S5547,vulnerability,critical,yes,main,syntactic,partial,py/weak-cipher,326 327,A02
 python:S5549,bug,blocker,yes,main,syntactic,todo,,,
 python:S5603,code_smell,major,yes,all,syntactic,todo,,,
 python:S5607,bug,blocker,yes,all,syntactic,todo,,,
@@ -129,7 +129,7 @@ python:S5632,bug,blocker,yes,all,syntactic,todo,,,
 python:S5642,bug,blocker,yes,all,syntactic,todo,,,
 python:S5644,bug,blocker,yes,all,syntactic,todo,,,
 python:S5655,code_smell,critical,yes,all,syntactic,todo,,,
-python:S5659,vulnerability,critical,yes,main,syntactic,todo,,347,A02
+python:S5659,vulnerability,critical,yes,main,syntactic,done,py/jwt-unverified,347,A02
 python:S5685,code_smell,minor,yes,all,syntactic,todo,,,
 python:S5704,code_smell,critical,yes,all,syntactic,todo,,,
 python:S5706,code_smell,major,yes,all,syntactic,todo,,,
@@ -218,7 +218,7 @@ python:S6395,code_smell,major,yes,all,syntactic,todo,,,
 python:S6396,code_smell,major,yes,all,syntactic,todo,,,
 python:S6397,code_smell,major,yes,all,syntactic,todo,,,
 python:S6418,vulnerability,blocker,yes,main,syntactic,todo,,798,A07
-python:S6437,vulnerability,blocker,yes,main,syntactic,todo,,259 798,A07
+python:S6437,vulnerability,blocker,yes,main,syntactic,partial,py/hardcoded-credential,259 798,A07
 python:S6463,vulnerability,major,yes,main,syntactic,todo,,284,
 python:S6468,bug,major,yes,all,syntactic,todo,,,
 python:S6537,code_smell,major,yes,all,syntactic,todo,,,
@@ -251,8 +251,8 @@ python:S6735,code_smell,major,yes,all,syntactic,todo,,,
 python:S6740,code_smell,major,no,all,syntactic,todo,,,
 python:S6741,code_smell,major,yes,all,syntactic,todo,,,
 python:S6742,code_smell,major,yes,all,syntactic,todo,,,
-python:S6779,vulnerability,blocker,yes,all,syntactic,todo,,259 798,A07
-python:S6781,vulnerability,blocker,yes,all,syntactic,todo,,259 798,A07
+python:S6779,vulnerability,blocker,yes,all,syntactic,done,py/flask-secret-key,259 798,A07
+python:S6781,vulnerability,blocker,yes,all,syntactic,done,py/jwt-literal-secret,259 798,A07
 python:S6785,vulnerability,critical,yes,all,syntactic,todo,,770,A04 A05
 python:S6786,vulnerability,major,yes,all,syntactic,todo,,200,A05
 python:S6792,code_smell,major,yes,all,syntactic,todo,,,
@@ -286,7 +286,7 @@ python:S6979,code_smell,major,yes,all,syntactic,todo,,,
 python:S6982,code_smell,major,yes,all,syntactic,todo,,,
 python:S6983,code_smell,minor,yes,all,syntactic,todo,,,
 python:S6984,bug,critical,yes,all,syntactic,todo,,,
-python:S6985,vulnerability,critical,yes,all,syntactic,todo,,502 913,
+python:S6985,vulnerability,critical,yes,all,syntactic,partial,py/torch-load-unsafe,502 913,
 python:S7483,code_smell,major,yes,all,syntactic,todo,,,
 python:S7484,code_smell,major,yes,all,syntactic,todo,,,
 python:S7486,code_smell,minor,yes,all,syntactic,todo,,,
@@ -330,7 +330,7 @@ python:S7619,code_smell,major,yes,all,syntactic,todo,,,
 python:S7620,bug,major,yes,main,syntactic,todo,,,
 python:S7621,code_smell,major,yes,main,syntactic,todo,,,
 python:S7622,code_smell,major,yes,all,syntactic,todo,,,
-python:S7625,vulnerability,blocker,yes,all,syntactic,todo,,798,
+python:S7625,vulnerability,blocker,yes,all,syntactic,done,py/aws-access-key,798,
 python:S7632,code_smell,major,yes,all,syntactic,todo,,,
 python:S7931,bug,blocker,yes,all,syntactic,todo,,,
 python:S7941,code_smell,minor,no,main,syntactic,todo,,,
@@ -343,7 +343,7 @@ python:S8374,bug,blocker,yes,main,syntactic,todo,,,
 python:S8375,bug,blocker,yes,main,syntactic,todo,,,
 python:S8385,bug,blocker,yes,main,syntactic,todo,,,
 python:S8389,vulnerability,blocker,yes,main,syntactic,todo,,,
-python:S8392,vulnerability,blocker,yes,main,syntactic,todo,,668,
+python:S8392,vulnerability,blocker,yes,main,syntactic,done,py/bind-all-interfaces,668,
 python:S8396,code_smell,critical,yes,main,syntactic,todo,,,
 python:S8397,code_smell,blocker,yes,main,syntactic,todo,,,
 python:S8400,bug,blocker,yes,main,syntactic,todo,,,
