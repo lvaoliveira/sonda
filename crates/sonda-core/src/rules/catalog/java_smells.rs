@@ -2469,26 +2469,26 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- filters
 
-const LOOPS: &[&str] = &[
+pub(super) const LOOPS: &[&str] = &[
     "for_statement",
     "enhanced_for_statement",
     "while_statement",
     "do_statement",
 ];
 
-fn children_of_kind<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
+pub(super) fn children_of_kind<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|n| n.kind() == kind)
         .collect()
 }
 
-fn members(body: Node) -> Vec<Node> {
+pub(super) fn members(body: Node) -> Vec<Node> {
     statements(body)
 }
 
 /// How many times `word` occurs in `haystack` as a whole identifier.
-fn count_word(haystack: &[u8], word: &[u8]) -> usize {
+pub(super) fn count_word(haystack: &[u8], word: &[u8]) -> usize {
     if word.is_empty() {
         return 0;
     }
@@ -2522,14 +2522,14 @@ fn is_literal_value(node: Node) -> bool {
     )
 }
 
-fn declarator_names<'a>(declaration: Node, src: &'a [u8]) -> Vec<&'a [u8]> {
+pub(super) fn declarator_names<'a>(declaration: Node, src: &'a [u8]) -> Vec<&'a [u8]> {
     children_of_kind(declaration, "variable_declarator")
         .into_iter()
         .filter_map(|d| d.child_by_field_name("name").map(|n| text(n, src)))
         .collect()
 }
 
-fn enclosing_class(node: Node) -> Option<Node> {
+pub(super) fn enclosing_class(node: Node) -> Option<Node> {
     let mut p = node.parent();
     let mut hops = 0;
     while let Some(n) = p {
