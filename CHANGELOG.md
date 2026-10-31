@@ -9,8 +9,8 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 959
-  rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java, C/C++ and C#
+  ([ADR-0015](docs/adr/0015-csharp.md)) with 1004 rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
   complexity, technical debt, and cross-file duplication.
