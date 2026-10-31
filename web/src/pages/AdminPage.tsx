@@ -80,9 +80,13 @@ function Users({ me }: { me: string | null }) {
         </div>
       </Card>
       <CreateUser
-        onCreated={(username) => {
+        onCreated={(username, service) => {
           setError('')
-          setNotice(`Created ${username}. Share the password with them; they can change it under Account.`)
+          setNotice(
+            service
+              ? `Created ${username}, a service user. Generate its CI tokens under Tokens below.`
+              : `Created ${username}. Share the password with them; they can change it under Account.`,
+          )
           reload()
         }}
         onError={setError}
@@ -158,14 +162,20 @@ function UserRowView({ user, isMe, update }: { user: UserRow; isMe: boolean; upd
             className="h-8 rounded-md border-0 bg-canvas px-2 text-[13px] edge"
           >
             <option value="member">Member</option>
-            <option value="admin">Admin</option>
+            {/* Admins have to be able to sign in. */}
+            <option value="admin" disabled={!user.hasPassword}>
+              Admin
+            </option>
           </select>
         </td>
-        <td className="py-2.5">{user.disabled ? <span className="text-fg-faint">Disabled</span> : <span className="text-ok">Active</span>}</td>
+        <td className="py-2.5">
+          {user.disabled ? <span className="text-fg-faint">Disabled</span> : <span className="text-ok">Active</span>}
+          {!user.hasPassword && <span className="block text-xs text-fg-faint">Service user · can’t sign in</span>}
+        </td>
         <td className="py-2.5 text-fg-muted">{user.lastLoginAt ? shortDate(user.lastLoginAt) : 'Never'}</td>
         <td className="py-2.5 text-right">
           <span className="inline-flex gap-1.5">
-            <Button onClick={() => setResetting(!resetting)}>Reset password</Button>
+            <Button onClick={() => setResetting(!resetting)}>{user.hasPassword ? 'Reset password' : 'Set password'}</Button>
             <Button onClick={() => update(user, { disabled: !user.disabled }, `${user.disabled ? 'Enabled' : 'Disabled'} ${user.username}.`)}>
               {user.disabled ? 'Enable' : 'Disable'}
             </Button>
@@ -198,19 +208,29 @@ function UserRowView({ user, isMe, update }: { user: UserRow; isMe: boolean; upd
   )
 }
 
-function CreateUser({ onCreated, onError }: { onCreated: (username: string) => void; onError: (message: string) => void }) {
+function CreateUser({ onCreated, onError }: { onCreated: (username: string, service: boolean) => void; onError: (message: string) => void }) {
   const api = useApi()
-  const empty: NewUser = { username: '', displayName: '', role: 'member', password: '' }
-  const [user, setUser] = useState<NewUser>(empty)
+  const empty = { username: '', displayName: '', role: 'member' as Role, password: '' }
+  const [user, setUser] = useState(empty)
+  const [service, setService] = useState(false)
   const [busy, setBusy] = useState(false)
-  const set = (patch: Partial<NewUser>) => setUser((u) => ({ ...u, ...patch }))
+  const set = (patch: Partial<typeof empty>) => setUser((u) => ({ ...u, ...patch }))
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
+    const { password, ...fields } = user
+    const created: NewUser = {
+      ...fields,
+      username: user.username.trim().toLowerCase(),
+      displayName: user.displayName.trim(),
+      // A service user has no password and is a member.
+      ...(service ? { role: 'member' } : { password }),
+    }
     try {
-      await api.createUser({ ...user, username: user.username.trim().toLowerCase(), displayName: user.displayName.trim() })
-      onCreated(user.username.trim().toLowerCase())
+      await api.createUser(created)
+      onCreated(user.username.trim().toLowerCase(), service)
       setUser(empty)
+      setService(false)
     } catch (err) {
       onError((err as Error).message)
     }
@@ -229,24 +249,33 @@ function CreateUser({ onCreated, onError }: { onCreated: (username: string) => v
         </label>
         <label className="flex flex-col gap-1.5 text-[13px]">
           Role
-          <select value={user.role} onChange={(e) => set({ role: e.target.value as Role })} className={input}>
+          <select value={service ? 'member' : user.role} disabled={service} onChange={(e) => set({ role: e.target.value as Role })} className={input}>
             <option value="member">Member</option>
             <option value="admin">Admin</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          Initial password
-          <input
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            value={user.password}
-            onChange={(e) => set({ password: e.target.value })}
-            className={input}
-          />
+        {!service && (
+          <label className="flex flex-col gap-1.5 text-[13px]">
+            Initial password
+            <input
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={MIN_PASSWORD_LENGTH}
+              value={user.password}
+              onChange={(e) => set({ password: e.target.value })}
+              className={input}
+            />
+          </label>
+        )}
+        <label className="flex items-center gap-2 self-center text-[13px]">
+          <input type="checkbox" checked={service} onChange={(e) => setService(e.target.checked)} className="accent-brand" />
+          <span>
+            Service user
+            <span className="block text-xs text-fg-faint">No password, can’t sign in: owns CI tokens.</span>
+          </span>
         </label>
-        <Button type="submit" primary disabled={busy || user.password.length < MIN_PASSWORD_LENGTH}>
+        <Button type="submit" primary disabled={busy || (!service && user.password.length < MIN_PASSWORD_LENGTH)}>
           {busy ? 'Adding…' : 'Add user'}
         </Button>
       </form>
