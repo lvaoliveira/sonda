@@ -173,6 +173,18 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/static-iv", &[323], &[A02]),
     // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
     ("java/regex-catastrophic-backtracking", &[1333], &[]),
+    ("java/debug-enabled", &[215, 489], &[A05]),
+    ("java/autoescape-disabled", &[79], &[A03]),
+    ("java/upload-size-unlimited", &[400, 770], &[]),
+    ("java/server-version-disclosed", &[200], &[A05]),
+    ("java/security-rule-order", &[285, 287], &[A01]),
+    ("java/password-fast-hash", &[256, 916], &[A02, A04]),
+    ("java/receiver-without-permission", &[925, 926], &[]),
+    ("java/keystore-without-user-auth", &[522], &[A04]),
+    ("java/biometric-without-crypto", &[1390], &[A07]),
+    ("java/database-key-literal", &[311, 321], &[A02, A04]),
+    ("java/webview-javascript-interface", &[749], &[A05]),
+    ("java/persistent-device-id", &[213], &[]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
 ];
