@@ -136,7 +136,7 @@ export interface AnalysisSummary {
   project: string
   branch: string
   sha: string
-  /** Null where unknown: uploads from older CLIs or outside git have no message; durations aren't uploaded. */
+  /** Null where unknown: a message needs git, a duration `sonda scan --upload`. */
   message: string | null
   note: string
   duration: string | null
@@ -753,6 +753,8 @@ export interface AnalysisRow {
   sha: string
   /** The commit's subject line, when the upload had one. */
   message: string | null
+  /** How long the scan took (`sonda scan --upload`); null for an uploaded report. */
+  duration: string | null
   analyzedAt: string
   toolVersion: string
   gate: GateState
@@ -797,6 +799,8 @@ export interface AnalysisDetail {
   sha: string
   /** The commit's subject line, when the upload had one. */
   message: string | null
+  /** How long the scan took (`sonda scan --upload`); null for an uploaded report. */
+  duration: string | null
   analyzedAt: string
   toolVersion: string
   newCodeReference: string | null

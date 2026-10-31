@@ -19,6 +19,8 @@ const ROWS: AnalysisRow[] = PROJECT_LIST.projects
     analyzedAt: new Date(NOW - offset * 2.5 * 3_600_000).toISOString(),
     // One without, as an upload from outside git has.
     message: offset === 3 ? null : MESSAGES[offset % MESSAGES.length],
+    // Uploaded reports (`sonda upload`) have no duration.
+    duration: offset % 3 === 2 ? null : `${1 + (offset % 4)}m ${(offset * 17) % 60}s`,
     toolVersion: '0.1.0',
     gate,
     failing: gate === 'failed' ? ['New vulnerabilities > 0', 'Coverage on new code < 80%'] : [],
@@ -61,6 +63,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
     mainBranch: 'main',
     sha: row.sha,
     message: row.message,
+    duration: row.duration,
     analyzedAt: row.analyzedAt,
     toolVersion: row.toolVersion,
     newCodeReference: 'origin/main',

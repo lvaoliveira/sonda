@@ -355,13 +355,14 @@ describe('Coverage', () => {
 })
 
 describe('Analyses', () => {
-  it('shows each analysis’s commit message', async () => {
+  it('shows each analysis’s commit message and scan duration', async () => {
     const user = userEvent.setup()
     renderAt('/analyses')
     expect((await screen.findAllByText('Fix refunds rounding for partial captures')).length).toBeGreaterThan(0)
     await user.click(screen.getAllByRole('link', { name: 'payments-platform' })[0])
     expect(await screen.findByRole('heading', { level: 1, name: '9f3c2a1e7b04' })).toBeInTheDocument()
     expect(screen.getByText('Fix refunds rounding for partial captures')).toBeInTheDocument()
+    expect(screen.getByText('scanned in 1m 0s')).toBeInTheDocument()
   })
 
   it('lists analyses newest first, filters by gate and project, and pages', async () => {
