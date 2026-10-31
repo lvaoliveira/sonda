@@ -2133,7 +2133,7 @@ fn is_routable_ipv4(string: Node, src: &[u8]) -> bool {
 }
 
 /// Every node below `node` (inside nested functions too) that satisfies `pred`.
-fn collect_below<'t>(node: Node<'t>, pred: impl Fn(Node<'t>) -> bool) -> Vec<Node<'t>> {
+pub(super) fn collect_below<'t>(node: Node<'t>, pred: impl Fn(Node<'t>) -> bool) -> Vec<Node<'t>> {
     let mut found = Vec::new();
     let mut cursor = node.walk();
     if !cursor.goto_first_child() {

@@ -4598,7 +4598,7 @@ fn lacks_title(element: Node, src: &[u8]) -> bool {
 
 /// The attribute is on an HTML element, not a component, whose props may
 /// mean anything.
-fn on_dom_element(attr: Node, src: &[u8]) -> bool {
+pub(super) fn on_dom_element(attr: Node, src: &[u8]) -> bool {
     attr.parent()
         .and_then(|o| tag_name(o, src))
         .is_some_and(is_dom_tag)
