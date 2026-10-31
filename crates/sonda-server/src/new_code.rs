@@ -111,7 +111,7 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
     .bind(project)
     .fetch_optional(pool)
     .await?;
-    let Some((latest, branch, mut measures, mut gate)) = latest else {
+    let Some((latest, branch, mut measures, _gate)) = latest else {
         return Ok(());
     };
 
@@ -149,35 +149,68 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
     .bind(&new_ids)
     .execute(&mut *tx)
     .await?;
-    // The issues present in the latest analysis that are new.
-    let new: Vec<(String, String, i32)> = sqlx::query_as(
-        "SELECT category, severity, effort_minutes FROM issues
-         WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL AND is_new",
-    )
-    .bind(project)
-    .bind(&branch)
-    .fetch_all(&mut *tx)
-    .await?;
-    let count =
-        |p: &dyn Fn(&(String, String, i32)) -> bool| new.iter().filter(|i| p(i)).count() as f64;
-    let values = [
-        ("new_issues", new.len() as f64),
-        ("new_bugs", count(&|i| i.0 == "bug")),
-        ("new_vulnerabilities", count(&|i| i.0 == "vulnerability")),
-        ("new_code_smells", count(&|i| i.0 == "code_smell")),
-        ("new_blocker_issues", count(&|i| i.1 == "blocker")),
-        ("new_critical_issues", count(&|i| i.1 == "critical")),
-        ("new_major_issues", count(&|i| i.1 == "major")),
-        ("new_debt_minutes", new.iter().map(|i| f64::from(i.2)).sum()),
-    ];
-    for (metric, value) in values {
-        measures[metric] = Value::from(value);
-    }
     measures["new_lines"] = Value::from(changed.lines as f64);
     // Without per-file coverage (an older CLI, or no --coverage), the scan's
     // value stays.
     if let Some(coverage) = changed.coverage {
         measures["new_coverage"] = Value::from(coverage);
+    }
+    sqlx::query("UPDATE analyses SET measures = $2 WHERE id = $1")
+        .bind(latest)
+        .bind(&measures)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    recount(pool, project, &branch).await
+}
+
+/// An issue as `recount` counts it: category, severity, effort, new.
+type CountedIssue = (String, String, i32, bool);
+
+/// Recounts the issue measures of the branch's latest analysis, overall and
+/// on new code, from the issue tracker: issues present in it, except those
+/// decided as accepted or false positive (ADR-0014). Then re-evaluates and
+/// stores its gate. New code is what `is_new` says: the period's on the
+/// main branch (see `refresh`), the scan's elsewhere.
+pub async fn recount(pool: &PgPool, project: i64, branch: &str) -> Result<(), sqlx::Error> {
+    let latest: Option<(i64, Value, Value)> = sqlx::query_as(
+        "SELECT id, measures, gate FROM analyses
+         WHERE project_id = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(project)
+    .bind(branch)
+    .fetch_optional(pool)
+    .await?;
+    let Some((latest, mut measures, mut gate)) = latest else {
+        return Ok(());
+    };
+    let issues: Vec<CountedIssue> = sqlx::query_as(
+        "SELECT category, severity, effort_minutes, is_new FROM issues
+         WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL
+           AND status <> ALL($3::issue_status[])",
+    )
+    .bind(project)
+    .bind(branch)
+    .bind(crate::issues::DECIDED)
+    .fetch_all(pool)
+    .await?;
+    for (prefix, new_only) in [("", false), ("new_", true)] {
+        let counted: Vec<&CountedIssue> = issues.iter().filter(|i| !new_only || i.3).collect();
+        let count =
+            |p: &dyn Fn(&CountedIssue) -> bool| counted.iter().filter(|i| p(i)).count() as f64;
+        let values = [
+            ("issues", counted.len() as f64),
+            ("bugs", count(&|i| i.0 == "bug")),
+            ("vulnerabilities", count(&|i| i.0 == "vulnerability")),
+            ("code_smells", count(&|i| i.0 == "code_smell")),
+            ("blocker_issues", count(&|i| i.1 == "blocker")),
+            ("critical_issues", count(&|i| i.1 == "critical")),
+            ("major_issues", count(&|i| i.1 == "major")),
+            ("debt_minutes", counted.iter().map(|i| f64::from(i.2)).sum()),
+        ];
+        for (metric, value) in values {
+            measures[format!("{prefix}{metric}")] = Value::from(value);
+        }
     }
     let passed = evaluate_gate(&mut gate, &measures);
     sqlx::query("UPDATE analyses SET measures = $2, gate = $3, gate_passed = $4 WHERE id = $1")
@@ -185,9 +218,9 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
         .bind(&measures)
         .bind(&gate)
         .bind(passed)
-        .execute(&mut *tx)
+        .execute(pool)
         .await?;
-    tx.commit().await
+    Ok(())
 }
 
 /// What changed in `latest` since `start`.

@@ -1,4 +1,4 @@
-import { AuthError, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
@@ -10,6 +10,7 @@ import { coverageList, fileCoverage } from './coverage'
 import { dependencyList, reviewDependency } from './dependencies'
 import { PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
 import { queryIssues } from './query'
+import { securityReview } from './review'
 import { mockTokens } from './tokens'
 import rulesData from './rules.json'
 
@@ -79,13 +80,18 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     const issue = findIssue(id)
     const at = new Date().toISOString()
     const actor = session.user?.username ?? null
-    if (patch.status !== undefined && patch.status !== issue.status) {
-      issue.history.push({ at, actor, field: 'status', oldValue: issue.status, newValue: patch.status })
+    // As the server: decisions need a reason, and a reason needs a status.
+    const reason = patch.reason?.trim() || null
+    if (patch.status && DECIDED.includes(patch.status) && !reason) throw new Error(`say why: ${patch.status} needs a reason`)
+    if (reason && (!patch.status || patch.status === 'open')) throw new Error('a reason goes with confirmed, accepted or false_positive')
+    if (patch.status !== undefined && (patch.status !== issue.status || reason)) {
+      issue.history.push({ at, actor, field: 'status', oldValue: issue.status, newValue: patch.status, reason })
       issue.status = patch.status
+      issue.reason = reason
     }
     const assignee = patch.assignee === '' ? null : patch.assignee
     if (assignee !== undefined && assignee !== issue.assignee) {
-      issue.history.push({ at, actor, field: 'assignee', oldValue: issue.assignee, newValue: assignee })
+      issue.history.push({ at, actor, field: 'assignee', oldValue: issue.assignee, newValue: assignee, reason: null })
       issue.assignee = assignee
     }
     return issue
@@ -167,6 +173,10 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     security: async () => {
       guard()
       return wait(SECURITY)
+    },
+    securityReview: async (query) => {
+      guard()
+      return wait(securityReview(issues, catalog, query))
     },
     components: async (project) => {
       guard()

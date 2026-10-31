@@ -53,12 +53,34 @@ describe('Issues', () => {
     expect(within(detail).getByText('No triage changes yet.')).toBeInTheDocument()
     const row = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')[0]
     const before = within(row).getByText(/^(Open|Confirmed)$/).textContent ?? ''
+    // Accepting asks why first (ADR-0014).
     await user.click(within(detail).getByRole('button', { name: 'Accept risk' }))
+    const accept = within(detail).getByRole('button', { name: 'Accept' })
+    expect(accept).toBeDisabled()
+    await user.type(within(detail).getByLabelText(/Why is this risk acceptable\?/), 'Behind the VPN only.')
+    await user.click(accept)
     expect(await screen.findByRole('status')).toHaveTextContent('Marked accepted')
     await waitFor(() => expect(within(row).getByText('Accepted')).toBeInTheDocument())
     expect(await within(detail).findByText(/→ accepted/)).toBeInTheDocument()
+    expect(within(detail).getAllByText('“Behind the VPN only.”').length).toBeGreaterThan(0)
+    expect(within(detail).queryByLabelText(/Why is this risk acceptable\?/)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(within(row).getByText(before)).toBeInTheDocument())
+  })
+
+  it('marks a false positive with a reason, and can cancel', async () => {
+    const user = userEvent.setup()
+    renderAt('/issues')
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    await user.click(await within(detail).findByRole('button', { name: 'False positive' }))
+    await user.click(within(detail).getByRole('button', { name: 'Cancel' }))
+    expect(within(detail).queryByRole('button', { name: 'Mark false positive' })).not.toBeInTheDocument()
+    await user.click(within(detail).getByRole('button', { name: 'False positive' }))
+    await user.type(within(detail).getByLabelText(/Why is this not a real problem\?/), 'The input is a constant.')
+    await user.click(within(detail).getByRole('button', { name: 'Mark false positive' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Marked false positive')
+    expect(await within(detail).findByText('False positive: “The input is a constant.”')).toBeInTheDocument()
+    expect(within(detail).getByRole('button', { name: 'Reopen' })).toBeInTheDocument()
   })
 
   it('shows the whole path of an issue, not only its file name', async () => {
@@ -471,6 +493,40 @@ describe('Security', () => {
     await userEvent.setup().click(within(owasp).getByRole('button', { name: '2021' }))
     categories = within(within(owasp).getByRole('list', { name: 'OWASP Top 10 2021 categories' })).getAllByRole('listitem')
     expect(categories[2]).toHaveTextContent('A03Injection3')
+  })
+
+  it('reviews vulnerabilities in place, most severe first', async () => {
+    const user = userEvent.setup()
+    renderAt('/security')
+    const review = await screen.findByRole('region', { name: 'To review' })
+    const list = await within(review).findByRole('list', { name: 'Vulnerabilities to review' })
+    let rows = within(list).getAllByRole('listitem')
+    // Open ones only; the confirmed one is already reviewed.
+    expect(rows).toHaveLength(4)
+    expect(rows[0]).toHaveTextContent('Blocker')
+    expect(rows[0]).toHaveTextContent('java/hardcoded-secret')
+    expect(review).toHaveTextContent('Reviewed 20%')
+    expect(review).toHaveTextContent('4 open · 1 confirmed · 0 accepted · 0 false positive')
+
+    await user.click(within(rows[0]).getByRole('button', { name: 'False positive' }))
+    await user.type(within(rows[0]).getByLabelText(/Why is this not a real problem\?/), 'A test key, revoked.')
+    await user.click(within(rows[0]).getByRole('button', { name: 'Mark false positive' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Marked false positive')
+    await waitFor(() => expect(within(review).getAllByRole('listitem')).toHaveLength(3))
+    expect(review).toHaveTextContent('Reviewed 40%')
+
+    const filter = within(review).getByRole('group', { name: 'Review status' })
+    await user.click(within(filter).getByRole('button', { name: 'False positive' }))
+    rows = await within(review).findAllByRole('listitem')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveTextContent('“A test key, revoked.”')
+    await user.click(within(rows[0]).getByRole('button', { name: 'Reopen' }))
+    await waitFor(() => expect(within(review).queryAllByRole('listitem')).toHaveLength(0))
+    expect(review).toHaveTextContent('Nothing matches.')
+
+    await user.click(within(filter).getByRole('button', { name: 'To review' }))
+    await user.selectOptions(within(review).getByRole('combobox', { name: 'Severity' }), 'blocker')
+    await waitFor(() => expect(within(review).getAllByRole('listitem')).toHaveLength(1))
   })
 })
 

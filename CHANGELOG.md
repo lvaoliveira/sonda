@@ -197,6 +197,23 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- Security review of issues, as in SonarQube (ADR-0014, instead of
+  hotspots):
+  - **Statuses and reasons:** a new "false positive" status for code
+    issues; accepting an issue or marking it a false positive needs a
+    reason, kept in its history.
+  - **Decided issues leave the counts:** accepted and false-positive issues
+    no longer count in the server's issue measures, ratings, open counts or
+    gate, so reviewing the last new vulnerability makes the gate pass.
+  - **Review queue:** the Security screen's **To review** lists open
+    vulnerabilities, most severe and new code first, with their CWE and
+    OWASP categories, progress counts, filters, and Confirm, Accept, False
+    positive and Assign to me in place. `GET /api/security/review` serves
+    it.
+  - **CI follows the server's gate when it uploads:** `sonda upload` and
+    `sonda scan --upload` print the server's gate, reviews included, and
+    exit with it (`--no-gate` still exits 0). An older server that sends no
+    gate leaves the local one deciding.
 - The server treats an empty secret variable (`SONDA_TOKEN_FILE: ""`) as
   unset, so a git-ignored `compose.override.yaml` turns the shared token off
   once pipelines use their own tokens (docs/server.md).

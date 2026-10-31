@@ -212,8 +212,18 @@ pub async fn create(
     .bind(summary.analysis_id)
     .fetch_optional(&state.pool)
     .await?;
-    if let Some(project) = main {
-        crate::new_code::refresh(&state.pool, project).await?;
+    match main {
+        Some(project) => crate::new_code::refresh(&state.pool, project).await?,
+        // Other branches keep the scan's new code; decided issues still
+        // leave the counts (ADR-0014).
+        None => {
+            let (project, branch): (i64, String) =
+                sqlx::query_as("SELECT project_id, branch FROM analyses WHERE id = $1")
+                    .bind(summary.analysis_id)
+                    .fetch_one(&state.pool)
+                    .await?;
+            crate::new_code::recount(&state.pool, project, &branch).await?;
+        }
     }
     crate::dependencies::refresh_gates(
         &state.pool,
@@ -226,6 +236,21 @@ pub async fn create(
         fixed = summary.issues.fixed,
         "stored analysis"
     );
+    let mut summary = summary;
+    let (gate, passed): (Value, bool) =
+        sqlx::query_as("SELECT gate, gate_passed FROM analyses WHERE id = $1")
+            .bind(summary.analysis_id)
+            .fetch_one(&state.pool)
+            .await?;
+    summary.gate = Some(store::ServerGate {
+        passed,
+        state: crate::health::gate_state(passed, &gate),
+        failing: crate::health::conditions(&gate)
+            .into_iter()
+            .filter(|c| c.status == "error")
+            .map(|c| c.label)
+            .collect(),
+    });
     Ok((StatusCode::CREATED, Json(summary)))
 }
 

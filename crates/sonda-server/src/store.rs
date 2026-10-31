@@ -9,6 +9,20 @@ use sqlx::PgPool;
 pub struct Summary {
     pub analysis_id: i64,
     pub issues: IssueCounts,
+    /// The server's gate for this analysis, set once it's stored and
+    /// refreshed: what `sonda upload` exits on (ADR-0014).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<ServerGate>,
+}
+
+/// A gate as the server evaluated it, reviews included.
+#[derive(Debug, Serialize)]
+pub struct ServerGate {
+    pub passed: bool,
+    /// `passed`, `failed` or `partial`.
+    pub state: &'static str,
+    /// Labels of the failing conditions, e.g. "New vulnerabilities > 0".
+    pub failing: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,6 +228,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     tx.commit().await?;
 
     Ok(Summary {
+        gate: None,
         analysis_id,
         issues: IssueCounts {
             open: n as u64,

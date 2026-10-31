@@ -17,6 +17,8 @@ use ureq::http::Uri;
 const MAX_REPORT_BYTES: u64 = 256 << 20;
 /// How much of a server's error answer to show.
 const MAX_ERROR_BYTES: u64 = 4 << 10;
+/// How much of a successful answer to read: counts and the gate's labels.
+const MAX_ANSWER_BYTES: u64 = 64 << 10;
 
 #[derive(Args)]
 pub struct UploadArgs {
@@ -47,6 +49,9 @@ pub struct UploadArgs {
     /// other users and in CI logs.
     #[arg(long, value_name = "FILE", env = "SONDA_TOKEN_FILE")]
     token_file: Option<PathBuf>,
+    /// Always exit 0, even when the server's quality gate fails.
+    #[arg(long)]
+    no_gate: bool,
 }
 
 pub fn run(args: UploadArgs) -> Result<ExitCode> {
@@ -60,8 +65,11 @@ pub fn run(args: UploadArgs) -> Result<ExitCode> {
     }
     .check()?;
     let report = read_capped(&args.report, MAX_REPORT_BYTES)?;
-    target.send(&report, &args.root, None)?;
-    Ok(ExitCode::SUCCESS)
+    // As SonarQube's sonar.qualitygate.wait: the server's gate decides.
+    Ok(match target.send(&report, &args.root, None)? {
+        Some(false) if !args.no_gate => ExitCode::from(1),
+        _ => ExitCode::SUCCESS,
+    })
 }
 
 /// Where an analysis goes and which one it is: `sonda upload`'s and
@@ -108,7 +116,14 @@ impl Target {
 impl Checked {
     /// Sends `report` (JSON) and the sources under `root`. `scan_duration`
     /// is how long the scan took, when this process ran it.
-    pub fn send(self, report: &[u8], root: &Path, scan_duration: Option<Duration>) -> Result<()> {
+    /// Returns whether the server's gate passed, when its answer says
+    /// (ADR-0014): that gate knows the reviews people made on the server.
+    pub fn send(
+        self,
+        report: &[u8],
+        root: &Path,
+        scan_duration: Option<Duration>,
+    ) -> Result<Option<bool>> {
         let Checked {
             url,
             token,
@@ -154,7 +169,7 @@ impl Checked {
         let _ = response
             .body_mut()
             .as_reader()
-            .take(MAX_ERROR_BYTES)
+            .take(MAX_ANSWER_BYTES)
             .read_to_string(&mut answer);
         eprintln!(
             "sonda: uploaded {} files for {}/{} to {}{}",
@@ -164,8 +179,37 @@ impl Checked {
             server,
             summary(&answer)
         );
-        Ok(())
+        let gate = server_gate(&answer);
+        if let Some((passed, failing)) = &gate {
+            eprintln!(
+                "sonda: quality gate on the server, reviews included: {}",
+                if *passed {
+                    "PASSED".to_string()
+                } else {
+                    format!("FAILED ({})", failing.join(", "))
+                }
+            );
+        }
+        Ok(gate.map(|(passed, _)| passed))
     }
+}
+
+/// The server's gate in its answer, and its failing conditions; `None`
+/// from a server that doesn't send one.
+fn server_gate(answer: &str) -> Option<(bool, Vec<String>)> {
+    let json: serde_json::Value = serde_json::from_str(answer).ok()?;
+    let passed = json["gate"]["passed"].as_bool()?;
+    let failing = json["gate"]["failing"]
+        .as_array()
+        .map(|f| {
+            f.iter()
+                .filter_map(|c| c.as_str())
+                // The server's text, shown in a terminal.
+                .map(|c| sonda_core::report::terminal_safe(c).into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((passed, failing))
 }
 
 /// The server's issue counts, e.g. ": 331 open issues (61 new, 2 fixed)",

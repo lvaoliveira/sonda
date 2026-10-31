@@ -70,7 +70,7 @@ matched to the branch's earlier ones by fingerprint:
 
 - **New:** a fingerprint the branch has not seen.
 - **Kept:** an issue still present. It moves to its new line, and its status
-  (confirmed, accepted) and assignee stay.
+  (confirmed, accepted, false positive), reason and assignee stay.
 - **Fixed:** an issue missing from the upload.
 - **Reopened:** a fixed issue that comes back, with its earlier status.
 
@@ -80,7 +80,27 @@ many analyses include them.
 `POST /api/analyses` needs `Authorization: Bearer <token>`. It takes the JSON
 `sonda upload` sends, gzipped or plain, up to 128 MiB as sent and 800 MiB
 uncompressed. It answers `201` with
-`{"analysis_id": 2, "issues": {"open": 331, "new": 61, "reopened": 0, "fixed": 2}}`.
+`{"analysis_id": 2, "issues": {"open": 331, "new": 61, "reopened": 0, "fixed": 2}, "gate": {...}}`.
+`gate` is the server's quality gate for that analysis, with the reviews
+made on the server taken into account: `passed`, `state` and the labels of
+its `failing` conditions.
+
+**CI follows the server's gate when it uploads** (ADR-0014), as SonarQube's
+scanner does with `sonar.qualitygate.wait`. `sonda upload` and
+`sonda scan --upload` print it and exit with it: `1` when it fails, even
+when the local gate passed, and `0` when it passes, even when the local gate
+failed because of a finding someone accepted or marked a false positive on
+the server:
+
+```
+sonda: quality gate on the server, reviews included: FAILED (New vulnerabilities > 0)
+```
+
+`--no-gate` still always exits `0`. A server that sends no `gate` (an older
+one) leaves the local gate deciding. Without an upload, the local gate
+decides, with `sonda-ignore` comments for findings that are never a
+problem.
+
 A rejected upload stores nothing:
 
 | Status | Meaning |
@@ -98,7 +118,7 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
 
 | Role | Can |
 |---|---|
-| **member** | Read, and triage: status and assignee. |
+| **member** | Read, and triage: status, reason and assignee. |
 | **admin** | The same, plus manage users. |
 
 - **Where each credential works:**
@@ -200,7 +220,7 @@ each project's main branch. Every filter is optional:
 | Parameter | |
 |---|---|
 | `project`, `branch` | One project; a branch other than its main one |
-| `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted` or `fixed` |
+| `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted`, `false_positive` or `fixed` |
 | `file` | Any part of the path |
 | `assignee`, `new=true` | Assigned to someone; on new code only |
 | `offset`, `limit` | Paging; `limit` is 1-200, default 50 |
@@ -223,11 +243,26 @@ The server highlights with a small built-in lexer, not tree-sitter: it
 runs on uploaded code inside the server process, where sonda never runs its
 C parsers (ADR-0003 keeps them in sandboxed workers).
 
-`PATCH /api/issues/{id}` with `{"status": "confirmed"}` (or `open`,
-`accepted`) and/or `{"assignee": "alice"}` (`""` unassigns) changes triage.
-Each change is recorded in the issue's history. `fixed` cannot be set: it
-is decided by analyses. A change needs the token, or a browser session plus
-a `Sonda-Csrf` header.
+`PATCH /api/issues/{id}` with `{"status": "confirmed"}` and/or
+`{"assignee": "alice"}` (`""` unassigns) changes triage. A change needs the
+token, or a browser session plus a `Sonda-Csrf` header. Each change is
+recorded in the issue's history, with its reason. The statuses (ADR-0014):
+
+| Status | |
+|---|---|
+| `open` | Not reviewed yet. |
+| `confirmed` | A real problem, to fix. |
+| `accepted` | A real problem whose risk is accepted. Needs a `reason`. |
+| `false_positive` | Not a problem: the rule is wrong here. Needs a `reason`. |
+| `fixed` | Gone from the latest analysis. Set by analyses, never by hand. |
+
+A `reason` is 1-500 characters, as in
+`{"status": "accepted", "reason": "Behind the VPN only."}`; `422` without
+one. **Accepted and false-positive issues are decided:** they stay listed,
+with their reason, but leave the issue measures (overall and on new code),
+the ratings, the open counts and the gate. The stored gate is re-evaluated
+on each status change, so reviewing the last new vulnerability makes the
+gate pass, as in SonarQube. Reopening counts the issue again.
 
 ## Overview
 
@@ -357,11 +392,12 @@ Each gate has:
 ## Security
 
 `GET /api/security` summarizes vulnerabilities across projects, each
-project's main branch. Open means present and not accepted. It returns:
+project's main branch. Open means present and not decided (accepted or
+false positive). It returns:
 - open vulnerabilities by severity, how many appeared in the last 7 days,
   and how many projects have any;
-- counts by status: open, confirmed, accepted, and fixed in the last 30
-  days;
+- counts by status: open, confirmed, accepted, false positive, and fixed
+  in the last 30 days;
 - the ten to fix first: most severe, then longest open;
 - twelve weekly points: open count, a severity-weighted risk (blocker 10,
   critical 5, major 2, minor 1), and how many were found and fixed that
@@ -371,8 +407,30 @@ project's main branch. Open means present and not accepted. It returns:
 - median days from first seen to fixed, over the last 90 days: for blockers
   and criticals, and for all.
 
-Hotspots, CWE/OWASP mappings and reachability aren't recorded; see the
-roadmap.
+Reachability isn't recorded; see the roadmap.
+
+### Review queue
+
+`GET /api/security/review` is the Security screen's **To review** queue
+(ADR-0014): vulnerabilities to decide on, most severe first, then those on
+new code, then the oldest. Every filter is optional:
+
+| Parameter | |
+|---|---|
+| `project`, `branch` | One project; a branch other than its main one (needs `project`) |
+| `status` | `open` (the default), `confirmed`, `accepted`, `false_positive` or `all` |
+| `severity` | Comma-separated severities |
+| `owasp`, `edition` | An OWASP Top 10 category id, `A01` to `A10`, in `edition` `2025` (the default) or `2021` |
+| `assignee`, `new=true` | Assigned to someone; on new code only |
+
+It returns the first 200 matching `items`, each with its rule and the
+rule's name, CWE ids and OWASP categories, its location, status, reason,
+assignee and when it was first seen, and `total`. `progress` counts every
+finding in scope by status, whatever the other filters, with the share
+`reviewed` (no longer open, 0-100); `newCode` is the same on new code.
+Decisions go through `PATCH /api/issues/{id}`. Dependency findings are
+reviewed on their own (see Known vulnerabilities), without "false positive",
+which is for code issues only.
 
 ## Components
 

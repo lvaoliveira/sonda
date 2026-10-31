@@ -11,7 +11,7 @@ export type Category = 'bug' | 'vulnerability' | 'code_smell'
 /** Rating as a level from 1 (worst) to 5 (best); shown as pip meters, never letters. */
 export type Level = 1 | 2 | 3 | 4 | 5
 export type GateState = 'passed' | 'failed' | 'running' | 'partial'
-export type IssueStatus = 'open' | 'confirmed' | 'fixed' | 'accepted'
+export type IssueStatus = 'open' | 'confirmed' | 'fixed' | 'accepted' | 'false_positive'
 export type Scope = 'all' | 'mine'
 export type Range = '7d' | '30d' | '90d'
 export type DrillMetric = 'gate' | 'critical' | 'vulns' | 'coverage' | 'dup' | 'debt'
@@ -203,6 +203,8 @@ export interface CodeLine {
 
 /** Status a person can set. `fixed` is decided by analyses, never set. */
 export type TriageStatus = Exclude<IssueStatus, 'fixed'>
+/** Statuses that need a reason, and leave the counts and the gate (ADR-0014). */
+export const DECIDED: readonly TriageStatus[] = ['accepted', 'false_positive']
 
 export type FacetKey = 'severity' | 'category' | 'status' | 'component'
 
@@ -243,6 +245,8 @@ export interface IssueSummary {
   language: string | null
   effortMinutes: number
   status: IssueStatus
+  /** Why it was accepted or marked a false positive. */
+  reason: string | null
   assignee: string | null
   isNew: boolean
   /** When the analysis that first saw it arrived (ISO 8601). */
@@ -265,6 +269,8 @@ export interface IssueEvent {
   field: 'status' | 'assignee'
   oldValue: string | null
   newValue: string | null
+  /** Given with a status change. */
+  reason: string | null
 }
 
 export interface IssueDetail extends IssueSummary {
@@ -279,6 +285,8 @@ export interface IssueDetail extends IssueSummary {
 
 export interface IssuePatch {
   status?: TriageStatus
+  /** Required with `accepted` and `false_positive`; 1–500 characters. */
+  reason?: string
   /** `''` unassigns. */
   assignee?: string
 }
@@ -718,7 +726,7 @@ export interface Security {
   open: number
   newThisWeek: number
   projectsAffected: number
-  status: { open: number; confirmed: number; accepted: number; fixedLast30Days: number }
+  status: { open: number; confirmed: number; accepted: number; falsePositive: number; fixedLast30Days: number }
   /** Most severe first, then oldest. */
   focus: SecurityFinding[]
   /** Twelve weeks, oldest first; `weighted` weighs blocker 10, critical 5, major 2, minor 1. */
@@ -733,6 +741,57 @@ export interface Security {
   dependencies: DependencyPortfolio
   /** Medians over vulnerabilities fixed in the last 90 days; null when none was. */
   remediation: { medianDaysSevere: number | null; medianDaysAll: number | null; fixedLast90Days: number }
+}
+
+/** Filters for the security review queue; each project's main branch without `branch`. */
+export interface ReviewQuery {
+  project?: string
+  branch?: string
+  /** Open by default. */
+  status?: TriageStatus | 'all'
+  severity: Severity[]
+  /** An OWASP Top 10 2025 category id, `A01`–`A10`. */
+  owasp?: string
+  assignee?: string
+  isNew: boolean
+}
+
+/** How far the review has come: findings by status, and the share no longer open (null without findings). */
+export interface ReviewProgress {
+  open: number
+  confirmed: number
+  accepted: number
+  falsePositive: number
+  reviewed: number | null
+}
+
+export interface ReviewFinding {
+  id: number
+  project: string
+  branch: string
+  rule: string
+  ruleName: string | null
+  message: string
+  severity: Severity
+  file: string
+  line: number
+  isNew: boolean
+  detectedAt: string
+  status: TriageStatus
+  assignee: string | null
+  reason: string | null
+  cwe: number[]
+  owasp: { id: string; title: string }[]
+}
+
+/** Vulnerabilities to decide on (ADR-0014): most severe first, new code first, then oldest. */
+export interface SecurityReview {
+  /** Every finding in scope, whatever the other filters. */
+  progress: ReviewProgress
+  newCode: ReviewProgress
+  /** Findings matching the filters; `items` holds the first 200. */
+  total: number
+  items: ReviewFinding[]
 }
 
 // ---------------------------------------------------------------- analyses
@@ -891,6 +950,7 @@ export interface SondaApi {
   /** The default gate first, then by how many projects use each. */
   gates(): Promise<QualityGate[]>
   security(): Promise<Security>
+  securityReview(query: ReviewQuery): Promise<SecurityReview>
   /** Every project's components, or one project's. */
   components(project?: string): Promise<ComponentList>
   component(project: string, path: string, branch?: string): Promise<ComponentDetail>

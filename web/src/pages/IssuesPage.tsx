@@ -6,10 +6,11 @@ import { AppShell } from '@/components/shell/AppShell'
 import { CodeViewer } from '@/components/sonda/CodeViewer'
 import { Button, Toast, type ToastMessage } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
+import { ReasonForm } from '@/components/sonda/triage'
 import { SeverityGlyph, SeverityPill } from '@/components/sonda/status'
 import { formatAge, formatEffort, formatNumber, shortDate } from '@/lib/format'
 import { DEFAULT_FILTER, filterFromParams, type IssueFilter, PAGE_SIZE, toQuery } from '@/lib/issues'
-import { CATEGORY_LABEL, languageLabel, SEVERITY, SEVERITY_ORDER, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
+import { CATEGORY_LABEL, DECISION_PROMPT, languageLabel, SEVERITY, SEVERITY_ORDER, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
 
 export function IssuesPage() {
   const api = useApi()
@@ -106,30 +107,33 @@ function Issues({ me }: { me: string | null }) {
   }
 
   const remember = (updated: IssueDetail[]) => {
-    setOverrides((o) => ({ ...o, ...Object.fromEntries(updated.map((u) => [u.id, { status: u.status, assignee: u.assignee }])) }))
+    setOverrides((o) => ({ ...o, ...Object.fromEntries(updated.map((u) => [u.id, { status: u.status, reason: u.reason, assignee: u.assignee }])) }))
     setDetailVersion((v) => v + 1)
   }
+  /** Resolves whether the change was saved. */
   const apply = async (ids: number[], patch: IssuePatch, message: string) => {
     const before = items.filter((i) => ids.includes(i.id))
     try {
       remember(await Promise.all(ids.map((id) => api.updateIssue(id, patch))))
     } catch (e) {
       setToast({ text: `Not saved: ${(e as Error).message}` })
-      return
+      return false
     }
     setToast({
       text: message,
       undo: async () => {
         const restore = (b: IssueSummary): IssuePatch => ({
           // "Fixed" is not a triage status: scans set it, and undo leaves it.
-          ...(b.status !== 'fixed' && { status: b.status }),
+          ...(b.status !== 'fixed' && { status: b.status, ...(b.reason && { reason: b.reason }) }),
           assignee: b.assignee ?? '',
         })
         remember(await Promise.all(before.map((b) => api.updateIssue(b.id, restore(b)))))
       },
     })
+    return true
   }
-  const setStatus = (ids: number[], status: TriageStatus) => apply(ids, { status }, `Marked ${STATUS_LABEL[status].toLowerCase()}`)
+  const setStatus = (ids: number[], status: TriageStatus, reason?: string) =>
+    apply(ids, { status, ...(reason && { reason }) }, `Marked ${STATUS_LABEL[status].toLowerCase()}`)
   const assignToMe = (ids: number[]) => me && apply(ids, { assignee: me }, 'Assigned to you')
 
   // j/k move, a assigns to me, c confirms (not while typing).
@@ -270,7 +274,7 @@ function Issues({ me }: { me: string | null }) {
             id={selected.id}
             version={detailVersion}
             me={me}
-            onStatus={(s) => setStatus([selected.id], s)}
+            onStatus={(s, reason) => setStatus([selected.id], s, reason)}
             onAssign={() => assignToMe([selected.id])}
           />
         )}
@@ -283,7 +287,7 @@ function Issues({ me }: { me: string | null }) {
 const FACET_OPTIONS: Record<Exclude<FacetKey, 'component'>, { value: string; label: string }[]> = {
   severity: SEVERITY_ORDER.map((s) => ({ value: s, label: SEVERITY[s].label })),
   category: (['vulnerability', 'bug', 'code_smell'] as const).map((c) => ({ value: c, label: CATEGORY_LABEL[c] })),
-  status: (['open', 'confirmed', 'accepted', 'fixed'] as const).map((s) => ({ value: s, label: STATUS_LABEL[s] })),
+  status: (['open', 'confirmed', 'accepted', 'false_positive', 'fixed'] as const).map((s) => ({ value: s, label: STATUS_LABEL[s] })),
 }
 
 function Facets({
@@ -387,11 +391,13 @@ function IssueView({
   id: number
   version: number
   me: string | null
-  onStatus: (s: TriageStatus) => void
+  onStatus: (s: TriageStatus, reason?: string) => Promise<boolean>
   onAssign: () => void
 }) {
   const api = useApi()
   const detail = useAsync(() => api.issue(id), [api, id, version])
+  // The decision being explained, while its reason is asked for.
+  const [deciding, setDeciding] = useState<{ id: number; status: keyof typeof DECISION_PROMPT } | null>(null)
   // Keep the issue on screen while a change reloads it.
   const [shown, setShown] = useState<IssueDetail | null>(null)
   if (detail.state === 'ready' && detail.data !== shown) setShown(detail.data)
@@ -404,6 +410,7 @@ function IssueView({
     )
   }
   const mine = me !== null && issue.assignee === me
+  const decision = deciding?.id === id ? deciding.status : null
   const meta: { k: string; v: string; mono?: boolean; color?: string }[] = [
     { k: 'Project', v: `${issue.project} · ${issue.branch}`, mono: true },
     { k: 'Effort', v: formatEffort(issue.effortMinutes), mono: true },
@@ -461,11 +468,31 @@ function IssueView({
           <Button disabled={issue.status === 'confirmed'} onClick={() => onStatus('confirmed')}>
             Confirm
           </Button>
-          <Button disabled={issue.status === 'accepted'} onClick={() => onStatus('accepted')}>
+          <Button disabled={issue.status === 'accepted'} onClick={() => setDeciding({ id, status: 'accepted' })}>
             Accept risk
           </Button>
-          {(issue.status === 'confirmed' || issue.status === 'accepted') && <Button onClick={() => onStatus('open')}>Reopen</Button>}
+          <Button disabled={issue.status === 'false_positive'} onClick={() => setDeciding({ id, status: 'false_positive' })}>
+            False positive
+          </Button>
+          {issue.status !== 'open' && issue.status !== 'fixed' && <Button onClick={() => onStatus('open')}>Reopen</Button>}
         </div>
+        {decision && (
+          <ReasonForm
+            key={`${id}-${decision}`}
+            {...DECISION_PROMPT[decision]}
+            onSubmit={async (reason) => {
+              const saved = await onStatus(decision, reason)
+              if (saved) setDeciding(null)
+              return saved
+            }}
+            onCancel={() => setDeciding(null)}
+          />
+        )}
+        {issue.reason && (issue.status === 'accepted' || issue.status === 'false_positive') && (
+          <p className="m-0 text-[13px] text-fg-muted">
+            {STATUS_LABEL[issue.status]}: “{issue.reason}”
+          </p>
+        )}
       </div>
       <div className="flex flex-col border-b border-line">
         <div className="flex justify-between gap-2 border-b border-line bg-panel-2 px-5 py-[9px] font-mono text-[10.5px]">
@@ -503,6 +530,7 @@ function IssueView({
               <span className="text-fg-muted">
                 {e.oldValue ?? 'none'} → {e.newValue ?? 'none'}
               </span>
+              {e.reason && <span className="basis-full text-fg-muted order-last">“{e.reason}”</span>}
               <span className="ml-auto text-[12px] text-fg-faint">
                 {e.actor && <>{e.actor === 'api-token' ? 'API token' : `@${e.actor}`} · </>}
                 {shortDate(e.at)}

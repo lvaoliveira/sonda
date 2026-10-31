@@ -107,6 +107,11 @@ async fn findings_are_triaged_with_reasons_and_audited() {
             json!({ "status": "fixed" }),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
+        // False positive is for code issues only (ADR-0014).
+        (
+            json!({ "status": "false_positive" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
         (
             json!({ "ecosystem": "maven" }),
             StatusCode::UNPROCESSABLE_ENTITY,

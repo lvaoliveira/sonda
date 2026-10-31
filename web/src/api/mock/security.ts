@@ -9,7 +9,7 @@ export const SECURITY: Security = {
   open: 23,
   newThisWeek: 4,
   projectsAffected: 6,
-  status: { open: 15, confirmed: 8, accepted: 4, fixedLast30Days: 31 },
+  status: { open: 15, confirmed: 8, accepted: 4, falsePositive: 2, fixedLast30Days: 31 },
   focus: [
     { id: 101, severity: 'blocker', rule: 'js/hardcoded-secret', message: 'Revoke this secret and read it from the environment or a secret store.', project: 'billing-service', branch: 'main', component: 'src', path: 'src/main/java/com/acme/billing/config/StripeConfig.java', line: 14, firstSeen: days(1), ageDays: 1, cwe: [798] },
     { id: 102, severity: 'blocker', rule: 'js/xxe', message: "Remove 'noent: true' so external entities aren't expanded.", project: 'billing-service', branch: 'main', component: 'src', path: 'src/pdf/render.js', line: 41, firstSeen: days(9), ageDays: 9, cwe: [611, 827] },

@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -63,6 +63,17 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     drill: (metric) => call<Drill>('GET', `/drill/${metric}`),
     gates: async () => (await call<{ gates: QualityGate[] }>('GET', '/gates')).gates,
     security: () => call<Security>('GET', '/security'),
+    securityReview: (q) => {
+      const p = new URLSearchParams()
+      if (q.project) p.set('project', q.project)
+      if (q.branch) p.set('branch', q.branch)
+      if (q.status) p.set('status', q.status)
+      if (q.severity.length) p.set('severity', q.severity.join(','))
+      if (q.owasp) p.set('owasp', q.owasp)
+      if (q.assignee) p.set('assignee', q.assignee)
+      if (q.isNew) p.set('new', 'true')
+      return call<SecurityReview>('GET', `/security/review?${p}`)
+    },
     components: (project) => call<ComponentList>('GET', `/components${project ? `?project=${encodeURIComponent(project)}` : ''}`),
     component: (project, path, branch) =>
       call<ComponentDetail>(
