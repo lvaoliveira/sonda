@@ -366,6 +366,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- On the server, `new_vulnerable_dependencies` and its severe variant
+  counted every vulnerable dependency as new when the main branch's new
+  code period started at an analysis from a CLI that didn't upload
+  dependencies yet, so projects older than that failed the default gate.
+  The base is now the first analysis of the period that recorded
+  dependencies.
+
 - Moving the main branch's new code start on a project page reloaded the
   page into a skeleton and back to the Overall measures, so the admin
   lost the New code view they were acting on. Reloads now keep showing

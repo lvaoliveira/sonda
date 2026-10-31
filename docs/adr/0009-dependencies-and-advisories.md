@@ -155,7 +155,13 @@ that wants a failing build.
   lockfiles at the new-code reference (read from git's objects, as
   ADR-0002 allows); the server's, on the main branch, is the dependencies
   of the new code period's start (ADR-0011). Other branches keep the CLI's
-  values, since the server doesn't know their base.
+  values, since the server doesn't know their base. When the period's
+  start came from a CLI that didn't send dependencies yet, the base is the
+  first analysis since that did (`analyses.dependencies_recorded`, or
+  having dependency rows for older rows): otherwise every finding of a
+  project older than dependency uploads looked new and failed the default
+  gate. An upload that sent an empty list did record "none", so a project
+  that adds its first lockfile still gets its findings counted as new.
 - **Where the gate lives.** The server keeps the stored gate current
   instead of overlaying it when read. It re-evaluates these conditions,
   reviews included, when an analysis is uploaded, when advisories are

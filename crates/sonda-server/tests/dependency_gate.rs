@@ -223,3 +223,102 @@ async fn new_vulnerable_dependencies_follow_the_main_branch_period() {
     let (_, p) = send(&app, project(Some("feature"))).await;
     assert_eq!(condition(&p)["status"], "ignored");
 }
+
+#[tokio::test]
+async fn analyses_from_before_dependency_uploads_are_not_a_baseline() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    let osv = tempfile::tempdir().unwrap();
+    std::fs::write(
+        osv.path().join("a.json"),
+        json!({
+            "id": "GHSA-aaaa-aaaa-aaaa", "modified": "2024-01-01T00:00:00Z", "summary": "lodash is vulnerable",
+            "database_specific": { "severity": "CRITICAL" },
+            "affected": [{ "package": { "ecosystem": "npm", "name": "lodash" },
+                           "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "0" }, { "fixed": "4.17.21" }] }] }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    advisories::import(&db.pool, &[osv.path().to_path_buf()])
+        .await
+        .unwrap();
+    let lock = r#"{"lockfileVersion": 3, "packages": {"": {}, "node_modules/lodash": {"version": "4.17.20"}}}"#;
+    let gated = |mut body: Value| {
+        body["report"]["gate"] = json!({ "passed": true, "conditions": [
+            { "metric": "new_severe_vulnerable_dependencies", "op": "gt", "threshold": 0.0, "actual": null, "status": "ignored" }
+        ]});
+        body
+    };
+    let new_severe = |app: axum::Router, key: &'static str| async move {
+        let request = Request::get(format!("/api/projects/{key}"))
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let (_, p) = send(&app, request).await;
+        let c = p["gate"]["conditions"][0].clone();
+        (
+            c["actual"].as_f64(),
+            p["gate"]["state"].as_str().map(str::to_string),
+        )
+    };
+
+    // An older CLI's upload has no dependency data at all; the next,
+    // unchanged, does. The lockfile was there all along: old debt.
+    let old = tempfile::tempdir().unwrap();
+    let mut first = gated(upload_json_for(
+        old.path(),
+        &[("package-lock.json", lock)],
+        "old",
+        "main",
+    ));
+    first["report"]
+        .as_object_mut()
+        .unwrap()
+        .remove("dependencies");
+    upload(&db, &first).await;
+    upload(
+        &db,
+        &gated(upload_json_for(
+            old.path(),
+            &[("package-lock.json", lock)],
+            "old",
+            "main",
+        )),
+    )
+    .await;
+    assert_eq!(
+        new_severe(app.clone(), "old").await,
+        (Some(0.0), Some("passed".into()))
+    );
+
+    // A project that had no lockfile, then adds a vulnerable one: new.
+    let fresh = tempfile::tempdir().unwrap();
+    upload(
+        &db,
+        &gated(upload_json_for(
+            fresh.path(),
+            &[("a.js", "let a;\n")],
+            "fresh",
+            "main",
+        )),
+    )
+    .await;
+    upload(
+        &db,
+        &gated(upload_json_for(
+            fresh.path(),
+            &[("package-lock.json", lock)],
+            "fresh",
+            "main",
+        )),
+    )
+    .await;
+    assert_eq!(
+        new_severe(app, "fresh").await,
+        (Some(1.0), Some("failed".into()))
+    );
+}
