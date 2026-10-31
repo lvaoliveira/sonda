@@ -405,7 +405,6 @@ function IssueView({
   }
   const mine = me !== null && issue.assignee === me
   const meta: { k: string; v: string; mono?: boolean; color?: string }[] = [
-    { k: 'Location', v: `${issue.file.split('/').pop()}:${issue.line}`, mono: true },
     { k: 'Project', v: `${issue.project} · ${issue.branch}`, mono: true },
     { k: 'Effort', v: formatEffort(issue.effortMinutes), mono: true },
     { k: 'Detected', v: shortDate(issue.detectedAt) + (issue.isNew ? ' · new code' : '') },
@@ -426,6 +425,26 @@ function IssueView({
         </div>
         <h2 className="m-0 text-[21px] leading-[1.25] font-semibold tracking-[-0.02em]">{issue.message}</h2>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-px overflow-hidden rounded-[9px] bg-line" style={{ boxShadow: '0 0 0 1px var(--sd-line)' }}>
+          {/* The whole path, on its own row: the file name alone is often ambiguous. */}
+          <div className="col-span-full flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
+            <span className="text-[11px] text-fg-faint">Location</span>
+            <span aria-label="Location" className="font-mono text-[11px] [overflow-wrap:anywhere]" title={issue.file}>
+              {/* Break after a slash before breaking a name. */}
+              {issue.file
+                .split('/')
+                .slice(0, -1)
+                .map((dir, i) => (
+                  <span key={i} className="text-fg-muted">
+                    {dir}/<wbr />
+                  </span>
+                ))}
+              <span>{issue.file.slice(issue.file.lastIndexOf('/') + 1)}</span>
+              <span className="text-fg-muted">
+                :{issue.line}
+                {issue.endLine > issue.line && `–${issue.endLine}`}
+              </span>
+            </span>
+          </div>
           {meta.map((m) => (
             <div key={m.k} className="flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
               <span className="text-[11px] text-fg-faint">{m.k}</span>
