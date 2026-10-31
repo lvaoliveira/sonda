@@ -1,6 +1,6 @@
 [package]
 name = "sonda"
-description = "Open-source static analysis and quality gates for JavaScript/TypeScript, Python, Java and C/C++"
+description = "Open-source static analysis and quality gates for JavaScript/TypeScript, Python, Java, C/C++ and C#"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

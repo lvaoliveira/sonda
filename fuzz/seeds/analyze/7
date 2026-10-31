@@ -1,0 +1,9 @@
+using System.Security.Cryptography;
+namespace N;
+class A {
+  int X { get => x; set { x = value; } }
+  async Task<int> F(string s) {
+    if (s == "") { return s switch { "a" => 1, _ => 0 }; }
+    try { return MD5.Create().GetHashCode(); } catch (Exception e) when (e is IOException) { throw; }
+  }
+}

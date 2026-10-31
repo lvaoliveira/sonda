@@ -171,4 +171,17 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/activemq-untrusted-classes", &[502], &[A08]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
+    ("cs/weak-hash", &[1240], &[A02]),
+    ("cs/weak-cipher", &[326, 327], &[A02]),
+    ("cs/insecure-cipher-mode", &[327, 780], &[A02]),
+    ("cs/weak-tls-version", &[295, 326, 327], &[A02, A07]),
+    ("cs/weak-key-size", &[326], &[A02]),
+    (
+        "cs/certificate-validation-disabled",
+        &[295],
+        &[A02, A05, A07],
+    ),
+    ("cs/ldap-anonymous", &[521], &[A07]),
+    ("cs/empty-db-password", &[521], &[A07]),
+    ("cs/cleartext-url", &[319], &[A02]),
 ];
