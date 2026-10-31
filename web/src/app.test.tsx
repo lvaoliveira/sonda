@@ -190,18 +190,22 @@ describe('Projects', () => {
     expect(await screen.findByText(/\(the first analysis\)/)).toBeInTheDocument()
   })
 
-  it('says when a small change leaves coverage out of the gate', async () => {
+  it('says why conditions are left out of the gate', async () => {
     const api = createMockApi(0)
     const real = api.project
     const project: SondaApi['project'] = async (key, branch) => {
       const p = await real(key, branch)
-      const conditions = p.gate.conditions.map((c) => (c.metric === 'new_coverage' ? { ...c, status: 'ignored' as const } : { ...c, status: 'ok' as const }))
+      const conditions = [
+        ...p.gate.conditions.map((c) => (c.metric === 'new_coverage' ? { ...c, status: 'ignored' as const, reason: 'fewer than 20 new lines' } : { ...c, status: 'ok' as const })),
+        { label: 'New severe vulnerable dependencies > 0', metric: 'new_severe_vulnerable_dependencies', actual: null, status: 'ignored' as const, reason: 'no advisory data' },
+      ]
       return { ...p, gate: { state: 'passed', conditions } }
     }
     renderAt('/projects/payments-platform', { ...api, project })
-    expect(await screen.findByText('0 of 4 conditions failing · 1 ignored on a small change')).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'Ignored' })).toBeInTheDocument()
+    expect(await screen.findByText('0 of 5 conditions failing · 2 ignored')).toBeInTheDocument()
+    expect(screen.getAllByRole('img', { name: 'Ignored' })).toHaveLength(2)
     expect(screen.getByText('· ignored: fewer than 20 new lines')).toBeInTheDocument()
+    expect(screen.getByText('· ignored: no advisory data')).toBeInTheDocument()
   })
 
   it('switches branches through the URL and explains unknown ones', async () => {

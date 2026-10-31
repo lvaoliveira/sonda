@@ -315,11 +315,15 @@ fn advisories_fill_the_dependency_gate_metrics() {
                           "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "4.17.21"}]}]}]}"#,
     )]);
 
-    // Without advisories: no data, so the gate passes.
+    // Without advisories: ignored, so the gate passes.
     let out = run(&["scan", "-f", "json"], dir.path());
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let report = json(&out);
-    assert_eq!(report["gate"]["conditions"][0]["status"], "no_data");
+    assert_eq!(report["gate"]["conditions"][0]["status"], "ignored");
+    assert_eq!(
+        report["gate"]["conditions"][0]["reason"],
+        "no advisory data"
+    );
     assert!(report.get("vulnerabilities").is_none());
 
     let out = sonda()

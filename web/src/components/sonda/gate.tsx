@@ -22,7 +22,7 @@ export function GateConditions({ conditions }: { conditions: GateCondition[] }) 
             </span>
             <span>
               {c.label}
-              {c.status === 'ignored' && <span className="text-xs text-fg-faint"> · ignored: fewer than 20 new lines</span>}
+              {c.status === 'ignored' && <span className="text-xs text-fg-faint"> · ignored: {c.reason ?? 'fewer than 20 new lines'}</span>}
             </span>
             <Mono className="text-xs">
               <span style={{ color: m.color }}>{c.actual == null ? 'no data' : `${Number.isInteger(c.actual) ? c.actual : c.actual.toFixed(1)}${unit}`}</span>

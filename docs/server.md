@@ -487,7 +487,9 @@ advisories. It re-evaluates them, accepted findings left out, when an
 analysis is uploaded, when advisories are imported or synced (each
 branch's latest analysis), and when a finding is reviewed. The result is
 stored with the analysis, so every page agrees. Until advisories exist,
-the CLI's values stand: "no data", unless it scanned with `--advisories`.
+these conditions are ignored ("no advisory data"), as in the CLI without
+`--advisories`, so they don't fail the gate or make it partial. The
+default gate has `new_severe_vulnerable_dependencies > 0`.
 
 `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies`
 count the packages whose finding wasn't there when the main branch's new

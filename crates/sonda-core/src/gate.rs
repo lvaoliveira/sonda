@@ -9,8 +9,8 @@ pub enum Status {
     Error,
     /// The metric has no value (e.g. coverage without a report); not counted as failing.
     NoData,
-    /// A condition on coverage or duplication of new code, when there are
-    /// fewer than `MIN_NEW_LINES` new lines; not counted as failing.
+    /// Not evaluated, for the `reason` the result gives (see
+    /// [`ignored_because`]); not counted as failing.
     Ignored,
 }
 
@@ -28,12 +28,45 @@ pub fn ignored_on_small_changes(metric: Metric) -> bool {
     )
 }
 
+/// Metrics that have data only when dependencies were checked against
+/// advisories (ADR-0009).
+pub fn needs_advisories(metric: Metric) -> bool {
+    matches!(
+        metric,
+        Metric::VulnerableDependencies
+            | Metric::SevereVulnerableDependencies
+            | Metric::NewVulnerableDependencies
+            | Metric::NewSevereVulnerableDependencies
+    )
+}
+
+/// Why a condition isn't evaluated, if it isn't: a small change (for
+/// coverage and duplication of new code), or no advisory data (for
+/// dependencies), which says nothing about the project, unlike coverage
+/// that wasn't uploaded ("no data"). The CLI and the server share it.
+pub fn ignored_because(
+    metric: Metric,
+    actual: Option<f64>,
+    new_lines: Option<f64>,
+) -> Option<&'static str> {
+    if ignored_on_small_changes(metric) && new_lines.is_some_and(|n| n < MIN_NEW_LINES) {
+        Some("fewer than 20 new lines")
+    } else if needs_advisories(metric) && actual.is_none() {
+        Some("no advisory data")
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConditionResult {
     #[serde(flatten)]
     pub condition: Condition,
     pub actual: Option<f64>,
     pub status: Status,
+    /// Why it's ignored, when it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,17 +76,14 @@ pub struct GateResult {
 }
 
 pub(crate) fn evaluate(conditions: &[Condition], measures: &Measures) -> GateResult {
-    let small = measures
-        .get(&Metric::NewLines)
-        .copied()
-        .flatten()
-        .is_some_and(|n| n < MIN_NEW_LINES);
+    let new_lines = measures.get(&Metric::NewLines).copied().flatten();
     let results: Vec<ConditionResult> = conditions
         .iter()
         .map(|c| {
             let actual = measures.get(&c.metric).copied().flatten();
+            let reason = ignored_because(c.metric, actual, new_lines);
             let status = match actual {
-                _ if small && ignored_on_small_changes(c.metric) => Status::Ignored,
+                _ if reason.is_some() => Status::Ignored,
                 None => Status::NoData,
                 Some(v)
                     if (c.op == Op::Gt && v > c.threshold)
@@ -67,6 +97,7 @@ pub(crate) fn evaluate(conditions: &[Condition], measures: &Measures) -> GateRes
                 condition: c.clone(),
                 actual,
                 status,
+                reason,
             }
         })
         .collect();
@@ -136,5 +167,22 @@ mod tests {
             at(20.0),
             (false, vec![Status::Ok, Status::Error, Status::NoData])
         );
+    }
+
+    #[test]
+    fn dependency_conditions_without_advisories_are_ignored() {
+        let condition = Condition {
+            metric: Metric::NewSevereVulnerableDependencies,
+            op: Op::Gt,
+            threshold: 0.0,
+        };
+        let at = |value: Option<f64>| {
+            let measures = Measures::from([(Metric::NewSevereVulnerableDependencies, value)]);
+            let r = evaluate(std::slice::from_ref(&condition), &measures);
+            (r.passed, r.conditions[0].status, r.conditions[0].reason)
+        };
+        assert_eq!(at(None), (true, Status::Ignored, Some("no advisory data")));
+        assert_eq!(at(Some(0.0)), (true, Status::Ok, None));
+        assert_eq!(at(Some(1.0)), (false, Status::Error, None));
     }
 }

@@ -65,10 +65,13 @@ async fn gates_follow_advisories_and_reviews() {
         StatusCode::CREATED
     );
 
-    // No advisory data yet: the CLI's "no data" stands.
+    // No advisory data yet: the condition is ignored, not missing data.
     let (state, c) = gate(&app).await;
-    assert_eq!(c["status"], "no_data");
-    assert_eq!(state, "partial", "a condition without data");
+    assert_eq!(
+        (c["status"].as_str(), c["reason"].as_str()),
+        (Some("ignored"), Some("no advisory data"))
+    );
+    assert_eq!(state, "passed");
 
     // An advisory arrives: the stored gate fails without a new analysis.
     let osv = tempfile::tempdir().unwrap();
@@ -214,8 +217,9 @@ async fn new_vulnerable_dependencies_follow_the_main_branch_period() {
         (Some(1.0), Some("failed"))
     );
 
-    // Other branches keep what the CLI judged: here, no data.
+    // Other branches keep what the CLI judged: here, it had no advisories,
+    // so no new findings to judge by.
     upload(&db, &analysis(&[("minimist", "1.2.0")], "feature")).await;
     let (_, p) = send(&app, project(Some("feature"))).await;
-    assert_eq!(condition(&p)["status"], "no_data");
+    assert_eq!(condition(&p)["status"], "ignored");
 }

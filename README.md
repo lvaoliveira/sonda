@@ -21,6 +21,7 @@ Quality gate: FAILED
   ✓ fails if new_vulnerabilities > 0 (actual: 0)
   ✓ fails if new_coverage < 80 (actual: 84)
   ✓ fails if new_duplicated_lines_density > 3 (actual: 0.4)
+  – fails if new_severe_vulnerable_dependencies > 0 (actual: no data, ignored: no advisory data)
 ```
 
 ## Features
@@ -130,15 +131,17 @@ metric = "new_bugs"        # fail when new_bugs > 0
 op = "gt"
 threshold = 0
 
-# Optional: fail on dependencies with a known blocker or critical vulnerability.
-# Needs advisory data: `--advisories DIR`, or a server with advisories.
+# Optional: fail on any dependency with a known blocker or critical
+# vulnerability, not only the ones a change brought (the default gate's
+# new_severe_vulnerable_dependencies). Needs advisory data: `--advisories DIR`,
+# or a server with advisories.
 [[gate.conditions]]
 metric = "severe_vulnerable_dependencies"
 op = "gt"
 threshold = 0
 ```
 
-Gate metrics: `files`, `lines`, `ncloc`, `functions`, `complexity`, `cognitive_complexity`, `issues`, `bugs`, `vulnerabilities`, `code_smells`, `blocker_issues`, `critical_issues`, `major_issues`, `debt_minutes`, `duplicated_lines`, `duplicated_lines_density`, `coverage`. Most also have a `new_` variant for new code only: `new_lines`, `new_issues`, `new_bugs`, `new_vulnerabilities`, `new_code_smells`, `new_blocker_issues`, `new_critical_issues`, `new_major_issues`, `new_debt_minutes`, `new_duplicated_lines`, `new_duplicated_lines_density` and `new_coverage`. For dependencies: `vulnerable_dependencies` and `severe_vulnerable_dependencies` (packages with a blocker or critical known vulnerability), and `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies` (those whose finding wasn't there at the new-code reference: added, or moved into an affected version), which have data only when checked against advisories. Each finding in the report's `vulnerabilities` says whether it's new (`is_new`). A condition on a metric with no data, such as coverage without a report, is shown as "no data" and does not fail the gate. As in SonarQube, with fewer than 20 new lines the conditions on `new_coverage`, `new_duplicated_lines` and `new_duplicated_lines_density` are "ignored" and don't fail it either: one uncovered line in a two-line change is 50% coverage.
+Gate metrics: `files`, `lines`, `ncloc`, `functions`, `complexity`, `cognitive_complexity`, `issues`, `bugs`, `vulnerabilities`, `code_smells`, `blocker_issues`, `critical_issues`, `major_issues`, `debt_minutes`, `duplicated_lines`, `duplicated_lines_density`, `coverage`. Most also have a `new_` variant for new code only: `new_lines`, `new_issues`, `new_bugs`, `new_vulnerabilities`, `new_code_smells`, `new_blocker_issues`, `new_critical_issues`, `new_major_issues`, `new_debt_minutes`, `new_duplicated_lines`, `new_duplicated_lines_density` and `new_coverage`. For dependencies: `vulnerable_dependencies` and `severe_vulnerable_dependencies` (packages with a blocker or critical known vulnerability), and `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies` (those whose finding wasn't there at the new-code reference: added, or moved into an affected version), which have data only when checked against advisories. Each finding in the report's `vulnerabilities` says whether it's new (`is_new`). A condition on a metric with no data, such as coverage without a report, is shown as "no data" and does not fail the gate. Some conditions are "ignored" instead, with the reason, and don't fail it either: as in SonarQube, with fewer than 20 new lines, those on `new_coverage`, `new_duplicated_lines` and `new_duplicated_lines_density` (one uncovered line in a two-line change is 50% coverage); and without advisory data, those on dependencies. The default gate fails on new bugs, new vulnerabilities, coverage of new code below 80%, duplication of new code above 3%, and new dependencies with a blocker or critical known vulnerability.
 
 ## Web app (preview)
 

@@ -400,6 +400,8 @@ export interface GateCondition {
   metric: string
   actual: number | null
   status: ConditionStatus
+  /** Why an ignored condition is: "fewer than 20 new lines", "no advisory data". */
+  reason?: string | null
 }
 
 /** Null where the analysis has no value: no coverage uploaded, or no new code. */

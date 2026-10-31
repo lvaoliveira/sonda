@@ -169,9 +169,9 @@ pub fn render(r: &Report) -> String {
             Status::Ignored => (
                 "–",
                 format!(
-                    "{}, ignored: fewer than {} new lines",
+                    "{}, ignored: {}",
                     c.actual.map_or("no data".into(), |v| v.to_string()),
-                    crate::gate::MIN_NEW_LINES
+                    c.reason.unwrap_or("not evaluated")
                 ),
             ),
         };

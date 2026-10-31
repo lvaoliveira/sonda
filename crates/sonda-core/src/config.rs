@@ -74,6 +74,14 @@ threshold = 80
 metric = "new_duplicated_lines_density"
 op = "gt"
 threshold = 3
+
+# Blocker or critical known vulnerabilities in dependencies the change added
+# or upgraded into. No data, so never failing, without advisories
+# (`--advisories`, or a sonda server that has imported them).
+[[gate.conditions]]
+metric = "new_severe_vulnerable_dependencies"
+op = "gt"
+threshold = 0
 "#;
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -181,6 +189,7 @@ impl Default for GateConfig {
                 cond(Metric::NewVulnerabilities, Op::Gt, 0.0),
                 cond(Metric::NewCoverage, Op::Lt, 80.0),
                 cond(Metric::NewDuplicatedLinesDensity, Op::Gt, 3.0),
+                cond(Metric::NewSevereVulnerableDependencies, Op::Gt, 0.0),
             ],
         }
     }
