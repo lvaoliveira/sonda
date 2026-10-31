@@ -560,18 +560,18 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- filters
 
-fn text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+pub(super) fn text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
     &src[node.byte_range()]
 }
 
-fn contains_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
+pub(super) fn contains_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack
             .windows(needle.len())
             .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
-fn has_interpolation(string: Node) -> bool {
+pub(super) fn has_interpolation(string: Node) -> bool {
     let mut cursor = string.walk();
     string
         .children(&mut cursor)
@@ -580,7 +580,7 @@ fn has_interpolation(string: Node) -> bool {
 
 /// A string literal's characters between its quotes; None for f-strings
 /// that interpolate, whose value isn't known.
-fn string_value<'s>(string: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+pub(super) fn string_value<'s>(string: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     if string.kind() != "string" || has_interpolation(string) {
         return None;
     }
@@ -595,14 +595,14 @@ fn string_value<'s>(string: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     (rest.len() >= 2 * n).then(|| &rest[n..rest.len() - n])
 }
 
-fn call_of(node: Node) -> Option<Node> {
+pub(super) fn call_of(node: Node) -> Option<Node> {
     // keyword_argument -> argument_list -> call
     node.parent()
         .and_then(|a| a.parent())
         .filter(|c| c.kind() == "call")
 }
 
-fn callee_name<'s>(call: Node, src: &'s [u8]) -> &'s [u8] {
+pub(super) fn callee_name<'s>(call: Node, src: &'s [u8]) -> &'s [u8] {
     let Some(function) = call.child_by_field_name("function") else {
         return b"";
     };
@@ -614,17 +614,21 @@ fn callee_name<'s>(call: Node, src: &'s [u8]) -> &'s [u8] {
     }
 }
 
-fn call_arguments(call: Node) -> Vec<Node> {
+pub(super) fn call_arguments(call: Node) -> Vec<Node> {
     let Some(args) = call.child_by_field_name("arguments") else {
         return Vec::new();
     };
+    // `f(x for x in y)`: the lone generator is the arguments node itself.
+    if args.kind() == "generator_expression" {
+        return vec![args];
+    }
     let mut cursor = args.walk();
     args.named_children(&mut cursor)
         .filter(|a| a.kind() != "comment")
         .collect()
 }
 
-fn keyword_value<'t>(call: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn keyword_value<'t>(call: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> {
     call_arguments(call).into_iter().find_map(|a| {
         (a.kind() == "keyword_argument"
             && a.child_by_field_name("name")
@@ -828,7 +832,7 @@ fn weak_hash_call(call: Node, src: &[u8]) -> bool {
     })
 }
 
-fn integer_value(node: Node, src: &[u8]) -> Option<u64> {
+pub(super) fn integer_value(node: Node, src: &[u8]) -> Option<u64> {
     if node.kind() != "integer" {
         return None;
     }
