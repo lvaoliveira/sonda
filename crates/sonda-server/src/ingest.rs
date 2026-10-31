@@ -40,6 +40,10 @@ struct Upload {
     /// The project's version; older clients don't send it.
     #[serde(default)]
     version: Option<String>,
+    /// The commit's subject line; older clients, and scans outside git,
+    /// don't send it.
+    #[serde(default)]
+    commit_message: Option<String>,
     report: Report,
     sources: Vec<Source>,
     /// The repository's CODEOWNERS file; older clients don't send it.
@@ -111,6 +115,7 @@ struct Issue {
 /// An upload that passed every check, ready to store.
 pub struct Analysis {
     pub meta: Meta,
+    pub commit_message: Option<String>,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
     pub measures: Value,
@@ -298,6 +303,13 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         version: upload.version,
     };
     validate_meta(&meta).map_err(|e| invalid(e.to_string()))?;
+    if upload.commit_message.as_ref().is_some_and(|m| {
+        m.trim().is_empty() || m.chars().count() > 300 || m.chars().any(char::is_control)
+    }) {
+        return Err(invalid(
+            "invalid commit message: use 1-300 characters, no control characters".into(),
+        ));
+    }
     let r = upload.report;
     if r.tool != "sonda" {
         return Err(invalid("the report was not written by sonda".into()));
@@ -440,6 +452,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     let dependencies = validate_dependencies(r.dependencies).map_err(invalid)?;
     Ok(Analysis {
         meta,
+        commit_message: upload.commit_message,
         tool_version: r.version,
         new_code_reference: r.new_code_reference,
         measures: r.measures,

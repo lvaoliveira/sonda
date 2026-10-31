@@ -234,7 +234,18 @@ type SevereRow = (i64, String, String, String, i32, f64, i64, String);
 type AnalysisRow = (i64, String, String, String, f64, Value, Value, bool);
 
 /// An analysis id, then the same columns as `AnalysisRow`.
-type RecentRow = (i64, i64, String, String, String, f64, Value, Value, bool);
+type RecentRow = (
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    f64,
+    Value,
+    Value,
+    bool,
+    Option<String>,
+);
 
 pub async fn get_overview(
     axum::extract::State(state): axum::extract::State<State>,
@@ -333,7 +344,7 @@ pub async fn get_overview(
     .await?;
     let recent: Vec<RecentRow> = sqlx::query_as(
         "SELECT a.id, p.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
-                a.measures, a.gate, a.gate_passed
+                a.measures, a.gate, a.gate_passed, a.commit_message
          FROM analyses a JOIN projects p ON p.id = a.project_id
          ORDER BY a.received_at DESC, a.id DESC LIMIT 8",
     )
@@ -442,7 +453,7 @@ fn build(
         recent: recent
             .into_iter()
             .map(
-                |(id, project, key, branch, sha, at, measures, gate, passed)| {
+                |(id, project, key, branch, sha, at, measures, gate, passed, message)| {
                     let a = Analysis {
                         project,
                         key,
@@ -472,7 +483,7 @@ fn build(
                         project: a.key,
                         branch: a.branch,
                         sha: a.sha.chars().take(7).collect(),
-                        message: None,
+                        message,
                         note,
                         duration: None,
                         ago: ago(now - a.at),

@@ -3,6 +3,8 @@ import { PROJECT_LIST, projectDetail } from './projects'
 
 const NOW = Date.parse('2026-10-30T09:41:00Z')
 
+const MESSAGES = ['Fix refunds rounding for partial captures', 'Bump express to 4.21.2', 'Add retry to the ledger export', 'Split checkout handlers by tender']
+
 /** Two analyses per mock project on main, plus a release branch, newest first. */
 const ROWS: AnalysisRow[] = PROJECT_LIST.projects
   .flatMap((p, i) => [
@@ -15,6 +17,8 @@ const ROWS: AnalysisRow[] = PROJECT_LIST.projects
     branch,
     sha: offset === 0 ? '9f3c2a1e7b04' : `${(((offset + 1) * 2_654_435_761) >>> 0).toString(16).padStart(8, '0')}a1c3`,
     analyzedAt: new Date(NOW - offset * 2.5 * 3_600_000).toISOString(),
+    // One without, as an upload from outside git has.
+    message: offset === 3 ? null : MESSAGES[offset % MESSAGES.length],
     toolVersion: '0.1.0',
     gate,
     failing: gate === 'failed' ? ['New vulnerabilities > 0', 'Coverage on new code < 80%'] : [],
@@ -56,6 +60,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
     branch: row.branch,
     mainBranch: 'main',
     sha: row.sha,
+    message: row.message,
     analyzedAt: row.analyzedAt,
     toolVersion: row.toolVersion,
     newCodeReference: 'origin/main',

@@ -113,6 +113,32 @@ pub(crate) fn files_at(
     Ok(out)
 }
 
+/// Commit subjects are cut to this many characters.
+pub(crate) const MAX_SUBJECT: usize = 200;
+
+/// The first line of `commit`'s message, read from the object database
+/// (`cat-file`, as ADR-0002 allows); `None` when it has none.
+pub(crate) fn commit_subject(
+    root: &Path,
+    commit: &str,
+    timeout: Duration,
+) -> Result<Option<String>, Error> {
+    validate_ref(commit)?;
+    let object = git(root, &["cat-file", "commit", commit], timeout)?;
+    // Headers, a blank line, then the message.
+    let message = object.split_once("\n\n").map_or("", |(_, m)| m);
+    Ok(message
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| {
+            l.chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_SUBJECT)
+                .collect()
+        }))
+}
+
 /// What `auto` found to compare with (ADR-0010).
 pub(crate) enum Auto {
     /// A reference for [`new_code`], and how it was chosen.

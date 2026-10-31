@@ -197,6 +197,9 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- `sonda upload` sends the commit's subject line, read from git's objects
+  when `--root` has the commit, and the server shows it in Recent
+  analyses, the analyses list and the analysis page (`message`).
 - Bun's text `bun.lock` and pipenv's `Pipfile.lock` are read: registry
   packages, aliases resolved, and direct ones from Bun's workspaces or the
   `Pipfile`. Bun's binary `bun.lockb` gets a warning naming

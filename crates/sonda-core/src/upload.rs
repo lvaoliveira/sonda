@@ -43,6 +43,10 @@ pub struct Upload {
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The commit's subject line, from git in `root` when it has the
+    /// commit; shown with the analysis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_message: Option<String>,
     /// The JSON report, forwarded as written; the server validates it fully.
     pub report: Value,
     pub sources: Vec<Source>,
@@ -58,7 +62,7 @@ pub struct Source {
 }
 
 /// Validates `meta` and `report_json`, then reads every file the report
-/// lists from under `root`.
+/// lists from under `root`, and the commit's subject from git there.
 pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Error> {
     validate_meta(&meta)?;
     let report: Value = serde_json::from_slice(report_json)
@@ -78,12 +82,25 @@ pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Er
     Ok(Upload {
         project: meta.project,
         branch: meta.branch,
+        commit_message: commit_message(root, &meta.commit),
         commit: meta.commit.to_ascii_lowercase(),
         version: meta.version,
         report,
         sources,
         codeowners: read_codeowners(root),
     })
+}
+
+/// Best effort: a report scanned outside git, or a commit not in this
+/// clone, uploads without a message.
+fn commit_message(root: &Path, commit: &str) -> Option<String> {
+    match crate::git::commit_subject(root, commit, std::time::Duration::from_secs(10)) {
+        Ok(subject) => subject,
+        Err(e) => {
+            tracing::info!(error = %e, "no commit message to upload");
+            None
+        }
+    }
 }
 
 /// Checks project, branch, commit and version; the server applies the same

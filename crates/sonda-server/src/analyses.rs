@@ -46,6 +46,8 @@ pub struct AnalysisRow {
     pub project: String,
     pub branch: String,
     pub sha: String,
+    /// The commit's subject line, when the upload had one.
+    pub message: Option<String>,
     pub analyzed_at: String,
     pub tool_version: String,
     pub gate: &'static str,
@@ -64,6 +66,8 @@ pub struct AnalysisDetail {
     pub branch: String,
     pub main_branch: String,
     pub sha: String,
+    /// The commit's subject line, when the upload had one.
+    pub message: Option<String>,
     pub analyzed_at: String,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
@@ -126,6 +130,7 @@ type ListRow = (
     Value,
     bool,
     Value,
+    Option<String>,
 );
 
 pub async fn list_analyses(
@@ -166,7 +171,7 @@ pub async fn list_analyses(
         .await?;
     let rows: Vec<ListRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
-                a.tool_version, a.measures, a.gate, a.gate_passed, a.warnings
+                a.tool_version, a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message
          {FILTER} ORDER BY a.received_at DESC, a.id DESC OFFSET $4 LIMIT $5"
     )))
     .bind(&q.project)
@@ -179,12 +184,25 @@ pub async fn list_analyses(
     let items = rows
         .into_iter()
         .map(
-            |(id, project, branch, sha, at, tool_version, measures, gate, passed, warnings)| {
+            |(
+                id,
+                project,
+                branch,
+                sha,
+                at,
+                tool_version,
+                measures,
+                gate,
+                passed,
+                warnings,
+                message,
+            )| {
                 AnalysisRow {
                     id,
                     project,
                     branch,
                     sha,
+                    message,
                     analyzed_at: rfc3339(at),
                     tool_version,
                     gate: gate_state(passed, &gate),
@@ -222,6 +240,7 @@ type DetailRow = (
     Value,
     bool,
     Value,
+    Option<String>,
 );
 
 type IssueRow = (i64, String, String, String, String, String, i32);
@@ -234,7 +253,7 @@ pub async fn get_analysis(
     let row: DetailRow = sqlx::query_as(
         "SELECT a.id, a.project_id, p.key, p.main_branch, a.branch, a.commit_sha,
                 extract(epoch FROM a.received_at)::float8, a.tool_version, a.new_code_reference,
-                a.measures, a.gate, a.gate_passed, a.warnings
+                a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message
          FROM analyses a JOIN projects p ON p.id = a.project_id WHERE a.id = $1",
     )
     .bind(id)
@@ -255,6 +274,7 @@ pub async fn get_analysis(
         gate,
         passed,
         warnings,
+        message,
     ) = row;
 
     let files: Vec<(String, String)> =
@@ -302,6 +322,7 @@ pub async fn get_analysis(
         branch,
         main_branch,
         sha,
+        message,
         analyzed_at: rfc3339(at),
         tool_version,
         new_code_reference,

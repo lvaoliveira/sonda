@@ -51,7 +51,10 @@ sonda upload report.json --server http://127.0.0.1:9000 --token-file secrets/son
 ```
 
 The first upload creates the project. Each upload becomes the branch's
-latest analysis, ordered by when it arrives, not by commit date. Issues are
+latest analysis, ordered by when it arrives, not by commit date. When
+`--root` is a git clone that has the commit, the upload carries the
+commit's subject line, read from git's objects (ADR-0002), which Recent
+analyses, the analyses list and the analysis page show. Issues are
 matched to the branch's earlier ones by fingerprint:
 
 - **New:** a fingerprint the branch has not seen.
