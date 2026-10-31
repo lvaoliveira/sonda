@@ -153,7 +153,7 @@ function Dependencies({ d: loaded }: { d: DependencyList }) {
                 Vulnerable only
               </Chip>
             </div>
-            <div className="overflow-x-auto">
+            <div className="relative overflow-x-auto">
               <table className="w-full min-w-[640px] border-collapse text-[13px]">
                 <thead>
                   <tr className="font-mono text-[9.5px] tracking-[.06em] text-fg-faint uppercase">
