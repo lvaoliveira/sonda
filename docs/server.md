@@ -173,7 +173,19 @@ rights, and is now optional. For each pipeline, generate a project
 analysis token, put it in the pipeline's secret (`SONDA_TOKEN` or
 `SONDA_TOKEN_FILE`, which `sonda upload` and `sonda scan --upload` read),
 and check the analyses list shows it as the uploader. Once no recent
-analysis shows `api-token`, remove `SONDA_TOKEN` from the server.
+analysis shows `api-token`, turn the shared token off. With Docker
+Compose, add a `compose.override.yaml` (git-ignored, merged automatically)
+and restart with `docker compose up -d`:
+
+```yaml
+services:
+  sonda:
+    environment:
+      SONDA_TOKEN_FILE: ""   # empty counts as unset: no shared token
+```
+
+The old token then gets `401`, and only users' tokens upload. Removing
+the override turns it back on.
 
 The cookie is `__Host-sonda_session`: `HttpOnly` (page scripts cannot read
 it), `Secure`, `SameSite=Strict`, and valid for 12 hours. The database keeps
@@ -611,7 +623,7 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 |---|---|
 | `DATABASE_URL` / `DATABASE_URL_FILE` | `postgres://user@host:port/db`. Required. |
 | `DATABASE_PASSWORD` / `DATABASE_PASSWORD_FILE` | The database password, if not in the URL. |
-| `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The shared API token, at least 32 characters. Optional since users have their own tokens (see Tokens). Kept in memory only as a SHA-256 hash and compared in constant time. |
+| `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The shared API token, at least 32 characters. Optional since users have their own tokens (see Tokens); empty counts as unset. Kept in memory only as a SHA-256 hash and compared in constant time. |
 | `SONDA_ADMIN_PASSWORD` / `SONDA_ADMIN_PASSWORD_FILE` | Creates the first admin while no users exist; ignored afterwards. At least 12 characters. |
 | `SONDA_ADMIN_USERNAME` | That admin's username. Default `admin`. |
 | `SONDA_ADVISORY_SYNC` | `true` syncs advisories from OSV daily (see [Known vulnerabilities](#known-vulnerabilities)). Off by default: the server makes no outbound connections. |

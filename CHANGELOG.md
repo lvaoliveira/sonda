@@ -197,6 +197,9 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- The server treats an empty secret variable (`SONDA_TOKEN_FILE: ""`) as
+  unset, so a git-ignored `compose.override.yaml` turns the shared token off
+  once pipelines use their own tokens (docs/server.md).
 - User and analysis tokens, as in SonarQube (ADR-0012): users generate
   user tokens (`sonda_u_`, acting as them), project analysis tokens
   (`sonda_p_`, uploading one project) and global analysis tokens

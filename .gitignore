@@ -1,3 +1,5 @@
 /target
 .DS_Store
 /secrets
+# Local Docker Compose settings, such as turning the shared token off.
+compose.override.yaml
