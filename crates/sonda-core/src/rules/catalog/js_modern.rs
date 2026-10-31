@@ -791,7 +791,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[exact("S7771")],
+        sonar: &[exact("S7771"), related("S7755")],
         check: Check::Query {
             langs: JS_TS,
             query: r#"(subscript_expression object: (_) @o index: (binary_expression left: (member_expression object: (_) @lo property: (property_identifier) @l (#eq? @l "length")) operator: "-" right: (number))) @match"#,

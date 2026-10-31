@@ -420,7 +420,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[exact("S6847")],
+        sonar: &[exact("S6847"), related("S6848")],
         check: Check::Query {
             langs: JSX,
             query: r#"(jsx_attribute (property_identifier) @a (#match? @a "^on(Click|DoubleClick|MouseDown|MouseUp|KeyDown|KeyUp|KeyPress)$")) @match"#,
@@ -801,7 +801,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[exact("S7649")],
+        sonar: &[exact("S7649"), related("S7653")],
         check: Check::Query {
             langs: TS,
             query: r#"(decorator (call_expression function: (identifier) @d (#any-of? @d "Input" "Output") arguments: (arguments (string)))) @match"#,
@@ -841,7 +841,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[exact("S7651")],
+        sonar: &[exact("S7651"), related("S7652")],
         check: Check::Query {
             langs: TS,
             query: r#"(public_field_definition (decorator (call_expression function: (identifier) @d (#eq? @d "Output"))) name: (property_identifier) @n) @match"#,
@@ -857,14 +857,14 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- filters
 
-fn named(node: Node) -> Vec<Node> {
+pub(super) fn named(node: Node) -> Vec<Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|n| n.kind() != "comment")
         .collect()
 }
 
-fn count_word(haystack: &[u8], word: &[u8]) -> usize {
+pub(super) fn count_word(haystack: &[u8], word: &[u8]) -> usize {
     if word.is_empty() {
         return 0;
     }
@@ -885,7 +885,7 @@ fn count_word(haystack: &[u8], word: &[u8]) -> usize {
     count
 }
 
-fn count_pattern(haystack: &[u8], pattern: &[u8]) -> usize {
+pub(super) fn count_pattern(haystack: &[u8], pattern: &[u8]) -> usize {
     if pattern.is_empty() {
         return 0;
     }
@@ -895,7 +895,7 @@ fn count_pattern(haystack: &[u8], pattern: &[u8]) -> usize {
         .count()
 }
 
-fn operator_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+pub(super) fn operator_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
     node.child_by_field_name("operator")
         .map_or(&b""[..], |o| text(o, src))
 }
@@ -1146,7 +1146,7 @@ fn index_only_reads_the_array(for_loop: Node, src: &[u8]) -> bool {
         && count_word(body_text, index) == reads
 }
 
-fn scope_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+pub(super) fn scope_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
     let mut p = node.parent();
     let mut hops = 0;
     while let Some(n) = p {
