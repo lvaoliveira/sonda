@@ -12,8 +12,8 @@ Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.1
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
-| JavaScript | 461 | 257 | 37 | 92 | 75 | 0 |
-| TypeScript | 481 | 262 | 35 | 106 | 78 | 0 |
+| JavaScript | 461 | 284 | 41 | 84 | 52 | 0 |
+| TypeScript | 481 | 292 | 41 | 95 | 53 | 0 |
 | Python | 397 | 126 | 11 | 260 | 0 | 0 |
 | Java | 703 | 305 | 9 | 368 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |

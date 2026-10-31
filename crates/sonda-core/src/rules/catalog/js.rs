@@ -3003,7 +3003,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Vulnerability,
         severity: Blocker,
         effort_minutes: 30,
-        sonar: &[exact("S2068")],
+        sonar: &[exact("S2068"), related("S6437")],
         check: Check::Query {
             langs: JS_TS,
             query: r#"(variable_declarator name: (identifier) @n value: (string) @match
