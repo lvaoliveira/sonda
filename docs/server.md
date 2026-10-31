@@ -203,7 +203,10 @@ trend: green improving, red worsening, gray unchanged):
 **Where to focus** lists two kinds of items, most severe first:
 - projects whose main branch fails its gate, with the number of
   consecutive failing analyses;
-- new blocker or critical issues in the range, per project.
+- blocker or critical issues first detected in the range, per project,
+  opening the Issues page on them. "Detected", not "new": a rule added
+  to sonda finds issues in old code too, and those aren't new code for
+  the gate (see "New code on the main branch").
 
 **What the server doesn't know** is null, and the page leaves it out:
 - teams, so the response says `teams: false` and the "My team" scope is

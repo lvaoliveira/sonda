@@ -249,7 +249,7 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
       }
     >
       <div className="flex flex-col gap-1.5 px-2.5 pb-2.5">
-        {data.focus.length === 0 && <p className="m-0 px-2.5 py-4 text-[13px] text-fg-muted">Nothing needs attention: every gate passes and no new blocker or critical issues appeared.</p>}
+        {data.focus.length === 0 && <p className="m-0 px-2.5 py-4 text-[13px] text-fg-muted">Nothing needs attention: every gate passes and no blocker or critical issues were detected.</p>}
         {data.focus.map((f) => {
           const s = SEVERITY[f.severity]
           return (

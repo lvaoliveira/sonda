@@ -142,7 +142,7 @@ async fn the_overview_is_built_from_analysis_history() {
     assert_eq!(focus[0]["title"], "payments is failing its quality gate");
     assert_eq!(focus[0]["tag"], "Blocks main · 2 analyses");
     assert_eq!(focus[0]["drill"], "vulns");
-    assert_eq!(focus[1]["title"], "1 new critical issue in payments");
+    assert_eq!(focus[1]["title"], "1 critical issue detected in payments");
     // The gate opens its drill-down; the new issue, the Issues page on it.
     assert_eq!(focus[0]["link"], Value::Null);
     let link = focus[1]["link"].as_str().unwrap();
