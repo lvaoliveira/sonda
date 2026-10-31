@@ -177,16 +177,10 @@ describe('Projects', () => {
     const start = await screen.findByRole('combobox', { name: 'Start new code at' })
     const options = within(start).getAllByRole('option')
     await user.selectOptions(start, options[0])
-    // The page reloads (the gate and new-code measures change): wait for
-    // the old view to go before opening New code again.
-    const reopen = async (button: string) => {
-      await user.click(screen.getByRole('button', { name: button }))
-      await waitFor(() => expect(screen.queryByRole('button', { name: button })).not.toBeInTheDocument())
-      await user.click(await screen.findByRole('button', { name: 'New code' }))
-    }
-    await reopen('Start new code here')
+    // The project reloads in place: New code stays open, with the new start.
+    await user.click(screen.getByRole('button', { name: 'Start new code here' }))
     expect(await screen.findByText(/\(set by an admin\)/)).toBeInTheDocument()
-    await reopen('Back to the default start')
+    await user.click(await screen.findByRole('button', { name: 'Back to the default start' }))
     expect(await screen.findByText(/\(the first analysis\)/)).toBeInTheDocument()
   })
 

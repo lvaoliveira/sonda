@@ -259,6 +259,7 @@ function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCode
       reload()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    } finally {
       setBusy(false)
     }
   }

@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { ApiContext } from './apiContext'
 import type { SondaApi } from './types'
 
@@ -21,10 +21,16 @@ export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
   const [result, setResult] = useState<Async<T>>({ state: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const rerun = useCallback(() => setAttempt((n) => n + 1), [])
+  const lastAttempt = useRef(attempt)
 
   useEffect(() => {
     let current = true
-    setResult({ state: 'loading' })
+    // A reload keeps what's shown until the new data arrives, so the page
+    // doesn't flash a skeleton or lose its local state (a selected tab);
+    // new deps, or a retry after an error, start over.
+    const reloading = attempt !== lastAttempt.current
+    lastAttempt.current = attempt
+    setResult((r) => (reloading && r.state === 'ready' ? r : { state: 'loading' }))
     load().then(
       (data) => current && setResult({ state: 'ready', data, reload: rerun }),
       (error: unknown) =>

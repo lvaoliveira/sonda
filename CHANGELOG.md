@@ -358,6 +358,12 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Moving the main branch's new code start on a project page reloaded the
+  page into a skeleton and back to the Overall measures, so the admin
+  lost the New code view they were acting on. Reloads now keep showing
+  the page until the new data arrives. This also fixes an intermittently
+  failing web test.
+
 - "Where to focus" called issues first detected in the range "new", which
   disagreed with the gate when a rule added to sonda found them in old
   code. They now read "Detected · 6h ago" and "1 blocker issue detected
