@@ -61,6 +61,12 @@ describe('Issues', () => {
     await waitFor(() => expect(within(row).getByText(before)).toBeInTheDocument())
   })
 
+  it('shows the whole path of an issue, not only its file name', async () => {
+    renderAt('/issues?project=billing-service&branch=main&sev=blocker&issue=6')
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    expect(await within(detail).findByLabelText('Location')).toHaveTextContent(/^src\/main\/java\/com\/acme\/billing\/config\/StripeConfig\.java:\d+/)
+  })
+
   it('offers no "assign to me" without a name', async () => {
     const api = createMockApi(0)
     const shell = api.shell
