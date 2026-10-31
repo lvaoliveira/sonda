@@ -141,7 +141,6 @@ async fn the_list_filters_paginates_and_counts_facets() {
         let (status, _) = get(&app, &format!("/api/issues?{bad}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -180,7 +179,6 @@ async fn an_issue_comes_with_highlighted_code_and_its_rule() {
         get(&app, "/api/issues/abc").await.0,
         StatusCode::BAD_REQUEST
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -258,5 +256,4 @@ async fn triage_needs_authorization_and_is_audited() {
         send(&app, patch(999999, json!({}), &csrf)).await.0,
         StatusCode::NOT_FOUND
     );
-    db.drop().await;
 }

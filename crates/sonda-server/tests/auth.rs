@@ -148,7 +148,6 @@ async fn a_user_signs_in_reads_and_signs_out() {
             .0,
         StatusCode::UNAUTHORIZED
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -182,7 +181,6 @@ async fn the_first_admin_comes_from_the_secret_once() {
         .await
         .unwrap();
     assert!(hash.starts_with("$argon2id$") && !hash.contains("first password"));
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -316,7 +314,6 @@ async fn admins_manage_users_and_cannot_lock_everyone_out() {
         Some(json!({ "role": "member" })),
     );
     assert_eq!(send(&app, step_down).await.0, StatusCode::OK);
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -368,7 +365,6 @@ async fn users_change_their_own_password() {
             .await
             .is_some()
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -408,7 +404,6 @@ async fn expired_and_forged_sessions_are_rejected() {
                 .collect::<String>()
         )
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -427,7 +422,6 @@ async fn the_token_reads_too_and_loopback_servers_read_openly() {
             .0,
         StatusCode::OK
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -496,7 +490,6 @@ async fn rules_report_live_counts_on_main_branches() {
         catalog["total"].as_u64(),
         Some(catalog["rules"].as_array().unwrap().len() as u64)
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -562,5 +555,4 @@ async fn repeated_failures_are_throttled_whether_or_not_the_user_exists() {
             .await
             .unwrap();
     assert_eq!(left, 0);
-    db.drop().await;
 }

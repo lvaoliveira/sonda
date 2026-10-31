@@ -131,5 +131,4 @@ async fn projects_are_listed_and_detailed_from_their_analyses() {
         err["error"].as_str().unwrap().contains("main, feature"),
         "{err}"
     );
-    db.drop().await;
 }

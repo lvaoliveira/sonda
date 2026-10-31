@@ -81,5 +81,4 @@ async fn components_are_listed_and_detailed() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = api(&db, "/api/projects/payments/components/api?branch=gone").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    db.drop().await;
 }

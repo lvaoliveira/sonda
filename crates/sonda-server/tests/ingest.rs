@@ -110,7 +110,6 @@ async fn issues_are_tracked_across_analyses() {
             .await
             .unwrap();
     assert_eq!((analyses, sources), (4, 3));
-    db.drop().await;
 }
 
 /// Changes a valid upload into an invalid one.
@@ -189,5 +188,4 @@ async fn tampered_uploads_are_rejected_and_store_nothing() {
         .await
         .unwrap();
     assert_eq!(stored, 0);
-    db.drop().await;
 }
