@@ -124,9 +124,9 @@ function Dependencies({ p }: { p: ProjectDetail }) {
       ) : (
         <p className="m-0 text-[13px] text-fg-muted">
           sonda reads <Mono className="text-xs">package-lock.json</Mono>, <Mono className="text-xs">yarn.lock</Mono>, <Mono className="text-xs">pnpm-lock.yaml</Mono>,{' '}
-          <Mono className="text-xs">Cargo.lock</Mono>,{' '}
+          <Mono className="text-xs">bun.lock</Mono>, <Mono className="text-xs">Cargo.lock</Mono>,{' '}
           <Mono className="text-xs">poetry.lock</Mono>,{' '}
-          <Mono className="text-xs">uv.lock</Mono> and pinned <Mono className="text-xs">requirements*.txt</Mono>; analyses uploaded by an older sonda don't include them.
+          <Mono className="text-xs">uv.lock</Mono>, <Mono className="text-xs">Pipfile.lock</Mono> and pinned <Mono className="text-xs">requirements*.txt</Mono>; analyses uploaded by an older sonda don't include them.
         </p>
       )}
     </Card>

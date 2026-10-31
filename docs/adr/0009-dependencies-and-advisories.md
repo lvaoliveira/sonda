@@ -198,6 +198,16 @@ that wants a failing build.
    lockfile (all 73 registry packages its resolutions name, the patched
    `typescript` once, aliases resolved). Fuzzed with those as seeds.
 
+   Bun's text `bun.lock` and pipenv's `Pipfile.lock` followed (2026-10-31),
+   both JSON, no new dependency. `bun.lock` allows trailing commas, which
+   a string-aware pass removes (comments too) before `serde_json`; direct
+   packages are the top-level installs any workspace declares. Bun's
+   binary `bun.lockb` stays unread, with a warning naming the command
+   that writes `bun.lock`. `Pipfile.lock`'s pinned `==` versions are read,
+   direct packages from the `Pipfile` next to it. Checked against Bun's and
+   pipenv's own lockfiles: 42 and 85 packages, exactly the registry ones
+   they pin, and 12 and 28 direct, exactly what their manifests declare.
+
 ## Consequences
 
 - The report gains a field, and later the upload carries it; older

@@ -1,5 +1,6 @@
 //! Python: `poetry.lock` (with `pyproject.toml` for which packages are
-//! direct), `uv.lock`, and pinned `requirements*.txt`.
+//! direct), `uv.lock`, pipenv's `Pipfile.lock` (with its `Pipfile`), and
+//! pinned `requirements*.txt`.
 
 use super::{Dependency, Ecosystem, Parsed, purl};
 use std::collections::HashSet;
@@ -148,6 +149,49 @@ fn direct_names(manifest: &Value) -> HashSet<String> {
     names
 }
 
+/// pipenv's `Pipfile.lock` (JSON): the `default` and `develop` packages,
+/// pinned `==version`. `manifest` is the `Pipfile` next to it: its
+/// `[packages]` and `[dev-packages]` are the direct ones.
+pub(super) fn pipenv(path: &str, text: &str, manifest: Option<&str>) -> Result<Parsed, String> {
+    let lock: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("not valid JSON ({e})"))?;
+    if !lock["_meta"].is_object() {
+        return Err("not a Pipfile.lock (no \"_meta\")".into());
+    }
+    let direct: Option<HashSet<String>> = manifest.and_then(|m| toml(m).ok()).map(|pipfile| {
+        ["packages", "dev-packages"]
+            .iter()
+            .filter_map(|section| pipfile.get(section).and_then(Value::as_table))
+            .flat_map(|table| table.keys().map(|k| normalize(k)))
+            .collect()
+    });
+    let mut dependencies = Vec::new();
+    let mut unpinned = 0;
+    for section in ["default", "develop"] {
+        for (name, entry) in lock[section].as_object().into_iter().flatten() {
+            let version = entry["version"].as_str().and_then(|v| {
+                v.strip_prefix("===")
+                    .or_else(|| v.strip_prefix("=="))
+                    .filter(|v| !v.is_empty())
+            });
+            match version {
+                Some(v) => dependencies.push(dependency(
+                    path,
+                    name,
+                    v,
+                    direct.as_ref().map(|d| d.contains(&normalize(name))),
+                )),
+                // git, path and editable packages have no pinned version.
+                None => unpinned += 1,
+            }
+        }
+    }
+    Ok(Parsed {
+        dependencies,
+        notes: skipped_note(unpinned, "git, path or editable packages"),
+    })
+}
+
 pub(super) fn uv(path: &str, text: &str) -> Result<Parsed, String> {
     let lock = toml(text)?;
     let packages = lock
@@ -250,6 +294,58 @@ pub(super) fn requirements(path: &str, text: &str) -> Parsed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_pipfile_lock() {
+        let lock = r#"{
+          "_meta": {"hash": {"sha256": "x"}, "pipfile-spec": 6, "requires": {"python_version": "3.12"}},
+          "default": {
+            "requests": {"hashes": ["sha256:a"], "index": "pypi", "version": "==2.31.0"},
+            "Urllib3": {"version": "==2.0.7", "markers": "python_version >= '3.7'"},
+            "mylib": {"editable": true, "path": "."},
+            "gitdep": {"git": "https://github.com/x/y.git", "ref": "abc"}
+          },
+          "develop": {
+            "pytest": {"version": "==7.4.0"}
+          }
+        }"#;
+        let pipfile = "[packages]\nrequests = \"*\"\n\n[dev-packages]\nPyTest = \"*\"\n";
+        let parsed = pipenv("Pipfile.lock", lock, Some(pipfile)).unwrap();
+        let got: Vec<(&str, &str, Option<bool>, &str)> = parsed
+            .dependencies
+            .iter()
+            .map(|d| {
+                (
+                    d.name.as_str(),
+                    d.version.as_str(),
+                    d.direct,
+                    d.purl.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Urllib3", "2.0.7", Some(false), "pkg:pypi/urllib3@2.0.7"),
+                ("requests", "2.31.0", Some(true), "pkg:pypi/requests@2.31.0"),
+                ("pytest", "7.4.0", Some(true), "pkg:pypi/pytest@7.4.0"),
+            ]
+        );
+        assert_eq!(
+            parsed.notes,
+            ["git, path or editable packages: 2 not listed"]
+        );
+        // Without the Pipfile, nothing says what's direct.
+        assert!(
+            pipenv("p", lock, None)
+                .unwrap()
+                .dependencies
+                .iter()
+                .all(|d| d.direct.is_none())
+        );
+        assert!(pipenv("p", "{}", None).is_err());
+        assert!(pipenv("p", "{", None).is_err());
+    }
 
     fn names(p: &Parsed) -> Vec<(&str, &str, Option<bool>)> {
         p.dependencies

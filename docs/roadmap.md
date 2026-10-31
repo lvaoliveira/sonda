@@ -117,7 +117,7 @@ own groundwork, smallest first:
 which supersedes the sketch below where they differ (2026-10-30): SBOMs,
 server storage, advisory import and sync, matching, triage, the Security
 screen and gate metrics, `new_vulnerable_dependencies` included. Left:
-more lockfile formats (Go, Gradle, Bun). sonda
+more lockfile formats (Go, Gradle; Bun's binary `bun.lockb`, which `bun install --save-text-lockfile` converts). sonda
 analyzes a project's own code only. Its third-party dependencies are a
 separate risk, and the one OWASP Top 10 2025 ranks third (A03, Software
 Supply Chain Failures; A06 in 2021). This item has two parts: list what a project depends on (an

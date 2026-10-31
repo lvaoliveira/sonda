@@ -5,6 +5,7 @@
 //! parsers only read data, never run a package manager, and turn anything
 //! unexpected into a warning.
 
+mod bun;
 mod cargo;
 mod npm;
 mod pnpm;
@@ -78,6 +79,12 @@ pub(crate) enum FileKind {
     PyProject,
     /// `pnpm-lock.yaml`.
     PnpmLock,
+    /// Bun's text `bun.lock`.
+    BunLock,
+    /// pipenv's `Pipfile.lock`.
+    PipfileLock,
+    /// `Pipfile`: tells which of `Pipfile.lock`'s packages are direct.
+    Pipfile,
     /// `yarn.lock`: Yarn v1's own format, or Yarn 2+'s YAML.
     YarnLock,
     /// `package.json`: tells which of `yarn.lock`'s packages are direct.
@@ -96,10 +103,14 @@ pub(crate) fn file_kind(file_name: &str) -> Option<FileKind> {
         "pyproject.toml" => FileKind::PyProject,
         "yarn.lock" => FileKind::YarnLock,
         "pnpm-lock.yaml" => FileKind::PnpmLock,
+        "bun.lock" => FileKind::BunLock,
+        "Pipfile.lock" => FileKind::PipfileLock,
+        "Pipfile" => FileKind::Pipfile,
         "package.json" => FileKind::PackageJson,
         n if n.starts_with("requirements") && n.ends_with(".txt") => FileKind::Requirements,
-        "bun.lock" | "bun.lockb" | "go.sum" | "gradle.lockfile" | "Pipfile.lock"
-        | "composer.lock" | "Gemfile.lock" => FileKind::Unsupported,
+        "bun.lockb" | "go.sum" | "gradle.lockfile" | "composer.lock" | "Gemfile.lock" => {
+            FileKind::Unsupported
+        }
         _ => return None,
     })
 }
@@ -110,6 +121,7 @@ pub(crate) fn manifest_for(kind: FileKind) -> Option<FileKind> {
     match kind {
         FileKind::PoetryLock => Some(FileKind::PyProject),
         FileKind::YarnLock => Some(FileKind::PackageJson),
+        FileKind::PipfileLock => Some(FileKind::Pipfile),
         _ => None,
     }
 }
@@ -117,7 +129,10 @@ pub(crate) fn manifest_for(kind: FileKind) -> Option<FileKind> {
 /// Manifests aren't lockfiles: they're read only next to the lockfile that
 /// needs them.
 pub(crate) fn is_manifest(kind: FileKind) -> bool {
-    matches!(kind, FileKind::PyProject | FileKind::PackageJson)
+    matches!(
+        kind,
+        FileKind::PyProject | FileKind::PackageJson | FileKind::Pipfile
+    )
 }
 
 /// A parsed lockfile: its dependencies and notes about what it left out.
@@ -143,16 +158,25 @@ pub(crate) fn parse(
         FileKind::Requirements => python::requirements(path, text),
         FileKind::YarnLock => yarn::parse(path, text, manifest)?,
         FileKind::PnpmLock => pnpm::parse(path, text)?,
-        FileKind::PyProject | FileKind::PackageJson => {
+        FileKind::BunLock => bun::parse(path, text)?,
+        FileKind::PipfileLock => python::pipenv(path, text, manifest)?,
+        FileKind::PyProject | FileKind::PackageJson | FileKind::Pipfile => {
             return Ok(Parsed {
                 dependencies: Vec::new(),
                 notes: Vec::new(),
             });
         }
+        // Bun's binary lockfile has a text equivalent sonda reads.
+        FileKind::Unsupported if path.ends_with("bun.lockb") => {
+            return Err("not read: Bun's binary lockfile isn't; `bun install \
+                        --save-text-lockfile` writes bun.lock, which is"
+                .into());
+        }
         FileKind::Unsupported => {
             return Err(
                 "not read: sonda reads package-lock.json, yarn.lock, pnpm-lock.yaml, \
-                        Cargo.lock, poetry.lock, uv.lock and requirements*.txt so far"
+                        bun.lock, Cargo.lock, poetry.lock, uv.lock, Pipfile.lock and \
+                        requirements*.txt so far"
                     .into(),
             );
         }
@@ -231,6 +255,14 @@ mod tests {
         assert_eq!(file_kind("package.json"), Some(FileKind::PackageJson));
         assert_eq!(file_kind("pnpm-lock.yaml"), Some(FileKind::PnpmLock));
         assert_eq!(file_kind("bun.lockb"), Some(FileKind::Unsupported));
+        assert_eq!(file_kind("bun.lock"), Some(FileKind::BunLock));
+        assert_eq!(file_kind("Pipfile.lock"), Some(FileKind::PipfileLock));
+        assert_eq!(file_kind("Pipfile"), Some(FileKind::Pipfile));
+        assert!(
+            parse(FileKind::Unsupported, "app/bun.lockb", "", None)
+                .unwrap_err()
+                .contains("--save-text-lockfile")
+        );
     }
 
     #[test]
