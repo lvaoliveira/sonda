@@ -1,6 +1,6 @@
 # ADR-0014: Security review of issues
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-10-31
 - Replaces the roadmap's "hotspots" item
 

@@ -81,7 +81,7 @@ user's `password_hash` is nullable, and accounts are never deleted.
 ## Security: CWE/OWASP mapping, hotspots, reachability
 
 **Status:** the CWE/OWASP mapping is done (2026-10-30); security review
-is designed (ADR-0014, proposed); reachability is planned, not started. The Security screen shows
+is designed (ADR-0014, accepted); reachability is planned, not started. The Security screen shows
 vulnerabilities by severity, age, project, component, rule and OWASP
 category. The design also has a hotspot review queue, and ranks findings
 by whether they can be reached from a public entry point. Each needs its
@@ -98,7 +98,7 @@ own groundwork, smallest first:
    hotspot rules any more: the old hotspots (weak hashing, cookie flags,
    CORS, ...) are vulnerabilities reviewed with issue statuses, as sonda
    already classifies them. [ADR-0014](adr/0014-security-review.md)
-   (proposed) adds a "false positive" status and reasons, takes accepted
+   (accepted) adds a "false positive" status and reasons, takes accepted
    and false-positive issues out of the counts and the gate, and gives the
    Security screen a review queue.
 3. **Reachability.** Whether a finding is on a path from a public entry
