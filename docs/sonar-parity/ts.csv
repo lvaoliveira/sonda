@@ -107,7 +107,7 @@ typescript:S2187,code_smell,blocker,yes,test,syntactic,todo,,,
 typescript:S2201,bug,major,yes,main,types,todo,,,
 typescript:S2208,code_smell,critical,no,main,syntactic,todo,,,
 typescript:S2234,code_smell,major,yes,main,types,todo,,,
-typescript:S2245,vulnerability,major,yes,main,syntactic,todo,,326 330 338 1241,A02
+typescript:S2245,vulnerability,major,yes,main,syntactic,partial,js/math-random-secret,326 330 338 1241,A02
 typescript:S2251,bug,major,yes,main,syntactic,done,js/for-wrong-direction,,
 typescript:S2260,code_smell,major,no,main,syntactic,todo,,,
 typescript:S2301,code_smell,major,yes,main,types,todo,,,
@@ -119,7 +119,7 @@ typescript:S2427,bug,minor,no,main,syntactic,todo,,,
 typescript:S2430,code_smell,critical,yes,main,syntactic,todo,,,
 typescript:S2486,code_smell,minor,yes,main,syntactic,partial,js/empty-catch,,
 typescript:S2589,code_smell,major,yes,main,syntactic,todo,,,
-typescript:S2598,vulnerability,critical,yes,main,syntactic,todo,,400 434,A04
+typescript:S2598,vulnerability,critical,yes,main,syntactic,partial,js/upload-without-limit,400 434,A04
 typescript:S2612,vulnerability,major,yes,main,syntactic,partial,js/world-permissions,266 732,A01 A04
 typescript:S2639,bug,major,yes,main,types,todo,,,
 typescript:S2681,code_smell,major,yes,main,syntactic,todo,,,
@@ -209,8 +209,8 @@ typescript:S4328,code_smell,major,no,main,syntactic,todo,,,
 typescript:S4335,bug,critical,yes,main,types,todo,,,
 typescript:S4423,vulnerability,critical,yes,main,syntactic,done,js/weak-tls,295 326 327,A02 A07
 typescript:S4426,vulnerability,critical,yes,main,syntactic,done,js/weak-key,326,A02
-typescript:S4502,vulnerability,critical,yes,main,syntactic,todo,,352,A01
-typescript:S4507,vulnerability,minor,yes,main,syntactic,todo,,215 489,A05
+typescript:S4502,vulnerability,critical,yes,main,syntactic,partial,js/csrf-methods-ignored,352,A01
+typescript:S4507,vulnerability,minor,yes,main,syntactic,done,js/error-handler-middleware,215 489,A05
 typescript:S4524,code_smell,critical,yes,main,syntactic,done,js/default-not-last,,
 typescript:S4619,code_smell,major,yes,main,types,todo,,,
 typescript:S4621,code_smell,critical,yes,main,syntactic,todo,,,
@@ -229,20 +229,20 @@ typescript:S5122,vulnerability,major,yes,main,syntactic,done,js/cors-any-origin,
 typescript:S5148,vulnerability,minor,yes,main,syntactic,done,js/window-open-opener js/jsx-target-blank,1022,A05
 typescript:S5247,vulnerability,major,yes,main,types,todo,,79,A03
 typescript:S5254,code_smell,major,yes,main,syntactic,todo,,,
-typescript:S5256,bug,major,yes,main,syntactic,todo,,,
+typescript:S5256,bug,major,yes,main,syntactic,partial,js/table-without-headers,,
 typescript:S5257,code_smell,major,yes,main,syntactic,todo,,,
 typescript:S5260,bug,critical,yes,main,syntactic,todo,,,
 typescript:S5264,code_smell,minor,yes,main,syntactic,todo,,,
-typescript:S5332,vulnerability,minor,yes,main,syntactic,todo,,200 319,A02
+typescript:S5332,vulnerability,minor,yes,main,syntactic,partial,js/cleartext-url,200 319,A02
 typescript:S5443,vulnerability,critical,yes,main,syntactic,done,js/public-tmp,377 379,A01
 typescript:S5527,vulnerability,critical,yes,main,syntactic,done,js/tls-hostname-unverified,297,A02 A05 A07
 typescript:S5542,vulnerability,critical,yes,main,syntactic,done,js/insecure-cipher-mode,327 780,A02
 typescript:S5547,vulnerability,critical,yes,main,syntactic,done,js/weak-cipher,326 327,A02
 typescript:S5604,vulnerability,major,no,main,syntactic,deprecated,,,
 typescript:S5659,vulnerability,critical,yes,main,syntactic,done,js/jwt-none,347,A02
-typescript:S5689,vulnerability,minor,yes,main,syntactic,todo,,200,A05
+typescript:S5689,vulnerability,minor,yes,main,syntactic,partial,js/express-version-disclosure,200,A05
 typescript:S5691,vulnerability,major,no,main,syntactic,deprecated,,,
-typescript:S5693,vulnerability,major,yes,main,syntactic,todo,,400 770,A05
+typescript:S5693,vulnerability,major,yes,main,syntactic,partial,js/upload-size-too-large,400 770,A05
 typescript:S5725,vulnerability,minor,yes,main,types,todo,,353,A08
 typescript:S5728,vulnerability,minor,yes,main,syntactic,done,js/csp-disabled,79,A05
 typescript:S5730,vulnerability,minor,no,main,syntactic,deprecated,,,
@@ -272,33 +272,33 @@ typescript:S5976,code_smell,major,yes,test,syntactic,todo,,,
 typescript:S6019,code_smell,major,yes,main,types,todo,,,
 typescript:S6035,code_smell,major,yes,main,types,todo,,,
 typescript:S6079,code_smell,critical,yes,test,syntactic,todo,,,
-typescript:S6080,bug,major,yes,test,syntactic,todo,,,
+typescript:S6080,bug,major,yes,test,syntactic,done,js/mocha-timeout-disabled,,
 typescript:S6092,code_smell,major,yes,test,syntactic,todo,,,
-typescript:S6249,vulnerability,minor,yes,main,syntactic,todo,,319,
-typescript:S6252,vulnerability,minor,yes,main,syntactic,todo,,16,
-typescript:S6265,vulnerability,blocker,yes,main,syntactic,todo,,284 732,
-typescript:S6268,vulnerability,blocker,yes,main,syntactic,todo,,79,A03
-typescript:S6270,vulnerability,blocker,yes,main,syntactic,todo,,284 732,
-typescript:S6275,vulnerability,major,yes,main,syntactic,todo,,311,
-typescript:S6281,vulnerability,critical,yes,main,syntactic,todo,,284 732,
-typescript:S6302,vulnerability,blocker,yes,main,syntactic,todo,,284 732,
-typescript:S6303,vulnerability,major,yes,main,syntactic,todo,,311,
+typescript:S6249,vulnerability,minor,yes,main,syntactic,done,cdk/bucket-allows-plain-http,319,
+typescript:S6252,vulnerability,minor,yes,main,syntactic,done,cdk/bucket-without-versioning,16,
+typescript:S6265,vulnerability,blocker,yes,main,syntactic,done,cdk/bucket-public-access,284 732,
+typescript:S6268,vulnerability,blocker,yes,main,syntactic,done,js/angular-sanitizer-bypass,79,A03
+typescript:S6270,vulnerability,blocker,yes,main,syntactic,done,cdk/policy-for-everyone,284 732,
+typescript:S6275,vulnerability,major,yes,main,syntactic,done,cdk/volume-not-encrypted,311,
+typescript:S6281,vulnerability,critical,yes,main,syntactic,done,cdk/bucket-public-access-not-blocked,284 732,
+typescript:S6302,vulnerability,blocker,yes,main,syntactic,done,cdk/policy-grants-everything,284 732,
+typescript:S6303,vulnerability,major,yes,main,syntactic,done,cdk/database-not-encrypted,311,
 typescript:S6304,vulnerability,blocker,no,main,syntactic,todo,,284 732,
-typescript:S6308,vulnerability,major,yes,main,syntactic,todo,,311,
+typescript:S6308,vulnerability,major,yes,main,syntactic,done,cdk/search-domain-not-encrypted,311,
 typescript:S6317,vulnerability,critical,yes,main,syntactic,todo,,269,
-typescript:S6319,vulnerability,major,yes,main,syntactic,todo,,312,
-typescript:S6321,vulnerability,minor,yes,main,syntactic,todo,,284,A01
+typescript:S6319,vulnerability,major,yes,main,syntactic,done,cdk/notebook-not-encrypted,312,
+typescript:S6321,vulnerability,minor,yes,main,syntactic,done,cdk/admin-port-open-to-world,284,A01
 typescript:S6323,bug,major,yes,main,types,todo,,,
 typescript:S6324,bug,major,yes,main,types,todo,,,
 typescript:S6325,code_smell,minor,yes,main,syntactic,todo,,,
 typescript:S6326,code_smell,major,yes,main,types,todo,,,
-typescript:S6327,vulnerability,minor,yes,main,syntactic,todo,,311,
+typescript:S6327,vulnerability,minor,yes,main,syntactic,done,cdk/topic-not-encrypted,311,
 typescript:S6328,bug,major,yes,main,types,todo,,,
-typescript:S6329,vulnerability,blocker,yes,main,syntactic,todo,,284 668 732 1327,
-typescript:S6330,vulnerability,major,yes,main,syntactic,todo,,311,
+typescript:S6329,vulnerability,blocker,yes,main,syntactic,done,cdk/publicly-accessible,284 668 732 1327,
+typescript:S6330,vulnerability,major,yes,main,syntactic,done,cdk/queue-not-encrypted,311,
 typescript:S6331,code_smell,major,yes,main,types,todo,,,
-typescript:S6332,vulnerability,major,yes,main,syntactic,todo,,311,
-typescript:S6333,vulnerability,blocker,yes,main,syntactic,todo,,306,
+typescript:S6332,vulnerability,major,yes,main,syntactic,done,cdk/file-system-not-encrypted,311,
+typescript:S6333,vulnerability,blocker,yes,main,syntactic,done,cdk/api-method-without-auth,306,
 typescript:S6351,bug,major,yes,main,syntactic,todo,,,
 typescript:S6353,code_smell,minor,yes,main,types,todo,,,
 typescript:S6397,code_smell,major,yes,main,types,todo,,,
@@ -364,7 +364,7 @@ typescript:S6749,code_smell,minor,yes,main,syntactic,done,js/redundant-fragment,
 typescript:S6750,code_smell,major,yes,main,syntactic,done,js/react-dom-render-result,,
 typescript:S6754,code_smell,minor,yes,main,syntactic,done,js/use-state-naming,,
 typescript:S6756,bug,major,yes,main,syntactic,done,js/set-state-from-state,,
-typescript:S6757,bug,major,yes,main,syntactic,todo,,,
+typescript:S6757,bug,major,yes,main,syntactic,done,js/this-in-function-component,,
 typescript:S6759,code_smell,minor,yes,main,types,todo,,,
 typescript:S6761,bug,major,yes,main,syntactic,done,js/children-with-inner-html,,
 typescript:S6763,code_smell,major,yes,main,syntactic,done,js/pure-component-scu,,
@@ -488,7 +488,7 @@ typescript:S7784,code_smell,minor,yes,main,syntactic,todo,,,
 typescript:S7785,code_smell,major,yes,main,types,todo,,,
 typescript:S7786,code_smell,minor,yes,main,syntactic,todo,,,
 typescript:S7787,code_smell,minor,yes,main,syntactic,todo,,,
-typescript:S7790,vulnerability,major,yes,main,syntactic,todo,,20,A03
+typescript:S7790,vulnerability,major,yes,main,syntactic,partial,js/template-built-dynamically,20,A03
 typescript:S8441,vulnerability,minor,yes,main,syntactic,todo,,16 668,
 typescript:S8479,vulnerability,minor,yes,main,types,todo,,79 183,A03
 typescript:S8754,code_smell,major,yes,test,syntactic,done,js/duplicate-test-title,,

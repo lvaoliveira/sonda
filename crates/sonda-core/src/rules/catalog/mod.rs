@@ -5,6 +5,7 @@ mod c;
 mod common;
 mod java;
 mod js;
+mod js_security;
 mod js_semantic;
 mod py;
 pub(super) mod standards;
@@ -23,6 +24,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
     [
         common::RULES,
         js::RULES,
+        js_security::RULES,
         js_semantic::RULES,
         py::RULES,
         java::RULES,
