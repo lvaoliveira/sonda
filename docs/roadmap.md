@@ -80,8 +80,8 @@ user's `password_hash` is nullable, and accounts are never deleted.
 
 ## Security: CWE/OWASP mapping, hotspots, reachability
 
-**Status:** the CWE/OWASP mapping is done (2026-10-30); hotspots and
-reachability are planned, not started. The Security screen shows
+**Status:** the CWE/OWASP mapping is done (2026-10-30); security review
+is designed (ADR-0014, accepted); reachability is planned, not started. The Security screen shows
 vulnerabilities by severity, age, project, component, rule and OWASP
 category. The design also has a hotspot review queue, and ranks findings
 by whether they can be reached from a public entry point. Each needs its
@@ -94,16 +94,13 @@ own groundwork, smallest first:
    page and the Security screen. `scripts/sonar_parity.py` reports drift
    of the 2021 categories from SonarQube's (SonarQube reports 2025 only in
    paid editions).
-2. **Hotspots.** A fourth kind of finding: security-sensitive code that a
-   person reviews (to review → safe, or → fix), rather than a confirmed
-   vulnerability.
-   - SonarQube treats several rules sonda ships as vulnerabilities as
-     hotspots instead, such as weak hashes, cookie flags, CORS, commands run
-     by name and file permissions. Moving them changes what the gate counts,
-     so it needs an ADR.
-   - Plugs into: a `hotspot` category in the core model and reports, a
-     review status in the issue tracker (migration), the Security screen's
-     review queue, and gate metrics (reviewed share).
+2. **Security review, instead of hotspots.** SonarQube 26.7 has no
+   hotspot rules any more: the old hotspots (weak hashing, cookie flags,
+   CORS, ...) are vulnerabilities reviewed with issue statuses, as sonda
+   already classifies them. [ADR-0014](adr/0014-security-review.md)
+   (accepted) adds a "false positive" status and reasons, takes accepted
+   and false-positive issues out of the counts and the gate, and gives the
+   Security screen a review queue.
 3. **Reachability.** Whether a finding is on a path from a public entry
    point (an HTTP route, a CLI command).
    - Needs ADR-0008's data flow (S3) plus cross-file call summaries, which
