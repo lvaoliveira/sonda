@@ -131,9 +131,13 @@ pub fn database(env: &dyn Env) -> Result<PgConnectOptions> {
 
 /// `NAME`, or the contents of the file `NAME_FILE` names (trailing newline
 /// removed). Setting both is an error, so it is never ambiguous which wins.
+/// A secret from `name` or the file `<name>_FILE` names. An empty variable
+/// counts as unset, so a compose override can turn a secret off
+/// (`SONDA_TOKEN_FILE: ""`), which compose can't do by removing it.
 fn secret(env: &dyn Env, name: &str) -> Result<Option<String>> {
     let file_var = format!("{name}_FILE");
-    match (env.var(name), env.var(&file_var)) {
+    let set = |var: &str| env.var(var).filter(|v| !v.is_empty());
+    match (set(name), set(&file_var)) {
         (Some(_), Some(_)) => bail!("set {name} or {file_var}, not both"),
         (Some(value), None) => Ok(Some(value)),
         (None, Some(path)) => {
@@ -194,6 +198,14 @@ mod tests {
         assert!(load(&[url, ("SONDA_TOKEN", "short")]).is_err());
         let both = load(&[url, ("SONDA_TOKEN", TOKEN), ("SONDA_TOKEN_FILE", "/x")]);
         assert!(both.err().unwrap().to_string().contains("not both"));
+        // Empty is unset: how a compose override turns the shared token off.
+        assert!(
+            load(&[url, ("SONDA_TOKEN_FILE", "")])
+                .unwrap()
+                .token
+                .is_none()
+        );
+        assert!(load(&[url, ("SONDA_TOKEN", "")]).unwrap().token.is_none());
     }
 
     #[test]
