@@ -278,7 +278,7 @@ never merges anything itself.
 | **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, and analysis stages and logs. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
 | **Narrow screens** | The app shell keeps its sidebar at phone widths, so pages scroll sideways. | Collapse the sidebar into a menu below a breakpoint, in `AppShell`. |
 | **Server-managed rule profiles** | Rules are configured per repository in `sonda.toml`; the Rules page is read-only. | A profile `sonda scan` downloads; decide what wins over `sonda.toml`. |
-| **Per-user or per-project API tokens** | One server token serves every upload (ADR-0006). Designed in [ADR-0012](adr/0012-api-tokens.md) (proposed). | Phase 1: project tokens for CI uploads; phase 2: personal tokens for scripts. |
+| **User and analysis tokens** | One server token serves every upload (ADR-0006). Designed in [ADR-0012](adr/0012-api-tokens.md) (proposed). | User, project analysis and global analysis tokens, as in SonarQube; `SONDA_TOKEN` optional. |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules ([ADR-0008](adr/0008-semantic-layer.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |

@@ -1,4 +1,4 @@
-# ADR-0012: Project and personal API tokens
+# ADR-0012: User and analysis tokens
 
 - Status: **proposed**
 - Date: 2026-10-31
@@ -23,48 +23,58 @@ problems:
 ADR-0006 left room for this: "Per-user or per-project tokens can replace
 it later."
 
+SonarQube's model is the reference, as for rules and new code: three token
+types, each owned by the user who generated it, never more powerful than
+that user, and revoked with them.
+
 ## Decision
 
-### Two kinds of token
+### Three types, as in SonarQube
 
-| | Project token | Personal token |
-|---|---|---|
-| **For** | CI uploading one project | scripts acting as a person |
-| **Created by** | an admin | any user, for themselves |
-| **Can** | upload analyses of its project, any branch | read, and triage as its user |
-| **Cannot** | read, triage, or upload another project | upload, or manage users or tokens |
-| **Audit name** | `token:<label>` | the user's username |
+| | User token | Project analysis token | Global analysis token |
+|---|---|---|---|
+| **Prefix** | `sonda_u_` | `sonda_p_` | `sonda_a_` |
+| **For** | scripts, and analyses of any project | CI of one project | CI uploading many projects |
+| **Can** | everything its owner can, uploads included, except managing users and tokens | upload analyses of its one project, any branch | upload analyses of any project |
+| **Cannot** | manage users or tokens (that needs a signed-in session) | read, triage, or upload another project | read or triage |
 
-- **A project token names a project key**, which may not exist yet: the
-  first upload creates the project, as today.
-- **A personal token is its user.** Disabling the user stops it, and it
-  never has more rights than the user. Admin routes still need a signed-in
-  session, never a token (ADR-0006).
-- **Least privilege.** Neither kind can do everything `SONDA_TOKEN` does.
-  Uploads, the most damaging action, need a token bound to that project.
+- **Every token belongs to the user who generated it.** Users generate
+  their own tokens of all three types. Disabling a user stops all their
+  tokens, and a token never has more rights than its owner has now.
+- **Who may analyse.** SonarQube grants "Execute Analysis" per project.
+  sonda has no per-project permissions yet (ADR-0006's roles are admin and
+  member), so every active user may analyse, as every user may triage.
+  When per-project permissions arrive, analysis rights narrow with them.
+- **A project analysis token names a project key,** which may not exist
+  yet: the first upload creates the project, as today.
+- **Admins see and revoke every user's tokens.** They can't read a token's
+  secret, which nobody can after creation.
+- **Audit:** actions by token are recorded as the owner, with the token's
+  name: `ada (token ci-shop)`. Uploads record the token that sent them.
 
 ### The token itself
 
-- **Format:** `sonda_p_` (project) or `sonda_u_` (personal) and 32 random
-  bytes, base32-encoded (lowercase, no padding). The prefix lets secret
-  scanners, such as GitHub's custom patterns, find leaked tokens, and makes
-  the kind visible at a glance.
-- **Shown once,** at creation. Afterwards the UI shows only its label, its
-  first 12 characters, when it was created and by whom, when it was last
-  used, and its expiry.
+- **Format:** the type's prefix and 32 random bytes, base32-encoded
+  (lowercase, no padding). As with SonarQube's `squ_`, `sqp_` and `sqa_`,
+  the prefix lets secret scanners, such as GitHub's custom patterns, find
+  leaked tokens, and shows the type at a glance.
+- **Shown once,** at creation. Afterwards only its name, type, project (for
+  a project analysis token), first 12 characters, creation date, last use
+  and expiry are shown.
 - **Stored as SHA-256.** These are 256-bit random values, so a slow
   password hash adds nothing. Lookup is by hash, which a unique index makes
   constant-time with respect to the token's content.
-- **Expiry is chosen at creation:** 30, 90 or 365 days, or none. The
-  default is 90 days for personal tokens and none for project tokens,
-  since CI secrets are rotated by people, not by schedules.
+- **Expiry is chosen at creation:** 30, 60 or 90 days, or no expiry, for
+  every type. 30 days is preselected, as in SonarQube. A token past its
+  expiry stops working and stays listed as expired.
 - **Revocation is immediate** and kept: a revoked token stays listed, with
   who revoked it and when, and can't be reinstated.
+- **Names** are unique per user, 1-100 characters, as in SonarQube.
 
 ```
-api_tokens: id, kind (project | personal), project_key (project tokens),
-            user_id (personal tokens), label, hash (unique), prefix,
-            created_by, created_at, expires_at, last_used_at,
+api_tokens: id, user_id, type (user | project_analysis | global_analysis),
+            project_key (project analysis tokens), name, hash (unique),
+            prefix, created_at, expires_at, last_used_at,
             revoked_at, revoked_by
 analyses:   + token_id (nullable): the token that uploaded it
 ```
@@ -76,9 +86,9 @@ reads don't each write to the table.
 
 - **It keeps working, with the same rights as today,** so existing
   pipelines don't break when the server is upgraded.
-- **It becomes optional.** A server without it accepts only database
-  tokens. `docs/server.md` will describe moving each pipeline to a project
-  token and then removing `SONDA_TOKEN`.
+- **It becomes optional.** A server without it accepts only users' tokens.
+  `docs/server.md` will describe moving each pipeline to a project
+  analysis token and then removing `SONDA_TOKEN`.
 - **Uploads made with it are marked** (`token_id` null, audit name
   `api-token`), so admins can see which projects still use it.
 
@@ -87,34 +97,30 @@ used.
 
 ### Where it shows
 
-- **Admin page:** project tokens, to create (label, project, expiry),
-  copy once, and revoke. Each project's page lists its tokens to admins.
-- **Account page:** your own personal tokens, to create and revoke.
-- **Analyses:** which token uploaded each one, or `api-token`.
+- **Account page, "Tokens":** generate a token (name, type, project for a
+  project analysis token, expiry), copy it once, and see and revoke your
+  own.
+- **Admin page:** every user's tokens, with their owner, to revoke.
+- **Analyses:** which token, and whose, uploaded each one, or `api-token`.
 
 ### Not now
 
-- **Tokens with custom scopes**, such as read-only project tokens or upload
-  rights for several projects. Two fixed kinds cover CI and scripts; more
-  can be added as needs appear.
-- **Branch restrictions** on project tokens.
+- **A maximum token lifetime** set by admins (SonarQube has one). Expiry
+  is each user's choice until that's needed.
+- **Per-project permissions,** such as SonarQube's "Execute Analysis" per
+  project. Tokens follow them when they exist.
 - **Throttling failed bearer attempts.** Tokens are 256-bit random values,
   so guessing isn't practical, unlike passwords.
 
-## Phases
-
-1. **Project tokens:** the table, issuing and revoking from the Admin page,
-   upload authorization by project, `analyses.token_id`, and `SONDA_TOKEN`
-   becoming optional.
-2. **Personal tokens:** issuing from the Account page, reads and triage as
-   the user.
-
 ## Consequences
 
-- **A leaked CI secret exposes one project,** and rotating it touches one
-  pipeline.
-- **Uploads become attributable,** per token.
+- **A leaked CI secret exposes one project** when it's a project analysis
+  token, and rotating it touches one pipeline.
+- **Every action by token is attributable** to a user.
+- **Disabling a user who leaves cuts off their tokens,** including CI
+  tokens they generated, so pipelines should use tokens of an account that
+  stays, as with SonarQube.
 - **Two credential paths exist during migration,** the shared token and
-  database tokens. The audit trail shows which one each upload used.
+  users' tokens. The audit trail shows which one each upload used.
 - **The CLI doesn't change:** `sonda upload` and `sonda scan --upload`
   already send a bearer token from `SONDA_TOKEN` or `SONDA_TOKEN_FILE`.
