@@ -6,6 +6,7 @@ mod common;
 mod java;
 mod java_bugs;
 mod java_extra;
+mod java_last;
 mod java_more;
 mod java_regex;
 mod java_security;
@@ -65,6 +66,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_tests::RULES,
         java_extra::RULES,
         java_regex::RULES,
+        java_last::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -124,6 +126,7 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "common/line-length",
     "common/file-length",
     "common/final-newline",
+    "common/tab-character",
     // Java style rules outside SonarQube's default profile that fire on most
     // real code: escaped Unicode, suppressions, public fields, boolean
     // parameters, legacy collections, brace and else conventions.
@@ -134,6 +137,23 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/synchronized-collections",
     "java/if-else-if-without-else",
     "java/missing-braces",
+    // High-volume conventions outside SonarQube's default profile: test
+    // names, missing Javadoc, ternaries, number formatting, varargs, size
+    // and complexity limits, static imports and pattern compilation.
+    "java/test-method-name",
+    "java/public-api-undocumented",
+    "java/ternary-operator",
+    "java/large-number-underscores",
+    "java/varargs-declared",
+    "java/inner-class-too-long",
+    "java/too-many-returns",
+    "java/private-method-not-static",
+    "java/pattern-compiled-in-method",
+    "java/static-imports-many",
+    "java/method-complexity",
+    "java/too-many-methods",
+    "java/nesting-depth",
+    "java/expression-complexity",
 ];
 
 // ---------------------------------------------------- shared filters

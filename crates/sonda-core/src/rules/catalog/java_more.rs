@@ -63,7 +63,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[exact("S2066")],
+        sonar: &[exact("S2066"), exact("S2059")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(class_declaration (super_interfaces) @i) @match"#,

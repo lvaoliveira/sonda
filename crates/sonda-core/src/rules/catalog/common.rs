@@ -115,4 +115,16 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Structural,
         example: None,
     },
+    Rule {
+        id: crate::rules::TAB_CHARACTER,
+        name: "Tabulation characters should not be used",
+        description: "Tabs show differently in every editor, so the same file reads differently for each reader.",
+        message: "",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S105")],
+        check: Check::Structural,
+        example: None,
+    },
 ];
