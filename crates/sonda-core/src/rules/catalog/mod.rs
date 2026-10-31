@@ -11,6 +11,7 @@ mod java_smells;
 mod java_tests;
 mod js;
 mod js_a11y;
+mod js_extra;
 mod js_modern;
 mod js_security;
 mod js_semantic;
@@ -36,6 +37,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         js_security::RULES,
         js_modern::RULES,
         js_a11y::RULES,
+        js_extra::RULES,
         js_semantic::RULES,
         py::RULES,
         py_security::RULES,
