@@ -47,6 +47,7 @@ mod git;
 mod measures;
 mod newcode;
 mod project;
+mod regex;
 mod sandbox;
 mod scanner;
 mod semantic;
