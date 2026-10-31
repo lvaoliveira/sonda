@@ -1402,7 +1402,7 @@ fn named_children(node: Node) -> Vec<Node> {
 
 /// The declared type of `name` as seen from `from`: a parameter, a local
 /// or a field of the enclosing classes.
-fn declared_type<'t>(from: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn declared_type<'t>(from: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
     let mut p = from.parent();
     while let Some(n) = p {
         match n.kind() {

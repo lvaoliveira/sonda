@@ -3,11 +3,9 @@
 //! rule reports the pattern's string when its analysis finds something.
 
 use super::py_security::{call_arguments, callee_name, has_interpolation, string_value, text};
+use super::regex_checks as checks;
 use super::*;
-use crate::regex::{
-    Assertion, ClassItem, Flags, GroupKind, Mode, Node as Rx, Regex, Set, complexity, first_set,
-    literal_text, nullable, parse, set_of, walk,
-};
+use crate::regex::{Flags, Regex, parse};
 
 pub(super) static RULES: &[Rule] = &[
     Rule {
@@ -662,16 +660,6 @@ fn find_in_pattern<'t>(
     check(&regex).then_some(pattern)
 }
 
-fn any_node(regex: &Regex, mut pred: impl FnMut(&Rx) -> bool) -> bool {
-    let mut found = false;
-    walk(&regex.root, &mut |n| {
-        if !found && pred(n) {
-            found = true;
-        }
-    });
-    found
-}
-
 // ---------------------------------------------------- R1: syntax
 
 fn regex_is_invalid<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -695,134 +683,35 @@ fn regex_is_invalid<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 fn regex_has_empty_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(
-            r,
-            |n| matches!(n, Rx::Group { inner, kind, .. } if **inner == Rx::Empty && *kind != GroupKind::Scoped),
-        )
-    })
+    find_in_pattern(call, src, checks::has_empty_group)
 }
 
 fn regex_has_empty_alternative<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(
-            r,
-            |n| matches!(n, Rx::Alt(alts) if alts.contains(&Rx::Empty)),
-        )
-    })
+    find_in_pattern(call, src, checks::has_empty_alternative)
 }
 
 fn regex_has_single_character_class<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            matches!(n, Rx::Class { negated: false, items }
-                if matches!(items.as_slice(), [ClassItem::Char(c)] if !".*+?()[]{}|^$\\ -#&~".contains(*c) && !c.is_whitespace()))
-        })
-    })
-}
-
-fn group_is_useless(node: &Rx, in_repeat: bool) -> bool {
-    match node {
-        Rx::Group { kind, inner, .. } => {
-            (*kind == GroupKind::NonCapture
-                && !in_repeat
-                && !matches!(**inner, Rx::Alt(_) | Rx::Empty))
-                || group_is_useless(inner, false)
-        }
-        Rx::Repeat { inner, .. } => group_is_useless(inner, true),
-        Rx::Look { inner, .. } => group_is_useless(inner, false),
-        Rx::Conditional { yes, no } => {
-            group_is_useless(yes, false) || no.as_ref().is_some_and(|n| group_is_useless(n, false))
-        }
-        Rx::Alt(items) => items.iter().any(|n| group_is_useless(n, false)),
-        Rx::Concat(items) => items.iter().any(|n| group_is_useless(n, false)),
-        _ => false,
-    }
+    find_in_pattern(call, src, checks::has_single_character_class)
 }
 
 fn regex_has_useless_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        // A group that is the whole pattern still has no job.
-        group_is_useless(&r.root, false)
-    })
+    find_in_pattern(call, src, checks::has_useless_group)
 }
 
 fn regex_has_superfluous_braces<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            matches!(
-                n,
-                Rx::Repeat {
-                    min: 1,
-                    max: Some(1),
-                    braces: true,
-                    ..
-                }
-            )
-        })
-    })
-}
-
-fn class_is_digits(items: &[ClassItem]) -> bool {
-    matches!(items, [ClassItem::Range('0', '9')])
-}
-
-fn class_is_word(items: &[ClassItem]) -> bool {
-    let (mut lower, mut upper, mut digit, mut underscore) = (false, false, false, false);
-    for item in items {
-        match item {
-            ClassItem::Range('a', 'z') => lower = true,
-            ClassItem::Range('A', 'Z') => upper = true,
-            ClassItem::Range('0', '9') => digit = true,
-            ClassItem::Char('_') => underscore = true,
-            _ => return false,
-        }
-    }
-    lower && upper && digit && underscore
+    find_in_pattern(call, src, checks::has_superfluous_braces)
 }
 
 fn regex_could_be_concise<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| match n {
-            Rx::Repeat {
-                min,
-                max,
-                braces: true,
-                ..
-            } => matches!((min, max), (0, None) | (1, None) | (0, Some(1))),
-            Rx::Class { items, .. } => class_is_digits(items) || class_is_word(items),
-            _ => false,
-        })
-    })
+    find_in_pattern(call, src, checks::could_be_concise)
 }
 
 fn regex_has_octal_escape<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| any_node(r, |n| matches!(n, Rx::Octal(_))))
-}
-
-fn contains_backref_to(node: &Rx, index: usize, name: Option<&str>) -> bool {
-    let mut found = false;
-    walk(node, &mut |n| match n {
-        Rx::BackrefIndex(i) if *i == index => found = true,
-        Rx::BackrefName(s) if Some(s.as_str()) == name => found = true,
-        _ => {}
-    });
-    found
+    find_in_pattern(call, src, checks::has_octal_escape)
 }
 
 fn regex_backreferences_its_own_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| match n {
-            Rx::Group { kind, index, inner } if *index > 0 => {
-                let name = match kind {
-                    GroupKind::Named(s) => Some(s.as_str()),
-                    _ => None,
-                };
-                contains_backref_to(inner, *index, name)
-            }
-            _ => false,
-        })
-    })
+    find_in_pattern(call, src, checks::backreferences_its_own_group)
 }
 
 fn replacement_names_missing_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -869,352 +758,67 @@ fn replacement_names_missing_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Nod
 }
 
 fn regex_has_single_character_alternation<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(
-            r,
-            |n| matches!(n, Rx::Alt(alts) if alts.len() >= 2 && alts.iter().all(|a| matches!(a, Rx::Char(_)))),
-        )
-    })
+    find_in_pattern(call, src, checks::has_single_character_alternation)
 }
 
 fn regex_has_multiple_spaces<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        !r.flags.verbose
-            && any_node(r, |n| match n {
-                Rx::Concat(items) => items
-                    .windows(2)
-                    .any(|w| w[0] == Rx::Char(' ') && w[1] == Rx::Char(' ')),
-                _ => false,
-            })
-    })
+    find_in_pattern(call, src, checks::has_multiple_spaces)
 }
 
 // ---------------------------------------------------- R2: language
 
 fn regex_class_repeats_a_character<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Class { items, .. } = n else {
-                return false;
-            };
-            let sets: Vec<Set> = items
-                .iter()
-                .filter_map(|i| {
-                    set_of(
-                        &Rx::Class {
-                            negated: false,
-                            items: vec![i.clone()],
-                        },
-                        &r.flags,
-                    )
-                })
-                .collect();
-            sets.iter()
-                .enumerate()
-                .any(|(i, a)| sets[i + 1..].iter().any(|b| a.overlaps(b)))
-        })
-    })
+    find_in_pattern(call, src, checks::class_repeats_a_character)
 }
 
 fn regex_class_splits_a_grapheme<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Class { items, .. } = n else {
-                return false;
-            };
-            items.iter().any(|i| match i {
-                ClassItem::Char(c) => {
-                    ('\u{300}'..='\u{36f}').contains(c)
-                        || matches!(*c, '\u{200d}' | '\u{fe0f}' | '\u{20e3}')
-                        || ('\u{1f3fb}'..='\u{1f3ff}').contains(c)
-                }
-                _ => false,
-            })
-        })
-    })
+    find_in_pattern(call, src, checks::class_splits_a_grapheme)
 }
 
 fn regex_repeats_something_empty<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            matches!(n, Rx::Repeat { inner, max, mode, .. }
-                if *mode != Mode::Possessive
-                    && max.is_none_or(|m| m > 1)
-                    && !matches!(**inner, Rx::Assertion(_) | Rx::Look { .. })
-                    && nullable(inner))
-        })
-    })
-}
-
-fn starts_with_anchor(node: &Rx) -> bool {
-    match node {
-        Rx::Assertion(Assertion::Start | Assertion::StartAbs) => true,
-        Rx::Concat(items) => items.first().is_some_and(starts_with_anchor),
-        _ => false,
-    }
-}
-
-fn ends_with_anchor(node: &Rx) -> bool {
-    match node {
-        Rx::Assertion(Assertion::End | Assertion::EndAbs) => true,
-        Rx::Concat(items) => items.last().is_some_and(ends_with_anchor),
-        _ => false,
-    }
+    find_in_pattern(call, src, checks::repeats_something_empty)
 }
 
 fn regex_anchors_bind_one_alternative<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        let Rx::Alt(alts) = &r.root else { return false };
-        let some_start = alts.iter().any(starts_with_anchor);
-        let all_start = alts.iter().all(starts_with_anchor);
-        let some_end = alts.iter().any(ends_with_anchor);
-        let all_end = alts.iter().all(ends_with_anchor);
-        (some_start && !all_start && starts_with_anchor(&alts[0]))
-            || (some_end && !all_end && ends_with_anchor(&alts[alts.len() - 1]))
-    })
+    find_in_pattern(call, src, checks::anchors_bind_one_alternative)
 }
 
 fn regex_has_redundant_alternative<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Alt(alts) = n else { return false };
-            alts.iter().enumerate().any(|(i, a)| {
-                alts[..i].iter().any(|b| {
-                    b == a
-                        || (matches!(a, Rx::Char(_))
-                            && matches!(b, Rx::Class { negated: false, .. })
-                            && set_of(a, &r.flags)
-                                .zip(set_of(b, &r.flags))
-                                .is_some_and(|(x, y)| x.is_subset_of(&y)))
-                })
-            })
-        })
-    })
-}
-
-fn single_char_set(node: &Rx, flags: &Flags) -> Option<Set> {
-    set_of(node, flags)
+    find_in_pattern(call, src, checks::has_redundant_alternative)
 }
 
 fn regex_possessive_starves_next<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Concat(items) = n else { return false };
-            items.windows(2).any(|w| {
-                let Rx::Repeat {
-                    inner,
-                    max: None,
-                    mode: Mode::Possessive,
-                    ..
-                } = &w[0]
-                else {
-                    return false;
-                };
-                let Some(taken) = single_char_set(inner, &r.flags) else {
-                    return false;
-                };
-                !nullable(&w[1]) && {
-                    let next = first_set(&w[1], &r.flags);
-                    !next.is_empty() && next.is_subset_of(&taken)
-                }
-            })
-        })
-    })
+    find_in_pattern(call, src, checks::possessive_starves_next)
 }
 
 fn regex_boundary_cannot_match<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Concat(items) = n else { return false };
-            items.windows(2).any(|w| match &w[0] {
-                Rx::Assertion(Assertion::EndAbs) => !nullable(&w[1]),
-                Rx::Assertion(Assertion::End) if !r.flags.multiline => {
-                    !nullable(&w[1]) && !first_set(&w[1], &r.flags).contains('\n' as u32)
-                }
-                _ => match &w[1] {
-                    Rx::Assertion(Assertion::StartAbs) => !nullable(&w[0]),
-                    Rx::Assertion(Assertion::Start) if !r.flags.multiline => !nullable(&w[0]),
-                    _ => false,
-                },
-            })
-        })
-    })
+    find_in_pattern(call, src, checks::boundary_cannot_match)
 }
 
 fn regex_lookahead_contradicts_next<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Concat(items) = n else { return false };
-            items.windows(2).any(|w| {
-                let Rx::Look {
-                    ahead: true,
-                    negative,
-                    inner,
-                } = &w[0]
-                else {
-                    return false;
-                };
-                if nullable(&w[1]) || nullable(inner) {
-                    return false;
-                }
-                let (looked, next) = (first_set(inner, &r.flags), first_set(&w[1], &r.flags));
-                if looked.is_empty() || next.is_empty() {
-                    return false;
-                }
-                if *negative {
-                    // (?!a)a: the whole lookahead is one character
-                    single_char_set(inner, &r.flags).is_some_and(|l| next.is_subset_of(&l))
-                } else {
-                    !looked.overlaps(&next)
-                }
-            })
-        })
-    })
+    find_in_pattern(call, src, checks::lookahead_contradicts_next)
 }
 
 fn regex_ends_with_reluctant<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        let last = match &r.root {
-            Rx::Concat(items) => items.last(),
-            other => Some(other),
-        };
-        matches!(
-            last,
-            Some(Rx::Repeat {
-                mode: Mode::Lazy,
-                min: 0,
-                max: None,
-                ..
-            })
-        )
-    })
+    find_in_pattern(call, src, checks::ends_with_reluctant)
 }
 
 fn regex_reluctant_dot_before_literal<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        let dot_lazy = |n: &Rx| matches!(n, Rx::Repeat { inner, max: None, mode: Mode::Lazy, .. } if **inner == Rx::Any);
-        any_node(r, |n| match n {
-            Rx::Concat(items) => items.windows(2).any(|w| {
-                (dot_lazy(&w[0]) || matches!(&w[0], Rx::Group { inner, .. } if dot_lazy(inner)))
-                    && matches!(w[1], Rx::Char(c) if !c.is_alphanumeric())
-            }),
-            _ => false,
-        })
-    })
+    find_in_pattern(call, src, checks::reluctant_dot_before_literal)
 }
 
 fn regex_is_too_complex<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| complexity(&r.root) > 20)
+    find_in_pattern(call, src, checks::is_too_complex)
 }
 
 // ---------------------------------------------------- R3: backtracking
 
-fn peel(node: &Rx) -> &Rx {
-    match node {
-        Rx::Group { inner, kind, .. } if *kind != GroupKind::Atomic => peel(inner),
-        other => other,
-    }
-}
-
-fn items_of(node: &Rx) -> Vec<&Rx> {
-    match peel(node) {
-        Rx::Concat(items) => items.iter().collect(),
-        other => vec![other],
-    }
-}
-
-fn is_unbounded(node: &Rx) -> bool {
-    matches!(node, Rx::Repeat { max: None, mode, .. } if *mode != Mode::Possessive)
-}
-
-fn repeat_body_ambiguous(body: &Rx, flags: &Flags) -> bool {
-    let body = peel(body);
-    // (a|a)*, (a|ab)*: alternatives that can match a common prefix
-    if let Rx::Alt(alts) = body {
-        for (i, a) in alts.iter().enumerate() {
-            for b in &alts[i + 1..] {
-                if literal_text(a)
-                    .zip(literal_text(b))
-                    .is_some_and(|(x, y)| x.starts_with(&y) || y.starts_with(&x))
-                {
-                    return true;
-                }
-                if single_char_set(a, flags)
-                    .zip(single_char_set(b, flags))
-                    .is_some_and(|(x, y)| x.overlaps(&y))
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-    let items = items_of(body);
-    let begin = first_set(body, flags);
-    // an unbounded repeat at the end of the body whose characters can also
-    // start the next iteration: (a+)+, (\w+\s?)*
-    for (i, item) in items.iter().enumerate().rev() {
-        if is_unbounded(item) {
-            let Rx::Repeat { inner, .. } = item else {
-                break;
-            };
-            let chars = first_set(inner, flags);
-            if chars.overlaps(&begin) {
-                return true;
-            }
-        }
-        if !nullable(item) && i + 1 != items.len() {
-            break;
-        }
-        if !nullable(item) {
-            break;
-        }
-    }
-    false
-}
-
 fn regex_backtracks_exponentially<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| match n {
-            Rx::Repeat {
-                inner,
-                max: None,
-                mode,
-                ..
-            } if *mode != Mode::Possessive => repeat_body_ambiguous(inner, &r.flags),
-            _ => false,
-        })
-    })
+    find_in_pattern(call, src, checks::backtracks_exponentially)
 }
 
 fn regex_backtracks_polynomially<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, |r| {
-        any_node(r, |n| {
-            let Rx::Concat(items) = n else { return false };
-            (0..items.len()).any(|i| {
-                let Rx::Repeat { inner: a, .. } = &items[i] else {
-                    return false;
-                };
-                if !is_unbounded(&items[i]) {
-                    return false;
-                }
-                let Some(sa) = single_char_set(a, &r.flags) else {
-                    return false;
-                };
-                for later in &items[i + 1..] {
-                    if let Rx::Repeat { inner: b, .. } = later
-                        && is_unbounded(later)
-                    {
-                        return single_char_set(b, &r.flags).is_some_and(|sb| sa.overlaps(&sb));
-                    }
-                    if !nullable(later) {
-                        return false;
-                    }
-                }
-                false
-            })
-        })
-    })
+    find_in_pattern(call, src, checks::backtracks_polynomially)
 }
 
 #[cfg(test)]
