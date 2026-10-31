@@ -755,6 +755,8 @@ export interface AnalysisRow {
   message: string | null
   /** How long the scan took (`sonda scan --upload`); null for an uploaded report. */
   duration: string | null
+  /** `ada (token ci-shop)`, or `api-token` for the shared SONDA_TOKEN. */
+  uploadedBy: string
   analyzedAt: string
   toolVersion: string
   gate: GateState
@@ -801,6 +803,8 @@ export interface AnalysisDetail {
   message: string | null
   /** How long the scan took (`sonda scan --upload`); null for an uploaded report. */
   duration: string | null
+  /** `ada (token ci-shop)`, or `api-token` for the shared SONDA_TOKEN. */
+  uploadedBy: string
   analyzedAt: string
   toolVersion: string
   newCodeReference: string | null
@@ -819,6 +823,44 @@ export interface AnalysisDetail {
   next: { id: number; sha: string } | null
 }
 
+// ------------------------------------------------------------------ tokens
+
+/** As in SonarQube (ADR-0012): a user token acts as its owner; analysis tokens only upload. */
+export type TokenType = 'user' | 'project_analysis' | 'global_analysis'
+
+/** A token as lists show it: never its secret. */
+export interface ApiToken {
+  id: number
+  name: string
+  type: TokenType
+  /** The one project a project analysis token uploads. */
+  project: string | null
+  /** The secret's first characters. */
+  prefix: string
+  /** The user who generated it. */
+  owner: string
+  createdAt: string
+  /** Null for no expiry. */
+  expiresAt: string | null
+  lastUsedAt: string | null
+  revokedAt: string | null
+  revokedBy: string | null
+  status: 'active' | 'expired' | 'revoked'
+}
+
+export interface NewToken {
+  name: string
+  type: TokenType
+  project?: string
+  /** Null for no expiry. */
+  expiresInDays: 30 | 60 | 90 | null
+}
+
+/** A token just generated: its secret, shown this once. */
+export interface CreatedToken extends ApiToken {
+  token: string
+}
+
 // ------------------------------------------------------------------ client
 
 export interface SondaApi {
@@ -828,6 +870,13 @@ export interface SondaApi {
   signOut(): Promise<void>
   /** The signed-in user's own password; needs the current one. */
   changePassword(current: string, next: string): Promise<void>
+  /** The signed-in user's tokens, revoked and expired ones included. */
+  myTokens(): Promise<ApiToken[]>
+  createToken(token: NewToken): Promise<CreatedToken>
+  revokeMyToken(id: number): Promise<void>
+  /** Admins only: every user's tokens. */
+  tokens(): Promise<ApiToken[]>
+  revokeToken(id: number): Promise<void>
   /** Admins only. */
   users(): Promise<UserRow[]>
   createUser(user: NewUser): Promise<User>

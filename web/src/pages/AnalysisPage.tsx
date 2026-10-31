@@ -86,6 +86,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
           </time>
           <span>sonda {a.toolVersion}</span>
           {a.duration && <span>scanned in {a.duration}</span>}
+          <span>uploaded by {a.uploadedBy}</span>
           {a.newCodeReference && <span>new code since {a.newCodeReference}</span>}
           <span className="ml-auto flex gap-3 text-[13px]">
             {a.previous ? <Link to={`/analyses/${a.previous.id}`}>← {a.previous.sha.slice(0, 7)}</Link> : <span className="text-fg-faint">first on {a.branch}</span>}

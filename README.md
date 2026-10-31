@@ -62,7 +62,7 @@ sonda scan . --jobs 4                     # limit parallelism (default: every CP
 sonda scan . --sandbox require            # refuse to scan if workers cannot be sandboxed
 sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
 sonda upload report.json --server https://sonda.example.com \
-  --project payments --branch main --commit "$GITHUB_SHA"   # token from SONDA_TOKEN or SONDA_TOKEN_FILE
+  --project payments --branch main --commit "$GITHUB_SHA"   # a project analysis token, from SONDA_TOKEN or SONDA_TOKEN_FILE
                                           # --project-version 2.3.0: a new version starts a new code period
 sonda scan . --upload --server https://sonda.example.com \
   --project payments --branch main --commit "$GITHUB_SHA"   # both at once, recording the scan's duration

@@ -108,11 +108,9 @@ fn commit_message(root: &Path, commit: &str) -> Option<String> {
     }
 }
 
-/// Checks project, branch, commit and version; the server applies the same
-/// rules.
-pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
-    let bad = |msg: String| Err(Error::InvalidArgument(msg));
-    let p = &meta.project;
+/// A project key: 1-100 letters, digits, `.`, `_` or `-`, not starting
+/// with `.` or `-`. The server applies the same rule.
+pub fn check_project_key(p: &str) -> Result<(), Error> {
     if p.is_empty()
         || p.len() > 100
         || p.starts_with(['.', '-'])
@@ -120,11 +118,19 @@ pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
     {
-        return bad(format!(
+        return Err(Error::InvalidArgument(format!(
             "invalid project key {p:?}: use 1-100 letters, digits, '.', '_' or '-', \
              not starting with '.' or '-'"
-        ));
+        )));
     }
+    Ok(())
+}
+
+/// Checks project, branch, commit and version; the server applies the same
+/// rules.
+pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
+    let bad = |msg: String| Err(Error::InvalidArgument(msg));
+    check_project_key(&meta.project)?;
     let b = &meta.branch;
     if b.is_empty() || b.len() > 255 || b.chars().any(char::is_control) {
         return bad(format!(

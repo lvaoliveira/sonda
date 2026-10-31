@@ -28,6 +28,7 @@ pub mod security;
 pub mod session;
 pub mod store;
 pub mod throttle;
+pub mod tokens;
 pub mod users;
 
 use anyhow::{Context, Result};
@@ -65,7 +66,7 @@ pub async fn run(config: Config) -> Result<()> {
     }
     let state = http::State {
         pool,
-        token: std::sync::Arc::new(config.token),
+        token: config.token.map(std::sync::Arc::new),
         reads_require_auth,
     };
     let app = http::router(state, config.web_dir.as_deref());

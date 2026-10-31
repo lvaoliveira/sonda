@@ -1,4 +1,4 @@
-import type { Category, GateState, IssueStatus, Level, Severity, TokenRole } from '@/api/types'
+import type { Category, GateState, IssueStatus, Level, Severity, TokenRole, TokenType } from '@/api/types'
 
 /** Severity is always a glyph plus a label, never color alone. */
 export const SEVERITY: Record<Severity, { glyph: string; label: string; color: string; soft: string; rank: number }> = {
@@ -107,4 +107,11 @@ export const ROLE_COLOR: Record<TokenRole, string> = {
   type: 'var(--sd-accent)',
   punct: 'var(--sd-muted)',
   plain: 'var(--sd-text)',
+}
+
+/** Token types (ADR-0012), as SonarQube names them. */
+export const TOKEN_TYPE: Record<TokenType, { label: string; note: string }> = {
+  user: { label: 'User', note: 'Acts as you: reads, triage and uploads, never account or token changes.' },
+  project_analysis: { label: 'Project analysis', note: 'Uploads analyses of one project, nothing else. Best for CI.' },
+  global_analysis: { label: 'Global analysis', note: 'Uploads analyses of any project, nothing else.' },
 }

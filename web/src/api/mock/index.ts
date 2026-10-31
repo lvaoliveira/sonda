@@ -10,6 +10,7 @@ import { coverageList, fileCoverage } from './coverage'
 import { dependencyList, reviewDependency } from './dependencies'
 import { PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
 import { queryIssues } from './query'
+import { mockTokens } from './tokens'
 import rulesData from './rules.json'
 
 export interface MockOptions {
@@ -36,6 +37,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const issues = structuredClone(issuesData) as IssueDetail[]
   const catalog = structuredClone(rulesData) as RuleCatalog
   const users = structuredClone(MOCK_USERS)
+  const tokens = mockTokens()
   const signedIn = options.signedIn ?? true
   const session: Session = { user: signedIn ? users[0] : null, authenticated: signedIn, readsRequireAuth: options.readsRequireAuth ?? false }
   const asUser = (u: UserRow): User => ({ id: u.id, username: u.username, displayName: u.displayName, role: u.role, disabled: u.disabled })
@@ -108,6 +110,28 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       if (!session.user) throw new AuthError()
       if (current !== MOCK_PASSWORD) throw new Error('the current password is wrong')
       checkPassword(next)
+    },
+    myTokens: async () => {
+      if (!session.user) throw new AuthError()
+      return wait(tokens.list(session.user.username))
+    },
+    createToken: async (t) => {
+      if (!session.user) throw new AuthError()
+      return wait(tokens.create(session.user.username, t))
+    },
+    revokeMyToken: async (id) => {
+      if (!session.user) throw new AuthError()
+      tokens.revoke(id, session.user.username, session.user.username)
+      await wait(null)
+    },
+    tokens: async () => {
+      requireAdmin()
+      return wait(tokens.list())
+    },
+    revokeToken: async (id) => {
+      requireAdmin()
+      tokens.revoke(id, session.user!.username)
+      await wait(null)
     },
     users: async () => {
       requireAdmin()

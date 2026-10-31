@@ -16,7 +16,9 @@ pub const MIN_TOKEN_LEN: usize = 32;
 pub struct Config {
     pub listen: SocketAddr,
     pub database: PgConnectOptions,
-    pub token: Token,
+    /// The shared `SONDA_TOKEN`, optional since users have their own
+    /// tokens (ADR-0012).
+    pub token: Option<Token>,
     /// The built web app (`web/dist`), served for every non-API path.
     pub web_dir: Option<PathBuf>,
     /// Username and password for the first admin, used only while no users
@@ -65,8 +67,7 @@ impl Env for ProcessEnv {
 impl Config {
     pub fn load(listen: SocketAddr, web_dir: Option<PathBuf>, env: &dyn Env) -> Result<Self> {
         let database = database(env)?;
-        let token = secret(env, "SONDA_TOKEN")?
-            .context("set SONDA_TOKEN or SONDA_TOKEN_FILE: the API token clients upload with")?;
+        let token = secret(env, "SONDA_TOKEN")?;
         let admin = match secret(env, "SONDA_ADMIN_PASSWORD")? {
             Some(password) => {
                 let username = env
@@ -83,7 +84,7 @@ impl Config {
         Ok(Self {
             listen,
             database,
-            token: Token::new(&token)?,
+            token: token.as_deref().map(Token::new).transpose()?,
             web_dir,
             admin,
             advisory_sync: advisory_sync(env)?,
@@ -177,8 +178,9 @@ mod tests {
             ("SONDA_TOKEN_FILE", token_file.to_str().unwrap()),
         ])
         .unwrap();
-        assert!(config.token.matches(TOKEN));
-        assert!(!config.token.matches("wrong"));
+        let token = config.token.as_ref().unwrap();
+        assert!(token.matches(TOKEN));
+        assert!(!token.matches("wrong"));
         assert_eq!(config.database.get_host(), "db");
         assert_eq!(config.database.get_database(), Some("sonda"));
     }
@@ -187,7 +189,9 @@ mod tests {
     fn missing_or_ambiguous_secrets_are_errors() {
         let url = ("DATABASE_URL", "postgres://sonda@db/sonda");
         assert!(load(&[("SONDA_TOKEN", TOKEN)]).is_err());
-        assert!(load(&[url]).is_err());
+        // SONDA_TOKEN is optional: users have their own tokens (ADR-0012).
+        assert!(load(&[url]).unwrap().token.is_none());
+        assert!(load(&[url, ("SONDA_TOKEN", "short")]).is_err());
         let both = load(&[url, ("SONDA_TOKEN", TOKEN), ("SONDA_TOKEN_FILE", "/x")]);
         assert!(both.err().unwrap().to_string().contains("not both"));
     }
