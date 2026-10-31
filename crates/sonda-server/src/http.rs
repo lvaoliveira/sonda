@@ -95,7 +95,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
         .route("/users/{id}", patch(users::update_user))
-        .route("/tokens", get(tokens::list_all))
+        .route("/tokens", get(tokens::list_all).post(tokens::create_for))
         .route("/tokens/{id}", delete(tokens::revoke_any))
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(

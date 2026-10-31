@@ -226,6 +226,10 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
+- Admins generate tokens for other users on the Admin page (choose the
+  owner), so CI tokens can belong to a `ci` service user instead of a
+  person whose account may be disabled. `POST /api/tokens` with a `user`;
+  the token lists show which admin generated each one (`createdBy`).
 - `sonda scan --upload` scans and uploads in one step, with the same
   options as `sonda upload` (checked before the scan starts), and sends
   how long the scan took, which Recent analyses, the analyses list and the

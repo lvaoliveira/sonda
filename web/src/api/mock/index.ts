@@ -139,6 +139,13 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       tokens.revoke(id, session.user!.username)
       await wait(null)
     },
+    createTokenFor: async (username, t) => {
+      requireAdmin()
+      const owner = users.find((u) => u.username === username)
+      if (!owner) throw new Error(`no user named "${username}"`)
+      if (owner.disabled) throw new Error(`${username} is disabled, so its tokens wouldn't work`)
+      return wait(tokens.create(username, t, session.user!.username))
+    },
     users: async () => {
       requireAdmin()
       return wait(users)
