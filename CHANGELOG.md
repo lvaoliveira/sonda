@@ -358,6 +358,12 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Moving the main branch's new code start on a project page reloaded the
+  page into a skeleton and back to the Overall measures, so the admin
+  lost the New code view they were acting on. Reloads now keep showing
+  the page until the new data arrives. This also fixes an intermittently
+  failing web test.
+
 - An issue's details showed only its file name as Location, cut off when
   long. Location now has its own full-width row with the whole path,
   wrapping at slashes, and the line range.
