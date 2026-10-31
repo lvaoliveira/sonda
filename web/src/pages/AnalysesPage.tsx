@@ -122,6 +122,7 @@ function AnalysisList({ page, onOffset }: { page: AnalysisPage; onOffset: (offse
                 <time dateTime={a.analyzedAt} title={new Date(a.analyzedAt).toUTCString()}>
                   {formatAge(a.analyzedAt)}
                 </time>
+                {a.duration && <span className="block" title="How long the scan took">{a.duration}</span>}
               </Mono>
             </li>
           )

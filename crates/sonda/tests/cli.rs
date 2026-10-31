@@ -1036,6 +1036,95 @@ fn upload_sends_the_commit_subject_from_git() {
 }
 
 #[test]
+fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let (url, server) = fake_server(
+        "201 Created",
+        r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":0}}"#,
+    );
+    let mut cmd = sonda();
+    cmd.args(["scan", "-f", "text", "--no-gate", "--upload", "--server"])
+        .arg(&url)
+        .args([
+            "--project",
+            "payments",
+            "--branch",
+            "main",
+            "--commit",
+            "0123abc",
+        ])
+        .arg(dir.path())
+        .env("SONDA_TOKEN", "s3cret")
+        .env_remove("SONDA_TOKEN_FILE");
+    for var in [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        cmd.env_remove(var);
+    }
+    let result = cmd.output().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    // Its own report is the text one it was asked for.
+    assert!(
+        stdout(&result).contains("Quality gate"),
+        "{}",
+        stdout(&result)
+    );
+    assert!(stderr(&result).contains("uploaded 1 files for payments/main"));
+    let request = server.join().unwrap();
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(&request.body[..]),
+        &mut json,
+    )
+    .unwrap();
+    let body: Value = serde_json::from_slice(&json).unwrap();
+    // The server gets the full JSON report, and the duration beside it.
+    assert_eq!(body["report"]["tool"], "sonda");
+    assert!(body["report"].get("scan_duration_ms").is_none());
+    assert!(
+        body["scan_duration_ms"].is_u64(),
+        "{}",
+        body["scan_duration_ms"]
+    );
+    assert_eq!(body["sources"][0]["path"], "app.js");
+}
+
+#[test]
+fn scan_upload_checks_the_server_before_scanning() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let out = sonda()
+        .args(["scan", "--upload", "--server", "http://example.com"])
+        .args([
+            "--project",
+            "payments",
+            "--branch",
+            "main",
+            "--commit",
+            "0123abc",
+        ])
+        .arg(dir.path())
+        .env("SONDA_TOKEN", "s3cret")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 2);
+    assert!(stderr(&out).contains("plain http"), "{}", stderr(&out));
+    assert!(stdout(&out).is_empty(), "nothing was scanned");
+    // SONDA_SERVER alone doesn't make a scan upload.
+    let out = sonda()
+        .args(["scan", "--no-gate"])
+        .arg(dir.path())
+        .env("SONDA_SERVER", "http://example.com")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+}
+
+#[test]
 fn upload_reports_the_servers_refusal() {
     let (dir, out) = scanned(&[("a.js", "var x;\n")]);
     let (url, server) = fake_server("401 Unauthorized", r#"{"error":"bad token"}"#);

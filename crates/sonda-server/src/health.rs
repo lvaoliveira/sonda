@@ -125,6 +125,18 @@ pub(crate) fn evaluate_gate(gate: &mut Value, measures: &Value) -> bool {
     passed
 }
 
+/// A scan's duration as people read it: `850ms`, `42s`, `3m 12s`,
+/// `1h 5m`.
+pub(crate) fn duration_text(ms: i64) -> String {
+    let s = ms / 1000;
+    match ms {
+        ms if ms < 1000 => format!("{}ms", ms.max(0)),
+        _ if s < 60 => format!("{s}s"),
+        _ if s < 3600 => format!("{}m {}s", s / 60, s % 60),
+        _ => format!("{}h {}m", s / 3600, s % 3600 / 60),
+    }
+}
+
 pub(crate) fn condition_label(c: &Value) -> String {
     let metric = c["metric"].as_str().unwrap_or("?");
     let name = match metric {
@@ -353,6 +365,15 @@ mod tests {
     fn debt_reads_in_days_or_hours() {
         assert_eq!(debt_text(4094.0), "9d");
         assert_eq!(debt_text(90.0), "2h");
+    }
+
+    #[test]
+    fn durations_read_like_people_say_them() {
+        let got: Vec<String> = [850, 42_400, 192_000, 3_900_000]
+            .into_iter()
+            .map(duration_text)
+            .collect();
+        assert_eq!(got, ["850ms", "42s", "3m 12s", "1h 5m"]);
     }
 
     #[test]

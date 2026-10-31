@@ -2,12 +2,12 @@
 //! for one project and branch. `GET /api/analyses/{id}`: one analysis, with
 //! its gate, measures, warnings, and the issues it introduced and fixed.
 //!
-//! Commit messages, scan durations and stage logs are not uploaded, so
-//! neither is reported.
+//! Commit messages and scan durations come with the upload when the CLI
+//! has them; stage logs aren't uploaded.
 
 use crate::api::ApiError;
 use crate::health::{
-    GateDetail, Measures, component_of, conditions, gate_state, measure_set, rfc3339,
+    GateDetail, Measures, component_of, conditions, duration_text, gate_state, measure_set, rfc3339,
 };
 use crate::http::State;
 use axum::Json;
@@ -48,6 +48,9 @@ pub struct AnalysisRow {
     pub sha: String,
     /// The commit's subject line, when the upload had one.
     pub message: Option<String>,
+    /// How long the scan took (`sonda scan --upload`); null for an uploaded
+    /// report.
+    pub duration: Option<String>,
     pub analyzed_at: String,
     pub tool_version: String,
     pub gate: &'static str,
@@ -68,6 +71,9 @@ pub struct AnalysisDetail {
     pub sha: String,
     /// The commit's subject line, when the upload had one.
     pub message: Option<String>,
+    /// How long the scan took (`sonda scan --upload`); null for an uploaded
+    /// report.
+    pub duration: Option<String>,
     pub analyzed_at: String,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
@@ -131,6 +137,7 @@ type ListRow = (
     bool,
     Value,
     Option<String>,
+    Option<i64>,
 );
 
 pub async fn list_analyses(
@@ -171,7 +178,8 @@ pub async fn list_analyses(
         .await?;
     let rows: Vec<ListRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
-                a.tool_version, a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message
+                a.tool_version, a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message,
+                a.scan_duration_ms
          {FILTER} ORDER BY a.received_at DESC, a.id DESC OFFSET $4 LIMIT $5"
     )))
     .bind(&q.project)
@@ -196,6 +204,7 @@ pub async fn list_analyses(
                 passed,
                 warnings,
                 message,
+                duration,
             )| {
                 AnalysisRow {
                     id,
@@ -203,6 +212,7 @@ pub async fn list_analyses(
                     branch,
                     sha,
                     message,
+                    duration: duration.map(duration_text),
                     analyzed_at: rfc3339(at),
                     tool_version,
                     gate: gate_state(passed, &gate),
@@ -241,6 +251,7 @@ type DetailRow = (
     bool,
     Value,
     Option<String>,
+    Option<i64>,
 );
 
 type IssueRow = (i64, String, String, String, String, String, i32);
@@ -253,7 +264,7 @@ pub async fn get_analysis(
     let row: DetailRow = sqlx::query_as(
         "SELECT a.id, a.project_id, p.key, p.main_branch, a.branch, a.commit_sha,
                 extract(epoch FROM a.received_at)::float8, a.tool_version, a.new_code_reference,
-                a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message
+                a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message, a.scan_duration_ms
          FROM analyses a JOIN projects p ON p.id = a.project_id WHERE a.id = $1",
     )
     .bind(id)
@@ -275,6 +286,7 @@ pub async fn get_analysis(
         passed,
         warnings,
         message,
+        duration,
     ) = row;
 
     let files: Vec<(String, String)> =
@@ -323,6 +335,7 @@ pub async fn get_analysis(
         main_branch,
         sha,
         message,
+        duration: duration.map(duration_text),
         analyzed_at: rfc3339(at),
         tool_version,
         new_code_reference,
