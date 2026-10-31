@@ -106,5 +106,4 @@ async fn analyses_are_listed_and_show_what_changed() {
     assert_eq!(b["next"]["id"], second);
     let (status, _) = api(&db, "/api/analyses/999999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    db.drop().await;
 }

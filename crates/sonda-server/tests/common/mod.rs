@@ -11,7 +11,8 @@ use sonda_core::upload::{self, Meta};
 use sonda_core::{Isolation, ScanOptions, report};
 use sonda_server::config::Token;
 use sonda_server::http;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use sqlx::Connection;
+use sqlx::postgres::{PgConnectOptions, PgConnection, PgPool, PgPoolOptions};
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -19,9 +20,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tower::ServiceExt;
 
+/// A database of its own for one test, dropped when the test ends, failed
+/// tests included.
 pub struct TestDb {
     pub pool: PgPool,
-    admin: PgPool,
+    url: String,
     name: String,
 }
 
@@ -41,27 +44,44 @@ impl TestDb {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
-        let admin = PgPool::connect(&url).await.expect("test database server");
+        let mut admin = PgConnection::connect(&url)
+            .await
+            .expect("test database server");
         // Safe to splice: `name` is built above from the process id and a
         // counter only. (Identifiers cannot be bound as parameters.)
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(&admin)
+            .execute(&mut admin)
             .await
             .unwrap();
         let options = PgConnectOptions::from_str(&url).unwrap().database(&name);
         let pool = PgPoolOptions::new().connect_with(options).await.unwrap();
-        Some(Self { pool, admin, name })
+        Some(Self { pool, url, name })
     }
+}
 
-    pub async fn drop(self) {
-        self.pool.close().await;
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE {} WITH (FORCE)",
-            self.name
-        )))
-        .execute(&self.admin)
-        .await
-        .unwrap();
+impl Drop for TestDb {
+    /// `Drop` can't await, and the pool's connections belong to the test's
+    /// runtime, which this blocks: drop the database from a thread with a
+    /// runtime and a connection of its own. `WITH (FORCE)` ends the pool's
+    /// connections. Errors are ignored, since this also runs while a failed
+    /// test unwinds.
+    fn drop(&mut self) {
+        let (url, name) = (self.url.clone(), self.name.clone());
+        let _ = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                let mut admin = PgConnection::connect(&url).await?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "DROP DATABASE IF EXISTS {name} WITH (FORCE)"
+                )))
+                .execute(&mut admin)
+                .await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            })
+        })
+        .join();
     }
 }
 

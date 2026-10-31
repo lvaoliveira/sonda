@@ -146,5 +146,4 @@ async fn each_metric_drills_into_components_and_files() {
     for bad in ["nonsense", "critical?scope=mine", "critical?colour=red"] {
         assert_eq!(drill(&db, bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
-    db.drop().await;
 }

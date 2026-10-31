@@ -48,5 +48,4 @@ async fn projects_on_the_default_gate_are_recognized() {
     assert_eq!(vulns["failing"], 1);
     assert_eq!(gates[0]["evaluations"].as_array().unwrap().len(), 3);
     assert_eq!(gates[0]["mostCommonFailure"], "New vulnerabilities > 0");
-    db.drop().await;
 }

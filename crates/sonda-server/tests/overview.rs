@@ -226,7 +226,6 @@ async fn the_overview_is_built_from_analysis_history() {
         kpi(&quarter, "vulns")["series"].as_array().unwrap().len(),
         3
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -242,5 +241,4 @@ async fn an_empty_server_and_bad_queries() {
     for bad in ["?range=1y", "?scope=mine", "?colour=red"] {
         assert_eq!(overview(&db, bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
-    db.drop().await;
 }

@@ -43,5 +43,4 @@ async fn security_summarizes_open_vulnerabilities() {
     assert_eq!(trend[11]["weighted"], 5);
     assert_eq!(trend[11]["introduced"], 1);
     assert!(s["remediation"]["medianDaysSevere"].is_null());
-    db.drop().await;
 }

@@ -46,7 +46,6 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "users"
         ]
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -67,7 +66,6 @@ async fn the_schema_rejects_invalid_data() {
         .execute(&db.pool)
         .await;
     assert!(bad_digest.is_err(), "accepted a 31-byte sha256");
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -78,7 +76,6 @@ async fn health_is_ok_when_the_database_answers() {
     let (status, body) = get(http::router(state(db.pool.clone()), None), "/api/health").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("ok"), "{body}");
-    db.drop().await;
 }
 
 #[tokio::test]
