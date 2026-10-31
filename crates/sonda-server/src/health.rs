@@ -85,22 +85,29 @@ pub(crate) fn debt_text(minutes: f64) -> String {
 /// `passed`. Returns whether it passes. For values the server computes
 /// itself (ADR-0009, ADR-0011).
 pub(crate) fn evaluate_gate(gate: &mut Value, measures: &Value) -> bool {
-    // As the CLI does: on a small change, coverage and duplication of new
-    // code are ignored (`sonda_core::MIN_NEW_LINES`).
-    let small = measures["new_lines"]
-        .as_f64()
-        .is_some_and(|n| n < sonda_core::MIN_NEW_LINES);
+    // As the CLI does: a small change ignores coverage and duplication of
+    // new code, and no advisory data ignores dependencies.
+    let new_lines = measures["new_lines"].as_f64();
     for c in gate["conditions"].as_array_mut().into_iter().flatten() {
         let Some(metric) = c["metric"].as_str() else {
             continue;
         };
         let actual = measures[metric].as_f64();
         let threshold = c["threshold"].as_f64().unwrap_or(0.0);
-        let ignorable = sonda_core::model::Metric::ALL
+        let reason = sonda_core::model::Metric::ALL
             .iter()
-            .any(|m| m.as_str() == metric && sonda_core::ignored_on_small_changes(*m));
+            .find(|m| m.as_str() == metric)
+            .and_then(|m| sonda_core::ignored_because(*m, actual, new_lines));
+        match reason {
+            Some(r) => c["reason"] = Value::from(r),
+            None => {
+                if let Some(o) = c.as_object_mut() {
+                    o.remove("reason");
+                }
+            }
+        }
         let status = match (actual, c["op"].as_str()) {
-            _ if small && ignorable => "ignored",
+            _ if reason.is_some() => "ignored",
             (None, _) => "no_data",
             (Some(v), Some("gt")) if v > threshold => "error",
             (Some(v), Some("lt")) if v < threshold => "error",
@@ -203,9 +210,11 @@ pub struct ConditionRow {
     pub label: String,
     pub metric: String,
     pub actual: Option<f64>,
-    /// `ok`, `error`, `no_data` or `ignored` (coverage or duplication of
-    /// new code, with fewer than 20 new lines).
+    /// `ok`, `error`, `no_data` or `ignored` (see `reason`).
     pub status: String,
+    /// Why an ignored condition is: "fewer than 20 new lines", "no
+    /// advisory data". Older analyses' ignored conditions have none.
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -239,6 +248,7 @@ pub(crate) fn conditions(gate: &Value) -> Vec<ConditionRow> {
             metric: c["metric"].as_str().unwrap_or_default().to_string(),
             actual: c["actual"].as_f64(),
             status: c["status"].as_str().unwrap_or("no_data").to_string(),
+            reason: c["reason"].as_str().map(str::to_string),
         })
         .collect()
 }

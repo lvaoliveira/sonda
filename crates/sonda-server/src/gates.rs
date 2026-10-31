@@ -274,6 +274,7 @@ mod tests {
             ("new_vulnerabilities", "gt", 0.0, vulns),
             ("new_coverage", "lt", 80.0, "ok"),
             ("new_duplicated_lines_density", "gt", 3.0, "ok"),
+            ("new_severe_vulnerable_dependencies", "gt", 0.0, "ignored"),
         ])
     }
 

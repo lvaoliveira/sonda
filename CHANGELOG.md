@@ -186,6 +186,13 @@ file, the report formats and the public library API.
   to compute coverage on its main-branch new code period, instead of
   keeping the scan's value, and the Overview's coverage drill-down lists
   each project's least covered files.
+- The default gate also fails on `new_severe_vulnerable_dependencies > 0`:
+  dependencies a change added or upgraded into with a blocker or critical
+  known vulnerability. Without advisory data, dependency conditions are
+  `ignored` ("no advisory data") rather than "no data", so projects that
+  don't use advisories keep a passing gate, not a partial one. Ignored
+  conditions now carry a `reason`. Projects last scanned with an older CLI
+  show under a custom gate on the Quality gates page until their next scan.
 - `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies`
   gate metrics: vulnerable packages the change brought, compared with the
   lockfiles at the new-code reference (the same advisory on the same

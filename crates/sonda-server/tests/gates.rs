@@ -38,7 +38,7 @@ async fn projects_on_the_default_gate_are_recognized() {
     assert_eq!(gates[0]["name"], "Default");
     assert_eq!(gates[0]["isDefault"], true);
     assert_eq!(gates[0]["projects"].as_array().unwrap().len(), 2);
-    assert_eq!(gates[0]["conditions"].as_array().unwrap().len(), 4);
+    assert_eq!(gates[0]["conditions"].as_array().unwrap().len(), 5);
     let vulns = gates[0]["conditions"]
         .as_array()
         .unwrap()
