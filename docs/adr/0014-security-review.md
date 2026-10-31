@@ -44,9 +44,10 @@ issues from serving that today:
 | **False positive** | not a problem, the rule is wrong here | required, new |
 | **Fixed** | gone from the latest analysis (set by analyses) | — |
 
-- **False positive is new** (migration: the `issue_status` type gains
-  `false_positive`). Dependency findings keep open, confirmed and accepted:
-  a version range doesn't misfire the way a code rule can.
+- **False positive is new, for code issues only** (migration: the
+  `issue_status` type gains `false_positive`). Dependency findings keep
+  open, confirmed and accepted: a version range doesn't misfire the way a
+  code rule can.
 - **Reasons** go in the issue's history (`issue_events` gains `reason`),
   and the issue shows the latest one. They're 1-500 characters, required
   for accepted and false positive, as for dependency reviews.
@@ -68,10 +69,25 @@ listed under their status.
   scan's own new code.
 - **The stored gate is re-evaluated** when an issue's status changes, as
   for dependency reviews.
-- **The CLI's gate in CI doesn't know** about reviews, which live on the
-  server. As before, a finding that is never a problem can be suppressed in
-  code (`sonda-ignore`), and the server's gate is the one that reflects
-  reviews.
+### CI follows the server's gate when it uploads
+
+SonarQube evaluates the gate only on the server, with the statuses people
+set there; with `sonar.qualitygate.wait=true` the scanner waits for that
+result and fails the build on it. sonda also has a local gate, which can't
+know about reviews.
+
+- **When uploading** (`sonda scan --upload`, `sonda upload`), the server
+  answers with its gate, evaluated as it stores the analysis, reviews
+  included, and the CLI's exit code follows it: 1 when the server's gate
+  fails, 0 when it passes. It's SonarQube's `sonar.qualitygate.wait=true`,
+  always on, since the answer comes back in the same response.
+  `sonda scan --upload` still prints its own report; the line after the
+  upload says which gate decided and lists the server's failing conditions.
+- **Without uploading,** nothing changes: the local gate decides, and a
+  finding that is never a problem is suppressed in code (`sonda-ignore`).
+- **`--no-gate`** still always exits 0.
+- **An older server** that doesn't answer with a gate leaves the local gate
+  deciding, as today.
 
 ### The review queue
 
@@ -105,7 +121,11 @@ is selected.
 
 - **Reviews change the gate:** marking a new vulnerability as accepted or a
   false positive, with a reason, lets the gate pass on the server, as in
-  SonarQube.
+  SonarQube, and so CI uploading to it passes on the next run.
+- **An uploading CI job's exit code can differ from the local report's
+  gate,** in both directions: the server knows reviews, and its new code
+  period on the main branch (ADR-0011) differs from the scan's. The upload
+  line says which gate decided.
 - **Counts drop on upgrade** for issues already accepted, which no longer
   count. That's the point, but dashboards will show it.
 - **Rules and reports don't change.** The work is in the server and the web
