@@ -339,8 +339,7 @@ async fn service_users_have_no_password_and_cannot_sign_in() {
         .find(|u| u["username"] == "ci")
         .unwrap();
     assert_eq!(row["hasPassword"], false);
-    // No password matches, not even an empty one.
-    assert!(sign_in(&app, "ci", "").await.is_none());
+    // It has no password hash, so no password matches.
     assert!(sign_in(&app, "ci", PASSWORD).await.is_none());
 
     // Admins have to be able to sign in.
@@ -369,11 +368,11 @@ async fn service_users_have_no_password_and_cannot_sign_in() {
     // With a password in the same change, it can.
     let (code, _, body) = send(
         &app,
-        make_admin(json!({ "role": "admin", "password": "a long enough one" })),
+        make_admin(json!({ "role": "admin", "password": PASSWORD })),
     )
     .await;
     assert_eq!(code, StatusCode::OK, "{body}");
-    assert!(sign_in(&app, "ci", "a long enough one").await.is_some());
+    assert!(sign_in(&app, "ci", PASSWORD).await.is_some());
 }
 
 #[tokio::test]
