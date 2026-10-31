@@ -20,6 +20,9 @@ export interface MockOptions {
   readsRequireAuth?: boolean
 }
 
+/** As the server: admins have to be able to sign in. */
+const NO_PASSWORD_ADMIN = "a user without a password can't sign in, so it can't be an admin; set a password first"
+
 /** Every mock user's password. */
 export const MOCK_PASSWORD = 'correct horse battery'
 
@@ -152,9 +155,11 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     createUser: async (input) => {
       requireAdmin()
-      checkPassword(input.password)
+      const { password, ...fields } = input
+      if (password === undefined && input.role === 'admin') throw new Error(NO_PASSWORD_ADMIN)
+      if (password !== undefined) checkPassword(password)
       if (users.some((u) => u.username === input.username)) throw new Error(`username "${input.username}" is taken`)
-      const user: UserRow = { ...input, id: users.length + 1, disabled: false, hasPassword: true, createdAt: new Date().toISOString(), lastLoginAt: null }
+      const user: UserRow = { ...fields, id: users.length + 1, disabled: false, hasPassword: password !== undefined, createdAt: new Date().toISOString(), lastLoginAt: null }
       users.push(user)
       return wait(asUser(user))
     },
@@ -165,6 +170,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       const activeAdmins = users.filter((u) => u.role === 'admin' && !u.disabled)
       const staysAdmin = (patch.role ?? 'admin') === 'admin' && patch.disabled !== true
       if (activeAdmins.length === 1 && activeAdmins[0].id === id && !staysAdmin) throw new Error('the last active admin cannot be disabled or made a member')
+      if (patch.role === 'admin' && !user.hasPassword && patch.password === undefined) throw new Error(NO_PASSWORD_ADMIN)
+      if (patch.password !== undefined) user.hasPassword = true
       if (patch.displayName !== undefined) user.displayName = patch.displayName
       if (patch.role !== undefined) user.role = patch.role
       if (patch.disabled !== undefined) user.disabled = patch.disabled
