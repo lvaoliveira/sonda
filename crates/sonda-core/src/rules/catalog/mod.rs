@@ -17,6 +17,7 @@ mod js_more;
 mod js_security;
 mod js_semantic;
 mod py;
+mod py_extra;
 mod py_more;
 mod py_quality;
 mod py_security;
@@ -46,6 +47,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         py_security::RULES,
         py_quality::RULES,
         py_more::RULES,
+        py_extra::RULES,
         java::RULES,
         java_security::RULES,
         java_bugs::RULES,
@@ -95,6 +97,14 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     // sonda cannot see which version a project targets.
     "java/instanceof-then-cast",
     "java/collectors-to-list",
+    // Style rules that fire on most real Python: every method that skips
+    // self, every untyped signature, every trailing comment. Python 3.14
+    // moved the compression modules, which most projects don't target yet.
+    "py/method-could-be-static",
+    "py/hint-missing-return",
+    "py/hint-missing-parameter",
+    "py/trailing-comment",
+    "py/compression-namespace",
 ];
 
 // ---------------------------------------------------- shared filters
