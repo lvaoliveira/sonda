@@ -12,8 +12,8 @@ Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.1
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
-| JavaScript | 461 | 167 | 20 | 199 | 75 | 0 |
-| TypeScript | 481 | 158 | 18 | 227 | 78 | 0 |
+| JavaScript | 461 | 232 | 22 | 132 | 75 | 0 |
+| TypeScript | 481 | 222 | 20 | 161 | 78 | 0 |
 | Python | 397 | 6 | 2 | 389 | 0 | 0 |
 | Java | 703 | 9 | 1 | 672 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
@@ -25,6 +25,10 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-All match.
+1 rules differ:
+
+| Rule | sonda | SonarQube |
+|---|---|---|
+| `js/hardcoded-ip` | none | CWE-547, A01 |
 
 Per-language details: the `.csv` files in this directory.

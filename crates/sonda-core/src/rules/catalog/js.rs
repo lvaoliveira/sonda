@@ -3264,20 +3264,20 @@ const LOOPS: &[&str] = &[
     "do_statement",
 ];
 
-fn text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+pub(super) fn text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
     &src[node.byte_range()]
 }
 
 /// Whether any node below `node`, not looking inside nested functions,
 /// satisfies `pred`.
-fn contains(node: Node, pred: impl Fn(Node) -> bool) -> bool {
+pub(super) fn contains(node: Node, pred: impl Fn(Node) -> bool) -> bool {
     find_below(node, false, pred).is_some()
 }
 
 /// The first node below `node` that satisfies `pred`, looking inside
 /// nested functions only when `into_functions` is set. Iterative, like
 /// every tree walk in sonda.
-fn find_below<'t>(
+pub(super) fn find_below<'t>(
     node: Node<'t>,
     into_functions: bool,
     pred: impl Fn(Node) -> bool,
@@ -3303,7 +3303,7 @@ fn find_below<'t>(
 }
 
 /// Whether `node` has an anonymous child token `token`, such as `set` or `*`.
-fn has_token(node: Node, token: &str) -> bool {
+pub(super) fn has_token(node: Node, token: &str) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor).any(|c| c.kind() == token)
 }
@@ -4122,7 +4122,7 @@ fn declared_without_const(undefined: Node, _: &[u8]) -> bool {
 // ---------------------------------------------------- JSX helpers
 
 /// The node holding an element's name and attributes.
-fn opening_tag(element: Node) -> Option<Node> {
+pub(super) fn opening_tag(element: Node) -> Option<Node> {
     match element.kind() {
         "jsx_element" => element.child_by_field_name("open_tag"),
         "jsx_self_closing_element" => Some(element),
@@ -4131,7 +4131,7 @@ fn opening_tag(element: Node) -> Option<Node> {
 }
 
 /// A plain tag name (`div`, `Button`); None for `Foo.Bar` and fragments.
-fn tag_name<'s>(opening: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+pub(super) fn tag_name<'s>(opening: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     opening
         .child_by_field_name("name")
         .filter(|n| n.kind() == "identifier")
@@ -4139,11 +4139,11 @@ fn tag_name<'s>(opening: Node, src: &'s [u8]) -> Option<&'s [u8]> {
 }
 
 /// HTML elements are lowercase; components start with a capital.
-fn is_dom_tag(name: &[u8]) -> bool {
+pub(super) fn is_dom_tag(name: &[u8]) -> bool {
     name.first().is_some_and(u8::is_ascii_lowercase)
 }
 
-fn attributes<'t>(opening: Node<'t>) -> Vec<Node<'t>> {
+pub(super) fn attributes<'t>(opening: Node<'t>) -> Vec<Node<'t>> {
     let mut cursor = opening.walk();
     opening
         .children_by_field_name("attribute", &mut cursor)
@@ -4151,13 +4151,13 @@ fn attributes<'t>(opening: Node<'t>) -> Vec<Node<'t>> {
 }
 
 /// `{...props}` may set any attribute, so checks for a missing one stop.
-fn has_spread(opening: Node) -> bool {
+pub(super) fn has_spread(opening: Node) -> bool {
     attributes(opening)
         .iter()
         .any(|a| a.kind() == "jsx_expression")
 }
 
-fn attribute<'t>(opening: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn attribute<'t>(opening: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> {
     attributes(opening).into_iter().find(|a| {
         a.kind() == "jsx_attribute"
             && a.named_child(0)
@@ -4167,7 +4167,7 @@ fn attribute<'t>(opening: Node<'t>, name: &str, src: &[u8]) -> Option<Node<'t>> 
 
 /// A value known without running the code: the text of `"x"`, `{1}`,
 /// `{true}` or `{'x'}`, and `true` for a bare attribute (`disabled`).
-fn static_value<'s>(attr: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+pub(super) fn static_value<'s>(attr: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     let Some(value) = attr.named_child(1) else {
         return Some(b"true");
     };
@@ -5473,7 +5473,7 @@ fn unsafe_chain_use<'t>(token: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     }
 }
 
-fn string_content<'s>(string: Node, src: &'s [u8]) -> &'s [u8] {
+pub(super) fn string_content<'s>(string: Node, src: &'s [u8]) -> &'s [u8] {
     let t = text(string, src);
     t.get(1..t.len().saturating_sub(1)).unwrap_or(b"")
 }
