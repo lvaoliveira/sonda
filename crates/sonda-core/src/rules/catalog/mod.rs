@@ -109,6 +109,11 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "py/hint-missing-parameter",
     "py/trailing-comment",
     "py/compression-namespace",
+    // Formatting rules a formatter or editor config already enforces.
+    "common/trailing-whitespace",
+    "common/line-length",
+    "common/file-length",
+    "common/final-newline",
 ];
 
 // ---------------------------------------------------- shared filters
