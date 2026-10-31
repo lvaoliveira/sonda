@@ -961,8 +961,14 @@ fn is_hardcoded_credential(node: Node, src: &[u8]) -> bool {
     let Some(literal) = string_value(value, src) else {
         return false;
     };
+    // "db.password" names a setting; it is not a password.
+    let looks_like_property_key = literal
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'_'))
+        && literal.iter().any(|b| matches!(b, b'.' | b'-'));
     named_like_credential
         && !describes_location
+        && !looks_like_property_key
         && literal.len() >= 4
         && !literal.contains(&b' ')
         && !literal.contains(&b'{')
