@@ -298,7 +298,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Vulnerability,
         severity: Blocker,
         effort_minutes: 15,
-        sonar: &[related("S6437")],
+        sonar: &[related("S6437"), related("S2068"), related("S6418")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(variable_declarator name: (identifier) @n value: (string_literal) @v) @match
@@ -739,7 +739,7 @@ fn sql_built_dynamically(call: Node, src: &[u8]) -> bool {
     }
 }
 
-fn is_all_literals(expr: Node) -> bool {
+pub(super) fn is_all_literals(expr: Node) -> bool {
     match expr.kind() {
         "string_literal" | "decimal_integer_literal" | "character_literal" => true,
         "binary_expression" => {

@@ -131,6 +131,10 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     // SonarQube files this under a 2021 category, but its CWEs are in no 2025
     // category, so the 2021 one is left out to keep the two editions consistent.
     ("java/broadcast-without-permission", &[927], &[]),
+    ("java/pbe-literal-salt", &[759, 760], &[A02]),
+    ("java/custom-crypto", &[327], &[A02]),
+    ("java/ldap-object-deserialization", &[502], &[A08]),
+    ("java/activemq-untrusted-classes", &[502], &[A08]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
 ];

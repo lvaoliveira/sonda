@@ -12,10 +12,10 @@ Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.1
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
-| JavaScript | 461 | 232 | 37 | 117 | 75 | 0 |
-| TypeScript | 481 | 222 | 35 | 146 | 78 | 0 |
+| JavaScript | 461 | 257 | 37 | 92 | 75 | 0 |
+| TypeScript | 481 | 262 | 35 | 106 | 78 | 0 |
 | Python | 397 | 126 | 11 | 260 | 0 | 0 |
-| Java | 703 | 92 | 7 | 583 | 0 | 21 |
+| Java | 703 | 305 | 9 | 368 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 
@@ -25,11 +25,12 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-2 rules differ:
+3 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
 | `js/hardcoded-ip` | none | CWE-547, A01 |
 | `java/broadcast-without-permission` | CWE-927 | CWE-927, A04 |
+| `java/hardcoded-ip` | none | CWE-547, A01 |
 
 Per-language details: the `.csv` files in this directory.

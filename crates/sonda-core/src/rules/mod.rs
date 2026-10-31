@@ -361,7 +361,15 @@ mod tests {
     /// this does, for every language each rule claims.
     #[test]
     fn every_query_compiles_for_every_language() {
-        let rules = RuleSet::new(&RulesConfig::default()).unwrap();
+        // Off-by-default rules must compile too.
+        let cfg = RulesConfig {
+            enabled: catalog::OFF_BY_DEFAULT
+                .iter()
+                .map(|&id| id.into())
+                .collect(),
+            ..RulesConfig::default()
+        };
+        let rules = RuleSet::new(&cfg).unwrap();
         for &lang in crate::lang::ALL {
             let compiled = rules
                 .queries(lang)

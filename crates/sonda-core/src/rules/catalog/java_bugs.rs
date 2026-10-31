@@ -1187,13 +1187,13 @@ const LOOP_STOPS: &[&str] = &[
     "lambda_expression",
     "class_body",
 ];
-const SCOPE_STOPS: &[&str] = &["lambda_expression", "class_body", "method_declaration"];
+pub(super) const SCOPE_STOPS: &[&str] = &["lambda_expression", "class_body", "method_declaration"];
 
-fn is_comment(node: Node) -> bool {
+pub(super) fn is_comment(node: Node) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
 
-fn statements(block: Node) -> Vec<Node> {
+pub(super) fn statements(block: Node) -> Vec<Node> {
     let mut cursor = block.walk();
     block
         .named_children(&mut cursor)
@@ -1203,7 +1203,7 @@ fn statements(block: Node) -> Vec<Node> {
 
 /// The first node below `root` that satisfies `pred`, not descending into
 /// nodes whose kind is in `stops` (they are still tested themselves).
-fn find_in_scope<'t>(
+pub(super) fn find_in_scope<'t>(
     root: Node<'t>,
     stops: &[&str],
     pred: impl Fn(Node<'t>) -> bool,
@@ -1228,26 +1228,26 @@ fn find_in_scope<'t>(
     }
 }
 
-fn operator_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+pub(super) fn operator_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
     node.child_by_field_name("operator")
         .map_or(&b""[..], |o| text(o, src))
 }
 
-fn modifiers_of(declaration: Node) -> Option<Node> {
+pub(super) fn modifiers_of(declaration: Node) -> Option<Node> {
     let mut cursor = declaration.walk();
     declaration
         .children(&mut cursor)
         .find(|c| c.kind() == "modifiers")
 }
 
-fn has_modifier(declaration: Node, word: &str) -> bool {
+pub(super) fn has_modifier(declaration: Node, word: &str) -> bool {
     modifiers_of(declaration).is_some_and(|m| {
         let mut cursor = m.walk();
         m.children(&mut cursor).any(|c| c.kind() == word)
     })
 }
 
-fn parameter_types<'s>(method: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+pub(super) fn parameter_types<'s>(method: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let Some(params) = method.child_by_field_name("parameters") else {
         return Vec::new();
     };
@@ -1784,7 +1784,7 @@ fn inside_synchronized_block(call: Node, _: &[u8]) -> bool {
     false
 }
 
-fn no_arguments(call: Node, _: &[u8]) -> bool {
+pub(super) fn no_arguments(call: Node, _: &[u8]) -> bool {
     call_arguments(call).is_empty()
 }
 
@@ -1981,7 +1981,7 @@ fn returns_this<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-fn returns_null<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn returns_null<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     // `toString(Object)` and other overloads are ordinary methods.
     if !parameter_types(method, src).is_empty() {
         return None;
@@ -2054,7 +2054,7 @@ fn record_has_array_without_equals(record: Node, src: &[u8]) -> bool {
     has_array && !has_equals
 }
 
-fn has_annotation(declaration: Node, name: &[u8], src: &[u8]) -> bool {
+pub(super) fn has_annotation(declaration: Node, name: &[u8], src: &[u8]) -> bool {
     let Some(mods) = modifiers_of(declaration) else {
         return false;
     };
@@ -2091,7 +2091,7 @@ fn second_autowired_constructor<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<
         .nth(1)
 }
 
-fn owning_declaration(annotation: Node) -> Option<Node> {
+pub(super) fn owning_declaration(annotation: Node) -> Option<Node> {
     annotation
         .parent()
         .filter(|m| m.kind() == "modifiers")
