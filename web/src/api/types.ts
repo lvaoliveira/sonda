@@ -349,7 +349,8 @@ export interface NewUser {
   username: string
   displayName: string
   role: Role
-  password: string
+  /** Absent for a service user, such as `ci`: it can't sign in and only owns tokens, so it's a member. */
+  password?: string
 }
 
 export interface UserPatch {

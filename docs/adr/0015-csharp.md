@@ -75,5 +75,6 @@ the recovered parts.
 - Some grammar quirks need a rule-side workaround. For example, the grammar
   reads `x is true || y` as `x is (true || y)`, so a rule about boolean
   literals ignores operators inside patterns.
-- The parity table gains a C# column at the next refresh against the
-  SonarQube server.
+- The parity table has a C# row and `cs.csv`. SonarQube 26.7 has 446 C#
+  rules; the first batch covers 51 keys and partly covers 3. Three of its
+  rules are outside the default profile, so they are opt-in.

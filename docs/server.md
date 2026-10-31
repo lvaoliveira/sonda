@@ -138,6 +138,14 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
 | `PUT /api/me/password` `{"current": "...", "new": "..."}` | `204`. Your other sessions end. |
 | `GET /api/users`, `POST /api/users`, `PATCH /api/users/{id}` | Admins only. List users; create one; change display name, role, disabled, or reset the password. |
 
+- **Service users:** `POST /api/users` without a `password` creates a
+  service user, such as `ci`. It can't sign in (no password matches) and
+  only owns tokens generated for it by an admin (see Tokens below). It
+  must be a member: an admin has to be able to sign in, or a passwordless
+  admin could count as the last one while nobody can act as it. Setting a
+  password later makes it an ordinary user. The users list shows it with
+  `hasPassword: false`.
+
 - **Passwords:** at least 12 characters, stored as Argon2id hashes.
 - **Failed sign-ins:** every failure gets the same answer after the same
   amount of hashing, so nobody can probe which usernames exist.
@@ -162,9 +170,9 @@ never has more rights than them: disabling the owner stops every token
 they own, CI ones included.
 
 **CI tokens belong to a service user.** So that a pipeline doesn't stop
-when a person leaves, an admin creates a user such as `ci` (a member,
-with a long random password nobody keeps) and generates the pipelines'
-tokens for it on the Admin page: choose the owner, then the type,
+when a person leaves, an admin creates a **service user** such as `ci`
+(Add a user → Service user) and generates the pipelines' tokens for it on
+the Admin page: choose the owner, then the type,
 project and expiry. The token acts as `ci`, uploads show
 `ci (token shop)`, and the token lists say which admin generated it.
 

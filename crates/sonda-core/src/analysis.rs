@@ -82,6 +82,7 @@ pub(crate) fn analyze(
     let mut metrics = FileMetrics::default();
     measure_functions(&ctx, syn, root, rules, cfg, &mut issues, &mut metrics);
     let scan = scan_tokens(&ctx, syn, root, rules, &mut issues);
+    scan_lines(&ctx, rules, scan.code_lines.len(), &mut issues);
 
     metrics.lines = ctx.lines.count();
     metrics.ncloc = scan.code_lines.len();
@@ -181,9 +182,170 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// An issue on a span of one line, in 0-based character columns.
+    fn issue_on_line(
+        &self,
+        active: &ActiveRule,
+        row: usize,
+        columns: (usize, usize),
+        message: String,
+    ) -> Issue {
+        Issue {
+            rule: active.rule.id,
+            severity: active.severity,
+            category: active.rule.category,
+            message,
+            path: self.path.to_string(),
+            line: row + 1,
+            column: columns.0 + 1,
+            end_line: row + 1,
+            end_column: columns.1 + 1,
+            effort_minutes: active.rule.effort_minutes,
+            is_new: true,
+            fingerprint: Fingerprint::default(),
+        }
+    }
+
     fn text(&self, node: Node) -> &'a str {
         &self.src[node.byte_range()]
     }
+}
+
+const LINE_LENGTH_LIMIT: usize = 120;
+const FILE_LENGTH_LIMIT: usize = 1000;
+/// Line rules can fire on every line of a generated file: report the first
+/// ones, which is enough to see the problem.
+const LINE_ISSUE_CAP: usize = 100;
+
+/// Rules about the text of lines, not about the syntax tree.
+fn scan_lines(ctx: &Ctx, rules: &RuleSet, ncloc: usize, issues: &mut Vec<Issue>) {
+    let trailing = rules.get(rules::TRAILING_WHITESPACE);
+    let long = rules.get(rules::LINE_LENGTH);
+    if trailing.is_some() || long.is_some() {
+        let (mut trailing_count, mut long_count) = (0, 0);
+        for row in 0..ctx.lines.count() {
+            let line = ctx.lines.text(row);
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            if let Some(rule) = trailing {
+                let kept = line.trim_end_matches([' ', '\t']);
+                if kept.len() < line.len() && trailing_count < LINE_ISSUE_CAP {
+                    trailing_count += 1;
+                    let columns = (kept.chars().count(), line.chars().count());
+                    let msg = "Remove the trailing whitespace from this line.".to_string();
+                    issues.push(ctx.issue_on_line(rule, row, columns, msg));
+                }
+            }
+            if let Some(rule) = long {
+                let width = line.chars().count();
+                if width > LINE_LENGTH_LIMIT && long_count < LINE_ISSUE_CAP {
+                    long_count += 1;
+                    let msg = format!(
+                        "Split this {width}-character line: the limit is {LINE_LENGTH_LIMIT}."
+                    );
+                    issues.push(ctx.issue_on_line(rule, row, (LINE_LENGTH_LIMIT, width), msg));
+                }
+            }
+        }
+    }
+    if let Some(rule) = rules.get(rules::FILE_LENGTH)
+        && ncloc > FILE_LENGTH_LIMIT
+    {
+        let msg = format!(
+            "This file has {ncloc} lines of code; the limit is {FILE_LENGTH_LIMIT}. Split it."
+        );
+        issues.push(ctx.issue_on_line(rule, 0, (0, ctx.lines.text(0).chars().count()), msg));
+    }
+    if let Some(rule) = rules.get(rules::FINAL_NEWLINE)
+        && !ctx.src.is_empty()
+        && !ctx.src.ends_with('\n')
+    {
+        let row = ctx.lines.count() - 1;
+        let width = ctx.lines.text(row).chars().count();
+        let msg = "Add a newline at the end of this file.".to_string();
+        issues.push(ctx.issue_on_line(rule, row, (width, width), msg));
+    }
+}
+
+/// Whether one line of a comment reads as source code rather than prose.
+fn looks_like_code(line: &str) -> bool {
+    let l = line.trim().trim_start_matches(['/', '#', '*', '-']).trim();
+    if l.chars().count() < 4 || l.contains("http") || l.contains("sonda-ignore") {
+        return false;
+    }
+    let words = l.split_whitespace().count();
+    // Sentences have several plain lowercase words; code rarely does.
+    let prose = l
+        .split_whitespace()
+        .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_ascii_lowercase()))
+        .count();
+    if prose >= 4 {
+        return false;
+    }
+    let starts = |kw: &[&str]| kw.iter().any(|k| l.starts_with(k));
+    if l == "}" || l == "{" || l == "});" || l == "};" {
+        return true;
+    }
+    if l.ends_with(';') && (l.contains('(') || l.contains(" = ") || l.contains('.')) && words <= 12
+    {
+        return true;
+    }
+    if l.ends_with('{')
+        && starts(&[
+            "if ",
+            "if(",
+            "for ",
+            "for(",
+            "while ",
+            "while(",
+            "} else",
+            "else",
+            "function ",
+            "switch",
+            "try",
+            "catch",
+            "class ",
+            "public ",
+            "private ",
+            "static ",
+            "void ",
+        ])
+    {
+        return true;
+    }
+    let assigns_to_a_name = l.split_once(" = ").is_some_and(|(left, _)| {
+        !left.is_empty()
+            && left
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '[' | ']'))
+    });
+    if assigns_to_a_name
+        && (l.ends_with(')') || l.ends_with(']'))
+        && words <= 8
+        && l.starts_with(|c: char| c.is_alphabetic() || c == '_')
+    {
+        return true;
+    }
+    // Python
+    if l.ends_with(':')
+        && starts(&[
+            "def ", "class ", "if ", "elif ", "else", "for ", "while ", "try", "except", "with ",
+            "finally",
+        ])
+    {
+        return true;
+    }
+    starts(&[
+        "import ", "from ", "return ", "print(", "console.", "const ", "let ", "var ",
+    ]) && (l.ends_with(')') || l.ends_with(';') || l.contains(" = ") || l.contains(" import "))
+        && words <= 12
+}
+
+fn comment_is_commented_out_code(comment: &str) -> bool {
+    // Doc comments are prose with examples in them.
+    if comment.starts_with("/**") || comment.starts_with("///") || comment.starts_with("//!") {
+        return false;
+    }
+    comment.lines().any(looks_like_code)
 }
 
 fn expired(deadline: Instant) -> ControlFlow<()> {
@@ -388,6 +550,7 @@ fn scan_tokens(
     let mut comment = vec![false; rows];
     let mut tokens = Vec::new();
     let todo_rule = rules.get(rules::TODO_COMMENT);
+    let code_rule = rules.get(rules::COMMENTED_OUT_CODE);
     let mark = |flags: &mut Vec<bool>, node: Node| {
         flags[node.start_position().row..=last_row(node)].fill(true);
     };
@@ -396,6 +559,19 @@ fn scan_tokens(
         let kind = node.kind();
         if syn.comments.contains(&kind) {
             mark(&mut comment, node);
+            let alone = ctx.lines.text(node.start_position().row)[..node
+                .start_position()
+                .column
+                .min(ctx.lines.text(node.start_position().row).len())]
+                .trim()
+                .is_empty();
+            if let Some(rule) = code_rule
+                && alone
+                && comment_is_commented_out_code(ctx.text(node))
+            {
+                let msg = "Remove this commented-out code.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
             if let Some(rule) = todo_rule
                 && let Some(tag) = todo_tag(ctx.text(node))
             {
@@ -1017,6 +1193,57 @@ pub(crate) mod tests {
             issue.message.starts_with("'f' has 8 parameters"),
             "{}",
             issue.message
+        );
+    }
+
+    #[test]
+    fn line_rules() {
+        let mut cfg = Config::default();
+        cfg.rules.enabled = [
+            rules::TRAILING_WHITESPACE,
+            rules::LINE_LENGTH,
+            rules::FILE_LENGTH,
+            rules::FINAL_NEWLINE,
+        ]
+        .map(String::from)
+        .to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let long = "x".repeat(130);
+        let src = format!("a = 1  \nb = 2\n{long}\nc = 3");
+        let a = analyze("t", Lang::Python, &src, &rules, &cfg, far_deadline()).unwrap();
+        let hit = |rule: &str| -> Vec<usize> {
+            a.issues
+                .iter()
+                .filter(|i| i.rule == rule)
+                .map(|i| i.line)
+                .collect()
+        };
+        assert_eq!(hit(rules::TRAILING_WHITESPACE), [1]);
+        assert_eq!(hit(rules::LINE_LENGTH), [3]);
+        assert_eq!(hit(rules::FINAL_NEWLINE), [4]);
+    }
+
+    #[test]
+    fn commented_out_code() {
+        let src = "# this explains the next step\n# x = compute(a, b)\n# if ready:\n# See https://example.com/a;\ny = 1\n";
+        let a = run(Lang::Python, src);
+        let lines: Vec<usize> = a
+            .issues
+            .iter()
+            .filter(|i| i.rule == rules::COMMENTED_OUT_CODE)
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(lines, [2, 3]);
+        let js = run(
+            Lang::JavaScript,
+            "// Returns the sum;\n// foo(1);\n/** @return {x}; */\n",
+        );
+        assert_eq!(
+            js.issues
+                .iter()
+                .filter(|i| i.rule == rules::COMMENTED_OUT_CODE)
+                .count(),
+            1
         );
     }
 

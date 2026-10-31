@@ -317,6 +317,65 @@ async fn admins_manage_users_and_cannot_lock_everyone_out() {
 }
 
 #[tokio::test]
+async fn service_users_have_no_password_and_cannot_sign_in() {
+    let Some(db) = migrated().await else { return };
+    create_user(&db, "root", "admin").await;
+    let app = http::router(state(db.pool.clone()), None);
+    let admin = sign_in(&app, "root", PASSWORD).await.unwrap();
+    let post = |body: Value| request("POST", "/api/users", Some(&admin), Some(body));
+
+    let (code, _, ci) = send(
+        &app,
+        post(json!({ "username": "ci", "displayName": "CI pipelines", "role": "member" })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{ci}");
+    let id = ci["id"].as_i64().unwrap();
+    let (_, _, list) = send(&app, request("GET", "/api/users", Some(&admin), None)).await;
+    let row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "ci")
+        .unwrap();
+    assert_eq!(row["hasPassword"], false);
+    // It has no password hash, so no password matches.
+    assert!(sign_in(&app, "ci", PASSWORD).await.is_none());
+
+    // Admins have to be able to sign in.
+    let (code, _, body) = send(
+        &app,
+        post(json!({ "username": "ops", "displayName": "Ops", "role": "admin" })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("can't be an admin")
+    );
+    let make_admin = |body: Value| {
+        request(
+            "PATCH",
+            &format!("/api/users/{id}"),
+            Some(&admin),
+            Some(body),
+        )
+    };
+    let (code, _, _) = send(&app, make_admin(json!({ "role": "admin" }))).await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+    // With a password in the same change, it can.
+    let (code, _, body) = send(
+        &app,
+        make_admin(json!({ "role": "admin", "password": PASSWORD })),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert!(sign_in(&app, "ci", PASSWORD).await.is_some());
+}
+
+#[tokio::test]
 async fn users_change_their_own_password() {
     let Some(db) = migrated().await else { return };
     create_user(&db, "ann", "member").await;

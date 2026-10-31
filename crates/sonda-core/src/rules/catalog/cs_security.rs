@@ -13,7 +13,7 @@ pub(super) static RULES: &[Rule] = &[
         description: "MD5, SHA-1 and RIPEMD-160 are broken for security purposes: collisions can be computed.",
         message: "Use a stronger algorithm such as SHA-256.",
         category: Vulnerability,
-        severity: Major,
+        severity: Critical,
         effort_minutes: 15,
         sonar: &[exact("S4790")],
         check: Check::Query {
@@ -184,7 +184,7 @@ pub(super) static RULES: &[Rule] = &[
         description: "Data sent over http, ftp or telnet can be read and changed by anyone on the network path.",
         message: "Use the encrypted protocol (https, sftp, ssh) instead.",
         category: Vulnerability,
-        severity: Critical,
+        severity: Minor,
         effort_minutes: 5,
         sonar: &[related("S5332")],
         check: Check::Query {

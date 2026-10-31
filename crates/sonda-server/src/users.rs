@@ -117,22 +117,35 @@ fn dummy_hash() -> &'static str {
 
 // ------------------------------------------------------------ persistence
 
+/// Admins have to be able to sign in: a passwordless admin would count as
+/// the last active admin while nobody could act as it.
+const NO_PASSWORD_ADMIN: &str =
+    "a user without a password can't sign in, so it can't be an admin; set a password first";
+
+/// Without a password, a service user: it can't sign in and only owns
+/// tokens (such as CI's), so it must be a member.
 pub async fn create(
     pool: &PgPool,
     username: &str,
     display_name: &str,
     role: &str,
-    password: &str,
+    password: Option<&str>,
 ) -> Result<User, ApiError> {
     check_username(username).map_err(ApiError::Unprocessable)?;
     check_display_name(display_name).map_err(ApiError::Unprocessable)?;
-    check_password(password).map_err(ApiError::Unprocessable)?;
     if !matches!(role, "admin" | "member") {
         return Err(ApiError::Unprocessable(
             "role must be admin or member".into(),
         ));
     }
-    let hash = hash_password(password.to_string()).await?;
+    let hash = match password {
+        Some(p) => {
+            check_password(p).map_err(ApiError::Unprocessable)?;
+            Some(hash_password(p.to_string()).await?)
+        }
+        None if role == "admin" => return Err(ApiError::Unprocessable(NO_PASSWORD_ADMIN.into())),
+        None => None,
+    };
     let sql = format!(
         "WITH u AS (INSERT INTO users (username, display_name, role, password_hash)
                     VALUES ($1, $2, $3::user_role, $4) ON CONFLICT (username) DO NOTHING RETURNING *)
@@ -156,7 +169,7 @@ pub async fn bootstrap_admin(pool: &PgPool, admin: Option<(String, String)>) -> 
         .await?;
     match (users, admin) {
         (0, Some((username, password))) => {
-            create(pool, &username, "Administrator", "admin", &password)
+            create(pool, &username, "Administrator", "admin", Some(&password))
                 .await
                 .map_err(|e| anyhow::anyhow!("creating the first admin: {e:?}"))?;
             tracing::info!(username = %username, "created the first admin");
@@ -205,7 +218,9 @@ pub struct NewUser {
     username: String,
     display_name: String,
     role: String,
-    password: String,
+    /// None for a service user, which can't sign in.
+    #[serde(default)]
+    password: Option<String>,
 }
 
 pub async fn create_user(
@@ -218,7 +233,7 @@ pub async fn create_user(
         &new.username,
         &new.display_name,
         &new.role,
-        &new.password,
+        new.password.as_deref(),
     )
     .await?;
     tracing::info!(by = caller.name(), username = %user.username, role = %user.role, "created user");
@@ -273,6 +288,16 @@ pub async fn update_user(
         return Err(ApiError::Unprocessable(
             "the last active admin cannot be disabled or made a member".into(),
         ));
+    }
+    if patch.role.as_deref() == Some("admin") && hash.is_none() {
+        let has_password: Option<bool> =
+            sqlx::query_scalar("SELECT password_hash IS NOT NULL FROM users WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if has_password == Some(false) {
+            return Err(ApiError::Unprocessable(NO_PASSWORD_ADMIN.into()));
+        }
     }
     let sql = format!(
         "WITH u AS (

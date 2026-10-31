@@ -19,9 +19,12 @@ mod js_more;
 mod js_security;
 mod js_semantic;
 mod py;
+mod py_cdk;
 mod py_extra;
+mod py_last;
 mod py_more;
 mod py_quality;
+mod py_regex;
 mod py_security;
 pub(super) mod standards;
 
@@ -50,6 +53,9 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         py_quality::RULES,
         py_more::RULES,
         py_extra::RULES,
+        py_cdk::RULES,
+        py_regex::RULES,
+        py_last::RULES,
         java::RULES,
         java_security::RULES,
         java_bugs::RULES,
@@ -109,6 +115,18 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "py/hint-missing-parameter",
     "py/trailing-comment",
     "py/compression-namespace",
+    // Documentation and licence-header policies are a project decision.
+    "py/missing-docstring",
+    "py/missing-license-header",
+    // Formatting rules a formatter or editor config already enforces.
+    "common/trailing-whitespace",
+    "common/line-length",
+    "common/file-length",
+    "common/final-newline",
+    // Outside SonarQube's default C# profile.
+    "cs/protected-in-sealed",
+    "cs/redundant-constructor",
+    "cs/empty-string-comparison",
 ];
 
 // ---------------------------------------------------- shared filters

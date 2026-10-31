@@ -15,6 +15,11 @@ pub(crate) const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
 pub(crate) const FUNCTION_LENGTH: &str = "common/function-length";
 pub(crate) const TOO_MANY_PARAMETERS: &str = "common/too-many-parameters";
 pub(crate) const TODO_COMMENT: &str = "common/todo-comment";
+pub(crate) const TRAILING_WHITESPACE: &str = "common/trailing-whitespace";
+pub(crate) const LINE_LENGTH: &str = "common/line-length";
+pub(crate) const FILE_LENGTH: &str = "common/file-length";
+pub(crate) const FINAL_NEWLINE: &str = "common/final-newline";
+pub(crate) const COMMENTED_OUT_CODE: &str = "common/commented-out-code";
 
 /// Extra check on the node captured as `@match`.
 #[derive(Clone, Copy)]

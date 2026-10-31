@@ -676,6 +676,26 @@ describe('Users', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('last active admin')
   })
 
+  it('adds a service user without a password, to own CI tokens', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin')
+    await screen.findByRole('cell', { name: /Dev Patel/ })
+    await user.type(screen.getByLabelText('Username'), 'ci')
+    await user.type(screen.getByLabelText('Display name'), 'CI pipelines')
+    await user.click(screen.getByRole('checkbox', { name: /Service user/ }))
+    expect(screen.queryByLabelText('Initial password')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Role')).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Add user' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Created ci, a service user')
+    const row = (await screen.findByRole('cell', { name: /CI pipelines/ })).closest('tr')!
+    expect(row).toHaveTextContent('Service user · can’t sign in')
+    expect(within(row).getByRole('button', { name: 'Set password' })).toBeInTheDocument()
+    // Admins have to be able to sign in.
+    expect(within(row).getByRole('option', { name: 'Admin' })).toBeDisabled()
+    const tokens = screen.getByRole('region', { name: 'Tokens' })
+    expect(within(within(tokens).getByLabelText('Owner')).getByRole('option', { name: 'ci' })).toBeInTheDocument()
+  })
+
   it('keeps administration from members', async () => {
     const user = userEvent.setup()
     renderAt('/admin', createMockApi(0, { signedIn: false, readsRequireAuth: true }))

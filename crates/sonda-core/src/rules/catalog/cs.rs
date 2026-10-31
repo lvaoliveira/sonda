@@ -157,8 +157,8 @@ pub(super) static RULES: &[Rule] = &[
         name: "Set, init, add and remove accessors should use 'value'",
         description: "An accessor that never reads `value` silently drops what the caller passed in.",
         message: "Use 'value' in this accessor, or throw if the operation isn't supported.",
-        category: Bug,
-        severity: Major,
+        category: CodeSmell,
+        severity: Blocker,
         effort_minutes: 5,
         sonar: &[exact("S3237")],
         check: Check::Query {
@@ -508,7 +508,7 @@ pub(super) static RULES: &[Rule] = &[
         description: "`xs.Where(p).First()` is `xs.First(p)`: one call is shorter and does the same.",
         message: "Pass the predicate to this method and remove the Where() call.",
         category: CodeSmell,
-        severity: Minor,
+        severity: Major,
         effort_minutes: 2,
         sonar: &[related("S2971")],
         check: Check::Query {
@@ -559,7 +559,7 @@ pub(super) static RULES: &[Rule] = &[
                       relied on, and changes race between threads.",
         message: "Make this field 'readonly' or 'const', or private behind a property.",
         category: CodeSmell,
-        severity: Minor,
+        severity: Critical,
         effort_minutes: 20,
         sonar: &[exact("S2223")],
         check: Check::Query {
@@ -660,7 +660,7 @@ pub(super) static RULES: &[Rule] = &[
         description: "Only subclasses can call an abstract class's constructor, so `public` promises more than it gives.",
         message: "Make this constructor protected.",
         category: CodeSmell,
-        severity: Minor,
+        severity: Major,
         effort_minutes: 2,
         sonar: &[exact("S3442")],
         check: Check::Query {
@@ -1600,7 +1600,9 @@ pub(super) mod tests {
     use crate::rules::RuleSet;
 
     pub(crate) fn flagged(rule: &str, src: &str) -> Vec<usize> {
-        let cfg = Config::default();
+        let mut cfg = Config::default();
+        // Rules that are off by default still have to work when enabled.
+        cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
         let file = analyze("t.cs", Lang::CSharp, src, &rules, &cfg, far_deadline()).unwrap();
         file.issues
