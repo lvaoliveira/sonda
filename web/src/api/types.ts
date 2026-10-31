@@ -60,6 +60,8 @@ export interface FocusItem {
   trail: { text: string; emphasis: 'muted' | 'strong' | 'faint' }[]
   cta: string
   drill: DrillMetric
+  /** About specific issues: the Issues page filtered to them, opened instead of the drawer. */
+  link?: string | null
 }
 
 export interface HealthDimension {

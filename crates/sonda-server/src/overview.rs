@@ -62,6 +62,9 @@ pub struct FocusItem {
     pub trail: Vec<Crumb>,
     pub cta: &'static str,
     pub drill: &'static str,
+    /// Where the item leads instead of `drill`'s drawer, when it's about
+    /// specific issues: the Issues page, filtered to them.
+    pub link: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -225,8 +228,8 @@ struct TrackedIssue {
 type IssueRow = (i64, String, String, bool, f64, Option<f64>, bool);
 
 /// A new blocker or critical issue: project, severity, message, path, line,
-/// and when it was first seen.
-type SevereRow = (i64, String, String, String, i32, f64);
+/// when it was first seen, its id and its branch.
+type SevereRow = (i64, String, String, String, i32, f64, i64, String);
 
 type AnalysisRow = (i64, String, String, String, f64, Value, Value, bool);
 
@@ -315,7 +318,7 @@ pub async fn get_overview(
     .collect();
     let new_severe: Vec<SevereRow> = sqlx::query_as(
         "SELECT i.project_id, i.severity, i.message, i.path, i.line,
-                extract(epoch FROM fa.received_at)::float8
+                extract(epoch FROM fa.received_at)::float8, i.id, i.branch
          FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          JOIN analyses fa ON fa.id = i.first_analysis_id
@@ -996,6 +999,7 @@ fn focus_items(
                 ],
                 cta: "Review",
                 drill,
+                link: None,
             },
         ));
     }
@@ -1045,11 +1049,50 @@ fn focus_items(
                 ],
                 cta: "Open",
                 drill: "critical",
+                link: Some(issues_link(&key_of(project), &list)),
             },
         ));
     }
     items.sort_by_key(|(rank, _)| *rank);
     items.into_iter().map(|(_, item)| item).collect()
+}
+
+/// The Issues page, filtered to `list`'s project, branch and severities,
+/// and to its file when they share one, with the headline issue selected.
+fn issues_link(key: &str, list: &[&SevereRow]) -> String {
+    let head = list[0];
+    let mut severities: Vec<&str> = ["blocker", "critical"]
+        .into_iter()
+        .filter(|s| list.iter().any(|i| i.1 == *s))
+        .collect();
+    severities.dedup();
+    let mut pairs = vec![
+        ("project", key.to_string()),
+        ("branch", head.7.clone()),
+        ("sev", severities.join(",")),
+    ];
+    if list.iter().all(|i| i.3 == head.3) {
+        pairs.push(("file", head.3.clone()));
+    }
+    pairs.push(("issue", head.6.to_string()));
+    let query: Vec<String> = pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={}", encode_component(v)))
+        .collect();
+    format!("/issues?{}", query.join("&"))
+}
+
+/// Percent-encodes everything but RFC 3986's unreserved characters, as
+/// JavaScript's `encodeURIComponent` does for these values (`,` included).
+fn encode_component(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(b).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn drill_for(metric: &str) -> &'static str {

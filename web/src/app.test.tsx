@@ -628,6 +628,18 @@ describe('Overview', () => {
     expect(screen.getByText('feature_store/ingest/backfill.py')).toBeInTheDocument()
   })
 
+  it('opens a new issue from Where to focus, not every critical issue', async () => {
+    const user = userEvent.setup()
+    renderAt('/')
+    await user.click(await screen.findByRole('button', { name: /Live Stripe secret committed to billing-service/ }))
+    // The Issues page, filtered to that file's blockers, with the issue open.
+    expect(await screen.findByText(/Showing billing-service on main · blocker · src\/main\/java\/com\/acme\/billing\/config\/StripeConfig\.java/)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    const list = await screen.findByRole('listbox')
+    expect(within(list).getAllByRole('option')).toHaveLength(1)
+    expect(within(list).getByRole('option', { selected: true })).toHaveTextContent('Live Stripe secret key hard-coded')
+  })
+
   it('says so honestly when the server has no overview yet', async () => {
     const api = createMockApi(0)
     renderAt('/', { ...api, overview: undefined, drill: undefined })

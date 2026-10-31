@@ -143,6 +143,24 @@ async fn the_overview_is_built_from_analysis_history() {
     assert_eq!(focus[0]["tag"], "Blocks main · 2 analyses");
     assert_eq!(focus[0]["drill"], "vulns");
     assert_eq!(focus[1]["title"], "1 new critical issue in payments");
+    // The gate opens its drill-down; the new issue, the Issues page on it.
+    assert_eq!(focus[0]["link"], Value::Null);
+    let link = focus[1]["link"].as_str().unwrap();
+    let (rest, id) = link.rsplit_once("&issue=").unwrap();
+    let (path, severity): (String, String) =
+        sqlx::query_as("SELECT path, severity FROM issues WHERE id = $1")
+            .bind(id.parse::<i64>().unwrap())
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(severity, "critical");
+    assert_eq!(
+        rest,
+        format!(
+            "/issues?project=payments&branch=main&sev=critical&file={}",
+            path.replace('/', "%2F")
+        )
+    );
     assert_eq!(o["focusTotal"], 2);
 
     // Issue flow and severities come from when issues appeared.
