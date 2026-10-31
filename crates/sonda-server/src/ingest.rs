@@ -71,9 +71,9 @@ struct Report {
     files: Vec<File>,
     issues: Vec<Issue>,
     warnings: Vec<String>,
-    /// Older CLIs don't send it (ADR-0009).
+    /// Older CLIs don't send it (ADR-0009): absent, not empty.
     #[serde(default)]
-    dependencies: Vec<DependencyIn>,
+    dependencies: Option<Vec<DependencyIn>>,
 }
 
 #[derive(Deserialize)]
@@ -128,6 +128,8 @@ pub struct Analysis {
     pub issues: Vec<StoredIssue>,
     pub codeowners: Option<String>,
     pub dependencies: Vec<StoredDependency>,
+    /// Whether the report carried dependency data, even none.
+    pub dependencies_recorded: bool,
 }
 
 pub struct StoredDependency {
@@ -449,7 +451,9 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     if r.warnings.len() > MAX_FILES || r.warnings.iter().any(|w| w.len() > MAX_TEXT) {
         return Err(invalid("the report's warnings are too large".into()));
     }
-    let dependencies = validate_dependencies(r.dependencies).map_err(invalid)?;
+    let dependencies_recorded = r.dependencies.is_some();
+    let dependencies =
+        validate_dependencies(r.dependencies.unwrap_or_default()).map_err(invalid)?;
     Ok(Analysis {
         meta,
         commit_message: upload.commit_message,
@@ -464,6 +468,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         issues,
         codeowners: upload.codeowners,
         dependencies,
+        dependencies_recorded,
     })
 }
 

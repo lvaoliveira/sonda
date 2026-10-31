@@ -701,6 +701,23 @@ fn finding_keys(deps: &[DependencyRow]) -> HashSet<FindingKey> {
         .collect()
 }
 
+/// What new vulnerable dependencies compare with on the main branch: the
+/// period's start, or, when that analysis came from a CLI that didn't send
+/// dependencies, the first analysis since that did. Without it, every
+/// finding of a project older than dependency uploads would look new.
+async fn base_analysis(pool: &PgPool, start: i64) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT min(a.id) FROM analyses a JOIN analyses s ON s.id = $1
+         WHERE a.project_id = s.project_id AND a.branch = s.branch AND a.id >= s.id
+           AND (a.dependencies_recorded
+                OR (a.dependencies_recorded IS NULL
+                    AND EXISTS (SELECT 1 FROM analysis_dependencies d WHERE d.analysis_id = a.id)))",
+    )
+    .bind(start)
+    .fetch_one(pool)
+    .await
+}
+
 async fn on_main_branch(pool: &PgPool, analysis: i64) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT a.branch = p.main_branch FROM analyses a JOIN projects p ON p.id = a.project_id
@@ -771,7 +788,7 @@ pub async fn refresh_gates(pool: &PgPool, scope: GateScope) -> Result<usize, sql
         // On the main branch, what its new code period started with, by
         // today's advisories too.
         let start = match crate::new_code::period(pool, project).await? {
-            Some(p) if on_main_branch(pool, id).await? => Some(p.analysis),
+            Some(p) if on_main_branch(pool, id).await? => base_analysis(pool, p.analysis).await?,
             _ => None,
         };
         let known = match start {
