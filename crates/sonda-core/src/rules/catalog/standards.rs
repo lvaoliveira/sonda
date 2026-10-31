@@ -93,6 +93,8 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("py/cdk-api-method-no-auth", &[306], &[]),
     ("py/cdk-unrestricted-outbound", &[284], &[]),
     ("py/s3-bucket-owner", &[441, 693], &[]),
+    // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
+    ("py/regex-catastrophic-backtracking", &[1333], &[]),
     ("py/no-eval", &[95], &[A03]),
     ("py/subprocess-shell", &[78], &[A03]),
     ("py/pickle-load", &[502], &[A08]),

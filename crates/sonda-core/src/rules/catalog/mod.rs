@@ -21,6 +21,7 @@ mod py_cdk;
 mod py_extra;
 mod py_more;
 mod py_quality;
+mod py_regex;
 mod py_security;
 pub(super) mod standards;
 
@@ -50,6 +51,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         py_more::RULES,
         py_extra::RULES,
         py_cdk::RULES,
+        py_regex::RULES,
         java::RULES,
         java_security::RULES,
         java_bugs::RULES,
