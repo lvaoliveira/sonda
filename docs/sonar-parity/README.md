@@ -15,7 +15,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.1
 | JavaScript | 461 | 232 | 37 | 117 | 75 | 0 |
 | TypeScript | 481 | 222 | 35 | 146 | 78 | 0 |
 | Python | 397 | 126 | 11 | 260 | 0 | 0 |
-| Java | 703 | 9 | 1 | 672 | 0 | 21 |
+| Java | 703 | 34 | 7 | 641 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 
@@ -25,10 +25,11 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-1 rules differ:
+2 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
 | `js/hardcoded-ip` | none | CWE-547, A01 |
+| `java/broadcast-without-permission` | CWE-927 | CWE-927, A04 |
 
 Per-language details: the `.csv` files in this directory.

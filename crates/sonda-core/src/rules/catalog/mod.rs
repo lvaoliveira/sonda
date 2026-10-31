@@ -4,6 +4,7 @@
 mod c;
 mod common;
 mod java;
+mod java_security;
 mod js;
 mod js_a11y;
 mod js_modern;
@@ -36,6 +37,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         py_security::RULES,
         py_quality::RULES,
         java::RULES,
+        java_security::RULES,
         c::RULES,
     ]
     .into_iter()

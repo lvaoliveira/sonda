@@ -200,8 +200,8 @@ java:S2063,code_smell,critical,no,main,syntactic,todo,,,
 java:S2065,code_smell,minor,yes,main,syntactic,todo,,,
 java:S2066,bug,minor,yes,main,syntactic,todo,,,
 java:S2068,vulnerability,major,yes,main,syntactic,todo,,259 798,A07
-java:S2077,vulnerability,major,yes,main,syntactic,todo,,89 943,A03
-java:S2092,vulnerability,minor,yes,main,syntactic,todo,,311 315 614,A04 A05
+java:S2077,vulnerability,major,yes,main,syntactic,partial,java/sql-built-dynamically,89 943,A03
+java:S2092,vulnerability,minor,yes,main,syntactic,done,java/cookie-not-secure,311 315 614,A04 A05
 java:S2093,code_smell,critical,yes,all,syntactic,todo,,,
 java:S2094,code_smell,minor,yes,main,syntactic,todo,,,
 java:S2095,bug,blocker,yes,all,dataflow,todo,,,
@@ -212,7 +212,7 @@ java:S2110,bug,major,yes,main,syntactic,todo,,,
 java:S2111,bug,major,yes,main,syntactic,todo,,,
 java:S2112,code_smell,major,yes,main,syntactic,todo,,,
 java:S2114,bug,major,yes,main,syntactic,todo,,,
-java:S2115,vulnerability,blocker,yes,main,syntactic,todo,,521,A07
+java:S2115,vulnerability,blocker,yes,main,syntactic,done,java/empty-db-password,521,A07
 java:S2116,bug,major,yes,main,syntactic,todo,,,
 java:S2118,bug,major,yes,main,syntactic,todo,,,
 java:S2119,bug,critical,yes,main,syntactic,todo,,,
@@ -276,12 +276,12 @@ java:S2232,code_smell,major,yes,main,syntactic,todo,,,
 java:S2234,code_smell,major,yes,main,syntactic,todo,,,
 java:S2235,code_smell,critical,yes,main,syntactic,todo,,,
 java:S2236,bug,blocker,yes,main,syntactic,todo,,,
-java:S2245,vulnerability,major,yes,main,syntactic,todo,,326 330 338 1241,A02
+java:S2245,vulnerability,major,yes,main,syntactic,partial,java/random-secret,326 330 338 1241,A02
 java:S2250,code_smell,minor,no,main,syntactic,todo,,,
 java:S2251,bug,major,yes,main,syntactic,todo,,,
 java:S2252,bug,major,yes,main,syntactic,todo,,,
 java:S2253,code_smell,major,no,main,syntactic,template,,,
-java:S2254,vulnerability,critical,yes,main,syntactic,todo,,807,A04
+java:S2254,vulnerability,critical,yes,main,syntactic,done,java/requested-session-id,807,A04
 java:S2257,vulnerability,critical,yes,main,syntactic,todo,,327,A02
 java:S2259,bug,major,yes,main,dataflow,todo,,,
 java:S2260,code_smell,major,no,all,syntactic,todo,,,
@@ -314,7 +314,7 @@ java:S2447,code_smell,critical,yes,main,syntactic,todo,,,
 java:S2479,code_smell,critical,yes,main,syntactic,todo,,,
 java:S2583,bug,major,yes,all,dataflow,todo,,,
 java:S2589,code_smell,major,yes,all,dataflow,todo,,,
-java:S2612,vulnerability,major,yes,main,syntactic,todo,,266 732,A01 A04
+java:S2612,vulnerability,major,yes,main,syntactic,done,java/world-permissions,266 732,A01 A04
 java:S2629,code_smell,major,yes,main,syntactic,todo,,,
 java:S2637,bug,minor,yes,main,dataflow,todo,,,
 java:S2638,code_smell,critical,yes,main,syntactic,todo,,,
@@ -384,8 +384,8 @@ java:S3252,code_smell,critical,yes,main,syntactic,todo,,,
 java:S3254,code_smell,minor,no,main,syntactic,todo,,,
 java:S3305,code_smell,critical,yes,main,syntactic,todo,,,
 java:S3306,bug,major,no,main,syntactic,todo,,,
-java:S3329,vulnerability,critical,yes,main,syntactic,todo,,327 780,A02
-java:S3330,vulnerability,minor,yes,main,syntactic,todo,,1004,A05
+java:S3329,vulnerability,critical,yes,main,syntactic,done,java/predictable-iv,327 780,A02
+java:S3330,vulnerability,minor,yes,main,syntactic,done,java/cookie-not-httponly,1004,A05
 java:S3346,bug,major,yes,main,syntactic,todo,,,
 java:S3358,code_smell,major,yes,main,syntactic,todo,,,
 java:S3366,code_smell,major,no,main,syntactic,todo,,,
@@ -416,7 +416,7 @@ java:S3740,code_smell,major,no,main,syntactic,todo,,,
 java:S3749,code_smell,critical,no,main,syntactic,todo,,,
 java:S3750,bug,major,no,main,syntactic,todo,,,
 java:S3751,code_smell,major,yes,main,syntactic,todo,,,
-java:S3752,vulnerability,minor,yes,main,syntactic,todo,,352,A01 A04
+java:S3752,vulnerability,minor,yes,main,syntactic,done,java/request-mapping-any-method,352,A01 A04
 java:S3753,bug,blocker,yes,main,syntactic,todo,,,
 java:S3776,code_smell,critical,yes,main,syntactic,done,common/cognitive-complexity,,
 java:S3824,code_smell,major,yes,all,dataflow,todo,,,
@@ -436,7 +436,7 @@ java:S4011,code_smell,major,no,main,syntactic,template,,,
 java:S4030,code_smell,minor,yes,all,syntactic,todo,,,
 java:S4032,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4034,code_smell,minor,yes,main,syntactic,todo,,,
-java:S4036,vulnerability,minor,yes,main,syntactic,todo,,426 427,A08
+java:S4036,vulnerability,minor,yes,main,syntactic,done,java/os-command-path,426 427,A08
 java:S4042,code_smell,major,yes,main,syntactic,todo,,,
 java:S4065,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4087,code_smell,minor,yes,main,syntactic,todo,,,
@@ -451,24 +451,24 @@ java:S4274,code_smell,major,yes,main,syntactic,todo,,,
 java:S4275,bug,critical,yes,main,syntactic,todo,,,
 java:S4276,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4288,code_smell,major,no,main,syntactic,todo,,,
-java:S4347,vulnerability,critical,yes,main,syntactic,todo,,330 332 336 337,A02
+java:S4347,vulnerability,critical,yes,main,syntactic,done,java/secure-random-seed,330 332 336 337,A02
 java:S4348,bug,major,yes,main,syntactic,todo,,,
 java:S4349,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4351,bug,major,yes,main,syntactic,todo,,,
-java:S4423,vulnerability,critical,yes,main,syntactic,todo,,295 326 327,A02 A07
+java:S4423,vulnerability,critical,yes,main,syntactic,done,java/weak-tls-version,295 326 327,A02 A07
 java:S4425,code_smell,major,yes,main,syntactic,todo,,,
-java:S4426,vulnerability,critical,yes,main,syntactic,todo,,326,A02
-java:S4433,vulnerability,critical,yes,main,syntactic,todo,,521,A07
+java:S4426,vulnerability,critical,yes,main,syntactic,done,java/weak-key-size,326,A02
+java:S4433,vulnerability,critical,yes,main,syntactic,done,java/ldap-anonymous,521,A07
 java:S4434,vulnerability,major,yes,main,syntactic,todo,,502,A08
 java:S4449,code_smell,major,yes,main,dataflow,todo,,,
 java:S4454,code_smell,critical,yes,main,syntactic,todo,,,
 java:S4488,code_smell,minor,yes,main,syntactic,todo,,,
-java:S4502,vulnerability,critical,yes,main,syntactic,todo,,352,A01
+java:S4502,vulnerability,critical,yes,main,syntactic,partial,java/csrf-disabled,352,A01
 java:S4507,vulnerability,minor,yes,main,syntactic,todo,,215 489,A05
 java:S4512,vulnerability,critical,yes,main,syntactic,todo,,915,A03 A08
 java:S4517,bug,major,yes,main,syntactic,todo,,,
 java:S4524,code_smell,critical,yes,main,syntactic,todo,,,
-java:S4544,vulnerability,critical,yes,main,syntactic,todo,,502,A08
+java:S4544,vulnerability,critical,yes,main,syntactic,done,java/jackson-unsafe-typing,502,A08
 java:S4551,code_smell,major,no,main,syntactic,todo,,,
 java:S4601,vulnerability,critical,yes,main,syntactic,todo,,285 287,A01
 java:S4602,bug,blocker,yes,main,syntactic,todo,,,
@@ -479,8 +479,8 @@ java:S4682,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4684,vulnerability,critical,yes,main,syntactic,todo,,915,A08
 java:S4719,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4738,code_smell,major,yes,all,syntactic,todo,,,
-java:S4790,vulnerability,critical,yes,main,syntactic,done,java/weak-hash,1240,A02
-java:S4830,vulnerability,critical,yes,main,syntactic,todo,,295,A02 A05 A07
+java:S4790,vulnerability,critical,yes,main,syntactic,done,java/weak-hash java/weak-hash-library,1240,A02
+java:S4830,vulnerability,critical,yes,main,syntactic,done,java/trust-manager-accepts-all,295,A02 A05 A07
 java:S4838,code_smell,minor,yes,main,syntactic,todo,,,
 java:S4925,code_smell,major,yes,main,syntactic,todo,,,
 java:S4926,code_smell,minor,no,main,syntactic,todo,,,
@@ -490,29 +490,29 @@ java:S4970,code_smell,critical,yes,main,syntactic,todo,,,
 java:S4973,bug,major,yes,main,syntactic,done,java/string-reference-equality,,
 java:S4977,code_smell,minor,yes,main,syntactic,todo,,,
 java:S5042,code_smell,major,no,main,syntactic,deprecated,,,
-java:S5122,vulnerability,major,yes,main,syntactic,todo,,346 942,A05 A07
+java:S5122,vulnerability,major,yes,main,syntactic,partial,java/cors-any-origin,346 942,A05 A07
 java:S5128,code_smell,critical,no,main,syntactic,todo,,,
 java:S5164,bug,major,yes,main,syntactic,todo,,,
 java:S5194,code_smell,minor,no,main,syntactic,todo,,,
 java:S5247,vulnerability,major,yes,main,syntactic,todo,,79,A03
 java:S5261,code_smell,major,yes,main,syntactic,todo,,,
 java:S5301,vulnerability,minor,yes,main,syntactic,todo,,502,A08
-java:S5320,vulnerability,major,yes,main,syntactic,todo,,927,A04
+java:S5320,vulnerability,major,yes,main,syntactic,done,java/broadcast-without-permission,927,A04
 java:S5322,vulnerability,critical,yes,main,syntactic,todo,,925 926,
-java:S5324,vulnerability,critical,yes,main,syntactic,todo,,312,A04
+java:S5324,vulnerability,critical,yes,main,syntactic,done,java/android-external-storage,312,A04
 java:S5329,code_smell,major,yes,main,syntactic,todo,,,
-java:S5332,vulnerability,minor,yes,main,syntactic,todo,,319,A02
+java:S5332,vulnerability,minor,yes,main,syntactic,partial,java/cleartext-url,319,A02
 java:S5344,vulnerability,critical,yes,main,syntactic,todo,,256 916,A02 A04
 java:S5361,code_smell,critical,yes,main,syntactic,todo,,,
 java:S5411,code_smell,minor,yes,main,syntactic,todo,,,
 java:S5413,code_smell,major,yes,main,syntactic,todo,,,
-java:S5443,vulnerability,critical,yes,main,syntactic,todo,,377 379,A01
-java:S5445,vulnerability,critical,yes,main,syntactic,todo,,377 379,A01
-java:S5527,vulnerability,critical,yes,main,syntactic,todo,,297,A02 A05 A07
-java:S5542,vulnerability,critical,yes,main,syntactic,todo,,327 780,A02
-java:S5547,vulnerability,critical,yes,main,syntactic,todo,,326 327,A02
+java:S5443,vulnerability,critical,yes,main,syntactic,done,java/public-tmp,377 379,A01
+java:S5445,vulnerability,critical,yes,main,syntactic,done,java/create-temp-file,377 379,A01
+java:S5527,vulnerability,critical,yes,main,syntactic,done,java/hostname-verifier-accepts-all,297,A02 A05 A07
+java:S5542,vulnerability,critical,yes,main,syntactic,done,java/insecure-cipher-mode,327 780,A02
+java:S5547,vulnerability,critical,yes,main,syntactic,done,java/weak-cipher,326 327,A02
 java:S5612,code_smell,major,no,main,syntactic,todo,,,
-java:S5659,vulnerability,critical,yes,main,syntactic,todo,,347,A02
+java:S5659,vulnerability,critical,yes,main,syntactic,done,java/jwt-unverified,347,A02
 java:S5663,code_smell,minor,yes,main,syntactic,todo,,,
 java:S5664,code_smell,major,yes,main,syntactic,todo,,,
 java:S5665,code_smell,minor,yes,main,syntactic,todo,,,
@@ -556,7 +556,7 @@ java:S5866,bug,major,yes,main,syntactic,todo,,,
 java:S5867,code_smell,minor,no,main,syntactic,todo,,,
 java:S5868,bug,major,yes,main,syntactic,todo,,,
 java:S5869,code_smell,major,yes,main,syntactic,todo,,,
-java:S5876,vulnerability,critical,yes,main,syntactic,todo,,384,A07
+java:S5876,vulnerability,critical,yes,main,syntactic,done,java/session-fixation-disabled,384,A07
 java:S5917,bug,major,yes,main,syntactic,todo,,,
 java:S5958,code_smell,major,yes,test,syntactic,todo,,,
 java:S5960,bug,major,yes,main,syntactic,todo,,,
@@ -604,7 +604,7 @@ java:S6243,code_smell,major,yes,main,syntactic,todo,,,
 java:S6244,code_smell,minor,yes,main,syntactic,todo,,,
 java:S6246,code_smell,minor,yes,main,syntactic,todo,,,
 java:S6262,code_smell,minor,yes,main,syntactic,todo,,,
-java:S6263,vulnerability,major,yes,main,syntactic,todo,,798,
+java:S6263,vulnerability,major,yes,main,syntactic,done,java/aws-access-key,798,
 java:S6288,vulnerability,major,yes,main,syntactic,todo,,522,A04
 java:S6293,vulnerability,major,yes,main,syntactic,todo,,1390,A07
 java:S6301,vulnerability,major,yes,main,syntactic,todo,,311 321,A02 A04
@@ -613,7 +613,7 @@ java:S6331,code_smell,major,yes,main,syntactic,todo,,,
 java:S6353,code_smell,minor,yes,main,syntactic,todo,,,
 java:S6355,code_smell,major,yes,main,syntactic,todo,,,
 java:S6362,vulnerability,minor,yes,main,syntactic,deprecated,,,
-java:S6363,vulnerability,major,yes,main,syntactic,todo,,79,A01
+java:S6363,vulnerability,major,yes,main,syntactic,done,java/webview-file-access,79,A01
 java:S6373,vulnerability,blocker,yes,main,dataflow,todo,,611 827,A05
 java:S6374,vulnerability,major,no,main,dataflow,deprecated,,,
 java:S6376,vulnerability,major,yes,main,dataflow,todo,,776,A05
@@ -624,7 +624,7 @@ java:S6397,code_smell,major,yes,main,syntactic,todo,,,
 java:S6411,code_smell,major,no,main,syntactic,todo,,,
 java:S6418,vulnerability,blocker,yes,main,syntactic,todo,,798,A07
 java:S6432,vulnerability,critical,yes,main,syntactic,todo,,323,A02
-java:S6437,vulnerability,blocker,yes,main,syntactic,todo,,259 798,A07
+java:S6437,vulnerability,blocker,yes,main,syntactic,partial,java/hardcoded-credential,259 798,A07
 java:S6485,code_smell,major,yes,main,syntactic,todo,,,
 java:S6539,code_smell,info,yes,main,syntactic,todo,,,
 java:S6541,code_smell,info,yes,main,syntactic,todo,,,
