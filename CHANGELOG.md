@@ -197,6 +197,11 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- `sonda scan --upload` scans and uploads in one step, with the same
+  options as `sonda upload` (checked before the scan starts), and sends
+  how long the scan took, which Recent analyses, the analyses list and the
+  analysis page show. The report itself doesn't carry it, so it stays the
+  same for the same inputs.
 - `sonda upload` sends the commit's subject line, read from git's objects
   when `--root` has the commit, and the server shows it in Recent
   analyses, the analyses list and the analysis page (`message`).

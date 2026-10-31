@@ -109,7 +109,7 @@ async fn analyses_are_listed_and_show_what_changed() {
 }
 
 #[tokio::test]
-async fn commit_messages_are_stored_and_shown() {
+async fn commit_messages_and_durations_are_stored_and_shown() {
     let Some(db) = TestDb::new().await else {
         return;
     };
@@ -118,6 +118,7 @@ async fn commit_messages_are_stored_and_shown() {
     let files = [("a.js", "let a = 1;\n")];
     let mut body = upload_json_for(dir.path(), &files, "shop", "main");
     body["commit_message"] = serde_json::json!("Fix refunds rounding");
+    body["scan_duration_ms"] = serde_json::json!(192_400);
     let (status, summary) = upload(&db, &body).await;
     assert_eq!(status, StatusCode::CREATED, "{summary}");
     let id = summary["analysis_id"].as_i64().unwrap();
@@ -126,6 +127,7 @@ async fn commit_messages_are_stored_and_shown() {
 
     let (_, detail) = api(&db, &format!("/api/analyses/{id}")).await;
     assert_eq!(detail["message"], "Fix refunds rounding");
+    assert_eq!(detail["duration"], "3m 12s");
     let (_, list) = api(&db, "/api/analyses?project=shop").await;
     let messages: Vec<(i64, Value)> = list["items"]
         .as_array()
@@ -137,6 +139,8 @@ async fn commit_messages_are_stored_and_shown() {
         messages,
         [(without, Value::Null), (id, "Fix refunds rounding".into())]
     );
+    assert_eq!(list["items"][1]["duration"], "3m 12s");
+    assert_eq!(list["items"][0]["duration"], Value::Null);
     let (status, overview) = api(&db, "/api/overview").await;
     assert_eq!(status, StatusCode::OK, "{overview}");
     let recent: Vec<Value> = overview["recent"]
@@ -146,6 +150,11 @@ async fn commit_messages_are_stored_and_shown() {
         .map(|r| r["message"].clone())
         .collect();
     assert_eq!(recent, [Value::Null, "Fix refunds rounding".into()]);
+    assert_eq!(overview["recent"][1]["duration"], "3m 12s");
+
+    body["scan_duration_ms"] = serde_json::json!(8 * 24 * 3_600_000u64);
+    assert_eq!(upload(&db, &body).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    body["scan_duration_ms"] = serde_json::json!(1000);
 
     for bad in ["", "  ", "line\nbreak", &"x".repeat(301)] {
         body["commit_message"] = serde_json::json!(bad);

@@ -50,64 +50,122 @@ pub struct UploadArgs {
 }
 
 pub fn run(args: UploadArgs) -> Result<ExitCode> {
-    // Everything that can fail locally fails before any connection is made.
-    let url = endpoint(&args.server)?;
-    let token = token(args.token_file.as_deref())?;
-    let report = read_capped(&args.report, MAX_REPORT_BYTES)?;
-    let meta = Meta {
+    let target = Target {
+        server: args.server,
         project: args.project,
         branch: args.branch,
         commit: args.commit,
-        version: args.project_version,
-    };
-    let upload = upload::prepare(&report, &args.root, meta)?;
-    let files = upload.sources.len();
-    let body = gzip(&serde_json::to_vec(&upload)?)?;
-    tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
+        project_version: args.project_version,
+        token_file: args.token_file,
+    }
+    .check()?;
+    let report = read_capped(&args.report, MAX_REPORT_BYTES)?;
+    target.send(&report, &args.root, None)?;
+    Ok(ExitCode::SUCCESS)
+}
 
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(10)))
-        .timeout_global(Some(Duration::from_secs(300)))
-        // A redirect would carry the token somewhere the user did not name.
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .user_agent(concat!("sonda/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into();
-    let mut response = agent
-        .post(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .header("Content-Encoding", "gzip")
-        .send(&body[..])
-        .with_context(|| format!("sending to {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let mut text = String::new();
-        // Best effort: the status alone already says what went wrong.
+/// Where an analysis goes and which one it is: `sonda upload`'s and
+/// `sonda scan --upload`'s options.
+pub struct Target {
+    pub server: String,
+    pub project: String,
+    pub branch: String,
+    pub commit: String,
+    pub project_version: Option<String>,
+    pub token_file: Option<PathBuf>,
+}
+
+/// A target whose URL, token and metadata passed the local checks.
+pub struct Checked {
+    url: String,
+    token: String,
+    server: String,
+    meta: Meta,
+}
+
+impl Target {
+    /// Everything that can fail locally fails here, before anything is
+    /// scanned, read or sent.
+    pub fn check(self) -> Result<Checked> {
+        let url = endpoint(&self.server)?;
+        let token = token(self.token_file.as_deref())?;
+        let meta = Meta {
+            project: self.project,
+            branch: self.branch,
+            commit: self.commit,
+            version: self.project_version,
+        };
+        upload::validate_meta(&meta)?;
+        Ok(Checked {
+            url,
+            token,
+            server: self.server,
+            meta,
+        })
+    }
+}
+
+impl Checked {
+    /// Sends `report` (JSON) and the sources under `root`. `scan_duration`
+    /// is how long the scan took, when this process ran it.
+    pub fn send(self, report: &[u8], root: &Path, scan_duration: Option<Duration>) -> Result<()> {
+        let Checked {
+            url,
+            token,
+            server,
+            meta,
+        } = self;
+        let mut upload = upload::prepare(report, root, meta)?;
+        upload.scan_duration_ms =
+            scan_duration.map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let files = upload.sources.len();
+        let body = gzip(&serde_json::to_vec(&upload)?)?;
+        tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
+
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_global(Some(Duration::from_secs(300)))
+            // A redirect would carry the token somewhere the user did not name.
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .user_agent(concat!("sonda/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .into();
+        let mut response = agent
+            .post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .header("Content-Encoding", "gzip")
+            .send(&body[..])
+            .with_context(|| format!("sending to {url}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let mut text = String::new();
+            // Best effort: the status alone already says what went wrong.
+            let _ = response
+                .body_mut()
+                .as_reader()
+                .take(MAX_ERROR_BYTES)
+                .read_to_string(&mut text);
+            bail!("the server answered {status}: {}", text.trim());
+        }
+        let mut answer = String::new();
+        // Best effort: the upload already succeeded; the summary is a bonus.
         let _ = response
             .body_mut()
             .as_reader()
             .take(MAX_ERROR_BYTES)
-            .read_to_string(&mut text);
-        bail!("the server answered {status}: {}", text.trim());
+            .read_to_string(&mut answer);
+        eprintln!(
+            "sonda: uploaded {} files for {}/{} to {}{}",
+            files,
+            upload.project,
+            upload.branch,
+            server,
+            summary(&answer)
+        );
+        Ok(())
     }
-    let mut answer = String::new();
-    // Best effort: the upload already succeeded; the summary is a bonus.
-    let _ = response
-        .body_mut()
-        .as_reader()
-        .take(MAX_ERROR_BYTES)
-        .read_to_string(&mut answer);
-    eprintln!(
-        "sonda: uploaded {} files for {}/{} to {}{}",
-        files,
-        upload.project,
-        upload.branch,
-        args.server,
-        summary(&answer)
-    );
-    Ok(ExitCode::SUCCESS)
 }
 
 /// The server's issue counts, e.g. ": 331 open issues (61 new, 2 fixed)",

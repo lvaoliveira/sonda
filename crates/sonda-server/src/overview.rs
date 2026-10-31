@@ -9,7 +9,8 @@
 
 use crate::api::ApiError;
 use crate::health::{
-    self, DAY, ago, condition_label, coverage_level, debt_level, debt_text, iso_date, plural,
+    self, DAY, ago, condition_label, coverage_level, debt_level, debt_text, duration_text,
+    iso_date, plural,
 };
 use crate::http::State;
 use axum::Json;
@@ -245,6 +246,7 @@ type RecentRow = (
     Value,
     bool,
     Option<String>,
+    Option<i64>,
 );
 
 pub async fn get_overview(
@@ -344,7 +346,7 @@ pub async fn get_overview(
     .await?;
     let recent: Vec<RecentRow> = sqlx::query_as(
         "SELECT a.id, p.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
-                a.measures, a.gate, a.gate_passed, a.commit_message
+                a.measures, a.gate, a.gate_passed, a.commit_message, a.scan_duration_ms
          FROM analyses a JOIN projects p ON p.id = a.project_id
          ORDER BY a.received_at DESC, a.id DESC LIMIT 8",
     )
@@ -453,7 +455,7 @@ fn build(
         recent: recent
             .into_iter()
             .map(
-                |(id, project, key, branch, sha, at, measures, gate, passed, message)| {
+                |(id, project, key, branch, sha, at, measures, gate, passed, message, duration)| {
                     let a = Analysis {
                         project,
                         key,
@@ -485,7 +487,7 @@ fn build(
                         sha: a.sha.chars().take(7).collect(),
                         message,
                         note,
-                        duration: None,
+                        duration: duration.map(duration_text),
                         ago: ago(now - a.at),
                     }
                 },

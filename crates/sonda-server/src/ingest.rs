@@ -44,6 +44,9 @@ struct Upload {
     /// don't send it.
     #[serde(default)]
     commit_message: Option<String>,
+    /// How long the scan took, from `sonda scan --upload`.
+    #[serde(default)]
+    scan_duration_ms: Option<u64>,
     report: Report,
     sources: Vec<Source>,
     /// The repository's CODEOWNERS file; older clients don't send it.
@@ -116,6 +119,7 @@ struct Issue {
 pub struct Analysis {
     pub meta: Meta,
     pub commit_message: Option<String>,
+    pub scan_duration_ms: Option<i64>,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
     pub measures: Value,
@@ -312,6 +316,13 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
             "invalid commit message: use 1-300 characters, no control characters".into(),
         ));
     }
+    // A week bounds what a scan could take.
+    let scan_duration_ms = match upload.scan_duration_ms {
+        Some(ms) if ms > 7 * 24 * 3_600_000 => {
+            return Err(invalid("invalid scan duration: more than a week".into()));
+        }
+        ms => ms.map(|ms| ms as i64),
+    };
     let r = upload.report;
     if r.tool != "sonda" {
         return Err(invalid("the report was not written by sonda".into()));
@@ -457,6 +468,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     Ok(Analysis {
         meta,
         commit_message: upload.commit_message,
+        scan_duration_ms,
         tool_version: r.version,
         new_code_reference: r.new_code_reference,
         measures: r.measures,

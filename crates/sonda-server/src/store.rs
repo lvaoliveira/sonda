@@ -56,9 +56,8 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     let analysis_id: i64 = sqlx::query_scalar(
         "INSERT INTO analyses (project_id, branch, commit_sha, tool_version,
              new_code_reference, measures, gate, gate_passed, warnings, codeowners,
-             project_version, commit_message,
-             dependencies_recorded)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             project_version, commit_message, scan_duration_ms, dependencies_recorded)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING id",
     )
     .bind(project_id)
@@ -73,6 +72,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     .bind(&a.codeowners)
     .bind(&a.meta.version)
     .bind(&a.commit_message)
+    .bind(a.scan_duration_ms)
     .bind(a.dependencies_recorded)
     .fetch_one(&mut *tx)
     .await?;

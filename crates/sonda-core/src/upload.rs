@@ -47,6 +47,10 @@ pub struct Upload {
     /// commit; shown with the analysis.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_message: Option<String>,
+    /// How long the scan took, when `sonda scan --upload` ran it. Not in
+    /// the report, which stays the same for the same inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_duration_ms: Option<u64>,
     /// The JSON report, forwarded as written; the server validates it fully.
     pub report: Value,
     pub sources: Vec<Source>,
@@ -83,6 +87,7 @@ pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Er
         project: meta.project,
         branch: meta.branch,
         commit_message: commit_message(root, &meta.commit),
+        scan_duration_ms: None,
         commit: meta.commit.to_ascii_lowercase(),
         version: meta.version,
         report,

@@ -50,6 +50,17 @@ sonda upload report.json --server http://127.0.0.1:9000 --token-file secrets/son
 # sonda: uploaded 170 files for payments/main to http://127.0.0.1:9000: 331 open issues (61 new, 2 fixed)
 ```
 
+Or scan and upload in one step, which also records how long the scan
+took (a report can't carry it: reports are byte-identical for the same
+inputs). The server, project, branch and token are checked before the
+scan starts; the server gets the full JSON report whatever `--format`
+the scan prints:
+
+```sh
+sonda scan . --upload --server http://127.0.0.1:9000 --token-file secrets/sonda_token \
+  --project payments --branch main --commit "$(git rev-parse HEAD)"
+```
+
 The first upload creates the project. Each upload becomes the branch's
 latest analysis, ordered by when it arrives, not by commit date. When
 `--root` is a git clone that has the commit, the upload carries the

@@ -96,6 +96,34 @@ struct ScanArgs {
     /// debugging; a parser crash then aborts the whole scan).
     #[arg(long)]
     no_isolation: bool,
+    /// Also upload the analysis to a sonda server, with how long the scan
+    /// took (as `sonda upload` does with a report; see its options).
+    #[arg(long, help_heading = "Upload", requires_all = ["project", "branch", "commit"])]
+    upload: bool,
+    /// Server URL (default: SONDA_SERVER).
+    #[arg(long, help_heading = "Upload", requires = "upload")]
+    server: Option<String>,
+    /// Project key on the server.
+    #[arg(long, help_heading = "Upload", requires = "upload")]
+    project: Option<String>,
+    /// Branch the analysis belongs to.
+    #[arg(long, help_heading = "Upload", requires = "upload")]
+    branch: Option<String>,
+    /// Analyzed commit, as hex (in GitHub Actions: $GITHUB_SHA).
+    #[arg(long, help_heading = "Upload", requires = "upload")]
+    commit: Option<String>,
+    /// The project's version, such as 2.3.0.
+    #[arg(long, help_heading = "Upload", requires = "upload")]
+    project_version: Option<String>,
+    /// File holding the API token (default: SONDA_TOKEN_FILE, else the
+    /// SONDA_TOKEN variable).
+    #[arg(
+        long,
+        value_name = "FILE",
+        help_heading = "Upload",
+        requires = "upload"
+    )]
+    token_file: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -250,6 +278,35 @@ fn run(cli: Cli) -> Result<ExitCode> {
 }
 
 fn scan(args: ScanArgs) -> Result<ExitCode> {
+    // Checked before scanning, so a wrong URL or token fails fast. The
+    // environment is read here, not by clap, so that SONDA_SERVER alone
+    // doesn't turn a plain scan into an upload.
+    let upload = if args.upload {
+        let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+        let server = match args.server.clone() {
+            Some(s) => s,
+            None => env("SONDA_SERVER")
+                .and_then(|v| v.into_string().ok())
+                .context("--upload needs --server or SONDA_SERVER")?,
+        };
+        Some(
+            upload::Target {
+                server,
+                project: args.project.clone().unwrap_or_default(),
+                branch: args.branch.clone().unwrap_or_default(),
+                commit: args.commit.clone().unwrap_or_default(),
+                project_version: args.project_version.clone(),
+                token_file: args
+                    .token_file
+                    .clone()
+                    .or_else(|| env("SONDA_TOKEN_FILE").map(PathBuf::from)),
+            }
+            .check()?,
+        )
+    } else {
+        None
+    };
+    let started = std::time::Instant::now();
     let cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
     let isolation = if args.no_isolation {
         Isolation::InProcess
@@ -268,7 +325,9 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         jobs: args.jobs,
         advisories: args.advisories,
     };
+    let root = opts.root.clone();
     let outcome = sonda_core::run(&opts, &cfg)?;
+    let scan_duration = started.elapsed();
     let passed = outcome.gate.passed;
     let rendered = report::render(&report::build(&outcome, args.only_new), args.format.into());
 
@@ -283,6 +342,12 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
             );
         }
         None => print!("{rendered}"),
+    }
+    if let Some(target) = upload {
+        // The server gets the full JSON report, whatever --format and
+        // --only-new chose for this one.
+        let report = report::render(&report::build(&outcome, false), report::Format::Json);
+        target.send(report.as_bytes(), &root, Some(scan_duration))?;
     }
     Ok(if passed || args.no_gate {
         ExitCode::SUCCESS
