@@ -76,6 +76,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
       <div className="flex flex-col gap-2">
         <span className="micro-label">Analysis · {a.project}</span>
         <h1 className="m-0 font-mono text-[26px] leading-[1.15] font-semibold tracking-[-0.02em]">{a.sha.slice(0, 12)}</h1>
+        {a.message && <p className="m-0 text-[15px] text-fg">{a.message}</p>}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px] text-fg-muted">
           <Link to={projectUrl} className="font-mono text-[12.5px]">
             {a.branch}

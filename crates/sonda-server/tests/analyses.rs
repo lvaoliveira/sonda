@@ -107,3 +107,52 @@ async fn analyses_are_listed_and_show_what_changed() {
     let (status, _) = api(&db, "/api/analyses/999999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn commit_messages_are_stored_and_shown() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("a.js", "let a = 1;\n")];
+    let mut body = upload_json_for(dir.path(), &files, "shop", "main");
+    body["commit_message"] = serde_json::json!("Fix refunds rounding");
+    let (status, summary) = upload(&db, &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{summary}");
+    let id = summary["analysis_id"].as_i64().unwrap();
+    // An older CLI, or a scan outside git, sends none.
+    let without = analysis(&db, dir.path(), "shop", "main", &files).await;
+
+    let (_, detail) = api(&db, &format!("/api/analyses/{id}")).await;
+    assert_eq!(detail["message"], "Fix refunds rounding");
+    let (_, list) = api(&db, "/api/analyses?project=shop").await;
+    let messages: Vec<(i64, Value)> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["id"].as_i64().unwrap(), a["message"].clone()))
+        .collect();
+    assert_eq!(
+        messages,
+        [(without, Value::Null), (id, "Fix refunds rounding".into())]
+    );
+    let (status, overview) = api(&db, "/api/overview").await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    let recent: Vec<Value> = overview["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["message"].clone())
+        .collect();
+    assert_eq!(recent, [Value::Null, "Fix refunds rounding".into()]);
+
+    for bad in ["", "  ", "line\nbreak", &"x".repeat(301)] {
+        body["commit_message"] = serde_json::json!(bad);
+        assert_eq!(
+            upload(&db, &body).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{bad:?}"
+        );
+    }
+}

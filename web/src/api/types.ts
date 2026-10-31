@@ -136,7 +136,7 @@ export interface AnalysisSummary {
   project: string
   branch: string
   sha: string
-  /** Null where unknown: commit messages and durations are not uploaded. */
+  /** Null where unknown: uploads from older CLIs or outside git have no message; durations aren't uploaded. */
   message: string | null
   note: string
   duration: string | null
@@ -751,6 +751,8 @@ export interface AnalysisRow {
   project: string
   branch: string
   sha: string
+  /** The commit's subject line, when the upload had one. */
+  message: string | null
   analyzedAt: string
   toolVersion: string
   gate: GateState
@@ -793,6 +795,8 @@ export interface AnalysisDetail {
   branch: string
   mainBranch: string
   sha: string
+  /** The commit's subject line, when the upload had one. */
+  message: string | null
   analyzedAt: string
   toolVersion: string
   newCodeReference: string | null

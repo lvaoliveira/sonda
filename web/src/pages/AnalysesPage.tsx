@@ -109,6 +109,7 @@ function AnalysisList({ page, onOffset }: { page: AnalysisPage; onOffset: (offse
                 <Mono className="text-[10.5px] text-fg-faint">
                   {a.branch} · {a.sha.slice(0, 7)}
                 </Mono>
+                {a.message && <span className="overflow-hidden text-xs text-ellipsis whitespace-nowrap text-fg-muted">{a.message}</span>}
               </span>
               <span className="overflow-hidden text-ellipsis whitespace-nowrap" style={{ color: a.failing.length ? 'var(--sd-crit)' : 'var(--sd-muted)' }}>
                 {note}

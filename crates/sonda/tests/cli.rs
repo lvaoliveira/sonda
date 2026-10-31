@@ -911,6 +911,10 @@ fn scanned(files: &[(&str, &str)]) -> (TempDir, TempDir) {
 }
 
 fn upload(dir: &Path, out: &Path, server: &str) -> Command {
+    upload_commit(dir, out, server, "0123abc")
+}
+
+fn upload_commit(dir: &Path, out: &Path, server: &str, commit: &str) -> Command {
     let mut cmd = sonda();
     cmd.args([
         "upload",
@@ -919,7 +923,7 @@ fn upload(dir: &Path, out: &Path, server: &str) -> Command {
         "--branch",
         "main",
         "--commit",
-        "0123abc",
+        commit,
     ])
     .arg("--server")
     .arg(server)
@@ -990,6 +994,45 @@ fn upload_sends_the_report_and_sources() {
     assert_eq!(body["report"], report);
     assert_eq!(body["sources"][0]["path"], "src/app.js");
     assert_eq!(body["sources"][0]["content"], "var x = 1;\n");
+}
+
+#[test]
+fn upload_sends_the_commit_subject_from_git() {
+    let (dir, out) = scanned(&[("app.js", "var x = 1;\n")]);
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "."]);
+    git(
+        root,
+        &[
+            "commit",
+            "-qm",
+            "Fix refunds rounding\n\nThe body isn't sent.",
+        ],
+    );
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let head = String::from_utf8(head.stdout).unwrap();
+    let (url, server) = fake_server("201 Created", "{}");
+    let result = upload_commit(root, out.path(), &url, head.trim())
+        .output()
+        .unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    let request = server.join().unwrap();
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(&request.body[..]),
+        &mut json,
+    )
+    .unwrap();
+    let body: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(body["commit_message"], "Fix refunds rounding");
 }
 
 #[test]
