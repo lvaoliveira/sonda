@@ -15,7 +15,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.1
 | JavaScript | 461 | 232 | 37 | 117 | 75 | 0 |
 | TypeScript | 481 | 222 | 35 | 146 | 78 | 0 |
 | Python | 397 | 126 | 11 | 260 | 0 | 0 |
-| Java | 703 | 92 | 7 | 583 | 0 | 21 |
+| Java | 703 | 214 | 7 | 461 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 

@@ -6,6 +6,7 @@ mod common;
 mod java;
 mod java_bugs;
 mod java_security;
+mod java_smells;
 mod js;
 mod js_a11y;
 mod js_modern;
@@ -40,6 +41,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java::RULES,
         java_security::RULES,
         java_bugs::RULES,
+        java_smells::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -79,6 +81,10 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "js/unused-parameter",
     "js/shadowed-variable",
     "js/prefer-const",
+    // Pattern matching for instanceof and Stream.toList() need Java 16, and
+    // sonda cannot see which version a project targets.
+    "java/instanceof-then-cast",
+    "java/collectors-to-list",
 ];
 
 // ---------------------------------------------------- shared filters

@@ -739,7 +739,7 @@ fn sql_built_dynamically(call: Node, src: &[u8]) -> bool {
     }
 }
 
-fn is_all_literals(expr: Node) -> bool {
+pub(super) fn is_all_literals(expr: Node) -> bool {
     match expr.kind() {
         "string_literal" | "decimal_integer_literal" | "character_literal" => true,
         "binary_expression" => {
