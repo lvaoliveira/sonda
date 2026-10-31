@@ -169,6 +169,8 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/custom-crypto", &[327], &[A02]),
     ("java/ldap-object-deserialization", &[502], &[A08]),
     ("java/activemq-untrusted-classes", &[502], &[A08]),
+    ("java/servlet-throws", &[600], &[]),
+    ("java/static-iv", &[323], &[A02]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
     ("cs/weak-hash", &[1240], &[A02]),

@@ -2006,7 +2006,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 10,
-        sonar: &[exact("S6813")],
+        sonar: &[exact("S6813"), related("S3306"), related("S4288")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(marker_annotation name: (identifier) @n (#eq? @n "Autowired")) @match"#,
