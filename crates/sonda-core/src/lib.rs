@@ -238,6 +238,8 @@ pub mod fuzzing {
             Requirements,
             YarnLock,
             PnpmLock,
+            BunLock,
+            PipfileLock,
         ];
         let kind = kinds[usize::from(selector) % kinds.len()];
         // The same text doubles as the manifest (pyproject.toml, package.json).

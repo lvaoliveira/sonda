@@ -197,6 +197,10 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- Bun's text `bun.lock` and pipenv's `Pipfile.lock` are read: registry
+  packages, aliases resolved, and direct ones from Bun's workspaces or the
+  `Pipfile`. Bun's binary `bun.lockb` gets a warning naming
+  `bun install --save-text-lockfile`, which writes `bun.lock`.
 - `pnpm-lock.yaml` (lockfile versions 5 to 9, pnpm 6 and later) and Yarn
   2+'s `yarn.lock` are read too: registry packages with their versions,
   peer suffixes and aliases resolved, and direct ones from pnpm's
