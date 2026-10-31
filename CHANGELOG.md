@@ -186,6 +186,12 @@ file, the report formats and the public library API.
   to compute coverage on its main-branch new code period, instead of
   keeping the scan's value, and the Overview's coverage drill-down lists
   each project's least covered files.
+- `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies`
+  gate metrics: vulnerable packages the change brought, compared with the
+  lockfiles at the new-code reference (the same advisory on the same
+  package at another version isn't new). Each finding in the JSON report's
+  `vulnerabilities` has `is_new`. On the server's main branch they're
+  computed against the new code period's start.
 - Branch and function coverage: `sonda scan --coverage` reads LCOV's
   `BRDA`, `FN` and `FNDA` records into each file's `branch_coverage` and
   `function_coverage` in the JSON report, and the coverage report shows

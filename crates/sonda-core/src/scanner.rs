@@ -4,7 +4,7 @@
 use crate::analysis::{self, FileAnalysis};
 use crate::config::{Config, ScanConfig};
 use crate::coverage::Coverage;
-use crate::deps::{self, Dependency, FileKind};
+use crate::deps::{self, Dependency, Ecosystem, FileKind};
 use crate::duplication;
 use crate::error::Error;
 use crate::git::{self, Auto};
@@ -17,7 +17,7 @@ use crate::worker::WorkerPool;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::num::NonZeroUsize;
@@ -74,26 +74,42 @@ pub(crate) fn scan(
         "discovered files"
     );
     let (dependencies, dependency_warnings) = load_dependencies(&found.dependency_files);
-    let vulnerabilities = match &opts.advisories {
-        Some(dir) => {
-            let (advisories, warnings) = load_advisories(dir)?;
-            let found = crate::advisories::check(&dependencies, &advisories);
-            info!(
-                advisories = advisories.len(),
-                vulnerabilities = found.len(),
-                "checked dependencies"
-            );
-            Some((found, warnings))
-        }
-        None => None,
-    };
+    let advisories = opts
+        .advisories
+        .as_deref()
+        .map(load_advisories)
+        .transpose()?;
     let mut analysis = scan_files(opts, cfg, rules, found.files, found.warnings)?;
-    analysis.dependencies = dependencies;
-    analysis.warnings.extend(dependency_warnings);
-    if let Some((found, warnings)) = vulnerabilities {
-        analysis.vulnerabilities = Some(found);
+    if let Some((advisories, warnings)) = advisories {
+        let mut vulnerabilities = crate::advisories::check(&dependencies, &advisories);
+        // New: not already affecting the project at the new-code reference.
+        if let Some(reference) = analysis.new_code.reference() {
+            let base = base_dependencies(
+                &opts.root,
+                reference,
+                &found.dependency_files,
+                Duration::from_secs(cfg.scan.git_timeout_secs),
+            )?;
+            let known: HashSet<(Ecosystem, String, String)> =
+                crate::advisories::check(&base, &advisories)
+                    .into_iter()
+                    .map(|v| finding_key(&v))
+                    .collect();
+            for v in &mut vulnerabilities {
+                v.is_new = !known.contains(&finding_key(v));
+            }
+        }
+        info!(
+            advisories = advisories.len(),
+            vulnerabilities = vulnerabilities.len(),
+            new = vulnerabilities.iter().filter(|v| v.is_new).count(),
+            "checked dependencies"
+        );
+        analysis.vulnerabilities = Some(vulnerabilities);
         analysis.warnings.extend(warnings);
     }
+    analysis.dependencies = dependencies;
+    analysis.warnings.extend(dependency_warnings);
     analysis.warnings.sort();
     analysis.warnings.dedup();
     Ok(analysis)
@@ -191,10 +207,39 @@ fn load_advisories(dir: &Path) -> Result<(Vec<crate::advisories::Advisory>, Vec<
 /// (`scan.max_file_size_kb`); this still bounds memory.
 const LOCKFILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+/// A finding, as the same vulnerability in the same package whatever its
+/// version: upgrading within an affected range isn't a new finding.
+fn finding_key(v: &crate::advisories::Vulnerability) -> (Ecosystem, String, String) {
+    (
+        v.ecosystem,
+        deps::package_key(v.ecosystem, &v.name),
+        v.advisory.clone(),
+    )
+}
+
+/// The dependencies the lockfiles found now pinned at the merge base of
+/// HEAD and `reference`. Lockfiles that didn't exist there pinned nothing;
+/// their problems there are not this scan's warnings.
+fn base_dependencies(
+    root: &Path,
+    reference: &str,
+    files: &[DependencyFile],
+    timeout: Duration,
+) -> Result<Vec<Dependency>, Error> {
+    let paths: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+    let contents = git::files_at(root, reference, &paths, LOCKFILE_MAX_BYTES, timeout)?;
+    let (dependencies, _) = parse_dependencies(files, |f| {
+        contents
+            .get(&f.rel)
+            .cloned()
+            .ok_or_else(|| format!("{}: not at {reference}", f.rel))
+    });
+    Ok(dependencies)
+}
+
 /// Reads and parses each lockfile; problems become warnings. Sorted, so the
 /// result does not depend on the walk's order.
 fn load_dependencies(files: &[DependencyFile]) -> (Vec<Dependency>, Vec<String>) {
-    let started = Instant::now();
     let read = |f: &DependencyFile| -> Result<String, String> {
         let bytes = read_listed(&f.path, f.id, LOCKFILE_MAX_BYTES)
             .map_err(|e| format!("{}: {e}", f.rel))?
@@ -207,6 +252,15 @@ fn load_dependencies(files: &[DependencyFile]) -> (Vec<Dependency>, Vec<String>)
             })?;
         String::from_utf8(bytes).map_err(|_| format!("{}: skipped, not valid UTF-8", f.rel))
     };
+    parse_dependencies(files, read)
+}
+
+/// Parses each lockfile `read` gives; problems become warnings.
+fn parse_dependencies(
+    files: &[DependencyFile],
+    read: impl Fn(&DependencyFile) -> Result<String, String>,
+) -> (Vec<Dependency>, Vec<String>) {
+    let started = Instant::now();
     let dir = |rel: &str| rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
     // pyproject.toml is read only next to a poetry.lock, which needs it.
     let poetry_dirs: Vec<String> = files

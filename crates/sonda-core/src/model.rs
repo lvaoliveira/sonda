@@ -71,6 +71,10 @@ metrics! {
     // checked against advisories.
     VulnerableDependencies => "vulnerable_dependencies",
     SevereVulnerableDependencies => "severe_vulnerable_dependencies",
+    // Of those, the ones whose finding wasn't there at the new-code
+    // reference: added or upgraded into a vulnerable version.
+    NewVulnerableDependencies => "new_vulnerable_dependencies",
+    NewSevereVulnerableDependencies => "new_severe_vulnerable_dependencies",
 }
 
 /// A quality-gate condition: the gate fails when `metric <op> threshold` holds.

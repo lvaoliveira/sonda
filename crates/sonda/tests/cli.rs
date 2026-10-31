@@ -508,6 +508,81 @@ fn only_new_lists_new_issues_but_gate_sees_everything() {
 }
 
 #[test]
+fn new_vulnerable_dependencies_are_the_ones_the_change_brought() {
+    let lock = |minimist: &str, lodash: Option<&str>| {
+        let lodash = lodash.map_or(String::new(), |v| {
+            format!(r#", "node_modules/lodash": {{"version": "{v}"}}"#)
+        });
+        format!(
+            r#"{{"lockfileVersion": 3, "packages": {{"": {{}},
+                "node_modules/minimist": {{"version": "{minimist}"}}{lodash}}}}}"#
+        )
+    };
+    let advisory = |id: &str, name: &str, fixed: &str| {
+        format!(
+            r#"{{"id": "{id}", "modified": "2024-01-01T00:00:00Z", "summary": "{name} is vulnerable",
+                "affected": [{{"package": {{"ecosystem": "npm", "name": "{name}"}},
+                  "ranges": [{{"type": "SEMVER", "events": [{{"introduced": "0"}}, {{"fixed": "{fixed}"}}]}}]}}]}}"#
+        )
+    };
+    let osv = project(&[
+        (
+            "a.json",
+            advisory("GHSA-aaaa-aaaa-aaaa", "minimist", "1.2.6").as_str(),
+        ),
+        (
+            "b.json",
+            advisory("GHSA-bbbb-bbbb-bbbb", "lodash", "4.17.21").as_str(),
+        ),
+    ]);
+    // Committed: minimist, already vulnerable.
+    let dir = project(&[("package-lock.json", lock("1.2.0", None).as_str())]);
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "old"]);
+    // The change: minimist moves within the affected range, and lodash
+    // arrives vulnerable. Only lodash is new.
+    std::fs::write(
+        root.join("package-lock.json"),
+        lock("1.2.5", Some("4.17.20")),
+    )
+    .unwrap();
+    let out = sonda()
+        .args(["scan", "-f", "json", "--new-code", "HEAD", "--advisories"])
+        .arg(osv.path())
+        .arg(root)
+        .output()
+        .unwrap();
+    let report = json(&out);
+    assert_eq!(
+        report["measures"]["vulnerable_dependencies"],
+        2.0,
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(report["measures"]["new_vulnerable_dependencies"], 1.0);
+    let new: Vec<(&str, bool)> = report["vulnerabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| (v["name"].as_str().unwrap(), v["is_new"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(new, [("lodash", true), ("minimist", false)]);
+
+    // Without a reference, every finding is new.
+    let out = sonda()
+        .args(["scan", "-f", "json", "--new-code", "none", "--advisories"])
+        .arg(osv.path())
+        .arg(root)
+        .output()
+        .unwrap();
+    assert_eq!(json(&out)["measures"]["new_vulnerable_dependencies"], 2.0);
+}
+
+#[test]
 fn coverage_report_feeds_the_coverage_measures() {
     let dir = project(&[
         ("app.js", "const a = 1;\nconst b = 2;\n"),

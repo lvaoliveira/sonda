@@ -489,6 +489,13 @@ branch's latest analysis), and when a finding is reviewed. The result is
 stored with the analysis, so every page agrees. Until advisories exist,
 the CLI's values stand: "no data", unless it scanned with `--advisories`.
 
+`new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies`
+count the packages whose finding wasn't there when the main branch's new
+code period started (ADR-0011): added, or moved into an affected version.
+The same advisory on the same package at another version isn't new. Both
+sides are checked against today's advisories. Other branches keep the
+CLI's values, which compared with the branch's own reference.
+
 `GET /api/security` adds `dependencies`: open and confirmed findings
 across each project's main branch, by severity, with how many packages
 and projects they affect, the ten most severe, and when advisories were

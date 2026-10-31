@@ -149,9 +149,13 @@ that wants a failing build.
 **As built:**
 - **The metrics.** They're `vulnerable_dependencies` and
   `severe_vulnerable_dependencies` (packages with a blocker or critical
-  finding), counted in packages. `new_vulnerable_dependencies` waits: "new"
-  needs a base to compare against, and on the server that would be another
-  branch's analysis. It's on the roadmap.
+  finding), counted in packages. Their `new_` variants came later
+  (2026-10-31): a package's finding is new when that advisory didn't
+  affect that package at the base, at any version. The CLI's base is the
+  lockfiles at the new-code reference (read from git's objects, as
+  ADR-0002 allows); the server's, on the main branch, is the dependencies
+  of the new code period's start (ADR-0011). Other branches keep the CLI's
+  values, since the server doesn't know their base.
 - **Where the gate lives.** The server keeps the stored gate current
   instead of overlaying it when read. It re-evaluates these conditions,
   reviews included, when an analysis is uploaded, when advisories are

@@ -31,27 +31,7 @@ pub(crate) fn new_code<'a>(
     timeout: Duration,
     files: impl IntoIterator<Item = (&'a str, Option<Vec<u8>>)>,
 ) -> Result<NewCode, Error> {
-    validate_ref(reference)?;
-    let prefix = git(root, &["rev-parse", "--show-prefix"], timeout)?;
-    let base = git(
-        root,
-        &["merge-base", "--end-of-options", "HEAD", reference],
-        timeout,
-    )?;
-    let tree = git(
-        root,
-        &[
-            "ls-tree",
-            "-r",
-            "-z",
-            "--full-tree",
-            "--end-of-options",
-            base.trim(),
-        ],
-        timeout,
-    )?;
-    let blobs = parse_ls_tree(&tree, prefix.trim_end_matches('\n'));
-
+    let blobs = base_blobs(root, reference, timeout)?;
     let mut cat = CatFile::start(git_command(root).args(["cat-file", "--batch"]), timeout)?;
     let mut changed = HashMap::new();
     for (path, content) in files {
@@ -75,6 +55,62 @@ pub(crate) fn new_code<'a>(
         reference: reference.to_string(),
         files: changed,
     })
+}
+
+/// The files under `root` at the merge base of HEAD and `reference`, by
+/// root-relative path, as blob ids.
+fn base_blobs(
+    root: &Path,
+    reference: &str,
+    timeout: Duration,
+) -> Result<HashMap<String, String>, Error> {
+    validate_ref(reference)?;
+    let prefix = git(root, &["rev-parse", "--show-prefix"], timeout)?;
+    let base = git(
+        root,
+        &["merge-base", "--end-of-options", "HEAD", reference],
+        timeout,
+    )?;
+    let tree = git(
+        root,
+        &[
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            "--end-of-options",
+            base.trim(),
+        ],
+        timeout,
+    )?;
+    Ok(parse_ls_tree(&tree, prefix.trim_end_matches('\n')))
+}
+
+/// The contents of `paths` (root-relative) at the merge base of HEAD and
+/// `reference`, as `new_code` compares against: the lockfiles a change
+/// started from. Paths missing there, not UTF-8 or larger than `max_bytes`
+/// are left out.
+pub(crate) fn files_at(
+    root: &Path,
+    reference: &str,
+    paths: &[&str],
+    max_bytes: u64,
+    timeout: Duration,
+) -> Result<HashMap<String, String>, Error> {
+    let blobs = base_blobs(root, reference, timeout)?;
+    let mut cat = CatFile::start(git_command(root).args(["cat-file", "--batch"]), timeout)?;
+    let mut out = HashMap::new();
+    for path in paths {
+        if let Some(oid) = blobs.get(*path)
+            && let Some(text) = cat
+                .blob(oid, max_bytes)?
+                .and_then(|b| String::from_utf8(b).ok())
+        {
+            out.insert(path.to_string(), text);
+        }
+    }
+    cat.finish()?;
+    Ok(out)
 }
 
 /// What `auto` found to compare with (ADR-0010).
