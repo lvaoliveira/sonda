@@ -1,0 +1,10 @@
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/globset/a7d070056cb99316/out/globset-a7d070056cb99316.d: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/fnv.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/glob.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/pathutil.rs
+
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/globset/a7d070056cb99316/out/libglobset-a7d070056cb99316.rlib: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/fnv.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/glob.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/pathutil.rs
+
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/globset/a7d070056cb99316/out/libglobset-a7d070056cb99316.rmeta: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/fnv.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/glob.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/pathutil.rs
+
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/lib.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/fnv.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/glob.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/globset-0.4.21/src/pathutil.rs:

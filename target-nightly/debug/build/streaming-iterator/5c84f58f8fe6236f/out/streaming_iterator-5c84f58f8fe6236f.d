@@ -1,0 +1,9 @@
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/streaming-iterator/5c84f58f8fe6236f/out/streaming_iterator-5c84f58f8fe6236f.d: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/slice.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/sources.rs
+
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/streaming-iterator/5c84f58f8fe6236f/out/libstreaming_iterator-5c84f58f8fe6236f.rlib: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/slice.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/sources.rs
+
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/streaming-iterator/5c84f58f8fe6236f/out/libstreaming_iterator-5c84f58f8fe6236f.rmeta: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/slice.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/sources.rs
+
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/lib.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/slice.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/streaming-iterator-0.1.9/src/sources.rs:

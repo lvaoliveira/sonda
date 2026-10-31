@@ -158,7 +158,10 @@ jobs:
       # Overlaps with deny's advisory check, but uses RustSec's reference tool.
       - run: cargo audit --deny warnings
 
+  # Reported, not gated, so it runs on main only: on pull requests it was a
+  # fourth full run of the test suite, instrumented, that nobody read.
   coverage:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

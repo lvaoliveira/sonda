@@ -1,0 +1,10 @@
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/hashlink/e68dfb7680d65ce1/out/hashlink-e68dfb7680d65ce1.d: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs
+
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/hashlink/e68dfb7680d65ce1/out/libhashlink-e68dfb7680d65ce1.rlib: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs
+
+/Users/lucas.oliveira/pet-projects/sonda/target-nightly/debug/build/hashlink/e68dfb7680d65ce1/out/libhashlink-e68dfb7680d65ce1.rmeta: /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs /Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs
+
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs:
+/Users/lucas.oliveira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs:
