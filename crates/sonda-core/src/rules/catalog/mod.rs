@@ -17,6 +17,7 @@ mod js_more;
 mod js_security;
 mod js_semantic;
 mod py;
+mod py_more;
 mod py_quality;
 mod py_security;
 pub(super) mod standards;
@@ -44,6 +45,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         py::RULES,
         py_security::RULES,
         py_quality::RULES,
+        py_more::RULES,
         java::RULES,
         java_security::RULES,
         java_bugs::RULES,
