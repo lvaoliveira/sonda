@@ -75,7 +75,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[exact("S103")],
+        sonar: &[exact("S103"), exact("LineLength")],
         check: Check::Structural,
         example: None,
     },
