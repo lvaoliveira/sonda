@@ -1672,7 +1672,7 @@ fn route_mixes_safe_and_unsafe_methods(call: Node, src: &[u8]) -> bool {
             .any(|v| contains_ignoring_case(m, v))
 }
 
-const BUILTIN_NAMES: &[&str] = &[
+pub(super) const BUILTIN_NAMES: &[&str] = &[
     "abs",
     "aiter",
     "all",
@@ -3000,6 +3000,21 @@ fn parameter_lacks_hint<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
         };
         name.is_some_and(|n| !matches!(n, b"self" | b"cls") && !n.starts_with(b"_"))
     })
+}
+
+/// Names of the functions called anywhere inside `root`.
+pub(super) fn collect_calls<'s>(root: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    collect_in_scope(root, &[], |n| n.kind() == "call")
+        .into_iter()
+        .map(|c| callee_name(c, src))
+        .collect()
+}
+
+pub(super) fn identifiers_in(node: Node) -> Vec<Node> {
+    if node.kind() == "identifier" {
+        return vec![node];
+    }
+    collect_in_scope(node, &[], |n| n.kind() == "identifier")
 }
 
 #[cfg(test)]
