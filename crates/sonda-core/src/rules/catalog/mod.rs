@@ -5,6 +5,7 @@ mod c;
 mod common;
 mod java;
 mod java_bugs;
+mod java_extra;
 mod java_more;
 mod java_security;
 mod java_smells;
@@ -60,6 +61,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_smells::RULES,
         java_more::RULES,
         java_tests::RULES,
+        java_extra::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -119,6 +121,16 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "common/line-length",
     "common/file-length",
     "common/final-newline",
+    // Java style rules outside SonarQube's default profile that fire on most
+    // real code: escaped Unicode, suppressions, public fields, boolean
+    // parameters, legacy collections, brace and else conventions.
+    "java/unicode-escape",
+    "java/suppress-warnings",
+    "java/boolean-selector",
+    "java/public-field",
+    "java/synchronized-collections",
+    "java/if-else-if-without-else",
+    "java/missing-braces",
 ];
 
 // ---------------------------------------------------- shared filters

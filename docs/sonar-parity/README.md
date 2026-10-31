@@ -1,7 +1,7 @@
 # Compatibility with SonarQube rules
 
 Which SonarQube rule keys have an equivalent in sonda ([ADR-0007](../adr/0007-sonarqube-rule-parity.md)).
-Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.124771.
+Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.124771.
 
 - **done**: a sonda rule covers it (`exact` in sonda's catalog);
   **partial**: a sonda rule is related but differs, for example syntactic where
@@ -15,7 +15,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-10-31, against SonarQube 26.7.0.1
 | JavaScript | 461 | 286 | 41 | 82 | 52 | 0 |
 | TypeScript | 481 | 294 | 41 | 93 | 53 | 0 |
 | Python | 397 | 359 | 14 | 24 | 0 | 0 |
-| Java | 703 | 308 | 9 | 365 | 0 | 21 |
+| Java | 703 | 377 | 11 | 294 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 
