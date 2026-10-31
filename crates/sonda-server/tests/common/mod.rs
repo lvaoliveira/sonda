@@ -191,7 +191,7 @@ pub async fn upload(db: &TestDb, body: &Value) -> (StatusCode, Value) {
 pub const PASSWORD: &str = "correct horse battery";
 
 pub async fn create_user(db: &TestDb, username: &str, role: &str) -> i64 {
-    sonda_server::users::create(&db.pool, username, username, role, PASSWORD)
+    sonda_server::users::create(&db.pool, username, username, role, Some(PASSWORD))
         .await
         .unwrap()
         .id
