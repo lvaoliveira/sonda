@@ -388,7 +388,7 @@ fn lacks_a_license_header<'t>(module: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
     let head: Vec<u8> = src
         .split(|&b| b == b'\n')
         .take(5)
-        .flat_map(|l| l.iter().copied().chain([b'\n']))
+        .flat_map(|l| l.iter().copied().chain(*b"\n"))
         .collect();
     let has = ["copyright", "license", "licence"]
         .iter()
