@@ -120,6 +120,8 @@ pub struct Analysis {
     pub meta: Meta,
     pub commit_message: Option<String>,
     pub scan_duration_ms: Option<i64>,
+    /// The user's token that uploaded it; `None` for `SONDA_TOKEN`.
+    pub token_id: Option<i64>,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
     pub measures: Value,
@@ -170,6 +172,7 @@ pub struct StoredIssue {
 
 pub async fn create(
     axum::extract::State(state): axum::extract::State<State>,
+    axum::extract::Extension(caller): axum::extract::Extension<crate::api::Caller>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<store::Summary>), ApiError> {
@@ -184,10 +187,22 @@ pub async fn create(
     };
     // Decompressing, parsing and hashing up to hundreds of MiB is CPU work:
     // keep it off the async workers.
-    let analysis =
+    let mut analysis =
         tokio::task::spawn_blocking(move || decode(&body, gzip, MAX_JSON_BYTES).and_then(validate))
             .await
             .map_err(|e| ApiError::Internal(e.into()))??;
+    // A project analysis token uploads its one project (ADR-0012).
+    if let crate::api::Caller::UserToken(_, token) = &caller {
+        if let Some(project) = &token.project
+            && project != &analysis.meta.project
+        {
+            return Err(ApiError::Forbidden(format!(
+                "this token uploads project {project:?} only, not {:?}",
+                analysis.meta.project
+            )));
+        }
+        analysis.token_id = Some(token.id);
+    }
     let summary = store::ingest(&state.pool, analysis).await?;
     // On the main branch, new code is the project's period (ADR-0011).
     let main: Option<i64> = sqlx::query_scalar(
@@ -469,6 +484,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         meta,
         commit_message: upload.commit_message,
         scan_duration_ms,
+        token_id: None,
         tool_version: r.version,
         new_code_reference: r.new_code_reference,
         measures: r.measures,

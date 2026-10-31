@@ -4,6 +4,7 @@ import { MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type User
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
+import { TokenTable } from '@/components/sonda/tokens'
 import { shortDate } from '@/lib/format'
 
 /** Administration: users and roles (ADR-0006). Admins only; the server enforces it too. */
@@ -86,8 +87,37 @@ function Users({ me }: { me: string | null }) {
         }}
         onError={setError}
       />
+      <AllTokens />
       <p className="m-0 text-[12.5px] text-fg-faint">Single sign-on (OpenID Connect) is planned; see ADR-0006.</p>
     </>
+  )
+}
+
+/** Every user's tokens, to revoke (ADR-0012); nobody can read a secret after it's generated. */
+function AllTokens() {
+  const api = useApi()
+  const [version, setVersion] = useState(0)
+  const tokens = useAsync(() => api.tokens(), [api, version])
+  const [error, setError] = useState('')
+  const revoke = async (id: number) => {
+    setError('')
+    try {
+      await api.revokeToken(id)
+      setVersion((v) => v + 1)
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+  return (
+    <Card id="all-tokens" title="Tokens" subtitle="Everyone's tokens. Users generate their own under Account; disabling a user stops theirs.">
+      {error && (
+        <p role="alert" className="m-0 text-[13px] text-crit">
+          {error}
+        </p>
+      )}
+      {tokens.state === 'ready' && <TokenTable tokens={tokens.data} showOwner onRevoke={(t) => void revoke(t.id)} />}
+      {tokens.state === 'error' && <p role="alert">Could not load tokens: {tokens.error.message}</p>}
+    </Card>
   )
 }
 

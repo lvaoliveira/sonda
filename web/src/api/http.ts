@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type QualityGate, type RuleCatalog, type Security, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -38,6 +38,11 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     signIn: (username, password) => call<void>('POST', '/session', { username, password }),
     signOut: () => call<void>('DELETE', '/session'),
     changePassword: (current, next) => call<void>('PUT', '/me/password', { current, new: next }),
+    myTokens: () => call<ApiToken[]>('GET', '/me/tokens'),
+    createToken: (token) => call<CreatedToken>('POST', '/me/tokens', token),
+    revokeMyToken: (id) => call<void>('DELETE', `/me/tokens/${id}`),
+    tokens: () => call<ApiToken[]>('GET', '/tokens'),
+    revokeToken: (id) => call<void>('DELETE', `/tokens/${id}`),
     users: () => call<UserRow[]>('GET', '/users'),
     createUser: (user) => call<User>('POST', '/users', user),
     updateUser: (id, patch) => call<User>('PATCH', `/users/${id}`, patch),

@@ -363,6 +363,7 @@ describe('Analyses', () => {
     expect(await screen.findByRole('heading', { level: 1, name: '9f3c2a1e7b04' })).toBeInTheDocument()
     expect(screen.getByText('Fix refunds rounding for partial captures')).toBeInTheDocument()
     expect(screen.getByText('scanned in 1m 0s')).toBeInTheDocument()
+    expect(screen.getByText('uploaded by mara (token ci-payments-platform)')).toBeInTheDocument()
   })
 
   it('lists analyses newest first, filters by gate and project, and pages', async () => {
@@ -494,6 +495,55 @@ describe('Quality gates', () => {
   it('says so for an unknown address', async () => {
     renderAt('/nowhere')
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
+  })
+})
+
+describe('Tokens', () => {
+  it('generates a token, shows its secret once, and revokes it', async () => {
+    const user = userEvent.setup()
+    renderAt('/account')
+    const card = await screen.findByRole('region', { name: 'Tokens' })
+    // Project analysis is the default type, with 30 days preselected.
+    expect(within(card).getByRole('combobox', { name: 'Expires in' })).toHaveValue('30')
+    await user.type(within(card).getByRole('textbox', { name: 'Name' }), 'ci-billing')
+    await user.type(within(card).getByRole('textbox', { name: 'Project key' }), 'billing-service')
+    await user.click(within(card).getByRole('button', { name: 'Generate' }))
+    const shown = await within(card).findByRole('status')
+    expect(shown).toHaveTextContent('Copy “ci-billing” now: it won’t be shown again.')
+    expect(shown).toHaveTextContent(/sonda_p_[a-z2-7]{52}/)
+    const row = await within(card).findByRole('row', { name: 'Token ci-billing' })
+    expect(row).toHaveTextContent('Project analysis')
+    expect(row).toHaveTextContent('billing-service')
+    // The list never shows the secret, only its first characters.
+    expect(row.textContent).not.toMatch(/sonda_p_[a-z2-7]{52}/)
+    await user.click(within(card).getByRole('button', { name: 'Done' }))
+    expect(within(card).queryByRole('status')).not.toBeInTheDocument()
+    await user.click(within(row).getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(within(card).getByRole('row', { name: 'Token ci-billing' })).toHaveTextContent('Revoked'))
+  })
+
+  it('asks for a project only for project analysis tokens', async () => {
+    const user = userEvent.setup()
+    renderAt('/account')
+    const card = await screen.findByRole('region', { name: 'Tokens' })
+    await user.selectOptions(within(card).getByRole('combobox', { name: 'Type' }), 'user')
+    expect(within(card).queryByRole('textbox', { name: 'Project key' })).not.toBeInTheDocument()
+    expect(within(card).getByText(/Acts as you/)).toBeInTheDocument()
+    await user.selectOptions(within(card).getByRole('combobox', { name: 'Expires in' }), 'none')
+    await user.type(within(card).getByRole('textbox', { name: 'Name' }), 'scripts-forever')
+    await user.click(within(card).getByRole('button', { name: 'Generate' }))
+    expect(await within(card).findByRole('row', { name: 'Token scripts-forever' })).toHaveTextContent('No expiry')
+  })
+
+  it('lets admins see and revoke everyone’s tokens', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin')
+    const card = await screen.findByRole('region', { name: 'Tokens' })
+    const row = await within(card).findByRole('row', { name: 'Token ci-payments' })
+    expect(row).toHaveTextContent('mara')
+    expect(within(card).getByRole('row', { name: 'Token old-script' })).toHaveTextContent('Expired')
+    await user.click(within(row).getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(within(card).getByRole('row', { name: 'Token ci-payments' })).toHaveTextContent('Revoked'))
   })
 })
 

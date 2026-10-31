@@ -21,6 +21,7 @@ const ROWS: AnalysisRow[] = PROJECT_LIST.projects
     message: offset === 3 ? null : MESSAGES[offset % MESSAGES.length],
     // Uploaded reports (`sonda upload`) have no duration.
     duration: offset % 3 === 2 ? null : `${1 + (offset % 4)}m ${(offset * 17) % 60}s`,
+    uploadedBy: offset % 2 === 0 ? `mara (token ci-${project})` : 'api-token',
     toolVersion: '0.1.0',
     gate,
     failing: gate === 'failed' ? ['New vulnerabilities > 0', 'Coverage on new code < 80%'] : [],
@@ -64,6 +65,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
     sha: row.sha,
     message: row.message,
     duration: row.duration,
+    uploadedBy: row.uploadedBy,
     analyzedAt: row.analyzedAt,
     toolVersion: row.toolVersion,
     newCodeReference: 'origin/main',

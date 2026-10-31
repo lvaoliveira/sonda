@@ -6,13 +6,13 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, dependencies, drill, gates, ingest, issues, new_code,
-    overview, projects, rules, security, session, throttle,
+    overview, projects, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -25,7 +25,9 @@ use tower_http::timeout::TimeoutLayer;
 #[derive(Clone)]
 pub struct State {
     pub pool: sqlx::PgPool,
-    pub token: Arc<Token>,
+    /// The shared `SONDA_TOKEN`, when set; users' tokens are in the
+    /// database (ADR-0012).
+    pub token: Option<Arc<Token>>,
     /// True unless the server listens on loopback only (see `api::require_read`).
     pub reads_require_auth: bool,
 }
@@ -36,7 +38,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .layer(DefaultBodyLimit::max(ingest::MAX_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            api::require_token,
+            api::require_upload,
         ));
     let reads = Router::new()
         .route("/rules", get(rules::list))
@@ -81,15 +83,19 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         ));
     let account = Router::new()
         .route("/me/password", put(users::change_own_password))
+        .route("/me/tokens", get(tokens::list_mine).post(tokens::create))
+        .route("/me/tokens/{id}", delete(tokens::revoke_mine))
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            api::require_write,
+            api::require_session,
         ));
     let admin = Router::new()
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
         .route("/users/{id}", patch(users::update_user))
+        .route("/tokens", get(tokens::list_all))
+        .route("/tokens/{id}", delete(tokens::revoke_any))
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -163,7 +169,7 @@ async fn session_status(
     Ok(Json(SessionStatus {
         authenticated: !matches!(caller, Caller::Anonymous),
         user: match caller {
-            Caller::User(u) => Some(u),
+            Caller::User(u) | Caller::UserToken(u, _) => Some(u),
             _ => None,
         },
         reads_require_auth: state.reads_require_auth,

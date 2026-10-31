@@ -197,6 +197,15 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- User and analysis tokens, as in SonarQube (ADR-0012): users generate
+  user tokens (`sonda_u_`, acting as them), project analysis tokens
+  (`sonda_p_`, uploading one project) and global analysis tokens
+  (`sonda_a_`, uploading any project) under Account, expiring in 30, 60 or
+  90 days or not at all. Secrets are shown once and stored as SHA-256;
+  tokens stop when revoked, expired or their owner is disabled; admins see
+  and revoke everyone's. Uploads record their token, and actions by token
+  are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
+  now optional.
 - `sonda scan --upload` scans and uploads in one step, with the same
   options as `sonda upload` (checked before the scan starts), and sends
   how long the scan took, which Recent analyses, the analyses list and the

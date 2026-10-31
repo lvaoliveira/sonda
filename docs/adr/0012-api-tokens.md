@@ -1,6 +1,6 @@
 # ADR-0012: User and analysis tokens
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-10-31
 - Builds on [ADR-0005](0005-sonda-server.md) (the server and its token) and
   [ADR-0006](0006-users.md) (users and roles)

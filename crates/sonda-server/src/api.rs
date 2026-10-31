@@ -2,6 +2,7 @@
 
 use crate::http::State;
 use crate::session;
+use crate::tokens::{self, TokenRef};
 use crate::users::User;
 use axum::Json;
 use axum::extract::Request;
@@ -38,10 +39,7 @@ impl IntoResponse for ApiError {
             _ => None,
         };
         let (status, message) = match self {
-            Self::Unauthorized => (
-                StatusCode::UNAUTHORIZED,
-                "sign in or send the API token".into(),
-            ),
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "sign in, or send a token".into()),
             Self::SignInFailed => (
                 StatusCode::UNAUTHORIZED,
                 "invalid username or password".into(),
@@ -89,27 +87,41 @@ impl From<sqlx::Error> for ApiError {
 /// Who is calling, as far as the API cares.
 #[derive(Debug, Clone)]
 pub enum Caller {
-    /// The API token, as a bearer header: `sonda upload`, scripts.
+    /// The shared `SONDA_TOKEN`, as a bearer header: `sonda upload`, scripts.
     Token,
     /// A signed-in user (see `session`).
     User(User),
+    /// A user's token, as a bearer header (ADR-0012).
+    UserToken(User, TokenRef),
     Anonymous,
 }
 
 impl Caller {
-    /// For logs and the audit trail.
-    pub fn name(&self) -> &str {
+    /// For logs and the audit trail: a token's actions are its owner's,
+    /// with the token named.
+    pub fn name(&self) -> String {
         match self {
-            Caller::Token => "api-token",
-            Caller::User(u) => &u.username,
-            Caller::Anonymous => "anonymous",
+            Caller::Token => "api-token".into(),
+            Caller::User(u) => u.username.clone(),
+            Caller::UserToken(u, t) => format!("{} (token {})", u.username, t.name),
+            Caller::Anonymous => "anonymous".into(),
         }
+    }
+
+    /// Analysis tokens only upload.
+    fn analysis_only(&self) -> bool {
+        matches!(self, Caller::UserToken(_, t) if t.kind.analysis_only())
     }
 }
 
 pub async fn caller(state: &State, headers: &HeaderMap) -> Result<Caller, ApiError> {
-    if bearer(headers).is_some_and(|t| state.token.matches(t)) {
-        return Ok(Caller::Token);
+    if let Some(presented) = bearer(headers) {
+        if state.token.as_ref().is_some_and(|t| t.matches(presented)) {
+            return Ok(Caller::Token);
+        }
+        if let Some((user, token)) = tokens::authenticate(&state.pool, presented).await? {
+            return Ok(Caller::UserToken(user, token));
+        }
     }
     if let Some(token) = session::from_headers(headers)
         && let Some(user) = session::user(&state.pool, token).await?
@@ -119,19 +131,27 @@ pub async fn caller(state: &State, headers: &HeaderMap) -> Result<Caller, ApiErr
     Ok(Caller::Anonymous)
 }
 
-/// Middleware for routes that need the API token. It runs before the body
-/// is read, so an unauthenticated client cannot make the server buffer an
-/// upload.
-pub async fn require_token(
+/// Middleware for uploads: `SONDA_TOKEN` or a user's token of any type (a
+/// project analysis token's project is checked with the body). It runs
+/// before the body is read, so an unauthenticated client cannot make the
+/// server buffer an upload.
+pub async fn require_upload(
     axum::extract::State(state): axum::extract::State<State>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    if bearer(request.headers()).is_some_and(|t| state.token.matches(t)) {
-        Ok(next.run(request).await)
-    } else {
-        Err(ApiError::Unauthorized)
+    let caller = caller(&state, request.headers()).await?;
+    match caller {
+        Caller::Token | Caller::UserToken(..) => {}
+        Caller::User(_) => {
+            return Err(ApiError::Forbidden(
+                "uploads need a token: generate one under Account, Tokens".into(),
+            ));
+        }
+        Caller::Anonymous => return Err(ApiError::Unauthorized),
     }
+    request.extensions_mut().insert(caller);
+    Ok(next.run(request).await)
 }
 
 /// Middleware for reads. Anyone may read while the server listens on
@@ -145,6 +165,9 @@ pub async fn require_read(
     let caller = caller(&state, request.headers()).await?;
     if state.reads_require_auth && matches!(caller, Caller::Anonymous) {
         return Err(ApiError::Unauthorized);
+    }
+    if caller.analysis_only() {
+        return Err(ApiError::Forbidden(ANALYSIS_ONLY.into()));
     }
     request.extensions_mut().insert(caller);
     Ok(next.run(request).await)
@@ -169,6 +192,33 @@ pub async fn require_write(
     Ok(next.run(request).await)
 }
 
+const ANALYSIS_ONLY: &str = "analysis tokens only upload; use a user token";
+
+/// Middleware for your own account (password, tokens): a signed-in user,
+/// never a token, so a leaked token can't mint more. Changes also need
+/// `CSRF_HEADER`.
+pub async fn require_session(
+    axum::extract::State(state): axum::extract::State<State>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let caller = caller(&state, request.headers()).await?;
+    match &caller {
+        Caller::User(_) => {}
+        Caller::Token | Caller::UserToken(..) => {
+            return Err(ApiError::Forbidden(
+                "tokens can't manage accounts or tokens; sign in".into(),
+            ));
+        }
+        Caller::Anonymous => return Err(ApiError::Unauthorized),
+    }
+    if request.method() != axum::http::Method::GET {
+        check_write(&caller, request.headers())?;
+    }
+    request.extensions_mut().insert(caller);
+    Ok(next.run(request).await)
+}
+
 /// Middleware for user management: a signed-in admin, never the API token.
 /// Changes also need `CSRF_HEADER`.
 pub async fn require_admin(
@@ -180,9 +230,9 @@ pub async fn require_admin(
     match &caller {
         Caller::User(u) if u.is_admin() => {}
         Caller::User(_) => return Err(ApiError::Forbidden("admins only".into())),
-        Caller::Token => {
+        Caller::Token | Caller::UserToken(..) => {
             return Err(ApiError::Forbidden(
-                "the API token cannot manage users; sign in as an admin".into(),
+                "tokens cannot manage users or tokens; sign in as an admin".into(),
             ));
         }
         Caller::Anonymous => return Err(ApiError::Unauthorized),
@@ -197,6 +247,11 @@ pub async fn require_admin(
 fn check_write(caller: &Caller, headers: &HeaderMap) -> Result<(), ApiError> {
     match caller {
         Caller::Token => Ok(()),
+        Caller::UserToken(_, t) if t.kind.analysis_only() => {
+            Err(ApiError::Forbidden(ANALYSIS_ONLY.into()))
+        }
+        // A bearer header isn't sent by a cross-site form, so no CSRF header.
+        Caller::UserToken(..) => Ok(()),
         Caller::User(_) if headers.contains_key(CSRF_HEADER) => Ok(()),
         Caller::User(_) => Err(ApiError::Forbidden(format!(
             "missing the {CSRF_HEADER} header"

@@ -51,6 +51,9 @@ pub struct AnalysisRow {
     /// How long the scan took (`sonda scan --upload`); null for an uploaded
     /// report.
     pub duration: Option<String>,
+    /// Who uploaded it: `ada (token ci-shop)`, or `api-token` for the shared
+    /// `SONDA_TOKEN` (ADR-0012).
+    pub uploaded_by: String,
     pub analyzed_at: String,
     pub tool_version: String,
     pub gate: &'static str,
@@ -74,6 +77,9 @@ pub struct AnalysisDetail {
     /// How long the scan took (`sonda scan --upload`); null for an uploaded
     /// report.
     pub duration: Option<String>,
+    /// Who uploaded it: `ada (token ci-shop)`, or `api-token` for the shared
+    /// `SONDA_TOKEN` (ADR-0012).
+    pub uploaded_by: String,
     pub analyzed_at: String,
     pub tool_version: String,
     pub new_code_reference: Option<String>,
@@ -125,6 +131,11 @@ pub struct Neighbor {
     pub sha: String,
 }
 
+/// Who uploaded an analysis, over `a`, its token `t` and the token's owner
+/// `tu`: uploads with the shared token, and older ones, have no token.
+const UPLOADED_BY: &str = "CASE WHEN a.token_id IS NULL THEN 'api-token'
+    ELSE tu.username || ' (token ' || t.name || ')' END";
+
 type ListRow = (
     i64,
     String,
@@ -138,6 +149,7 @@ type ListRow = (
     Value,
     Option<String>,
     Option<i64>,
+    String,
 );
 
 pub async fn list_analyses(
@@ -166,6 +178,7 @@ pub async fn list_analyses(
     };
     // $1 project key, $2 branch, $3 gate passed: each NULL when not filtered.
     const FILTER: &str = "FROM analyses a JOIN projects p ON p.id = a.project_id
+         LEFT JOIN api_tokens t ON t.id = a.token_id LEFT JOIN users tu ON tu.id = t.user_id
          WHERE ($1::text IS NULL OR p.key = $1)
            AND ($2::text IS NULL OR a.branch = $2)
            AND ($3::boolean IS NULL OR a.gate_passed = $3)";
@@ -179,7 +192,7 @@ pub async fn list_analyses(
     let rows: Vec<ListRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
                 a.tool_version, a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message,
-                a.scan_duration_ms
+                a.scan_duration_ms, {UPLOADED_BY}
          {FILTER} ORDER BY a.received_at DESC, a.id DESC OFFSET $4 LIMIT $5"
     )))
     .bind(&q.project)
@@ -205,6 +218,7 @@ pub async fn list_analyses(
                 warnings,
                 message,
                 duration,
+                uploaded_by,
             )| {
                 AnalysisRow {
                     id,
@@ -213,6 +227,7 @@ pub async fn list_analyses(
                     sha,
                     message,
                     duration: duration.map(duration_text),
+                    uploaded_by,
                     analyzed_at: rfc3339(at),
                     tool_version,
                     gate: gate_state(passed, &gate),
@@ -252,6 +267,7 @@ type DetailRow = (
     Value,
     Option<String>,
     Option<i64>,
+    String,
 );
 
 type IssueRow = (i64, String, String, String, String, String, i32);
@@ -261,12 +277,15 @@ pub async fn get_analysis(
     Path(id): Path<i64>,
 ) -> Result<Json<AnalysisDetail>, ApiError> {
     let pool = &state.pool;
-    let row: DetailRow = sqlx::query_as(
+    let row: DetailRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, a.project_id, p.key, p.main_branch, a.branch, a.commit_sha,
                 extract(epoch FROM a.received_at)::float8, a.tool_version, a.new_code_reference,
-                a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message, a.scan_duration_ms
-         FROM analyses a JOIN projects p ON p.id = a.project_id WHERE a.id = $1",
-    )
+                a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message, a.scan_duration_ms,
+                {UPLOADED_BY}
+         FROM analyses a JOIN projects p ON p.id = a.project_id
+         LEFT JOIN api_tokens t ON t.id = a.token_id LEFT JOIN users tu ON tu.id = t.user_id
+         WHERE a.id = $1"
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -287,6 +306,7 @@ pub async fn get_analysis(
         warnings,
         message,
         duration,
+        uploaded_by,
     ) = row;
 
     let files: Vec<(String, String)> =
@@ -336,6 +356,7 @@ pub async fn get_analysis(
         sha,
         message,
         duration: duration.map(duration_text),
+        uploaded_by,
         analyzed_at: rfc3339(at),
         tool_version,
         new_code_reference,

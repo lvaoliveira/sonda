@@ -85,7 +85,8 @@ A rejected upload stores nothing:
 
 | Status | Meaning |
 |---|---|
-| `401` | Missing or wrong token. |
+| `401` | Missing, wrong, revoked or expired token. |
+| `403` | A token that can't upload this project, or a browser session (uploads need a token). |
 | `400` | Not gzip, or not a sonda upload. |
 | `413` | Too large, compressed or after decompression. |
 | `415` | A `Content-Encoding` other than gzip or identity. |
@@ -102,12 +103,12 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
 
 - **Where each credential works:**
   - People sign in with username and password.
-  - The API token is for machines: `sonda upload`, and scripts reading or
-    triaging with `Authorization: Bearer <token>`. It cannot manage users,
-    and it no longer signs browsers in.
+  - Machines use tokens, as `Authorization: Bearer <token>` (see Tokens
+    below). No token manages users or tokens, or signs browsers in.
 - **Who can read:** anyone, while the server listens on loopback only (the
   default without Docker). Otherwise, as in the Docker image, every read
-  needs a signed-in user or the token, because the server holds source code.
+  needs a signed-in user or a user token, because the server holds source
+  code.
 
 | Endpoint | |
 |---|---|
@@ -130,8 +131,49 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
   them out everywhere.
 - **Lockout protection:** the last active admin cannot be disabled or
   demoted.
-- **Audit:** triage changes record who made them, as a username or
-  `api-token`.
+- **Audit:** triage changes record who made them: a username,
+  `ada (token scripts)` for a user token, or `api-token`.
+
+## Tokens
+
+Each user generates their own tokens under Account, as in SonarQube
+([ADR-0012](adr/0012-api-tokens.md)). A token belongs to its owner and
+never has more rights than them: disabling the owner stops every token
+they generated, CI ones included, so give pipelines tokens of an account
+that stays.
+
+| Type | Prefix | Can |
+|---|---|---|
+| **User** | `sonda_u_` | What its owner can: read, triage and upload. Not manage users or tokens. |
+| **Project analysis** | `sonda_p_` | Upload analyses of one project, any branch; nothing else. Best for CI. |
+| **Global analysis** | `sonda_a_` | Upload analyses of any project; nothing else. |
+
+- **Expiry** is chosen when generating: 30, 60 or 90 days, or none. An
+  expired token stops working and stays listed.
+- **Secrets are shown once.** The server keeps their SHA-256, and lists show
+  only the first 12 characters. The prefixes let secret scanners, such as
+  GitHub's custom patterns, recognize leaked tokens.
+- **Revoking** is immediate and final; revoked tokens stay listed with who
+  revoked them. Admins see and revoke everyone's tokens on the Admin page.
+- **Uploads record their token:** the analyses list and page show
+  `ada (token ci-shop)`, or `api-token` for the shared `SONDA_TOKEN`.
+
+| Endpoint | |
+|---|---|
+| `GET /api/me/tokens` | Your tokens, revoked and expired ones included. |
+| `POST /api/me/tokens` `{"name": "ci-shop", "type": "project_analysis", "project": "shop", "expiresInDays": 30}` | `201` with `token`, the secret, this once. `type` is `user`, `project_analysis` or `global_analysis`; `expiresInDays` is 30, 60, 90 or null. |
+| `DELETE /api/me/tokens/{id}` | `204`. Revokes one of yours. |
+| `GET /api/tokens`, `DELETE /api/tokens/{id}` | Admins only: everyone's tokens, and revoking any. |
+
+These need a signed-in session (and the `Sonda-Csrf` header for changes),
+never a token, so a leaked token can't generate more.
+
+**Moving off `SONDA_TOKEN`.** The shared token still works with its old
+rights, and is now optional. For each pipeline, generate a project
+analysis token, put it in the pipeline's secret (`SONDA_TOKEN` or
+`SONDA_TOKEN_FILE`, which `sonda upload` and `sonda scan --upload` read),
+and check the analyses list shows it as the uploader. Once no recent
+analysis shows `api-token`, remove `SONDA_TOKEN` from the server.
 
 The cookie is `__Host-sonda_session`: `HttpOnly` (page scripts cannot read
 it), `Secure`, `SameSite=Strict`, and valid for 12 hours. The database keeps
@@ -569,7 +611,7 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 |---|---|
 | `DATABASE_URL` / `DATABASE_URL_FILE` | `postgres://user@host:port/db`. Required. |
 | `DATABASE_PASSWORD` / `DATABASE_PASSWORD_FILE` | The database password, if not in the URL. |
-| `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The API token, at least 32 characters. Required. Kept in memory only as a SHA-256 hash and compared in constant time. |
+| `SONDA_TOKEN` / `SONDA_TOKEN_FILE` | The shared API token, at least 32 characters. Optional since users have their own tokens (see Tokens). Kept in memory only as a SHA-256 hash and compared in constant time. |
 | `SONDA_ADMIN_PASSWORD` / `SONDA_ADMIN_PASSWORD_FILE` | Creates the first admin while no users exist; ignored afterwards. At least 12 characters. |
 | `SONDA_ADMIN_USERNAME` | That admin's username. Default `admin`. |
 | `SONDA_ADVISORY_SYNC` | `true` syncs advisories from OSV daily (see [Known vulnerabilities](#known-vulnerabilities)). Off by default: the server makes no outbound connections. |

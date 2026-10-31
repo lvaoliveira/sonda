@@ -93,7 +93,7 @@ pub fn state(pool: PgPool) -> http::State {
 pub fn state_with(pool: PgPool, reads_require_auth: bool) -> http::State {
     http::State {
         pool,
-        token: Arc::new(Token::new(TOKEN).unwrap()),
+        token: Some(Arc::new(Token::new(TOKEN).unwrap())),
         reads_require_auth,
     }
 }
