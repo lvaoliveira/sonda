@@ -88,7 +88,7 @@ function Dependencies({ d: loaded }: { d: DependencyList }) {
         <div className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
           <span className="font-semibold">No dependencies recorded</span>
           <span className="text-[13px] text-fg-muted">
-            This analysis has no lockfiles sonda reads (package-lock.json, Cargo.lock, poetry.lock, uv.lock, pinned requirements*.txt), or was uploaded by an older sonda.
+            This analysis has no lockfiles sonda reads (package-lock.json, Yarn v1’s yarn.lock, Cargo.lock, poetry.lock, uv.lock, pinned requirements*.txt), or was uploaded by an older sonda.
           </span>
         </div>
       ) : (
