@@ -4,7 +4,7 @@
 
 use super::java_bugs::{has_annotation, has_modifier, statements};
 use super::java_extra::{class_members, declared_field, declared_type, name_text, type_text};
-use super::java_security::{call_arguments, find_node, method_name, string_value, text};
+use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, declarator_names, enclosing_class};
 use super::*;
 
@@ -1168,12 +1168,6 @@ fn implements_word(class: Node, word: &[u8], src: &[u8]) -> bool {
 fn serializable_without_uid(class: Node, src: &[u8]) -> bool {
     implements_word(class, b"Serializable", src)
         && declared_field(class, b"serialVersionUID", src).is_none()
-}
-
-fn inner_serializable_not_static(class: Node, src: &[u8]) -> bool {
-    implements_word(class, b"Serializable", src)
-        && !has_modifier(class, "static")
-        && enclosing_class(class).is_some_and(|o| implements_word(o, b"Serializable", src))
 }
 
 fn lacks_serializable(class: Node, src: &[u8]) -> bool {
