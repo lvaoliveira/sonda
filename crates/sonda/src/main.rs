@@ -343,11 +343,16 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         }
         None => print!("{rendered}"),
     }
+    // When uploading, the server's gate decides, reviews included (ADR-0014);
+    // an older server that sends none leaves the local one deciding.
+    let mut passed = passed;
     if let Some(target) = upload {
         // The server gets the full JSON report, whatever --format and
         // --only-new chose for this one.
         let report = report::render(&report::build(&outcome, false), report::Format::Json);
-        target.send(report.as_bytes(), &root, Some(scan_duration))?;
+        if let Some(server) = target.send(report.as_bytes(), &root, Some(scan_duration))? {
+            passed = server;
+        }
     }
     Ok(if passed || args.no_gate {
         ExitCode::SUCCESS

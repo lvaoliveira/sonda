@@ -58,6 +58,7 @@ export function summary(d: IssueDetail): IssueSummary {
     language: d.language,
     effortMinutes: d.effortMinutes,
     status: d.status,
+    reason: d.reason,
     assignee: d.assignee,
     isNew: d.isNew,
     detectedAt: d.detectedAt,

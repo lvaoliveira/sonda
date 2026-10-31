@@ -23,6 +23,7 @@ pub mod issues;
 pub mod new_code;
 pub mod overview;
 pub mod projects;
+pub mod review;
 pub mod rules;
 pub mod security;
 pub mod session;

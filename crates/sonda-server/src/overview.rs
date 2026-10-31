@@ -304,7 +304,7 @@ pub async fn get_overview(
         )
         .collect();
     let issues: Vec<TrackedIssue> = sqlx::query_as::<_, IssueRow>(
-        "SELECT i.project_id, i.severity, i.category, i.status = 'accepted',
+        "SELECT i.project_id, i.severity, i.category, i.status IN ('accepted', 'false_positive'),
                 extract(epoch FROM fa.received_at)::float8,
                 extract(epoch FROM xa.received_at)::float8,
                 i.first_analysis_id = (SELECT min(b.id) FROM analyses b
@@ -335,7 +335,7 @@ pub async fn get_overview(
          FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          JOIN analyses fa ON fa.id = i.first_analysis_id
-         WHERE i.fixed_analysis_id IS NULL AND i.status <> 'accepted'
+         WHERE i.fixed_analysis_id IS NULL AND i.status NOT IN ('accepted', 'false_positive')
            AND i.severity IN ('blocker', 'critical') AND fa.received_at >= to_timestamp($1)
            AND i.first_analysis_id <> (SELECT min(b.id) FROM analyses b
                                        WHERE b.project_id = i.project_id AND b.branch = i.branch)

@@ -48,6 +48,17 @@ describe('the HTTP API client', () => {
     window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   })
 
+  it('asks for the review queue with only the filters set', async () => {
+    const { fn, calls } = fakeFetch(() => json({}))
+    const api = createHttpApi('/api', fn)
+    await api.securityReview({ status: 'open', severity: [], isNew: false })
+    await api.securityReview({ project: 'shop', status: 'all', severity: ['blocker', 'critical'], owasp: 'A05', assignee: 'ann', isNew: true })
+    expect(calls.map((c) => c.url)).toEqual([
+      '/api/security/review?status=open',
+      '/api/security/review?project=shop&status=all&severity=blocker%2Ccritical&owasp=A05&assignee=ann&new=true',
+    ])
+  })
+
   it('asks for the overview of a range; there are no teams to scope by', async () => {
     const { fn, calls } = fakeFetch(() => json({ teams: false }))
     await createHttpApi('/api', fn).overview!('all', '30d')

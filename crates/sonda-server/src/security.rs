@@ -66,6 +66,7 @@ pub struct StatusCounts {
     pub open: usize,
     pub confirmed: usize,
     pub accepted: usize,
+    pub false_positive: usize,
     pub fixed_last_30_days: usize,
 }
 
@@ -291,8 +292,9 @@ fn owasp_edition(edition: Edition, open: &[&Vuln]) -> OwaspEdition {
 }
 
 fn build(now: f64, vulns: &[Vuln]) -> Security {
-    // Open: present and not accepted (accepted is a decision, not a fix).
-    let is_open = |v: &&Vuln| v.fixed_at.is_none() && v.status != "accepted";
+    // Open: present and not decided (a decision isn't a fix, ADR-0014).
+    let decided = |v: &Vuln| crate::issues::DECIDED.contains(&v.status.as_str());
+    let is_open = |v: &&Vuln| v.fixed_at.is_none() && !decided(v);
     let open: Vec<&Vuln> = vulns.iter().filter(is_open).collect();
 
     let mut open_by_severity: BTreeMap<String, usize> = BTreeMap::new();
@@ -333,11 +335,7 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
             let start = end - 7.0 * DAY;
             let open_at: Vec<&Vuln> = vulns
                 .iter()
-                .filter(|v| {
-                    v.status != "accepted"
-                        && v.first_at <= end
-                        && v.fixed_at.is_none_or(|f| f > end)
-                })
+                .filter(|v| !decided(v) && v.first_at <= end && v.fixed_at.is_none_or(|f| f > end))
                 .collect();
             RiskPoint {
                 date: rfc3339(end),
@@ -449,7 +447,8 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
     let status = StatusCounts {
         open: present.clone().filter(|v| v.status == "open").count(),
         confirmed: present.clone().filter(|v| v.status == "confirmed").count(),
-        accepted: present.filter(|v| v.status == "accepted").count(),
+        accepted: present.clone().filter(|v| v.status == "accepted").count(),
+        false_positive: present.filter(|v| v.status == "false_positive").count(),
         fixed_last_30_days: fixed_since(30.0).len(),
     };
 

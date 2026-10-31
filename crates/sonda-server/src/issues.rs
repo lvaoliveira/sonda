@@ -21,7 +21,7 @@ const MAX_CODE_LINES: usize = 80;
 const SEVERITIES: &[&str] = &["blocker", "critical", "major", "minor", "info"];
 const CATEGORIES: &[&str] = &["bug", "vulnerability", "code_smell"];
 /// `fixed` is derived from scans; the others are a human's triage.
-const STATES: &[&str] = &["open", "confirmed", "accepted", "fixed"];
+const STATES: &[&str] = &["open", "confirmed", "accepted", "false_positive", "fixed"];
 
 // SQL in this module is assembled with `format!` from the constants below
 // and fixed column names only, never from request input (which is always
@@ -120,6 +120,8 @@ pub struct IssueView {
     pub is_new: bool,
     /// When the analysis that first saw it arrived (UTC, ISO 8601).
     pub detected_at: String,
+    /// Why it was confirmed, accepted or ruled a false positive (ADR-0014).
+    pub reason: Option<String>,
 }
 
 /// Columns for `IssueView`, over `scoped s`.
@@ -132,7 +134,8 @@ fn view_columns() -> String {
          WHERE f.analysis_id = s.last_analysis_id AND f.path = s.path) AS language,
         s.effort_minutes, s.state AS status, s.assignee, s.is_new,
         (SELECT to_char(a.received_at AT TIME ZONE 'UTC', {ISO_8601})
-         FROM analyses a WHERE a.id = s.first_analysis_id) AS detected_at"
+         FROM analyses a WHERE a.id = s.first_analysis_id) AS detected_at,
+        s.reason"
     )
 }
 
@@ -295,6 +298,8 @@ pub struct Event {
     pub field: String,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
+    /// Why, for a status change that gave one.
+    pub reason: Option<String>,
 }
 
 pub async fn get_issue(
@@ -346,7 +351,8 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
         _ => Vec::new(),
     };
     let history: Vec<Event> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT to_char(at AT TIME ZONE 'UTC', {ISO_8601}) AS at, actor, field, old_value, new_value
+        "SELECT to_char(at AT TIME ZONE 'UTC', {ISO_8601}) AS at, actor, field, old_value, new_value,
+                reason
              FROM issue_events WHERE issue_id = $1 ORDER BY id"
     )))
     .bind(id)
@@ -365,12 +371,22 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
 }
 
 /// A triage change. `assignee: ""` unassigns; an absent field is unchanged.
+/// `reason` comes with a status: required for accepted and false positive
+/// (ADR-0014), optional for confirmed.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Patch {
     status: Option<String>,
     assignee: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
 }
+
+/// Statuses a person sets; `fixed` is decided by analyses.
+const SETTABLE: &[&str] = &["open", "confirmed", "accepted", "false_positive"];
+
+/// Decisions that take an issue out of the counts and the gate (ADR-0014).
+pub(crate) const DECIDED: &[&str] = &["accepted", "false_positive"];
 
 pub async fn patch_issue(
     axum::extract::State(state): axum::extract::State<State>,
@@ -380,12 +396,37 @@ pub async fn patch_issue(
 ) -> Result<Json<IssueDetail>, ApiError> {
     let actor = caller.name().to_string();
     if let Some(s) = &patch.status
-        && !["open", "confirmed", "accepted"].contains(&s.as_str())
+        && !SETTABLE.contains(&s.as_str())
     {
         return Err(ApiError::Unprocessable(format!(
-            "status {s:?} cannot be set; use open, confirmed or accepted \
+            "status {s:?} cannot be set; use open, confirmed, accepted or false_positive \
              (fixed is decided by analyses)"
         )));
+    }
+    let reason = match patch.reason.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(r) if r.chars().count() <= 500 && !r.chars().any(|c| c.is_control() && c != '\n') => {
+            Some(r.to_string())
+        }
+        Some(_) => {
+            return Err(ApiError::Unprocessable(
+                "a reason has at most 500 characters".into(),
+            ));
+        }
+    };
+    match patch.status.as_deref() {
+        Some(s) if DECIDED.contains(&s) && reason.is_none() => {
+            return Err(ApiError::Unprocessable(format!(
+                "say why: {} needs a reason",
+                s.replace('_', " ")
+            )));
+        }
+        None | Some("open") if reason.is_some() => {
+            return Err(ApiError::Unprocessable(
+                "a reason goes with confirmed, accepted or false_positive".into(),
+            ));
+        }
+        _ => {}
     }
     let assignee = match patch.assignee.as_deref().map(str::trim) {
         None => None,
@@ -407,13 +448,28 @@ pub async fn patch_issue(
             .fetch_optional(&mut *tx)
             .await?;
     let (old_status, old_assignee) = current.ok_or(ApiError::NotFound)?;
-    if let Some(new) = patch.status.filter(|s| *s != old_status) {
-        sqlx::query("UPDATE issues SET status = $2::issue_status WHERE id = $1")
+    // A new reason for the same decision is recorded too.
+    let status_changed = patch
+        .status
+        .as_ref()
+        .is_some_and(|s| *s != old_status || reason.is_some());
+    if let Some(new) = patch.status.filter(|_| status_changed) {
+        sqlx::query("UPDATE issues SET status = $2::issue_status, reason = $3 WHERE id = $1")
             .bind(id)
             .bind(&new)
+            .bind(&reason)
             .execute(&mut *tx)
             .await?;
-        record(&mut tx, id, &actor, "status", Some(old_status), Some(new)).await?;
+        record(
+            &mut tx,
+            id,
+            &actor,
+            "status",
+            Some(old_status),
+            Some(new),
+            reason,
+        )
+        .await?;
     }
     if let Some(new) = assignee.filter(|a| *a != old_assignee) {
         sqlx::query("UPDATE issues SET assignee = $2 WHERE id = $1")
@@ -421,9 +477,18 @@ pub async fn patch_issue(
             .bind(&new)
             .execute(&mut *tx)
             .await?;
-        record(&mut tx, id, &actor, "assignee", old_assignee, new).await?;
+        record(&mut tx, id, &actor, "assignee", old_assignee, new, None).await?;
     }
     tx.commit().await?;
+    // Decided issues leave the counts, so the branch's gate may change.
+    if status_changed {
+        let (project, branch): (i64, String) =
+            sqlx::query_as("SELECT project_id, branch FROM issues WHERE id = $1")
+                .bind(id)
+                .fetch_one(&state.pool)
+                .await?;
+        crate::new_code::recount(&state.pool, project, &branch).await?;
+    }
     Ok(Json(detail(&state.pool, id).await?))
 }
 
@@ -434,16 +499,18 @@ async fn record(
     field: &str,
     old: Option<String>,
     new: Option<String>,
+    reason: Option<String>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO issue_events (issue_id, actor, field, old_value, new_value)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO issue_events (issue_id, actor, field, old_value, new_value, reason)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(id)
     .bind(actor)
     .bind(field)
     .bind(old)
     .bind(new)
+    .bind(reason)
     .execute(tx)
     .await?;
     Ok(())

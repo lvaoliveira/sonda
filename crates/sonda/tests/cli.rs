@@ -1035,16 +1035,11 @@ fn upload_sends_the_commit_subject_from_git() {
     assert_eq!(body["commit_message"], "Fix refunds rounding");
 }
 
-#[test]
-fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
-    let dir = project(&[("app.js", "var x = 1;\n")]);
-    let (url, server) = fake_server(
-        "201 Created",
-        r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":0}}"#,
-    );
+/// `sonda scan --upload` of `dir` to `server`.
+fn scan_upload(dir: &Path, server: &str) -> Command {
     let mut cmd = sonda();
-    cmd.args(["scan", "-f", "text", "--no-gate", "--upload", "--server"])
-        .arg(&url)
+    cmd.args(["scan", "--upload", "--server"])
+        .arg(server)
         .args([
             "--project",
             "payments",
@@ -1053,7 +1048,7 @@ fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
             "--commit",
             "0123abc",
         ])
-        .arg(dir.path())
+        .arg(dir)
         .env("SONDA_TOKEN", "s3cret")
         .env_remove("SONDA_TOKEN_FILE");
     for var in [
@@ -1066,7 +1061,20 @@ fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
     ] {
         cmd.env_remove(var);
     }
-    let result = cmd.output().unwrap();
+    cmd
+}
+
+#[test]
+fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let (url, server) = fake_server(
+        "201 Created",
+        r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":0}}"#,
+    );
+    let result = scan_upload(dir.path(), &url)
+        .args(["-f", "text", "--no-gate"])
+        .output()
+        .unwrap();
     assert_eq!(code(&result), 0, "{}", stderr(&result));
     // Its own report is the text one it was asked for.
     assert!(
@@ -1092,6 +1100,58 @@ fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
         body["scan_duration_ms"]
     );
     assert_eq!(body["sources"][0]["path"], "app.js");
+}
+
+#[test]
+fn upload_exits_on_the_servers_gate() {
+    let failed = r#"{"analysis_id":7,"gate":{"passed":false,"state":"failed","failing":["New vulnerabilities > 0"]}}"#;
+    let (dir, out) = scanned(&[("app.js", "var x = 1;\n")]);
+    let (url, server) = fake_server("201 Created", failed);
+    let result = upload(dir.path(), out.path(), &url).output().unwrap();
+    server.join().unwrap();
+    assert_eq!(code(&result), 1, "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains(
+            "quality gate on the server, reviews included: FAILED (New vulnerabilities > 0)"
+        ),
+        "{}",
+        stderr(&result)
+    );
+
+    let (url, server) = fake_server("201 Created", failed);
+    let result = upload(dir.path(), out.path(), &url)
+        .arg("--no-gate")
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+}
+
+#[test]
+fn scan_upload_follows_the_servers_gate_over_its_own() {
+    // eval fails the local gate; a review on the server has accepted it.
+    let dir = project(&[("app.js", "eval(input);\n")]);
+    let passed = r#"{"analysis_id":7,"gate":{"passed":true,"state":"passed","failing":[]}}"#;
+    let (url, server) = fake_server("201 Created", passed);
+    let result = scan_upload(dir.path(), &url).output().unwrap();
+    server.join().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains("quality gate on the server, reviews included: PASSED"),
+        "{}",
+        stderr(&result)
+    );
+
+    // A server that sends no gate leaves the local one deciding.
+    let (url, server) = fake_server("201 Created", r#"{"analysis_id":7}"#);
+    let result = scan_upload(dir.path(), &url).output().unwrap();
+    server.join().unwrap();
+    assert_eq!(code(&result), 1, "{}", stderr(&result));
+    assert!(
+        !stderr(&result).contains("on the server"),
+        "{}",
+        stderr(&result)
+    );
 }
 
 #[test]

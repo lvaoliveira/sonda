@@ -49,6 +49,7 @@ export const STATUS_LABEL: Record<IssueStatus, string> = {
   confirmed: 'Confirmed',
   fixed: 'Fixed',
   accepted: 'Accepted',
+  false_positive: 'False positive',
 }
 
 export const STATUS_COLOR: Record<IssueStatus, string> = {
@@ -56,7 +57,14 @@ export const STATUS_COLOR: Record<IssueStatus, string> = {
   confirmed: 'var(--sd-warn)',
   fixed: 'var(--sd-ok)',
   accepted: 'var(--sd-faint)',
+  false_positive: 'var(--sd-faint)',
 }
+
+/** What the reason form asks before each decision that needs one (ADR-0014). */
+export const DECISION_PROMPT = {
+  accepted: { verb: 'Accept', prompt: 'Why is this risk acceptable?' },
+  false_positive: { verb: 'Mark false positive', prompt: 'Why is this not a real problem?' },
+} as const
 
 /** Level 4–5 is good, 3 is a warning, 1–2 is critical. */
 export function levelColor(level: Level): string {

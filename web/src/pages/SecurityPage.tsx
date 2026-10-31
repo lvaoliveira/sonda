@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { Security } from '@/api/types'
+import type { IssuePatch, ReviewFinding, ReviewProgress, ReviewQuery, Security, Severity, TriageStatus } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
-import { Segmented } from '@/components/sonda/controls'
+import { Button, Segmented, Toast, type ToastMessage } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
 import { Sparkline } from '@/components/sonda/meters'
 import { SeverityGlyph } from '@/components/sonda/status'
+import { ReasonForm } from '@/components/sonda/triage'
 import { formatAge, formatNumber, shortDate } from '@/lib/format'
 import { componentLabel, componentUrl, cweUrl, dependenciesUrl, projectUrl } from '@/lib/links'
-import { SEVERITY } from '@/lib/visual'
+import { DECISION_PROMPT, SEVERITY, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
 
 export function SecurityPage() {
   const api = useApi()
@@ -74,6 +75,8 @@ function SecurityView({ s }: { s: Security }) {
         </div>
       </MetricGrid>
 
+      <ToReview s={s} />
+
       <div className="grid grid-cols-1 gap-5 min-[1000px]:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
         <FixFirst s={s} />
         <Trend s={s} />
@@ -87,6 +90,223 @@ function SecurityView({ s }: { s: Security }) {
         <OwaspTop10 s={s} />
       </div>
     </>
+  )
+}
+
+const REVIEW_STATUS: { value: TriageStatus | 'all'; label: string }[] = [
+  { value: 'open', label: 'To review' },
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'accepted', label: 'Accepted' },
+  { value: 'false_positive', label: 'False positive' },
+  { value: 'all', label: 'All' },
+]
+
+/** The security review queue (ADR-0014): decide on each open vulnerability in place. */
+function ToReview({ s }: { s: Security }) {
+  const api = useApi()
+  const shell = useAsync(() => api.shell(), [api])
+  const me = shell.state === 'ready' ? shell.data.me : null
+  const [query, setQuery] = useState<ReviewQuery>({ status: 'open', severity: [], isNew: false })
+  const [mine, setMine] = useState(false)
+  const [version, setVersion] = useState(0)
+  const [toast, setToast] = useState<ToastMessage | null>(null)
+  const assignee = mine && me ? me : undefined
+  const loaded = useAsync(() => api.securityReview({ ...query, assignee }), [api, query, assignee, version])
+  const set = (patch: Partial<ReviewQuery>) => setQuery((q) => ({ ...q, ...patch }))
+  const triage = async (f: ReviewFinding, patch: IssuePatch, message: string) => {
+    try {
+      await api.updateIssue(f.id, patch)
+    } catch (e) {
+      setToast({ text: `Not saved: ${(e as Error).message}` })
+      return false
+    }
+    setToast({ text: message })
+    setVersion((v) => v + 1)
+    return true
+  }
+  const review = loaded.state === 'ready' ? loaded.data : null
+  const categories = s.owasp.find((o) => o.year === 2025)?.categories ?? []
+  return (
+    <Card
+      id="review"
+      padded={false}
+      title="To review"
+      subtitle="Decide on each vulnerability: confirm it to fix, accept the risk, or mark a false positive. Decided ones leave the counts and the gate."
+      aside={review && <Progress label="Reviewed" p={review.progress} newCode={review.newCode} />}
+    >
+      <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+        <Segmented label="Review status" options={REVIEW_STATUS} value={query.status ?? 'open'} onChange={(status) => set({ status })} />
+        <select
+          aria-label="Project"
+          value={query.project ?? ''}
+          onChange={(e) => set({ project: e.target.value || undefined })}
+          className="h-8 rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge"
+        >
+          <option value="">All projects</option>
+          {s.projects.map((p) => (
+            <option key={p.project} value={p.project}>
+              {p.project}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Severity"
+          value={query.severity[0] ?? ''}
+          onChange={(e) => set({ severity: e.target.value ? [e.target.value as Severity] : [] })}
+          className="h-8 rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge"
+        >
+          <option value="">Any severity</option>
+          {(['blocker', 'critical', 'major', 'minor'] as const).map((sev) => (
+            <option key={sev} value={sev}>
+              {SEVERITY[sev].label}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="OWASP Top 10"
+          value={query.owasp ?? ''}
+          onChange={(e) => set({ owasp: e.target.value || undefined })}
+          className="h-8 max-w-[220px] rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge"
+        >
+          <option value="">Any OWASP category</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.id} {c.title}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1.5 text-[13px]">
+          <input type="checkbox" checked={query.isNew} onChange={(e) => set({ isNew: e.target.checked })} className="accent-brand" />
+          New code
+        </label>
+        {me && (
+          <label className="flex items-center gap-1.5 text-[13px]">
+            <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} className="accent-brand" />
+            Assigned to me
+          </label>
+        )}
+      </div>
+      {loaded.state === 'error' && (
+        <p role="alert" className="m-0 px-5 pb-4 text-[13px]">
+          Could not load the review queue: {loaded.error.message}
+        </p>
+      )}
+      {!review && loaded.state === 'loading' && <div aria-busy="true" className="mx-5 mb-4 h-24 rounded-lg bg-panel-2" />}
+      {review && review.items.length === 0 && (
+        <p className="m-0 border-t border-line px-5 py-4 text-[13px] text-fg-faint">
+          {query.status === 'open' ? 'Nothing left to review.' : 'Nothing matches.'}
+        </p>
+      )}
+      {review && review.items.length > 0 && (
+        <ol aria-label="Vulnerabilities to review" aria-busy={loaded.state === 'loading'} className="m-0 list-none p-0">
+          {review.items.map((f) => (
+            <ReviewRow key={f.id} f={f} me={me} onTriage={(patch, message) => triage(f, patch, message)} />
+          ))}
+        </ol>
+      )}
+      {review && review.total > review.items.length && (
+        <p className="m-0 border-t border-line px-5 py-2.5 text-xs text-fg-faint">
+          Showing {review.items.length} of {formatNumber(review.total)}; narrow the filters to see the rest.
+        </p>
+      )}
+      <Toast toast={toast} onDone={() => setToast(null)} />
+    </Card>
+  )
+}
+
+function Progress({ label, p, newCode }: { label: string; p: ReviewProgress; newCode: ReviewProgress }) {
+  const total = p.open + p.confirmed + p.accepted + p.falsePositive
+  const parts = [
+    { n: p.confirmed, color: STATUS_COLOR.confirmed },
+    { n: p.accepted + p.falsePositive, color: 'var(--sd-ok)' },
+  ]
+  return (
+    <span className="flex min-w-[180px] flex-col gap-1 text-right text-xs text-fg-muted">
+      <span>
+        {label}{' '}
+        <Mono className="text-[12.5px] text-fg">{p.reviewed == null ? '—' : `${p.reviewed}%`}</Mono>
+        {newCode.reviewed != null && <> · new code {newCode.reviewed}%</>}
+      </span>
+      <Bar total={total} parts={parts} />
+      <span className="text-fg-faint">
+        {p.open} open · {p.confirmed} confirmed · {p.accepted} accepted · {p.falsePositive} false positive
+      </span>
+    </span>
+  )
+}
+
+function ReviewRow({
+  f,
+  me,
+  onTriage,
+}: {
+  f: ReviewFinding
+  me: string | null
+  onTriage: (patch: IssuePatch, message: string) => Promise<boolean>
+}) {
+  const [deciding, setDeciding] = useState<keyof typeof DECISION_PROMPT | null>(null)
+  const issueUrl = `/issues?project=${encodeURIComponent(f.project)}&branch=${encodeURIComponent(f.branch)}&file=${encodeURIComponent(f.file)}&cat=vulnerability&issue=${f.id}`
+  return (
+    <li
+      aria-label={`${f.rule} at ${f.file}:${f.line}`}
+      className="grid grid-cols-[16px_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2 border-t border-line px-5 py-3 text-[13.5px] min-[760px]:grid-cols-[16px_minmax(0,1fr)_auto]"
+    >
+      <SeverityGlyph severity={f.severity} />
+      <span className="flex min-w-0 flex-col gap-1">
+        <span>{f.message}</span>
+        <span className="text-xs text-fg-faint">
+          <Link to={projectUrl(f.project)} className="text-fg-muted">
+            {f.project}
+          </Link>
+          {' › '}
+          <Link to={issueUrl} className="font-mono text-[11.5px] [overflow-wrap:anywhere]">
+            {f.file}:{f.line}
+          </Link>{' '}
+          ·{' '}
+          <Link to={`/rules#${encodeURIComponent(f.rule)}`} className="font-mono text-[11px] text-fg-faint" title={f.ruleName ?? undefined}>
+            {f.rule}
+          </Link>
+          {f.cwe.map((c) => (
+            <span key={c}>
+              {' · '}
+              <a href={cweUrl(c)} target="_blank" rel="noreferrer" className="font-mono text-[11px] text-fg-faint">
+                CWE-{c}
+              </a>
+            </span>
+          ))}
+          {f.owasp.map((o) => (
+            <span key={o.id} title={`OWASP Top 10 2025: ${o.title}`}>
+              {' · '}
+              <Mono className="text-[11px]">{o.id}</Mono>
+            </span>
+          ))}
+        </span>
+        <span className="flex flex-wrap items-center gap-2 text-xs text-fg-faint">
+          <span style={{ color: SEVERITY[f.severity].color }}>{SEVERITY[f.severity].label}</span>
+          <span>·</span>
+          <span style={{ color: STATUS_COLOR[f.status] }}>{STATUS_LABEL[f.status]}</span>
+          <span>·</span>
+          <span>{formatAge(f.detectedAt)} old</span>
+          {f.isNew && <span className="text-brand">new code</span>}
+          {f.assignee && <span>· {f.assignee === me ? 'assigned to you' : `@${f.assignee}`}</span>}
+        </span>
+        {f.reason && <span className="text-xs text-fg-muted">“{f.reason}”</span>}
+        {deciding && (
+          <ReasonForm
+            {...DECISION_PROMPT[deciding]}
+            onSubmit={(reason) => onTriage({ status: deciding, reason }, `Marked ${STATUS_LABEL[deciding].toLowerCase()}`)}
+            onCancel={() => setDeciding(null)}
+          />
+        )}
+      </span>
+      <span className="col-start-2 flex flex-wrap gap-1.5 min-[760px]:col-start-3 min-[760px]:justify-end">
+        {f.status !== 'confirmed' && <Button onClick={() => void onTriage({ status: 'confirmed' }, 'Marked confirmed')}>Confirm</Button>}
+        {f.status !== 'accepted' && <Button onClick={() => setDeciding('accepted')}>Accept</Button>}
+        {f.status !== 'false_positive' && <Button onClick={() => setDeciding('false_positive')}>False positive</Button>}
+        {f.status !== 'open' && <Button onClick={() => void onTriage({ status: 'open' }, 'Reopened')}>Reopen</Button>}
+        {me && f.assignee !== me && <Button onClick={() => void onTriage({ assignee: me }, 'Assigned to you')}>Assign to me</Button>}
+      </span>
+    </li>
   )
 }
 
@@ -233,6 +453,7 @@ function Remediation({ s }: { s: Security }) {
     { label: 'Confirmed', n: s.status.confirmed, color: 'var(--sd-warn)' },
     { label: 'Fixed · 30 days', n: s.status.fixedLast30Days, color: 'var(--sd-ok)' },
     { label: 'Accepted risk', n: s.status.accepted, color: 'var(--sd-faint)' },
+    { label: 'False positive', n: s.status.falsePositive, color: 'var(--sd-faint)' },
   ]
   const max = Math.max(1, ...rows.map((r) => r.n))
   const r = s.remediation

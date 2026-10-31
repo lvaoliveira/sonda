@@ -6,7 +6,7 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, dependencies, drill, gates, ingest, issues, new_code,
-    overview, projects, rules, security, session, throttle, tokens,
+    overview, projects, review, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -63,6 +63,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         )
         .route("/components", get(components::list_components))
         .route("/security", get(security::get_security))
+        .route("/security/review", get(review::get_review))
         .route("/gates", get(gates::list_gates))
         .route("/issues", get(issues::list_issues))
         .route("/issues/{id}", get(issues::get_issue))

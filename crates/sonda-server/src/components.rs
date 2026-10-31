@@ -155,7 +155,7 @@ pub async fn list_components(
         "SELECT i.project_id, i.path, i.category, i.severity, i.effort_minutes FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          WHERE i.project_id = ANY($1) AND i.fixed_analysis_id IS NULL
-           AND i.status <> 'accepted'",
+           AND i.status NOT IN ('accepted', 'false_positive')",
     )
     .bind(&projects)
     .fetch_all(pool)
@@ -305,7 +305,7 @@ pub async fn get_component(
     // new code, accepted, when first seen and when fixed.
     let history: Vec<IssueHistory> = sqlx::query_as(
         "SELECT i.path, i.category, i.severity, i.effort_minutes, i.is_new,
-                i.status = 'accepted', extract(epoch FROM fa.received_at)::float8,
+                i.status IN ('accepted', 'false_positive'), extract(epoch FROM fa.received_at)::float8,
                 extract(epoch FROM xa.received_at)::float8
          FROM issues i
          JOIN analyses fa ON fa.id = i.first_analysis_id
