@@ -5,8 +5,13 @@ mod c;
 mod common;
 mod java;
 mod js;
+mod js_a11y;
+mod js_modern;
+mod js_security;
 mod js_semantic;
 mod py;
+mod py_quality;
+mod py_security;
 pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, Keep};
@@ -23,8 +28,13 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
     [
         common::RULES,
         js::RULES,
+        js_security::RULES,
+        js_modern::RULES,
+        js_a11y::RULES,
         js_semantic::RULES,
         py::RULES,
+        py_security::RULES,
+        py_quality::RULES,
         java::RULES,
         c::RULES,
     ]
