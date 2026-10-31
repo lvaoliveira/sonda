@@ -180,6 +180,24 @@ that wants a failing build.
    real 1,920-entry monorepo lockfile: every installed package is listed
    except the monorepo's own workspaces, which `yarn.lock` doesn't list.
 
+   pnpm (`pnpm-lock.yaml`, lockfile versions 5 to 9) and Yarn 2+ are built
+   too, on `yaml-rust2` (2026-10-31). The review: `serde_yaml` is archived
+   and depends on `unsafe-libyaml`, flagged unmaintained
+   (RUSTSEC-2024-0449); `serde_yml` is flagged unsound
+   (RUSTSEC-2025-0068); `yaml-rust` is flagged unmaintained
+   (RUSTSEC-2024-0320). `yaml-rust2` is pure Rust, maintained, without
+   advisories, and past the 14-day release age, with default features off
+   (no `encoding_rs`). Its loader copies an anchor's node at each alias,
+   so a hostile lockfile could expand exponentially ("billion laughs");
+   sonda uses only its event parser, builds its own tree, rejects aliases
+   (package managers don't write any), caps nesting at 64 levels and reads
+   every document (pnpm 11+ writes the package manager's own lockfile
+   first, which sonda leaves out). Checked against real lockfiles: sonda's
+   own `web/pnpm-lock.yaml` (pnpm 12; the 20 direct dependencies its
+   `package.json` declares, and every installed package) and a Yarn 4
+   lockfile (all 73 registry packages its resolutions name, the patched
+   `typescript` once, aliases resolved). Fuzzed with those as seeds.
+
 ## Consequences
 
 - The report gains a field, and later the upload carries it; older

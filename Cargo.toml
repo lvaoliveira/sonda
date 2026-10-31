@@ -44,6 +44,10 @@ tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-typescript = "0.23.2"
+# pnpm-lock.yaml and Yarn 2+ yarn.lock (ADR-0009). serde_yaml, serde_yml and
+# yaml-rust carry RustSec unmaintained/unsound advisories; this is the
+# maintained pure-Rust successor.
+yaml-rust2 = { version = "0.13.0", default-features = false }
 # 3.4.3 and 3.5.0 were younger than the 14-day minimum when added. Cargo.lock
 # holds a few crates below that age on purpose, because a security fix
 # overrides the minimum: rustls-webpki 0.103.16 (RUSTSEC-2026-0382),

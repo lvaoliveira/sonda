@@ -7,7 +7,9 @@
 
 mod cargo;
 mod npm;
+mod pnpm;
 mod python;
+mod yaml;
 mod yarn;
 
 use serde::{Deserialize, Serialize};
@@ -74,7 +76,9 @@ pub(crate) enum FileKind {
     Requirements,
     /// `pyproject.toml`: tells which of `poetry.lock`'s packages are direct.
     PyProject,
-    /// Yarn v1's `yarn.lock`.
+    /// `pnpm-lock.yaml`.
+    PnpmLock,
+    /// `yarn.lock`: Yarn v1's own format, or Yarn 2+'s YAML.
     YarnLock,
     /// `package.json`: tells which of `yarn.lock`'s packages are direct.
     PackageJson,
@@ -91,10 +95,11 @@ pub(crate) fn file_kind(file_name: &str) -> Option<FileKind> {
         "uv.lock" => FileKind::UvLock,
         "pyproject.toml" => FileKind::PyProject,
         "yarn.lock" => FileKind::YarnLock,
+        "pnpm-lock.yaml" => FileKind::PnpmLock,
         "package.json" => FileKind::PackageJson,
         n if n.starts_with("requirements") && n.ends_with(".txt") => FileKind::Requirements,
-        "pnpm-lock.yaml" | "bun.lock" | "bun.lockb" | "go.sum" | "gradle.lockfile"
-        | "Pipfile.lock" | "composer.lock" | "Gemfile.lock" => FileKind::Unsupported,
+        "bun.lock" | "bun.lockb" | "go.sum" | "gradle.lockfile" | "Pipfile.lock"
+        | "composer.lock" | "Gemfile.lock" => FileKind::Unsupported,
         _ => return None,
     })
 }
@@ -137,6 +142,7 @@ pub(crate) fn parse(
         FileKind::UvLock => python::uv(path, text)?,
         FileKind::Requirements => python::requirements(path, text),
         FileKind::YarnLock => yarn::parse(path, text, manifest)?,
+        FileKind::PnpmLock => pnpm::parse(path, text)?,
         FileKind::PyProject | FileKind::PackageJson => {
             return Ok(Parsed {
                 dependencies: Vec::new(),
@@ -145,7 +151,7 @@ pub(crate) fn parse(
         }
         FileKind::Unsupported => {
             return Err(
-                "not read: sonda reads package-lock.json, yarn.lock (Yarn v1), \
+                "not read: sonda reads package-lock.json, yarn.lock, pnpm-lock.yaml, \
                         Cargo.lock, poetry.lock, uv.lock and requirements*.txt so far"
                     .into(),
             );
@@ -223,7 +229,8 @@ mod tests {
         assert_eq!(file_kind("Cargo.toml"), None);
         assert_eq!(file_kind("yarn.lock"), Some(FileKind::YarnLock));
         assert_eq!(file_kind("package.json"), Some(FileKind::PackageJson));
-        assert_eq!(file_kind("pnpm-lock.yaml"), Some(FileKind::Unsupported));
+        assert_eq!(file_kind("pnpm-lock.yaml"), Some(FileKind::PnpmLock));
+        assert_eq!(file_kind("bun.lockb"), Some(FileKind::Unsupported));
     }
 
     #[test]

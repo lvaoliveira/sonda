@@ -230,9 +230,17 @@ pub mod fuzzing {
     /// JSON. It may be rejected, but must not panic.
     pub fn parse_lockfile(selector: u8, text: &str) {
         use crate::deps::FileKind::*;
-        let kinds = [PackageLock, CargoLock, PoetryLock, UvLock, Requirements];
+        let kinds = [
+            PackageLock,
+            CargoLock,
+            PoetryLock,
+            UvLock,
+            Requirements,
+            YarnLock,
+            PnpmLock,
+        ];
         let kind = kinds[usize::from(selector) % kinds.len()];
-        // The same text doubles as poetry's pyproject.toml.
+        // The same text doubles as the manifest (pyproject.toml, package.json).
         let Ok(parsed) = crate::deps::parse(kind, "fuzz.lock", text, Some(text)) else {
             return;
         };
