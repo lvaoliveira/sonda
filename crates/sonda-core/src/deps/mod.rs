@@ -8,6 +8,7 @@
 mod cargo;
 mod npm;
 mod python;
+mod yarn;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -64,7 +65,7 @@ pub struct Dependency {
 }
 
 /// Files the scanner hands to this module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum FileKind {
     PackageLock,
     CargoLock,
@@ -73,6 +74,10 @@ pub(crate) enum FileKind {
     Requirements,
     /// `pyproject.toml`: tells which of `poetry.lock`'s packages are direct.
     PyProject,
+    /// Yarn v1's `yarn.lock`.
+    YarnLock,
+    /// `package.json`: tells which of `yarn.lock`'s packages are direct.
+    PackageJson,
     /// A lockfile sonda recognizes but doesn't read yet (ADR-0009's later
     /// phases), reported so an SBOM's gap isn't silent.
     Unsupported,
@@ -85,13 +90,29 @@ pub(crate) fn file_kind(file_name: &str) -> Option<FileKind> {
         "poetry.lock" => FileKind::PoetryLock,
         "uv.lock" => FileKind::UvLock,
         "pyproject.toml" => FileKind::PyProject,
+        "yarn.lock" => FileKind::YarnLock,
+        "package.json" => FileKind::PackageJson,
         n if n.starts_with("requirements") && n.ends_with(".txt") => FileKind::Requirements,
-        "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "go.sum"
-        | "gradle.lockfile" | "Pipfile.lock" | "composer.lock" | "Gemfile.lock" => {
-            FileKind::Unsupported
-        }
+        "pnpm-lock.yaml" | "bun.lock" | "bun.lockb" | "go.sum" | "gradle.lockfile"
+        | "Pipfile.lock" | "composer.lock" | "Gemfile.lock" => FileKind::Unsupported,
         _ => return None,
     })
+}
+
+/// The manifest a lockfile of `kind` reads next to it, to tell which of
+/// its packages are direct.
+pub(crate) fn manifest_for(kind: FileKind) -> Option<FileKind> {
+    match kind {
+        FileKind::PoetryLock => Some(FileKind::PyProject),
+        FileKind::YarnLock => Some(FileKind::PackageJson),
+        _ => None,
+    }
+}
+
+/// Manifests aren't lockfiles: they're read only next to the lockfile that
+/// needs them.
+pub(crate) fn is_manifest(kind: FileKind) -> bool {
+    matches!(kind, FileKind::PyProject | FileKind::PackageJson)
 }
 
 /// A parsed lockfile: its dependencies and notes about what it left out.
@@ -101,8 +122,8 @@ pub(crate) struct Parsed {
     pub(crate) notes: Vec<String>,
 }
 
-/// Parses the lockfile at `path` (root-relative). `manifest` is the
-/// `pyproject.toml` next to it, if any. An error is a warning's text.
+/// Parses the lockfile at `path` (root-relative). `manifest` is the one
+/// `manifest_for` names next to it, if any. An error is a warning's text.
 pub(crate) fn parse(
     kind: FileKind,
     path: &str,
@@ -115,7 +136,8 @@ pub(crate) fn parse(
         FileKind::PoetryLock => python::poetry(path, text, manifest)?,
         FileKind::UvLock => python::uv(path, text)?,
         FileKind::Requirements => python::requirements(path, text),
-        FileKind::PyProject => {
+        FileKind::YarnLock => yarn::parse(path, text, manifest)?,
+        FileKind::PyProject | FileKind::PackageJson => {
             return Ok(Parsed {
                 dependencies: Vec::new(),
                 notes: Vec::new(),
@@ -123,8 +145,8 @@ pub(crate) fn parse(
         }
         FileKind::Unsupported => {
             return Err(
-                "not read: sonda reads package-lock.json, Cargo.lock, poetry.lock, \
-                        uv.lock and requirements*.txt so far"
+                "not read: sonda reads package-lock.json, yarn.lock (Yarn v1), \
+                        Cargo.lock, poetry.lock, uv.lock and requirements*.txt so far"
                     .into(),
             );
         }
@@ -199,8 +221,9 @@ mod tests {
             Some(FileKind::Requirements)
         );
         assert_eq!(file_kind("Cargo.toml"), None);
-        assert_eq!(file_kind("yarn.lock"), Some(FileKind::Unsupported));
-        assert_eq!(file_kind("package.json"), None);
+        assert_eq!(file_kind("yarn.lock"), Some(FileKind::YarnLock));
+        assert_eq!(file_kind("package.json"), Some(FileKind::PackageJson));
+        assert_eq!(file_kind("pnpm-lock.yaml"), Some(FileKind::Unsupported));
     }
 
     #[test]

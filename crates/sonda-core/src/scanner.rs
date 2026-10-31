@@ -262,21 +262,21 @@ fn parse_dependencies(
 ) -> (Vec<Dependency>, Vec<String>) {
     let started = Instant::now();
     let dir = |rel: &str| rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-    // pyproject.toml is read only next to a poetry.lock, which needs it.
-    let poetry_dirs: Vec<String> = files
+    // A manifest (pyproject.toml, package.json) is read only next to a
+    // lockfile that needs it.
+    let needed: HashSet<(String, FileKind)> = files
         .iter()
-        .filter(|f| f.kind == FileKind::PoetryLock)
-        .map(|f| dir(&f.rel))
+        .filter_map(|f| deps::manifest_for(f.kind).map(|m| (dir(&f.rel), m)))
         .collect();
-    let manifests: HashMap<String, String> = files
+    let manifests: HashMap<(String, FileKind), String> = files
         .iter()
-        .filter(|f| f.kind == FileKind::PyProject && poetry_dirs.contains(&dir(&f.rel)))
-        .filter_map(|f| read(f).ok().map(|text| (dir(&f.rel), text)))
+        .filter(|f| needed.contains(&(dir(&f.rel), f.kind)))
+        .filter_map(|f| read(f).ok().map(|text| ((dir(&f.rel), f.kind), text)))
         .collect();
 
     let mut dependencies = Vec::new();
     let mut warnings = Vec::new();
-    for f in files.iter().filter(|f| f.kind != FileKind::PyProject) {
+    for f in files.iter().filter(|f| !deps::is_manifest(f.kind)) {
         // An unsupported lockfile is only reported, never read.
         let text = match f.kind {
             FileKind::Unsupported => String::new(),
@@ -288,7 +288,9 @@ fn parse_dependencies(
                 }
             },
         };
-        let manifest = manifests.get(&dir(&f.rel)).map(String::as_str);
+        let manifest = deps::manifest_for(f.kind)
+            .and_then(|m| manifests.get(&(dir(&f.rel), m)))
+            .map(String::as_str);
         match deps::parse(f.kind, &f.rel, &text, manifest) {
             Ok(parsed) => {
                 dependencies.extend(parsed.dependencies);

@@ -171,7 +171,14 @@ that wants a failing build.
 3. **Advisories:** the mirror, sync and import, matching, findings and
    review, gate metrics, the Security screen, and `--advisories`.
 4. **More lockfiles:** YAML, Yarn v1, Go and Gradle, each with its parser
-   review.
+   review. Yarn v1 is built (2026-10-31): a hand-written parser for its
+   own format, no new dependency, reading `version` per entry, resolving
+   `npm:` aliases to the real package, skipping `file:` and `link:`
+   packages, and marking entries direct when one of their specifiers is a
+   `name@range` the `package.json` next to it declares. Yarn 2+ writes
+   YAML under the same name and gets its own warning. Checked against a
+   real 1,920-entry monorepo lockfile: every installed package is listed
+   except the monorepo's own workspaces, which `yarn.lock` doesn't list.
 
 ## Consequences
 
