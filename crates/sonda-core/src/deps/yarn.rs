@@ -1,9 +1,14 @@
-//! Yarn v1's `yarn.lock` (Yarn classic): its own format, not YAML. Each
-//! entry starts at column 0 with the specifiers it resolves
-//! (`"@babel/core@^7.0.0", "@babel/core@^7.1.0":`), and its indented fields
-//! include `version "7.1.2"`. Yarn 2+ (Berry) writes YAML under the same
-//! name; that isn't read yet (ADR-0009's later phase).
+//! `yarn.lock`, in either of its formats:
+//!
+//! - **Yarn v1** (classic): its own format, not YAML. Each entry starts at
+//!   column 0 with the specifiers it resolves (`"@babel/core@^7.0.0",
+//!   "@babel/core@^7.1.0":`), and its indented fields include `version
+//!   "7.1.2"`.
+//! - **Yarn 2+** (Berry): YAML with a `__metadata` entry. Each entry's
+//!   `resolution` names the package (`lodash@npm:4.17.21`), and the
+//!   workspaces' own entries list what they declare.
 
+use super::yaml::{self, Node};
 use super::{Dependency, Ecosystem, Parsed, purl};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -15,11 +20,11 @@ const MANIFEST_DEPENDENCIES: &[&str] = &[
     "peerDependencies",
 ];
 
-/// `manifest` is the `package.json` next to the lockfile, if any: its
-/// declared `name@range` specifiers tell which entries are direct.
+/// `manifest` is the `package.json` next to the lockfile, if any: for Yarn
+/// v1, its declared `name@range` specifiers tell which entries are direct.
 pub(super) fn parse(path: &str, text: &str, manifest: Option<&str>) -> Result<Parsed, String> {
     if text.lines().any(|l| l.starts_with("__metadata:")) {
-        return Err("a Yarn 2+ (Berry) lockfile, which is YAML: not read yet".into());
+        return berry(path, text);
     }
     if !text.lines().any(|l| l.trim() == "# yarn lockfile v1") {
         return Err("not a Yarn v1 lockfile (no \"# yarn lockfile v1\" header)".into());
@@ -75,6 +80,86 @@ pub(super) fn parse(path: &str, text: &str, manifest: Option<&str>) -> Result<Pa
         dependencies,
         notes: Vec::new(),
     })
+}
+
+/// Yarn 2+: registry packages from each entry's `resolution`, direct when
+/// one of the entry's specifiers is one a workspace declares.
+fn berry(path: &str, text: &str) -> Result<Parsed, String> {
+    let lock = yaml::load(text)?;
+    let mut declared: HashSet<String> = HashSet::new();
+    let mut packages: Vec<(&str, &str)> = Vec::new();
+    for (key, entry) in lock.entries() {
+        let Some(resolution) = entry.get("resolution").and_then(Node::str) else {
+            continue;
+        };
+        if resolution.contains("@workspace:") {
+            for field in ["dependencies", "peerDependencies"] {
+                for (name, range) in entry.get(field).map(Node::entries).unwrap_or_default() {
+                    let Some(range) = range.str() else { continue };
+                    declared.insert(format!("{name}@{range}"));
+                    // Older lockfiles leave out the default protocol.
+                    if !range.contains(':') {
+                        declared.insert(format!("{name}@npm:{range}"));
+                    }
+                }
+            }
+            continue;
+        }
+        packages.push((key, resolution));
+    }
+
+    let mut dependencies = Vec::new();
+    let mut skipped = 0;
+    for (key, resolution) in packages {
+        let Some((name, version)) = registry_package(resolution) else {
+            skipped += 1;
+            continue;
+        };
+        let (namespace, bare) = match name.split_once('/') {
+            Some((scope, bare)) if scope.starts_with('@') => (Some(scope), bare),
+            _ => (None, name.as_str()),
+        };
+        dependencies.push(Dependency {
+            ecosystem: Ecosystem::Npm,
+            purl: purl(Ecosystem::Npm, namespace, bare, &version),
+            direct: Some(specifiers(key).iter().any(|s| declared.contains(s))),
+            name,
+            version,
+            source: path.to_string(),
+            license: None,
+        });
+    }
+    let notes = if skipped > 0 {
+        vec![format!(
+            "{skipped} packages not from the registry (git, file, link or tarball) left out"
+        )]
+    } else {
+        Vec::new()
+    };
+    Ok(Parsed {
+        dependencies,
+        notes,
+    })
+}
+
+/// A Yarn 2+ `resolution`'s registry package: `name@npm:1.0.0`, or a
+/// patched one (`name@patch:name@npm%3A1.0.0#...`, as Yarn applies to
+/// `typescript` itself), which is still that package's code. `None` for
+/// git, file, link and other sources.
+fn registry_package(resolution: &str) -> Option<(String, String)> {
+    let at = resolution.get(1..)?.find('@')? + 1;
+    let (name, source) = (&resolution[..at], &resolution[at + 1..]);
+    if let Some(version) = source.strip_prefix("npm:") {
+        return (!name.is_empty() && !version.is_empty())
+            .then(|| (name.to_string(), version.to_string()));
+    }
+    let patched = source.strip_prefix("patch:")?;
+    let inner = patched.split('#').next()?;
+    let inner = inner.replace("%3A", ":").replace("%40", "@");
+    if inner.contains("@patch:") {
+        return None;
+    }
+    registry_package(&inner)
 }
 
 /// `"a@^1", b@~2` -> `["a@^1", "b@~2"]`.
@@ -200,13 +285,86 @@ broken@^1.0.0:
 
     #[test]
     fn berry_and_other_files_are_errors() {
-        let berry = "__metadata:\n  version: 6\n\n\"lodash@npm:^4\":\n  version: 4.17.21\n";
+        let berry = "__metadata:\n  version: 6\n\nlodash: [\n";
         assert!(
             parse("yarn.lock", berry, None)
                 .unwrap_err()
-                .contains("Berry")
+                .contains("YAML")
         );
         assert!(parse("yarn.lock", "lodash@^4:\n  version \"4\"\n", None).is_err());
+    }
+
+    #[test]
+    fn reads_yarn_2_and_later() {
+        let lock = r#"# This file is generated by running "yarn install" inside your project.
+
+__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"@types/node@npm:^20":
+  version: 20.1.0
+  resolution: "@types/node@npm:20.1.0"
+  languageName: node
+  linkType: hard
+
+"lodash@npm:^4.17.20, lodash@npm:^4.17.21":
+  version: 4.17.21
+  resolution: "lodash@npm:4.17.21"
+  languageName: node
+  linkType: hard
+
+"lodash@npm:^3":
+  version: 3.10.1
+  resolution: "lodash@npm:3.10.1"
+
+"ms-alias@npm:ms@^2":
+  version: 2.0.0
+  resolution: "ms@npm:2.0.0"
+
+"typescript@npm:^5.0.0":
+  version: 5.0.4
+  resolution: "typescript@npm:5.0.4"
+
+"typescript@patch:typescript@npm%3A^5.0.0#optional!builtin<compat/typescript>":
+  version: 5.0.4
+  resolution: "typescript@patch:typescript@npm%3A5.0.4#optional!builtin<compat/typescript>::version=5.0.4&hash=b5f058"
+
+"left-pad@git+https://github.com/x/left-pad.git":
+  version: 1.3.0
+  resolution: "left-pad@git+https://github.com/x/left-pad.git#commit=abc"
+
+"app@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "app@workspace:."
+  dependencies:
+    "@types/node": "npm:^20"
+    lodash: "npm:^4.17.20"
+    ms-alias: "npm:ms@^2"
+    typescript: "patch:typescript@npm%3A^5.0.0#optional!builtin<compat/typescript>"
+  languageName: unknown
+  linkType: soft
+"#;
+        // Through the module's parse, which merges duplicate entries.
+        let parsed =
+            super::super::parse(super::super::FileKind::YarnLock, "yarn.lock", lock, None).unwrap();
+        let got: Vec<(&str, &str, Option<bool>)> = parsed
+            .dependencies
+            .iter()
+            .map(|d| (d.name.as_str(), d.version.as_str(), d.direct))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("@types/node", "20.1.0", Some(true)),
+                ("lodash", "3.10.1", Some(false)),
+                ("lodash", "4.17.21", Some(true)),
+                ("ms", "2.0.0", Some(true)),
+                // Patched and unpatched entries are one package.
+                ("typescript", "5.0.4", Some(true)),
+            ]
+        );
+        assert_eq!(parsed.notes.len(), 1, "the git package");
     }
 
     #[test]

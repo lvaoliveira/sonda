@@ -197,6 +197,13 @@ file, the report formats and the public library API.
   each entry's resolved version, `npm:` aliases as the real package, and
   which packages are direct from the `package.json` next to it. Yarn 2+
   (Berry) lockfiles, which are YAML, are named in a warning.
+- `pnpm-lock.yaml` (lockfile versions 5 to 9, pnpm 6 and later) and Yarn
+  2+'s `yarn.lock` are read too: registry packages with their versions,
+  peer suffixes and aliases resolved, and direct ones from pnpm's
+  importers or Yarn's workspaces. Local, git and tarball packages are left
+  out with a note. YAML is parsed with `yaml-rust2`'s event parser only:
+  aliases are refused, so a hostile lockfile can't expand ("billion
+  laughs"), and nesting is capped.
 - `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies`
   gate metrics: vulnerable packages the change brought, compared with the
   lockfiles at the new-code reference (the same advisory on the same

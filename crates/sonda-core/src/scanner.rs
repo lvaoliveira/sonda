@@ -716,7 +716,7 @@ mod tests {
             "[project]\ndependencies = [\"flask>=3\"]\n",
         );
         write("old/package-lock.json", r#"{"lockfileVersion": 1}"#);
-        write("app/pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+        write("app/bun.lockb", "lockfileVersion: '9.0'\n");
         write("src/app.js", "let a = 1;\n");
 
         let cfg = Config::default();
@@ -755,7 +755,7 @@ mod tests {
         assert!(
             r.warnings
                 .iter()
-                .any(|w| w.starts_with("app/pnpm-lock.yaml: skipped, not read")),
+                .any(|w| w.starts_with("app/bun.lockb: skipped, not read")),
             "{:?}",
             r.warnings
         );
