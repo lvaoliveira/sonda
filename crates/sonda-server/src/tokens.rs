@@ -1,5 +1,6 @@
-//! User and analysis tokens (ADR-0012), as in SonarQube. Each belongs to the
-//! user who generated it and never has more rights than that user:
+//! User and analysis tokens (ADR-0012), as in SonarQube. Each belongs to a
+//! user, who generated it or for whom an admin did, and never has more
+//! rights than that user:
 //!
 //! - a **user token** (`sonda_u_`) acts as its owner, uploads included;
 //! - a **project analysis token** (`sonda_p_`) uploads one project;
@@ -160,8 +161,10 @@ pub struct TokenView {
     pub project: Option<String>,
     /// The secret's first characters.
     pub prefix: String,
-    /// The user who generated it.
+    /// The user it acts as.
     pub owner: String,
+    /// The admin who generated it for its owner; null when the owner did.
+    pub created_by: Option<String>,
     pub created_at: String,
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
@@ -179,6 +182,7 @@ type TokenRow = (
     Option<String>,
     String,
     String,
+    Option<String>,
     f64,
     Option<f64>,
     Option<f64>,
@@ -187,13 +191,28 @@ type TokenRow = (
     f64,
 );
 
-const TOKEN_COLUMNS: &str = "t.id, t.name, t.type, t.project_key, t.prefix, u.username,
+const TOKEN_COLUMNS: &str =
+    "t.id, t.name, t.type, t.project_key, t.prefix, u.username, t.created_by,
     extract(epoch FROM t.created_at)::float8, extract(epoch FROM t.expires_at)::float8,
     extract(epoch FROM t.last_used_at)::float8, extract(epoch FROM t.revoked_at)::float8,
     t.revoked_by, extract(epoch FROM now())::float8";
 
 fn view(row: TokenRow) -> TokenView {
-    let (id, name, kind, project, prefix, owner, created, expires, used, revoked, by, now) = row;
+    let (
+        id,
+        name,
+        kind,
+        project,
+        prefix,
+        owner,
+        created_by,
+        created,
+        expires,
+        used,
+        revoked,
+        by,
+        now,
+    ) = row;
     TokenView {
         id,
         name,
@@ -201,6 +220,7 @@ fn view(row: TokenRow) -> TokenView {
         project,
         prefix,
         owner,
+        created_by,
         created_at: rfc3339(created),
         expires_at: expires.map(rfc3339),
         last_used_at: used.map(rfc3339),
@@ -260,6 +280,10 @@ pub struct NewToken {
     project: Option<String>,
     /// 30, 60 or 90; null for no expiry.
     expires_in_days: Option<u32>,
+    /// The owner's username, when an admin generates it for someone
+    /// (`POST /api/tokens` only).
+    #[serde(default)]
+    user: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -278,6 +302,53 @@ pub async fn create(
     Json(new): Json<NewToken>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
     let user = session_user(&caller)?;
+    if new.user.is_some() {
+        return Err(ApiError::Unprocessable(
+            "admins generate tokens for other users with POST /api/tokens".into(),
+        ));
+    }
+    generate_for(&state.pool, user.id, &user.username, None, new).await
+}
+
+/// `POST /api/tokens`: an admin generates a token for `user`, such as a
+/// `ci` service user, so a pipeline doesn't stop when a person leaves.
+pub async fn create_for(
+    axum::extract::State(state): axum::extract::State<State>,
+    Extension(caller): Extension<Caller>,
+    Json(new): Json<NewToken>,
+) -> Result<(StatusCode, Json<Created>), ApiError> {
+    let admin = session_user(&caller)?;
+    let invalid = |m: String| ApiError::Unprocessable(m);
+    let username = new
+        .user
+        .as_deref()
+        .map(str::trim)
+        .ok_or_else(|| invalid("user names the token's owner".into()))?;
+    let owner: Option<(i64, bool)> =
+        sqlx::query_as("SELECT id, disabled FROM users WHERE username = $1")
+            .bind(username)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (id, disabled) = owner.ok_or_else(|| invalid(format!("no user named {username:?}")))?;
+    if disabled {
+        return Err(invalid(format!(
+            "{username} is disabled, so its tokens wouldn't work"
+        )));
+    }
+    let by = (id != admin.id).then_some(admin.username.as_str());
+    let username = username.to_string();
+    generate_for(&state.pool, id, &username, by, new).await
+}
+
+/// Generates a token owned by `owner`; `by` is the admin who asked, when
+/// it isn't the owner.
+async fn generate_for(
+    pool: &PgPool,
+    owner: i64,
+    owner_name: &str,
+    by: Option<&str>,
+    new: NewToken,
+) -> Result<(StatusCode, Json<Created>), ApiError> {
     let invalid = |m: &str| ApiError::Unprocessable(m.into());
     let name = new.name.trim();
     if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
@@ -306,28 +377,38 @@ pub async fn create(
     let secret = generate(kind);
     let hash: Vec<u8> = Sha256::digest(secret.as_bytes()).to_vec();
     let inserted: Result<i64, sqlx::Error> = sqlx::query_scalar(
-        "INSERT INTO api_tokens (user_id, type, project_key, name, hash, prefix, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7))
+        "INSERT INTO api_tokens (user_id, type, project_key, name, hash, prefix, expires_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7), $8)
          RETURNING id",
     )
-    .bind(user.id)
+    .bind(owner)
     .bind(kind.as_str())
     .bind(&project)
     .bind(name)
     .bind(&hash)
     .bind(&secret[..SHOWN_PREFIX])
     .bind(new.expires_in_days.map(|d| d as i32))
-    .fetch_one(&state.pool)
+    .bind(by)
+    .fetch_one(pool)
     .await;
     let id = match inserted {
         Ok(id) => id,
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            return Err(invalid("you already have a token with this name"));
+            return Err(ApiError::Unprocessable(match by {
+                None => "you already have a token with this name".into(),
+                Some(_) => format!("{owner_name} already has a token with this name"),
+            }));
         }
         Err(e) => return Err(e.into()),
     };
-    tracing::info!(by = %user.username, id, kind = kind.as_str(), "generated a token");
-    let view = list(&state.pool, Some(user.id))
+    tracing::info!(
+        by = by.unwrap_or(owner_name),
+        owner = owner_name,
+        id,
+        kind = kind.as_str(),
+        "generated a token"
+    );
+    let view = list(pool, Some(owner))
         .await?
         .into_iter()
         .find(|t| t.id == id)

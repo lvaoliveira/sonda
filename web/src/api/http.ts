@@ -43,6 +43,7 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     revokeMyToken: (id) => call<void>('DELETE', `/me/tokens/${id}`),
     tokens: () => call<ApiToken[]>('GET', '/tokens'),
     revokeToken: (id) => call<void>('DELETE', `/tokens/${id}`),
+    createTokenFor: (user, token) => call<CreatedToken>('POST', '/tokens', { ...token, user }),
     users: () => call<UserRow[]>('GET', '/users'),
     createUser: (user) => call<User>('POST', '/users', user),
     updateUser: (id, patch) => call<User>('PATCH', `/users/${id}`, patch),

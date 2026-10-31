@@ -12,6 +12,7 @@ const SEED: ApiToken[] = [
     project: 'payments-platform',
     prefix: 'sonda_p_k3x9',
     owner: 'mara',
+    createdBy: null,
     createdAt: '2026-10-01T09:00:00Z',
     expiresAt: null,
     lastUsedAt: '2026-10-30T08:12:00Z',
@@ -26,6 +27,7 @@ const SEED: ApiToken[] = [
     project: null,
     prefix: 'sonda_u_2fqa',
     owner: 'devon',
+    createdBy: null,
     createdAt: '2026-08-01T09:00:00Z',
     expiresAt: '2026-08-31T09:00:00Z',
     lastUsedAt: null,
@@ -39,13 +41,13 @@ const SEED: ApiToken[] = [
 export function mockTokens() {
   const tokens: ApiToken[] = structuredClone(SEED)
 
-  /** As the server checks it (ADR-0012). */
-  function create(owner: string, t: NewToken): CreatedToken {
+  /** As the server checks it (ADR-0012); `by` is the admin generating it for `owner`. */
+  function create(owner: string, t: NewToken, by?: string): CreatedToken {
     const name = t.name.trim()
     if (!name || name.length > 100) throw new Error("a token's name has 1-100 characters, no control characters")
     if (t.type === 'project_analysis' && !t.project?.trim()) throw new Error('a project analysis token needs a project')
     if (t.type !== 'project_analysis' && t.project) throw new Error('only project analysis tokens have a project')
-    if (tokens.some((x) => x.owner === owner && x.name === name && x.status !== 'revoked')) throw new Error('you already have a token with this name')
+    if (tokens.some((x) => x.owner === owner && x.name === name && x.status !== 'revoked')) throw new Error(by && by !== owner ? `${owner} already has a token with this name` : 'you already have a token with this name')
     const secret = PREFIX[t.type] + Array.from({ length: 52 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz234567'[(i * 7 + tokens.length * 13) % 32]).join('')
     const now = Date.now()
     const token: ApiToken = {
@@ -55,6 +57,7 @@ export function mockTokens() {
       project: t.type === 'project_analysis' ? t.project!.trim() : null,
       prefix: secret.slice(0, 12),
       owner,
+      createdBy: by && by !== owner ? by : null,
       createdAt: new Date(now).toISOString(),
       expiresAt: t.expiresInDays == null ? null : new Date(now + t.expiresInDays * DAY).toISOString(),
       lastUsedAt: null,

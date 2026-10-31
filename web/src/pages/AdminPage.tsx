@@ -4,7 +4,7 @@ import { MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type User
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
-import { TokenTable } from '@/components/sonda/tokens'
+import { TokenGenerator, TokenTable } from '@/components/sonda/tokens'
 import { shortDate } from '@/lib/format'
 
 /** Administration: users and roles (ADR-0006). Admins only; the server enforces it too. */
@@ -87,14 +87,18 @@ function Users({ me }: { me: string | null }) {
         }}
         onError={setError}
       />
-      <AllTokens />
+      <AllTokens owners={list.filter((u) => !u.disabled).map((u) => u.username)} />
       <p className="m-0 text-[12.5px] text-fg-faint">Single sign-on (OpenID Connect) is planned; see ADR-0006.</p>
     </>
   )
 }
 
-/** Every user's tokens, to revoke (ADR-0012); nobody can read a secret after it's generated. */
-function AllTokens() {
+/**
+ * Every user's tokens, to revoke (ADR-0012), and generating one for any
+ * user, such as a `ci` service user whose tokens outlive a person's account.
+ * Nobody can read a secret after it's generated.
+ */
+function AllTokens({ owners }: { owners: string[] }) {
   const api = useApi()
   const [version, setVersion] = useState(0)
   const tokens = useAsync(() => api.tokens(), [api, version])
@@ -109,7 +113,12 @@ function AllTokens() {
     }
   }
   return (
-    <Card id="all-tokens" title="Tokens" subtitle="Everyone's tokens. Users generate their own under Account; disabling a user stops theirs.">
+    <Card
+      id="all-tokens"
+      title="Tokens"
+      subtitle="Everyone's tokens. Users generate their own under Account; generate CI tokens here for a service user such as ci, so pipelines don't stop when a person leaves. Disabling a user stops their tokens."
+    >
+      <TokenGenerator owners={owners} onGenerate={(token, owner) => api.createTokenFor(owner, token)} onGenerated={() => setVersion((v) => v + 1)} />
       {error && (
         <p role="alert" className="m-0 text-[13px] text-crit">
           {error}

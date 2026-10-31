@@ -896,8 +896,10 @@ export interface ApiToken {
   project: string | null
   /** The secret's first characters. */
   prefix: string
-  /** The user who generated it. */
+  /** The user it acts as. */
   owner: string
+  /** The admin who generated it for its owner; null when the owner did. */
+  createdBy: string | null
   createdAt: string
   /** Null for no expiry. */
   expiresAt: string | null
@@ -936,6 +938,8 @@ export interface SondaApi {
   /** Admins only: every user's tokens. */
   tokens(): Promise<ApiToken[]>
   revokeToken(id: number): Promise<void>
+  /** Admins only: generates a token owned by `user`, such as a `ci` service user. */
+  createTokenFor(user: string, token: NewToken): Promise<CreatedToken>
   /** Admins only. */
   users(): Promise<UserRow[]>
   createUser(user: NewUser): Promise<User>

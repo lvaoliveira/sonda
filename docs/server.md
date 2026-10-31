@@ -159,8 +159,14 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
 Each user generates their own tokens under Account, as in SonarQube
 ([ADR-0012](adr/0012-api-tokens.md)). A token belongs to its owner and
 never has more rights than them: disabling the owner stops every token
-they generated, CI ones included, so give pipelines tokens of an account
-that stays.
+they own, CI ones included.
+
+**CI tokens belong to a service user.** So that a pipeline doesn't stop
+when a person leaves, an admin creates a user such as `ci` (a member,
+with a long random password nobody keeps) and generates the pipelines'
+tokens for it on the Admin page: choose the owner, then the type,
+project and expiry. The token acts as `ci`, uploads show
+`ci (token shop)`, and the token lists say which admin generated it.
 
 | Type | Prefix | Can |
 |---|---|---|
@@ -184,13 +190,14 @@ that stays.
 | `POST /api/me/tokens` `{"name": "ci-shop", "type": "project_analysis", "project": "shop", "expiresInDays": 30}` | `201` with `token`, the secret, this once. `type` is `user`, `project_analysis` or `global_analysis`; `expiresInDays` is 30, 60, 90 or null. |
 | `DELETE /api/me/tokens/{id}` | `204`. Revokes one of yours. |
 | `GET /api/tokens`, `DELETE /api/tokens/{id}` | Admins only: everyone's tokens, and revoking any. |
+| `POST /api/tokens` `{"user": "ci", "name": "shop", ...}` | Admins only: generates a token owned by `user`, with the same fields as `POST /api/me/tokens`. `createdBy` records the admin. `422` for an unknown or disabled user. |
 
 These need a signed-in session (and the `Sonda-Csrf` header for changes),
 never a token, so a leaked token can't generate more.
 
 **Moving off `SONDA_TOKEN`.** The shared token still works with its old
 rights, and is now optional. For each pipeline, generate a project
-analysis token, put it in the pipeline's secret (`SONDA_TOKEN` or
+analysis token (for a `ci` service user, as above), put it in the pipeline's secret (`SONDA_TOKEN` or
 `SONDA_TOKEN_FILE`, which `sonda upload` and `sonda scan --upload` read),
 and check the analyses list shows it as the uploader. Once no recent
 analysis shows `api-token`, turn the shared token off. With Docker

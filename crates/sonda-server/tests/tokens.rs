@@ -345,6 +345,84 @@ async fn tokens_act_for_their_owner_within_their_type() {
 }
 
 #[tokio::test]
+async fn admins_generate_tokens_for_other_users() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    let ada = session_for(&db, "ada", "admin").await;
+    let max = session_for(&db, "max", "member").await;
+    // A service user: nobody signs in as it, it only owns CI tokens.
+    let ci = session_for(&db, "ci", "member").await;
+    session_for(&db, "gone", "member").await;
+    sqlx::query("UPDATE users SET disabled = true WHERE username = 'gone'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let for_user = |cookie: &str, body: Value| {
+        as_session(Request::post("/api/tokens"), cookie)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(json_body(body))
+            .unwrap()
+    };
+    let ci_shop = json!({ "name": "shop", "type": "project_analysis", "project": "shop",
+                          "expiresInDays": 90, "user": "ci" });
+
+    let (status, created) = send(&app, for_user(&ada, ci_shop.clone())).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["owner"], "ci");
+    assert_eq!(created["createdBy"], "ada");
+    let secret = created["token"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("sonda_p_"));
+    // It uploads as its owner, and its owner sees it.
+    let dir = tempfile::tempdir().unwrap();
+    let body = upload_json_for(dir.path(), &[("a.js", "let x = 1;\n")], "shop", "main");
+    assert_eq!(upload_as(&app, &secret, &body).await, StatusCode::CREATED);
+    let mine = as_session(Request::get("/api/me/tokens"), &ci)
+        .body(Body::empty())
+        .unwrap();
+    let (_, mine) = send(&app, mine).await;
+    assert_eq!(mine[0]["name"], "shop");
+    assert_eq!(mine[0]["createdBy"], "ada");
+    // An admin's own token, generated here, names no one else.
+    let own = json!({ "name": "mine", "type": "user", "expiresInDays": 30, "user": "ada" });
+    let (_, own) = send(&app, for_user(&ada, own)).await;
+    assert_eq!(own["owner"], "ada");
+    assert_eq!(own["createdBy"], Value::Null);
+
+    let (status, body) = send(&app, for_user(&ada, ci_shop.clone())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "ci already has a token with this name");
+    for (user, error) in [
+        (json!(null), "user names the token's owner"),
+        (json!("nobody"), "no user named \"nobody\""),
+        (
+            json!("gone"),
+            "gone is disabled, so its tokens wouldn't work",
+        ),
+    ] {
+        let mut b = ci_shop.clone();
+        b["name"] = json!("other");
+        b["user"] = user;
+        let (status, body) = send(&app, for_user(&ada, b)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["error"], error);
+    }
+
+    // Admins only, signed in: not members, not tokens, not /me/tokens.
+    let (status, _) = send(&app, for_user(&max, ci_shop.clone())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let by_token = bearer(Request::post("/api/tokens"), own["token"].as_str().unwrap())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(json_body(ci_shop.clone()))
+        .unwrap();
+    assert_eq!(send(&app, by_token).await.0, StatusCode::FORBIDDEN);
+    let (status, body) = generate(&app, &max, ci_shop).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[tokio::test]
 async fn sonda_token_is_optional() {
     let Some(db) = TestDb::new().await else {
         return;
