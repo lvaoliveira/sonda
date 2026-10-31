@@ -26,10 +26,11 @@ pub(crate) fn compute(project: &ProjectAnalysis) -> Measures {
     );
 
     // Packages, not findings: one package with two advisories counts once.
-    let vulnerable = |severe: bool| {
+    let vulnerable = |severe: bool, new: bool| {
         project.vulnerabilities.as_ref().map(|v| {
             let mut purls: Vec<&str> = v
                 .iter()
+                .filter(|f| !new || f.is_new)
                 .filter(|f| !severe || f.severity >= crate::model::Severity::Critical)
                 .map(|f| f.purl.as_str())
                 .collect();
@@ -38,8 +39,16 @@ pub(crate) fn compute(project: &ProjectAnalysis) -> Measures {
             purls.len() as f64
         })
     };
-    m.insert(Metric::VulnerableDependencies, vulnerable(false));
-    m.insert(Metric::SevereVulnerableDependencies, vulnerable(true));
+    m.insert(Metric::VulnerableDependencies, vulnerable(false, false));
+    m.insert(
+        Metric::SevereVulnerableDependencies,
+        vulnerable(true, false),
+    );
+    m.insert(Metric::NewVulnerableDependencies, vulnerable(false, true));
+    m.insert(
+        Metric::NewSevereVulnerableDependencies,
+        vulnerable(true, true),
+    );
 
     let issues: Vec<&Issue> = project.files.iter().flat_map(|f| &f.issues).collect();
     let new_issues: Vec<&Issue> = issues.iter().copied().filter(|i| i.is_new).collect();

@@ -116,8 +116,8 @@ own groundwork, smallest first:
 **Status:** built, per [ADR-0009](adr/0009-dependencies-and-advisories.md),
 which supersedes the sketch below where they differ (2026-10-30): SBOMs,
 server storage, advisory import and sync, matching, triage, the Security
-screen and gate metrics. Left: more lockfile formats (pnpm, Yarn, Go,
-Gradle) and `new_vulnerable_dependencies` (see Smaller items). sonda
+screen and gate metrics, `new_vulnerable_dependencies` included. Left:
+more lockfile formats (pnpm, Yarn, Go, Gradle). sonda
 analyzes a project's own code only. Its third-party dependencies are a
 separate risk, and the one OWASP Top 10 2025 ranks third (A03, Software
 Supply Chain Failures; A06 in 2021). This item has two parts: list what a project depends on (an
@@ -283,6 +283,5 @@ never merges anything itself.
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Full file path in issue details** | The Location box in an issue's details (Issues page) is too small to show the whole path, and the full filename/path matters to the reader. | In `web/src/pages/IssuesPage.tsx`, give the Location field more room (full row width) and wrap long paths instead of truncating, with the file path first and the line/column after it. |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
-| **`new_vulnerable_dependencies`** | "New" needs a base: on the server, another branch's analysis; in the CLI, the lockfiles at the `--new-code` reference (ADR-0009). | Compare a branch's vulnerable packages with its base branch's latest analysis on the server, and with the merge base's lockfiles in the CLI (`git.rs` already reads them). |
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules ([ADR-0008](adr/0008-semantic-layer.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |

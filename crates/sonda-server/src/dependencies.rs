@@ -11,7 +11,7 @@ use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
 use sonda_core::deps::{Ecosystem, package_key};
 use sqlx::PgPool;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Licenses listed by count; the rest are summed as "other".
 const TOP_LICENSES: usize = 8;
@@ -673,7 +673,43 @@ pub async fn portfolio(pool: &PgPool) -> Result<Portfolio, sqlx::Error> {
 }
 
 /// Gate metrics the server keeps current from its advisories (ADR-0009).
-const GATE_METRICS: &[&str] = &["vulnerable_dependencies", "severe_vulnerable_dependencies"];
+/// The `new_` ones only on the main branch, against its new code period
+/// (ADR-0011); other branches keep the CLI's, which compared with the
+/// branch's own reference.
+const GATE_METRICS: &[&str] = &[
+    "vulnerable_dependencies",
+    "severe_vulnerable_dependencies",
+    "new_vulnerable_dependencies",
+    "new_severe_vulnerable_dependencies",
+];
+
+type FindingKey = (String, String, String);
+
+/// A finding as the same vulnerability in the same package, whatever its
+/// version, as the CLI matches them (`sonda_core`'s scanner).
+fn finding_key(d: &DependencyRow, a: &Finding) -> FindingKey {
+    let name = sonda_core::deps::Ecosystem::parse(&d.ecosystem).map_or_else(
+        || d.name.clone(),
+        |e| sonda_core::deps::package_key(e, &d.name),
+    );
+    (d.ecosystem.clone(), name, a.id.clone())
+}
+
+fn finding_keys(deps: &[DependencyRow]) -> HashSet<FindingKey> {
+    deps.iter()
+        .flat_map(|d| d.advisories.iter().map(move |a| finding_key(d, a)))
+        .collect()
+}
+
+async fn on_main_branch(pool: &PgPool, analysis: i64) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT a.branch = p.main_branch FROM analyses a JOIN projects p ON p.id = a.project_id
+         WHERE a.id = $1",
+    )
+    .bind(analysis)
+    .fetch_one(pool)
+    .await
+}
 
 /// Which analyses' gates to refresh.
 pub enum GateScope {
@@ -732,22 +768,37 @@ pub async fn refresh_gates(pool: &PgPool, scope: GateScope) -> Result<usize, sql
     {
         let mut deps = merge(rows(pool, id).await?);
         annotate(pool, &mut [(project, &mut deps)]).await?;
-        let count = |severe: bool| {
+        // On the main branch, what its new code period started with, by
+        // today's advisories too.
+        let start = match crate::new_code::period(pool, project).await? {
+            Some(p) if on_main_branch(pool, id).await? => Some(p.analysis),
+            _ => None,
+        };
+        let known = match start {
+            Some(start) => {
+                let mut base = merge(rows(pool, start).await?);
+                annotate(pool, &mut [(project, &mut base)]).await?;
+                Some(finding_keys(&base))
+            }
+            None => None,
+        };
+        let count = |severe: bool, known: Option<&HashSet<FindingKey>>| {
             deps.iter()
                 .filter(|d| {
                     d.advisories.iter().any(|a| {
                         !a.accepted()
                             && (!severe || matches!(a.severity.as_str(), "blocker" | "critical"))
+                            && known.is_none_or(|k| !k.contains(&finding_key(d, a)))
                     })
                 })
                 .count() as f64
         };
-        let values = [
-            ("vulnerable_dependencies", count(false)),
-            ("severe_vulnerable_dependencies", count(true)),
-        ];
-        for (metric, value) in values {
-            measures[metric] = serde_json::json!(value);
+        measures["vulnerable_dependencies"] = serde_json::json!(count(false, None));
+        measures["severe_vulnerable_dependencies"] = serde_json::json!(count(true, None));
+        if let Some(known) = &known {
+            measures["new_vulnerable_dependencies"] = serde_json::json!(count(false, Some(known)));
+            measures["new_severe_vulnerable_dependencies"] =
+                serde_json::json!(count(true, Some(known)));
         }
         let passed = crate::health::evaluate_gate(&mut gate, &measures);
         sqlx::query("UPDATE analyses SET gate = $2, gate_passed = $3, measures = $4 WHERE id = $1")

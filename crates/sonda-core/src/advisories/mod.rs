@@ -113,6 +113,10 @@ pub struct Vulnerability {
     pub severity: Severity,
     /// The lowest later version that fixes it.
     pub fixed_in: Option<String>,
+    /// Not affecting the project at the new-code reference: its package was
+    /// added, or moved to an affected version, since. True when there's no
+    /// reference (the whole project is new code).
+    pub is_new: bool,
 }
 
 /// The known vulnerabilities in `deps`, most severe first: one per package
@@ -165,6 +169,7 @@ pub fn check(deps: &[crate::deps::Dependency], advisories: &[Advisory]) -> Vec<V
                 summary: a.summary.clone(),
                 severity: a.severity,
                 fixed_in: p.fixed_in(&d.version),
+                is_new: true,
             });
         }
     }

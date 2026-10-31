@@ -122,3 +122,100 @@ async fn gates_follow_advisories_and_reviews() {
     .unwrap();
     assert_eq!((passed, measure), (true, json!(0.0)));
 }
+
+#[tokio::test]
+async fn new_vulnerable_dependencies_follow_the_main_branch_period() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    let dir = tempfile::tempdir().unwrap();
+    let analysis = |packages: &[(&str, &str)], branch: &str| {
+        let entries: Vec<String> = packages
+            .iter()
+            .map(|(n, v)| format!(r#""node_modules/{n}": {{"version": "{v}"}}"#))
+            .collect();
+        let lock = format!(
+            r#"{{"lockfileVersion": 3, "packages": {{"": {{}}, {}}}}}"#,
+            entries.join(", ")
+        );
+        let mut body = upload_json_for(dir.path(), &[("package-lock.json", &lock)], "shop", branch);
+        // As if the CLI had no advisories, with no new code to judge.
+        body["report"]["gate"] = json!({ "passed": true, "conditions": [
+            { "metric": "new_vulnerable_dependencies", "op": "gt", "threshold": 0.0, "actual": null, "status": "no_data" }
+        ]});
+        body["report"]["measures"]["new_lines"] = json!(0.0);
+        body
+    };
+    let osv = tempfile::tempdir().unwrap();
+    for (id, name, fixed) in [
+        ("GHSA-aaaa-aaaa-aaaa", "lodash", "4.17.21"),
+        ("GHSA-bbbb-bbbb-bbbb", "minimist", "1.2.6"),
+    ] {
+        std::fs::write(
+            osv.path().join(format!("{id}.json")),
+            json!({
+                "id": id, "modified": "2024-01-01T00:00:00Z", "summary": format!("{name} is vulnerable"),
+                "database_specific": { "severity": "HIGH" },
+                "affected": [{ "package": { "ecosystem": "npm", "name": name },
+                               "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "0" }, { "fixed": fixed }] }] }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    advisories::import(&db.pool, &[osv.path().to_path_buf()])
+        .await
+        .unwrap();
+
+    // The period starts with lodash vulnerable: old debt.
+    upload(&db, &analysis(&[("lodash", "4.17.20")], "main")).await;
+    let condition = |p: &Value| {
+        p["gate"]["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["metric"] == "new_vulnerable_dependencies")
+            .cloned()
+            .unwrap()
+    };
+    let bearer = format!("Bearer {TOKEN}");
+    let project = |branch: Option<&str>| {
+        let path = branch.map_or("/api/projects/shop".to_string(), |b| {
+            format!("/api/projects/shop?branch={b}")
+        });
+        Request::get(path)
+            .header(header::AUTHORIZATION, &bearer)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (_, p) = send(&app, project(None)).await;
+    assert_eq!(
+        (
+            condition(&p)["actual"].as_f64(),
+            p["gate"]["state"].as_str()
+        ),
+        (Some(0.0), Some("passed"))
+    );
+
+    // lodash moves within its affected range; minimist arrives vulnerable.
+    upload(
+        &db,
+        &analysis(&[("lodash", "4.17.19"), ("minimist", "1.2.0")], "main"),
+    )
+    .await;
+    let (_, p) = send(&app, project(None)).await;
+    assert_eq!(
+        (
+            condition(&p)["actual"].as_f64(),
+            p["gate"]["state"].as_str()
+        ),
+        (Some(1.0), Some("failed"))
+    );
+
+    // Other branches keep what the CLI judged: here, no data.
+    upload(&db, &analysis(&[("minimist", "1.2.0")], "feature")).await;
+    let (_, p) = send(&app, project(Some("feature"))).await;
+    assert_eq!(condition(&p)["status"], "no_data");
+}
