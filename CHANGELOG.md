@@ -330,6 +330,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- "Where to focus" called issues first detected in the range "new", which
+  disagreed with the gate when a rule added to sonda found them in old
+  code. They now read "Detected · 6h ago" and "1 blocker issue detected
+  in arandu".
+
 - "Where to focus" on the Overview opened the drawer of every blocker and
   critical issue for an item about specific new issues. It now opens the
   Issues page filtered to them (project, branch, severity, and file when

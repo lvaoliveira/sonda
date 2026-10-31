@@ -1028,9 +1028,11 @@ fn focus_items(
             if severity == "blocker" { 1 } else { 2 },
             FocusItem {
                 severity,
-                tag: format!("New · {} ago", ago(now - head.5)),
+                // "Detected", not "new": a rule added to sonda finds issues
+                // in old code too, which the gate's new code leaves out.
+                tag: format!("Detected · {} ago", ago(now - head.5)),
                 title: format!(
-                    "{} new {} {} in {}",
+                    "{} {} {} detected in {}",
                     list.len(),
                     severity,
                     plural(list.len(), "issue", "issues"),
