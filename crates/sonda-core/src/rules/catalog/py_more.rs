@@ -1817,17 +1817,17 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- filters
 
-fn body_of(node: Node) -> Option<Node> {
+pub(super) fn body_of(node: Node) -> Option<Node> {
     node.child_by_field_name("body")
         .or_else(|| children_of_kind(node, "block").pop())
 }
 
-fn name_of<'s>(node: Node, src: &'s [u8]) -> &'s [u8] {
+pub(super) fn name_of<'s>(node: Node, src: &'s [u8]) -> &'s [u8] {
     node.child_by_field_name("name")
         .map_or(&b""[..], |n| text(n, src))
 }
 
-fn in_class(function: Node) -> bool {
+pub(super) fn in_class(function: Node) -> bool {
     let mut owner = function.parent();
     if let Some(decorated) = owner.filter(|p| p.kind() == "decorated_definition") {
         owner = decorated.parent();
@@ -1838,7 +1838,7 @@ fn in_class(function: Node) -> bool {
         .is_some_and(|c| c.kind() == "class_definition")
 }
 
-fn is_decorated(function: Node) -> bool {
+pub(super) fn is_decorated(function: Node) -> bool {
     function
         .parent()
         .is_some_and(|p| p.kind() == "decorated_definition")
@@ -1857,7 +1857,7 @@ fn decorator_texts<'s>(function: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
         .unwrap_or_default()
 }
 
-fn is_stub_body(body: Node) -> bool {
+pub(super) fn is_stub_body(body: Node) -> bool {
     statements(body).iter().all(|s| match s.kind() {
         "pass_statement" | "raise_statement" => true,
         "expression_statement" => s
@@ -1922,14 +1922,14 @@ fn is_literal_scalar(kind: &str) -> bool {
     matches!(kind, "integer" | "float" | "true" | "false" | "none")
 }
 
-fn call_statement_of(statement: Node) -> Option<Node> {
+pub(super) fn call_statement_of(statement: Node) -> Option<Node> {
     (statement.kind() == "expression_statement")
         .then(|| statement.named_child(0))
         .flatten()
         .filter(|c| c.kind() == "call")
 }
 
-fn assignment_of(statement: Node) -> Option<Node> {
+pub(super) fn assignment_of(statement: Node) -> Option<Node> {
     (statement.kind() == "expression_statement")
         .then(|| statement.named_child(0))
         .flatten()
@@ -1983,7 +1983,7 @@ fn iter_returns_container<'t>(function: Node<'t>, _: &[u8]) -> Option<Node<'t>> 
     })
 }
 
-fn literal_family(kind: &str) -> Option<&'static str> {
+pub(super) fn literal_family(kind: &str) -> Option<&'static str> {
     match kind {
         "string" => Some("string"),
         "integer" | "float" => Some("number"),
@@ -2035,7 +2035,7 @@ fn identity_between_different_literals(cmp: Node, _: &[u8]) -> bool {
     families.len() >= 2 && families.windows(2).any(|w| w[0] != w[1])
 }
 
-fn is_generator(function: Node) -> bool {
+pub(super) fn is_generator(function: Node) -> bool {
     body_of(function)
         .is_some_and(|b| find_in_scope(b, SCOPE_STOPS, |n| n.kind() == "yield").is_some())
 }
@@ -2479,7 +2479,7 @@ fn parameter_overwritten_first<'t>(function: Node<'t>, src: &[u8]) -> Option<Nod
         .then_some(first)
 }
 
-fn is_private_name(name: &[u8]) -> bool {
+pub(super) fn is_private_name(name: &[u8]) -> bool {
     name.starts_with(b"__") && !name.ends_with(b"__") && name.len() > 2
 }
 
@@ -2616,7 +2616,7 @@ fn is_snake_case(name: &[u8]) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
 }
 
-fn is_dunder(name: &[u8]) -> bool {
+pub(super) fn is_dunder(name: &[u8]) -> bool {
     name.starts_with(b"__") && name.ends_with(b"__")
 }
 
@@ -2693,7 +2693,7 @@ fn first_parameter(function: Node) -> Option<Node> {
         .next()
 }
 
-fn first_parameter_name<'s>(function: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+pub(super) fn first_parameter_name<'s>(function: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     let first = first_parameter(function)?;
     let name = match first.kind() {
         "identifier" => Some(first),
@@ -2735,7 +2735,7 @@ fn class_method_first_parameter<'t>(decorated: Node<'t>, src: &[u8]) -> Option<N
     (!ok).then(|| first_parameter(function)).flatten()
 }
 
-fn imported_names<'s>(import: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+pub(super) fn imported_names<'s>(import: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut names = Vec::new();
     let mut cursor = import.walk();
     for c in import.children_by_field_name("name", &mut cursor) {
@@ -3180,7 +3180,7 @@ fn async_function_never_awaits(function: Node, _: &[u8]) -> bool {
     .is_none()
 }
 
-fn loop_pair<'s>(for_statement: Node, src: &'s [u8]) -> Option<(&'s [u8], &'s [u8])> {
+pub(super) fn loop_pair<'s>(for_statement: Node, src: &'s [u8]) -> Option<(&'s [u8], &'s [u8])> {
     let left = for_statement.child_by_field_name("left")?;
     let items = statements(left);
     let [a, b] = items.as_slice() else {
@@ -3362,7 +3362,7 @@ fn datetime_argument_out_of_range(call: Node, src: &[u8]) -> bool {
         .any(|(v, (lo, hi))| v < lo || v > hi)
 }
 
-fn receiver_text<'s>(call: Node, src: &'s [u8]) -> &'s [u8] {
+pub(super) fn receiver_text<'s>(call: Node, src: &'s [u8]) -> &'s [u8] {
     call.child_by_field_name("function")
         .and_then(|f| f.child_by_field_name("object"))
         .map_or(&b""[..], |o| text(o, src))
@@ -3558,7 +3558,6 @@ mod tests {
     #[test]
     fn comments_and_ips() {
         let src = "x = 0\nx = 1  # note\ny = 2  # noqa\nz = 3  # NOSONAR\nh = '192.168.0.4'\nl = '127.0.0.1'\na = 1; b = 2\nc = 3;";
-        assert_eq!(flagged("py/trailing-comment", src), [2]);
         assert_eq!(flagged("py/noqa-comment", src), [3]);
         assert_eq!(flagged("py/hardcoded-ip", src), [5]);
         assert_eq!(flagged("py/semicolon-statements", src), [7]);

@@ -71,6 +71,8 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("py/static-salt", &[759, 760], &[A02]),
     ("py/ldap-anonymous-bind", &[521], &[A07]),
     ("py/password-fast-hash", &[256, 916], &[A02, A04]),
+    ("py/route-mixed-methods", &[352], &[A01, A04]),
+    ("py/upload-with-body", &[20], &[A03]),
     ("py/no-eval", &[95], &[A03]),
     ("py/subprocess-shell", &[78], &[A03]),
     ("py/pickle-load", &[502], &[A08]),

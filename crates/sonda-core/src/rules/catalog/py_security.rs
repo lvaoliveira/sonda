@@ -422,7 +422,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Vulnerability,
         severity: Blocker,
         effort_minutes: 15,
-        sonar: &[related("S6437")],
+        sonar: &[exact("S2068"), related("S6437"), related("S6418")],
         check: Check::Query {
             langs: PYTHON,
             query: r#"(assignment left: [(identifier) (attribute)] @l right: (string) @r) @match
