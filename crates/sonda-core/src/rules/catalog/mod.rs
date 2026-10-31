@@ -8,6 +8,7 @@ mod java_bugs;
 mod java_more;
 mod java_security;
 mod java_smells;
+mod java_tests;
 mod js;
 mod js_a11y;
 mod js_modern;
@@ -44,6 +45,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_bugs::RULES,
         java_smells::RULES,
         java_more::RULES,
+        java_tests::RULES,
         c::RULES,
     ]
     .into_iter()

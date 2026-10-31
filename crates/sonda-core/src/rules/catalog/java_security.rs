@@ -298,7 +298,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Vulnerability,
         severity: Blocker,
         effort_minutes: 15,
-        sonar: &[related("S6437")],
+        sonar: &[related("S6437"), related("S2068"), related("S6418")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(variable_declarator name: (identifier) @n value: (string_literal) @v) @match

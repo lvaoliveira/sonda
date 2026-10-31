@@ -1333,7 +1333,7 @@ fn all_annotations<'a>(declaration: Node, src: &'a [u8]) -> Vec<&'a [u8]> {
         .collect()
 }
 
-fn implements(class: Node, src: &[u8], interface: &[u8]) -> bool {
+pub(super) fn implements(class: Node, src: &[u8], interface: &[u8]) -> bool {
     let mut cursor = class.walk();
     class
         .children(&mut cursor)
