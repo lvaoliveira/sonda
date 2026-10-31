@@ -358,6 +358,10 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- An issue's details showed only its file name as Location, cut off when
+  long. Location now has its own full-width row with the whole path,
+  wrapping at slashes, and the line range.
+
 - "Where to focus" called issues first detected in the range "new", which
   disagreed with the gate when a rule added to sonda found them in old
   code. They now read "Detected · 6h ago" and "1 blocker issue detected

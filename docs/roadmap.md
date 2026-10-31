@@ -281,7 +281,6 @@ never merges anything itself.
 | **Server-managed rule profiles** | Rules are configured per repository in `sonda.toml`; the Rules page is read-only. | A profile `sonda scan` downloads; decide what wins over `sonda.toml`. |
 | **Per-user or per-project API tokens** | One server token serves every upload (ADR-0006). | Tokens owned by users or projects, revocable, shown once. |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
-| **Full file path in issue details** | The Location box in an issue's details (Issues page) is too small to show the whole path, and the full filename/path matters to the reader. | In `web/src/pages/IssuesPage.tsx`, give the Location field more room (full row width) and wrap long paths instead of truncating, with the file path first and the line/column after it. |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules ([ADR-0008](adr/0008-semantic-layer.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |
