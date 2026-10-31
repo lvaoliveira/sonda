@@ -280,5 +280,6 @@ never merges anything itself.
 | **Server-managed rule profiles** | Rules are configured per repository in `sonda.toml`; the Rules page is read-only. | A profile `sonda scan` downloads; decide what wins over `sonda.toml`. |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
+| **Regex analysis** | 35 SonarQube rules (about 85 per-language instances) read a pattern as a pattern, which tree-sitter queries cannot do ([ADR-0013](adr/0013-regex-analysis.md), proposed). | A parser for the JavaScript, Python and Java dialects, then syntax rules (R1), language rules (R2) and backtracking detection (R3). |
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules ([ADR-0008](adr/0008-semantic-layer.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |
