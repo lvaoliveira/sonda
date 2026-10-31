@@ -2066,11 +2066,11 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- filters
 
-const SCOPE_STOPS: &[&str] = &["function_definition", "class_definition", "lambda"];
+pub(super) const SCOPE_STOPS: &[&str] = &["function_definition", "class_definition", "lambda"];
 
 /// The first node below `root` that satisfies `pred`, not descending into
 /// nodes whose kind is in `stops` (they are still tested themselves).
-fn find_in_scope<'t>(
+pub(super) fn find_in_scope<'t>(
     root: Node<'t>,
     stops: &[&str],
     pred: impl Fn(Node<'t>) -> bool,
@@ -2095,7 +2095,7 @@ fn find_in_scope<'t>(
     }
 }
 
-fn statements(block: Node) -> Vec<Node> {
+pub(super) fn statements(block: Node) -> Vec<Node> {
     let mut cursor = block.walk();
     block
         .named_children(&mut cursor)
@@ -2103,20 +2103,23 @@ fn statements(block: Node) -> Vec<Node> {
         .collect()
 }
 
-fn children_of_kind<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
+pub(super) fn children_of_kind<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|n| n.kind() == kind)
         .collect()
 }
 
-fn has_token(node: Node, token: &str) -> bool {
+pub(super) fn has_token(node: Node, token: &str) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor).any(|c| c.kind() == token)
 }
 
 /// `a OP b` with exactly two operands: (left, operator text, right).
-fn two_operands<'s>(cmp: Node<'s>, src: &'s [u8]) -> Option<(Node<'s>, &'s [u8], Node<'s>)> {
+pub(super) fn two_operands<'s>(
+    cmp: Node<'s>,
+    src: &'s [u8],
+) -> Option<(Node<'s>, &'s [u8], Node<'s>)> {
     let mut cursor = cmp.walk();
     let operands: Vec<Node> = cmp
         .named_children(&mut cursor)
@@ -2134,7 +2137,7 @@ fn contains_call(node: Node) -> bool {
         || find_in_scope(node, &[], |n| matches!(n.kind(), "call" | "await")).is_some()
 }
 
-fn nearest_function(node: Node, hops_allowed: usize) -> Option<Node> {
+pub(super) fn nearest_function(node: Node, hops_allowed: usize) -> Option<Node> {
     let mut p = node.parent();
     let mut hops = 0;
     while let Some(n) = p {

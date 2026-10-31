@@ -1000,7 +1000,7 @@ pub(crate) mod tests {
         assert_eq!(todo_tag("// TODO: fix"), Some("TODO"));
         assert_eq!(todo_tag("# FIXME"), Some("FIXME"));
         assert_eq!(todo_tag("// todos and TODOS"), None);
-        let a = run(Lang::Python, "x = 1  # TODO remove\n");
+        let a = run(Lang::Python, "# TODO remove\nx = 1\n");
         assert_eq!(rules_hit(&a), vec![rules::TODO_COMMENT]);
     }
 
