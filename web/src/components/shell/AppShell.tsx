@@ -7,12 +7,14 @@ import {
   LayoutGrid,
   LogOut,
   type LucideIcon,
+  Menu,
   Package,
   Search,
   Shield,
   SlidersHorizontal,
+  X,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { Link, NavLink } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import { useSessionActions } from '@/api/session'
@@ -69,14 +71,40 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
   const data = shell.state === 'ready' ? shell.data : null
   // Every trail starts at the organization, named by the server.
   const trail: Crumb[] = [{ label: data?.org.name ?? '…', to: '/' }, ...crumbs]
+  // Below 900px the sidebar is a drawer, opened from the header's menu button.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const close = () => setMenuOpen(false)
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menuOpen])
 
   return (
     <div className="flex min-h-screen bg-canvas text-fg">
-      <aside aria-label="Primary" className="sticky top-0 flex h-screen w-[228px] flex-none flex-col bg-canvas">
-        <Link to="/" className="flex h-[60px] items-center gap-2.5 px-[18px] text-fg hover:text-fg">
-          <Logo />
-          <span className="text-[17px] font-semibold tracking-[-0.03em]">sonda</span>
-        </Link>
+      {menuOpen && <div aria-hidden="true" onClick={close} className="fixed inset-0 z-20 bg-black/40 min-[900px]:hidden" />}
+      <aside
+        id="primary-nav"
+        aria-label="Primary"
+        className={`fixed inset-y-0 left-0 z-30 flex h-screen w-[228px] flex-none flex-col bg-canvas transition-transform duration-200 min-[900px]:sticky min-[900px]:top-0 min-[900px]:translate-x-0 ${
+          menuOpen ? 'translate-x-0 shadow-2xl' : 'max-[899px]:invisible max-[899px]:-translate-x-full'
+        }`}
+      >
+        <div className="flex h-[60px] items-center pr-3">
+          <Link to="/" onClick={close} className="flex h-full flex-1 items-center gap-2.5 px-[18px] text-fg hover:text-fg">
+            <Logo />
+            <span className="text-[17px] font-semibold tracking-[-0.03em]">sonda</span>
+          </Link>
+          <button
+            type="button"
+            onClick={close}
+            aria-label="Close menu"
+            className="grid size-8 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-fg-muted hover:bg-hover hover:text-fg min-[900px]:hidden"
+          >
+            <X size={16} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
         <div className="mx-3 mb-2.5 flex items-center gap-2.5 rounded-lg bg-panel px-2.5 py-2 edge">
           <span className="grid size-[22px] place-items-center rounded-md text-[10px] font-bold" style={{ background: 'var(--sd-text)', color: 'var(--sd-bg)' }}>
             {data?.org.initials ?? '··'}
@@ -99,6 +127,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
                 key={item.to}
                 to={item.to}
                 end={item.to === '/'}
+                onClick={close}
                 className={({ isActive }) =>
                   `group flex h-[34px] items-center gap-2.5 rounded-lg px-2.5 text-sm hover:bg-hover hover:text-fg ${
                     isActive ? 'bg-panel font-semibold text-fg' : 'text-fg-muted'
@@ -122,7 +151,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
         </nav>
         <div className="m-3 flex items-center gap-2.5 rounded-lg bg-panel p-2.5 edge">
           <span className="grid size-7 place-items-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand">{data?.user.initials ?? '··'}</span>
-          <Link to="/account" title="Your account" className="flex min-w-0 flex-1 flex-col leading-[1.25] text-fg hover:text-fg">
+          <Link to="/account" onClick={close} title="Your account" className="flex min-w-0 flex-1 flex-col leading-[1.25] text-fg hover:text-fg">
             <span className="text-[13px] font-semibold">{data?.user.name ?? ' '}</span>
             <span className="text-[11.5px] text-fg-faint">{data?.user.handle ?? ' '}</span>
           </Link>
@@ -134,9 +163,19 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col py-2.5 pr-2.5">
-        <div className="flex min-w-0 flex-1 flex-col rounded-[14px] bg-panel edge">
-          <header className="sticky top-0 z-5 flex h-14 items-center gap-3 rounded-t-[14px] border-b border-line bg-panel px-6">
+      <div className="flex min-w-0 flex-1 flex-col min-[900px]:py-2.5 min-[900px]:pr-2.5">
+        <div className="flex min-w-0 flex-1 flex-col bg-panel min-[900px]:rounded-[14px] min-[900px]:edge">
+          <header className="sticky top-0 z-5 flex h-14 items-center gap-2 border-b border-line bg-panel px-4 min-[900px]:gap-3 min-[900px]:rounded-t-[14px] min-[900px]:px-6">
+            <button
+              type="button"
+              onClick={() => setMenuOpen(true)}
+              aria-label="Open menu"
+              aria-expanded={menuOpen}
+              aria-controls="primary-nav"
+              className="-ml-1.5 grid size-[34px] flex-none cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-fg-muted hover:bg-hover hover:text-fg min-[900px]:hidden"
+            >
+              <Menu size={18} strokeWidth={1.8} aria-hidden="true" />
+            </button>
             <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[13.5px] whitespace-nowrap">
               {trail.map((c, i) => {
                 const last = i === trail.length - 1
@@ -163,7 +202,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
               type="button"
               disabled
               title="Search is not built yet"
-              className="flex h-[34px] min-w-[120px] flex-[0_1_300px] cursor-not-allowed items-center gap-2 rounded-lg border-0 bg-canvas px-3 text-[13px] text-fg-faint edge"
+              className="flex h-[34px] min-w-[120px] flex-[0_1_300px] cursor-not-allowed items-center max-[640px]:hidden gap-2 rounded-lg border-0 bg-canvas px-3 text-[13px] text-fg-faint edge"
             >
               <Search size={14} strokeWidth={2} aria-hidden="true" className="flex-none" />
               <span className="flex-1 overflow-hidden text-left whitespace-nowrap">Search or run a command</span>
@@ -180,7 +219,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
               {theme}
             </button>
           </header>
-          <main className="box-border flex w-full max-w-[1560px] flex-1 flex-col gap-5 px-6 pt-7 pb-8">{children}</main>
+          <main className="box-border flex w-full max-w-[1560px] min-w-0 flex-1 flex-col gap-5 px-4 pt-5 pb-8 min-[900px]:px-6 min-[900px]:pt-7">{children}</main>
         </div>
       </div>
     </div>
