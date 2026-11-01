@@ -156,6 +156,10 @@ pub(crate) struct Flags {
     pub dot_all: bool,
     pub verbose: bool,
     pub ascii: bool,
+    /// Java: CANON_EQ, UNICODE_CASE and UNICODE_CHARACTER_CLASS.
+    pub canon_eq: bool,
+    pub unicode_case: bool,
+    pub unicode_class: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +175,8 @@ pub(crate) enum Assertion {
     End,
     StartAbs,
     EndAbs,
+    /// Java `\G`: where the previous match ended.
+    MatchStart,
     WordBoundary,
     NotWordBoundary,
 }
@@ -180,6 +186,18 @@ pub(crate) enum ClassItem {
     Char(char),
     Range(char, char),
     Shorthand(char),
+    /// Java: a nested class such as the `[b-d]` in `[a[b-d]]`.
+    Nested {
+        negated: bool,
+        items: Vec<ClassItem>,
+    },
+    /// Java: `[a-z&&[^aeiou]]`, the parts joined by `&&`.
+    Intersect(Vec<Vec<ClassItem>>),
+    /// Java: `\p{L}`, whose members this layer doesn't enumerate.
+    Property {
+        name: String,
+        negated: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,6 +248,11 @@ pub(crate) enum Node {
     },
     /// An octal escape such as `\012`.
     Octal(char),
+    /// Java `\p{L}`, `\R`, `\X`: matched characters aren't enumerated.
+    Property {
+        name: String,
+        negated: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -243,6 +266,8 @@ pub(crate) struct Regex {
     pub flags: Flags,
     pub groups: usize,
     pub names: Vec<String>,
+    /// Java `\cX` escapes whose X is outside `@` to `_`.
+    pub bad_controls: usize,
 }
 
 // ---------------------------------------------------- parser
@@ -255,6 +280,8 @@ struct Parser {
     names: Vec<String>,
     nodes: usize,
     depth: usize,
+    java: bool,
+    bad_controls: usize,
 }
 
 fn err<T>(message: &str) -> Result<T, ParseError> {
@@ -265,6 +292,15 @@ fn err<T>(message: &str) -> Result<T, ParseError> {
 
 /// Parses `pattern` as a Python `re` pattern.
 pub(crate) fn parse(pattern: &str, flags: Flags) -> Result<Regex, ParseError> {
+    parse_dialect(pattern, flags, false)
+}
+
+/// Parses `pattern` as a `java.util.regex` pattern.
+pub(crate) fn parse_java(pattern: &str, flags: Flags) -> Result<Regex, ParseError> {
+    parse_dialect(pattern, flags, true)
+}
+
+fn parse_dialect(pattern: &str, flags: Flags, java: bool) -> Result<Regex, ParseError> {
     let mut p = Parser {
         chars: pattern.chars().collect(),
         pos: 0,
@@ -273,6 +309,8 @@ pub(crate) fn parse(pattern: &str, flags: Flags) -> Result<Regex, ParseError> {
         names: Vec::new(),
         nodes: 0,
         depth: 0,
+        java,
+        bad_controls: 0,
     };
     let root = p.alternation()?;
     if p.pos < p.chars.len() {
@@ -283,6 +321,7 @@ pub(crate) fn parse(pattern: &str, flags: Flags) -> Result<Regex, ParseError> {
         flags: p.flags,
         groups: p.groups,
         names: p.names,
+        bad_controls: p.bad_controls,
     })
 }
 
@@ -391,6 +430,7 @@ impl Parser {
                 }
                 Some('{') => match self.braces()? {
                     Some((min, max)) => (min, max, true),
+                    None if self.java => return err("Illegal repetition"),
                     None => return Ok(node),
                 },
                 _ => return Ok(node),
@@ -472,6 +512,9 @@ impl Parser {
         } else {
             None
         };
+        if self.java && lo.is_none() {
+            return err("Illegal repetition");
+        }
         match result {
             Some((min, Some(max))) if min > max => err("min repeat greater than max repeat"),
             Some(r) => Ok(Some(r)),
@@ -493,6 +536,7 @@ impl Parser {
             '^' => Node::Assertion(Assertion::Start),
             '$' => Node::Assertion(Assertion::End),
             '*' | '+' | '?' => return err("nothing to repeat"),
+            '{' if self.java => return err("Illegal repetition"),
             '{' => {
                 self.pos -= 1;
                 if self.braces()?.is_some() {
@@ -501,8 +545,10 @@ impl Parser {
                 self.pos += 1;
                 Node::Char('{')
             }
+            '[' if self.java => self.java_class()?,
             '[' => self.class()?,
             '(' => return self.group(),
+            '\\' if self.java => self.java_escape()?,
             '\\' => self.escape()?,
             c => Node::Char(c),
         }))
@@ -510,6 +556,9 @@ impl Parser {
 
     fn group(&mut self) -> Result<Option<Node>, ParseError> {
         if self.eat('?') {
+            if self.java {
+                return self.java_group();
+            }
             if self.eat(':') {
                 return self.group_body(GroupKind::NonCapture, 0).map(Some);
             }
@@ -624,7 +673,13 @@ impl Parser {
                     on = false;
                     self.pos += 1;
                 }
-                Some(c @ ('a' | 'i' | 'L' | 'm' | 's' | 'u' | 'x')) => {
+                Some(c @ ('a' | 'i' | 'L' | 'm' | 's' | 'u' | 'x' | 'd' | 'U'))
+                    if (if self.java {
+                        !matches!(c, 'a' | 'L')
+                    } else {
+                        !matches!(c, 'd' | 'U')
+                    }) =>
+                {
                     self.pos += 1;
                     any = true;
                     match c {
@@ -633,6 +688,8 @@ impl Parser {
                         's' => changed.dot_all = on,
                         'x' => changed.verbose = on,
                         'a' => changed.ascii = on,
+                        'u' if self.java => changed.unicode_case = on,
+                        'U' if self.java => changed.unicode_class = on,
                         _ => {}
                     }
                 }
@@ -869,6 +926,365 @@ impl Parser {
     }
 }
 
+// ---------------------------------------------------- Java dialect
+
+impl Parser {
+    fn java_group(&mut self) -> Result<Option<Node>, ParseError> {
+        if self.eat(':') {
+            return self.group_body(GroupKind::NonCapture, 0).map(Some);
+        }
+        if self.eat('>') {
+            return self.group_body(GroupKind::Atomic, 0).map(Some);
+        }
+        if self.eat('=') || self.eat('!') {
+            let negative = self.chars[self.pos - 1] == '!';
+            return self.look(true, negative).map(Some);
+        }
+        if self.looking_at("<=") || self.looking_at("<!") {
+            self.pos += 1;
+            let negative = self.eat('!');
+            if !negative {
+                self.pos += 1;
+            }
+            return self.look(false, negative).map(Some);
+        }
+        if self.eat('<') {
+            let name = self.java_group_name()?;
+            if self.names.contains(&name) {
+                return err("Named capturing group is already defined");
+            }
+            self.names.push(name.clone());
+            self.groups += 1;
+            let index = self.groups;
+            return self.group_body(GroupKind::Named(name), index).map(Some);
+        }
+        self.inline_flags()
+    }
+
+    fn java_group_name(&mut self) -> Result<String, ParseError> {
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c != '>') {
+            self.pos += 1;
+        }
+        if !self.eat('>') {
+            return err("named capturing group is missing trailing '>'");
+        }
+        let name: String = self.chars[start..self.pos - 1].iter().collect();
+        let mut chars = name.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric());
+        if valid {
+            Ok(name)
+        } else {
+            err("capturing group name does not start with a Latin letter")
+        }
+    }
+
+    fn java_escape(&mut self) -> Result<Node, ParseError> {
+        let Some(c) = self.peek() else {
+            return err("Unexpected internal error: trailing backslash");
+        };
+        self.pos += 1;
+        Ok(match c {
+            'd' | 'D' | 's' | 'S' | 'w' | 'W' | 'h' | 'H' | 'v' | 'V' => Node::Shorthand(c),
+            'A' => Node::Assertion(Assertion::StartAbs),
+            'z' => Node::Assertion(Assertion::EndAbs),
+            'Z' => Node::Assertion(Assertion::End),
+            'G' => Node::Assertion(Assertion::MatchStart),
+            'b' => Node::Assertion(Assertion::WordBoundary),
+            'B' => Node::Assertion(Assertion::NotWordBoundary),
+            'R' | 'X' => Node::Property {
+                name: c.to_string(),
+                negated: false,
+            },
+            'p' | 'P' => {
+                let name = self.java_property_name()?;
+                Node::Property {
+                    name,
+                    negated: c == 'P',
+                }
+            }
+            'Q' => {
+                let mut items = Vec::new();
+                while self.pos < self.chars.len() && !self.looking_at("\\E") {
+                    items.push(Node::Char(self.chars[self.pos]));
+                    self.pos += 1;
+                }
+                if self.looking_at("\\E") {
+                    self.pos += 2;
+                }
+                match items.len() {
+                    0 => Node::Empty,
+                    1 => items.pop().unwrap_or(Node::Empty),
+                    _ => Node::Concat(items),
+                }
+            }
+            'E' => Node::Empty,
+            'k' => {
+                if !self.eat('<') {
+                    return err("\\k is not followed by '<' for named capturing group");
+                }
+                let name = self.java_group_name()?;
+                if !self.names.contains(&name) {
+                    return err("named capturing group does not exist");
+                }
+                Node::BackrefName(name)
+            }
+            '0' => {
+                let mut v = 0;
+                let mut digits = 0;
+                while digits < 3 {
+                    match self.peek().and_then(|d| d.to_digit(8)) {
+                        Some(d) if digits < 2 || v < 32 => {
+                            v = v * 8 + d;
+                            self.pos += 1;
+                            digits += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if digits == 0 {
+                    return err("Illegal octal escape sequence");
+                }
+                Node::Octal(char::from_u32(v).unwrap_or('\0'))
+            }
+            '1'..='9' => {
+                let mut n = c.to_digit(10).unwrap_or(0) as usize;
+                while let Some(d) = self.peek().and_then(|d| d.to_digit(10)) {
+                    let next = n * 10 + d as usize;
+                    if next > self.groups {
+                        break;
+                    }
+                    n = next;
+                    self.pos += 1;
+                }
+                Node::BackrefIndex(n)
+            }
+            _ => Node::Char(self.java_char_escape(c)?),
+        })
+    }
+
+    fn java_property_name(&mut self) -> Result<String, ParseError> {
+        if self.eat('{') {
+            let start = self.pos;
+            while self.peek().is_some_and(|c| c != '}') {
+                self.pos += 1;
+            }
+            if !self.eat('}') {
+                return err("Unclosed character family");
+            }
+            Ok(self.chars[start..self.pos - 1].iter().collect())
+        } else {
+            match self.peek() {
+                Some(c) => {
+                    self.pos += 1;
+                    Ok(c.to_string())
+                }
+                None => err("Illegal character family"),
+            }
+        }
+    }
+
+    /// The escapes that stand for one character, in or out of a class.
+    fn java_char_escape(&mut self, c: char) -> Result<char, ParseError> {
+        Ok(match c {
+            't' => '\t',
+            'n' => '\n',
+            'r' => '\r',
+            'f' => '\u{c}',
+            'a' => '\u{7}',
+            'e' => '\u{1b}',
+            'x' => {
+                if self.eat('{') {
+                    let start = self.pos;
+                    while self.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
+                        self.pos += 1;
+                    }
+                    let digits: String = self.chars[start..self.pos].iter().collect();
+                    if !self.eat('}') || digits.is_empty() {
+                        return err("Unclosed hexadecimal escape sequence");
+                    }
+                    match u32::from_str_radix(&digits, 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                    {
+                        Some(ch) => ch,
+                        None => return err("Hexadecimal codepoint is too big"),
+                    }
+                } else {
+                    self.hex(2)?
+                }
+            }
+            'u' => self.hex(4)?,
+            'c' => {
+                let Some(x) = self.peek() else {
+                    return err("Illegal control escape sequence");
+                };
+                self.pos += 1;
+                if !('@'..='_').contains(&x) {
+                    self.bad_controls += 1;
+                }
+                char::from_u32((x as u32) ^ 64).unwrap_or('\0')
+            }
+            'N' => {
+                if !self.eat('{') {
+                    return err("Illegal/unsupported escape sequence");
+                }
+                while self.peek().is_some_and(|d| d != '}') {
+                    self.pos += 1;
+                }
+                if !self.eat('}') {
+                    return err("Unclosed character name escape sequence");
+                }
+                '\u{fffd}'
+            }
+            c if c.is_ascii_alphabetic() => return err("Illegal/unsupported escape sequence"),
+            c => c,
+        })
+    }
+
+    fn java_class(&mut self) -> Result<Node, ParseError> {
+        let (negated, items) = self.java_class_body()?;
+        Ok(Node::Class { negated, items })
+    }
+
+    fn java_class_body(&mut self) -> Result<(bool, Vec<ClassItem>), ParseError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return err("pattern nested too deeply to analyze");
+        }
+        self.count()?;
+        let negated = self.eat('^');
+        let mut parts: Vec<Vec<ClassItem>> = vec![Vec::new()];
+        let mut first = true;
+        loop {
+            let Some(c) = self.peek() else {
+                return err("Unclosed character class");
+            };
+            self.pos += 1;
+            if c == ']' && !first {
+                break;
+            }
+            first = false;
+            let current = parts.len() - 1;
+            match c {
+                '[' => {
+                    let (n, it) = self.java_class_body()?;
+                    parts[current].push(ClassItem::Nested {
+                        negated: n,
+                        items: it,
+                    });
+                }
+                '&' if self.peek() == Some('&') => {
+                    self.pos += 1;
+                    parts.push(Vec::new());
+                }
+                _ => {
+                    let lo = if c == '\\' {
+                        match self.java_class_escape()? {
+                            Escaped::Char(ch) => ch,
+                            Escaped::Items(items) => {
+                                parts[current].extend(items);
+                                continue;
+                            }
+                        }
+                    } else {
+                        c
+                    };
+                    let range_follows = self.peek() == Some('-')
+                        && self
+                            .chars
+                            .get(self.pos + 1)
+                            .is_some_and(|n| *n != ']' && *n != '[');
+                    if range_follows {
+                        self.pos += 1;
+                        let h = self.peek().unwrap_or(']');
+                        self.pos += 1;
+                        let hi = if h == '\\' {
+                            match self.java_class_escape()? {
+                                Escaped::Char(ch) => ch,
+                                Escaped::Items(_) => return err("Illegal character range"),
+                            }
+                        } else {
+                            h
+                        };
+                        if hi < lo {
+                            return err("Illegal character range");
+                        }
+                        parts[current].push(ClassItem::Range(lo, hi));
+                    } else {
+                        parts[current].push(ClassItem::Char(lo));
+                    }
+                }
+            }
+        }
+        self.depth -= 1;
+        let items = if parts.len() == 1 {
+            parts.pop().unwrap_or_default()
+        } else {
+            vec![ClassItem::Intersect(parts)]
+        };
+        Ok((negated, items))
+    }
+
+    fn java_class_escape(&mut self) -> Result<Escaped, ParseError> {
+        let Some(c) = self.peek() else {
+            return err("Unexpected internal error: trailing backslash");
+        };
+        self.pos += 1;
+        Ok(match c {
+            'd' | 'D' | 's' | 'S' | 'w' | 'W' | 'h' | 'H' | 'v' | 'V' => {
+                Escaped::Items(vec![ClassItem::Shorthand(c)])
+            }
+            'p' | 'P' => {
+                let name = self.java_property_name()?;
+                Escaped::Items(vec![ClassItem::Property {
+                    name,
+                    negated: c == 'P',
+                }])
+            }
+            'Q' => {
+                let mut items = Vec::new();
+                while self.pos < self.chars.len() && !self.looking_at("\\E") {
+                    items.push(ClassItem::Char(self.chars[self.pos]));
+                    self.pos += 1;
+                }
+                if self.looking_at("\\E") {
+                    self.pos += 2;
+                }
+                Escaped::Items(items)
+            }
+            '0' => {
+                let mut v = 0;
+                let mut digits = 0;
+                while digits < 3 {
+                    match self.peek().and_then(|d| d.to_digit(8)) {
+                        Some(d) if digits < 2 || v < 32 => {
+                            v = v * 8 + d;
+                            self.pos += 1;
+                            digits += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if digits == 0 {
+                    return err("Illegal octal escape sequence");
+                }
+                Escaped::Char(char::from_u32(v).unwrap_or('\0'))
+            }
+            'b' | 'B' | 'A' | 'z' | 'Z' | 'G' | 'R' | 'X' | 'k' | '1'..='9' => {
+                return err("Illegal/unsupported escape sequence");
+            }
+            c => Escaped::Char(self.java_char_escape(c)?),
+        })
+    }
+}
+
+enum Escaped {
+    Char(char),
+    Items(Vec<ClassItem>),
+}
+
 // ---------------------------------------------------- analyses
 
 /// The characters a single-character node can match; None for nodes that
@@ -885,14 +1301,7 @@ pub(crate) fn set_of(node: &Node, flags: &Flags) -> Option<Set> {
         }
         Node::Shorthand(c) => shorthand_set(*c, flags.ascii),
         Node::Class { negated, items } => {
-            let mut s = Set::empty();
-            for item in items {
-                s = s.union(&match item {
-                    ClassItem::Char(c) => Set::of(*c),
-                    ClassItem::Range(lo, hi) => Set::range(*lo as u32, *hi as u32),
-                    ClassItem::Shorthand(c) => shorthand_set(*c, flags.ascii),
-                });
-            }
+            let mut s = items_set(items, flags)?;
             if flags.ignore_case {
                 s = s.fold_case();
             }
@@ -903,8 +1312,45 @@ pub(crate) fn set_of(node: &Node, flags: &Flags) -> Option<Set> {
     Some(if flags.ignore_case { s.fold_case() } else { s })
 }
 
+fn items_set(items: &[ClassItem], flags: &Flags) -> Option<Set> {
+    let mut s = Set::empty();
+    for item in items {
+        s = s.union(&match item {
+            ClassItem::Char(c) => Set::of(*c),
+            ClassItem::Range(lo, hi) => Set::range(*lo as u32, *hi as u32),
+            ClassItem::Shorthand(c) => shorthand_set(*c, flags.ascii),
+            ClassItem::Nested { negated, items } => {
+                let inner = items_set(items, flags)?;
+                if *negated { inner.negate() } else { inner }
+            }
+            ClassItem::Intersect(parts) => {
+                let mut acc: Option<Set> = None;
+                for part in parts {
+                    let p = items_set(part, flags)?;
+                    acc = Some(match acc {
+                        Some(a) => a.intersect(&p),
+                        None => p,
+                    });
+                }
+                acc.unwrap_or_default()
+            }
+            ClassItem::Property { .. } => return None,
+        });
+    }
+    Some(s)
+}
+
 fn shorthand_set(c: char, ascii: bool) -> Set {
     match c {
+        'h' => Set::of(' ')
+            .union(&Set::of('\t'))
+            .union(&Set::of('\u{a0}'))
+            .union(&Set::range(0x2000, 0x200a)),
+        'H' => shorthand_set('h', ascii).negate(),
+        'v' => Set::range(0x0a, 0x0d)
+            .union(&Set::of('\u{85}'))
+            .union(&Set::range(0x2028, 0x2029)),
+        'V' => shorthand_set('v', ascii).negate(),
         'd' => digit_set(),
         'D' => digit_set().negate(),
         's' => space_set(ascii),
@@ -918,9 +1364,12 @@ fn shorthand_set(c: char, ascii: bool) -> Set {
 pub(crate) fn nullable(node: &Node) -> bool {
     match node {
         Node::Empty | Node::Assertion(_) | Node::Look { .. } => true,
-        Node::Char(_) | Node::Octal(_) | Node::Any | Node::Shorthand(_) | Node::Class { .. } => {
-            false
-        }
+        Node::Char(_)
+        | Node::Octal(_)
+        | Node::Any
+        | Node::Shorthand(_)
+        | Node::Property { .. }
+        | Node::Class { .. } => false,
         Node::BackrefIndex(_) | Node::BackrefName(_) => true,
         Node::Group { inner, .. } => nullable(inner),
         Node::Conditional { yes, no } => nullable(yes) || no.as_ref().is_none_or(|n| nullable(n)),
@@ -1110,6 +1559,70 @@ mod tests {
         let first = first_set(&r.root, &r.flags);
         assert!(first.contains('b' as u32) && !first.contains('1' as u32));
         assert!(Set::of('a').is_subset_of(&Set::range(97, 99)));
+    }
+
+    fn java_ok(p: &str) -> Regex {
+        parse_java(p, Flags::default()).unwrap_or_else(|e| panic!("{p}: {}", e.message))
+    }
+
+    #[test]
+    fn java_dialect_accepts_what_java_accepts() {
+        for p in [
+            r"\d+(\.\d+)?",
+            r"(?<year>\d{4})-(?<m>\d\d)",
+            r"(?<year>a)\k<year>",
+            r"[a-z&&[^aeiou]]",
+            r"[a[b-d]]",
+            r"\p{L}+\P{Lu}",
+            r"\p{IsAlphabetic}\pL",
+            r"\Qa.b\E+",
+            r"a*+b++c?+",
+            r"(?>a)",
+            r"(?i)abc(?-i:d)",
+            r"\h\v\R\X",
+            r"\x{1F600}\u00e9\0101\cA",
+            r"\z\Z\G\A",
+            r"(?<=a)b(?<!c)d",
+            r"a]b}c",
+        ] {
+            java_ok(p);
+        }
+    }
+
+    #[test]
+    fn java_dialect_rejects_what_java_rejects() {
+        for p in [
+            "(",
+            "a{",
+            "a{,3}",
+            "{1}",
+            "*a",
+            "[a",
+            r"\q",
+            r"\0",
+            "a**",
+            r"(?<1a>x)",
+            r"\k<n>",
+            r"(?<n>a)(?<n>b)",
+            "[z-a]",
+            r"(?P<n>a)",
+            "(?#c)",
+            r"[\b]",
+            r"\x{110000}",
+        ] {
+            assert!(
+                parse_java(p, Flags::default()).is_err(),
+                "{p} should not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn java_classes_resolve_to_sets() {
+        let r = java_ok("[a-z&&[^aeiou]]");
+        let set = set_of(&r.root, &r.flags).unwrap();
+        assert!(set.contains('b' as u32) && !set.contains('e' as u32));
+        assert_eq!(java_ok(r"\cz").bad_controls, 1);
     }
 
     #[test]

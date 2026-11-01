@@ -9,6 +9,7 @@ mod java;
 mod java_bugs;
 mod java_extra;
 mod java_more;
+mod java_regex;
 mod java_security;
 mod java_smells;
 mod java_tests;
@@ -27,6 +28,7 @@ mod py_more;
 mod py_quality;
 mod py_regex;
 mod py_security;
+mod regex_checks;
 pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, Keep};
@@ -64,6 +66,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_more::RULES,
         java_tests::RULES,
         java_extra::RULES,
+        java_regex::RULES,
         c::RULES,
         cs::RULES,
         cs_security::RULES,
