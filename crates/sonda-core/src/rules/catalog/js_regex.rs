@@ -5,6 +5,7 @@
 
 use super::js::{string_content, text};
 use super::js_extra::named;
+use super::js_more::is_provably_string;
 use super::js_syntax::used_as_a_condition;
 use super::regex_checks as checks;
 use super::*;
@@ -431,8 +432,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "const m = s.match(/a(b)/);",
-            good: "const m = /a(b)/.exec(s);",
+            bad: "const s = 'abc';\nconst m = s.match(/a(b)/);",
+            good: "const s = 'abc';\nconst m = /a(b)/.exec(s);",
         }),
     },
 ];
@@ -694,6 +695,14 @@ fn match_could_be_exec(call: Node, src: &[u8]) -> bool {
     let Some(regex) = regex else {
         return false;
     };
+    // Reported where the receiver is known to be a string, as SonarQube does.
+    if !call
+        .child_by_field_name("function")
+        .and_then(|f| f.child_by_field_name("object"))
+        .is_some_and(|o| is_provably_string(o, src, 0))
+    {
+        return false;
+    }
     let global = regex
         .child_by_field_name("flags")
         .is_some_and(|f| text(f, src).contains(&b'g'));

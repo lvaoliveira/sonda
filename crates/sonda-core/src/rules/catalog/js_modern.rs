@@ -13,6 +13,7 @@
 //! frequent nodes should not call them in a loop.
 
 use super::js::{find_below, has_token, string_content, text};
+use super::js_more::{is_provably_array, is_provably_string};
 use super::*;
 
 pub(super) static RULES: &[Rule] = &[
@@ -799,8 +800,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "const last = arr[arr.length - 1];",
-            good: "const last = arr.at(-1);",
+            bad: "const arr = [1, 2];\nconst last = arr[arr.length - 1];",
+            good: "const arr = [1, 2];\nconst last = arr.at(-1);",
         }),
     },
     Rule {
@@ -1996,6 +1997,11 @@ fn reads_from_the_end(subscript: Node, src: &[u8]) -> bool {
     if measured.is_none_or(|m| text(m, src) != text(object, src)) {
         return false;
     }
+    // SonarQube reports it where the receiver is known to be an array or a
+    // string; `.at()` does not exist on whatever a parameter might be.
+    if !(is_provably_array(object, src, 0) || is_provably_string(object, src, 0)) {
+        return false;
+    }
     // Writing to an element has no at() form.
     !subscript.parent().is_some_and(|p| {
         (matches!(
@@ -2083,16 +2089,8 @@ fn is_only_type_checks(node: Node, src: &[u8]) -> bool {
         "parenthesized_expression" => node
             .named_child(0)
             .is_some_and(|c| is_only_type_checks(c, src)),
-        "unary_expression" => {
-            let t = text(node, src);
-            if t.starts_with(b"typeof") {
-                return true;
-            }
-            t.starts_with(b"!")
-                && node
-                    .child_by_field_name("argument")
-                    .is_some_and(|a| is_only_type_checks(a, src))
-        }
+        // `!Array.isArray(x)` is not one: SonarQube leaves negations alone.
+        "unary_expression" => text(node, src).starts_with(b"typeof"),
         "binary_expression" => {
             let op = node
                 .child_by_field_name("operator")
@@ -2703,8 +2701,8 @@ class G extends A { constructor() { super(...arguments); } }";
 
     #[test]
     fn at_negative_index_only_for_reads() {
-        let src = "const a = arr[arr.length - 1];\narr[arr.length - 1] = 2;\nconst b = other[arr.length - 1];";
-        assert_eq!(flagged("js/negative-index", JS, src), [1]);
+        let src = "const arr = [1, 2];\nconst a = arr[arr.length - 1];\narr[arr.length - 1] = 2;\nconst b = other[arr.length - 1];\nfunction f(p) { return p[p.length - 1]; }";
+        assert_eq!(flagged("js/negative-index", JS, src), [2]);
     }
 
     #[test]

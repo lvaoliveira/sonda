@@ -6104,12 +6104,14 @@ SonarQube: S7771, S7755 (related)
 Noncompliant:
 
 ```javascript
+const arr = [1, 2];
 const last = arr[arr.length - 1];
 ```
 
 Compliant:
 
 ```javascript
+const arr = [1, 2];
 const last = arr.at(-1);
 ```
 
@@ -7848,13 +7850,13 @@ SonarQube: S6959
 Noncompliant:
 
 ```javascript
-const s = list.reduce((a, b) => a + b);
+const s = [1, 2, 3].reduce((a, b) => a + b);
 ```
 
 Compliant:
 
 ```javascript
-const s = list.reduce((a, b) => a + b, 0);
+const s = [1, 2, 3].reduce((a, b) => a + b, 0);
 ```
 
 ## js/parseint-as-callback
@@ -10006,12 +10008,14 @@ SonarQube: S6594
 Noncompliant:
 
 ```javascript
+const s = 'abc';
 const m = s.match(/a(b)/);
 ```
 
 Compliant:
 
 ```javascript
+const s = 'abc';
 const m = /a(b)/.exec(s);
 ```
 

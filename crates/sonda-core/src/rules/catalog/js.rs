@@ -3725,9 +3725,21 @@ fn loses_precision(number: Node, src: &[u8]) -> bool {
 /// block's whole subtree, which is quadratic on deep nesting.
 fn nested_block<'t>(container: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     let mut cursor = container.walk();
-    container
-        .named_children(&mut cursor)
-        .find(|c| c.kind() == "statement_block")
+    container.named_children(&mut cursor).find(|c| {
+        // A block that declares something is a scope, not a leftover.
+        c.kind() == "statement_block"
+            && !named_children_of(*c).iter().any(|d| {
+                matches!(
+                    d.kind(),
+                    "lexical_declaration" | "class_declaration" | "function_declaration"
+                )
+            })
+    })
+}
+
+fn named_children_of(node: Node) -> Vec<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).collect()
 }
 
 /// The last named child that isn't a comment.
