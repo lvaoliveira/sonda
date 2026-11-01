@@ -14,6 +14,8 @@ mod cs_opt3;
 mod cs_security;
 mod cs_smells;
 mod cs_tail;
+mod cs_typed;
+mod cs_types;
 mod java;
 mod java_bugs;
 mod java_close;
@@ -112,6 +114,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_opt::RULES, cs_opt::OFF_BY_DEFAULT),
     (cs_opt2::RULES, cs_opt2::OFF_BY_DEFAULT),
     (cs_opt3::RULES, cs_opt3::OFF_BY_DEFAULT),
+    (cs_typed::RULES, cs_typed::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

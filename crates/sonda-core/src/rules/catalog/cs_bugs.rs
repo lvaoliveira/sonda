@@ -173,7 +173,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[exact("S2345")],
+        sonar: &[exact("S2345"), related("S4070")],
         check: Check::Query {
             langs: CSHARP,
             query: "(enum_declaration (attribute_list) body: (enum_member_declaration_list)) @match",
