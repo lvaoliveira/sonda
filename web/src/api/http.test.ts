@@ -59,6 +59,19 @@ describe('the HTTP API client', () => {
     ])
   })
 
+  it('reads and changes rule settings, globally and per project', async () => {
+    const { fn, calls } = fakeFetch(() => json({}))
+    const api = createHttpApi('/api', fn)
+    await api.projectRules('shop')
+    await api.setRuleOff('js/no-var', true, 'Too noisy.')
+    await api.setProjectRule('shop', 'js/no-var', 'inherit')
+    expect(calls.map((c) => [c.init.method ?? 'GET', c.url, c.init.body ?? null])).toEqual([
+      ['GET', '/api/projects/shop/rule-settings', null],
+      ['PUT', '/api/rule-settings', '{"rule":"js/no-var","off":true,"note":"Too noisy."}'],
+      ['PUT', '/api/projects/shop/rule-settings', '{"rule":"js/no-var","state":"inherit"}'],
+    ])
+  })
+
   it('asks for the overview of a range; there are no teams to scope by', async () => {
     const { fn, calls } = fakeFetch(() => json({ teams: false }))
     await createHttpApi('/api', fn).overview!('all', '30d')

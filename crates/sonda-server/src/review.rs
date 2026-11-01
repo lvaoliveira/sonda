@@ -131,6 +131,7 @@ pub async fn get_review(
          FROM issues i JOIN projects p ON p.id = i.project_id
          JOIN analyses fa ON fa.id = i.first_analysis_id
          WHERE i.category = 'vulnerability' AND i.fixed_analysis_id IS NULL
+           AND NOT rule_off(i.project_id, i.rule)
            AND ($1::text IS NULL OR p.key = $1)
            AND i.branch = coalesce($2, p.main_branch)",
     )

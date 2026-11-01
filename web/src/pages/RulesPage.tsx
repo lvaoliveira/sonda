@@ -4,27 +4,29 @@ import { Link, useLocation } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { Category, Rule, RuleCatalog } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
-import { Chip } from '@/components/sonda/controls'
+import { Button, Chip } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
 import { SeverityGlyph, SeverityPill } from '@/components/sonda/status'
-import { formatNumber } from '@/lib/format'
+import { formatNumber, shortDate } from '@/lib/format'
 import { cweUrl } from '@/lib/links'
 import { CATEGORY_LABEL, languageLabel } from '@/lib/visual'
 
 export function RulesPage() {
   const api = useApi()
   const catalog = useAsync(() => api.rules(), [api])
+  const shell = useAsync(() => api.shell(), [api])
+  const isAdmin = shell.state === 'ready' && shell.data.isAdmin
   return (
     <AppShell crumbs={[{ label: 'Rules', to: '/rules' }]}>
       {catalog.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
       {catalog.state === 'error' && <p role="alert">Could not load rules: {catalog.error.message}</p>}
-      {catalog.state === 'ready' && <Rules catalog={catalog.data} />}
+      {catalog.state === 'ready' && <Rules catalog={catalog.data} isAdmin={isAdmin} reload={catalog.reload} />}
     </AppShell>
   )
 }
 
-/** Read-only: rules are configured per repository in sonda.toml, not on the server. */
-function Rules({ catalog }: { catalog: RuleCatalog }) {
+/** The catalog, with where each rule is off; admins turn rules off for every project (ADR-0016). */
+function Rules({ catalog, isAdmin, reload }: { catalog: RuleCatalog; isAdmin: boolean; reload: () => void }) {
   const location = useLocation()
   const rules = catalog.rules
   const [q, setQ] = useState('')
@@ -137,18 +139,24 @@ function Rules({ catalog }: { catalog: RuleCatalog }) {
                       <span>off by default</span>
                     </>
                   )}
+                  {r.serverOff && (
+                    <>
+                      <span>·</span>
+                      <span className="text-warn">off on the server</span>
+                    </>
+                  )}
                 </span>
               </div>
             )
           })}
         </div>
-        {rule && <RuleDetail rule={rule} />}
+        {rule && <RuleDetail rule={rule} isAdmin={isAdmin} reload={reload} />}
       </div>
     </>
   )
 }
 
-function RuleDetail({ rule }: { rule: Rule }) {
+function RuleDetail({ rule, isAdmin, reload }: { rule: Rule; isAdmin: boolean; reload: () => void }) {
   return (
     <article className="flex min-w-0 flex-col gap-5 overflow-auto bg-panel px-[22px] py-5">
       <div className="flex flex-col gap-2.5">
@@ -200,6 +208,8 @@ function RuleDetail({ rule }: { rule: Rule }) {
         </Link>
       </div>
 
+      <WhereOff key={rule.id} rule={rule} isAdmin={isAdmin} reload={reload} />
+
       {(rule.noncompliant || rule.compliant) && (
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-3">
           {rule.noncompliant && <CodeSample tone="crit" mark="✕" label="Noncompliant" code={rule.noncompliant} />}
@@ -210,14 +220,81 @@ function RuleDetail({ rule }: { rule: Rule }) {
       <section className="flex flex-col gap-2">
         <h3 className="m-0 font-normal micro-label">Configure</h3>
         <p className="m-0 text-[13px] text-fg-muted">
-          Rules are configured per repository, in its sonda.toml. To turn this one {rule.onByDefault ? 'off' : 'on (it is off by default)'}, or change its
-          severity:
+          A repository decides which rules its scans run, in its sonda.toml. To turn this one {rule.onByDefault ? 'off' : 'on (it is off by default)'}, or
+          change its severity, there:
         </p>
         <pre className="m-0 overflow-auto rounded-lg bg-canvas px-3.5 py-3 font-mono text-[11.5px] leading-[1.8] edge">
           {`[rules]\n${rule.onByDefault ? 'disabled' : 'enabled'} = ["${rule.id}"]\n\n[rules.severity]\n"${rule.id}" = "major"`}
         </pre>
       </section>
     </article>
+  )
+}
+
+/** Where the rule is off, and for admins, turning it off for every project (ADR-0016). */
+function WhereOff({ rule, isAdmin, reload }: { rule: Rule; isAdmin: boolean; reload: () => void }) {
+  const api = useApi()
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const set = async (off: boolean) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setRuleOff(rule.id, off, note.trim() || undefined)
+      setNote('')
+      reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const off = rule.offIn
+  return (
+    <section aria-label="Where it's off" className="flex flex-col gap-2">
+      <h3 className="m-0 font-normal micro-label">Where it's off</h3>
+      {rule.serverOff ? (
+        <p className="m-0 text-[13px]">
+          <span className="font-semibold text-warn">Off on the server for every project</span>
+          <span className="text-fg-muted">
+            {' '}
+            · by {rule.serverOff.changedBy}, {shortDate(rule.serverOff.changedAt)}
+            {rule.serverOff.note && <>: “{rule.serverOff.note}”</>}. Its findings stay stored but don't count; a project can turn it back on in its
+            settings.
+          </span>
+        </p>
+      ) : null}
+      <p className="m-0 text-[13px] text-fg-muted">
+        {off
+          ? `Off in ${formatNumber(off.sondaToml + off.server)} ${off.sondaToml + off.server === 1 ? 'project' : 'projects'}: ${off.sondaToml} by their sonda.toml, ${off.server} on the server.`
+          : rule.onByDefault
+            ? 'On in every project.'
+            : 'Off by default, and no repository turns it on.'}
+      </p>
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-2">
+          {!rule.serverOff && (
+            <input
+              aria-label="Why it's off"
+              placeholder="Why (optional)"
+              maxLength={500}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="h-8 w-[260px] rounded-md border-0 bg-canvas px-2 text-[13px] edge"
+            />
+          )}
+          <Button onClick={() => void set(!rule.serverOff)} disabled={busy}>
+            {rule.serverOff ? 'Turn back on for every project' : 'Turn off for every project'}
+          </Button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="m-0 text-xs text-crit">
+          {error}
+        </p>
+      )}
+    </section>
   )
 }
 

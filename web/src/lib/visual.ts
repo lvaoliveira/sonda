@@ -1,4 +1,4 @@
-import type { Category, GateState, IssueStatus, Level, Severity, TokenRole, TokenType } from '@/api/types'
+import type { Category, GateState, IssueStatus, Level, ProjectRules, RuleSetBy, Severity, TokenRole, TokenType } from '@/api/types'
 
 /** Severity is always a glyph plus a label, never color alone. */
 export const SEVERITY: Record<Severity, { glyph: string; label: string; color: string; soft: string; rank: number }> = {
@@ -58,6 +58,23 @@ export const STATUS_COLOR: Record<IssueStatus, string> = {
   fixed: 'var(--sd-ok)',
   accepted: 'var(--sd-faint)',
   false_positive: 'var(--sd-faint)',
+}
+
+/** What decided a rule's state for a project (ADR-0016). */
+export const SET_BY_LABEL: Record<RuleSetBy, string> = {
+  default: 'Default',
+  sonda_toml: "The repository's sonda.toml",
+  server: 'Server, for all projects',
+  project: 'Server, for this project',
+}
+
+/** A change in a repository's sonda.toml rule settings. */
+export const TOML_CHANGE_LABEL: Record<ProjectRules['tomlChanges'][number]['change'], string> = {
+  disabled: 'turned off',
+  're-enabled': 'turned back on',
+  enabled: 'turned on (off by default)',
+  unset: 'back to off by default',
+  severity: 'severity changed',
 }
 
 /** What the reason form asks before each decision that needs one (ADR-0014). */

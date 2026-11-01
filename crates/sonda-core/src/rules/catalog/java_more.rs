@@ -1703,7 +1703,7 @@ fn file_never_restricts_trusted_packages(creation: Node, src: &[u8]) -> bool {
         && !src.windows(21).any(|w| w == b"setTrustAllPackages(f")
 }
 
-fn is_routable_ipv4(string: Node, src: &[u8]) -> bool {
+pub(super) fn is_routable_ipv4(string: Node, src: &[u8]) -> bool {
     let Some(body) = string_value(string, src) else {
         return false;
     };

@@ -867,6 +867,63 @@ describe('Overview', () => {
   })
 })
 
+describe('Rule settings', () => {
+  it('shows a project\u2019s rules with what set them, and lets admins change them', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform')
+    await user.click(await screen.findByRole('link', { name: 'Settings' }))
+    const card = await screen.findByRole('region', { name: 'Rules' })
+    expect(card).toHaveTextContent('1 disabled, 1 enabled, 1 severity changed')
+    const off = within(card).getByRole('listitem', { name: 'Rule go/unchecked-error' })
+    expect(off).toHaveTextContent('Off')
+    expect(off).toHaveTextContent("The repository's sonda.toml")
+    expect(within(card).getByRole('listitem', { name: 'Rule rust/undocumented-unsafe' })).toHaveTextContent('On')
+    expect(within(card).getByRole('listitem', { name: 'Rule py/broad-except' })).toHaveTextContent('severity minor in sonda.toml')
+    expect(screen.getByRole('region', { name: 'Changes in sonda.toml' })).toHaveTextContent('go/unchecked-errorturned off')
+
+    // Off for this project only, with why.
+    await user.type(within(card).getByLabelText('Rule to turn off'), 'go/sql-string-concat')
+    await user.type(within(card).getByLabelText("Why it's off"), 'Covered by our ORM.')
+    await user.click(within(card).getByRole('button', { name: 'Turn off here' }))
+    const row = await within(card).findByRole('listitem', { name: 'Rule go/sql-string-concat' })
+    expect(row).toHaveTextContent('Server, for this project')
+    expect(row).toHaveTextContent('by mara')
+    expect(row).toHaveTextContent('“Covered by our ORM.”')
+    expect(row).toHaveTextContent('1 open findings left out')
+
+    // The server can't turn on what sonda.toml turns off: shown, not hidden.
+    await user.selectOptions(within(off).getByLabelText('Server setting for go/unchecked-error'), 'on')
+    await user.click(within(off).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(within(card).getByRole('listitem', { name: 'Rule go/unchecked-error' })).toHaveTextContent('the server setting has no effect'))
+  })
+
+  it('says when the repository\u2019s settings are unknown, and is read-only for members', async () => {
+    const api = createMockApi(0)
+    const shell = api.shell
+    renderAt('/projects/billing-service/settings', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
+    const card = await screen.findByRole('region', { name: 'Rules' })
+    expect(card).toHaveTextContent('settings are unknown')
+    expect(screen.getByText(/read-only: admins change these/)).toBeInTheDocument()
+    expect(within(card).queryByLabelText('Rule to turn off')).not.toBeInTheDocument()
+  })
+
+  it('lets admins turn a rule off for every project, and shows where it\u2019s off', async () => {
+    const user = userEvent.setup()
+    renderAt('/rules#go%2Fsql-string-concat')
+    const where = await screen.findByRole('region', { name: "Where it's off" })
+    expect(where).toHaveTextContent('On in every project.')
+    await user.type(within(where).getByLabelText("Why it's off"), 'Too noisy for us.')
+    await user.click(within(where).getByRole('button', { name: 'Turn off for every project' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('Off on the server for every project'))
+    expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('by mara')
+    expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('“Too noisy for us.”')
+    expect(screen.getByRole('option', { name: /SQL queries should not be built/ })).toHaveTextContent('off on the server')
+    // A sonda.toml turns this one off in a project.
+    await user.click(screen.getByRole('option', { name: /Returned errors should be checked/ }))
+    expect(await screen.findByRole('region', { name: "Where it's off" })).toHaveTextContent('Off in 1 project: 1 by their sonda.toml, 0 on the server.')
+  })
+})
+
 describe('Shell', () => {
   it('marks the current page, and every screen in the navigation exists', async () => {
     const user = userEvent.setup()

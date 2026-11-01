@@ -298,7 +298,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Major,
         effort_minutes: 10,
-        sonar: &[exact("S3249")],
+        sonar: &[exact("S3249"), exact("S3397")],
         check: Check::Query {
             langs: CSHARP,
             query: r#"(class_declaration body: (declaration_list (method_declaration name: (identifier) @n
@@ -654,12 +654,15 @@ pub(super) fn cs_call_arguments<'t>(call: Node<'t>) -> Vec<Node<'t>> {
         .named_children(&mut cursor)
         .filter(|a| a.kind() == "argument")
         .collect();
+    // `this` and `base` are unnamed tokens: such an argument has no named
+    // child, so it stands for itself and positions stay right.
     args.into_iter()
-        .filter_map(|a| {
+        .map(|a| {
             let mut c = a.walk();
             a.named_children(&mut c)
                 .filter(|v| v.kind() != "comment" && Some(*v) != a.child_by_field_name("name"))
                 .last()
+                .unwrap_or(a)
         })
         .collect()
 }
