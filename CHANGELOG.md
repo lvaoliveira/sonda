@@ -10,8 +10,9 @@ file, the report formats and the public library API.
 ### Added
 
 - `sonda scan` analyzes JavaScript/TypeScript, Python, Java, C/C++ and C#
-  ([ADR-0015](docs/adr/0015-csharp.md)) with 1429 rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
-  compliant examples for each rule.
+  ([ADR-0015](docs/adr/0015-csharp.md)) for bugs, vulnerabilities and code
+  smells. [docs/rules.md](docs/rules.md) lists every rule, with
+  noncompliant and compliant examples.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
   complexity, technical debt, and cross-file duplication.
 - LCOV coverage import (`--coverage`).

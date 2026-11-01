@@ -12,6 +12,15 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Outside SonarQube's default profile.
+    "java/deprecated-call",
+    "java/hash-key-without-hashcode",
+    "java/tree-key-not-comparable",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/infinite-loop",

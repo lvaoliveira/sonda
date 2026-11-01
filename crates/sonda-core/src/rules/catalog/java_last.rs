@@ -8,6 +8,28 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, declarator_names, enclosing_class};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // High-volume conventions outside SonarQube's default profile: test
+    // names, missing Javadoc, ternaries, number formatting, varargs, size
+    // and complexity limits, static imports and pattern compilation.
+    "java/test-method-name",
+    "java/public-api-undocumented",
+    "java/ternary-operator",
+    "java/large-number-underscores",
+    "java/varargs-declared",
+    "java/inner-class-too-long",
+    "java/too-many-returns",
+    "java/private-method-not-static",
+    "java/pattern-compiled-in-method",
+    "java/static-imports-many",
+    "java/method-complexity",
+    "java/too-many-methods",
+    "java/nesting-depth",
+    "java/expression-complexity",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/too-many-returns",

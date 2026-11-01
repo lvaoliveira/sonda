@@ -9,6 +9,31 @@ use super::java_security::{call_arguments, find_node, method_name, string_value,
 use super::java_smells::{children_of_kind, count_word, declarator_names};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Conventions outside SonarQube's default profile (batch 13): they fire
+    // on nearly every file of a typical code base.
+    "java/exact-alarm",
+    "java/redundant-explicit-type",
+    "java/clock-in-test",
+    "java/collect-with-add",
+    "java/throws-many-checked",
+    "java/throws-checked",
+    "java/qualified-name",
+    "java/one-type-per-file",
+    "java/package-private-field",
+    "java/boolean-method-name",
+    "java/local-constant-name",
+    "java/junit4-import",
+    "java/operator-precedence",
+    "java/increment-in-expression",
+    "java/magic-number",
+    "java/test-assertion-message",
+    // Java 22 syntax: older code bases cannot adopt it.
+    "java/unused-exception-parameter",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/configuration-field-injection",
