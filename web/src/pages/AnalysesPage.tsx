@@ -85,7 +85,7 @@ function AnalysisList({ page, onOffset }: { page: AnalysisPage; onOffset: (offse
   const end = page.offset + page.items.length
   return (
     <div className="overflow-hidden rounded-xl bg-panel-2 edge">
-      <ol aria-label="Analyses" className="m-0 list-none overflow-x-auto p-0">
+      <ol aria-label="Analyses" className="relative m-0 list-none overflow-x-auto p-0">
         {page.items.map((a) => {
           const g = GATE[a.gate]
           const note =

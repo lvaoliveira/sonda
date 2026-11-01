@@ -15,6 +15,23 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, declarator_names, enclosing_class};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Batch 17: outside SonarQube's default profile, or tied to a Java version.
+    "java/lazy-static-unsynchronized",
+    "java/float-arithmetic",
+    "java/redundant-nullability",
+    "java/collect-redundant",
+    "java/enum-equals",
+    "java/random-test-data",
+    "java/location-manager-updates",
+    "java/bluetooth-low-latency",
+    "java/private-fields-no-constructor",
+    "java/declared-too-early",
+    "java/class-could-be-record",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/object-stream-append",

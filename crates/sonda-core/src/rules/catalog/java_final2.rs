@@ -11,6 +11,18 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, enclosing_class};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    "java/unnamed-needs-var",
+    "java/record-pattern-unused-component",
+    "java/constructor-prologue-long",
+    "java/validation-after-super",
+    "java/fields-set-after-super",
+    "java/class-transform-name",
+    "java/class-build-for-transform",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/unnamed-needs-var",

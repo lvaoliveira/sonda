@@ -12,6 +12,7 @@ pub enum Lang {
     Java,
     C,
     Cpp,
+    CSharp,
 }
 
 pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
@@ -22,6 +23,7 @@ pub(crate) const PYTHON: &[Lang] = &[Lang::Python];
 pub(crate) const JAVA: &[Lang] = &[Lang::Java];
 pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
 pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
+pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
 /// Every supported language.
 pub const ALL: &[Lang] = &[
     Lang::JavaScript,
@@ -31,6 +33,7 @@ pub const ALL: &[Lang] = &[
     Lang::Java,
     Lang::C,
     Lang::Cpp,
+    Lang::CSharp,
 ];
 
 impl Lang {
@@ -46,6 +49,7 @@ impl Lang {
             "java" => Lang::Java,
             "c" | "h" => Lang::C,
             "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => Lang::Cpp,
+            "cs" => Lang::CSharp,
             _ => return None,
         })
     }
@@ -68,6 +72,7 @@ impl Lang {
             Lang::Java => "java",
             Lang::C => "c",
             Lang::Cpp => "cpp",
+            Lang::CSharp => "csharp",
         }
     }
 
@@ -80,6 +85,7 @@ impl Lang {
             Lang::Java => tree_sitter_java::LANGUAGE.into(),
             Lang::C => tree_sitter_c::LANGUAGE.into(),
             Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         }
     }
 
@@ -89,6 +95,7 @@ impl Lang {
             Lang::Python => &PYTHON_SYNTAX,
             Lang::Java => &JAVA_SYNTAX,
             Lang::C | Lang::Cpp => &C_SYNTAX,
+            Lang::CSharp => &CSHARP_SYNTAX,
         }
     }
 }
@@ -188,6 +195,32 @@ static C_SYNTAX: Syntax = Syntax {
     dup_ignore: &["preproc_include"],
 };
 
+static CSHARP_SYNTAX: Syntax = Syntax {
+    functions: &[
+        "method_declaration",
+        "constructor_declaration",
+        "destructor_declaration",
+        "operator_declaration",
+        "conversion_operator_declaration",
+        "accessor_declaration",
+        "local_function_statement",
+        "lambda_expression",
+        "anonymous_method_expression",
+    ],
+    branches: &[
+        "for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+        "catch_clause",
+        "conditional_expression",
+    ],
+    switches: &["switch_statement", "switch_expression"],
+    cases: &["switch_section", "switch_expression_arm"],
+    comments: &["comment"],
+    dup_ignore: &["using_directive", "extern_alias_directive"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +239,7 @@ mod tests {
         assert_eq!(Lang::from_path(Path::new("a/b.tsx")), Some(Lang::Tsx));
         assert_eq!(Lang::from_path(Path::new("x.PY")), Some(Lang::Python));
         assert_eq!(Lang::from_path(Path::new("x.hpp")), Some(Lang::Cpp));
+        assert_eq!(Lang::from_path(Path::new("App.CS")), Some(Lang::CSharp));
         assert_eq!(Lang::from_path(Path::new("Makefile")), None);
     }
 

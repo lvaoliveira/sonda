@@ -11,6 +11,32 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, enclosing_class};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    "java/indentation-inconsistent",
+    "java/equals-asymmetric",
+    "java/catch-exception-needlessly",
+    "java/list-search-in-loop",
+    "java/concrete-parameter",
+    "java/annotation-default-passed",
+    "java/serializable-optional-field",
+    "java/test-swallows-everything",
+    "java/component-field-not-injected",
+    "java/record-accessor-override",
+    "java/gyroscope-sensor",
+    "java/switch-to-expression",
+    "java/import-order",
+    "java/record-pattern",
+    "java/single-if-in-pattern-case",
+    "java/extra-comment-slashes",
+    "java/gatherer-initializer",
+    "java/gatherer-default-finisher",
+    "java/class-builder-method-body",
+    "java/text-block-in-expression",
+    "java/one-line-text-block",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/indentation-inconsistent",

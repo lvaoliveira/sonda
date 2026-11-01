@@ -135,7 +135,10 @@ function ToReview({ s }: { s: Security }) {
       aside={review && <Progress label="Reviewed" p={review.progress} newCode={review.newCode} />}
     >
       <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
-        <Segmented label="Review status" options={REVIEW_STATUS} value={query.status ?? 'open'} onChange={(status) => set({ status })} />
+        {/* Five options: on the smallest phones they scroll sideways. */}
+        <div className="max-w-full overflow-x-auto">
+          <Segmented label="Review status" options={REVIEW_STATUS} value={query.status ?? 'open'} onChange={(status) => set({ status })} />
+        </div>
         <select
           aria-label="Project"
           value={query.project ?? ''}
@@ -329,7 +332,7 @@ function FixFirst({ s }: { s: Security }) {
                   {' › '}
                   <Link
                     to={`/issues?project=${encodeURIComponent(f.project)}&file=${encodeURIComponent(f.path)}&cat=vulnerability`}
-                    className="font-mono text-[11.5px]"
+                    className="font-mono text-[11.5px] [overflow-wrap:anywhere]"
                   >
                     {f.path}:{f.line}
                   </Link>{' '}

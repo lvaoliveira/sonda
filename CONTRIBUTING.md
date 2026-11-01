@@ -92,6 +92,16 @@ Rule {
   text with a node kind.
 - Regenerate the docs with
   `cargo run -q -p sonda -- rules --format markdown > docs/rules.md`.
+- A new catalog module is registered with one line in `catalog/mod.rs`'s
+  `MODULES`: `(name::RULES, name::OFF_BY_DEFAULT)`, or `&[]` when all its
+  rules are on.
+- **Off by default:** a rule outside SonarQube's default profile that
+  reports a style choice many codebases make on purpose goes in its own
+  module's `OFF_BY_DEFAULT`, just above `RULES`, with a comment saying why.
+  There is no shared list, so rule PRs don't collide; a test checks that a
+  module lists only its own rules.
+- **No rule counts in `CHANGELOG.md`.** `docs/rules.md` has the number,
+  and a count in the changelog conflicts with every other rule PR.
 
 Rules run on every file, including generated and minified ones, so keep
 them linear in the file's size:

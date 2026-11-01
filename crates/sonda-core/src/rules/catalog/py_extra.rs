@@ -17,6 +17,18 @@ use super::py_security::{
 };
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Style rules that fire on most real Python: every method that skips
+    // self, every untyped signature, every trailing comment. Python 3.14
+    // moved the compression modules, which most projects don't target yet.
+    "py/method-could-be-static",
+    "py/hint-missing-return",
+    "py/hint-missing-parameter",
+    "py/compression-namespace",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/jump-outside-loop",

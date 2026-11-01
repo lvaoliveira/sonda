@@ -5,6 +5,14 @@ use super::*;
 use crate::semantic::{DeclId, DeclKind, Model, ScopeKind};
 use std::collections::{HashMap, HashSet};
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    "js/unused-parameter",
+    "js/shadowed-variable",
+    "js/prefer-const",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "js/unused-variable",

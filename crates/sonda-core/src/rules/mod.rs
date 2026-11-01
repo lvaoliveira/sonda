@@ -5,7 +5,8 @@ use crate::config::RulesConfig;
 use crate::error::Error;
 use crate::lang::Lang;
 use crate::model::{Category, Severity};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
@@ -177,8 +178,19 @@ pub(crate) struct RuleSet {
     pub(crate) active: Vec<ActiveRule>,
     /// Indexed by `Lang::index`; None when no active rule has a query for
     /// the language.
-    queries: Vec<OnceLock<Result<Option<CompiledQueries>, String>>>,
+    queries: Vec<OnceLock<Compiled>>,
 }
+
+type Compiled = Arc<Result<Option<CompiledQueries>, String>>;
+
+/// Compiled queries, shared by every rule set with the same active rules:
+/// compiling a language's queries takes most of the time for a small file,
+/// and tests build a rule set per assertion, nearly always the default one.
+/// A scan builds one rule set, so this changes nothing there.
+static COMPILED: LazyLock<Mutex<HashMap<CompiledKey, Compiled>>> = LazyLock::new(Mutex::default);
+
+/// A language, and every active rule in order.
+type CompiledKey = (u8, Vec<&'static str>);
 
 impl RuleSet {
     pub(crate) fn new(cfg: &RulesConfig) -> Result<Self, Error> {
@@ -213,10 +225,26 @@ impl RuleSet {
     /// built-in query does not compile: a bug, which tests guard against.
     pub(crate) fn queries(&self, lang: Lang) -> Result<Option<&CompiledQueries>, String> {
         let slot = &self.queries[usize::from(lang.index())];
-        slot.get_or_init(|| self.compile_for(lang).map_err(|e| e.to_string()))
-            .as_ref()
-            .map(Option::as_ref)
-            .map_err(Clone::clone)
+        slot.get_or_init(|| {
+            // Pattern indices point into `active`, so the key is all of it.
+            let key = (
+                lang.index(),
+                self.active.iter().map(|a| a.rule.id).collect(),
+            );
+            let shared = COMPILED.lock().map(|c| c.get(&key).cloned());
+            if let Ok(Some(compiled)) = shared {
+                return compiled;
+            }
+            let compiled = Arc::new(self.compile_for(lang).map_err(|e| e.to_string()));
+            if let Ok(mut c) = COMPILED.lock() {
+                c.insert(key, Arc::clone(&compiled));
+            }
+            compiled
+        })
+        .as_ref()
+        .as_ref()
+        .map(Option::as_ref)
+        .map_err(Clone::clone)
     }
 
     fn compile_for(&self, lang: Lang) -> Result<Option<CompiledQueries>, Error> {
@@ -456,7 +484,7 @@ mod tests {
         assert!(active(&cfg));
         cfg.disabled = cfg.enabled.clone();
         assert!(!active(&cfg));
-        for id in catalog::OFF_BY_DEFAULT {
+        for id in catalog::OFF_BY_DEFAULT.iter() {
             assert!(find(id).is_some(), "{id}");
         }
         cfg = RulesConfig {

@@ -164,6 +164,32 @@ fn json_report_has_measures_gate_and_issues() {
     assert!(is_hex(&report["files"][0]["sha256"], 64));
 }
 
+#[test]
+fn json_report_carries_the_rule_settings_from_sonda_toml() {
+    // ADR-0016: the server shows why a rule reports nothing.
+    let toml = "[rules]\ndisabled = [\"js/no-var\", \"js/eqeqeq\"]\nenabled = [\"js/prefer-const\"]\n\n[rules.severity]\n\"js/no-eval\" = \"minor\"\n";
+    let dir = project(&[("app.js", "var x = 1;\neval(x);\n"), ("sonda.toml", toml)]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    let settings = &report["rule_settings"];
+    // Sorted, so the report stays deterministic.
+    assert_eq!(
+        settings["disabled"],
+        serde_json::json!(["js/eqeqeq", "js/no-var"])
+    );
+    assert_eq!(settings["enabled"], serde_json::json!(["js/prefer-const"]));
+    assert_eq!(
+        settings["severity"],
+        serde_json::json!({ "js/no-eval": "minor" })
+    );
+    // Without a sonda.toml, empty rather than absent.
+    let plain = project(&[("app.js", "eval(x);\n")]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], plain.path()));
+    assert_eq!(
+        report["rule_settings"],
+        serde_json::json!({ "disabled": [], "enabled": [], "severity": {} })
+    );
+}
+
 fn is_hex(v: &Value, len: usize) -> bool {
     v.as_str().is_some_and(|s| {
         s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))

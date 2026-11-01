@@ -10,6 +10,25 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Brace layout, member order, licence headers and similar policies: a
+    // project picks one convention (several of these contradict each other).
+    "java/brace-on-its-own-line",
+    "java/brace-at-line-end",
+    "java/else-on-another-line",
+    "java/else-on-the-same-line",
+    "java/closing-brace-not-first",
+    "java/member-order",
+    "java/missing-license-header",
+    "java/functional-interface-redefined",
+    "java/get-class-loader",
+    "java/loops-over-same-collection",
+    "java/lambda-explicit-types",
+    "java/inner-class-static",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/brace-on-its-own-line",

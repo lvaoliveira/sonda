@@ -13,6 +13,14 @@ use super::py_security::{
 };
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Documentation and licence-header policies are a project decision.
+    "py/missing-docstring",
+    "py/missing-license-header",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/missing-docstring",

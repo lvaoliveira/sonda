@@ -660,7 +660,10 @@ last imported.
 - the warnings the CLI reported (skipped files, syntax errors, timeouts);
 - the issues it introduced and the issues it fixed, with exact counts per
   severity and the 50 most severe listed;
-- the previous and next analyses on the same branch.
+- the previous and next analyses on the same branch;
+- `ruleSettings`: the `[rules]` settings of `sonda.toml` the scan ran
+  with (`disabled`, `enabled` and `severity`), or null for an upload from
+  an older `sonda` that didn't send them (ADR-0016).
 
 A branch's first analysis is its **baseline**: its issues are what was
 there, not new.

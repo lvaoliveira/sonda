@@ -3,6 +3,10 @@
 
 mod c;
 mod common;
+mod cs;
+mod cs_bugs;
+mod cs_security;
+mod cs_smells;
 mod java;
 mod java_bugs;
 mod java_close;
@@ -40,55 +44,61 @@ pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
-pub(super) use crate::lang::{C_CPP, C_ONLY, JAVA, JS_TS, JSX, Lang, PYTHON, TS};
+pub(super) use crate::lang::{C_CPP, C_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, TS};
 pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
 pub(super) use crate::model::Severity::{Blocker, Critical, Info, Major, Minor};
 use std::sync::LazyLock;
 pub(super) use tree_sitter::Node;
 
-/// Every rule, in a fixed order (structural rules first, then by language),
-/// so reports and docs/rules.md stay deterministic.
-pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
-    [
-        common::RULES,
-        js::RULES,
-        js_security::RULES,
-        js_modern::RULES,
-        js_a11y::RULES,
-        js_extra::RULES,
-        js_more::RULES,
-        js_semantic::RULES,
-        py::RULES,
-        py_security::RULES,
-        py_quality::RULES,
-        py_more::RULES,
-        py_extra::RULES,
-        py_cdk::RULES,
-        py_regex::RULES,
-        py_last::RULES,
-        java::RULES,
-        java_security::RULES,
-        java_bugs::RULES,
-        java_smells::RULES,
-        java_more::RULES,
-        java_tests::RULES,
-        java_extra::RULES,
-        java_regex::RULES,
-        java_last::RULES,
-        java_final::RULES,
-        java_tail::RULES,
-        java_rest::RULES,
-        java_flow::RULES,
-        java_end::RULES,
-        java_close::RULES,
-        java_last2::RULES,
-        java_final2::RULES,
-        c::RULES,
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
-});
+/// Every catalog module, in a fixed order (structural rules first, then by
+/// language), so reports and docs/rules.md stay deterministic: its rules,
+/// and which of them are off by default. A module lists its own
+/// off-by-default rules next to their definitions, so a new module only
+/// adds its line here.
+static MODULES: &[(&[Rule], &[&str])] = &[
+    (common::RULES, common::OFF_BY_DEFAULT),
+    (js::RULES, &[]),
+    (js_security::RULES, &[]),
+    (js_modern::RULES, &[]),
+    (js_a11y::RULES, &[]),
+    (js_extra::RULES, &[]),
+    (js_more::RULES, &[]),
+    (js_semantic::RULES, js_semantic::OFF_BY_DEFAULT),
+    (py::RULES, &[]),
+    (py_security::RULES, &[]),
+    (py_quality::RULES, &[]),
+    (py_more::RULES, &[]),
+    (py_extra::RULES, py_extra::OFF_BY_DEFAULT),
+    (py_cdk::RULES, &[]),
+    (py_regex::RULES, &[]),
+    (py_last::RULES, py_last::OFF_BY_DEFAULT),
+    (java::RULES, &[]),
+    (java_security::RULES, &[]),
+    (java_bugs::RULES, &[]),
+    (java_smells::RULES, java_smells::OFF_BY_DEFAULT),
+    (java_more::RULES, &[]),
+    (java_tests::RULES, &[]),
+    (java_extra::RULES, java_extra::OFF_BY_DEFAULT),
+    (java_regex::RULES, java_regex::OFF_BY_DEFAULT),
+    (java_last::RULES, java_last::OFF_BY_DEFAULT),
+    (java_final::RULES, java_final::OFF_BY_DEFAULT),
+    (java_tail::RULES, java_tail::OFF_BY_DEFAULT),
+    (java_rest::RULES, &[]),
+    (java_flow::RULES, java_flow::OFF_BY_DEFAULT),
+    (java_end::RULES, java_end::OFF_BY_DEFAULT),
+    (java_close::RULES, java_close::OFF_BY_DEFAULT),
+    (java_last2::RULES, java_last2::OFF_BY_DEFAULT),
+    (java_final2::RULES, java_final2::OFF_BY_DEFAULT),
+    (c::RULES, &[]),
+    (cs::RULES, cs::OFF_BY_DEFAULT),
+    (cs_security::RULES, &[]),
+    (cs_bugs::RULES, &[]),
+    (cs_smells::RULES, cs_smells::OFF_BY_DEFAULT),
+];
+
+/// Every rule, in `MODULES` order.
+pub static RULES: LazyLock<Vec<&'static Rule>> =
+    LazyLock::new(|| MODULES.iter().flat_map(|(rules, _)| rules.iter()).collect());
 
 /// CWE ids and OWASP categories by rule id.
 pub(super) fn standards(id: &str) -> super::Standards {
@@ -117,157 +127,13 @@ pub(super) fn standards(id: &str) -> super::Standards {
 
 /// Rules that are off unless `rules.enabled` lists them: those outside
 /// SonarQube's default profile that report style choices many codebases
-/// make on purpose.
-pub(super) static OFF_BY_DEFAULT: &[&str] = &[
-    "js/unused-parameter",
-    "js/shadowed-variable",
-    "js/prefer-const",
-    // Pattern matching for instanceof and Stream.toList() need Java 16, and
-    // sonda cannot see which version a project targets.
-    "java/instanceof-then-cast",
-    "java/collectors-to-list",
-    // Style rules that fire on most real Python: every method that skips
-    // self, every untyped signature, every trailing comment. Python 3.14
-    // moved the compression modules, which most projects don't target yet.
-    "py/method-could-be-static",
-    "py/hint-missing-return",
-    "py/hint-missing-parameter",
-    "py/compression-namespace",
-    // Documentation and licence-header policies are a project decision.
-    "py/missing-docstring",
-    "py/missing-license-header",
-    // Formatting rules a formatter or editor config already enforces.
-    "common/trailing-whitespace",
-    "common/line-length",
-    "common/file-length",
-    "common/final-newline",
-    "common/tab-character",
-    "common/trailing-comment",
-    "common/nosonar-comment",
-    "java/package-directory",
-    "java/test-in-production-source",
-    "java/parse-failure",
-    "java/package-info-missing",
-    "java/component-not-scanned",
-    // Java 22 and later syntax and APIs.
-    "java/unnamed-needs-var",
-    "java/record-pattern-unused-component",
-    "java/constructor-prologue-long",
-    "java/validation-after-super",
-    "java/fields-set-after-super",
-    "java/class-transform-name",
-    "java/class-build-for-transform",
-    "java/regex-ascii-letters",
-    // Batch 19: outside SonarQube's default profile, or tied to a newer Java version.
-    "java/irregular-number-pattern",
-    "java/serial-version-blind",
-    "java/bean-validation-misplaced",
-    "java/model-and-view-assertions",
-    "java/high-frame-rate",
-    "java/markdown-comment-html",
-    "java/gatherer-default-combiner",
-    "java/print-then-readln",
-    "java/reverse-copy",
-    // Java style rules outside SonarQube's default profile that fire on most
-    // real code: escaped Unicode, suppressions, public fields, boolean
-    // parameters, legacy collections, brace and else conventions.
-    "java/unicode-escape",
-    "java/suppress-warnings",
-    "java/boolean-selector",
-    "java/public-field",
-    "java/synchronized-collections",
-    "java/if-else-if-without-else",
-    "java/missing-braces",
-    // High-volume conventions outside SonarQube's default profile: test
-    // names, missing Javadoc, ternaries, number formatting, varargs, size
-    // and complexity limits, static imports and pattern compilation.
-    "java/test-method-name",
-    "java/public-api-undocumented",
-    "java/ternary-operator",
-    "java/large-number-underscores",
-    "java/varargs-declared",
-    "java/inner-class-too-long",
-    "java/too-many-returns",
-    "java/private-method-not-static",
-    "java/pattern-compiled-in-method",
-    "java/static-imports-many",
-    "java/method-complexity",
-    "java/too-many-methods",
-    "java/nesting-depth",
-    "java/expression-complexity",
-    // Conventions outside SonarQube's default profile (batch 13): they fire
-    // on nearly every file of a typical code base.
-    "java/exact-alarm",
-    "java/redundant-explicit-type",
-    "java/clock-in-test",
-    "java/collect-with-add",
-    "java/throws-many-checked",
-    "java/throws-checked",
-    "java/qualified-name",
-    "java/one-type-per-file",
-    "java/package-private-field",
-    "java/boolean-method-name",
-    "java/local-constant-name",
-    "java/junit4-import",
-    "java/operator-precedence",
-    "java/increment-in-expression",
-    "java/magic-number",
-    "java/test-assertion-message",
-    // Java 22 syntax: older code bases cannot adopt it.
-    "java/unused-exception-parameter",
-    // Brace layout, member order, licence headers and similar policies: a
-    // project picks one convention (several of these contradict each other).
-    "java/brace-on-its-own-line",
-    "java/brace-at-line-end",
-    "java/else-on-another-line",
-    "java/else-on-the-same-line",
-    "java/closing-brace-not-first",
-    "java/member-order",
-    "java/missing-license-header",
-    "java/functional-interface-redefined",
-    "java/get-class-loader",
-    "java/loops-over-same-collection",
-    "java/lambda-explicit-types",
-    "java/inner-class-static",
-    // Outside SonarQube's default profile.
-    "java/deprecated-call",
-    "java/hash-key-without-hashcode",
-    "java/tree-key-not-comparable",
-    // Batch 17: outside SonarQube's default profile, or tied to a Java version.
-    "java/lazy-static-unsynchronized",
-    "java/float-arithmetic",
-    "java/redundant-nullability",
-    "java/collect-redundant",
-    "java/enum-equals",
-    "java/random-test-data",
-    "java/location-manager-updates",
-    "java/bluetooth-low-latency",
-    "java/private-fields-no-constructor",
-    "java/declared-too-early",
-    "java/class-could-be-record",
-    // Batch 18: outside SonarQube's default profile, or tied to a newer Java version.
-    "java/indentation-inconsistent",
-    "java/equals-asymmetric",
-    "java/catch-exception-needlessly",
-    "java/list-search-in-loop",
-    "java/concrete-parameter",
-    "java/annotation-default-passed",
-    "java/serializable-optional-field",
-    "java/test-swallows-everything",
-    "java/component-field-not-injected",
-    "java/record-accessor-override",
-    "java/gyroscope-sensor",
-    "java/switch-to-expression",
-    "java/import-order",
-    "java/record-pattern",
-    "java/single-if-in-pattern-case",
-    "java/extra-comment-slashes",
-    "java/gatherer-initializer",
-    "java/gatherer-default-finisher",
-    "java/class-builder-method-body",
-    "java/text-block-in-expression",
-    "java/one-line-text-block",
-];
+/// make on purpose. Each module lists its own (`OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    MODULES
+        .iter()
+        .flat_map(|(_, off)| off.iter().copied())
+        .collect()
+});
 
 // ---------------------------------------------------- shared filters
 
@@ -308,4 +174,23 @@ pub(super) fn has_string_literal_operand(node: Node, _: &[u8]) -> bool {
 pub(super) fn no_arguments(node: Node, _: &[u8]) -> bool {
     node.child_by_field_name("arguments")
         .is_some_and(|a| a.named_child_count() == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A module lists only its own rules as off by default, so the list
+    /// stays next to the rules it describes.
+    #[test]
+    fn modules_list_only_their_own_rules_as_off_by_default() {
+        for (rules, off) in MODULES {
+            for id in *off {
+                assert!(
+                    rules.iter().any(|r| r.id == *id),
+                    "{id} is off by default in a module that doesn't define it"
+                );
+            }
+        }
+    }
 }

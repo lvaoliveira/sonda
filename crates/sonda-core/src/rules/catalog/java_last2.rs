@@ -10,6 +10,20 @@ use super::java_security::{call_arguments, find_node, method_name, string_value,
 use super::java_smells::{children_of_kind, count_word, declarator_names, enclosing_class};
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    "java/irregular-number-pattern",
+    "java/serial-version-blind",
+    "java/bean-validation-misplaced",
+    "java/model-and-view-assertions",
+    "java/high-frame-rate",
+    "java/markdown-comment-html",
+    "java/gatherer-default-combiner",
+    "java/print-then-readln",
+    "java/reverse-copy",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/inner-class-super-call",

@@ -127,7 +127,7 @@ impl Default for ScanConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RulesConfig {
     /// Rules that are off by default to turn on.
