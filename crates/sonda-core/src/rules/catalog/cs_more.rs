@@ -31,7 +31,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[related("S1244")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(binary_expression right: (_)) @match",
+            // The sides are checked in the filter: constraining `right:` keeps a
+            // pending match per level of a long `a - b - ...` chain.
+            query: "(binary_expression) @match",
             filter: Some(Keep(compares_fraction_exactly)),
         },
         example: Some(Example {

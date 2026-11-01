@@ -248,8 +248,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1121")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(assignment_expression) @match",
-            filter: Some(Keep(is_nested_assignment)),
+            // Matched from the parent: calling parent() on each assignment of
+            // an `a = b = c = ...` chain costs its depth, which is quadratic.
+            query: "(_ (assignment_expression)) @match",
+            filter: Some(Find(nested_assignment)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -1153,15 +1155,13 @@ fn is_contextual_keyword(name: Node, src: &[u8]) -> bool {
     )
 }
 
-fn is_nested_assignment(node: Node, src: &[u8]) -> bool {
+fn nested_assignment<'t>(parent: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut cursor = parent.walk();
     // `return cache ??= new();` is the lazy-initialization idiom.
-    if operator_text(node, src) == b"??=" {
-        return false;
-    }
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    match parent.kind() {
+    let assignment = parent
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "assignment_expression" && operator_text(*c, src) != b"??=")?;
+    let nested = match parent.kind() {
         "expression_statement"
         | "for_statement"
         | "assignment_expression"
@@ -1178,7 +1178,8 @@ fn is_nested_assignment(node: Node, src: &[u8]) -> bool {
             .and_then(|b| b.parent())
             .is_some_and(|w| matches!(w.kind(), "while_statement" | "do_statement")),
         _ => true,
-    }
+    };
+    nested.then_some(assignment)
 }
 
 fn comparable_without_operators<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
