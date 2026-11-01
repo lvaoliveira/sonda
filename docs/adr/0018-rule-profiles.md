@@ -1,6 +1,6 @@
 # ADR-0018: Rule profiles on the server, applied by the scanner
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-11-01
 - Completes the roadmap's "Server-managed rule profiles"; builds on ADR-0016
 
