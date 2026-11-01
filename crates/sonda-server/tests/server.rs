@@ -85,6 +85,25 @@ async fn health_is_ok_when_the_database_answers() {
 }
 
 #[tokio::test]
+async fn every_response_carries_a_request_id() {
+    use tower::ServiceExt;
+    let app = http::router(state(unreachable_pool()), None);
+    for path in ["/api/health", "/api/no-such-route"] {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let id = response.headers()["x-request-id"].to_str().unwrap();
+        assert_eq!(id.len(), 32, "{path}: {id}");
+    }
+}
+
+#[tokio::test]
 async fn health_is_503_when_the_database_is_down() {
     let (status, _) = get(http::router(state(unreachable_pool()), None), "/api/health").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

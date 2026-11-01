@@ -6,8 +6,8 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, deleted_projects, dependencies, drill, gates, ingest,
-    issues, new_code, overview, profiles, project_settings, projects, review, rule_settings, rules,
-    security, session, throttle, tokens,
+    issues, new_code, observability, overview, profiles, project_settings, projects, review,
+    rule_settings, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -166,6 +166,8 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         StatusCode::REQUEST_TIMEOUT,
         Duration::from_secs(30),
     ))
+    // Outermost, so timeouts are logged and the duration includes them.
+    .layer(middleware::from_fn(observability::log_request))
 }
 
 /// For load balancers and `docker compose`: 200 when the database answers.
