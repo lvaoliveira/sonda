@@ -231,6 +231,11 @@ fn encode_response(result: &Result<FileAnalysis, FileError>) -> Vec<u8> {
         e.u64(t.hash);
         e.usize(t.line);
     }
+    e.usize(a.facts.len());
+    for (k, v) in &a.facts {
+        e.str(k);
+        e.str(v);
+    }
     e.u8(u8::from(a.has_syntax_errors));
     e.u8(u8::from(a.semantic_incomplete));
     e.digest(&a.sha256);
@@ -303,6 +308,10 @@ fn decode_response(
             line: d.usize()?,
         });
     }
+    let mut facts = Vec::with_capacity(d.count(16)?);
+    for _ in 0..facts.capacity() {
+        facts.push((d.str()?.to_string(), d.str()?.to_string()));
+    }
     let flag = |b: u8| match b {
         0 => Ok(false),
         1 => Ok(true),
@@ -319,6 +328,7 @@ fn decode_response(
         metrics,
         code_lines,
         tokens,
+        facts,
         has_syntax_errors,
         semantic_incomplete,
         sha256,
@@ -837,6 +847,7 @@ mod tests {
         }
         e.usize(0);
         e.usize(0);
+        e.usize(0); // facts
         e.u8(0); // syntax errors
         e.u8(0); // semantic analysis incomplete
         e.digest(&Digest([0; 32]));

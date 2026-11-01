@@ -227,6 +227,15 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
+- Rule settings on the server (ADR-0016): admins turn a rule off for every
+  project or for one (`PUT /api/rule-settings`,
+  `PUT /api/projects/{key}/rule-settings`), and a project can turn back on
+  a rule that's off globally. Its findings stay stored but leave issue
+  lists, measures, ratings, counts and the gate, which CI follows; changes
+  recount the latest analyses. `GET /api/projects/{key}/rule-settings`
+  shows every rule's state for a project with what set it, the
+  repository's `sonda.toml` included, conflicts and changes over time, and
+  `GET /api/rules` says where each rule is off.
 - The JSON report carries `rule_settings`, the `[rules]` settings of
   `sonda.toml` the scan ran with, and the server stores them with each
   analysis (`ruleSettings` in `GET /api/analyses/{id}`), the first step of
