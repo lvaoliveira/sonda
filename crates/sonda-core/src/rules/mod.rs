@@ -26,6 +26,8 @@ pub(crate) const JAVA_PACKAGE_DIRECTORY: &str = "java/package-directory";
 pub(crate) const JAVA_TEST_IN_MAIN: &str = "java/test-in-production-source";
 pub(crate) const JAVA_ASSERTION_IN_MAIN: &str = "java/assertion-in-production";
 pub(crate) const JAVA_PARSE_FAILURE: &str = "java/parse-failure";
+pub(crate) const JAVA_PACKAGE_INFO_MISSING: &str = "java/package-info-missing";
+pub(crate) const JAVA_PACKAGE_INFO_ONLY: &str = "java/package-info-only";
 pub(crate) const COMMENTED_OUT_CODE: &str = "common/commented-out-code";
 
 /// Extra check on the node captured as `@match`.

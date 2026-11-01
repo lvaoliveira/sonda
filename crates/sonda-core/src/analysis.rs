@@ -214,6 +214,76 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// An issue that belongs to a file as a whole, found by looking at the project.
+fn project_issue(rule: &ActiveRule, path: &str, message: String) -> Issue {
+    let mut hasher = sha2::Sha256::new();
+    for field in ["sonda-fingerprint-v1", rule.rule.id, path] {
+        hasher.update((field.len() as u64).to_le_bytes());
+        hasher.update(field.as_bytes());
+    }
+    let hash = hasher.finalize();
+    let mut short = [0; 16];
+    short.copy_from_slice(&hash[..16]);
+    Issue {
+        rule: rule.rule.id,
+        severity: rule.severity,
+        category: rule.rule.category,
+        message,
+        path: path.to_string(),
+        line: 1,
+        column: 1,
+        end_line: 1,
+        end_column: 1,
+        effort_minutes: rule.rule.effort_minutes,
+        is_new: true,
+        fingerprint: Digest(short),
+    }
+}
+
+/// Rules about Java packages, which only the whole project can answer: a
+/// directory of Java files has a package-info.java, or has nothing else.
+pub(crate) fn java_package_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    let missing = rules.get(rules::JAVA_PACKAGE_INFO_MISSING);
+    let only = rules.get(rules::JAVA_PACKAGE_INFO_ONLY);
+    if missing.is_none() && only.is_none() {
+        return;
+    }
+    let mut dirs: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, f) in files.iter().enumerate() {
+        if f.lang == Lang::Java {
+            let dir = f.path.rsplit_once('/').map_or("", |(d, _)| d);
+            dirs.entry(dir.to_string()).or_default().push(i);
+        }
+    }
+    for members in dirs.values() {
+        let is_info = |i: &usize| files[*i].path.ends_with("package-info.java");
+        let infos: Vec<usize> = members.iter().copied().filter(is_info).collect();
+        let others = members.len() - infos.len();
+        if infos.is_empty()
+            && others > 0
+            && let Some(rule) = missing
+        {
+            let first = members[0];
+            let issue = project_issue(
+                rule,
+                &files[first].path,
+                "Add a package-info.java to document this package.".into(),
+            );
+            files[first].issues.push(issue);
+        } else if others == 0
+            && let (Some(rule), Some(&info)) = (only, infos.first())
+        {
+            let issue = project_issue(
+                rule,
+                &files[info].path,
+                "Remove this package: it holds only its package-info.java.".into(),
+            );
+            files[info].issues.push(issue);
+        }
+    }
+}
+
 /// Rules about a Java file's place in the project, which need its path.
 fn scan_java_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mut Vec<Issue>) {
     if lang != Lang::Java {

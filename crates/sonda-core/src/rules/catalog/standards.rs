@@ -191,6 +191,9 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/xml-signature-validation", &[347], &[A02]),
     ("java/entity-bound-to-request", &[915], &[A08]),
     ("java/saml-comments", &[287], &[A07]),
+    ("java/bean-populated-from-request", &[915], &[A03, A08]),
+    ("java/user-enumeration", &[200, 203], &[A01]),
+    ("java/permit-all", &[285], &[A01]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
 ];

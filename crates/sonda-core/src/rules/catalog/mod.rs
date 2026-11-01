@@ -11,6 +11,7 @@ mod java_extra;
 mod java_final;
 mod java_flow;
 mod java_last;
+mod java_last2;
 mod java_more;
 mod java_regex;
 mod java_rest;
@@ -79,6 +80,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_flow::RULES,
         java_end::RULES,
         java_close::RULES,
+        java_last2::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -143,6 +145,18 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/package-directory",
     "java/test-in-production-source",
     "java/parse-failure",
+    "java/package-info-missing",
+    "java/regex-ascii-letters",
+    // Batch 19: outside SonarQube's default profile, or tied to a newer Java version.
+    "java/irregular-number-pattern",
+    "java/serial-version-blind",
+    "java/bean-validation-misplaced",
+    "java/model-and-view-assertions",
+    "java/high-frame-rate",
+    "java/markdown-comment-html",
+    "java/gatherer-default-combiner",
+    "java/print-then-readln",
+    "java/reverse-copy",
     // Java style rules outside SonarQube's default profile that fire on most
     // real code: escaped Unicode, suppressions, public fields, boolean
     // parameters, legacy collections, brace and else conventions.

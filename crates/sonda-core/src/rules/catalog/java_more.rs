@@ -766,7 +766,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 10,
-        sonar: &[exact("S2925")],
+        sonar: &[exact("S2925"), exact("S5973")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_invocation object: (identifier) @o name: (identifier) @n (#eq? @o "Thread") (#eq? @n "sleep")) @match"#,

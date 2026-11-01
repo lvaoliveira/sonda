@@ -506,3 +506,10 @@ pub(super) fn repeats_an_alternation(r: &Regex) -> bool {
 pub(super) fn control_escape_out_of_range(r: &Regex) -> bool {
     r.bad_controls > 0
 }
+
+pub(super) fn has_ascii_letter_class(r: &Regex) -> bool {
+    any_node(r, |n| {
+        matches!(n, Rx::Class { negated: false, items }
+            if items.contains(&ClassItem::Range('a', 'z')) && items.contains(&ClassItem::Range('A', 'Z')))
+    })
+}

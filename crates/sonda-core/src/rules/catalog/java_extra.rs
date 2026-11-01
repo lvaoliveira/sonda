@@ -138,7 +138,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 2,
-        sonar: &[exact("S6213")],
+        sonar: &[exact("S6213"), related("S1190")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(local_variable_declaration declarator: (variable_declarator name: (identifier) @match (#any-of? @match "yield" "record" "sealed")))
