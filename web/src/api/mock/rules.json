@@ -34,6 +34,8 @@
       "severity": "critical",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 7,
       "projects": 3,
       "tags": [
@@ -70,6 +72,8 @@
       "severity": "blocker",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 3,
       "projects": 2,
       "tags": [
@@ -106,6 +110,8 @@
       "severity": "critical",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 2,
       "projects": 1,
       "tags": [
@@ -142,6 +148,8 @@
       "severity": "critical",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 4,
       "projects": 2,
       "tags": [
@@ -179,6 +187,8 @@
       "severity": "critical",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 2,
       "projects": 2,
       "tags": [
@@ -209,6 +219,8 @@
       "severity": "major",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 23,
       "projects": 4,
       "tags": [
@@ -232,6 +244,8 @@
       "severity": "major",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 41,
       "projects": 6,
       "tags": [
@@ -254,6 +268,8 @@
       "severity": "minor",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 88,
       "projects": 9,
       "tags": [
@@ -276,6 +292,8 @@
       "severity": "major",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 57,
       "projects": 5,
       "tags": [
@@ -298,6 +316,8 @@
       "severity": "major",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 132,
       "projects": 6,
       "tags": [
@@ -320,6 +340,8 @@
       "severity": "minor",
       "effortMinutes": 15,
       "onByDefault": false,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 6,
       "projects": 2,
       "tags": [
@@ -342,6 +364,8 @@
       "severity": "minor",
       "effortMinutes": 15,
       "onByDefault": true,
+      "serverOff": null,
+      "offIn": null,
       "openIssues": 0,
       "projects": 0,
       "tags": [

@@ -305,6 +305,10 @@ export interface Rule {
   effortMinutes: number
   /** False for rules a repository must list in `rules.enabled`. */
   onByDefault: boolean
+  /** Set when the server turns it off for every project (ADR-0016). */
+  serverOff: RuleSettingChange | null
+  /** In how many projects it's off, by what turned it off; null when on everywhere. */
+  offIn: { sondaToml: number; server: number } | null
   /** Open or confirmed issues on each project's main branch. */
   openIssues: number
   projects: number
@@ -318,6 +322,53 @@ export interface Rule {
   noncompliant: string | null
   compliant: string | null
 }
+
+/** Who changed a rule setting on the server, when, and why. */
+export interface RuleSettingChange {
+  note: string | null
+  changedBy: string
+  changedAt: string
+}
+
+/** What decided a rule's state for a project (ADR-0016). */
+export type RuleSetBy = 'default' | 'sonda_toml' | 'server' | 'project'
+
+export interface ProjectRuleState {
+  rule: string
+  name: string
+  on: boolean
+  setBy: RuleSetBy
+  /** The server setting that decided it. */
+  change: RuleSettingChange | null
+  /** The severity sonda.toml gives it, when it changes the default. */
+  severity: Severity | null
+  /** The server says on, but the scanner never runs it. */
+  conflict: boolean
+  /** Open findings on the main branch the server leaves out. */
+  hiddenIssues: number
+  /** This project's own server setting. */
+  projectSetting: 'on' | 'off' | null
+}
+
+/** sonda.toml's `[rules]`, as an analysis recorded them. */
+export interface SondaTomlRules {
+  disabled: string[]
+  enabled: string[]
+  severity: Record<string, Severity>
+}
+
+export interface ProjectRules {
+  project: string
+  mainBranch: string
+  /** From the main branch's latest analysis; null when unknown (an older sonda). */
+  sondaToml: SondaTomlRules | null
+  /** Every rule whose state differs from its default for this project. */
+  rules: ProjectRuleState[]
+  /** When the repository changed its settings, newest first. */
+  tomlChanges: { analysisId: number; sha: string; at: string; rule: string; change: 'disabled' | 're-enabled' | 'enabled' | 'unset' | 'severity' }[]
+}
+
+export type ProjectRuleSetting = 'on' | 'off' | 'inherit'
 
 export interface RuleCatalog {
   total: number
@@ -975,6 +1026,12 @@ export interface SondaApi {
   issue(id: number): Promise<IssueDetail>
   updateIssue(id: number, patch: IssuePatch): Promise<IssueDetail>
   rules(): Promise<RuleCatalog>
+  /** Every rule whose state differs from its default for the project, and what set it. */
+  projectRules(key: string): Promise<ProjectRules>
+  /** Admins: off for every project, or back on. */
+  setRuleOff(rule: string, off: boolean, note?: string): Promise<void>
+  /** Admins: on or off for one project, over the global setting, or `inherit` to follow it. */
+  setProjectRule(key: string, rule: string, state: ProjectRuleSetting, note?: string): Promise<void>
 }
 
 /** The session is missing or expired: the app shows sign-in again. */
