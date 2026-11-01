@@ -843,7 +843,7 @@ pub(super) fn operand(node: Node) -> Option<Node> {
 }
 
 /// Text with whitespace removed, to compare code that differs only in layout.
-fn squeezed(node: Node, src: &[u8]) -> Vec<u8> {
+pub(super) fn squeezed(node: Node, src: &[u8]) -> Vec<u8> {
     text(node, src)
         .iter()
         .copied()

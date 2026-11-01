@@ -884,7 +884,7 @@ fn route_templates<'t>(declaration: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
 }
 
 /// Is this PascalCase, with acronyms of at most two capitals?
-fn is_pascal_case(name: &[u8]) -> bool {
+pub(super) fn is_pascal_case(name: &[u8]) -> bool {
     if name.is_empty() || !name[0].is_ascii_uppercase() || name.contains(&b'_') {
         return false;
     }
