@@ -261,6 +261,12 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Project settings (ADR-0017): each project has a **Settings** page, linked
+  from its page, where admins give it a display name (screens show it with
+  the key under it; the key never changes) and choose its main branch among
+  the branches with analyses, which every screen then counts and where new
+  code starts over. Members read them, and each change is recorded with who
+  made it (`GET`/`PATCH /api/projects/{key}/settings`).
 - Web app: a **Quality profiles** page, under Configure (ADR-0018): each
   profile, the default, built in, and the projects using it, with its rules
   in the Rules page's structure (search, language, type, and whether the

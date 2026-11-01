@@ -1,4 +1,4 @@
-import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type ProjectSettingChange, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
@@ -8,7 +8,7 @@ import { GATES } from './gates'
 import { SECURITY } from './security'
 import { coverageList, fileCoverage } from './coverage'
 import { dependencyList, reviewDependency } from './dependencies'
-import { PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
+import { BRANCHES, clearNewCodePeriod, type MockProjectSettings, PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
 import { queryIssues } from './query'
 import { securityReview } from './review'
 import { mockRuleSettings } from './ruleSettings'
@@ -45,6 +45,29 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const tokens = mockTokens()
   const ruleSettings = mockRuleSettings()
   const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
+  // Each project's settings and their changes (ADR-0017), newest first.
+  const settings = new Map<string, MockProjectSettings & { changes: ProjectSettingChange[] }>()
+  const settingsOf = (key: string) => {
+    if (!projectKeys.includes(key)) throw new Error('not found')
+    let s = settings.get(key)
+    if (!s) settings.set(key, (s = { name: null, mainBranch: 'main', changes: [] }))
+    return s
+  }
+  /** What the project list shows of them. */
+  const shown = (key: string) => {
+    const s = settings.get(key)
+    return s ? { name: s.name, mainBranch: s.mainBranch } : {}
+  }
+  const settingsView = (key: string): ProjectSettings => {
+    const s = settingsOf(key)
+    return {
+      key,
+      name: s.name,
+      mainBranch: s.mainBranch,
+      branches: [...BRANCHES].sort((a, b) => Number(b.name === s.mainBranch) - Number(a.name === s.mainBranch)),
+      changes: s.changes,
+    }
+  }
   const findRule = (id: string) => {
     if (!catalog.rules.some((r) => r.id === id)) throw new Error(`unknown rule "${id}" (see GET /api/rules)`)
   }
@@ -232,6 +255,28 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       guard()
       return wait(setNewCodePeriod(project, analysis))
     },
+    projectSettings: async (project) => {
+      guard()
+      return wait(settingsView(project))
+    },
+    updateProjectSettings: async (project, patch) => {
+      requireAdmin()
+      const s = settingsOf(project)
+      // As the server does: a trimmed name, null when empty, and a main branch with analyses.
+      const name = patch.name === undefined ? s.name : patch.name?.trim() || null
+      if (name && name.length > 100) throw new Error('a project name is at most 100 characters')
+      const main = patch.mainBranch ?? s.mainBranch
+      if (!BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
+      const by = session.user!.username
+      const at = new Date().toISOString()
+      if (name !== s.name) s.changes.unshift({ setting: 'name', old: s.name, new: name, by, at })
+      if (main !== s.mainBranch) {
+        s.changes.unshift({ setting: 'main_branch', old: s.mainBranch, new: main, by, at })
+        clearNewCodePeriod(project)
+      }
+      Object.assign(s, { name, mainBranch: main })
+      return wait(settingsView(project))
+    },
     reviewDependency: async (_project, patch) => {
       guard()
       return wait(reviewDependency(patch, 'mara'))
@@ -248,11 +293,11 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     projects: async () => {
       guard()
-      return wait(PROJECT_LIST)
+      return wait({ ...PROJECT_LIST, projects: PROJECT_LIST.projects.map((p) => ({ ...p, ...shown(p.key) })) })
     },
     project: async (key, branch) => {
       guard()
-      const detail = projectDetail(key, branch)
+      const detail = projectDetail(key, branch, settings.get(key))
       if (!detail) throw new Error('not found')
       return wait(detail)
     },

@@ -58,7 +58,7 @@ function Projects({ list }: { list: ProjectList }) {
 
   const searched = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return list.projects.filter((p) => (!needle || p.key.toLowerCase().includes(needle)) && (!lang || p.languages.includes(lang)))
+    return list.projects.filter((p) => (!needle || `${p.key} ${p.name ?? ''}`.toLowerCase().includes(needle)) && (!lang || p.languages.includes(lang)))
   }, [list.projects, q, lang])
   const rows = useMemo(() => {
     const compare = SORTS.find((s) => s.value === sort)!.compare
@@ -200,9 +200,10 @@ function ProjectTable({ rows, total }: { rows: ProjectRow[]; total: number }) {
                 <td className={`${td} px-5`}>
                   <span className="flex min-w-0 flex-col leading-[1.3]">
                     <Link to={`/projects/${encodeURIComponent(p.key)}`} onClick={(e) => e.stopPropagation()} className="text-sm font-semibold text-fg">
-                      {p.key}
+                      {p.name ?? p.key}
                     </Link>
                     <span className="text-xs text-fg-faint">
+                      {p.name && <Mono className="text-[11px]">{p.key} · </Mono>}
                       <Mono className="text-[11px]">{p.mainBranch}</Mono>
                       {p.languages.length > 0 && ` · ${p.languages.map(languageLabel).join(', ')}`}
                     </span>

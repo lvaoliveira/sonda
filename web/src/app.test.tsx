@@ -945,6 +945,48 @@ describe('Rule settings', () => {
   })
 })
 
+describe('Project settings', () => {
+  it('lets admins name a project and choose its main branch, from its page', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi(0)
+    renderAt('/projects/payments-platform', api)
+    await user.click(await screen.findByRole('link', { name: 'Settings' }))
+    const general = await screen.findByRole('region', { name: 'General' })
+    expect(screen.getByRole('region', { name: 'Changes' })).toHaveTextContent('No changes yet.')
+
+    const name = within(general).getByRole('textbox', { name: 'Display name' })
+    expect(within(general).getByRole('button', { name: 'Save name' })).toBeDisabled()
+    await user.type(name, '  Payments platform ')
+    await user.click(within(general).getByRole('button', { name: 'Save name' }))
+    await waitFor(() => expect(screen.getByRole('list', { name: 'Setting changes' })).toHaveTextContent('Named “Payments platform”by mara'))
+
+    // Choosing another branch says what changes before it's saved.
+    await user.selectOptions(within(general).getByRole('combobox', { name: 'Main branch' }), 'release/2.4')
+    expect(within(general).getByRole('status')).toHaveTextContent('Every screen counts release/2.4 instead of main at once')
+    await user.click(within(general).getByRole('button', { name: 'Make it the main branch' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Setting changes' })).getAllByRole('listitem')[0]).toHaveTextContent('Main branch main → release/2.4'))
+    expect(within(general).queryByRole('status')).not.toBeInTheDocument()
+
+    // The project's page and the list show the name, with the key under it.
+    await user.click(screen.getByRole('link', { name: 'Payments platform' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Payments platform' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toHaveValue('release/2.4')
+    const list = await api.projects()
+    expect(list.projects.find((p) => p.key === 'payments-platform')).toMatchObject({ name: 'Payments platform', mainBranch: 'release/2.4' })
+  })
+
+  it('is read-only for members', async () => {
+    const api = createMockApi(0)
+    const shell = api.shell
+    renderAt('/projects/payments-platform/settings', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
+    const general = await screen.findByRole('region', { name: 'General' })
+    expect(within(general).queryByRole('textbox')).not.toBeInTheDocument()
+    expect(within(general).queryByRole('button')).not.toBeInTheDocument()
+    expect(general).toHaveTextContent('None: screens show the key.')
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' }).parentElement).toHaveTextContent('only admins can change these')
+  })
+})
+
 describe('Quality profiles', () => {
   it('lets admins create a profile, set its rules, copy, rename, make it the default and delete it', async () => {
     const user = userEvent.setup()
