@@ -417,6 +417,29 @@ them, and each change is recorded with who made it, from what to what.
 | `GET /api/projects/{key}/settings` | `name`, `mainBranch`, the `branches` with analyses (how many, and the latest's time), and the last 50 `changes`, newest first. |
 | `PATCH /api/projects/{key}/settings` `{"name": "Payments", "mainBranch": "develop"}` | Admins: either or both; `"name": null` removes the name. A name over 100 characters, or a branch without analyses, is a `422`. |
 
+#### Deleting a project
+
+Admins delete a project in its Settings page's Danger zone, by typing its
+key. It's permanent: its analyses, issues and their history, sources (file
+contents no other project's analyses share), dependencies, reviews and
+settings. Its project analysis tokens are revoked, recorded as revoked by
+that admin.
+
+**Its key is then refused.** Uploads create a project the first time they
+see a key, so a forgotten pipeline would bring a deleted project back,
+empty. Instead, uploads to it are a `403` saying who deleted it and when,
+and `sonda scan --upload` fails before scanning, when it fetches the
+project's rule settings. A project analysis token for the key can't be
+generated either. An admin allows the key again on the Administration
+page, which lists every deleted project with who deleted it and when; the
+next upload then starts a new project.
+
+| Endpoint | |
+|---|---|
+| `DELETE /api/projects/{key}` `{"confirm": "<key>"}` | Admins: deletes it; answers the deletion record. Any other `confirm` is a `422`. |
+| `GET /api/deleted-projects` | Admins: deleted projects, newest first: `key`, `name`, `analyses`, `deletedBy`, `deletedAt`, and `allowedBy`/`allowedAt` once its key is allowed again. |
+| `POST /api/deleted-projects/{id}/allow` | Admins: uploads to the key work again. |
+
 ## Quality gates
 
 `GET /api/gates` lists the quality gates projects use, read-only. A gate is

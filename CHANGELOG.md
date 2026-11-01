@@ -261,6 +261,14 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Deleting a project (ADR-0017): admins delete one in its Settings page's
+  Danger zone by typing its key. Its analyses, issues, sources it alone
+  had, dependencies, reviews and settings go, and its project analysis
+  tokens are revoked. Its key is then refused, so a forgotten pipeline
+  can't bring it back: uploads get a `403` saying who deleted it, and
+  `sonda scan --upload` fails before scanning. The Administration page
+  lists deleted projects, and admins allow a key again there
+  (`DELETE /api/projects/{key}`, `/api/deleted-projects`).
 - Project settings (ADR-0017): each project has a **Settings** page, linked
   from its page, where admins give it a display name (screens show it with
   the key under it; the key never changes) and choose its main branch among

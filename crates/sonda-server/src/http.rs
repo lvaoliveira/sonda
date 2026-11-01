@@ -5,9 +5,9 @@ use crate::api::{ApiError, Caller};
 use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
-    analyses, api, components, coverage, db, dependencies, drill, gates, ingest, issues, new_code,
-    overview, profiles, project_settings, projects, review, rule_settings, rules, security,
-    session, throttle, tokens,
+    analyses, api, components, coverage, db, deleted_projects, dependencies, drill, gates, ingest,
+    issues, new_code, overview, profiles, project_settings, projects, review, rule_settings, rules,
+    security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -106,6 +106,12 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
         .route("/projects/{key}/settings", patch(project_settings::patch))
+        .route("/projects/{key}", delete(deleted_projects::delete))
+        .route("/deleted-projects", get(deleted_projects::list))
+        .route(
+            "/deleted-projects/{id}/allow",
+            post(deleted_projects::allow),
+        )
         .route("/rule-settings", put(rule_settings::put_global))
         .route("/rule-profiles", post(profiles::post))
         .route(
