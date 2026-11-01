@@ -6,8 +6,8 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, dependencies, drill, gates, ingest, issues, new_code,
-    overview, profiles, projects, review, rule_settings, rules, security, session, throttle,
-    tokens,
+    overview, profiles, project_settings, projects, review, rule_settings, rules, security,
+    session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -59,6 +59,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         )
         .route("/projects/{key}/coverage", get(coverage::get_coverage))
         .route("/projects/{key}/rules", get(rule_settings::get_project))
+        .route("/projects/{key}/settings", get(project_settings::get))
         .route(
             "/projects/{key}/coverage/file",
             get(coverage::get_file_coverage),
@@ -104,6 +105,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
     let admin = Router::new()
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
+        .route("/projects/{key}/settings", patch(project_settings::patch))
         .route("/rule-settings", put(rule_settings::put_global))
         .route("/rule-profiles", post(profiles::post))
         .route(

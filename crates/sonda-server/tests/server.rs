@@ -40,6 +40,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "issue_events",
             "issues",
             "new_code_resets",
+            "project_changes",
             "project_rule_settings",
             "projects",
             "rule_profile_rules",

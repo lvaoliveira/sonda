@@ -24,6 +24,7 @@ function score(levels: Level[], coverage: number | null): number {
 
 const projects: ProjectRow[] = ROWS.map(([key, languages, gate, [reliability, security, maintainability], coverage, duplication, issues, ncloc, hoursAgo]) => ({
   key,
+  name: null,
   mainBranch: 'main',
   languages,
   gate,
@@ -43,15 +44,28 @@ export const PROJECT_LIST: ProjectList = {
   languages: ['python', 'java', 'go', 'typescript', 'rust', 'javascript'],
 }
 
+/** The mock projects' branches, as analyzed. */
+export const BRANCHES = [
+  { name: 'main', analyses: 12, analyzedAt: new Date(NOW - 12 * 60_000).toISOString(), ago: '12m' },
+  { name: 'release/2.4', analyses: 3, analyzedAt: new Date(NOW - 48 * 3_600_000).toISOString(), ago: '2d' },
+]
+
+/** A project's settings (ADR-0017), as an admin left them. */
+export interface MockProjectSettings {
+  name: string | null
+  mainBranch: string
+}
+
 /** A plausible project page for any listed project; null for unknown keys. */
-export function projectDetail(key: string, branch?: string): ProjectDetail | null {
+export function projectDetail(key: string, branch?: string, settings?: MockProjectSettings): ProjectDetail | null {
   const p = projects.find((r) => r.key === key)
   if (!p) return null
+  const main = settings?.mainBranch ?? p.mainBranch
   const branches = [
     { name: 'main', gate: p.gate, ago: '12m' },
     { name: 'release/2.4', gate: 'passed' as GateState, ago: '2d' },
-  ]
-  const on = branch ?? p.mainBranch
+  ].sort((a, b) => Number(b.name === main) - Number(a.name === main))
+  const on = branch ?? main
   if (!branches.some((b) => b.name === on)) throw new Error(`branch "${on}" has no analyses; analyzed branches: main, release/2.4`)
   // Only the main branch fails; the release branch passes.
   const failing = p.gate === 'failed' && on === 'main'
@@ -70,7 +84,8 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
   const dirs = p.key === 'payments-platform' ? ['services', 'packages', 'proto', 'tools'] : ['src', 'test', 'scripts']
   return {
     key: p.key,
-    mainBranch: p.mainBranch,
+    name: settings?.name ?? p.name,
+    mainBranch: main,
     branch: on,
     branches,
     languages: p.languages.map((id, i) => ({ id, ncloc: Math.round(p.ncloc / 2 ** (i + 1)) })),
@@ -106,8 +121,8 @@ export function projectDetail(key: string, branch?: string): ProjectDetail | nul
       debtMinutes: 4_000 / (i + 1),
     })),
     // A release branch analyzed before lockfiles were read.
-    dependencies: on === p.mainBranch ? DEPENDENCY_SUMMARY : null,
-    newCodePeriod: on === p.mainBranch ? newCodePeriod(p.key, history) : null,
+    dependencies: on === main ? DEPENDENCY_SUMMARY : null,
+    newCodePeriod: on === main ? newCodePeriod(p.key, history) : null,
   }
 }
 
@@ -130,6 +145,11 @@ function newCodePeriod(key: string, history: ProjectHistoryPoint[]): NewCodePeri
     // Projects without coverage keep the scan's (empty) value.
     fromScan: key === 'payments-platform' ? ['new_duplicated_lines_density'] : ['new_coverage', 'new_duplicated_lines_density'],
   }
+}
+
+/** As the server does when the main branch changes: new code starts over on it. */
+export function clearNewCodePeriod(key: string) {
+  PERIODS.delete(key)
 }
 
 /** As the server does: admins only, and only an analysis of the main branch. */
