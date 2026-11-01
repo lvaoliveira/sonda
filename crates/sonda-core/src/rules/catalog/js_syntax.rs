@@ -1164,7 +1164,7 @@ pub(super) static RULES: &[Rule] = &[
 
 // ------------------------------------------------------------- helpers
 
-fn is_function_kind(kind: &str) -> bool {
+pub(super) fn is_function_kind(kind: &str) -> bool {
     matches!(
         kind,
         "function_declaration"
@@ -1186,7 +1186,7 @@ fn is_loop_kind(kind: &str) -> bool {
 }
 
 /// The ancestors of `node` up to, not including, the enclosing function.
-fn ancestors_in_function(node: Node) -> Vec<Node> {
+pub(super) fn ancestors_in_function(node: Node) -> Vec<Node> {
     let mut out = Vec::new();
     let mut cur = node.parent();
     while let Some(p) = cur {
@@ -1199,7 +1199,7 @@ fn ancestors_in_function(node: Node) -> Vec<Node> {
     out
 }
 
-fn root_node(node: Node) -> Node {
+pub(super) fn root_node(node: Node) -> Node {
     let mut cur = node;
     while let Some(p) = cur.parent() {
         cur = p;
@@ -1209,7 +1209,7 @@ fn root_node(node: Node) -> Node {
 
 /// Visits every descendant of `node`; `visit` returns false to skip a
 /// node's children.
-fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
+pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if visit(child) {

@@ -27,6 +27,8 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("js/command-path", &[426, 427], &[A08]),
     ("js/hardcoded-password", &[259, 798], &[A07]),
     ("js/iam-action-wildcard", &[269], &[A01]),
+    ("js/login-without-session-regeneration", &[384], &[A07]),
+    ("js/static-assets-after-session", &[200], &[A01]),
     ("js/iam-kms-resource-wildcard", &[284], &[A01]),
     ("js/hardcoded-secret", &[798], &[A07]),
     ("js/xxe", &[611, 827], &[A05]),

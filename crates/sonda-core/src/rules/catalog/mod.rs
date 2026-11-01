@@ -32,6 +32,7 @@ mod js_more;
 mod js_security;
 mod js_semantic;
 mod js_syntax;
+mod js_syntax2;
 mod py;
 mod py_cdk;
 mod py_extra;
@@ -66,6 +67,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (js_more::RULES, &[]),
     (js_semantic::RULES, js_semantic::OFF_BY_DEFAULT),
     (js_syntax::RULES, js_syntax::OFF_BY_DEFAULT),
+    (js_syntax2::RULES, js_syntax2::OFF_BY_DEFAULT),
     (py::RULES, &[]),
     (py_security::RULES, &[]),
     (py_quality::RULES, &[]),
