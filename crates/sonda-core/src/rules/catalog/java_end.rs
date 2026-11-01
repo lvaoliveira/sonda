@@ -522,7 +522,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 60,
-        sonar: &[exact("S6539")],
+        sonar: &[exact("S6539"), exact("S1200")],
         check: Check::Query {
             langs: JAVA,
             query: r#"(class_declaration) @match"#,

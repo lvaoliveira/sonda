@@ -400,7 +400,7 @@ python:FunctionComplexity,code_smell,critical,no,main,syntactic,done,py/function
 python:InequalityUsage,code_smell,major,yes,main,syntactic,done,py/python2-inequality,,
 python:LineLength,code_smell,major,no,all,syntactic,done,common/line-length,,
 python:LongIntegerWithLowercaseSuffixUsage,code_smell,minor,no,main,syntactic,todo,,,
-python:NoSonar,code_smell,major,no,all,syntactic,todo,,,
+python:NoSonar,code_smell,major,no,all,syntactic,done,common/nosonar-comment,,
 python:OneStatementPerLine,code_smell,major,no,all,syntactic,done,py/semicolon-statements,,
 python:ParsingError,code_smell,major,no,all,syntactic,todo,,,
 python:PreIncrementDecrement,bug,major,yes,main,syntactic,done,py/increment-operator,,

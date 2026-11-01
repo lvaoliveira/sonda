@@ -403,14 +403,15 @@ async fn changes(
     analysis: i64,
 ) -> Result<Changes, sqlx::Error> {
     let counts: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT severity, count(*) FROM issues WHERE {column} = $1 GROUP BY severity"
+        "SELECT severity, count(*) FROM issues
+         WHERE {column} = $1 AND NOT rule_off(project_id, rule) GROUP BY severity"
     )))
     .bind(analysis)
     .fetch_all(pool)
     .await?;
     let items: Vec<IssueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, severity, category, rule, message, path, line FROM issues
-         WHERE {column} = $1
+         WHERE {column} = $1 AND NOT rule_off(project_id, rule)
          ORDER BY array_position(ARRAY['blocker', 'critical', 'major', 'minor', 'info'], severity),
                   path, line, id
          LIMIT $2"

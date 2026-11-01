@@ -6,7 +6,7 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, dependencies, drill, gates, ingest, issues, new_code,
-    overview, projects, review, rules, security, session, throttle, tokens,
+    overview, projects, review, rule_settings, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -58,6 +58,10 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         )
         .route("/projects/{key}/coverage", get(coverage::get_coverage))
         .route(
+            "/projects/{key}/rule-settings",
+            get(rule_settings::get_project),
+        )
+        .route(
             "/projects/{key}/coverage/file",
             get(coverage::get_file_coverage),
         )
@@ -94,6 +98,11 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
     let admin = Router::new()
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
+        .route("/rule-settings", put(rule_settings::put_global))
+        .route(
+            "/projects/{key}/rule-settings",
+            put(rule_settings::put_project),
+        )
         .route("/users/{id}", patch(users::update_user))
         .route("/tokens", get(tokens::list_all).post(tokens::create_for))
         .route("/tokens/{id}", delete(tokens::revoke_any))

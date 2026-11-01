@@ -194,7 +194,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Critical,
         effort_minutes: 10,
-        sonar: &[exact("S2551")],
+        sonar: &[exact("S2551"), related("S3998")],
         check: Check::Query {
             langs: CSHARP,
             query: "(lock_statement) @match",

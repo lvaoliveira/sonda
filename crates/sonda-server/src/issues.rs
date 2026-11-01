@@ -45,6 +45,7 @@ fn scoped() -> String {
             SELECT {DERIVED} FROM issues i JOIN projects p ON p.id = i.project_id
             WHERE ($1::text IS NULL OR p.key = $1)
               AND i.branch = coalesce($2::text, p.main_branch)
+              AND NOT rule_off(i.project_id, i.rule)
         )"
     )
 }

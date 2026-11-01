@@ -190,6 +190,10 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/xml-entity-expansion", &[776], &[A05]),
     ("java/xml-signature-validation", &[347], &[A02]),
     ("java/entity-bound-to-request", &[915], &[A08]),
+    ("java/saml-comments", &[287], &[A07]),
+    ("java/bean-populated-from-request", &[915], &[A03, A08]),
+    ("java/user-enumeration", &[200, 203], &[A01]),
+    ("java/permit-all", &[285], &[A01]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
     ("cs/weak-hash", &[1240], &[A02]),
@@ -223,4 +227,6 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("cs/request-validation-disabled", &[79], &[A03]),
     ("cs/unsafe-code", &[119, 787], &[]),
     ("cs/world-permissions", &[266, 732], &[A01, A04]),
+    ("cs/regex-without-timeout", &[400, 1333], &[]),
+    ("cs/random-secret", &[326, 330, 338, 1241], &[A02]),
 ];

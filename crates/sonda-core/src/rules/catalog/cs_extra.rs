@@ -1320,7 +1320,7 @@ fn getter_copies_collection<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<'
     copies.then_some(e)
 }
 
-fn misleadingly_indented_statement<'t>(block: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+fn misleadingly_indented_statement<'t>(block: Node<'t>, _src: &[u8]) -> Option<Node<'t>> {
     let stmts = cs_statements(block);
     stmts.windows(2).find_map(|pair| {
         let (control, next) = (pair[0], pair[1]);
@@ -1335,8 +1335,8 @@ fn misleadingly_indented_statement<'t>(block: Node<'t>, _: &[u8]) -> Option<Node
         (body.kind() != "block"
             && body.start_position().row > control.start_position().row
             && next.start_position().column == body.start_position().column
-            && next.start_position().column > control.start_position().column)
-            .then_some(next)
+            && next.start_position().column > super::cs_final::line_indent(control, _src))
+        .then_some(next)
     })
 }
 
