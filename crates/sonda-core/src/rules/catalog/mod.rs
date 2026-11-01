@@ -9,6 +9,7 @@ mod java_close;
 mod java_end;
 mod java_extra;
 mod java_final;
+mod java_final2;
 mod java_flow;
 mod java_last;
 mod java_last2;
@@ -81,6 +82,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_end::RULES,
         java_close::RULES,
         java_last2::RULES,
+        java_final2::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -146,6 +148,15 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/test-in-production-source",
     "java/parse-failure",
     "java/package-info-missing",
+    "java/component-not-scanned",
+    // Java 22 and later syntax and APIs.
+    "java/unnamed-needs-var",
+    "java/record-pattern-unused-component",
+    "java/constructor-prologue-long",
+    "java/validation-after-super",
+    "java/fields-set-after-super",
+    "java/class-transform-name",
+    "java/class-build-for-transform",
     "java/regex-ascii-letters",
     // Batch 19: outside SonarQube's default profile, or tied to a newer Java version.
     "java/irregular-number-pattern",

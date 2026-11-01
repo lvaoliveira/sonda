@@ -933,6 +933,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn spring_components_outside_the_scan_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (rel, body) in [
+            (
+                "src/com/acme/App.java",
+                "package com.acme;\n@SpringBootApplication\nclass App {}\n",
+            ),
+            (
+                "src/com/acme/web/Ok.java",
+                "package com.acme.web;\n@RestController\nclass Ok {}\n",
+            ),
+            (
+                "src/com/other/Svc.java",
+                "package com.other;\n\n@Service\nclass Svc {}\n",
+            ),
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ["java/component-not-scanned".to_string()].to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
+            advisories: None,
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let hits: Vec<(&str, usize)> = r
+            .files
+            .iter()
+            .flat_map(|f| f.issues.iter().map(|i| (f.path.as_str(), i.line)))
+            .collect();
+        assert_eq!(hits, [("src/com/other/Svc.java", 3)]);
+    }
+
     /// Renders every format; `reverse` feeds the post-discovery stage its
     /// inputs in reversed order, as a different filesystem might.
     fn render_all(root: &Path, cfg: &Config, threads: usize, reverse: bool) -> Vec<String> {

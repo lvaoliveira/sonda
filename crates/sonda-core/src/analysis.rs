@@ -27,6 +27,9 @@ pub(crate) struct FileAnalysis {
     pub(crate) code_lines: Vec<usize>,
     pub(crate) tokens: Vec<Token>,
     pub(crate) has_syntax_errors: bool,
+    /// Small (kind, value) facts for rules that look across files, such as
+    /// the package a Java file declares. Empty for other languages.
+    pub(crate) facts: Vec<(String, String)>,
     /// The semantic layer ran out of time: semantic rules found nothing.
     pub(crate) semantic_incomplete: bool,
     /// Of the exact bytes analyzed, so a later upload can prove it sends the same source.
@@ -122,6 +125,7 @@ pub(crate) fn analyze(
         code_lines: scan.code_lines,
         tokens: scan.tokens,
         has_syntax_errors: root.has_error(),
+        facts: java_facts(&ctx, lang, root),
         semantic_incomplete,
         sha256: Digest(sha2::Sha256::digest(bytes).into()),
     })
@@ -214,10 +218,81 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// The facts the project-level Java rules need from this file: its package,
+/// the base packages its Spring scan annotations cover, and the lines of
+/// the components it declares.
+fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
+    if lang != Lang::Java {
+        return Vec::new();
+    }
+    let mut facts = Vec::new();
+    let mut cursor = root.walk();
+    let children: Vec<Node> = root.named_children(&mut cursor).collect();
+    let package = children
+        .iter()
+        .find(|n| n.kind() == "package_declaration")
+        .and_then(|d| {
+            d.named_children(&mut d.walk())
+                .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
+        })
+        .map(|n| ctx.text(n).to_string());
+    if let Some(p) = &package {
+        facts.push(("package".to_string(), p.clone()));
+    }
+    for class in children.iter().filter(|n| n.kind() == "class_declaration") {
+        let Some(mods) = class
+            .children(&mut class.walk())
+            .find(|c| c.kind() == "modifiers")
+        else {
+            continue;
+        };
+        let t = ctx.text(mods);
+        if t.contains("@SpringBootApplication") || t.contains("@ComponentScan") {
+            let mut bases: Vec<String> = Vec::new();
+            let mut stack = vec![mods];
+            while let Some(n) = stack.pop() {
+                if n.kind() == "string_literal" {
+                    bases.push(ctx.text(n).trim_matches('"').to_string());
+                }
+                let mut c = n.walk();
+                stack.extend(n.named_children(&mut c));
+            }
+            if bases.is_empty() {
+                bases.extend(package.clone());
+            }
+            for b in bases {
+                facts.push(("scan".to_string(), b));
+            }
+        }
+        if [
+            "@Component",
+            "@Service",
+            "@Repository",
+            "@Controller",
+            "@RestController",
+            "@Configuration",
+        ]
+        .iter()
+        .any(|a| t.contains(a))
+        {
+            facts.push((
+                "component".to_string(),
+                (class.start_position().row + 1).to_string(),
+            ));
+        }
+    }
+    facts
+}
+
 /// An issue that belongs to a file as a whole, found by looking at the project.
-fn project_issue(rule: &ActiveRule, path: &str, message: String) -> Issue {
+fn project_issue(rule: &ActiveRule, path: &str, line: usize, message: String) -> Issue {
     let mut hasher = sha2::Sha256::new();
-    for field in ["sonda-fingerprint-v1", rule.rule.id, path] {
+    for field in [
+        "sonda-fingerprint-v1",
+        rule.rule.id,
+        path,
+        &line.to_string(),
+    ] {
         hasher.update((field.len() as u64).to_le_bytes());
         hasher.update(field.as_bytes());
     }
@@ -230,9 +305,9 @@ fn project_issue(rule: &ActiveRule, path: &str, message: String) -> Issue {
         category: rule.rule.category,
         message,
         path: path.to_string(),
-        line: 1,
+        line,
         column: 1,
-        end_line: 1,
+        end_line: line,
         end_column: 1,
         effort_minutes: rule.rule.effort_minutes,
         is_new: true,
@@ -245,6 +320,37 @@ fn project_issue(rule: &ActiveRule, path: &str, message: String) -> Issue {
 pub(crate) fn java_package_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
     let missing = rules.get(rules::JAVA_PACKAGE_INFO_MISSING);
     let only = rules.get(rules::JAVA_PACKAGE_INFO_ONLY);
+    if let Some(rule) = rules.get(rules::JAVA_COMPONENT_NOT_SCANNED) {
+        let fact = |f: &FileAnalysis, kind: &str| -> Vec<String> {
+            f.facts
+                .iter()
+                .filter(|(k, _)| k == kind)
+                .map(|(_, v)| v.clone())
+                .collect()
+        };
+        let bases: Vec<String> = files.iter().flat_map(|f| fact(f, "scan")).collect();
+        if !bases.is_empty() {
+            for f in files.iter_mut() {
+                let Some(package) = fact(f, "package").into_iter().next() else {
+                    continue;
+                };
+                let covered = bases
+                    .iter()
+                    .any(|b| package == *b || package.starts_with(&format!("{b}.")));
+                if covered {
+                    continue;
+                }
+                for line in fact(f, "component") {
+                    let line = line.parse().unwrap_or(1);
+                    let msg = format!(
+                        "Package {package} is outside every @ComponentScan base package, so this bean is not registered."
+                    );
+                    let issue = project_issue(rule, &f.path, line, msg);
+                    f.issues.push(issue);
+                }
+            }
+        }
+    }
     if missing.is_none() && only.is_none() {
         return;
     }
@@ -268,6 +374,7 @@ pub(crate) fn java_package_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             let issue = project_issue(
                 rule,
                 &files[first].path,
+                1,
                 "Add a package-info.java to document this package.".into(),
             );
             files[first].issues.push(issue);
@@ -277,6 +384,7 @@ pub(crate) fn java_package_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             let issue = project_issue(
                 rule,
                 &files[info].path,
+                1,
                 "Remove this package: it holds only its package-info.java.".into(),
             );
             files[info].issues.push(issue);

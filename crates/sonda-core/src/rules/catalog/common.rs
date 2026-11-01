@@ -223,4 +223,16 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Structural,
         example: None,
     },
+    Rule {
+        id: crate::rules::JAVA_COMPONENT_NOT_SCANNED,
+        name: "Spring beans should be considered by @ComponentScan",
+        description: "A component outside every scanned base package is never registered. Java projects only.",
+        message: "",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S4605")],
+        check: Check::Structural,
+        example: None,
+    },
 ];
