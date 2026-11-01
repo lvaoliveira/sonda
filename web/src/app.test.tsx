@@ -537,12 +537,14 @@ describe('Security', () => {
 
     const filter = within(review).getByRole('group', { name: 'Review status' })
     await user.click(within(filter).getByRole('button', { name: 'False positive' }))
-    rows = await within(review).findAllByRole('listitem')
-    expect(rows).toHaveLength(1)
+    // Wait for the reloaded list itself: while it loads, the old rows or none show.
+    await waitFor(() => expect(within(review).getAllByRole('listitem')).toHaveLength(1))
+    rows = within(review).getAllByRole('listitem')
     expect(rows[0]).toHaveTextContent('“A test key, revoked.”')
     await user.click(within(rows[0]).getByRole('button', { name: 'Reopen' }))
-    await waitFor(() => expect(within(review).queryAllByRole('listitem')).toHaveLength(0))
-    expect(review).toHaveTextContent('Nothing matches.')
+    // No rows also while it reloads, so wait for the empty answer.
+    expect(await within(review).findByText('Nothing matches.')).toBeInTheDocument()
+    expect(within(review).queryAllByRole('listitem')).toHaveLength(0)
 
     await user.click(within(filter).getByRole('button', { name: 'To review' }))
     await user.selectOptions(within(review).getByRole('combobox', { name: 'Severity' }), 'blocker')
