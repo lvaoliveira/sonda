@@ -165,7 +165,10 @@ struct Vuln {
     line: i32,
     status: String,
     first_at: f64,
+    /// When it left the open issues: fixed, or set aside.
     fixed_at: Option<f64>,
+    /// Left because the scan didn't run its rule: not a fix (ADR-0018).
+    set_aside: bool,
     /// Found by the branch's first analysis: already there, not introduced.
     baseline: bool,
 }
@@ -183,6 +186,7 @@ type Row = (
     f64,
     Option<f64>,
     bool,
+    bool,
 );
 
 pub async fn get_security(
@@ -195,7 +199,7 @@ pub async fn get_security(
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT i.id, p.key, i.branch, i.severity, i.rule, i.message, i.path, i.line,
                 i.status::text, extract(epoch FROM fa.received_at)::float8,
-                extract(epoch FROM xa.received_at)::float8,
+                extract(epoch FROM xa.received_at)::float8, i.rule_not_run,
                 i.first_analysis_id = (SELECT min(b.id) FROM analyses b
                                        WHERE b.project_id = i.project_id AND b.branch = i.branch)
          FROM issues i
@@ -221,6 +225,7 @@ pub async fn get_security(
                 status,
                 first_at,
                 fixed_at,
+                set_aside,
                 baseline,
             )| Vuln {
                 id,
@@ -234,6 +239,7 @@ pub async fn get_security(
                 status,
                 first_at,
                 fixed_at,
+                set_aside,
                 baseline,
             },
         )
@@ -347,7 +353,7 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
                     .count(),
                 fixed: vulns
                     .iter()
-                    .filter(|v| v.fixed_at.is_some_and(|f| f > start && f <= end))
+                    .filter(|v| !v.set_aside && v.fixed_at.is_some_and(|f| f > start && f <= end))
                     .count(),
             }
         })
@@ -426,7 +432,7 @@ fn build(now: f64, vulns: &[Vuln]) -> Security {
     let fixed_since = |days: f64| -> Vec<&Vuln> {
         vulns
             .iter()
-            .filter(|v| v.fixed_at.is_some_and(|f| f >= now - days * DAY))
+            .filter(|v| !v.set_aside && v.fixed_at.is_some_and(|f| f >= now - days * DAY))
             .collect()
     };
     let recent_fixes = fixed_since(90.0);
@@ -500,6 +506,7 @@ mod tests {
             line: 1,
             status: status.into(),
             first_at: now - first_days_ago * DAY,
+            set_aside: false,
             fixed_at: fixed_days_ago.map(|d| now - d * DAY),
             baseline: false,
         }
@@ -535,6 +542,24 @@ mod tests {
         // Ten days ago the critical in lib/w.js was still open.
         let fixed_week = &s.trend[s.trend.len() - 2];
         assert_eq!(fixed_week.fixed, 1);
+    }
+
+    #[test]
+    fn a_vulnerability_whose_rule_didnt_run_is_not_a_fix() {
+        let now = 100.0 * DAY;
+        let mut aside = vuln(1, "a", "src/x.js", "critical", "open", 40.0, Some(10.0));
+        aside.set_aside = true;
+        let vulns = [
+            aside,
+            vuln(2, "a", "src/y.js", "critical", "open", 30.0, Some(5.0)),
+        ];
+        let s = build(now, &vulns);
+        // Gone from the open ones, but only the real fix counts as fixed.
+        assert_eq!(s.open, 0);
+        assert_eq!(s.status.fixed_last_30_days, 1);
+        assert_eq!(s.remediation.median_days_severe, Some(25.0));
+        let fixed: usize = s.trend.iter().map(|t| t.fixed).sum();
+        assert_eq!(fixed, 1);
     }
 
     #[test]

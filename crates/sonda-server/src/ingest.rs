@@ -87,6 +87,10 @@ struct Report {
     /// it applied none.
     #[serde(default)]
     rule_profile: Option<RuleProfileIn>,
+    /// The ids of the rules the scan ran; older CLIs don't send them, and
+    /// then every missing issue is fixed, as before.
+    #[serde(default)]
+    active_rules: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +167,8 @@ pub struct Analysis {
     pub rule_settings: Option<Value>,
     /// `{"name", "revision"}` of the profile the scan applied.
     pub rule_profile: Option<Value>,
+    /// The rules the scan ran; `None` from an older CLI.
+    pub active_rules: Option<Vec<String>>,
 }
 
 pub struct StoredDependency {
@@ -541,6 +547,14 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         Some(_) => return Err(invalid("the report's rule profile is invalid".into())),
         None => None,
     };
+    if r.active_rules.as_ref().is_some_and(|ids| {
+        ids.len() > MAX_RULE_SETTINGS
+            || ids
+                .iter()
+                .any(|id| !(1..=100).contains(&id.len()) || id.chars().any(char::is_control))
+    }) {
+        return Err(invalid("the report's active rules are invalid".into()));
+    }
     let dependencies_recorded = r.dependencies.is_some();
     let dependencies =
         validate_dependencies(r.dependencies.unwrap_or_default()).map_err(invalid)?;
@@ -563,6 +577,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         dependencies_recorded,
         rule_settings,
         rule_profile,
+        active_rules: r.active_rules,
     })
 }
 

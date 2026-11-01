@@ -377,6 +377,10 @@ fn summary(answer: &str) -> String {
             if reopened > 0 {
                 s += &format!(", {reopened} reopened");
             }
+            // Missing because the scan didn't run their rule (ADR-0018).
+            if let Some(n) = count("set_aside").filter(|&n| n > 0) {
+                s += &format!(", {n} set aside: their rules didn't run");
+            }
             s + ")"
         }
         _ => String::new(),

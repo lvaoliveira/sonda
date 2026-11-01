@@ -316,6 +316,13 @@ impl RuleSet {
         }))
     }
 
+    /// The active rules' ids, sorted.
+    pub(crate) fn ids(&self) -> Vec<&'static str> {
+        let mut ids: Vec<&'static str> = self.active.iter().map(|a| a.rule.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
     pub(crate) fn get(&self, id: &str) -> Option<&ActiveRule> {
         self.active.iter().find(|a| a.rule.id == id)
     }
