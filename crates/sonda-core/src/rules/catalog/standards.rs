@@ -178,6 +178,7 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
     ("java/regex-catastrophic-backtracking", &[1333], &[]),
     ("js/regex-catastrophic-backtracking", &[1333], &[]),
+    ("js/template-autoescape-disabled", &[79], &[A03]),
     ("java/debug-enabled", &[215, 489], &[A05]),
     ("java/autoescape-disabled", &[79], &[A03]),
     ("java/upload-size-unlimited", &[400, 770], &[]),

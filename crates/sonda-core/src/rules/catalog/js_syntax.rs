@@ -1210,10 +1210,17 @@ pub(super) fn root_node(node: Node) -> Node {
 /// Visits every descendant of `node`; `visit` returns false to skip a
 /// node's children.
 pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if visit(child) {
-            walk(child, visit);
+    // Iterative: a deeply nested file must not overflow the stack.
+    let mut stack: Vec<Node<'t>> = {
+        let mut cursor = node.walk();
+        let kids: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        kids.into_iter().rev().collect()
+    };
+    while let Some(n) = stack.pop() {
+        if visit(n) {
+            let mut cursor = n.walk();
+            let kids: Vec<Node<'t>> = n.children(&mut cursor).collect();
+            stack.extend(kids.into_iter().rev());
         }
     }
 }
