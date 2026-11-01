@@ -2,9 +2,10 @@
 //! trees: see the notes in `js_modern.rs`.
 
 use super::cs::{
-    CS_SCOPE_STOPS, cs_has_modifier, cs_string_value, operand, same_code, simple_name,
+    CS_SCOPE_STOPS, cs_has_modifier, cs_statements, cs_string_value, operand, same_code,
+    simple_name,
 };
-use super::java_bugs::{find_in_scope, operator_text, statements};
+use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::text;
 use super::*;
 
@@ -682,7 +683,7 @@ pub(super) fn cs_integer(node: Node, src: &[u8]) -> Option<u64> {
 }
 
 fn type_members(body: Node) -> Vec<Node> {
-    statements(body)
+    cs_statements(body)
 }
 
 fn parameter_count(method: Node) -> usize {
@@ -730,7 +731,7 @@ const LOOP_KINDS: &[&str] = &[
 
 fn unconditional_loop_exit<'t>(node: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     let body = node.child_by_field_name("body")?;
-    let last = *statements(body).last()?;
+    let last = *cs_statements(body).last()?;
     if !matches!(
         last.kind(),
         "break_statement" | "return_statement" | "throw_statement"
@@ -765,7 +766,7 @@ fn is_lambda_body(creation: Node) -> bool {
     else {
         return false;
     };
-    statements(block).len() == 1
+    cs_statements(block).len() == 1
         && block.parent().is_some_and(|f| {
             matches!(
                 f.kind(),
@@ -803,7 +804,7 @@ fn self_referencing_accessor<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<
         match body.kind() {
             "arrow_expression_clause" => operand(body).filter(|e| is_self(*e)),
             "block" => {
-                let stmts = statements(body);
+                let stmts = cs_statements(body);
                 match stmts.as_slice() {
                     [s] if s.kind() == "return_statement" => operand(*s).filter(|e| is_self(*e)),
                     _ => None,
@@ -815,7 +816,7 @@ fn self_referencing_accessor<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<
     let assigns_self = |body: Node<'t>| -> Option<Node<'t>> {
         let expr = match body.kind() {
             "arrow_expression_clause" => operand(body)?,
-            "block" => match statements(body).as_slice() {
+            "block" => match cs_statements(body).as_slice() {
                 [s] if s.kind() == "expression_statement" => operand(*s)?,
                 _ => return None,
             },
@@ -1103,7 +1104,7 @@ fn returns_disposed<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         return returns_one_of(node.child_by_field_name("body")?, &names_of(declaration));
     }
     // `using var x = ...;` disposes x when the block ends.
-    let stmts = statements(node);
+    let stmts = cs_statements(node);
     for (i, stmt) in stmts.iter().enumerate() {
         if stmt.kind() != "local_declaration_statement" {
             continue;
@@ -1321,7 +1322,7 @@ fn overwritten_element<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             .filter(|l| l.kind() == "element_access_expression")?;
         Some((left, assignment.child_by_field_name("right")?))
     };
-    let stmts = statements(block);
+    let stmts = cs_statements(block);
     for pair in stmts.windows(2) {
         let (Some((first, _)), Some((second, value))) = (target(pair[0]), target(pair[1])) else {
             continue;
