@@ -29,6 +29,26 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "py/regex-named-group-by-index",
+        name: "Names of regular expressions named groups should be used",
+        description: "A named group read by number defeats its name.",
+        message: "Refer to the group by name.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S5860")],
+        check: Check::Query {
+            langs: PYTHON,
+            query: r#"(call function: (attribute object: (identifier) @o attribute: (identifier) @m (#eq? @o "re") (#any-of? @m "compile" "match" "search" "fullmatch" "sub" "subn" "split" "findall" "finditer"))) @match"#,
+            filter: Some(Find(regex_named_group_used_by_index)),
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "import re\np = re.compile(r'(?P<year>\\d+)-(?P=year)\\1')\n",
+            good: "import re\np = re.compile(r'(?P<year>\\d+)-(?P=year)')\n",
+        }),
+    },
+    Rule {
         id: "py/regex-empty-group",
         name: "Regular expressions should not contain empty groups",
         description: "An empty group matches nothing and captures nothing useful.",
@@ -680,6 +700,10 @@ fn regex_is_invalid<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         Err(e) if !e.message.contains("analyze") => Some(*pattern),
         _ => None,
     }
+}
+
+fn regex_named_group_used_by_index<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    find_in_pattern(call, src, checks::named_group_used_by_index)
 }
 
 fn regex_has_empty_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

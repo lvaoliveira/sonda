@@ -516,3 +516,8 @@ pub(super) fn has_ascii_letter_class(r: &Regex) -> bool {
             if items.contains(&ClassItem::Range('a', 'z')) && items.contains(&ClassItem::Range('A', 'Z')))
     })
 }
+
+/// A named group that the pattern itself refers to by number.
+pub(super) fn named_group_used_by_index(r: &Regex) -> bool {
+    !r.names.is_empty() && any_node(r, |n| matches!(n, Rx::BackrefIndex(_)))
+}
