@@ -227,6 +227,14 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
+- `sonda scan --upload` applies the server's rule settings (ADR-0018):
+  before scanning it fetches the project's rule profile and adjustments,
+  and where the server sets a rule (on, off, severity) the server wins over
+  `sonda.toml`. Rules this sonda doesn't know are skipped with a warning.
+  The scan stops before it starts if the settings can't be fetched; a
+  server without profiles leaves `sonda.toml` deciding. The report records
+  the profile it applied (`rule_profile`) beside `sonda.toml`'s own
+  `rule_settings`.
 - Rule profiles on the server (ADR-0018): named sets of rules, on or off
   with an optional severity, managed by admins (`/api/rule-profiles`). The
   built-in "sonda way" holds the catalog's defaults; one profile is the
