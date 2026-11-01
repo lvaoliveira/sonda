@@ -9,6 +9,7 @@ mod cs_security;
 mod java;
 mod java_bugs;
 mod java_extra;
+mod java_final;
 mod java_last;
 mod java_more;
 mod java_regex;
@@ -70,6 +71,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_extra::RULES,
         java_regex::RULES,
         java_last::RULES,
+        java_final::RULES,
         c::RULES,
         cs::RULES,
         cs_security::RULES,
@@ -160,6 +162,26 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/too-many-methods",
     "java/nesting-depth",
     "java/expression-complexity",
+    // Conventions outside SonarQube's default profile (batch 13): they fire
+    // on nearly every file of a typical code base.
+    "java/exact-alarm",
+    "java/redundant-explicit-type",
+    "java/clock-in-test",
+    "java/collect-with-add",
+    "java/throws-many-checked",
+    "java/throws-checked",
+    "java/qualified-name",
+    "java/one-type-per-file",
+    "java/package-private-field",
+    "java/boolean-method-name",
+    "java/local-constant-name",
+    "java/junit4-import",
+    "java/operator-precedence",
+    "java/increment-in-expression",
+    "java/magic-number",
+    "java/test-assertion-message",
+    // Java 22 syntax: older code bases cannot adopt it.
+    "java/unused-exception-parameter",
     // Outside SonarQube's default C# profile.
     "cs/protected-in-sealed",
     "cs/redundant-constructor",

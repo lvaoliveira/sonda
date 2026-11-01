@@ -971,7 +971,7 @@ const NESTED_SCOPES: &[&str] = &[
     "record_declaration",
 ];
 
-fn count_nodes(root: Node, stops: &[&str], pred: impl Fn(Node) -> bool) -> usize {
+pub(super) fn count_nodes(root: Node, stops: &[&str], pred: impl Fn(Node) -> bool) -> usize {
     let mut count = 0;
     let mut cursor = root.walk();
     if !cursor.goto_first_child() {
@@ -993,7 +993,7 @@ fn count_nodes(root: Node, stops: &[&str], pred: impl Fn(Node) -> bool) -> usize
     }
 }
 
-fn line_span(node: Node) -> usize {
+pub(super) fn line_span(node: Node) -> usize {
     node.end_position().row - node.start_position().row + 1
 }
 
@@ -1435,7 +1435,7 @@ fn chain_lacks_emptiness_check(call: Node, src: &[u8]) -> bool {
         })
 }
 
-fn literal_kind(node: Node) -> Option<&'static str> {
+pub(super) fn literal_kind(node: Node) -> Option<&'static str> {
     match node.kind() {
         "string_literal" => Some("string"),
         "decimal_integer_literal" | "hex_integer_literal" | "decimal_floating_point_literal" => {
