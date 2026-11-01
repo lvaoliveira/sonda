@@ -350,6 +350,37 @@ fn looks_like_code(line: &str) -> bool {
         && words <= 12
 }
 
+/// Tool directives that belong at the end of a line.
+fn is_pragma_comment(comment: &str) -> bool {
+    let body = comment
+        .trim_start_matches(['/', '#', '*', '-'])
+        .trim_start();
+    [
+        "noqa",
+        "NOSONAR",
+        "NOPMD",
+        "CHECKSTYLE",
+        "type:",
+        "pylint",
+        "pragma",
+        "fmt:",
+        "isort:",
+        "nosec",
+        "mypy:",
+        "pyright:",
+        "eslint",
+        "istanbul",
+        "prettier",
+        "@ts-",
+        "sonda-ignore",
+        "flake8",
+        "ruff:",
+        "yapf:",
+    ]
+    .iter()
+    .any(|p| body.starts_with(p))
+}
+
 fn comment_is_commented_out_code(comment: &str) -> bool {
     // Doc comments are prose with examples in them.
     if comment.starts_with("/**") || comment.starts_with("///") || comment.starts_with("//!") {
@@ -561,6 +592,7 @@ fn scan_tokens(
     let mut tokens = Vec::new();
     let todo_rule = rules.get(rules::TODO_COMMENT);
     let code_rule = rules.get(rules::COMMENTED_OUT_CODE);
+    let trailing_rule = rules.get(rules::TRAILING_COMMENT);
     let mark = |flags: &mut Vec<bool>, node: Node| {
         flags[node.start_position().row..=last_row(node)].fill(true);
     };
@@ -575,6 +607,13 @@ fn scan_tokens(
                 .min(ctx.lines.text(node.start_position().row).len())]
                 .trim()
                 .is_empty();
+            if let Some(rule) = trailing_rule
+                && !alone
+                && !is_pragma_comment(ctx.text(node))
+            {
+                let msg = "Move this comment to its own line.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
             if let Some(rule) = code_rule
                 && alone
                 && comment_is_commented_out_code(ctx.text(node))

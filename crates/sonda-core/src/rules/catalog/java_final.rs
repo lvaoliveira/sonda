@@ -1255,7 +1255,7 @@ fn chain_names<'s>(call: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     names
 }
 
-fn declared_type_names<'s>(root: Node, kinds: &[&str], src: &'s [u8]) -> Vec<&'s [u8]> {
+pub(super) fn declared_type_names<'s>(root: Node, kinds: &[&str], src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -1268,7 +1268,7 @@ fn declared_type_names<'s>(root: Node, kinds: &[&str], src: &'s [u8]) -> Vec<&'s
     out
 }
 
-fn root_of(node: Node) -> Node {
+pub(super) fn root_of(node: Node) -> Node {
     let mut n = node;
     while let Some(p) = n.parent() {
         n = p;
@@ -1276,7 +1276,7 @@ fn root_of(node: Node) -> Node {
     n
 }
 
-fn base_type(t: &[u8]) -> &[u8] {
+pub(super) fn base_type(t: &[u8]) -> &[u8] {
     t.split(|&b| b == b'<').next().unwrap_or(t)
 }
 
@@ -1680,7 +1680,7 @@ fn parameter_overwritten_first<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<
         .then_some(first)
 }
 
-fn key_type_is_an_enum_in_the_file(creation: Node, src: &[u8]) -> bool {
+pub(super) fn key_type_is_an_enum_in_the_file(creation: Node, src: &[u8]) -> bool {
     let Some(key) =
         find_node(creation, |n| n.kind() == "type_arguments").and_then(|a| a.named_child(0))
     else {
@@ -1698,7 +1698,7 @@ fn wraps_repeated_annotations(array: Node, src: &[u8]) -> bool {
             .all(|w| name_text(w[0], src) == name_text(w[1], src))
 }
 
-fn named_children_of(node: Node) -> Vec<Node> {
+pub(super) fn named_children_of(node: Node) -> Vec<Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|n| !matches!(n.kind(), "line_comment" | "block_comment"))
