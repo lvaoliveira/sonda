@@ -471,7 +471,11 @@ const NESTED: &[&str] = &[
     "class_body",
 ];
 
-fn nodes_in<'t>(root: Node<'t>, stops: &[&str], pred: impl Fn(Node<'t>) -> bool) -> Vec<Node<'t>> {
+pub(super) fn nodes_in<'t>(
+    root: Node<'t>,
+    stops: &[&str],
+    pred: impl Fn(Node<'t>) -> bool,
+) -> Vec<Node<'t>> {
     let mut out = Vec::new();
     let mut cursor = root.walk();
     if !cursor.goto_first_child() {
@@ -493,7 +497,7 @@ fn nodes_in<'t>(root: Node<'t>, stops: &[&str], pred: impl Fn(Node<'t>) -> bool)
     }
 }
 
-fn enclosing_method(node: Node) -> Option<Node> {
+pub(super) fn enclosing_method(node: Node) -> Option<Node> {
     let mut p = node.parent();
     while let Some(n) = p {
         if matches!(
@@ -507,7 +511,7 @@ fn enclosing_method(node: Node) -> Option<Node> {
     None
 }
 
-fn find_declared_type<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn find_declared_type<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
     find_node(root, |n| {
         matches!(
             n.kind(),
@@ -519,14 +523,14 @@ fn find_declared_type<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Nod
     })
 }
 
-fn has_method<'t>(class: Node<'t>, name: &[u8], src: &[u8]) -> Vec<Node<'t>> {
+pub(super) fn has_method<'t>(class: Node<'t>, name: &[u8], src: &[u8]) -> Vec<Node<'t>> {
     class_members(class)
         .into_iter()
         .filter(|m| m.kind() == "method_declaration" && name_text(*m, src) == name)
         .collect()
 }
 
-fn superclass_name<'s>(class: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+pub(super) fn superclass_name<'s>(class: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     let sup = class.child_by_field_name("superclass")?;
     sup.named_child(0).map(|t| base_type(text(t, src)))
 }
