@@ -181,7 +181,7 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
               </Chip>
               <Segmented label="Sort" options={SORTS} value={sort} onChange={setSort} />
             </div>
-            <div className="overflow-x-auto">
+            <div className="relative overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
                 <thead className="text-xs text-fg-muted">
                   <tr>

@@ -58,7 +58,7 @@ function Users({ me }: { me: string | null }) {
       )}
       {users.state === 'error' && <p role="alert">Could not load users: {users.error.message}</p>}
       <Card title="Users" subtitle="Disabled users can't sign in; they stay in the audit trail.">
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[720px] border-collapse text-[13.5px]">
             <thead>
               <tr className="text-left text-[12px] text-fg-faint">
