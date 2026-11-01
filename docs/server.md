@@ -395,6 +395,28 @@ the analyzed branches.
 `GET /api/issues` takes `project=` and `branch=` to list one project's
 issues, which is how the project page links to them.
 
+### Project settings
+
+A project's settings ([ADR-0017](adr/0017-project-settings.md)) are on its
+**Settings** page, linked from its page. Members read them; admins change
+them, and each change is recorded with who made it, from what to what.
+
+- **Display name:** optional, 1 to 100 characters. Screens show it with
+  the key under it. The key never changes, so CI's `--project`, project
+  analysis tokens and links keep working. `GET /api/projects` and
+  `GET /api/projects/{key}` return it as `name` (null without one).
+- **Main branch:** at first the first branch analyzed; admins choose any
+  branch with analyses. Every screen counts the new one at once. Its new
+  code period starts over on it, from its first analysis or its current
+  version's, and a start an admin set on the old branch no longer applies.
+  The old branch keeps its numbers until its next analysis, which judges
+  its new code by its scan again, as on any other branch.
+
+| Endpoint | |
+|---|---|
+| `GET /api/projects/{key}/settings` | `name`, `mainBranch`, the `branches` with analyses (how many, and the latest's time), and the last 50 `changes`, newest first. |
+| `PATCH /api/projects/{key}/settings` `{"name": "Payments", "mainBranch": "develop"}` | Admins: either or both; `"name": null` removes the name. A name over 100 characters, or a branch without analyses, is a `422`. |
+
 ## Quality gates
 
 `GET /api/gates` lists the quality gates projects use, read-only. A gate is

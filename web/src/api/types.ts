@@ -477,6 +477,8 @@ export const MIN_PASSWORD_LENGTH = 12
 /** A project as of its main branch's latest analysis. */
 export interface ProjectRow {
   key: string
+  /** The display name (ADR-0017); null shows the key alone. */
+  name: string | null
   mainBranch: string
   /** Languages by lines of code, most first. */
   languages: string[]
@@ -552,6 +554,8 @@ export interface ProjectComponent {
 
 export interface ProjectDetail {
   key: string
+  /** The display name (ADR-0017); null shows the key alone. */
+  name: string | null
   mainBranch: string
   branch: string
   /** The main branch first. */
@@ -1067,6 +1071,9 @@ export interface SondaApi {
   fileCoverage(project: string, path: string, branch?: string): Promise<FileCoverage>
   /** Admins: starts the main branch's new code at `analysis`, or at the first analysis (null). */
   setNewCodePeriod(project: string, analysis: number | null): Promise<NewCodePeriod>
+  projectSettings(project: string): Promise<ProjectSettings>
+  /** Admins: the display name (null for the key alone) and the main branch. */
+  updateProjectSettings(project: string, patch: ProjectSettingsPatch): Promise<ProjectSettings>
   /** Triages one known vulnerability in one of the project's packages. */
   reviewDependency(project: string, patch: DependencyReviewPatch): Promise<DependencyReview>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>
@@ -1102,4 +1109,28 @@ export class AuthError extends Error {
     super(message)
     this.name = 'AuthError'
   }
+}
+
+/** A project's settings (ADR-0017): members read them, admins change them. */
+export interface ProjectSettings {
+  key: string
+  name: string | null
+  mainBranch: string
+  /** Every branch with analyses, the main one first. */
+  branches: { name: string; analyses: number; analyzedAt: string; ago: string }[]
+  /** Who changed a setting, newest first. */
+  changes: ProjectSettingChange[]
+}
+
+export interface ProjectSettingChange {
+  setting: 'name' | 'main_branch'
+  old: string | null
+  new: string | null
+  by: string
+  at: string
+}
+
+export interface ProjectSettingsPatch {
+  name?: string | null
+  mainBranch?: string
 }

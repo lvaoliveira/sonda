@@ -33,6 +33,8 @@ pub struct ProjectList {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRow {
     pub key: String,
+    /// The display name (ADR-0017); null shows the key alone.
+    pub name: Option<String>,
     pub main_branch: String,
     /// Languages by lines of code, most first.
     pub languages: Vec<String>,
@@ -53,6 +55,8 @@ pub struct ProjectRow {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDetail {
     pub key: String,
+    /// The display name (ADR-0017); null shows the key alone.
+    pub name: Option<String>,
     pub main_branch: String,
     pub branch: String,
     pub branches: Vec<BranchRow>,
@@ -124,14 +128,24 @@ pub struct ProjectQuery {
     branch: Option<String>,
 }
 
-type LatestRow = (i64, String, String, i64, f64, Value, Value, bool);
+type LatestRow = (
+    i64,
+    String,
+    Option<String>,
+    String,
+    i64,
+    f64,
+    Value,
+    Value,
+    bool,
+);
 
 pub async fn list_projects(
     axum::extract::State(state): axum::extract::State<State>,
 ) -> Result<Json<ProjectList>, ApiError> {
     let pool = &state.pool;
     let latest: Vec<LatestRow> = sqlx::query_as(
-        "SELECT p.id, p.key, p.main_branch, a.id, extract(epoch FROM a.received_at)::float8,
+        "SELECT p.id, p.key, p.name, p.main_branch, a.id, extract(epoch FROM a.received_at)::float8,
                 a.measures, a.gate, a.gate_passed
          FROM projects p
          JOIN LATERAL (SELECT * FROM analyses a WHERE a.project_id = p.id
@@ -141,7 +155,7 @@ pub async fn list_projects(
     )
     .fetch_all(pool)
     .await?;
-    let analysis_ids: Vec<i64> = latest.iter().map(|r| r.3).collect();
+    let analysis_ids: Vec<i64> = latest.iter().map(|r| r.4).collect();
     let languages: Vec<(i64, String, i64)> = sqlx::query_as(
         "SELECT analysis_id, language, sum((metrics->>'ncloc')::bigint)::bigint
          FROM analysis_files WHERE analysis_id = ANY($1)
@@ -161,12 +175,13 @@ pub async fn list_projects(
     let projects = latest
         .into_iter()
         .map(
-            |(project, key, main_branch, analysis, at, measures, gate, passed)| {
+            |(project, key, name, main_branch, analysis, at, measures, gate, passed)| {
                 let stats = open.get(&project);
                 let ratings = ratings(&measures, stats);
                 let coverage = measures["coverage"].as_f64();
                 ProjectRow {
                     key,
+                    name,
                     main_branch,
                     languages: by_analysis.remove(&analysis).unwrap_or_default(),
                     gate: gate_state(passed, &gate),
@@ -210,8 +225,8 @@ pub async fn get_project(
     Query(q): Query<ProjectQuery>,
 ) -> Result<Json<ProjectDetail>, ApiError> {
     let pool = &state.pool;
-    let (project, main_branch): (i64, String) =
-        sqlx::query_as("SELECT id, main_branch FROM projects WHERE key = $1")
+    let (project, name, main_branch): (i64, Option<String>, String) =
+        sqlx::query_as("SELECT id, name, main_branch FROM projects WHERE key = $1")
             .bind(&key)
             .fetch_optional(pool)
             .await?
@@ -322,6 +337,7 @@ pub async fn get_project(
 
     Ok(Json(ProjectDetail {
         key,
+        name,
         main_branch,
         branch,
         branches,

@@ -16,6 +16,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { ProjectPage } from '@/pages/ProjectPage'
 import { ProjectRulesPage } from '@/pages/ProjectRulesPage'
+import { ProjectSettingsPage } from '@/pages/ProjectSettingsPage'
 import { QualityProfilesPage } from '@/pages/QualityProfilesPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RulesPage } from '@/pages/RulesPage'
@@ -43,6 +44,7 @@ export function AppRoutes() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
           <Route path="/projects/:key/rules" element={<ProjectRulesPage />} />
+          <Route path="/projects/:key/settings" element={<ProjectSettingsPage />} />
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
           <Route path="/projects/:key/dependencies" element={<DependenciesPage />} />
           <Route path="/projects/:key/coverage" element={<CoveragePage />} />
