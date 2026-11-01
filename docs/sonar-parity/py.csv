@@ -32,7 +32,7 @@ python:S1226,bug,minor,yes,all,syntactic,done,py/overwritten-parameter,,
 python:S1244,bug,major,yes,all,syntactic,done,py/float-equality,,
 python:S1309,code_smell,info,no,all,syntactic,done,py/noqa-comment,,
 python:S1313,code_smell,minor,yes,main,syntactic,done,py/hardcoded-ip,547,A01
-python:S1451,code_smell,blocker,no,all,syntactic,done,py/missing-license-header,,
+python:S1451,code_smell,blocker,no,all,syntactic,done,js/missing-license-header py/missing-license-header,,
 python:S1481,code_smell,minor,yes,all,syntactic,done,py/unused-local,,
 python:S1515,code_smell,major,yes,main,syntactic,done,py/loop-variable-closure,,
 python:S1542,code_smell,major,yes,main,syntactic,done,py/function-name,,
