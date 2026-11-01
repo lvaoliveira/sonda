@@ -11,8 +11,9 @@ use crate::deps::Dependency;
 use crate::gate::GateResult;
 use crate::lang::Lang;
 use crate::measures::Measures;
-use crate::model::{FileMetrics, Issue, Sha256};
+use crate::model::{FileMetrics, Issue, Severity, Sha256};
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -50,6 +51,9 @@ pub struct Report<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vulnerabilities: Option<&'a [crate::advisories::Vulnerability]>,
     pub warnings: &'a [String],
+    /// The `[rules]` settings of the project's sonda.toml the scan ran
+    /// with, so the server can show why a rule reports nothing (ADR-0016).
+    pub rule_settings: RuleSettings<'a>,
 }
 
 #[derive(Serialize)]
@@ -214,6 +218,38 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         dependencies: &scan.dependencies,
         vulnerabilities: scan.vulnerabilities.as_deref(),
         warnings: &scan.warnings,
+        rule_settings: RuleSettings::from_config(&outcome.rules),
+    }
+}
+
+/// `[rules]` from sonda.toml, sorted so the report stays deterministic.
+#[derive(Serialize)]
+pub struct RuleSettings<'a> {
+    /// Rules turned off.
+    pub disabled: Vec<&'a str>,
+    /// Off-by-default rules turned on.
+    pub enabled: Vec<&'a str>,
+    /// Changed severities, by rule.
+    pub severity: BTreeMap<&'a str, Severity>,
+}
+
+impl<'a> RuleSettings<'a> {
+    fn from_config(rules: &'a crate::config::RulesConfig) -> Self {
+        let sorted = |ids: &'a [String]| {
+            let mut v: Vec<&str> = ids.iter().map(String::as_str).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        RuleSettings {
+            disabled: sorted(&rules.disabled),
+            enabled: sorted(&rules.enabled),
+            severity: rules
+                .severity
+                .iter()
+                .map(|(k, v)| (k.as_str(), *v))
+                .collect(),
+        }
     }
 }
 

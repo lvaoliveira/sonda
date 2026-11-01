@@ -165,3 +165,49 @@ async fn commit_messages_and_durations_are_stored_and_shown() {
         );
     }
 }
+
+#[tokio::test]
+async fn rule_settings_from_sonda_toml_are_stored_and_shown() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("a.js", "let a = 1;\n")];
+    let mut body = upload_json_for(dir.path(), &files, "shop", "main");
+    // As the CLI sends them, but unsorted: the server normalizes.
+    body["report"]["rule_settings"] = serde_json::json!({
+        "disabled": ["js/no-var", "js/eqeqeq", "js/no-var"],
+        "enabled": ["js/prefer-const"],
+        "severity": { "js/no-eval": "minor" }
+    });
+    let (status, summary) = upload(&db, &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{summary}");
+    let id = summary["analysis_id"].as_i64().unwrap();
+    let (_, detail) = api(&db, &format!("/api/analyses/{id}")).await;
+    assert_eq!(
+        detail["ruleSettings"],
+        serde_json::json!({
+            "disabled": ["js/eqeqeq", "js/no-var"],
+            "enabled": ["js/prefer-const"],
+            "severity": { "js/no-eval": "minor" }
+        })
+    );
+
+    // From a CLI that sends none: unknown, not empty.
+    let mut older = upload_json_for(dir.path(), &files, "shop", "main");
+    older["report"]
+        .as_object_mut()
+        .unwrap()
+        .remove("rule_settings");
+    let (_, summary) = upload(&db, &older).await;
+    let id = summary["analysis_id"].as_i64().unwrap();
+    let (_, detail) = api(&db, &format!("/api/analyses/{id}")).await;
+    assert_eq!(detail["ruleSettings"], Value::Null);
+
+    // Bounded: it's untrusted input.
+    let mut bad = upload_json_for(dir.path(), &files, "shop", "main");
+    bad["report"]["rule_settings"]["disabled"] = serde_json::json!(["x".repeat(101)]);
+    let (status, _) = upload(&db, &bad).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
