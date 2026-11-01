@@ -1,6 +1,6 @@
-# ADR-0016: Turning rules off on the server, globally or per project
+# ADR-0016: Rule settings on the server, and showing every rule's state
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-11-01
 - Covers part of the roadmap's "Server-managed rule profiles" item
 
@@ -14,6 +14,11 @@ wait for its next scan.
 
 Admins want to do that from the server: turn a rule off for every project,
 or for one project, and turn it back on for a project where it's wanted.
+
+Whichever way a rule is turned off, the web app should say so. Today it
+can't: the uploaded report carries findings, not the rule settings the
+scan ran with, so a rule disabled in `sonda.toml` looks the same on the
+server as a rule that found nothing.
 
 ## Decision
 
@@ -29,6 +34,43 @@ that's off everywhere else, or drop one that's on everywhere else.
 
 Each change records who made it, when, and an optional note on why, shown
 next to the setting.
+
+### Uploads carry the repository's rule settings
+
+The JSON report gains `rule_settings`: what the project's `sonda.toml` set
+in `[rules]`, as the scan applied it.
+- `disabled`: rules turned off;
+- `enabled`: off-by-default rules turned on;
+- `severity`: changed severities, by rule.
+
+Adding a field keeps the report version. The server stores it with each
+analysis. A report from an older `sonda`, without the field, shows the
+repository's settings as unknown for that analysis rather than as
+"nothing set".
+
+### Every rule's state, whatever set it
+
+For each project, the server combines both places into one state per
+rule, and says what decided it:
+
+| State | Set by |
+|---|---|
+| on | default |
+| off | default (an off-by-default rule) |
+| on | `sonda.toml` (`enabled`) |
+| off | `sonda.toml` (`disabled`) |
+| off | server, globally |
+| off | server, this project |
+| on | server, this project (over a global off) |
+
+- **Severity** changed in `sonda.toml` is shown next to the state.
+- **Conflicts are shown, not hidden.** A rule `sonda.toml` turns off stays
+  off whatever the server says, since the scanner never ran it. If the
+  server says on, the project's Rules tab shows "off in `sonda.toml`; the
+  server setting has no effect until the repository turns it back on".
+- **Changes over time:** each analysis records its settings, so the tab
+  shows when the repository's settings changed, such as "`js/no-var`
+  turned off in `sonda.toml` at commit `a1b2c3d`".
 
 ### The server leaves findings out; the scanner is unchanged
 
@@ -64,14 +106,17 @@ server's gate decides (ADR-0014).
 
 ### Screens
 
-- **Rules page:** for admins, each rule gets an on/off switch with an
-  optional note. The page shows "off" on rules turned off globally, and
-  how many projects override it.
-- **A project's Rules tab:** the project's own settings, and every rule
-  that's off for that project, globally or for it alone, with who turned
-  it off and why. Admins change the setting there.
-- **Issues of a rule that's off** don't appear. The project's Rules tab
-  says how many there are.
+- **Rules page:** each rule shows its global server setting, and in how
+  many projects it's off, split by what turned it off (`sonda.toml` or
+  the server). Opening the rule lists those projects, with who turned it
+  off and why. Admins get an on/off switch with an optional note.
+- **A project's Rules tab:** every rule whose state differs from its
+  default for this project, with the state, what set it, and the note;
+  the repository's `sonda.toml` settings from the latest analysis; and
+  conflicts between the two. Admins change the project's server setting
+  there.
+- **Issues of a rule that's off on the server** don't appear. The
+  project's Rules tab says how many there are.
 
 ### Not now
 
@@ -91,5 +136,8 @@ server's gate decides (ADR-0014).
   counts they were stored with, so a chart can step down when a rule is
   turned off, as it does after reviews (ADR-0014).
 - Two places decide whether a rule counts: `sonda.toml` decides what the
-  scanner runs, and the server decides what counts. The project's Rules
-  tab shows the server's part, and `sonda rules` the scanner's.
+  scanner runs, and the server decides what counts. The web app shows
+  both, with what set each rule's state, so a rule is never off without
+  the screen saying why.
+- Analyses from an older `sonda` don't carry their rule settings, so the
+  repository's part shows as unknown until the project's next scan.
