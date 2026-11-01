@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type RuleProfileSummary, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -107,7 +107,11 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     issue: (id) => call<IssueDetail>('GET', `/issues/${id}`),
     updateIssue: (id, patch) => call<IssueDetail>('PATCH', `/issues/${id}`, patch),
     rules: () => call<RuleCatalog>('GET', '/rules'),
-    projectRules: (key) => call<ProjectRules>('GET', `/projects/${encodeURIComponent(key)}/rule-settings`),
+    projectRules: (key) => call<ProjectRules>('GET', `/projects/${encodeURIComponent(key)}/rules`),
+    ruleProfiles: () => call<RuleProfileSummary[]>('GET', '/rule-profiles'),
+    setProjectProfile: async (key, profile) => {
+      await call<unknown>('PUT', `/projects/${encodeURIComponent(key)}/rule-profile`, { profile })
+    },
     setRuleOff: async (rule, off, note) => {
       await call<unknown>('PUT', '/rule-settings', { rule, off, ...(note ? { note } : {}) })
     },

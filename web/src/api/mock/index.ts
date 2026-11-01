@@ -271,9 +271,20 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     projectRules: async (key) => {
       guard()
-      if (!projectKeys.includes(key)) throw new Error('not found')
+      const detail = projectDetail(key)
+      if (!detail) throw new Error('not found')
       const open = issues.filter((i) => i.status === 'open' || i.status === 'confirmed')
-      return wait(ruleSettings.projectRules(key, catalog.rules, open))
+      return wait(ruleSettings.projectRules(key, detail.languages.map((l) => l.id), catalog.rules, open))
+    },
+    ruleProfiles: async () => {
+      guard()
+      return wait(ruleSettings.profiles(projectKeys))
+    },
+    setProjectProfile: async (key, profile) => {
+      requireAdmin()
+      if (!projectKeys.includes(key)) throw new Error('not found')
+      ruleSettings.setProjectProfile(key, profile)
+      await wait(null)
     },
     setRuleOff: async (rule, off, note) => {
       requireAdmin()

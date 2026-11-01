@@ -84,9 +84,9 @@ next scan.
   is the default, how many projects use each, and per profile its rules
   with on/off and severity, searchable as on the Rules page. Admins
   create, copy, rename, delete and set the default; members read.
-- **A project's Settings → Rules:** the profile it uses (admins choose
-  it), then each rule's state with what set it: default, profile,
-  project, or `sonda.toml`, as ADR-0016's view already does.
+- **A project's Rules page** (ADR-0017): the profile it uses (admins
+  choose it), then each rule for the project's languages with its state
+  and what set it: default, profile, project, or `sonda.toml`.
 - **The Rules page:** each rule says which profiles turn it on or off.
 
 ### Not now
@@ -106,7 +106,7 @@ next scan.
   did for their other checks.
 - Two places still configure rules, with a clear order: the server's
   profile and project adjustments, then `sonda.toml`. The project's
-  Settings page shows which one decided each rule.
+  Rules page shows which one decided each rule.
 - Analyses from `sonda upload`, or from scans without the current
   profile, don't match the profile. The server says so rather than
   pretending otherwise.

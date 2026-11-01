@@ -244,14 +244,17 @@ file, the report formats and the public library API.
   applies, readable by analysis tokens for their project; reports record
   the profile they applied. ADR-0016's global settings become a "Server
   settings" profile, made the default.
-- Web app: a project's **Settings** page (ADR-0017), linked from its page,
-  starts with its **Rules**: the repository's `sonda.toml` settings (or
-  "unknown" from an older scan), every rule whose state differs from its
-  default with what set it, who, when and why, the findings left out,
-  conflicts, and when `sonda.toml` changed; admins set a rule on or off for
-  the project, or turn any rule off there. The **Rules** page says where
-  each rule is off, and admins turn a rule off for every project, or back
-  on.
+- Web app: a project's **Rules** page, linked from a Rules section on its
+  page (after Dependencies: rules on, off and by what, and the profile), with the
+  Rules page's structure (search, language, type and state filters, list
+  and detail) and only the rules for the project's languages: each with
+  its state there, what set it (default, `sonda.toml`, its profile, the
+  project), who, when and why, its findings here and those left out, and
+  conflicts. Admins enable or disable each rule for the project, or let it
+  follow the profile, and choose the project's rule profile. The page also
+  shows the repository's `sonda.toml` settings and when they changed. The
+  catalog's **Rules** page says where each rule is off and which profiles
+  set it, and admins turn a rule off in the default profile, or back on.
 - Rule settings on the server (ADR-0016): admins turn a rule off for every
   project or for one (`PUT /api/rule-settings`,
   `PUT /api/projects/{key}/rule-settings`), and a project can turn back on

@@ -190,7 +190,7 @@ async fn admins_manage_profiles_and_scans_get_their_projects() {
         json!({ "rule": "js/no-var", "on": true })
     );
     assert_ne!(adjusted["revision"], effective["revision"]);
-    let view = ok(&app, get_as("/api/projects/shop/rule-settings", as_max())).await;
+    let view = ok(&app, get_as("/api/projects/shop/rules", as_max())).await;
     assert_eq!(view["profile"]["name"], "Strict");
     assert_eq!(view["profile"]["chosen"], true);
 
@@ -316,7 +316,7 @@ async fn analyses_record_whether_they_applied_the_current_settings() {
     let dir = tempfile::tempdir().unwrap();
     let files = [("a.js", "var x = 1;\n")];
     upload(&db, &upload_json_for(dir.path(), &files, "shop", "main")).await;
-    let view = ok(&app, get_as("/api/projects/shop/rule-settings", cookie())).await;
+    let view = ok(&app, get_as("/api/projects/shop/rules", cookie())).await;
     assert_eq!(view["profileApplied"], false, "an older scan applied none");
 
     let effective = ok(&app, get_as("/api/projects/shop/rule-profile", cookie())).await;
@@ -325,7 +325,7 @@ async fn analyses_record_whether_they_applied_the_current_settings() {
         json!({ "name": effective["profile"], "revision": effective["revision"] });
     let (status, s) = upload(&db, &body).await;
     assert_eq!(status, StatusCode::CREATED, "{s}");
-    let view = ok(&app, get_as("/api/projects/shop/rule-settings", cookie())).await;
+    let view = ok(&app, get_as("/api/projects/shop/rules", cookie())).await;
     assert_eq!(view["profileApplied"], true);
 
     // A change makes it stale until the next scan.
@@ -335,7 +335,7 @@ async fn analyses_record_whether_they_applied_the_current_settings() {
         with_body("PUT", "/api/projects/shop/rule-settings", &ada, off),
     )
     .await;
-    let view = ok(&app, get_as("/api/projects/shop/rule-settings", cookie())).await;
+    let view = ok(&app, get_as("/api/projects/shop/rules", cookie())).await;
     assert_eq!(view["profileApplied"], false);
 
     let mut bad = upload_json_for(dir.path(), &files, "shop", "main");
