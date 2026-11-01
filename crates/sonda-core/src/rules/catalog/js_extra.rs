@@ -1364,24 +1364,22 @@ fn find_index_tests_equality(call: Node, src: &[u8]) -> bool {
 
 fn constant_assigned_in_constructor<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     let body = method.child_by_field_name("body")?;
-    // Only the statements at the very top count, as SonarQube does: once
+    // Only the statement at the very top counts, as SonarQube does: once
     // something else has run, a field initializer is no longer equivalent.
-    for s in named(body) {
-        let literal_to_this = s.kind() == "expression_statement"
-            && s.named_child(0).is_some_and(|a| {
-                a.kind() == "assignment_expression"
-                    && a.child_by_field_name("left").is_some_and(|l| {
-                        l.kind() == "member_expression"
-                            && l.child_by_field_name("object")
-                                .is_some_and(|o| o.kind() == "this")
-                    })
-                    && a.child_by_field_name("right").is_some_and(|r| {
-                        matches!(r.kind(), "number" | "string" | "true" | "false" | "null")
-                    })
-            });
-        return literal_to_this.then_some(s);
-    }
-    None
+    let first = named(body).into_iter().next()?;
+    (first.kind() == "expression_statement"
+        && first.named_child(0).is_some_and(|a| {
+            a.kind() == "assignment_expression"
+                && a.child_by_field_name("left").is_some_and(|l| {
+                    l.kind() == "member_expression"
+                        && l.child_by_field_name("object")
+                            .is_some_and(|o| o.kind() == "this")
+                })
+                && a.child_by_field_name("right").is_some_and(|r| {
+                    matches!(r.kind(), "number" | "string" | "true" | "false" | "null")
+                })
+        }))
+    .then_some(first)
 }
 
 fn import_exported_again<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
