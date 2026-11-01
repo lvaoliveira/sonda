@@ -38,9 +38,11 @@ pub struct RuleView {
     pub effort_minutes: u32,
     /// False for rules a repository must list in `rules.enabled`.
     pub on_by_default: bool,
-    /// Set when the server turns it off for every project (ADR-0016): who,
+    /// Set when the default profile turns it off (ADR-0016, ADR-0018): who,
     /// when and why.
     pub server_off: Option<crate::rule_settings::Change>,
+    /// The profiles that set it, on or off, with their severity.
+    pub in_profiles: Vec<crate::rule_settings::InProfile>,
     /// In how many projects it's off, by what turned it off; null when on
     /// everywhere.
     pub off_in: Option<crate::rule_settings::OffIn>,
@@ -93,7 +95,7 @@ pub async fn list(
         .into_iter()
         .map(|(rule, n, p)| (rule, (n, p)))
         .collect();
-    let (server_off, off_in) = crate::rule_settings::off_counts(&state.pool).await?;
+    let overview = crate::rule_settings::rule_overview(&state.pool).await?;
 
     let rules = RULES
         .iter()
@@ -128,8 +130,9 @@ pub async fn list(
                 severity: r.severity,
                 effort_minutes: r.effort_minutes,
                 on_by_default: r.on_by_default(),
-                server_off: server_off.get(r.id).cloned(),
-                off_in: off_in.get(r.id).copied(),
+                server_off: overview.default_off.get(r.id).cloned(),
+                in_profiles: overview.in_profiles.get(r.id).cloned().unwrap_or_default(),
+                off_in: overview.off_in.get(r.id).copied(),
                 open_issues,
                 projects,
                 tags,

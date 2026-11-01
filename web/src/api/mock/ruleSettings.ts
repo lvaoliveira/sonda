@@ -35,9 +35,9 @@ export function mockRuleSettings() {
         ? [true, 'sonda_toml']
         : [rule.onByDefault, 'default']
     const mine = own.get(project)?.get(rule.id)
-    const server = mine ? { on: mine.on, by: 'project' as const, change: mine.change } : global.has(rule.id) ? { on: false, by: 'server' as const, change: global.get(rule.id)! } : null
+    const server = mine ? { on: mine.on, by: 'project' as const, change: mine.change } : global.has(rule.id) ? { on: false, by: 'profile' as const, change: global.get(rule.id)! } : null
     const severity = toml?.severity[rule.id] && toml.severity[rule.id] !== rule.severity ? toml.severity[rule.id] : null
-    const base = { rule: rule.id, severity, projectSetting: mine ? (mine.on ? 'on' : 'off') : null } as const
+    const base = { rule: rule.id, severity, severityBy: severity ? ('sonda_toml' as const) : null, projectSetting: mine ? (mine.on ? 'on' : 'off') : null } as const
     if (!scannerOn) return { ...base, on: false, setBy: scannerBy, change: server?.change ?? null, conflict: server?.on === true }
     if (server) return { ...base, on: server.on, setBy: server.by, change: server.change, conflict: false }
     return { ...base, on: true, setBy: scannerBy, change: null, conflict: false }
@@ -59,7 +59,7 @@ export function mockRuleSettings() {
           const s = state(r, p)
           if (s.on) continue
           if (s.setBy === 'sonda_toml') counts.sondaToml++
-          if (s.setBy === 'server' || s.setBy === 'project') counts.server++
+          if (s.setBy === 'profile' || s.setBy === 'project') counts.server++
         }
         return { ...r, serverOff: global.get(r.id) ?? null, offIn: counts.sondaToml + counts.server ? counts : null }
       })
@@ -69,7 +69,15 @@ export function mockRuleSettings() {
         .map((r) => ({ ...state(r, project), name: r.name, hiddenIssues: off(r.id, project) ? openIssues.filter((i) => i.project === project && i.rule === r.id).length : 0 }))
         .filter((s) => s.setBy !== 'default' || s.projectSetting || s.conflict || s.severity || global.has(s.rule))
         .sort((a, b) => a.rule.localeCompare(b.rule))
-      return { project, mainBranch: 'main', sondaToml: SONDA_TOML[project] ?? null, rules: states, tomlChanges: TOML_CHANGES[project] ?? [] }
+      return {
+        project,
+        mainBranch: 'main',
+        profile: { id: 1, name: global.size ? 'Server settings' : 'sonda way', isDefault: true, chosen: false },
+        profileApplied: project in SONDA_TOML ? SONDA_TOML[project] !== null : null,
+        sondaToml: SONDA_TOML[project] ?? null,
+        rules: states,
+        tomlChanges: TOML_CHANGES[project] ?? [],
+      }
     },
     setGlobal(rule: string, isOff: boolean, by: string, note?: string) {
       checkNote(note)
