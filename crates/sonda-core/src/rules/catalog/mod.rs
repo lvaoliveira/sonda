@@ -10,6 +10,7 @@ mod java_final;
 mod java_last;
 mod java_more;
 mod java_regex;
+mod java_rest;
 mod java_security;
 mod java_smells;
 mod java_tail;
@@ -71,6 +72,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_last::RULES,
         java_final::RULES,
         java_tail::RULES,
+        java_rest::RULES,
         c::RULES,
     ]
     .into_iter()
