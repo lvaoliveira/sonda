@@ -11,6 +11,7 @@ import { dependencyList, reviewDependency } from './dependencies'
 import { PROJECT_LIST, projectDetail, setNewCodePeriod } from './projects'
 import { queryIssues } from './query'
 import { securityReview } from './review'
+import { mockRuleSettings } from './ruleSettings'
 import { mockTokens } from './tokens'
 import rulesData from './rules.json'
 
@@ -42,6 +43,13 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const catalog = structuredClone(rulesData) as RuleCatalog
   const users = structuredClone(MOCK_USERS)
   const tokens = mockTokens()
+  const ruleSettings = mockRuleSettings()
+  const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
+  const findRule = (id: string) => {
+    if (!catalog.rules.some((r) => r.id === id)) throw new Error(`unknown rule "${id}" (see GET /api/rules)`)
+  }
+  /** As the server: findings of a rule the server turned off leave lists. */
+  const counted = () => issues.filter((i) => !ruleSettings.off(i.rule, i.project))
   const signedIn = options.signedIn ?? true
   const session: Session = { user: signedIn ? users[0] : null, authenticated: signedIn, readsRequireAuth: options.readsRequireAuth ?? false }
   const asUser = (u: UserRow): User => ({ id: u.id, username: u.username, displayName: u.displayName, role: u.role, disabled: u.disabled })
@@ -250,7 +258,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     issues: async (query) => {
       guard()
-      return wait(queryIssues(issues, query))
+      return wait(queryIssues(counted(), query))
     },
     issue: async (id) => {
       guard()
@@ -259,7 +267,26 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     updateIssue: async (id, patch) => wait(update(id, patch)),
     rules: async () => {
       guard()
-      return wait(catalog)
+      return wait({ ...catalog, rules: ruleSettings.withSettings(catalog.rules, projectKeys) })
+    },
+    projectRules: async (key) => {
+      guard()
+      if (!projectKeys.includes(key)) throw new Error('not found')
+      const open = issues.filter((i) => i.status === 'open' || i.status === 'confirmed')
+      return wait(ruleSettings.projectRules(key, catalog.rules, open))
+    },
+    setRuleOff: async (rule, off, note) => {
+      requireAdmin()
+      findRule(rule)
+      ruleSettings.setGlobal(rule, off, session.user!.username, note)
+      await wait(null)
+    },
+    setProjectRule: async (key, rule, state, note) => {
+      requireAdmin()
+      findRule(rule)
+      if (!projectKeys.includes(key)) throw new Error('not found')
+      ruleSettings.setProject(key, rule, state, session.user!.username, note)
+      await wait(null)
     },
   }
 }
