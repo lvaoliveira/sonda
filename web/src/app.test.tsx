@@ -109,6 +109,26 @@ describe('Issues', () => {
     expect(within(list).getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('shows one pane at a time on a phone: the list, then the issue', async () => {
+    const user = userEvent.setup()
+    // A phone: no min-width query matches.
+    const wide = window.matchMedia
+    window.matchMedia = ((query: string) => ({ ...wide(query), matches: false })) as typeof window.matchMedia
+    try {
+      renderAt('/issues')
+      const list = await screen.findByRole('region', { name: 'Issue list' })
+      expect(screen.queryByRole('article', { name: 'Issue detail' })).not.toBeInTheDocument()
+      await user.click(within(list).getAllByRole('option')[1])
+      const detail = await screen.findByRole('article', { name: 'Issue detail' })
+      expect(screen.queryByRole('region', { name: 'Issue list' })).not.toBeInTheDocument()
+      await user.click(await within(detail).findByRole('button', { name: '← All issues' }))
+      expect(await screen.findByRole('region', { name: 'Issue list' })).toBeInTheDocument()
+      expect(screen.queryByRole('article', { name: 'Issue detail' })).not.toBeInTheDocument()
+    } finally {
+      window.matchMedia = wide
+    }
+  })
+
   it('links each issue to its rule', async () => {
     renderAt('/issues')
     const detail = await screen.findByRole('article', { name: 'Issue detail' })
@@ -859,6 +879,25 @@ describe('Shell', () => {
     const after = screen.getByRole('complementary', { name: 'Primary' })
     expect(within(after).getByRole('link', { name: /Quality gates/ })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByText('Page not found')).not.toBeInTheDocument()
+  })
+
+  it('opens the navigation as a menu on narrow screens, and closes it', async () => {
+    const user = userEvent.setup()
+    renderAt('/rules')
+    const open = await screen.findByRole('button', { name: 'Open menu' })
+    expect(open).toHaveAttribute('aria-expanded', 'false')
+    await user.click(open)
+    expect(open).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard('{Escape}')
+    expect(open).toHaveAttribute('aria-expanded', 'false')
+    await user.click(open)
+    await user.click(screen.getByRole('button', { name: 'Close menu' }))
+    expect(open).toHaveAttribute('aria-expanded', 'false')
+    // Following a link closes it too, even to the page already shown.
+    await user.click(open)
+    const nav = screen.getByRole('complementary', { name: 'Primary' })
+    await user.click(within(nav).getByRole('link', { name: /Rules/ }))
+    expect(open).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('toggles and remembers the theme', async () => {

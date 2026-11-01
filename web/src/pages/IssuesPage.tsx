@@ -71,6 +71,10 @@ function Issues({ me }: { me: string | null }) {
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const clearToast = useCallback(() => setToast(null), [])
   const wide = useWide(1280)
+  // On a phone, one pane at a time: the list, or the issue picked from it.
+  const narrow = !useWide(900)
+  const [reading, setReading] = useState(false)
+  const listHidden = narrow && reading
   // Facets follow the window width until toggled; crossing the breakpoint resets them.
   const [facets, setFacets] = useState({ wide, show: wide })
   if (facets.wide !== wide) setFacets({ wide, show: wide })
@@ -153,7 +157,7 @@ function Issues({ me }: { me: string | null }) {
   if (!page) {
     return loaded.state === 'error' ? <p role="alert">Could not load issues: {loaded.error.message}</p> : <IssuesSkeleton />
   }
-  const columns = showFacets ? (wide ? '240px minmax(0,1fr) minmax(0,1.35fr)' : '220px minmax(0,1fr) minmax(0,1.2fr)') : 'minmax(0,1fr) minmax(0,1.35fr)'
+  const columns = narrow ? 'minmax(0,1fr)' : showFacets ? (wide ? '240px minmax(0,1fr) minmax(0,1.35fr)' : '220px minmax(0,1fr) minmax(0,1.2fr)') : 'minmax(0,1fr) minmax(0,1.35fr)'
   const last = Math.min(page.offset + page.limit, page.total)
 
   return (
@@ -166,7 +170,7 @@ function Issues({ me }: { me: string | null }) {
       >
         <div className="flex items-center gap-2">
           <Button onClick={() => setShowFacets(!showFacets)}>{showFacets ? 'Hide filters' : 'Filters'}</Button>
-          <span className="text-xs text-fg-faint">
+          <span className="text-xs text-fg-faint max-[640px]:hidden">
             <Key>j</Key> <Key>k</Key> move · <Key>a</Key> assign · <Key>c</Key> confirm
           </span>
         </div>
@@ -184,9 +188,9 @@ function Issues({ me }: { me: string | null }) {
       {loaded.state === 'error' && <p role="alert">Could not load issues: {loaded.error.message}</p>}
 
       <div className="grid min-h-[calc(100vh-220px)] gap-px overflow-hidden rounded-xl bg-line" style={{ gridTemplateColumns: columns, boxShadow: '0 0 0 1px var(--sd-line)' }}>
-        {showFacets && <Facets page={page} filter={filter} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
+        {showFacets && !listHidden && <Facets page={page} filter={filter} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
 
-        <section aria-label="Issue list" aria-busy={loaded.state === 'loading'} className="flex min-w-0 flex-col bg-panel-2">
+        <section hidden={listHidden} aria-label="Issue list" aria-busy={loaded.state === 'loading'} className="flex min-w-0 flex-col bg-panel-2">
           <div className="flex min-h-12 flex-wrap items-center gap-2.5 border-b border-line px-3.5">
             <span className="font-semibold">
               {page.total === 0 ? 'No issues' : `${formatNumber(page.offset + 1)}–${formatNumber(last)} of ${formatNumber(page.total)}`}
@@ -223,7 +227,10 @@ function Issues({ me }: { me: string | null }) {
                   key={issue.id}
                   role="option"
                   aria-selected={on}
-                  onClick={() => setSelectedId(issue.id)}
+                  onClick={() => {
+                    setSelectedId(issue.id)
+                    if (narrow) setReading(true)
+                  }}
                   className="grid cursor-pointer grid-cols-[16px_14px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-3 pr-3.5 pl-[11px] hover:bg-hover"
                   style={{ borderLeft: `3px solid ${on ? 'var(--sd-accent)' : 'transparent'}`, background: on ? 'var(--sd-panel)' : undefined }}
                 >
@@ -269,8 +276,9 @@ function Issues({ me }: { me: string | null }) {
           )}
         </section>
 
-        {selected && (
+        {selected && (!narrow || reading) && (
           <IssueView
+            onBack={narrow ? () => setReading(false) : undefined}
             id={selected.id}
             version={detailVersion}
             me={me}
@@ -387,7 +395,10 @@ function IssueView({
   me,
   onStatus,
   onAssign,
+  onBack,
 }: {
+  /** On a phone, back to the list. */
+  onBack?: () => void
   id: number
   version: number
   me: string | null
@@ -422,6 +433,11 @@ function IssueView({
   return (
     <article aria-label="Issue detail" className="flex min-w-0 flex-col overflow-auto bg-panel">
       <div className="flex flex-col gap-3 border-b border-line px-5 py-[18px]">
+        {onBack && (
+          <button type="button" onClick={onBack} className="cursor-pointer self-start border-0 bg-transparent p-0 text-[13px] text-brand">
+            ← All issues
+          </button>
+        )}
         <div className="flex flex-wrap items-center gap-2.5 text-[12.5px]">
           <SeverityPill severity={issue.severity} />
           <span className="inline-flex h-6 items-center rounded-xl bg-hover px-2.5">{CATEGORY_LABEL[issue.category]}</span>

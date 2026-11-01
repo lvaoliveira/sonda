@@ -108,7 +108,7 @@ function Components({ list }: { list: ComponentList }) {
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl bg-panel-2 edge">
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[820px] border-collapse text-[13.5px]">
               <thead>
                 <tr className="font-mono text-[9.5px] tracking-[.06em] text-fg-faint uppercase">
