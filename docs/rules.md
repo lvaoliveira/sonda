@@ -37600,7 +37600,7 @@ class A { void F(Stream s, byte[] b) { s.ReadExactly(b, 0, b.Length); } }
 
 SonarQube: S4211
 
-Standards: [CWE-284](https://cwe.mitre.org/data/definitions/284.html), OWASP A01:2025 Broken Access Control, OWASP A01:2021 Broken Access Control
+Standards: [CWE-269](https://cwe.mitre.org/data/definitions/269.html), OWASP A06:2025 Insecure Design, OWASP A05:2021 Security Misconfiguration
 
 Noncompliant:
 
