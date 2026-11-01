@@ -13,8 +13,10 @@ mod java_final;
 mod java_last;
 mod java_more;
 mod java_regex;
+mod java_rest;
 mod java_security;
 mod java_smells;
+mod java_tail;
 mod java_tests;
 mod js;
 mod js_a11y;
@@ -72,6 +74,8 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_regex::RULES,
         java_last::RULES,
         java_final::RULES,
+        java_tail::RULES,
+        java_rest::RULES,
         c::RULES,
         cs::RULES,
         cs_security::RULES,
@@ -124,7 +128,6 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "py/method-could-be-static",
     "py/hint-missing-return",
     "py/hint-missing-parameter",
-    "py/trailing-comment",
     "py/compression-namespace",
     // Documentation and licence-header policies are a project decision.
     "py/missing-docstring",
@@ -135,6 +138,7 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "common/file-length",
     "common/final-newline",
     "common/tab-character",
+    "common/trailing-comment",
     // Java style rules outside SonarQube's default profile that fire on most
     // real code: escaped Unicode, suppressions, public fields, boolean
     // parameters, legacy collections, brace and else conventions.
@@ -182,6 +186,20 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/test-assertion-message",
     // Java 22 syntax: older code bases cannot adopt it.
     "java/unused-exception-parameter",
+    // Brace layout, member order, licence headers and similar policies: a
+    // project picks one convention (several of these contradict each other).
+    "java/brace-on-its-own-line",
+    "java/brace-at-line-end",
+    "java/else-on-another-line",
+    "java/else-on-the-same-line",
+    "java/closing-brace-not-first",
+    "java/member-order",
+    "java/missing-license-header",
+    "java/functional-interface-redefined",
+    "java/get-class-loader",
+    "java/loops-over-same-collection",
+    "java/lambda-explicit-types",
+    "java/inner-class-static",
     // Outside SonarQube's default C# profile.
     "cs/protected-in-sealed",
     "cs/redundant-constructor",

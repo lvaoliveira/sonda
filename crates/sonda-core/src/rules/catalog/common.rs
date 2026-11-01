@@ -127,4 +127,16 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Structural,
         example: None,
     },
+    Rule {
+        id: crate::rules::TRAILING_COMMENT,
+        name: "Comments should not be located at the end of lines of code",
+        description: "A comment after code pushes the line out and is easy to miss.",
+        message: "",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S139")],
+        check: Check::Structural,
+        example: None,
+    },
 ];

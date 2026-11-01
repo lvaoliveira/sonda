@@ -1037,7 +1037,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[exact("S139")],
+        sonar: &[related("S139")],
         check: Check::Query {
             langs: PYTHON,
             query: r#"(comment) @match"#,

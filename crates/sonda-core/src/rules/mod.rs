@@ -21,6 +21,7 @@ pub(crate) const LINE_LENGTH: &str = "common/line-length";
 pub(crate) const FILE_LENGTH: &str = "common/file-length";
 pub(crate) const FINAL_NEWLINE: &str = "common/final-newline";
 pub(crate) const TAB_CHARACTER: &str = "common/tab-character";
+pub(crate) const TRAILING_COMMENT: &str = "common/trailing-comment";
 pub(crate) const COMMENTED_OUT_CODE: &str = "common/commented-out-code";
 
 /// Extra check on the node captured as `@match`.
