@@ -1,11 +1,11 @@
 import { type FormEvent, useState } from 'react'
-import { useParams } from 'react-router'
+import { useNavigate, useParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { ProjectSettingChange, ProjectSettings, ProjectSettingsPatch } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
-import { shortDate } from '@/lib/format'
+import { formatNumber, shortDate } from '@/lib/format'
 
 /** A project's settings (ADR-0017): admins change them, members read them. */
 export function ProjectSettingsPage() {
@@ -69,7 +69,55 @@ function Settings({ settings, isAdmin, save }: { settings: ProjectSettings; isAd
           </ul>
         )}
       </Card>
+      {isAdmin && <DangerZone settings={settings} />}
     </>
+  )
+}
+
+/** Deleting the project (ADR-0017): permanent, confirmed by typing its key. */
+function DangerZone({ settings }: { settings: ProjectSettings }) {
+  const api = useApi()
+  const navigate = useNavigate()
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const analyses = settings.branches.reduce((n, b) => n + b.analyses, 0)
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await api.deleteProject(settings.key, typed)
+      navigate('/projects')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
+    }
+  }
+  return (
+    <Card id="danger" title="Danger zone" subtitle="Deleting the project can't be undone">
+      <p className="m-0 text-[13px] text-fg-muted">
+        This deletes <Mono className="text-[12px] text-fg">{settings.key}</Mono> and its {formatNumber(analyses)} {analyses === 1 ? 'analysis' : 'analyses'} on{' '}
+        {settings.branches.length} {settings.branches.length === 1 ? 'branch' : 'branches'}, with their issues and history, sources, dependencies, reviews and
+        settings. Its project analysis tokens are revoked. Uploads to <Mono className="text-[12px]">{settings.key}</Mono> are then refused, so a forgotten pipeline
+        can't bring it back, until an admin allows the key again on the Administration page.
+      </p>
+      <form onSubmit={(e) => void submit(e)} className="flex flex-wrap items-center gap-2">
+        <input
+          aria-label="Type the project's key to confirm"
+          placeholder={`Type ${settings.key} to confirm`}
+          autoComplete="off"
+          spellCheck={false}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          className="h-8 w-[320px] max-w-full rounded-md border-0 bg-canvas px-2 font-mono text-[12.5px] edge"
+        />
+        <Button type="submit" disabled={busy || typed !== settings.key} className="text-crit">
+          Delete this project
+        </Button>
+      </form>
+      <SaveError error={error} />
+    </Card>
   )
 }
 

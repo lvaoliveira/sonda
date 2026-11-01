@@ -3,9 +3,7 @@
 //! identifiers C# 14 makes contextual keywords. Queries stay cheap on deep
 //! trees: see the notes in `js_modern.rs`.
 
-use super::cs::{
-    CS_SCOPE_STOPS, cs_has_modifier, cs_statements, operand, simple_name, unparenthesized,
-};
+use super::cs::{CS_SCOPE_STOPS, cs_has_modifier, operand, simple_name};
 use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_more::{enclosing_type, members};
 use super::java_bugs::{find_in_scope, operator_text};
@@ -20,26 +18,6 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[];
 
 pub(super) static RULES: &[Rule] = &[
     // ---- Bugs ----
-    Rule {
-        id: "cs/integer-division-to-floating",
-        name: "Integer division should not be assigned to a floating-point variable",
-        description: "`double d = 1 / 3;` divides integers first, which gives 0, and only then converts it.",
-        message: "Make one operand floating point (1.0 / 3), or cast it before dividing.",
-        category: Bug,
-        severity: Minor,
-        effort_minutes: 2,
-        sonar: &[related("S2184")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(variable_declaration type: (predefined_type) (variable_declarator)) @match",
-            filter: Some(Find(integer_division_into_float)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { double Ratio() { double r = 1 / 3; return r; } }",
-            good: "class A { double Ratio() { double r = 1.0 / 3; return r; } }",
-        }),
-    },
     Rule {
         id: "cs/datetime-primary-key",
         name: "Dates should not be used as primary keys",
@@ -80,26 +58,6 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::CSharp,
             bad: "class B : A { public override void Save(string path, bool force = false) { base.Save(path); } }",
             good: "class B : A { public override void Save(string path, bool force = false) { base.Save(path, force); } }",
-        }),
-    },
-    Rule {
-        id: "cs/begin-invoke-without-end",
-        name: "BeginInvoke should be paired with EndInvoke",
-        description: "Without EndInvoke the call's resources leak, and any exception it throws is lost.",
-        message: "Call EndInvoke (in the callback, or later) for this BeginInvoke.",
-        category: Bug,
-        severity: Critical,
-        effort_minutes: 10,
-        sonar: &[related("S4583")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: r#"(class_declaration body: (declaration_list)) @match"#,
-            filter: Some(Find(unpaired_begin_invoke)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { void F(Func<int> work) { work.BeginInvoke(null, null); } }",
-            good: "class A { void F(Func<int> work) { var r = work.BeginInvoke(null, null); work.EndInvoke(r); } }",
         }),
     },
     Rule {
@@ -233,46 +191,6 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::CSharp,
             bad: "enum Color { Red, Green, Blue } class A { Color F() => Color.Red | Color.Blue; }",
             good: "[Flags] enum Colors { None = 0, Red = 1, Green = 2, Blue = 4 } class A { Colors F() => Colors.Red | Colors.Blue; }",
-        }),
-    },
-    Rule {
-        id: "cs/loop-could-be-where",
-        name: "Loops that only filter should use Where",
-        description: "A foreach whose whole body is an `if` reads more directly as iterating `xs.Where(...)`.",
-        message: "Iterate the collection filtered with Where(...) instead of testing inside the loop.",
-        category: CodeSmell,
-        severity: Minor,
-        effort_minutes: 5,
-        sonar: &[related("S3267")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(foreach_statement body: (block)) @match",
-            filter: Some(Find(loop_only_filters)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { void F(int[] xs) { foreach (var x in xs) { if (x > 0) { G(x); } } } }",
-            good: "class A { void F(int[] xs) { foreach (var x in xs.Where(x => x > 0)) { G(x); } } }",
-        }),
-    },
-    Rule {
-        id: "cs/method-returns-constant",
-        name: "Methods should not just return a constant",
-        description: "A private method with no parameters that returns a literal is a constant in disguise.",
-        message: "Replace this method with a constant.",
-        category: CodeSmell,
-        severity: Minor,
-        effort_minutes: 2,
-        sonar: &[related("S3400")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(method_declaration name: (identifier) parameters: (parameter_list) body: (_)) @match",
-            filter: Some(Find(returns_constant)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { private int Limit() { return 10; } int F() => Limit(); }",
-            good: "class A { private const int Limit = 10; int F() => Limit; }",
         }),
     },
     Rule {
@@ -522,33 +440,6 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- filters
 
-fn is_integer_division(e: Node, src: &[u8]) -> bool {
-    let e = unparenthesized(e);
-    e.kind() == "binary_expression"
-        && operator_text(e, src) == b"/"
-        && e.child_by_field_name("left")
-            .is_some_and(|l| unparenthesized(l).kind() == "integer_literal")
-        && e.child_by_field_name("right")
-            .is_some_and(|r| unparenthesized(r).kind() == "integer_literal")
-}
-
-fn integer_division_into_float<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let ty = text(declaration.child_by_field_name("type")?, src);
-    if !matches!(ty, b"double" | b"float" | b"decimal") {
-        return None;
-    }
-    let mut cursor = declaration.walk();
-    let declarators: Vec<Node<'t>> = declaration
-        .named_children(&mut cursor)
-        .filter(|d| d.kind() == "variable_declarator")
-        .collect();
-    declarators.into_iter().find_map(|d| {
-        let mut c = d.walk();
-        let value = d.named_children(&mut c).last()?;
-        is_integer_division(value, src).then_some(value)
-    })
-}
-
 fn date_key<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let ty = property.child_by_field_name("type")?;
     let t = text(ty, src);
@@ -600,23 +491,6 @@ fn base_call_drops_optional<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
                 let args = text(n.child_by_field_name("arguments").unwrap_or(n), src);
                 optional.iter().any(|o| count_word(args, o) == 0)
             }
-    })
-}
-
-fn unpaired_begin_invoke<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let body = class.child_by_field_name("body")?;
-    let whole = text(class, src);
-    if count_word(whole, b"EndInvoke") > 0 {
-        return None;
-    }
-    find_in_scope(body, &[], |n| {
-        n.kind() == "invocation_expression"
-            && n.child_by_field_name("function")
-                .and_then(|f| f.child_by_field_name("name"))
-                .is_some_and(|m| text(m, src) == b"BeginInvoke")
-            // Control.BeginInvoke(delegate) in Windows Forms needs no EndInvoke;
-            // a delegate's BeginInvoke ends with (callback, state).
-            && cs_call_arguments(n).len() >= 2
     })
 }
 
@@ -854,73 +728,6 @@ fn non_flags_bitwise<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             && is_member(n.child_by_field_name("left"))
             && is_member(n.child_by_field_name("right"))
     })
-}
-
-fn loop_only_filters<'t>(loop_node: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
-    let body = loop_node.child_by_field_name("body")?;
-    let statements = cs_statements(body);
-    let [statement] = statements.as_slice() else {
-        return None;
-    };
-    // A plain if, without else, whose condition doesn't stop the loop early.
-    (statement.kind() == "if_statement"
-        && statement.child_by_field_name("alternative").is_none()
-        && find_in_scope(*statement, CS_SCOPE_STOPS, |n| {
-            matches!(
-                n.kind(),
-                "break_statement"
-                    | "return_statement"
-                    | "yield_statement"
-                    | "continue_statement"
-                    | "await_expression"
-            )
-        })
-        .is_none())
-    .then_some(*statement)
-}
-
-fn returns_constant<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let private = cs_has_modifier(method, "private", src)
-        || !["public", "protected", "internal"]
-            .iter()
-            .any(|m| cs_has_modifier(method, m, src));
-    let special = [
-        "override", "virtual", "abstract", "extern", "partial", "async",
-    ]
-    .iter()
-    .any(|m| cs_has_modifier(method, m, src));
-    let mut cursor = method.walk();
-    let explicit = method
-        .named_children(&mut cursor)
-        .any(|c| matches!(c.kind(), "explicit_interface_specifier" | "attribute_list"));
-    let no_params = method
-        .child_by_field_name("parameters")
-        .is_some_and(|p| p.named_child_count() == 0);
-    if !private || special || explicit || !no_params {
-        return None;
-    }
-    // Only class members: interface default methods are API.
-    if method.parent()?.parent()?.kind() != "class_declaration" {
-        return None;
-    }
-    let body = method.child_by_field_name("body")?;
-    let value = match body.kind() {
-        "arrow_expression_clause" => operand(body)?,
-        "block" => match cs_statements(body).as_slice() {
-            [s] if s.kind() == "return_statement" => operand(*s)?,
-            _ => return None,
-        },
-        _ => return None,
-    };
-    matches!(
-        value.kind(),
-        "integer_literal"
-            | "real_literal"
-            | "string_literal"
-            | "boolean_literal"
-            | "character_literal"
-    )
-    .then_some(value)
 }
 
 fn array_passed_to_params<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1207,15 +1014,8 @@ mod tests {
     #[test]
     fn divisions_keys_and_base_calls() {
         let src = "namespace N;\nclass A : B {\nvoid F() { double a = 1 / 3; double b = 1.0 / 3; int c = 1 / 3; float d = (2 / 4); }\n[Key] public DateTime Taken { get; set; }\npublic DateTime Id { get; set; }\npublic DateTime Created { get; set; }\npublic override void Save(string p, bool force = false) { base.Save(p); }\npublic override void Load(string p, bool force = false) { base.Load(p, force); }\n}";
-        assert_eq!(flagged("cs/integer-division-to-floating", src), [3, 3]);
         assert_eq!(flagged("cs/datetime-primary-key", src), [4, 5]);
         assert_eq!(flagged("cs/optional-not-passed-to-base", src), [7]);
-    }
-
-    #[test]
-    fn begin_invoke() {
-        let src = "namespace N;\nclass A { void F(Func<int> w) { w.BeginInvoke(null, null); } }\nclass B { void F(Func<int> w) { var r = w.BeginInvoke(null, null); w.EndInvoke(r); } }\nclass C { void F(Control c) { c.BeginInvoke(new Action(G)); } }";
-        assert_eq!(flagged("cs/begin-invoke-without-end", src), [2]);
     }
 
     #[test]
@@ -1271,8 +1071,6 @@ mod tests {
     fn enums_loops_constants() {
         let src = "namespace N;\nenum Color { Red, Blue }\n[Flags] enum Access { None = 0, Read = 1, Write = 2 }\nclass A {\nobject F() => Color.Red | Color.Blue;\nobject G() => Access.Read | Access.Write;\nvoid H(int[] xs) {\nforeach (var x in xs) { if (x > 0) { G(x); } }\nforeach (var x in xs) { if (x > 0) { return; } }\nforeach (var x in xs) { if (x > 0) { G(x); } else { H(x); } }\n}\nprivate int Limit() { return 10; }\nprivate int Twice(int x) => x * 2;\npublic string Name() => \"a\";\nprivate override int K() => 1;\n}";
         assert_eq!(flagged("cs/bitwise-on-non-flags-enum", src), [5]);
-        assert_eq!(flagged("cs/loop-could-be-where", src), [8]);
-        assert_eq!(flagged("cs/method-returns-constant", src), [12]);
     }
 
     #[test]

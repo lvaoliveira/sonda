@@ -470,27 +470,6 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
-        id: "cs/redundant-boolean-literal",
-        name: "Boolean literals should not be redundant",
-        description: "`b ? true : false` is `b`, and `x && true` is `x`. Comparisons such as `x == true` are left \
-                      alone: on a nullable `bool` they aren't redundant, and the syntax tree can't tell.",
-        message: "Remove the boolean literal and simplify the expression.",
-        category: CodeSmell,
-        severity: Minor,
-        effort_minutes: 2,
-        sonar: &[related("S1125")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "[(binary_expression) (conditional_expression) (prefix_unary_expression (boolean_literal))] @match",
-            filter: Some(Keep(has_redundant_boolean_literal)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { bool F(bool b) { return b ? true : false; } }",
-            good: "class A { bool F(bool b, bool? c) { return b || c == true; } }",
-        }),
-    },
-    Rule {
         id: "cs/count-instead-of-any",
         name: "Any() should be used to test whether a sequence is empty",
         description: "`Count()` may enumerate the whole sequence to answer a yes-or-no question that `Any()` \
@@ -509,33 +488,6 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::CSharp,
             bad: "class A { bool F(IEnumerable<int> xs) { return xs.Count() > 0; } }",
             good: "class A { bool F(IEnumerable<int> xs) { return xs.Any(); } }",
-        }),
-    },
-    Rule {
-        id: "cs/where-then-predicate-method",
-        name: "Where() should not be followed by a method that takes the predicate itself",
-        description: "`xs.Where(p).First()` is `xs.First(p)`: one call is shorter and does the same.",
-        message: "Pass the predicate to this method and remove the Where() call.",
-        category: CodeSmell,
-        severity: Major,
-        effort_minutes: 2,
-        sonar: &[related("S2971")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: r#"(invocation_expression
-                        function: (member_access_expression
-                          expression: (invocation_expression
-                            function: (member_access_expression name: (identifier) @w))
-                          name: (identifier) @n)
-                        (#eq? @w "Where")
-                        (#any-of? @n "Any" "Count" "LongCount" "First" "FirstOrDefault"
-                                     "Last" "LastOrDefault" "Single" "SingleOrDefault")) @match"#,
-            filter: Some(Keep(where_then_bare_call)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { int F(List<int> xs) { return xs.Where(x => x > 0).First(); } }",
-            good: "class A { int F(List<int> xs) { return xs.First(x => x > 0); } }",
         }),
     },
     Rule {
@@ -1391,26 +1343,6 @@ fn negates_comparison(node: Node, src: &[u8]) -> bool {
     })
 }
 
-fn has_redundant_boolean_literal(node: Node, src: &[u8]) -> bool {
-    let is_bool =
-        |n: Option<Node>| n.is_some_and(|n| unparenthesized(n).kind() == "boolean_literal");
-    match node.kind() {
-        "conditional_expression" => {
-            is_bool(node.child_by_field_name("consequence"))
-                && is_bool(node.child_by_field_name("alternative"))
-        }
-        "binary_expression" => {
-            matches!(operator_text(node, src), b"&&" | b"||")
-                && (is_bool(node.child_by_field_name("left"))
-                    || is_bool(node.child_by_field_name("right")))
-                // tree-sitter-c-sharp reads `x is true || y` as `x is (true || y)`.
-                // parent() costs the node's depth: test it last.
-                && !node.parent().is_some_and(|p| p.kind() == "constant_pattern")
-        }
-        _ => unary_operator(node, src).is_some_and(|(_, op)| op == b"!"),
-    }
-}
-
 fn compares_count_call_with_zero(node: Node, src: &[u8]) -> bool {
     let empty_count_call = |n: Node| {
         is_call_named(n, src, &["Count"])
@@ -1579,17 +1511,6 @@ fn mergeable_inner_if<'t>(node: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
         p.kind() == "if_statement" && p.child_by_field_name("alternative") == Some(node)
     });
     (!is_else_if).then_some(inner)
-}
-
-fn where_then_bare_call(node: Node, _: &[u8]) -> bool {
-    let arguments = |call: Node| {
-        call.child_by_field_name("arguments")
-            .map_or(0, |a| a.named_child_count())
-    };
-    let inner = node
-        .child_by_field_name("function")
-        .and_then(|f| f.child_by_field_name("expression"));
-    arguments(node) == 0 && inner.is_some_and(|w| arguments(w) == 1)
 }
 
 fn compares_with_empty_string(node: Node, src: &[u8]) -> bool {
@@ -1771,7 +1692,6 @@ pub(super) mod tests {
         );
         assert_eq!(flagged("cs/nested-ternary", &src), [3, 4]);
         assert_eq!(flagged("cs/inverted-comparison", &src), [6]);
-        assert_eq!(flagged("cs/redundant-boolean-literal", &src), [9, 10, 11]);
     }
 
     #[test]
@@ -1779,7 +1699,6 @@ pub(super) mod tests {
         let src = method(
             "x = xs.Where(p).First();\nx = xs.Where(p).ToList();\nx = xs.Where(p).Any(q);\nGC.Collect();\nGC.KeepAlive(o);",
         );
-        assert_eq!(flagged("cs/where-then-predicate-method", &src), [3]);
         assert_eq!(flagged("cs/gc-collect", &src), [6]);
     }
 

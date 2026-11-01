@@ -534,6 +534,10 @@ pub async fn get_effective(
         )));
     }
     let pool = &state.pool;
+    // Its upload would be refused, so the scan fails before it starts.
+    if let Some(why) = crate::deleted_projects::refused(pool, &key).await? {
+        return Err(ApiError::Forbidden(why));
+    }
     let project: Option<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE key = $1")
         .bind(&key)
         .fetch_optional(pool)

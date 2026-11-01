@@ -20,29 +20,6 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[];
 pub(super) static RULES: &[Rule] = &[
     // ---- Bugs ----
     Rule {
-        id: "cs/float-equality",
-        name: "Floating-point values should not be compared for exact equality",
-        description: "Most decimal fractions have no exact binary representation, so `x == 0.1` can be false \
-                      for a value that prints as 0.1.",
-        message: "Compare with a tolerance, such as Math.Abs(x - 0.1) < 1e-9.",
-        category: Bug,
-        severity: Major,
-        effort_minutes: 5,
-        sonar: &[related("S1244")],
-        check: Check::Query {
-            langs: CSHARP,
-            // The sides are checked in the filter: constraining `right:` keeps a
-            // pending match per level of a long `a - b - ...` chain.
-            query: "(binary_expression) @match",
-            filter: Some(Keep(compares_fraction_exactly)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { bool F(double x) { return x == 0.1; } }",
-            good: "class A { bool F(double x) { return Math.Abs(x - 0.1) < 1e-9 || x == 0.0; } }",
-        }),
-    },
-    Rule {
         id: "cs/hashcode-mutable-field",
         name: "GetHashCode should not use mutable fields",
         description: "If a field the hash depends on changes while the object is in a dictionary or set, the \
@@ -312,27 +289,6 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::CSharp,
             bad: "class A { void F(ILogger log) { try { G(); } catch (IOException e) { log.LogError(e, \"Failed\"); throw; } } }",
             good: "class A { void F(ILogger log) { try { G(); } catch (IOException e) { log.LogError(e, \"Failed\"); Retry(); } } }",
-        }),
-    },
-    Rule {
-        id: "cs/non-short-circuit-logic",
-        name: "Boolean conditions should use && and ||",
-        description: "`&` and `|` evaluate both sides even when the result is already known, so a guard such as \
-                      `x != null & x.Ok` still throws.",
-        message: "Use '&&' or '||' instead.",
-        category: CodeSmell,
-        severity: Blocker,
-        effort_minutes: 2,
-        sonar: &[related("S2178")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(binary_expression) @match",
-            filter: Some(Keep(non_short_circuit_on_bools)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { bool F(B b) { return b != null & b.Ok; } }",
-            good: "class A { bool F(B b) { return b != null && b.Ok; } }",
         }),
     },
     Rule {
@@ -792,29 +748,6 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
-        id: "cs/any-instead-of-contains",
-        name: "Contains should be used to test for one value",
-        description: "`xs.Any(x => x == y)` is `xs.Contains(y)` written the long way, and slower on sets.",
-        message: "Use Contains(...) instead of Any with an equality lambda.",
-        category: CodeSmell,
-        severity: Minor,
-        effort_minutes: 2,
-        sonar: &[related("S6617")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: r#"(invocation_expression
-                        function: (member_access_expression name: (identifier) @n)
-                        arguments: (argument_list (argument (lambda_expression)) .)
-                        (#eq? @n "Any")) @match"#,
-            filter: Some(Keep(any_with_equality)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { bool F(List<int> xs, int y) { return xs.Any(x => x == y); } }",
-            good: "class A { bool F(List<int> xs, int y) { return xs.Contains(y); } }",
-        }),
-    },
-    Rule {
         id: "cs/logger-category-mismatch",
         name: "ILogger<T> should be typed with its own class",
         description: "The type argument is the log category; `ILogger<OtherClass>` files this class's messages \
@@ -1128,30 +1061,6 @@ fn is_hardcoded_ip(node: Node, src: &[u8]) -> bool {
         current = n.parent();
     }
     true
-}
-
-fn compares_fraction_exactly(node: Node, src: &[u8]) -> bool {
-    if !matches!(operator_text(node, src), b"==" | b"!=") {
-        return false;
-    }
-    let is_fraction = |n: Option<Node>| {
-        n.map(unparenthesized).is_some_and(|n| {
-            n.kind() == "real_literal"
-                // Decimals (1.1m) are exact.
-                && !text(n, src).ends_with(b"m")
-                && !text(n, src).ends_with(b"M")
-                && {
-                // Zero is exact; testing for it is deliberate.
-                let digits: Vec<u8> = text(n, src)
-                    .iter()
-                    .copied()
-                    .filter(|b| b.is_ascii_digit() || *b == b'.')
-                    .collect();
-                digits.iter().any(|b| matches!(b, b'1'..=b'9'))
-            }
-        })
-    };
-    is_fraction(node.child_by_field_name("left")) || is_fraction(node.child_by_field_name("right"))
 }
 
 fn hash_reads_mutable_field<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1478,7 +1387,7 @@ fn logs_and_rethrows(catch: Node, src: &[u8]) -> bool {
     logs && rethrows
 }
 
-fn is_boolean_expression(n: Node, src: &[u8]) -> bool {
+pub(super) fn is_boolean_expression(n: Node, src: &[u8]) -> bool {
     let n = unparenthesized(n);
     match n.kind() {
         "boolean_literal" | "is_pattern_expression" | "is_expression" => true,
@@ -1489,18 +1398,6 @@ fn is_boolean_expression(n: Node, src: &[u8]) -> bool {
         ),
         _ => false,
     }
-}
-
-/// `&` or `|` with a boolean on either side: C# has no `bool & int`, so the
-/// other side is a boolean too.
-fn non_short_circuit_on_bools(node: Node, src: &[u8]) -> bool {
-    matches!(operator_text(node, src), b"&" | b"|")
-        && (node
-            .child_by_field_name("left")
-            .is_some_and(|l| is_boolean_expression(l, src))
-            || node
-                .child_by_field_name("right")
-                .is_some_and(|r| is_boolean_expression(r, src)))
 }
 
 fn test_class_without_tests<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1827,36 +1724,6 @@ fn single_char_argument(call: Node, src: &[u8]) -> bool {
         })
 }
 
-fn any_with_equality(call: Node, src: &[u8]) -> bool {
-    let Some(lambda) = cs_call_arguments(call).first().copied() else {
-        return false;
-    };
-    let Some(parameter) = lambda
-        .child_by_field_name("parameters")
-        .map(|p| text(p, src).trim_ascii())
-        .map(|p| {
-            p.strip_prefix(b"(")
-                .and_then(|p| p.strip_suffix(b")"))
-                .unwrap_or(p)
-        })
-    else {
-        return false;
-    };
-    let Some(body) = lambda.child_by_field_name("body") else {
-        return false;
-    };
-    if body.kind() != "binary_expression" || operator_text(body, src) != b"==" {
-        return false;
-    }
-    let side = |f: &str| body.child_by_field_name(f).map(|n| text(n, src));
-    let (Some(l), Some(r)) = (side("left"), side("right")) else {
-        return false;
-    };
-    // `x => x == y`, but not `x => x.Id == y`, which Contains can't express.
-    (l == parameter) != (r == parameter)
-        && count_word(if l == parameter { r } else { l }, parameter) == 0
-}
-
 fn foreign_logger_category<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let own = text(class.child_by_field_name("name")?, src);
     // `ILogger<TRequest>` in `Behaviour<TRequest>` logs under the request
@@ -1954,11 +1821,7 @@ mod tests {
     }
 
     #[test]
-    fn floats_and_hashes() {
-        let src = method(
-            "b = x == 0.1;\nb = x != 2.5f;\nb = x == 0.0;\nb = x == 0d;\nb = x == 1;\nb = x == 1.1m;",
-        );
-        assert_eq!(flagged("cs/float-equality", &src), [4, 5]);
+    fn hashes() {
         let hash = "namespace N;\nclass P { int id; readonly int k; public override int GetHashCode() => id; }\nclass Q { readonly int k; int n; public override int GetHashCode() => k; }\nclass R { int id; public override int GetHashCode() => this.id ^ other.id; }";
         assert_eq!(flagged("cs/hashcode-mutable-field", hash), [2, 4]);
     }
@@ -2043,7 +1906,6 @@ mod tests {
         let src = method(
             "b = x != null & x.Ok;\nb = a | b;\nb = (a > 1) | !c;\nb = flags & Mask;\nb = typeof(string).IsInstanceOfType(o);\nb = typeof(B).IsAssignableFrom(o.GetType());\nb = (o as B) != null;\nb = o is B;\nt = typeof(A).GetType();\nt = o.GetType().GetType();\nt = o.GetType();",
         );
-        assert_eq!(flagged("cs/non-short-circuit-logic", &src), [4, 6]);
         assert_eq!(flagged("cs/type-check-simplify", &src), [8, 9, 10]);
         assert_eq!(flagged("cs/type-of-type", &src), [12, 13]);
     }
@@ -2088,7 +1950,6 @@ mod tests {
             "b = s.StartsWith(\"/\");\nb = s.EndsWith(\"\\\\\");\nb = s.StartsWith(\"ab\");\nb = s.StartsWith(\"/\", StringComparison.Ordinal);\nb = xs.Any(x => x == y);\nb = xs.Any(x => x.Id == y);\nb = xs.Any(x => y == x);\nb = xs.Any();\nif (a) { G(); } if (b) { H(); }\nif (c) { G(); }\nif (d) { H(); }",
         );
         assert_eq!(flagged("cs/starts-with-single-char", &src), [4, 5]);
-        assert_eq!(flagged("cs/any-instead-of-contains", &src), [8, 10]);
         assert_eq!(flagged("cs/conditions-same-line", &src), [12]);
     }
 

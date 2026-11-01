@@ -1,4 +1,4 @@
-import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type ProjectSettingChange, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type ProjectSettingChange, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
@@ -44,7 +44,14 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const users = structuredClone(MOCK_USERS)
   const tokens = mockTokens()
   const ruleSettings = mockRuleSettings()
+  // The projects not deleted (ADR-0017).
   const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
+  const deleted: DeletedProject[] = []
+  /** As the server refuses a deleted key until an admin allows it again. */
+  const refuseDeleted = (key?: string) => {
+    const d = key && deleted.find((x) => x.key === key && !x.allowedAt)
+    if (d) throw new Error(`project "${key}" was deleted by ${d.deletedBy} on ${d.deletedAt.slice(0, 10)}; an admin can allow its key again on the Admin page`)
+  }
   // Each project's settings and their changes (ADR-0017), newest first.
   const settings = new Map<string, MockProjectSettings & { changes: ProjectSettingChange[] }>()
   const settingsOf = (key: string) => {
@@ -157,6 +164,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     createToken: async (t) => {
       if (!session.user) throw new AuthError()
+      refuseDeleted(t.project)
       return wait(tokens.create(session.user.username, t))
     },
     revokeMyToken: async (id) => {
@@ -178,6 +186,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       const owner = users.find((u) => u.username === username)
       if (!owner) throw new Error(`no user named "${username}"`)
       if (owner.disabled) throw new Error(`${username} is disabled, so its tokens wouldn't work`)
+      refuseDeleted(t.project)
       return wait(tokens.create(username, t, session.user!.username))
     },
     users: async () => {
@@ -277,6 +286,39 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       Object.assign(s, { name, mainBranch: main })
       return wait(settingsView(project))
     },
+    deleteProject: async (project, confirm) => {
+      requireAdmin()
+      if (confirm !== project) throw new Error("type the project's key to confirm deleting it")
+      const at = projectKeys.indexOf(project)
+      if (at < 0) throw new Error('not found')
+      const by = session.user!.username
+      projectKeys.splice(at, 1)
+      for (const t of tokens.list()) if (t.type === 'project_analysis' && t.project === project) tokens.revoke(t.id, by)
+      const d: DeletedProject = {
+        id: deleted.length + 1,
+        key: project,
+        name: settings.get(project)?.name ?? null,
+        analyses: BRANCHES.reduce((n, b) => n + b.analyses, 0),
+        deletedBy: by,
+        deletedAt: new Date().toISOString(),
+        allowedBy: null,
+        allowedAt: null,
+      }
+      deleted.unshift(d)
+      settings.delete(project)
+      return wait(d)
+    },
+    deletedProjects: async () => {
+      requireAdmin()
+      return wait(deleted)
+    },
+    allowDeletedProject: async (id) => {
+      requireAdmin()
+      const d = deleted.find((x) => x.id === id)
+      if (!d) throw new Error('not found')
+      if (!d.allowedAt) Object.assign(d, { allowedBy: session.user!.username, allowedAt: new Date().toISOString() })
+      return wait(d)
+    },
     reviewDependency: async (_project, patch) => {
       guard()
       return wait(reviewDependency(patch, 'mara'))
@@ -293,10 +335,11 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     projects: async () => {
       guard()
-      return wait({ ...PROJECT_LIST, projects: PROJECT_LIST.projects.map((p) => ({ ...p, ...shown(p.key) })) })
+      return wait({ ...PROJECT_LIST, projects: PROJECT_LIST.projects.filter((p) => projectKeys.includes(p.key)).map((p) => ({ ...p, ...shown(p.key) })) })
     },
     project: async (key, branch) => {
       guard()
+      if (!projectKeys.includes(key)) throw new Error('not found')
       const detail = projectDetail(key, branch, settings.get(key))
       if (!detail) throw new Error('not found')
       return wait(detail)
