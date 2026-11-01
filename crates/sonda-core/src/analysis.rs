@@ -88,13 +88,17 @@ pub(crate) fn analyze(
     scan_lines(&ctx, rules, scan.code_lines.len(), &mut issues);
     scan_java_files(&ctx, lang, root, rules, &mut issues);
     scan_js_files(&ctx, lang, root, rules, &mut issues);
+    scan_py_files(&ctx, lang, root, rules, &mut issues);
 
     metrics.lines = ctx.lines.count();
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
     issues.retain(|i| {
-        i.rule == rules::NOSONAR_COMMENT || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+        // A malformed suppression comment cannot suppress the report about itself.
+        i.rule == rules::NOSONAR_COMMENT
+            || i.rule == "py/suppression-comment-format"
+            || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
     });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
@@ -996,6 +1000,52 @@ fn scan_js_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mu
             let at = first.copied().unwrap_or(root);
             let msg = "Add a copyright or license header to this file.".to_string();
             issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
+        }
+    }
+}
+
+/// Rules about a Python file as a whole: its name and what the parser could
+/// not read.
+fn scan_py_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mut Vec<Issue>) {
+    if lang != Lang::Python {
+        return;
+    }
+    let path = ctx.path.replace('\\', "/");
+    let file = path.rsplit('/').next().unwrap_or(&path);
+    let stem = file
+        .strip_suffix(".pyi")
+        .or_else(|| file.strip_suffix(".py"))
+        .unwrap_or(file);
+    if let Some(rule) = rules.get(rules::PY_MODULE_NAME)
+        && !(stem.starts_with("__") && stem.ends_with("__"))
+    {
+        let test_prefix = stem.strip_prefix("test_").unwrap_or(stem);
+        let ok = test_prefix
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_lowercase())
+            && test_prefix
+                .chars()
+                .all(|c| c == '_' || c.is_ascii_lowercase() || c.is_ascii_digit());
+        if !ok {
+            let msg = format!("Rename the module {stem} to lower case with underscores.");
+            let at = root.named_child(0).unwrap_or(root);
+            issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
+        }
+    }
+    if let Some(rule) = rules.get(rules::PY_PARSE_FAILURE)
+        && root.has_error()
+    {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if n.is_error() || n.is_missing() {
+                let msg = "The parser could not understand this part of the file.".to_string();
+                issues.push(ctx.issue(rule, n, msg, 0));
+                break;
+            }
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.children(&mut c).collect();
+            stack.extend(kids.into_iter().rev());
         }
     }
 }
@@ -2079,6 +2129,28 @@ pub(crate) mod tests {
         assert_eq!(hit(rules::TRAILING_WHITESPACE), [1]);
         assert_eq!(hit(rules::LINE_LENGTH), [3]);
         assert_eq!(hit(rules::FINAL_NEWLINE), [4]);
+    }
+
+    #[test]
+    fn python_rules_that_need_the_path_or_a_parse_error() {
+        let ids = [rules::PY_MODULE_NAME, rules::PY_PARSE_FAILURE];
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ids.map(String::from).to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let hits = |path: &str, src: &str| -> Vec<&'static str> {
+            analyze(path, Lang::Python, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .map(|i| i.rule)
+                .filter(|r| ids.contains(r))
+                .collect()
+        };
+        assert!(hits("pkg/good_name.py", "x = 1\n").is_empty());
+        assert!(hits("pkg/__init__.py", "x = 1\n").is_empty());
+        assert!(hits("pkg/test_thing.py", "x = 1\n").is_empty());
+        assert_eq!(hits("pkg/BadName.py", "x = 1\n"), [rules::PY_MODULE_NAME]);
+        assert_eq!(hits("a.py", "x = (\n"), [rules::PY_PARSE_FAILURE]);
     }
 
     #[test]

@@ -99,6 +99,9 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("py/s3-bucket-owner", &[441, 693], &[]),
     // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
     ("py/regex-catastrophic-backtracking", &[1333], &[]),
+    ("py/graphql-introspection-enabled", &[200], &[A05]),
+    ("py/graphql-no-depth-limit", &[770], &[]),
+    ("py/django-custom-password-hasher", &[327], &[A02]),
     ("py/xml-signature-no-x509", &[347], &[A02]),
     ("py/no-eval", &[95], &[A03]),
     ("py/subprocess-shell", &[78], &[A03]),

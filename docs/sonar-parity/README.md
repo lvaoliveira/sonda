@@ -14,7 +14,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 |---|---|---|---|---|---|---|
 | JavaScript | 461 | 420 | 41 | 0 | 0 | 0 |
 | TypeScript | 481 | 440 | 41 | 0 | 0 | 0 |
-| Python | 397 | 360 | 14 | 23 | 0 | 0 |
+| Python | 397 | 382 | 14 | 1 | 0 | 0 |
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
@@ -37,7 +37,7 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-15 rules differ:
+16 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
@@ -50,6 +50,7 @@ aren't compared.
 | `py/hardcoded-ip` | none | CWE-547, A01 |
 | `py/upload-with-body` | CWE-20, A03 | none |
 | `py/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
+| `py/graphql-no-depth-limit` | CWE-770 | CWE-770, A04, A05 |
 | `java/broadcast-without-permission` | CWE-927 | CWE-927, A04 |
 | `java/hardcoded-ip` | none | CWE-547, A01 |
 | `java/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
