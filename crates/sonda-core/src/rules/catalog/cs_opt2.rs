@@ -881,14 +881,14 @@ fn overwritten_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// `ref`, `out`, `this`... on a parameter, past any attributes.
-fn has_parameter_modifier(parameter: Node, wanted: &[&[u8]], src: &[u8]) -> bool {
+pub(super) fn has_parameter_modifier(parameter: Node, wanted: &[&[u8]], src: &[u8]) -> bool {
     let mut cursor = parameter.walk();
     parameter
         .named_children(&mut cursor)
         .any(|m| m.kind() == "modifier" && wanted.contains(&text(m, src)))
 }
 
-const DISPOSABLE_TYPES: &[&[u8]] = &[
+pub(super) const DISPOSABLE_TYPES: &[&[u8]] = &[
     b"Stream",
     b"FileStream",
     b"MemoryStream",
@@ -1166,7 +1166,7 @@ fn unusual_index_type(ty: Node, src: &[u8]) -> bool {
 }
 
 /// `T`, `TKey`, `TValue`: by convention a generic type parameter.
-fn is_type_parameter_name(t: &[u8]) -> bool {
+pub(super) fn is_type_parameter_name(t: &[u8]) -> bool {
     t == b"T"
         || (t.len() > 1 && t[0] == b'T' && t[1].is_ascii_uppercase())
         || (t.len() <= 2 && t.first().is_some_and(u8::is_ascii_uppercase))
@@ -1297,7 +1297,7 @@ fn is_public(declaration: Node, src: &[u8]) -> bool {
 /// Overrides and interface implementations take their name and signature
 /// from the contract. Without types, a public instance method of a type with
 /// base types may be one.
-fn may_implement_contract(method: Node, src: &[u8]) -> bool {
+pub(super) fn may_implement_contract(method: Node, src: &[u8]) -> bool {
     let mut cursor = method.walk();
     let explicit = method
         .named_children(&mut cursor)
@@ -1737,7 +1737,7 @@ fn blocks_on_task(node: Node, src: &[u8]) -> bool {
         })
 }
 
-fn enclosing_method(node: Node) -> Option<Node> {
+pub(super) fn enclosing_method(node: Node) -> Option<Node> {
     let mut current = node.parent();
     for _ in 0..128 {
         let n = current?;

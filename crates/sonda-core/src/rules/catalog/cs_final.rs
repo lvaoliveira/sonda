@@ -1580,7 +1580,7 @@ fn debugger_display_unknown_member<'t>(declaration: Node<'t>, src: &[u8]) -> Opt
     None
 }
 
-fn is_azure_function(method: Node, src: &[u8]) -> bool {
+pub(super) fn is_azure_function(method: Node, src: &[u8]) -> bool {
     attribute_names(method, src)
         .iter()
         .any(|(_, n)| matches!(*n, b"FunctionName" | b"Function"))
