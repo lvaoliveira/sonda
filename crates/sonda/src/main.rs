@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 mod upload;
 
-/// Static analysis and quality gates for JavaScript/TypeScript, Python, Java and C/C++.
+/// Static analysis and quality gates for JavaScript/TypeScript, Python, Java, C/C++ and C#.
 #[derive(Parser)]
 #[command(name = "sonda", version)]
 struct Cli {

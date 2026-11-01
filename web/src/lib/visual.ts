@@ -94,6 +94,7 @@ const LANGUAGE_LABEL: Record<string, string> = {
   java: 'Java',
   c: 'C',
   cpp: 'C++',
+  csharp: 'C#',
   go: 'Go',
   rust: 'Rust',
 }

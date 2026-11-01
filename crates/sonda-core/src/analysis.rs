@@ -788,10 +788,7 @@ impl<'t> ComplexityWalker<'_, 't> {
             return self.children(node, nesting + 1);
         }
         if self.syn.cases.contains(&kind)
-            && !node
-                .utf8_text(self.src)
-                .unwrap_or("")
-                .starts_with("default")
+            && !is_default_case(node.utf8_text(self.src).unwrap_or(""))
         {
             self.c.cyclomatic += 1;
         }
@@ -856,6 +853,14 @@ impl<'t> ComplexityWalker<'_, 't> {
             }
         }
     }
+}
+
+/// `default:`, or C#'s discard arm `_ => ...` in a switch expression.
+fn is_default_case(text: &str) -> bool {
+    text.starts_with("default")
+        || text
+            .strip_prefix('_')
+            .is_some_and(|rest| rest.trim_start().starts_with("=>"))
 }
 
 fn only_named_child(node: Node) -> Option<Node> {
@@ -1188,6 +1193,26 @@ pub(crate) mod tests {
         let a = run(Lang::Java, src);
         assert_eq!(a.metrics.cognitive_complexity, 3);
         assert_eq!(a.metrics.functions, 1);
+    }
+
+    #[test]
+    fn csharp_functions_and_complexity() {
+        let src = "class A {\n  int F(int a, bool b) {\n    if (a > 1 && b) { return 1; } else if (a > 0) { return 2; }\n    foreach (var x in xs) { }\n    return a switch { 1 => 1, 2 => 2, _ => 0 };\n  }\n  int P { get { return 1; } }\n}\n";
+        let a = run(Lang::CSharp, src);
+        assert_eq!(a.metrics.functions, 2);
+        // F: 1 + if + && + else-if + foreach + two non-discard arms; the getter: 1
+        assert_eq!(a.metrics.complexity, 7 + 1);
+        // if +1, && +1, else-if +1, foreach +1, switch expression +1
+        assert_eq!(a.metrics.cognitive_complexity, 5);
+    }
+
+    #[test]
+    fn csharp_parameters() {
+        let src =
+            "class A { void F(int a, int b, int c, int d, int e, int f, int g, int h) { } }\n";
+        let a = run(Lang::CSharp, src);
+        let hit = rules_hit(&a);
+        assert!(hit.contains(&rules::TOO_MANY_PARAMETERS), "{hit:?}");
     }
 
     #[test]
