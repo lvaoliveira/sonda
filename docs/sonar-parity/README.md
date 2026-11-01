@@ -18,7 +18,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
-| C# | 446 | 337 | 51 | 58 | 0 | 0 |
+| C# | 446 | 347 | 61 | 38 | 0 | 0 |
 
 ## Security standards
 
@@ -26,7 +26,7 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-13 rules differ:
+14 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
@@ -43,5 +43,6 @@ aren't compared.
 | `java/upload-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 | `cs/request-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 | `cs/hardcoded-ip` | none | CWE-547, A01 |
+| `cs/conflicting-transparency` | CWE-284, A01 | CWE-269, A05 |
 
 Per-language details: the `.csv` files in this directory.

@@ -7,15 +7,17 @@
 use super::cs::{cs_has_modifier, cs_statements, cs_string_value, simple_name, squeezed};
 use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_final::is_azure_function;
-use super::cs_more::{declarators, declared_type, enclosing_type, members};
+use super::cs_more::{declarators, declared_type, members};
 use super::cs_opt2::{
     enclosing_method, has_parameter_modifier, is_type_parameter_name, may_implement_contract,
 };
+use super::cs_types::{is_generic, type_of_name, walk_tree};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_last::count_nodes;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
 use super::*;
+use crate::semantic::Model;
 
 /// Rules that are off unless `rules.enabled` lists them (see
 /// `catalog::OFF_BY_DEFAULT`): all of this module's.
@@ -226,10 +228,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Critical,
         effort_minutes: 15,
         sonar: &[related("S3215")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "[(cast_expression type: (identifier) value: (identifier)) (as_expression left: (identifier) right: (identifier))] @match",
-            filter: Some(Keep(downcasts_interface)),
+            find: downcasts_interface,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -476,11 +477,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Minor,
         effort_minutes: 1,
         sonar: &[related("S6602")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression function: (member_access_expression expression: (identifier) name: (identifier) @n)
-                        (#eq? @n "FirstOrDefault")) @match"#,
-            filter: Some(Keep(predicate_call_on_list)),
+            find: use_list_find,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -497,11 +496,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Minor,
         effort_minutes: 1,
         sonar: &[related("S6603")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression function: (member_access_expression expression: (identifier) name: (identifier) @n)
-                        (#eq? @n "All")) @match"#,
-            filter: Some(Keep(predicate_call_on_list)),
+            find: use_list_true_for_all,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -518,11 +515,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Minor,
         effort_minutes: 1,
         sonar: &[related("S6605")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression function: (member_access_expression expression: (identifier) name: (identifier) @n)
-                        (#eq? @n "Any")) @match"#,
-            filter: Some(Keep(predicate_call_on_list)),
+            find: use_list_exists,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -881,80 +876,41 @@ fn has_base_list(declaration: Node) -> bool {
         .any(|c| c.kind() == "base_list")
 }
 
-/// The declared type of a local, parameter, field or property named `name`,
-/// as seen from `at`: the method's locals and parameters first, then the
-/// enclosing type's members.
-fn declared_type_of<'t>(name: &[u8], at: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if let Some(method) = enclosing_method(at) {
-        if let Some(params) = method.child_by_field_name("parameters") {
-            let mut cursor = params.walk();
-            let found = params.named_children(&mut cursor).find(|p| {
-                p.child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == name)
-            });
-            if let Some(p) = found {
-                return p.child_by_field_name("type");
-            }
-        }
-        let body = method.child_by_field_name("body")?;
-        if let Some(d) = find_in_scope(body, &[], |d| {
-            d.kind() == "variable_declarator"
-                && d.child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == name)
-        }) {
-            let declared = d.parent()?.child_by_field_name("type")?;
-            if declared.kind() != "implicit_type" {
-                return Some(declared);
-            }
-            // `var xs = new List<int>()`
-            let value = d.named_child(d.named_child_count().saturating_sub(1) as u32)?;
-            return (value.kind() == "object_creation_expression")
-                .then(|| value.child_by_field_name("type"))
-                .flatten();
-        }
-    }
-    let owner = enclosing_type(at)?;
-    members(owner).into_iter().find_map(|m| match m.kind() {
-        "field_declaration" => declarators(m)
-            .iter()
-            .any(|d| {
-                d.child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == name)
-            })
-            .then(|| declared_type(m))
-            .flatten(),
-        "property_declaration" => m
-            .child_by_field_name("name")
-            .filter(|n| text(*n, src) == name)
-            .and_then(|_| m.child_by_field_name("type")),
-        _ => None,
-    })
-}
-
 fn looks_like_interface(name: &[u8]) -> bool {
     name.len() > 1 && name[0] == b'I' && name[1].is_ascii_uppercase()
 }
 
-fn downcasts_interface(node: Node, src: &[u8]) -> bool {
-    let (target, value) = match node.kind() {
-        "cast_expression" => (
-            node.child_by_field_name("type"),
-            node.child_by_field_name("value"),
-        ),
-        _ => (
-            node.child_by_field_name("right"),
-            node.child_by_field_name("left"),
-        ),
-    };
-    let (Some(target), Some(value)) = (target, value) else {
-        return false;
-    };
-    let target = text(target, src);
-    if looks_like_interface(target) || is_type_parameter_name(target) || target == b"Object" {
-        return false;
-    }
-    declared_type_of(text(value, src), node, src)
-        .is_some_and(|t| t.kind() == "identifier" && looks_like_interface(text(t, src)))
+fn downcasts_interface<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    walk_tree(m, |node, _| {
+        let (target, value) = match node.kind() {
+            "cast_expression" => (
+                node.child_by_field_name("type"),
+                node.child_by_field_name("value"),
+            ),
+            "as_expression" => (
+                node.child_by_field_name("right"),
+                node.child_by_field_name("left"),
+            ),
+            _ => return,
+        };
+        let (Some(target), Some(value)) = (target, value) else {
+            return;
+        };
+        if target.kind() != "identifier" || value.kind() != "identifier" {
+            return;
+        }
+        let target = text(target, src);
+        if looks_like_interface(target) || is_type_parameter_name(target) || target == b"Object" {
+            return;
+        }
+        if type_of_name(m, value)
+            .is_some_and(|t| t.kind() == "identifier" && looks_like_interface(text(t, src)))
+        {
+            found.push(node);
+        }
+    });
+    found
 }
 
 fn is_action_or_func(ty: Node, src: &[u8]) -> bool {
@@ -1321,21 +1277,46 @@ fn function_catch_without_log<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'
     })
 }
 
-fn predicate_call_on_list(call: Node, src: &[u8]) -> bool {
-    let args = cs_call_arguments(call);
-    if !matches!(args.as_slice(), [a] if a.kind() == "lambda_expression" || a.kind() == "identifier")
-    {
-        return false;
-    }
-    let Some(receiver) = call
-        .child_by_field_name("function")
-        .and_then(|f| f.child_by_field_name("expression"))
-    else {
-        return false;
-    };
-    declared_type_of(text(receiver, src), call, src).is_some_and(|t| {
-        t.kind() == "generic_name" && t.named_child(0).is_some_and(|n| text(n, src) == b"List")
-    })
+/// Calls `xs.Method(predicate)` on a receiver declared as a `List<T>`.
+fn predicate_calls_on_list<'t>(m: &Model<'t>, method: &[u8], src: &[u8]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    walk_tree(m, |call, _| {
+        if call.kind() != "invocation_expression" {
+            return;
+        }
+        let Some(function) = call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "member_access_expression")
+        else {
+            return;
+        };
+        let named = function
+            .child_by_field_name("name")
+            .is_some_and(|n| text(n, src) == method);
+        let args = cs_call_arguments(call);
+        let predicate = matches!(args.as_slice(), [a] if a.kind() == "lambda_expression" || a.kind() == "identifier");
+        let list = function
+            .child_by_field_name("expression")
+            .filter(|r| r.kind() == "identifier")
+            .and_then(|r| type_of_name(m, r))
+            .is_some_and(|t| is_generic(t, b"List", src));
+        if named && predicate && list {
+            found.push(call);
+        }
+    });
+    found
+}
+
+fn use_list_find<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    predicate_calls_on_list(m, b"FirstOrDefault", src)
+}
+
+fn use_list_true_for_all<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    predicate_calls_on_list(m, b"All", src)
+}
+
+fn use_list_exists<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    predicate_calls_on_list(m, b"Any", src)
 }
 
 #[cfg(test)]

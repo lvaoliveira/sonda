@@ -65,13 +65,35 @@ errors" warning and still analyzes the rest of the tree. Rules must
 not assume an error-free tree; the review showed no false positives from
 the recovered parts.
 
+### Semantic layer
+
+C# gets ADR-0008's phase S1, scopes and symbols (`semantic/cs.rs`): one
+iterative pass declares parameters, locals, `foreach`, pattern and `out`
+variables, fields, properties and methods, and links every name in an
+expression to its declaration, with `this.x` resolved in the enclosing type.
+C# forbids using a local before its declaration and shadowing one, so
+resolving within the whole scope finds what the compiler finds.
+
+Each declaration also keeps the type written where it's declared: `int`
+in `int x`, `T` in `var x = new T()`. That's syntax, not inference, so it
+stays within S1 and needs none of S4's decisions. Rules use it to
+approximate SonarQube's typed rules (`rules/catalog/cs_types.rs`): a
+rule reports only what declarations in the file prove, and is `related`
+to its SonarQube key when typed analysis would find more. What it can't
+see: inherited members, types inferred across calls, and other files.
+
+Rules that need declared types are `Check::Semantic`. Walking up from a
+node to find its scope costs that node's depth for every `parent()`, which
+made a query-based version quadratic on deeply nested code; the model is
+built in one walk instead.
+
 ## Consequences
 
 - One more grammar to keep updated and fuzz. Grammar updates follow the same
   process as the others.
-- Type-dependent rules (nullable flow, `IDisposable`, LINQ on `IQueryable`
-  versus `IEnumerable`) wait for the semantic layer
-  ([ADR-0008](0008-semantic-layer.md)), as they do in Java.
+- Rules that need declared types use the C# semantic model above. Rules
+  that need flow or inference (nullable flow, values reaching a call) wait
+  for ADR-0008's later phases.
 - Some grammar quirks need a rule-side workaround. For example, the grammar
   reads `x is true || y` as `x is (true || y)`, so a rule about boolean
   literals ignores operators inside patterns.
