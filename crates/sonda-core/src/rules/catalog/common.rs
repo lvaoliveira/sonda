@@ -20,6 +20,7 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "js/missing-license-header",
     "java/package-info-missing",
     "java/component-not-scanned",
+    "cs/neutral-resources-language",
 ];
 
 pub(super) static RULES: &[Rule] = &[
@@ -300,6 +301,33 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 10,
         sonar: &[exact("S4605")],
+        check: Check::Structural,
+        example: None,
+    },
+    Rule {
+        id: crate::rules::CS_PARTIAL_METHOD_NOT_IMPLEMENTED,
+        name: "Partial methods should be implemented",
+        description: "The compiler silently removes calls to a partial method that no file of the project \
+                      implements, so the intended behavior never runs. C# projects only.",
+        message: "",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S3251")],
+        check: Check::Structural,
+        example: None,
+    },
+    Rule {
+        id: crate::rules::CS_NEUTRAL_RESOURCES_LANGUAGE,
+        name: "Assemblies with resources should declare their neutral language",
+        description: "NeutralResourcesLanguage tells the ResourceManager which culture the default resources \
+                      are in, which saves a lookup. Checked in classic AssemblyInfo files of projects that use \
+                      a ResourceManager. C# projects only.",
+        message: "",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[related("S4026")],
         check: Check::Structural,
         example: None,
     },

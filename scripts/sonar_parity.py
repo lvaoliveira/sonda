@@ -38,6 +38,20 @@ LANGUAGES = {
 }
 TIERS = ("syntactic", "types", "dataflow")
 
+# Rule keys sonda leaves out on purpose, by SonarQube language key: why, and
+# the decision record that says what would change it. Listed in the summary
+# while they're still todo.
+KNOWN_GAPS = {
+    "cs": {
+        "S1944": ("Invalid casts: needs the values reaching a cast and types from other files.",
+                  "../adr/0015-csharp.md"),
+        "S3220": ("Calls resolving to a `params` overload: needs C#'s overload resolution.",
+                  "../adr/0015-csharp.md"),
+        "S6802": ("Lambdas in loops in Blazor markup: checks `.razor` files, which sonda doesn't parse.",
+                  "../adr/0015-csharp.md"),
+    },
+}
+
 
 def fetch(server, token, path, **query):
     url = f"{server.rstrip('/')}{path}?{urllib.parse.urlencode(query)}"
@@ -111,7 +125,7 @@ def main():
     expected = {}
     for lang, (label, sonda_langs) in LANGUAGES.items():
         if lang not in available:
-            summary.append((label, None))
+            summary.append((label, None, lang))
             continue
         rules = all_rules(args.server, token, languages=lang,
                           f="severity,sysTags,status,isTemplate,scope")
@@ -159,7 +173,7 @@ def main():
             writer = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
-        summary.append((label, rows))
+        summary.append((label, rows, lang))
 
     lines = [
         "# Compatibility with SonarQube rules",
@@ -179,7 +193,7 @@ def main():
         "| Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |",
         "|---|---|---|---|---|---|---|",
     ]
-    for label, rows in summary:
+    for label, rows, _ in summary:
         if rows is None:
             lines.append(f"| {label} | not available on this SonarQube edition | | | | | |")
             continue
@@ -189,6 +203,26 @@ def main():
         lines.append(f"| {label} | {len(live)} | {count(lambda r: r['status'] == 'done')} | "
                      f"{count(lambda r: r['status'] == 'partial')} | {todo('syntactic')} | "
                      f"{todo('types')} | {todo('dataflow')} |")
+    # Keys left out on purpose, while SonarQube still has them and sonda
+    # still doesn't.
+    gaps = []
+    for label, rows, lang in summary:
+        todo_keys = {r["key"].split(":")[-1] for r in rows or [] if r["status"] == "todo"}
+        for key, (why, link) in sorted(KNOWN_GAPS.get(lang, {}).items()):
+            if key in todo_keys:
+                gaps.append(f"| {label} | {key} | {why} [Why]({link}) |")
+    if gaps:
+        lines += [
+            "",
+            "## Known gaps",
+            "",
+            "Rules sonda leaves out on purpose, and the decision records that say what",
+            "would change that.",
+            "",
+            "| Language | Key | Reason |",
+            "|---|---|---|",
+            *gaps,
+        ]
     # Standards drift: what sonda records against what SonarQube says.
     drift = []
     for s in sonda:
