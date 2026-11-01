@@ -202,7 +202,7 @@ pub async fn get_security(
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          JOIN analyses fa ON fa.id = i.first_analysis_id
          LEFT JOIN analyses xa ON xa.id = i.fixed_analysis_id
-         WHERE i.category = 'vulnerability'",
+         WHERE i.category = 'vulnerability' AND NOT rule_off(i.project_id, i.rule)",
     )
     .fetch_all(pool)
     .await?;

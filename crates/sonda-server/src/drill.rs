@@ -238,6 +238,7 @@ async fn open_issues(
                 i.path, i.severity, i.message, i.line, i.effort_minutes
          FROM issues i JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          WHERE i.fixed_analysis_id IS NULL AND i.status NOT IN ('accepted', 'false_positive')
+           AND NOT rule_off(i.project_id, i.rule)
            AND ($1::text[] IS NULL OR i.severity = ANY($1))
            AND ($2::text IS NULL OR i.category = $2)
            AND ($3::bigint[] IS NULL OR (i.is_new AND p.id = ANY($3)))",
