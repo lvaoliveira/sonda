@@ -15,7 +15,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | JavaScript | 461 | 286 | 41 | 82 | 52 | 0 |
 | TypeScript | 481 | 294 | 41 | 93 | 53 | 0 |
 | Python | 397 | 359 | 14 | 24 | 0 | 0 |
-| Java | 703 | 454 | 11 | 217 | 0 | 21 |
+| Java | 703 | 515 | 11 | 156 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 | C# | 446 | 51 | 3 | 392 | 0 | 0 |
@@ -26,7 +26,7 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-7 rules differ:
+8 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
@@ -37,5 +37,6 @@ aren't compared.
 | `java/broadcast-without-permission` | CWE-927 | CWE-927, A04 |
 | `java/hardcoded-ip` | none | CWE-547, A01 |
 | `java/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
+| `java/upload-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 
 Per-language details: the `.csv` files in this directory.
