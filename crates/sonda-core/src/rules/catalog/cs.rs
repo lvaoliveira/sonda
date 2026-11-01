@@ -7,6 +7,15 @@ use super::java_security::text;
 use super::java_smells::count_word;
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Outside SonarQube's default C# profile.
+    "cs/protected-in-sealed",
+    "cs/redundant-constructor",
+    "cs/empty-string-comparison",
+];
+
 pub(super) static RULES: &[Rule] = &[
     // ---- Bugs ----
     Rule {

@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Formatting rules a formatter or editor config already enforces.
+    "common/trailing-whitespace",
+    "common/line-length",
+    "common/file-length",
+    "common/final-newline",
+    "common/tab-character",
+    "common/trailing-comment",
+];
+
 pub(super) static RULES: &[Rule] = &[
     // ---- Structural rules (all languages, implemented in analysis.rs) ----
     Rule {

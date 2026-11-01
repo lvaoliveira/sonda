@@ -11,6 +11,15 @@ use super::java_security::{
 };
 use super::*;
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &[
+    // Pattern matching for instanceof and Stream.toList() need Java 16, and
+    // sonda cannot see which version a project targets.
+    "java/instanceof-then-cast",
+    "java/collectors-to-list",
+];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/class-name",

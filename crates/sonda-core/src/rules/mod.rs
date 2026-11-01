@@ -476,7 +476,7 @@ mod tests {
         assert!(active(&cfg));
         cfg.disabled = cfg.enabled.clone();
         assert!(!active(&cfg));
-        for id in catalog::OFF_BY_DEFAULT {
+        for id in catalog::OFF_BY_DEFAULT.iter() {
             assert!(find(id).is_some(), "{id}");
         }
         cfg = RulesConfig {
