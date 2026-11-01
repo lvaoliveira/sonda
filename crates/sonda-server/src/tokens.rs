@@ -373,6 +373,12 @@ async fn generate_for(
     if !matches!(new.expires_in_days, None | Some(30 | 60 | 90)) {
         return Err(invalid("expiresInDays is 30, 60, 90 or null (no expiry)"));
     }
+    // Its uploads would be refused (ADR-0017).
+    if let Some(p) = &project
+        && let Some(why) = crate::deleted_projects::refused(pool, p).await?
+    {
+        return Err(ApiError::Unprocessable(why));
+    }
 
     let secret = generate(kind);
     let hash: Vec<u8> = Sha256::digest(secret.as_bytes()).to_vec();

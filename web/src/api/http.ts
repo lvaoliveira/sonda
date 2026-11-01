@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type ProjectSettings, type RuleProfileDetail, type RuleProfileSummary, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type ProjectSettings, type DeletedProject, type RuleProfileDetail, type RuleProfileSummary, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -86,6 +86,9 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     setNewCodePeriod: (project, analysis) => call<NewCodePeriod>('PUT', `/projects/${encodeURIComponent(project)}/new-code`, { analysis }),
     projectSettings: (project) => call<ProjectSettings>('GET', `/projects/${encodeURIComponent(project)}/settings`),
     updateProjectSettings: (project, patch) => call<ProjectSettings>('PATCH', `/projects/${encodeURIComponent(project)}/settings`, patch),
+    deleteProject: (project, confirm) => call<DeletedProject>('DELETE', `/projects/${encodeURIComponent(project)}`, { confirm }),
+    deletedProjects: () => call<DeletedProject[]>('GET', '/deleted-projects'),
+    allowDeletedProject: (id) => call<DeletedProject>('POST', `/deleted-projects/${id}/allow`, {}),
     coverage: (project, branch) =>
       call<CoverageList>('GET', `/projects/${encodeURIComponent(project)}/coverage${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
     fileCoverage: (project, path, branch) =>

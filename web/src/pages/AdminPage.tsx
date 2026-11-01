@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from 'react'
 import { useApi, useAsync } from '@/api/hooks'
-import { MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type UserRow } from '@/api/types'
+import { type DeletedProject, MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type UserRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
@@ -92,6 +92,7 @@ function Users({ me }: { me: string | null }) {
         onError={setError}
       />
       <AllTokens owners={list.filter((u) => !u.disabled).map((u) => u.username)} />
+      <DeletedProjects />
       <p className="m-0 text-[12.5px] text-fg-faint">Single sign-on (OpenID Connect) is planned; see ADR-0006.</p>
     </>
   )
@@ -130,6 +131,64 @@ function AllTokens({ owners }: { owners: string[] }) {
       )}
       {tokens.state === 'ready' && <TokenTable tokens={tokens.data} showOwner onRevoke={(t) => void revoke(t.id)} />}
       {tokens.state === 'error' && <p role="alert">Could not load tokens: {tokens.error.message}</p>}
+    </Card>
+  )
+}
+
+/** Deleted projects (ADR-0017): who deleted which key and when; uploads to a key stay refused until it's allowed again. */
+function DeletedProjects() {
+  const api = useApi()
+  const deleted = useAsync(() => api.deletedProjects(), [api])
+  const [error, setError] = useState('')
+  const allow = async (d: DeletedProject) => {
+    setError('')
+    try {
+      await api.allowDeletedProject(d.id)
+      if (deleted.state === 'ready') deleted.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+  return (
+    <Card
+      id="deleted-projects"
+      title="Deleted projects"
+      subtitle="Uploads to a deleted project's key are refused, so a forgotten pipeline can't bring it back empty. Allow the key again and its next upload starts a new project."
+    >
+      {error && (
+        <p role="alert" className="m-0 text-[13px] text-crit">
+          {error}
+        </p>
+      )}
+      {deleted.state === 'error' && <p role="alert">Could not load deleted projects: {deleted.error.message}</p>}
+      {deleted.state === 'ready' && deleted.data.length === 0 && <p className="m-0 text-[13px] text-fg-muted">No project has been deleted.</p>}
+      {deleted.state === 'ready' && deleted.data.length > 0 && (
+        <ul aria-label="Deleted projects" className="m-0 flex list-none flex-col p-0">
+          {deleted.data.map((d) => (
+            <li key={d.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line py-2.5 text-[13px] first:border-t-0">
+              <span className="flex min-w-0 flex-col">
+                <Mono className="text-[12.5px] text-fg">{d.key}</Mono>
+                {d.name && <span className="text-xs text-fg-faint">{d.name}</span>}
+              </span>
+              <span className="text-fg-muted">
+                {d.analyses} {d.analyses === 1 ? 'analysis' : 'analyses'} · deleted by {d.deletedBy}, {shortDate(d.deletedAt)}
+              </span>
+              {d.allowedAt ? (
+                <span className="text-fg-faint">
+                  allowed again by {d.allowedBy}, {shortDate(d.allowedAt)}
+                </span>
+              ) : (
+                <>
+                  <span className="font-semibold text-warn">Uploads refused</span>
+                  <Button onClick={() => void allow(d)} className="ml-auto">
+                    Allow the key again
+                  </Button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   )
 }

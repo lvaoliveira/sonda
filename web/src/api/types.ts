@@ -1074,6 +1074,12 @@ export interface SondaApi {
   projectSettings(project: string): Promise<ProjectSettings>
   /** Admins: the display name (null for the key alone) and the main branch. */
   updateProjectSettings(project: string, patch: ProjectSettingsPatch): Promise<ProjectSettings>
+  /** Admins: deletes the project for good, `confirm` being its key typed again; its key is then refused. */
+  deleteProject(project: string, confirm: string): Promise<DeletedProject>
+  /** Admins: deleted projects, newest first. */
+  deletedProjects(): Promise<DeletedProject[]>
+  /** Admins: uploads to the deleted key work again, starting a new project. */
+  allowDeletedProject(id: number): Promise<DeletedProject>
   /** Triages one known vulnerability in one of the project's packages. */
   reviewDependency(project: string, patch: DependencyReviewPatch): Promise<DependencyReview>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>
@@ -1133,4 +1139,17 @@ export interface ProjectSettingChange {
 export interface ProjectSettingsPatch {
   name?: string | null
   mainBranch?: string
+}
+
+/** A deleted project's key (ADR-0017): refused for uploads until an admin allows it again. */
+export interface DeletedProject {
+  id: number
+  key: string
+  name: string | null
+  /** How many analyses it had. */
+  analyses: number
+  deletedBy: string
+  deletedAt: string
+  allowedBy: string | null
+  allowedAt: string | null
 }

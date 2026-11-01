@@ -13,6 +13,7 @@ pub mod components;
 pub mod config;
 pub mod coverage;
 pub mod db;
+pub mod deleted_projects;
 pub mod dependencies;
 pub mod drill;
 pub mod gates;

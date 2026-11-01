@@ -15,6 +15,29 @@ pub struct Summary {
     pub gate: Option<ServerGate>,
 }
 
+/// Why an upload wasn't stored.
+#[derive(Debug)]
+pub enum IngestError {
+    /// The project was deleted and its key isn't allowed again (ADR-0017).
+    Refused(String),
+    Db(sqlx::Error),
+}
+
+impl From<sqlx::Error> for IngestError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl From<IngestError> for crate::api::ApiError {
+    fn from(e: IngestError) -> Self {
+        match e {
+            IngestError::Refused(why) => Self::Forbidden(why),
+            IngestError::Db(e) => e.into(),
+        }
+    }
+}
+
 /// A gate as the server evaluated it, reviews included.
 #[derive(Debug, Serialize)]
 pub struct ServerGate {
@@ -57,8 +80,15 @@ fn is_zero(n: &u64) -> bool {
 ///
 /// Analyses are ordered by arrival, not by commit date. A project's first
 /// analyzed branch becomes its main branch.
-pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> {
+pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> {
     let mut tx = pool.begin().await?;
+    // A deleted project's key is refused until an admin allows it again
+    // (ADR-0017). Checked under the key's lock, so a deletion in progress
+    // finishes first and this sees it.
+    crate::deleted_projects::lock_key(&mut tx, &a.meta.project).await?;
+    if let Some(why) = crate::deleted_projects::refused(&mut *tx, &a.meta.project).await? {
+        return Err(IngestError::Refused(why));
+    }
     let project_id: i64 = sqlx::query_scalar(
         "INSERT INTO projects (key, main_branch) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE

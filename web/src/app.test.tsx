@@ -977,11 +977,40 @@ describe('Project settings', () => {
     expect(list.projects.find((p) => p.key === 'payments-platform')).toMatchObject({ name: 'Payments platform', mainBranch: 'release/2.4' })
   })
 
+  it('lets admins delete a project by typing its key, then allow the key again', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi(0)
+    renderAt('/projects/mobile-bff/settings', api)
+    const danger = await screen.findByRole('region', { name: 'Danger zone' })
+    expect(danger).toHaveTextContent('its 15 analyses on 2 branches')
+    const confirm = within(danger).getByRole('textbox', { name: "Type the project's key to confirm" })
+    const button = within(danger).getByRole('button', { name: 'Delete this project' })
+    await user.type(confirm, 'mobile')
+    expect(button).toBeDisabled()
+    await user.type(confirm, '-bff')
+    await user.click(button)
+
+    // Gone from the projects, and its key refused.
+    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'mobile-bff' })).not.toBeInTheDocument()
+    await expect(api.project('mobile-bff')).rejects.toThrow('not found')
+    await expect(api.createToken({ name: 'ci', type: 'project_analysis', project: 'mobile-bff', expiresInDays: 30 })).rejects.toThrow('"mobile-bff" was deleted by mara')
+
+    await user.click(within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Administration/ }))
+    const list = await screen.findByRole('list', { name: 'Deleted projects' })
+    expect(list).toHaveTextContent('mobile-bff15 analyses · deleted by mara')
+    expect(list).toHaveTextContent('Uploads refused')
+    await user.click(within(list).getByRole('button', { name: 'Allow the key again' }))
+    await waitFor(() => expect(screen.getByRole('list', { name: 'Deleted projects' })).toHaveTextContent('allowed again by mara'))
+    expect(within(screen.getByRole('list', { name: 'Deleted projects' })).queryByRole('button')).not.toBeInTheDocument()
+  })
+
   it('is read-only for members', async () => {
     const api = createMockApi(0)
     const shell = api.shell
     renderAt('/projects/payments-platform/settings', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
     const general = await screen.findByRole('region', { name: 'General' })
+    expect(screen.queryByRole('region', { name: 'Danger zone' })).not.toBeInTheDocument()
     expect(within(general).queryByRole('textbox')).not.toBeInTheDocument()
     expect(within(general).queryByRole('button')).not.toBeInTheDocument()
     expect(general).toHaveTextContent('None: screens show the key.')

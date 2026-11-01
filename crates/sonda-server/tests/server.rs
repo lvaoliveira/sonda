@@ -35,6 +35,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "analysis_dependencies",
             "analysis_files",
             "api_tokens",
+            "deleted_projects",
             "dependency_review_events",
             "dependency_reviews",
             "issue_events",
