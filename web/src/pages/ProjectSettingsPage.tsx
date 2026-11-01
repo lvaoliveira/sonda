@@ -51,6 +51,11 @@ function RulesSettings({ project, rules, catalog, isAdmin, reload }: { project: 
         title="Rules"
         subtitle="The repository's sonda.toml decides which rules the scanner runs; the server decides which findings count. Rules at their default aren't listed."
       >
+        <p className="m-0 px-5 pb-1 text-[13px] text-fg-muted">
+          Profile <span className="font-semibold text-fg">{rules.profile.name}</span>
+          {rules.profile.chosen ? '' : ' (the default)'}
+          {rules.profileApplied === false && <> · the latest scan didn’t apply its current settings</>}
+        </p>
         <p className="m-0 px-5 pb-3 text-[13px] text-fg-muted">
           {toml ? (
             <>
@@ -142,7 +147,12 @@ function RuleRow({ project, s, isAdmin, reload }: { project: string; s: ProjectR
               {s.change.note && <>: “{s.change.note}”</>}
             </>
           )}
-          {s.severity && <> · severity {s.severity} in sonda.toml</>}
+          {s.severity && (
+            <>
+              {' '}
+              · severity {s.severity} in {s.severityBy === 'profile' ? 'the profile' : 'sonda.toml'}
+            </>
+          )}
           {s.hiddenIssues > 0 && <> · {formatNumber(s.hiddenIssues)} open findings left out</>}
         </span>
         {s.conflict && (

@@ -64,8 +64,8 @@ export const STATUS_COLOR: Record<IssueStatus, string> = {
 export const SET_BY_LABEL: Record<RuleSetBy, string> = {
   default: 'Default',
   sonda_toml: "The repository's sonda.toml",
-  server: 'Server, for all projects',
-  project: 'Server, for this project',
+  profile: "The project's profile",
+  project: 'This project, over its profile',
 }
 
 /** A change in a repository's sonda.toml rule settings. */

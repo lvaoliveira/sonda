@@ -331,7 +331,7 @@ export interface RuleSettingChange {
 }
 
 /** What decided a rule's state for a project (ADR-0016). */
-export type RuleSetBy = 'default' | 'sonda_toml' | 'server' | 'project'
+export type RuleSetBy = 'default' | 'sonda_toml' | 'profile' | 'project'
 
 export interface ProjectRuleState {
   rule: string
@@ -340,9 +340,11 @@ export interface ProjectRuleState {
   setBy: RuleSetBy
   /** The server setting that decided it. */
   change: RuleSettingChange | null
-  /** The severity sonda.toml gives it, when it changes the default. */
+  /** Its severity when the profile or sonda.toml changes it. */
   severity: Severity | null
-  /** The server says on, but the scanner never runs it. */
+  /** What changed the severity. */
+  severityBy: 'profile' | 'sonda_toml' | null
+  /** The server says on, but the latest scan didn't apply its settings and never ran it. */
   conflict: boolean
   /** Open findings on the main branch the server leaves out. */
   hiddenIssues: number
@@ -360,6 +362,10 @@ export interface SondaTomlRules {
 export interface ProjectRules {
   project: string
   mainBranch: string
+  /** The rule profile the project uses (ADR-0018). */
+  profile: { id: number; name: string; isDefault: boolean; chosen: boolean }
+  /** Whether the main branch's latest analysis applied the server's current settings; null without one. */
+  profileApplied: boolean | null
   /** From the main branch's latest analysis; null when unknown (an older sonda). */
   sondaToml: SondaTomlRules | null
   /** Every rule whose state differs from its default for this project. */

@@ -173,6 +173,22 @@ pub async fn require_read(
     Ok(next.run(request).await)
 }
 
+/// Middleware for the rule settings a scan applies (ADR-0018): readers, as
+/// `require_read`, and also analysis tokens, whose one read this is. The
+/// handler holds a project analysis token to its project.
+pub async fn require_profile_read(
+    axum::extract::State(state): axum::extract::State<State>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let caller = caller(&state, request.headers()).await?;
+    if state.reads_require_auth && matches!(caller, Caller::Anonymous) {
+        return Err(ApiError::Unauthorized);
+    }
+    request.extensions_mut().insert(caller);
+    Ok(next.run(request).await)
+}
+
 /// The header a browser session must add to every change. A cross-site
 /// form or script cannot set it without a CORS preflight, which this server
 /// never approves, so a session cookie alone can never make a change.

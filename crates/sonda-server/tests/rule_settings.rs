@@ -160,7 +160,7 @@ async fn admins_turn_rules_off_globally_or_per_project() {
     // Each project's view says what decided each rule.
     let shop = get(&app, &max, "/api/projects/shop/rule-settings").await;
     let s = state(&shop, "js/no-eval").unwrap();
-    assert_eq!((&s["on"], &s["setBy"]), (&json!(false), &json!("server")));
+    assert_eq!((&s["on"], &s["setBy"]), (&json!(false), &json!("profile")));
     assert_eq!(s["change"]["changedBy"], "ada");
     assert_eq!(s["hiddenIssues"], 1);
     let blog = get(&app, &max, "/api/projects/blog/rule-settings").await;
