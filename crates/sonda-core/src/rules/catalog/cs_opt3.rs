@@ -615,10 +615,10 @@ fn file_namespaces<'s>(using: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut names = Vec::new();
     let mut current = using.parent();
     while let Some(n) = current {
-        if n.kind() == "namespace_declaration" {
-            if let Some(name) = n.child_by_field_name("name") {
-                names.push(text(name, src));
-            }
+        if n.kind() == "namespace_declaration"
+            && let Some(name) = n.child_by_field_name("name")
+        {
+            names.push(text(name, src));
         }
         if n.kind() == "compilation_unit" {
             let mut cursor = n.walk();
