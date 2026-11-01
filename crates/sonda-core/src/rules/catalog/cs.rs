@@ -817,7 +817,7 @@ fn unary_operator<'t, 's>(node: Node<'t>, src: &'s [u8]) -> Option<(Node<'t>, &'
 }
 
 /// The named operand of a unary expression, skipping comments.
-fn operand(node: Node) -> Option<Node> {
+pub(super) fn operand(node: Node) -> Option<Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .find(|c| c.kind() != "comment")
@@ -835,7 +835,7 @@ fn squeezed(node: Node, src: &[u8]) -> Vec<u8> {
 /// Whether two nodes hold the same code, ignoring layout. Comparing the
 /// kinds first keeps chains such as `a - b - c - ...` linear: there, the
 /// left side is a long expression and the right a name.
-fn same_code(a: Node, b: Node, src: &[u8]) -> bool {
+pub(super) fn same_code(a: Node, b: Node, src: &[u8]) -> bool {
     a.kind() == b.kind()
         && a.named_child_count() == b.named_child_count()
         && squeezed(a, src) == squeezed(b, src)
