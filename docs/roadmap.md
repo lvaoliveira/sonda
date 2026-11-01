@@ -275,7 +275,6 @@ never merges anything itself.
 | **Teams** | No teams, so the Overview has no "My team" scope. | Teams as user groups and project ownership; the Overview's `teams` flag. |
 | **Health score change** | Needs ratings history, which the server does not reconstruct yet. | Compute ratings per stored analysis; fills `health.delta` and "vs N days ago". |
 | **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, and analysis stages and logs. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
-| **Server-managed rule profiles** | Rules are configured per repository in `sonda.toml`. [ADR-0016](adr/0016-rule-settings-on-the-server.md) (accepted) lets admins turn rules off on the server. | The rest: named profiles `sonda scan` downloads and applies ([ADR-0018](adr/0018-rule-profiles.md), accepted). |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
 | **Regex analysis** | 35 SonarQube rules (about 85 per-language instances) read a pattern as a pattern, which tree-sitter queries cannot do ([ADR-0013](adr/0013-regex-analysis.md), proposed). | A parser for the JavaScript, Python and Java dialects, then syntax rules (R1), language rules (R2) and backtracking detection (R3). |

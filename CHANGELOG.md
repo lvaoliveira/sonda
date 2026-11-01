@@ -261,6 +261,13 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Web app: a **Quality profiles** page, under Configure (ADR-0018): each
+  profile, the default, built in, and the projects using it, with its rules
+  in the Rules page's structure (search, language, type, and whether the
+  profile sets them, those it sets listed first). Admins create a profile,
+  empty or as a copy, rename it, make it the default and delete it, and turn
+  each rule on or off in it with a severity and a note, or leave it at its
+  default. "sonda way" stays read-only, and members read.
 - Rule settings on the server (ADR-0016): admins turn a rule off for every
   project or for one (`PUT /api/rule-settings`,
   `PUT /api/projects/{key}/rule-settings`), and a project can turn back on
