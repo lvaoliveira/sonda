@@ -12,6 +12,7 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "js/increment-in-expression",
     "js/overloads-not-grouped",
     "js/angular-standalone-false",
+    "js/var-used-before-declaration",
 ];
 
 pub(super) static RULES: &[Rule] = &[
@@ -215,6 +216,66 @@ pub(super) static RULES: &[Rule] = &[
             good: "@Component({ selector: 'a' }) class C { ngOnInit() {} }",
         }),
     },
+    Rule {
+        id: "js/var-used-before-declaration",
+        name: "Variables declared with \"var\" should be declared before they are used",
+        description: "var is hoisted, so an earlier use reads undefined.",
+        message: "Declare the variable before this use.",
+        category: CodeSmell,
+        severity: Blocker,
+        effort_minutes: 3,
+        sonar: &[exact("S1526")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"[(function_declaration) (function_expression) (arrow_function) (method_definition)] @match"#,
+            filter: Some(Find(var_used_before_declaration)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function f() { g(x); var x = 1; }",
+            good: "function f() { var x = 1; g(x); }",
+        }),
+    },
+    Rule {
+        id: "js/jsx-key-unstable",
+        name: "JSX list components keys should match up between renders",
+        description: "A key that changes every render makes React remount every item.",
+        message: "Use a stable key from the data.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 3,
+        sonar: &[exact("S6486")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (jsx_expression (call_expression function: (_) @f)) (#eq? @a "key") (#match? @f "^(Math\\.random|uuid|uuidv4|v4|nanoid|Date\\.now)$")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const a = items.map((i) => <li key={Math.random()}>{i}</li>);",
+            good: "const a = items.map((i) => <li key={i.id}>{i.name}</li>);",
+        }),
+    },
+    Rule {
+        id: "js/jsx-inline-spacing",
+        name: "Spacing between inline elements should be explicit",
+        description: "A line break between JSX children is dropped, gluing the words together.",
+        message: "Add {' '} where the space is meant.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S6772")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_text) @match"#,
+            filter: Some(Keep(line_break_hides_a_space)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const a = <p><b>Hi</b>\n  there</p>;",
+            good: "const a = <p><b>Hi</b>{' '}\n  there</p>;",
+        }),
+    },
 ];
 
 fn is_mixed_into_an_expression(update: Node, _: &[u8]) -> bool {
@@ -388,4 +449,82 @@ fn asserts_the_literal_it_has(expr: Node, src: &[u8]) -> bool {
     ty.kind() == "literal_type"
         && matches!(value.kind(), "string" | "number" | "true" | "false")
         && text(value, src) == text(ty, src)
+}
+
+fn var_used_before_declaration<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let body = function.child_by_field_name("body")?;
+    let mut declared: Vec<(&[u8], usize)> = Vec::new();
+    walk(body, &mut |n| {
+        if is_function_kind(n.kind()) {
+            return false;
+        }
+        if n.kind() == "variable_declaration" {
+            for d in named(n) {
+                if let Some(name) = d
+                    .child_by_field_name("name")
+                    .filter(|x| x.kind() == "identifier")
+                {
+                    declared.push((text(name, src), name.start_byte()));
+                }
+            }
+        }
+        true
+    });
+    if declared.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    walk(body, &mut |n| {
+        if found.is_some() || is_function_kind(n.kind()) {
+            return false;
+        }
+        if n.kind() == "identifier"
+            && n.parent().is_none_or(|p| {
+                p.kind() != "variable_declarator" || p.child_by_field_name("name") != Some(n)
+            })
+        {
+            let first = declared
+                .iter()
+                .filter(|(name, _)| *name == text(n, src))
+                .map(|(_, at)| *at)
+                .min();
+            if first.is_some_and(|at| n.start_byte() < at) {
+                found = Some(n);
+            }
+        }
+        true
+    });
+    found
+}
+
+fn is_inline_element(node: Node, src: &[u8]) -> bool {
+    const INLINE: &[&[u8]] = &[
+        b"a", b"b", b"i", b"em", b"strong", b"span", b"code", b"small", b"abbr", b"label", b"cite",
+        b"kbd", b"mark", b"q", b"s", b"sub", b"sup", b"u", b"button",
+    ];
+    let open = match node.kind() {
+        "jsx_element" => node.child_by_field_name("open_tag"),
+        "jsx_self_closing_element" => Some(node),
+        _ => None,
+    };
+    open.and_then(|o| o.child_by_field_name("name"))
+        .is_some_and(|n| INLINE.contains(&text(n, src)))
+}
+
+fn line_break_hides_a_space(jsx_text: Node, src: &[u8]) -> bool {
+    let t = text(jsx_text, src);
+    if !t.contains(&b'\n') {
+        return false;
+    }
+    let (prev, next) = (jsx_text.prev_sibling(), jsx_text.next_sibling());
+    let inline = |n: Option<Node>| n.is_some_and(|n| is_inline_element(n, src));
+    let Some(first) = t.iter().position(|b| !b.is_ascii_whitespace()) else {
+        return inline(prev) && inline(next);
+    };
+    let last = t
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .unwrap_or(first);
+    (t[..first].contains(&b'\n') && inline(prev))
+        || (t[last + 1..].contains(&b'\n') && inline(next))
 }
