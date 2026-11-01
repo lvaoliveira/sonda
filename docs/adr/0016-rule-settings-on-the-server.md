@@ -1,6 +1,6 @@
 # ADR-0016: Rule settings on the server, and showing every rule's state
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-11-01
 - Covers part of the roadmap's "Server-managed rule profiles" item
 
