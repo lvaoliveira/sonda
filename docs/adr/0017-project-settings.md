@@ -20,18 +20,23 @@ is its main one, which rules and gate apply, and deleting it.
 ### A Settings page per project
 
 Each project gets a **Settings** page, linked from its page. Admins change
-the settings; members see the page read-only, including every rule's
-state and what set it (ADR-0016). Every change records who made it and
-when.
+the settings; members see the page read-only. Every change records who
+made it and when.
 
 | Section | Setting |
 |---|---|
 | General | display name; main branch |
-| Rules | each rule's state and what set it, and the project's server settings (ADR-0016) |
 | Quality gate | the gate the server evaluates for this project |
 | Danger zone | delete the project |
 
 The new-code-period control stays on the project page.
+
+**Rules have their own page, not a Settings section** (amended
+2026-11-01, after review): a project's **Rules** page has the catalog's
+Rules page structure (search, filters, list and detail), shows only the
+rules for the project's languages, each with its state there and what set
+it, and lets admins enable or disable each one for the project and choose
+its rule profile (ADR-0016, ADR-0018).
 
 ### Display name
 

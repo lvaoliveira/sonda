@@ -717,14 +717,18 @@ catalog default.
 | `PUT /api/projects/{key}/rule-settings` `{"rule": "js/no-var", "state": "on", "note": "..."}` | Admins: `on` or `off` for this project, over its profile, or `inherit`. |
 | `PUT /api/rule-settings` `{"rule": "js/no-var", "off": true}` | Admins: off in the default profile, or back on. When "sonda way" is the default, a "Server settings" profile takes its place. |
 | `GET /api/projects/{key}/rule-profile` | What a scan of the project applies: `profile`, `revision` and its `rules` (`rule`, `on`, `severity`). A project not uploaded yet gets the default profile's. Analysis tokens may read it, for their project only. |
-| `GET /api/projects/{key}/rule-settings` | Every rule whose state differs from its default for the project. |
+| `GET /api/projects/{key}/rules` | The rules for the project's languages, each with its state there. |
 
-The project view gives its `profile` and whether the main branch's latest
-analysis applied the current settings (`profileApplied`), and, for each
-rule not at its default, whether it's `on`, what set it (`setBy`:
-`default`, `sonda_toml`, `profile`, or `project`), the setting's note,
-author and time, its `severity` and what changed it (`severityBy`), and
-`hiddenIssues`, the open findings the server leaves out. It also returns
+The project's rules are those for the `languages` of its main branch's
+latest analysis, each with the catalog's description (as in
+`GET /api/rules`), its `openIssues` and `hiddenIssues` (open findings
+that count, and those the server leaves out), and its `state`: whether
+it's `on`, what set it (`setBy`: `default`, `sonda_toml`, `profile`, or
+`project`), the setting's note, author and time (`change`), its
+`severity` and what changed it (`severityBy`), and the project's own
+setting (`projectSetting`). The answer also gives the project's `profile`
+and whether that analysis applied the current settings
+(`profileApplied`). It also returns
 `sondaToml`, the repository's `[rules]` in that analysis (null when
 unknown: it came from an older `sonda`), and `tomlChanges`, when the
 repository changed them, newest first.

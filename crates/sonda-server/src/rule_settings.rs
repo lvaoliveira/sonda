@@ -178,8 +178,6 @@ pub(crate) async fn load_profiles(pool: &PgPool) -> Result<Profiles, sqlx::Error
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleState {
-    pub rule: &'static str,
-    pub name: &'static str,
     pub on: bool,
     pub set_by: SetBy,
     /// The note, author and time of the server setting that decided it.
@@ -192,10 +190,22 @@ pub struct RuleState {
     /// settings and `sonda.toml` (or the catalog) leaves it off, so nothing
     /// reached the server.
     pub conflict: bool,
-    /// Open findings on the main branch that the server leaves out.
-    pub hidden_issues: i64,
     /// This project's own adjustment, if any: `on` or `off`.
     pub project_setting: Option<&'static str>,
+}
+
+/// A rule for one project: the catalog's description, its state there, and
+/// its findings on the main branch.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRule {
+    #[serde(flatten)]
+    pub info: crate::rules::RuleInfo,
+    pub state: RuleState,
+    /// Open or confirmed findings that count.
+    pub open_issues: i64,
+    /// Open findings the server leaves out, since the rule is off.
+    pub hidden_issues: i64,
 }
 
 /// A change of the repository's settings between two analyses.
@@ -237,9 +247,10 @@ pub struct ProjectRules {
     /// when that analysis came from a sonda that didn't send them, or there
     /// is none.
     pub sonda_toml: Option<Value>,
-    /// Every rule whose state differs from its default for this project,
-    /// or that the server sets, sorted by rule id.
-    pub rules: Vec<RuleState>,
+    /// The languages of the main branch's latest analysis, as in reports.
+    pub languages: Vec<String>,
+    /// Every rule for those languages, in catalog order.
+    pub rules: Vec<ProjectRule>,
     /// When the repository's settings changed, newest first.
     pub toml_changes: Vec<TomlChange>,
 }
@@ -372,8 +383,8 @@ async fn latest_scans(
 /// the profile applied).
 type ScanRow = (i64, String, f64, Option<Value>, Option<Value>);
 
-/// `GET /api/projects/{key}/rule-settings`: every rule whose state differs
-/// from its default for the project, with what set it.
+/// `GET /api/projects/{key}/rules`: the rules for the project's languages,
+/// each with its state there and what set it, and its findings.
 pub async fn get_project(
     axum::extract::State(state): axum::extract::State<State>,
     Path(key): Path<String>,
@@ -404,10 +415,13 @@ pub async fn get_project(
     let profile_applied = history
         .last()
         .map(|h| h.4.as_ref().and_then(|p| p["revision"].as_str()) == Some(expected.as_str()));
-    let hidden: HashMap<String, i64> = sqlx::query_as(
-        "SELECT rule, count(*) FROM issues
+    // Open findings per rule: (counted, left out).
+    let findings: HashMap<String, (i64, i64)> = sqlx::query_as::<_, (String, i64, i64)>(
+        "SELECT rule, count(*) FILTER (WHERE NOT rule_off(project_id, rule)),
+                count(*) FILTER (WHERE rule_off(project_id, rule))
+         FROM issues
          WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL
-           AND status IN ('open', 'confirmed') AND rule_off(project_id, rule)
+           AND status IN ('open', 'confirmed')
          GROUP BY rule",
     )
     .bind(project)
@@ -415,11 +429,27 @@ pub async fn get_project(
     .fetch_all(pool)
     .await?
     .into_iter()
+    .map(|(rule, counted, hidden)| (rule, (counted, hidden)))
     .collect();
+    let languages: Vec<String> =
+        match history.last() {
+            Some(latest) => sqlx::query_scalar(
+                "SELECT DISTINCT language FROM analysis_files WHERE analysis_id = $1 ORDER BY 1",
+            )
+            .bind(latest.0)
+            .fetch_all(pool)
+            .await?,
+            None => Vec::new(),
+        };
 
     let rules = RULES
         .iter()
-        .filter_map(|r| {
+        .filter(|r| {
+            r.langs()
+                .iter()
+                .any(|l| languages.iter().any(|p| p == l.name()))
+        })
+        .map(|r| {
             let own_setting = own.get(r.id);
             let d = rule_state(
                 r,
@@ -428,22 +458,21 @@ pub async fn get_project(
                 own_setting,
                 profile_applied == Some(true),
             );
-            let listed = d.set_by != SetBy::Default
-                || d.severity.is_some()
-                || d.conflict
-                || own_setting.is_some();
-            listed.then(|| RuleState {
-                rule: r.id,
-                name: r.name,
-                on: d.on,
-                set_by: d.set_by,
-                change: d.change,
-                severity_by: d.severity.as_ref().map(|s| s.1),
-                severity: d.severity.map(|s| s.0),
-                conflict: d.conflict,
-                hidden_issues: hidden.get(r.id).copied().unwrap_or(0),
-                project_setting: own_setting.map(|(on, _)| if *on { "on" } else { "off" }),
-            })
+            let (open_issues, hidden_issues) = findings.get(r.id).copied().unwrap_or_default();
+            ProjectRule {
+                info: crate::rules::info(r),
+                state: RuleState {
+                    on: d.on,
+                    set_by: d.set_by,
+                    change: d.change,
+                    severity_by: d.severity.as_ref().map(|s| s.1),
+                    severity: d.severity.map(|s| s.0),
+                    conflict: d.conflict,
+                    project_setting: own_setting.map(|(on, _)| if *on { "on" } else { "off" }),
+                },
+                open_issues,
+                hidden_issues,
+            }
         })
         .collect();
 
@@ -506,6 +535,7 @@ pub async fn get_project(
         },
         profile_applied,
         sonda_toml,
+        languages,
         rules,
         toml_changes,
     }))
