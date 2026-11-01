@@ -116,9 +116,25 @@ file, which sonda doesn't read.
 - The parity table has a C# row and `cs.csv`. SonarQube 26.7 has 446 C#
   rules; the first batch covers 51 keys and partly covers 3. Three of its
   rules are outside the default profile, so they are opt-in.
-- Three SonarQube C# rules have no sonda counterpart:
-  - S1944 (invalid casts) and S3220 (calls that resolve ambiguously to a
-    `params` overload) depend on overload resolution and on the values that
-    reach a cast, which declarations alone don't settle. They wait for type
-    checking (ADR-0008's S4).
-  - S6802 checks Razor markup (`.razor` files), which sonda doesn't parse.
+- Three SonarQube C# rules have no sonda counterpart, on purpose:
+  - **S1944, invalid casts.** The compiler already rejects casts the
+    declared types make impossible. What's left fails at run time:
+    `object o = GetValue(); var i = (int)o;` throws when `GetValue()`
+    returns a boxed `long`. Telling needs the values that reach the cast,
+    and the return types of methods declared in other files, which
+    SonarQube gets from data flow over typed code.
+  - **S3220, calls resolving to a `params` overload.** It reports a call
+    the compiler binds to a `params` overload while another overload also
+    applies. Telling which overload a call binds to is C#'s overload
+    resolution: argument types, implicit conversions, generics, inherited
+    overloads.
+  - **S6802, lambdas in loops in Blazor markup.** It checks `.razor` files,
+    which mix HTML and C#; sonda parses `.cs` only.
+
+  Approximating S1944 and S3220 from declarations would guess, and both are
+  in SonarQube's default profile, so a guess would mean false positives in
+  every project. What would unblock them: type checking (ADR-0008's phase
+  S4, which needs its own ADR; running Roslyn was rejected above because it
+  needs .NET at scan time) for S1944 and S3220, and a Razor grammar, with
+  the same review this ADR gave tree-sitter-c-sharp, for S6802. The parity
+  report lists them as known gaps (`scripts/sonar_parity.py`).

@@ -20,13 +20,24 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | C++ | not available on this SonarQube edition | | | | | |
 | C# | 446 | 353 | 90 | 3 | 0 | 0 |
 
+## Known gaps
+
+Rules sonda leaves out on purpose, and the decision records that say what
+would change that.
+
+| Language | Key | Reason |
+|---|---|---|
+| C# | S1944 | Invalid casts: needs the values reaching a cast and types from other files. [Why](../adr/0015-csharp.md) |
+| C# | S3220 | Calls resolving to a `params` overload: needs C#'s overload resolution. [Why](../adr/0015-csharp.md) |
+| C# | S6802 | Lambdas in loops in Blazor markup: checks `.razor` files, which sonda doesn't parse. [Why](../adr/0015-csharp.md) |
+
 ## Security standards
 
 CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-14 rules differ:
+13 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
@@ -43,6 +54,5 @@ aren't compared.
 | `java/upload-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 | `cs/request-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 | `cs/hardcoded-ip` | none | CWE-547, A01 |
-| `cs/conflicting-transparency` | CWE-284, A01 | CWE-269, A05 |
 
 Per-language details: the `.csv` files in this directory.
