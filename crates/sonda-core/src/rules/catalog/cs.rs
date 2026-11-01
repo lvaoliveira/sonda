@@ -860,7 +860,7 @@ pub(super) fn same_code(a: Node, b: Node, src: &[u8]) -> bool {
         && squeezed(a, src) == squeezed(b, src)
 }
 
-fn unparenthesized(mut node: Node) -> Node {
+pub(super) fn unparenthesized(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         match operand(node) {
             Some(inner) => node = inner,
