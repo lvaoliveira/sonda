@@ -447,7 +447,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[exact("S7740")],
+        sonar: &[exact("S7740"), exact("S4327")],
         check: Check::Query {
             langs: JS_TS,
             query: r#"(variable_declarator name: (identifier) value: (this)) @match"#,
