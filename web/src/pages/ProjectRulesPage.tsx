@@ -174,12 +174,12 @@ function InThisProject({ project, rule, profile, isAdmin, reload }: { project: s
           />
           {(!s.on || s.projectSetting === 'off') && (
             <Button primary onClick={() => void set('on')} disabled={busy || s.projectSetting === 'on'}>
-              Enable here
+              Enable rule
             </Button>
           )}
           {(s.on || s.projectSetting === 'on') && (
             <Button onClick={() => void set('off')} disabled={busy || s.projectSetting === 'off'}>
-              Disable here
+              Disable rule
             </Button>
           )}
           {s.projectSetting && (

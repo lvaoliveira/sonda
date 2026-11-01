@@ -58,6 +58,9 @@ pub struct Report<'a> {
     /// `sonda scan --upload`; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_profile: Option<AppliedProfile>,
+    /// The ids of the rules the scan ran, sorted, so the server can tell a
+    /// fixed finding from one whose rule didn't run.
+    pub active_rules: &'a [&'static str],
 }
 
 /// The server's rule profile a scan applied, as the server named it.
@@ -232,6 +235,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         warnings: &scan.warnings,
         rule_settings: RuleSettings::from_config(&outcome.rules),
         rule_profile: None,
+        active_rules: &outcome.active_rules,
     }
 }
 

@@ -16,6 +16,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { ProjectPage } from '@/pages/ProjectPage'
 import { ProjectRulesPage } from '@/pages/ProjectRulesPage'
+import { QualityProfilesPage } from '@/pages/QualityProfilesPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RulesPage } from '@/pages/RulesPage'
 import { SecurityPage } from '@/pages/SecurityPage'
@@ -51,6 +52,7 @@ export function AppRoutes() {
           <Route path="/gates" element={<GatesPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/rules" element={<RulesPage />} />
+          <Route path="/quality-profiles" element={<QualityProfilesPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="*" element={<NotFoundPage />} />

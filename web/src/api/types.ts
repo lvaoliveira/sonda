@@ -365,6 +365,16 @@ export interface ProjectRule extends RuleInfo {
   hiddenIssues: number
 }
 
+/** A rule a profile sets (ADR-0018). */
+export interface ProfileRuleSetting {
+  rule: string
+  name: string | null
+  on: boolean
+  /** Null keeps the catalog's severity. */
+  severity: Severity | null
+  change: RuleSettingChange
+}
+
 /** A rule profile, as lists show it (ADR-0018). */
 export interface RuleProfileSummary {
   id: number
@@ -376,6 +386,11 @@ export interface RuleProfileSummary {
   rules: number
   /** Projects using it, by choice or as the default. */
   projects: string[]
+}
+
+export interface RuleProfileDetail extends RuleProfileSummary {
+  /** The rules it sets, sorted by id. */
+  rulesSet: ProfileRuleSetting[]
 }
 
 /** sonda.toml's `[rules]`, as an analysis recorded them. */
@@ -1066,6 +1081,15 @@ export interface SondaApi {
   ruleProfiles(): Promise<RuleProfileSummary[]>
   /** Admins: the project's profile, or null for the default. */
   setProjectProfile(key: string, profile: number | null): Promise<void>
+  ruleProfile(id: number): Promise<RuleProfileDetail>
+  /** Admins: a new profile, empty or a copy of `copyFrom`. */
+  createRuleProfile(name: string, copyFrom?: number): Promise<{ id: number; name: string }>
+  /** Admins: rename it (not "sonda way"), or make it the default. */
+  updateRuleProfile(id: number, patch: { name?: string; isDefault?: true }): Promise<void>
+  /** Admins: a profile that isn't the default, built in, or used by a project. */
+  deleteRuleProfile(id: number): Promise<void>
+  /** Admins: a rule on or off in a profile, with a severity, or `inherit` to leave it at its default. */
+  setProfileRule(id: number, rule: string, state: ProjectRuleSetting, severity?: Severity | null, note?: string): Promise<void>
   /** Admins: off for every project, or back on. */
   setRuleOff(rule: string, off: boolean, note?: string): Promise<void>
   /** Admins: on or off for one project, over the global setting, or `inherit` to follow it. */

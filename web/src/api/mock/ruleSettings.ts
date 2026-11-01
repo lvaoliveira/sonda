@@ -1,4 +1,4 @@
-import type { ProjectRule, ProjectRuleSetting, ProjectRuleState, ProjectRules, Rule, RuleProfileSummary, RuleSetBy, RuleSettingChange, Severity, SondaTomlRules } from '../types'
+import type { ProjectRule, ProjectRuleSetting, ProjectRuleState, ProjectRules, Rule, RuleProfileDetail, RuleProfileSummary, RuleSetBy, RuleSettingChange, Severity, SondaTomlRules } from '../types'
 
 /** The repositories' `[rules]`, as their latest analyses recorded them; null when unknown. */
 const SONDA_TOML: Record<string, SondaTomlRules | null> = {
@@ -133,6 +133,55 @@ export function mockRuleSettings() {
       own.set(project, map)
       if (setting === 'inherit') map.delete(rule)
       else map.set(rule, { on: setting === 'on', change: change(by, note) })
+    },
+    profileDetail(id: number, projects: string[], names: Map<string, string>): RuleProfileDetail {
+      const summary = this.profiles(projects).find((p) => p.id === id)
+      const p = profiles.find((x) => x.id === id)
+      if (!summary || !p) throw new Error('not found')
+      const rulesSet = [...p.rules.entries()]
+        .map(([rule, r]) => ({ rule, name: names.get(rule) ?? null, on: r.on, severity: r.severity, change: r.change }))
+        .sort((a, b) => a.rule.localeCompare(b.rule))
+      return { ...summary, rulesSet }
+    },
+    createProfile(name: string, by: string, copyFrom?: number): { id: number; name: string } {
+      const trimmed = name.trim()
+      if (!trimmed || trimmed.length > 100) throw new Error("a profile's name has 1-100 characters")
+      if (profiles.some((p) => p.name === trimmed)) throw new Error(`a profile named "${trimmed}" exists`)
+      const from = copyFrom === undefined ? undefined : profiles.find((p) => p.id === copyFrom)
+      if (copyFrom !== undefined && !from) throw new Error(`no profile ${copyFrom} to copy`)
+      const p: MockProfile = { id: Math.max(...profiles.map((x) => x.id)) + 1, name: trimmed, builtin: false, rules: new Map(from?.rules ?? []) }
+      void by
+      profiles.push(p)
+      return { id: p.id, name: p.name }
+    },
+    updateProfile(id: number, patch: { name?: string; isDefault?: true }) {
+      const p = profiles.find((x) => x.id === id)
+      if (!p) throw new Error('not found')
+      if (patch.name !== undefined) {
+        if (p.builtin) throw new Error("sonda way can't be renamed")
+        const name = patch.name.trim()
+        if (!name || name.length > 100) throw new Error("a profile's name has 1-100 characters")
+        if (profiles.some((x) => x.id !== id && x.name === name)) throw new Error(`a profile named "${name}" exists`)
+        p.name = name
+      }
+      if (patch.isDefault) defaultId = id
+    },
+    deleteProfile(id: number) {
+      const p = profiles.find((x) => x.id === id)
+      if (!p) throw new Error('not found')
+      if (p.builtin || id === defaultId) throw new Error("sonda way and the default profile can't be deleted")
+      const users = [...chosen.entries()].filter(([, v]) => v === id).map(([k]) => k)
+      if (users.length) throw new Error(`projects use this profile: ${users.sort().join(', ')}`)
+      profiles.splice(profiles.indexOf(p), 1)
+    },
+    setProfileRule(id: number, rule: string, setting: ProjectRuleSetting, by: string, severity?: Severity | null, note?: string) {
+      checkNote(note)
+      const p = profiles.find((x) => x.id === id)
+      if (!p) throw new Error('not found')
+      if (p.builtin) throw new Error("sonda way is the catalog's defaults and can't change; copy it")
+      if (!['on', 'off', 'inherit'].includes(setting)) throw new Error('state is on, off or inherit')
+      if (setting === 'inherit') p.rules.delete(rule)
+      else p.rules.set(rule, { on: setting === 'on', severity: severity ?? null, change: change(by, note) })
     },
     setProjectProfile(project: string, profile: number | null) {
       if (profile === null) chosen.delete(project)

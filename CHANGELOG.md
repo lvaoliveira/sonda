@@ -227,6 +227,12 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
+- A finding missing because the scan didn't run its rule (turned off by a
+  profile or `sonda.toml`) is no longer counted as fixed: reports list
+  their `active_rules`, and the server sets such findings aside, out of
+  the open issues but also out of every fixed count, list, trend and
+  time-to-fix, and brings them back without a "reopened" when the rule
+  runs again. The upload's summary says how many were set aside.
 - `sonda scan --upload` applies the server's rule settings (ADR-0018):
   before scanning it fetches the project's rule profile and adjustments,
   and where the server sets a rule (on, off, severity) the server wins over
@@ -255,6 +261,13 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Web app: a **Quality profiles** page, under Configure (ADR-0018): each
+  profile, the default, built in, and the projects using it, with its rules
+  in the Rules page's structure (search, language, type, and whether the
+  profile sets them, those it sets listed first). Admins create a profile,
+  empty or as a copy, rename it, make it the default and delete it, and turn
+  each rule on or off in it with a severity and a note, or leave it at its
+  default. "sonda way" stays read-only, and members read.
 - Rule settings on the server (ADR-0016): admins turn a rule off for every
   project or for one (`PUT /api/rule-settings`,
   `PUT /api/projects/{key}/rule-settings`), and a project can turn back on

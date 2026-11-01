@@ -72,6 +72,13 @@ matched to the branch's earlier ones by fingerprint:
 - **Kept:** an issue still present. It moves to its new line, and its status
   (confirmed, accepted, false positive), reason and assignee stay.
 - **Fixed:** an issue missing from the upload.
+- **Set aside:** an issue missing because the scan didn't run its rule (a
+  rule profile or `sonda.toml` turned it off; the report's `active_rules`
+  says which ran). It leaves the open issues like a fixed one, but isn't
+  counted or listed as fixed anywhere, and when the rule runs again and
+  finds it, it's back without counting as reopened. If the rule runs and
+  it's gone, it's fixed then. Uploads from an older `sonda`, without
+  `active_rules`, mark every missing issue fixed.
 - **Reopened:** a fixed issue that comes back, with its earlier status.
 
 Branches are tracked separately. Unchanged files are stored once, however
@@ -80,7 +87,8 @@ many analyses include them.
 `POST /api/analyses` needs `Authorization: Bearer <token>`. It takes the JSON
 `sonda upload` sends, gzipped or plain, up to 128 MiB as sent and 800 MiB
 uncompressed. It answers `201` with
-`{"analysis_id": 2, "issues": {"open": 331, "new": 61, "reopened": 0, "fixed": 2}, "gate": {...}}`.
+`{"analysis_id": 2, "issues": {"open": 331, "new": 61, "reopened": 0, "fixed": 2}, "gate": {...}}`,
+with `issues.set_aside` when some were set aside.
 `gate` is the server's quality gate for that analysis, with the reviews
 made on the server taken into account: `passed`, `state` and the labels of
 its `failing` conditions.

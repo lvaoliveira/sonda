@@ -696,6 +696,7 @@ mod tests {
             measures,
             gate,
             rules: cfg.rules.clone(),
+            active_rules: crate::rules::RuleSet::new(&cfg.rules).unwrap().ids(),
         }
     }
 

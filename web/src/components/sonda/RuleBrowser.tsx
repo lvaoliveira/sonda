@@ -27,6 +27,7 @@ export function RuleBrowser<T extends RuleInfo>({
   total,
   languages,
   count,
+  order,
   sortLabel,
   extraFilter,
   listTags,
@@ -39,6 +40,8 @@ export function RuleBrowser<T extends RuleInfo>({
   total: number
   languages: { id: string; rules: number }[]
   count: (rule: T) => number
+  /** What the list sorts by, most first; `count` when absent. */
+  order?: (rule: T) => number
   sortLabel: string
   extraFilter?: RuleFilter<T>
   listTags?: (rule: T) => ReactNode
@@ -63,8 +66,8 @@ export function RuleBrowser<T extends RuleInfo>({
           (!cat || r.category === cat) &&
           (!extra || !extraFilter || extraFilter.test(r, extra)),
       )
-      .sort((a, b) => count(b) - count(a))
-  }, [rules, search.q, lang, cat, extra, extraFilter, count])
+      .sort((a, b) => (order ?? count)(b) - (order ?? count)(a))
+  }, [rules, search.q, lang, cat, extra, extraFilter, count, order])
   const rule = list.find((r) => r.id === selected) ?? list[0]
 
   return (
