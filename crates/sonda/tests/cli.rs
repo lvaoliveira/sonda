@@ -887,39 +887,69 @@ fn fake_server(
     status: &'static str,
     reply: &'static str,
 ) -> (String, std::thread::JoinHandle<Request>) {
+    let (url, handle) = fake_server_seq(vec![(status, reply)]);
+    let one = std::thread::spawn(move || handle.join().unwrap().remove(0));
+    (url, one)
+}
+
+/// As `fake_server`, answering one request per reply, in order.
+fn fake_server_seq(
+    replies: Vec<(&'static str, &'static str)>,
+) -> (String, std::thread::JoinHandle<Vec<Request>>) {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut head = String::new();
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            if line == "\r\n" || line.is_empty() {
-                break;
+        let mut received = Vec::new();
+        for (status, reply) in replies {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut head = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                head.push_str(&line);
             }
-            head.push_str(&line);
+            let request = Request {
+                head,
+                body: Vec::new(),
+            };
+            // A GET has no body.
+            let len: usize = request
+                .header("content-length")
+                .map_or(0, |l| l.parse().unwrap());
+            let mut body = vec![0; len];
+            reader.read_exact(&mut body).unwrap();
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            )
+            .unwrap();
+            received.push(Request { body, ..request });
         }
-        let request = Request {
-            head,
-            body: Vec::new(),
-        };
-        let len: usize = request.header("content-length").unwrap().parse().unwrap();
-        let mut body = vec![0; len];
-        reader.read_exact(&mut body).unwrap();
-        let mut stream = stream;
-        write!(
-            stream,
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-            reply.len()
-        )
-        .unwrap();
-        Request { body, ..request }
+        received
     });
     (url, handle)
 }
+
+/// The JSON upload in a request's gzipped body.
+fn uploaded(request: &Request) -> Value {
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(&request.body[..]),
+        &mut json,
+    )
+    .unwrap();
+    serde_json::from_slice(&json).unwrap()
+}
+
+/// A server without rule profiles (ADR-0018), as before them.
+const NO_PROFILES: (&str, &str) = ("404 Not Found", r#"{"error":"not found"}"#);
 
 /// A scanned project and its JSON report, kept outside the project.
 fn scanned(files: &[(&str, &str)]) -> (TempDir, TempDir) {
@@ -1093,10 +1123,13 @@ fn scan_upload(dir: &Path, server: &str) -> Command {
 #[test]
 fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
     let dir = project(&[("app.js", "var x = 1;\n")]);
-    let (url, server) = fake_server(
-        "201 Created",
-        r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":0}}"#,
-    );
+    let (url, server) = fake_server_seq(vec![
+        NO_PROFILES,
+        (
+            "201 Created",
+            r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":0}}"#,
+        ),
+    ]);
     let result = scan_upload(dir.path(), &url)
         .args(["-f", "text", "--no-gate"])
         .output()
@@ -1109,14 +1142,14 @@ fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
         stdout(&result)
     );
     assert!(stderr(&result).contains("uploaded 1 files for payments/main"));
-    let request = server.join().unwrap();
-    let mut json = Vec::new();
-    std::io::Read::read_to_end(
-        &mut flate2::read::GzDecoder::new(&request.body[..]),
-        &mut json,
-    )
-    .unwrap();
-    let body: Value = serde_json::from_slice(&json).unwrap();
+    assert!(
+        stderr(&result).contains("has no rule profiles; scanning with sonda.toml alone"),
+        "{}",
+        stderr(&result)
+    );
+    let requests = server.join().unwrap();
+    let body = uploaded(&requests[1]);
+    assert!(body["report"].get("rule_profile").is_none());
     // The server gets the full JSON report, and the duration beside it.
     assert_eq!(body["report"]["tool"], "sonda");
     assert!(body["report"].get("scan_duration_ms").is_none());
@@ -1158,7 +1191,7 @@ fn scan_upload_follows_the_servers_gate_over_its_own() {
     // eval fails the local gate; a review on the server has accepted it.
     let dir = project(&[("app.js", "eval(input);\n")]);
     let passed = r#"{"analysis_id":7,"gate":{"passed":true,"state":"passed","failing":[]}}"#;
-    let (url, server) = fake_server("201 Created", passed);
+    let (url, server) = fake_server_seq(vec![NO_PROFILES, ("201 Created", passed)]);
     let result = scan_upload(dir.path(), &url).output().unwrap();
     server.join().unwrap();
     assert_eq!(code(&result), 0, "{}", stderr(&result));
@@ -1169,7 +1202,7 @@ fn scan_upload_follows_the_servers_gate_over_its_own() {
     );
 
     // A server that sends no gate leaves the local one deciding.
-    let (url, server) = fake_server("201 Created", r#"{"analysis_id":7}"#);
+    let (url, server) = fake_server_seq(vec![NO_PROFILES, ("201 Created", r#"{"analysis_id":7}"#)]);
     let result = scan_upload(dir.path(), &url).output().unwrap();
     server.join().unwrap();
     assert_eq!(code(&result), 1, "{}", stderr(&result));
@@ -1178,6 +1211,113 @@ fn scan_upload_follows_the_servers_gate_over_its_own() {
         "{}",
         stderr(&result)
     );
+}
+
+#[test]
+fn scan_upload_applies_the_servers_rule_profile() {
+    // ADR-0018: where the server sets a rule, it wins over sonda.toml.
+    let toml = "[rules]\ndisabled = [\"js/no-var\"]\n";
+    let dir = project(&[
+        (
+            "app.js",
+            "var x = 1;\neval(x);\nlet y = 2;\nconsole.log(y);\n",
+        ),
+        ("sonda.toml", toml),
+    ]);
+    let profile = r#"{"profile":"Strict","revision":"3.7.1","rules":[
+        {"rule":"js/no-var","on":true},
+        {"rule":"js/no-eval","on":false},
+        {"rule":"js/prefer-const","on":true,"severity":"blocker"},
+        {"rule":"js/from-a-newer-server","on":false}]}"#;
+    let (url, server) = fake_server_seq(vec![
+        ("200 OK", profile),
+        ("201 Created", r#"{"analysis_id":7}"#),
+    ]);
+    let result = scan_upload(dir.path(), &url)
+        .args(["--no-gate", "-f", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    let err = stderr(&result);
+    assert!(
+        err.contains(r#"rule profile "Strict": 4 rules set on the server"#),
+        "{err}"
+    );
+    assert!(
+        err.contains(
+            "skipped rules this sonda doesn't know (the server is newer): js/from-a-newer-server"
+        ),
+        "{err}"
+    );
+    let requests = server.join().unwrap();
+    // The settings are fetched with the token, before the upload.
+    assert!(
+        requests[0]
+            .head
+            .starts_with("GET /api/projects/payments/rule-profile HTTP/1.1"),
+        "{}",
+        requests[0].head
+    );
+    assert_eq!(requests[0].header("authorization"), Some("Bearer s3cret"));
+    let body = uploaded(&requests[1]);
+    let issues: Vec<(String, String)> = body["report"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["rule"].as_str().unwrap().to_string(),
+                i["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        issues.contains(&("js/no-var".into(), "minor".into())),
+        "{issues:?}"
+    );
+    assert!(
+        issues.contains(&("js/prefer-const".into(), "blocker".into())),
+        "{issues:?}"
+    );
+    assert!(!issues.iter().any(|(r, _)| r == "js/no-eval"), "{issues:?}");
+    assert_eq!(
+        body["report"]["rule_profile"],
+        serde_json::json!({ "name": "Strict", "revision": "3.7.1" })
+    );
+    // The repository's own settings, for the server to show beside its own.
+    assert_eq!(
+        body["report"]["rule_settings"]["disabled"],
+        serde_json::json!(["js/no-var"])
+    );
+    // The local report says the same as the uploaded one.
+    let local: Value = serde_json::from_str(&stdout(&result)).unwrap();
+    assert_eq!(local["rule_profile"]["name"], "Strict");
+}
+
+#[test]
+fn scan_upload_fails_before_scanning_without_the_rule_settings() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    for (status, reply, expected) in [
+        (
+            "500 Internal Server Error",
+            r#"{"error":"down"}"#,
+            "answered 500",
+        ),
+        (
+            "403 Forbidden",
+            r#"{"error":"this token reads project \"shop\"'s settings only"}"#,
+            "answered 403",
+        ),
+        ("200 OK", r#"{"profile":"x"}"#, "reading the rule settings"),
+    ] {
+        let (url, server) = fake_server_seq(vec![(status, reply)]);
+        let result = scan_upload(dir.path(), &url).output().unwrap();
+        // Only the one request: nothing was scanned or uploaded.
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(code(&result), 2, "{}", stderr(&result));
+        assert!(stderr(&result).contains(expected), "{}", stderr(&result));
+        assert!(stdout(&result).is_empty(), "nothing was scanned");
+    }
 }
 
 #[test]

@@ -54,6 +54,18 @@ pub struct Report<'a> {
     /// The `[rules]` settings of the project's sonda.toml the scan ran
     /// with, so the server can show why a rule reports nothing (ADR-0016).
     pub rule_settings: RuleSettings<'a>,
+    /// The server's rule profile the scan applied (ADR-0018), set by
+    /// `sonda scan --upload`; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_profile: Option<AppliedProfile>,
+}
+
+/// The server's rule profile a scan applied, as the server named it.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AppliedProfile {
+    pub name: String,
+    /// Opaque: the server compares it with its current settings.
+    pub revision: String,
 }
 
 #[derive(Serialize)]
@@ -219,6 +231,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         vulnerabilities: scan.vulnerabilities.as_deref(),
         warnings: &scan.warnings,
         rule_settings: RuleSettings::from_config(&outcome.rules),
+        rule_profile: None,
     }
 }
 
