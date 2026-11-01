@@ -35,6 +35,14 @@ pub struct IssueCounts {
     pub reopened: u64,
     /// Present in the previous analysis, gone from this one.
     pub fixed: u64,
+    /// Gone from this one because the scan didn't run their rule: not
+    /// fixed, just no longer counted (ADR-0018).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub set_aside: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Records `a` as the branch's latest analysis. Issues are matched to the
@@ -43,7 +51,9 @@ pub struct IssueCounts {
 /// - a known one is updated to its latest location and message, and
 ///   reopened if it was fixed, keeping its human status (accepted stays
 ///   accepted);
-/// - a tracked issue missing from this analysis is marked fixed.
+/// - a tracked issue missing from this analysis is marked fixed, unless the
+///   scan didn't run its rule: then it's set aside (`rule_not_run`), not
+///   counted as fixed, and not counted as reopened when it comes back.
 ///
 /// Analyses are ordered by arrival, not by commit date. A project's first
 /// analyzed branch becomes its main branch.
@@ -174,7 +184,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     let reopened: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM issues
          WHERE project_id = $1 AND branch = $2 AND fingerprint = ANY($3)
-           AND fixed_analysis_id IS NOT NULL",
+           AND fixed_analysis_id IS NOT NULL AND NOT rule_not_run",
     )
     .bind(project_id)
     .bind(&a.meta.branch)
@@ -196,7 +206,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
              end_line = EXCLUDED.end_line, end_col = EXCLUDED.end_col,
              effort_minutes = EXCLUDED.effort_minutes, is_new = EXCLUDED.is_new,
              last_analysis_id = EXCLUDED.last_analysis_id,
-             fixed_analysis_id = NULL
+             fixed_analysis_id = NULL, rule_not_run = false
          RETURNING (xmax = 0)",
     )
     .bind(project_id)
@@ -216,17 +226,40 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     .bind(cols.is_new)
     .fetch_all(&mut *tx)
     .await?;
-    let fixed = sqlx::query(
-        "UPDATE issues SET fixed_analysis_id = $3
+    // Missing now: fixed, or set aside when the scan didn't run the rule.
+    // Without the list (an older CLI), every one is fixed, as before.
+    let gone: Vec<bool> = sqlx::query_scalar(
+        "UPDATE issues SET fixed_analysis_id = $3,
+             rule_not_run = $4::text[] IS NOT NULL AND NOT (rule = ANY($4))
          WHERE project_id = $1 AND branch = $2
-           AND fixed_analysis_id IS NULL AND last_analysis_id <> $3",
+           AND fixed_analysis_id IS NULL AND last_analysis_id <> $3
+         RETURNING rule_not_run",
     )
     .bind(project_id)
     .bind(&a.meta.branch)
     .bind(analysis_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+    .bind(&a.active_rules)
+    .fetch_all(&mut *tx)
+    .await?;
+    // Set aside earlier, its rule runs again and it's still missing: fixed
+    // now, by this analysis.
+    let fixed_since = match &a.active_rules {
+        Some(active) => sqlx::query(
+            "UPDATE issues SET fixed_analysis_id = $3, rule_not_run = false
+             WHERE project_id = $1 AND branch = $2 AND rule_not_run
+               AND rule = ANY($4) AND last_analysis_id <> $3",
+        )
+        .bind(project_id)
+        .bind(&a.meta.branch)
+        .bind(analysis_id)
+        .bind(active)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected(),
+        None => 0,
+    };
+    let set_aside = gone.iter().filter(|&&n| n).count() as u64;
+    let fixed = gone.len() as u64 - set_aside + fixed_since;
     tx.commit().await?;
 
     Ok(Summary {
@@ -238,6 +271,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
             new: inserted.iter().filter(|&&i| i).count() as u64,
             reopened: reopened as u64,
             fixed,
+            set_aside,
         },
     })
 }

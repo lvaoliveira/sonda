@@ -181,6 +181,16 @@ fn json_report_carries_the_rule_settings_from_sonda_toml() {
         settings["severity"],
         serde_json::json!({ "js/no-eval": "minor" })
     );
+    // The rules the scan ran, sorted, as sonda.toml left them.
+    let active: Vec<&str> = report["active_rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(active.contains(&"js/prefer-const") && active.contains(&"js/no-eval"));
+    assert!(!active.contains(&"js/no-var") && !active.contains(&"js/eqeqeq"));
+    assert!(active.windows(2).all(|w| w[0] < w[1]), "sorted");
     // Without a sonda.toml, empty rather than absent.
     let plain = project(&[("app.js", "eval(x);\n")]);
     let report = json(&run(&["scan", "--no-gate", "-f", "json"], plain.path()));
@@ -1231,7 +1241,10 @@ fn scan_upload_applies_the_servers_rule_profile() {
         {"rule":"js/from-a-newer-server","on":false}]}"#;
     let (url, server) = fake_server_seq(vec![
         ("200 OK", profile),
-        ("201 Created", r#"{"analysis_id":7}"#),
+        (
+            "201 Created",
+            r#"{"analysis_id":7,"issues":{"open":3,"new":0,"reopened":0,"fixed":0,"set_aside":1}}"#,
+        ),
     ]);
     let result = scan_upload(dir.path(), &url)
         .args(["--no-gate", "-f", "json"])
@@ -1241,6 +1254,10 @@ fn scan_upload_applies_the_servers_rule_profile() {
     let err = stderr(&result);
     assert!(
         err.contains(r#"rule profile "Strict": 4 rules set on the server"#),
+        "{err}"
+    );
+    assert!(
+        err.contains("(0 new, 0 fixed, 1 set aside: their rules didn't run)"),
         "{err}"
     );
     assert!(
