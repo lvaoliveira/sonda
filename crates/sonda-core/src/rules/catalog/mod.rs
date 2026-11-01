@@ -4,6 +4,7 @@
 mod c;
 mod common;
 mod cs;
+mod cs_bugs;
 mod cs_security;
 mod java;
 mod java_bugs;
@@ -74,6 +75,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         c::RULES,
         cs::RULES,
         cs_security::RULES,
+        cs_bugs::RULES,
     ]
     .into_iter()
     .flatten()
