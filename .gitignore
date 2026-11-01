@@ -1,4 +1,5 @@
-/target
+# Build output, including extra target directories such as target-nightly.
+/target*/
 .DS_Store
 /secrets
 # Local Docker Compose settings, such as turning the shared token off.
