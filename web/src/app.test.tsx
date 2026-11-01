@@ -871,10 +871,11 @@ describe('Rule settings', () => {
   it('shows a project\u2019s rules, only for its languages, with their state there', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')
-    await screen.findByRole('heading', { level: 1, name: 'payments-platform' })
-    // The project's own Rules link, not the sidebar's catalog.
-    const link = screen.getAllByRole('link', { name: 'Rules' }).find((a) => a.getAttribute('href') === '/projects/payments-platform/rules')!
-    await user.click(link)
+    // The project page's Rules section, after Dependencies.
+    const section = await screen.findByRole('region', { name: 'Rules' })
+    expect(await within(section).findByText(/off \(/)).toHaveTextContent('1 off (1 in sonda.toml)')
+    expect(section).toHaveTextContent('profile sonda way (the default)')
+    await user.click(within(section).getByRole('link', { name: 'All 10 →' }))
     expect(await screen.findByRole('heading', { level: 1, name: 'Rules' })).toBeInTheDocument()
     // Go, Rust, TypeScript and Python: not the two Java rules.
     const list = screen.getByRole('listbox', { name: 'Rules' })

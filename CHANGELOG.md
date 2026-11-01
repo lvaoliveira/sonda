@@ -244,7 +244,8 @@ file, the report formats and the public library API.
   applies, readable by analysis tokens for their project; reports record
   the profile they applied. ADR-0016's global settings become a "Server
   settings" profile, made the default.
-- Web app: a project's **Rules** page, linked from its page, with the
+- Web app: a project's **Rules** page, linked from a Rules section on its
+  page (after Dependencies: rules on, off and by what, and the profile), with the
   Rules page's structure (search, language, type and state filters, list
   and detail) and only the rules for the project's languages: each with
   its state there, what set it (default, `sonda.toml`, its profile, the

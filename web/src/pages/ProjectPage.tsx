@@ -42,12 +42,7 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   return (
     <>
       <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h1 className="m-0 text-[30px] leading-[1.1] font-semibold tracking-[-0.035em]">{p.key}</h1>
-          <Link to={`${projectUrl}/rules`} className="text-[13px]">
-            Rules
-          </Link>
-        </div>
+        <h1 className="m-0 text-[30px] leading-[1.1] font-semibold tracking-[-0.035em]">{p.key}</h1>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13.5px] text-fg-muted">
           <label className="flex items-center gap-2">
             <span className="sr-only">Branch</span>
@@ -87,7 +82,65 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
       <History history={p.history} branch={p.branch} />
       <Components p={p} />
       <Dependencies p={p} />
+      <RulesSummary project={p.key} />
     </>
+  )
+}
+
+/** The project's rules at a glance (ADR-0016, ADR-0018), linking to its Rules page. */
+function RulesSummary({ project }: { project: string }) {
+  const api = useApi()
+  const rules = useAsync(() => api.projectRules(project), [api, project])
+  const url = `/projects/${encodeURIComponent(project)}/rules`
+  const r = rules.state === 'ready' ? rules.data : null
+  const off = r ? r.rules.filter((x) => !x.state.on) : []
+  const sources = (
+    [
+      ['default', 'by default'],
+      ['sonda_toml', 'in sonda.toml'],
+      ['profile', 'by the profile'],
+      ['project', 'for this project'],
+    ] as const
+  )
+    .map(([s, label]) => [off.filter((x) => x.state.setBy === s).length, label] as const)
+    .filter(([n]) => n > 0)
+    .map(([n, label]) => `${n} ${label}`)
+    .join(', ')
+  return (
+    <Card
+      id="rules"
+      title="Rules"
+      subtitle={r ? `For ${r.languages.map(languageLabel).join(', ') || 'no languages yet'}, on ${r.mainBranch}` : 'The rules this project runs'}
+      aside={
+        r && (
+          <Link to={url} className="text-[13px]">
+            All {formatNumber(r.rules.length)} →
+          </Link>
+        )
+      }
+    >
+      {rules.state === 'loading' && <div aria-busy="true" className="h-8 rounded-md bg-panel-2" />}
+      {rules.state === 'error' && <p role="alert" className="m-0 text-[13px]">Could not load the rules: {rules.error.message}</p>}
+      {r && (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 text-[13px] text-fg-muted">
+            <span>
+              <Mono className="text-[22px] text-fg">{formatNumber(r.rules.length - off.length)}</Mono> on
+            </span>
+            <span>
+              <Mono className="text-fg">{formatNumber(off.length)}</Mono> off{sources && ` (${sources})`}
+            </span>
+            <span>
+              profile <span className="font-semibold text-fg">{r.profile.name}</span>
+              {!r.profile.chosen && ' (the default)'}
+            </span>
+          </div>
+          {r.profileApplied === false && (
+            <p className="m-0 text-[13px] text-warn">The latest scan didn't apply the current settings; they apply from the next sonda scan --upload.</p>
+          )}
+        </div>
+      )}
+    </Card>
   )
 }
 
