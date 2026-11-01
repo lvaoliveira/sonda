@@ -92,6 +92,7 @@ pub(super) fn build<'t>(root: Node<'t>, src: &[u8], deadline: Instant) -> Option
                 break;
             }
             if !cursor.goto_parent() {
+                b.m.root = Some(root);
                 b.m.resolve();
                 return Some(b.m);
             }

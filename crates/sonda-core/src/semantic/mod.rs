@@ -6,6 +6,7 @@
 //! deadline: a file that runs out of time keeps its syntactic findings and
 //! loses only the semantic ones, with a warning.
 
+mod cs;
 mod js;
 
 use crate::lang::Lang;
@@ -25,6 +26,9 @@ pub(crate) enum ScopeKind {
     /// A block, loop header, `catch` or `switch` body: where `let`, `const`
     /// and `class` live.
     Block,
+    /// A C# class, struct, record or interface body: its fields, properties
+    /// and methods.
+    Type,
 }
 
 pub(crate) struct Scope {
@@ -49,6 +53,10 @@ pub(crate) enum DeclKind {
     /// TypeScript interfaces, type aliases, enums and namespaces, which
     /// merge with other declarations of the same name.
     Type,
+    /// C# type members.
+    Field,
+    Property,
+    Method,
 }
 
 pub(crate) struct Decl<'t> {
@@ -68,6 +76,11 @@ pub(crate) struct Decl<'t> {
     /// Declared next to a `...rest` element (`const { a, ...rest } = o`):
     /// often there only to leave `a` out of `rest`.
     pub(crate) rest_sibling: bool,
+    /// The type written where it's declared, for typed languages (C#): `int`
+    /// in `int x`. None when it's `var` or not written.
+    pub(crate) ty: Option<Node<'t>>,
+    /// Declared `static` (C# members).
+    pub(crate) is_static: bool,
 }
 
 pub(crate) struct Ref<'t> {
@@ -100,6 +113,10 @@ pub(crate) struct Model<'t> {
     /// The file contains JSX, which classic React runtimes compile to
     /// `React.createElement` without naming `React`.
     pub(crate) has_jsx: bool,
+    /// The file's syntax tree, for rules that look at more than names.
+    pub(crate) root: Option<Node<'t>>,
+    /// Each reference's index in `refs`, by its node's id.
+    ref_index: HashMap<usize, usize>,
 }
 
 impl<'t> Model<'t> {
@@ -116,6 +133,8 @@ impl<'t> Model<'t> {
             functions: Vec::new(),
             classes: Vec::new(),
             has_jsx: false,
+            root: None,
+            ref_index: HashMap::new(),
         }
     }
 
@@ -154,6 +173,8 @@ impl<'t> Model<'t> {
             reads: 0,
             writes: 0,
             rest_sibling: false,
+            ty: None,
+            is_static: false,
         });
     }
 
@@ -180,6 +201,12 @@ impl<'t> Model<'t> {
         }
     }
 
+    /// The declaration a name refers to, for a node recorded as a reference.
+    pub(crate) fn decl_of(&self, name: Node) -> Option<&Decl<'t>> {
+        let r = &self.refs[*self.ref_index.get(&name.id())?];
+        r.decl.map(|d| &self.decls[d])
+    }
+
     /// Every scope's declarations grouped by name, for redeclaration checks.
     pub(crate) fn names(&self) -> impl Iterator<Item = (ScopeId, &[DeclId])> {
         self.scopes
@@ -192,6 +219,12 @@ impl<'t> Model<'t> {
     /// counts reads and writes. Declarations are visible in their whole scope
     /// (hoisting), which is what matters for finding unused or misused ones.
     fn resolve(&mut self) {
+        self.ref_index = self
+            .refs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.node.id(), i))
+            .collect();
         for i in 0..self.refs.len() {
             let decl = self.lookup(self.refs[i].scope, &self.refs[i].name);
             let r = &mut self.refs[i];
@@ -214,6 +247,7 @@ pub(crate) fn build<'t>(
 ) -> Option<Model<'t>> {
     match lang {
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => js::build(root, src, deadline),
+        Lang::CSharp => cs::build(root, src, deadline),
         _ => None,
     }
 }
@@ -221,5 +255,8 @@ pub(crate) fn build<'t>(
 /// Whether the semantic layer supports `lang` (so a `None` from `build` means
 /// it ran out of time).
 pub(crate) fn supports(lang: Lang) -> bool {
-    matches!(lang, Lang::JavaScript | Lang::TypeScript | Lang::Tsx)
+    matches!(
+        lang,
+        Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp
+    )
 }
