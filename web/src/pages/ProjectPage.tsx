@@ -375,7 +375,7 @@ function Components({ p }: { p: ProjectDetail }) {
     `/issues?project=${encodeURIComponent(p.key)}&branch=${encodeURIComponent(p.branch)}&comp=${encodeURIComponent(path)}`
   return (
     <Card id="components" padded={false} title="Components" subtitle="Top-level directories · owners from the uploaded CODEOWNERS">
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <table className="w-full min-w-[720px] border-collapse text-[13.5px]">
           <thead>
             <tr className="font-mono text-[9.5px] tracking-[.06em] text-fg-faint uppercase">

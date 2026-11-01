@@ -89,7 +89,7 @@ function GateDetail({ gate }: { gate: QualityGate }) {
   return (
     <div className="flex min-w-0 flex-col gap-5">
       <Card id="conditions" padded={false} title={gate.name} subtitle={gate.isDefault ? 'sonda’s default gate: what sonda init writes' : 'Set in these projects’ sonda.toml'}>
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[560px] border-collapse text-[13.5px]">
             <thead>
               <tr className="font-mono text-[9.5px] tracking-[.06em] text-fg-faint uppercase">

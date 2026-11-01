@@ -18,6 +18,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | Java | 703 | 620 | 11 | 71 | 0 | 1 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
+| C# | 446 | 91 | 7 | 348 | 0 | 0 |
 
 ## Security standards
 
@@ -37,5 +38,6 @@ aren't compared.
 | `java/hardcoded-ip` | none | CWE-547, A01 |
 | `java/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
 | `java/upload-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
+| `cs/request-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 
 Per-language details: the `.csv` files in this directory.

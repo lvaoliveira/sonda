@@ -1051,7 +1051,7 @@ fn seeds_secure_random(node: Node, src: &[u8]) -> bool {
         .is_some_and(|o| contains_ignoring_case(text(o, src), b"secure"))
 }
 
-fn is_public_cleartext_url(string: Node, src: &[u8]) -> bool {
+pub(super) fn is_public_cleartext_url(string: Node, src: &[u8]) -> bool {
     let Some(body) = string_value(string, src) else {
         return false;
     };

@@ -204,7 +204,7 @@ function Files({ c }: { c: ComponentDetail }) {
         />
       }
     >
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <table className="w-full min-w-[600px] border-collapse text-[13.5px]">
           <thead>
             <tr className="font-mono text-[9.5px] tracking-[.06em] text-fg-faint uppercase">
