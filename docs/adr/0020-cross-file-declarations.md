@@ -1,4 +1,4 @@
-# ADR-0019: Declarations across files
+# ADR-0020: Declarations across files
 
 - Status: **proposed**
 - Date: 2026-11-01

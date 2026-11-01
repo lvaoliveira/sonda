@@ -3,7 +3,7 @@
 //! dispose pattern, controllers. Built on the C# semantic model
 //! (`semantic/cs.rs`). Rules that compare a declaration with its base types
 //! or interfaces are `Check::Structural`: they run on the project index,
-//! across files (`cs_project.rs`, ADR-0019). The others here see one file,
+//! across files (`cs_project.rs`, ADR-0020). The others here see one file,
 //! so those that need another file's types are `related` to their key.
 //! Queries stay cheap on deep trees: see the notes in `js_modern.rs`.
 

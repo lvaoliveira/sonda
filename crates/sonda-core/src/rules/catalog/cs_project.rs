@@ -1,5 +1,5 @@
 //! C# rules that compare a declaration with declarations in other files of
-//! the project (ADR-0019): an override with the method it overrides, a
+//! the project (ADR-0020): an override with the method it overrides, a
 //! method with the interface member it implements, a class with its base
 //! classes. They run once per scan, on the project index the files'
 //! summaries build (`semantic::cs_index`), and are `Check::Structural` in

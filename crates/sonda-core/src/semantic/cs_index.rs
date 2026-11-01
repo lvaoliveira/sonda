@@ -1,4 +1,4 @@
-//! A project-wide index of C# type declarations (ADR-0019), for rules that
+//! A project-wide index of C# type declarations (ADR-0020), for rules that
 //! compare a declaration with ones in other files: an override with the
 //! method it overrides, a class with its base classes and interfaces.
 //!

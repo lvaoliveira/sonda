@@ -94,7 +94,7 @@ were re-audited against this bar; those it could make exact moved to
 
 Rules that compare a declaration with its base classes, interfaces or the
 other half of a partial method see the whole project: they run on an index
-of every file's declarations ([ADR-0019](0019-cross-file-declarations.md)).
+of every file's declarations ([ADR-0020](0020-cross-file-declarations.md)).
 
 Rules that need declared types are `Check::Semantic`. Walking up from a
 node to find its scope costs that node's depth for every `parent()`, which

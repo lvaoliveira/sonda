@@ -363,7 +363,7 @@ pub(crate) fn is_classic_assembly_info(names: &[&str]) -> bool {
 fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
     let mut facts = Vec::new();
     // The types this file declares, for rules that compare declarations
-    // across files (ADR-0019).
+    // across files (ADR-0020).
     let index = crate::semantic::cs_index::extract(root, ctx.src.as_bytes());
     if !index.types.is_empty()
         && let Ok(json) = serde_json::to_string(&index)
@@ -481,7 +481,7 @@ fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
 /// methods implemented in no file, and AssemblyInfo without
 /// NeutralResourcesLanguage in a project that uses resources.
 pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
-    // Declarations compared across files (ADR-0019).
+    // Declarations compared across files (ADR-0020).
     let active: Vec<&str> = rules::cs_project::RULES
         .iter()
         .copied()
