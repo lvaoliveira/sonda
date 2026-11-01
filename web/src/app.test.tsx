@@ -903,7 +903,7 @@ describe('Rule settings', () => {
     const here = await screen.findByRole('region', { name: 'In this project' })
     expect(here).toHaveTextContent('On · Default')
     await user.type(within(here).getByLabelText('Why, for go/sql-string-concat'), 'Covered by our ORM.')
-    await user.click(within(here).getByRole('button', { name: 'Disable here' }))
+    await user.click(within(here).getByRole('button', { name: 'Disable rule' }))
     await waitFor(() => expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('Off · This project, over its profile'))
     expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('by mara')
     expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('“Covered by our ORM.”')
