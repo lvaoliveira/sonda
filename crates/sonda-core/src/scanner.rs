@@ -685,6 +685,7 @@ mod tests {
             analysis,
             measures,
             gate,
+            rules: cfg.rules.clone(),
         }
     }
 

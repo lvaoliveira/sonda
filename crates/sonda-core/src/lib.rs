@@ -71,6 +71,9 @@ pub struct Outcome {
     pub analysis: ProjectAnalysis,
     pub measures: Measures,
     pub gate: GateResult,
+    /// The `[rules]` settings the scan ran with, which the report carries
+    /// so the server can show them (ADR-0016).
+    pub rules: config::RulesConfig,
 }
 
 /// Analyzes `options.root` and evaluates the quality gate.
@@ -96,6 +99,7 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
         analysis,
         measures,
         gate,
+        rules: config.rules.clone(),
     })
 }
 

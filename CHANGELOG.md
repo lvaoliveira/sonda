@@ -227,6 +227,10 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
+- The JSON report carries `rule_settings`, the `[rules]` settings of
+  `sonda.toml` the scan ran with, and the server stores them with each
+  analysis (`ruleSettings` in `GET /api/analyses/{id}`), the first step of
+  ADR-0016: showing on the web app why a rule reports nothing.
 - Admins generate tokens for other users on the Admin page (choose the
   owner), so CI tokens can belong to a `ci` service user instead of a
   person whose account may be disabled. `POST /api/tokens` with a `user`;

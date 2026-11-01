@@ -97,6 +97,10 @@ pub struct AnalysisDetail {
     pub fixed: Changes,
     pub previous: Option<Neighbor>,
     pub next: Option<Neighbor>,
+    /// The `[rules]` settings of sonda.toml the scan ran with (ADR-0016):
+    /// `disabled`, `enabled` and `severity`. Null when the CLI didn't send
+    /// them: unknown, not "none".
+    pub rule_settings: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -325,6 +329,12 @@ pub async fn get_analysis(
     languages.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.id.cmp(&b.id)));
     let components: BTreeSet<&str> = files.iter().map(|(p, _)| component_of(p)).collect();
 
+    let rule_settings: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT rule_settings FROM analyses WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+
     let neighbor = |cmp: &str, order: &str| {
         format!(
             "SELECT id, commit_sha FROM analyses WHERE project_id = $1 AND branch = $2
@@ -382,6 +392,7 @@ pub async fn get_analysis(
         fixed,
         previous: previous.map(|(id, sha)| Neighbor { id, sha }),
         next: next.map(|(id, sha)| Neighbor { id, sha }),
+        rule_settings,
     }))
 }
 

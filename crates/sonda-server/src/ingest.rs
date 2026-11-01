@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use sonda_core::model::Severity;
 use sonda_core::report::REPORT_VERSION;
 use sonda_core::upload::{Meta, check_relative_path, parse_sha256, validate_meta};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
 
 /// The largest request body accepted, as sent (usually gzipped).
@@ -29,6 +29,8 @@ const MAX_FILES: usize = 200_000;
 const MAX_ISSUES: usize = 2_000_000;
 const MAX_TEXT: usize = 4_000;
 const MAX_DEPENDENCIES: usize = 200_000;
+/// Far more than there are rules.
+const MAX_RULE_SETTINGS: usize = 10_000;
 
 // The envelope is sonda's own and fixed: unknown fields are mistakes.
 #[derive(Deserialize)]
@@ -77,6 +79,17 @@ struct Report {
     /// Older CLIs don't send it (ADR-0009): absent, not empty.
     #[serde(default)]
     dependencies: Option<Vec<DependencyIn>>,
+    /// The `[rules]` settings of sonda.toml (ADR-0016); older CLIs don't
+    /// send them: absent, not empty.
+    #[serde(default)]
+    rule_settings: Option<RuleSettingsIn>,
+}
+
+#[derive(Deserialize)]
+struct RuleSettingsIn {
+    disabled: Vec<String>,
+    enabled: Vec<String>,
+    severity: BTreeMap<String, Severity>,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +149,8 @@ pub struct Analysis {
     pub dependencies: Vec<StoredDependency>,
     /// Whether the report carried dependency data, even none.
     pub dependencies_recorded: bool,
+    /// sonda.toml's `[rules]`, normalized; `None` from an older CLI.
+    pub rule_settings: Option<Value>,
 }
 
 pub struct StoredDependency {
@@ -502,6 +517,11 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     if r.warnings.len() > MAX_FILES || r.warnings.iter().any(|w| w.len() > MAX_TEXT) {
         return Err(invalid("the report's warnings are too large".into()));
     }
+    let rule_settings = r
+        .rule_settings
+        .map(validate_rule_settings)
+        .transpose()
+        .map_err(invalid)?;
     let dependencies_recorded = r.dependencies.is_some();
     let dependencies =
         validate_dependencies(r.dependencies.unwrap_or_default()).map_err(invalid)?;
@@ -522,7 +542,31 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         codeowners: upload.codeowners,
         dependencies,
         dependencies_recorded,
+        rule_settings,
     })
+}
+
+/// Bounded, sorted and deduplicated, as stored and shown. Rule ids aren't
+/// checked against this server's catalog: the CLI may be newer.
+fn validate_rule_settings(s: RuleSettingsIn) -> Result<Value, String> {
+    let ok = |id: &String| (1..=100).contains(&id.len()) && !id.chars().any(char::is_control);
+    let total = s.disabled.len() + s.enabled.len() + s.severity.len();
+    if total > MAX_RULE_SETTINGS
+        || !s
+            .disabled
+            .iter()
+            .chain(&s.enabled)
+            .chain(s.severity.keys())
+            .all(ok)
+    {
+        return Err("the report's rule settings are invalid".into());
+    }
+    let sorted = |v: Vec<String>| v.into_iter().collect::<BTreeSet<_>>();
+    Ok(serde_json::json!({
+        "disabled": sorted(s.disabled),
+        "enabled": sorted(s.enabled),
+        "severity": s.severity,
+    }))
 }
 
 fn validate_dependencies(deps: Vec<DependencyIn>) -> Result<Vec<StoredDependency>, String> {
