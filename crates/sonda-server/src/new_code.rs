@@ -187,7 +187,7 @@ pub async fn recount(pool: &PgPool, project: i64, branch: &str) -> Result<(), sq
     let issues: Vec<CountedIssue> = sqlx::query_as(
         "SELECT category, severity, effort_minutes, is_new FROM issues
          WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL
-           AND status <> ALL($3::issue_status[])",
+           AND status <> ALL($3::issue_status[]) AND NOT rule_off(project_id, rule)",
     )
     .bind(project)
     .bind(branch)

@@ -1,5 +1,5 @@
-//! `GET /api/rules`: sonda's rule catalog with live counts. Read-only: rules
-//! are configured in each repository's sonda.toml, not on the server.
+//! `GET /api/rules`: sonda's rule catalog with live counts, and where each
+//! rule is off: in repositories' sonda.toml, or on the server (ADR-0016).
 
 use crate::api::ApiError;
 use crate::http::State;
@@ -38,6 +38,12 @@ pub struct RuleView {
     pub effort_minutes: u32,
     /// False for rules a repository must list in `rules.enabled`.
     pub on_by_default: bool,
+    /// Set when the server turns it off for every project (ADR-0016): who,
+    /// when and why.
+    pub server_off: Option<crate::rule_settings::Change>,
+    /// In how many projects it's off, by what turned it off; null when on
+    /// everywhere.
+    pub off_in: Option<crate::rule_settings::OffIn>,
     /// Open or confirmed issues on each project's main branch.
     pub open_issues: i64,
     /// Projects with at least one of those.
@@ -78,6 +84,7 @@ pub async fn list(
         "SELECT i.rule, count(*), count(DISTINCT i.project_id)
          FROM issues i JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          WHERE i.fixed_analysis_id IS NULL AND i.status IN ('open', 'confirmed')
+           AND NOT rule_off(i.project_id, i.rule)
          GROUP BY i.rule",
     )
     .fetch_all(&state.pool)
@@ -86,6 +93,7 @@ pub async fn list(
         .into_iter()
         .map(|(rule, n, p)| (rule, (n, p)))
         .collect();
+    let (server_off, off_in) = crate::rule_settings::off_counts(&state.pool).await?;
 
     let rules = RULES
         .iter()
@@ -120,6 +128,8 @@ pub async fn list(
                 severity: r.severity,
                 effort_minutes: r.effort_minutes,
                 on_by_default: r.on_by_default(),
+                server_off: server_off.get(r.id).cloned(),
+                off_in: off_in.get(r.id).copied(),
                 open_issues,
                 projects,
                 tags,

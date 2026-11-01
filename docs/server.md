@@ -678,9 +678,42 @@ aren't reported.
 severity, effort, and noncompliant and compliant examples. It adds live
 counts: open or confirmed issues on each project's main branch, and how many
 projects have them. A project's main branch is the first branch analyzed.
+Each rule also has:
+- `serverOff`: who turned it off on the server for every project, when and
+  why; null when it isn't;
+- `offIn`: in how many projects it's off, by what turned it off
+  (`sondaToml`, `server`); null when it's on everywhere.
 
-The catalog is read-only. Rules are configured in each repository's
-`sonda.toml`, not on the server.
+### Rule settings
+
+Rules run as each repository's `sonda.toml` says. On top of that, admins
+can turn a rule off on the server, for every project or for one
+([ADR-0016](adr/0016-rule-settings-on-the-server.md)). The scanner still
+runs it: the server keeps its findings but leaves them out of issue lists,
+measures, ratings, counts and the gate, which CI follows when it uploads
+(ADR-0014). Changing a setting recounts the latest analyses at once, and
+turning the rule back on brings its issues back with their history.
+
+| Endpoint | |
+|---|---|
+| `PUT /api/rule-settings` `{"rule": "js/no-var", "off": true, "note": "..."}` | Admins: off for every project, or back on (`"off": false`). |
+| `PUT /api/projects/{key}/rule-settings` `{"rule": "js/no-var", "state": "on", "note": "..."}` | Admins: `on` or `off` for this project, over the global setting, or `inherit` to follow it again. |
+| `GET /api/projects/{key}/rule-settings` | Every rule whose state differs from its default for the project. |
+
+The project view gives, for each such rule, whether it's `on`, what set
+it (`setBy`: `default`, `sonda_toml`, `server` for every project, or
+`project`), the setting's note, author and time, the severity `sonda.toml`
+gives it, and `hiddenIssues`, the open findings the server leaves out. It
+also returns `sondaToml`, the repository's `[rules]` in the main branch's
+latest analysis (null when unknown: that analysis came from an older
+`sonda`), and `tomlChanges`, when the repository changed them, newest
+first.
+
+The server only leaves out what the scanner reported: it can't turn on a
+rule that `sonda.toml` disables, or an off-by-default rule it doesn't
+enable. When a project's server setting says on for such a rule, the view
+marks it `conflict`. Notes are at most 500 characters, and an unknown rule
+id is a `422`.
 
 ## Exposing it beyond this machine
 

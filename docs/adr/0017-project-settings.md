@@ -1,6 +1,6 @@
 # ADR-0017: Project settings
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-11-01
 - Builds on ADR-0016 (rule settings) and ADR-0014 (CI follows the server's gate)
 

@@ -300,7 +300,7 @@ pub async fn get_project(
     let issues: Vec<(String, String, String, i32)> = sqlx::query_as(
         "SELECT path, category, severity, effort_minutes FROM issues
          WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL
-           AND status NOT IN ('accepted', 'false_positive')",
+           AND status NOT IN ('accepted', 'false_positive') AND NOT rule_off(project_id, rule)",
     )
     .bind(project)
     .bind(&branch)
@@ -394,7 +394,8 @@ async fn open_issue_stats(pool: &sqlx::PgPool) -> Result<HashMap<i64, IssueStats
     let rows: Vec<(i64, String, String)> = sqlx::query_as(
         "SELECT i.project_id, i.category, i.severity FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
-         WHERE i.fixed_analysis_id IS NULL AND i.status NOT IN ('accepted', 'false_positive')",
+         WHERE i.fixed_analysis_id IS NULL AND i.status NOT IN ('accepted', 'false_positive')
+           AND NOT rule_off(i.project_id, i.rule)",
     )
     .fetch_all(pool)
     .await?;
