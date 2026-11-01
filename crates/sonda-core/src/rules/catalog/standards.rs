@@ -236,4 +236,5 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("cs/unsafe-csp", &[693], &[A05]),
     ("cs/xml-signature-unverified-key", &[347], &[A02]),
     ("cs/conflicting-transparency", &[284], &[A01]),
+    ("cs/deserialization-skips-validation", &[502], &[A08]),
 ];

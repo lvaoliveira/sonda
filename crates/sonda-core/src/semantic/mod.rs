@@ -148,8 +148,9 @@ impl<'t> Model<'t> {
         self.scopes.len() - 1
     }
 
-    /// The nearest scope at or above `scope` that `var` declarations go to.
-    fn function_scope(&self, mut scope: ScopeId) -> ScopeId {
+    /// The nearest scope at or above `scope` that `var` declarations go to:
+    /// a function's, or for C# also a type's or the file's.
+    pub(crate) fn function_scope(&self, mut scope: ScopeId) -> ScopeId {
         while self.scopes[scope].kind == ScopeKind::Block {
             scope = self.scopes[scope].parent.unwrap_or(0);
         }
@@ -189,6 +190,15 @@ impl<'t> Model<'t> {
                 None => return false,
             }
         }
+    }
+
+    /// Every declaration of `name` made directly in `scope`, such as a C#
+    /// method's overloads.
+    pub(crate) fn decls_named(&self, scope: ScopeId, name: &str) -> &[DeclId] {
+        self.scopes[scope]
+            .names
+            .get(name)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The first declaration of `name` visible from `scope`.
