@@ -71,8 +71,8 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
         "INSERT INTO analyses (project_id, branch, commit_sha, tool_version,
              new_code_reference, measures, gate, gate_passed, warnings, codeowners,
              project_version, commit_message, scan_duration_ms, dependencies_recorded,
-             token_id, rule_settings)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+             token_id, rule_settings, rule_profile)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          RETURNING id",
     )
     .bind(project_id)
@@ -91,6 +91,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, sqlx::Error> 
     .bind(a.dependencies_recorded)
     .bind(a.token_id)
     .bind(&a.rule_settings)
+    .bind(&a.rule_profile)
     .fetch_one(&mut *tx)
     .await?;
 

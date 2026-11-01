@@ -179,8 +179,8 @@ project and expiry. The token acts as `ci`, uploads show
 | Type | Prefix | Can |
 |---|---|---|
 | **User** | `sonda_u_` | What its owner can: read, triage and upload. Not manage users or tokens. |
-| **Project analysis** | `sonda_p_` | Upload analyses of one project, any branch; nothing else. Best for CI. |
-| **Global analysis** | `sonda_a_` | Upload analyses of any project; nothing else. |
+| **Project analysis** | `sonda_p_` | Upload analyses of one project, any branch, and read the rule settings its scans apply; nothing else. Best for CI. |
+| **Global analysis** | `sonda_a_` | Upload analyses of any project, and read the rule settings their scans apply; nothing else. |
 
 - **Expiry** is chosen when generating: 30, 60 or 90 days, or none. An
   expired token stops working and stays listed.
@@ -684,36 +684,56 @@ Each rule also has:
 - `offIn`: in how many projects it's off, by what turned it off
   (`sondaToml`, `server`); null when it's on everywhere.
 
-### Rule settings
+### Rule profiles and settings
 
-Rules run as each repository's `sonda.toml` says. On top of that, admins
-can turn a rule off on the server, for every project or for one
-([ADR-0016](adr/0016-rule-settings-on-the-server.md)). The scanner still
-runs it: the server keeps its findings but leaves them out of issue lists,
-measures, ratings, counts and the gate, which CI follows when it uploads
-(ADR-0014). Changing a setting recounts the latest analyses at once, and
-turning the rule back on brings its issues back with their history.
+Rules run as each repository's `sonda.toml` says, unless the server sets
+them. The server holds **rule profiles**
+([ADR-0018](adr/0018-rule-profiles.md)): named sets of rules, each on or
+off, optionally with a severity. Rules a profile doesn't mention keep their
+catalog default.
+
+- **"sonda way"** is built in and read-only: the catalog's defaults. It's
+  the default profile until an admin makes another one the default.
+- **A project uses** the default profile, or one an admin chooses. Admins
+  can also adjust single rules for one project, on or off, over its
+  profile ([ADR-0016](adr/0016-rule-settings-on-the-server.md)).
+- **`sonda scan --upload` applies them:** before scanning it fetches the
+  project's settings, and where the server sets a rule, the server wins;
+  `sonda.toml` decides the rest. The report records what it applied.
+- **Findings already stored** of a rule that's off are left out of issue
+  lists, measures, ratings, counts and the gate at once, which CI follows
+  when it uploads (ADR-0014). Changing a profile, a project's choice or an
+  adjustment recounts the latest analyses. Turning the rule back on brings
+  its issues back with their history.
 
 | Endpoint | |
 |---|---|
-| `PUT /api/rule-settings` `{"rule": "js/no-var", "off": true, "note": "..."}` | Admins: off for every project, or back on (`"off": false`). |
-| `PUT /api/projects/{key}/rule-settings` `{"rule": "js/no-var", "state": "on", "note": "..."}` | Admins: `on` or `off` for this project, over the global setting, or `inherit` to follow it again. |
+| `GET /api/rule-profiles`, `GET /api/rule-profiles/{id}` | Profiles, the default first, with the projects using each; one profile with the rules it sets. |
+| `POST /api/rule-profiles` `{"name": "Strict", "copyFrom": 1}` | Admins: a new profile, empty or a copy. |
+| `PATCH /api/rule-profiles/{id}` `{"name": "...", "isDefault": true}` | Admins: rename it (not "sonda way"), or make it the default. |
+| `DELETE /api/rule-profiles/{id}` | Admins: delete a profile that isn't the default, built in, or used by a project. |
+| `PUT /api/rule-profiles/{id}/rules` `{"rule": "js/no-var", "state": "off", "severity": "major", "note": "..."}` | Admins: `on`, `off`, or `inherit` to leave it at its default; `severity` is optional. |
+| `PUT /api/projects/{key}/rule-profile` `{"profile": 3}` | Admins: the project's profile, or `null` for the default. |
+| `PUT /api/projects/{key}/rule-settings` `{"rule": "js/no-var", "state": "on", "note": "..."}` | Admins: `on` or `off` for this project, over its profile, or `inherit`. |
+| `PUT /api/rule-settings` `{"rule": "js/no-var", "off": true}` | Admins: off in the default profile, or back on. When "sonda way" is the default, a "Server settings" profile takes its place. |
+| `GET /api/projects/{key}/rule-profile` | What a scan of the project applies: `profile`, `revision` and its `rules` (`rule`, `on`, `severity`). A project not uploaded yet gets the default profile's. Analysis tokens may read it, for their project only. |
 | `GET /api/projects/{key}/rule-settings` | Every rule whose state differs from its default for the project. |
 
-The project view gives, for each such rule, whether it's `on`, what set
-it (`setBy`: `default`, `sonda_toml`, `server` for every project, or
-`project`), the setting's note, author and time, the severity `sonda.toml`
-gives it, and `hiddenIssues`, the open findings the server leaves out. It
-also returns `sondaToml`, the repository's `[rules]` in the main branch's
-latest analysis (null when unknown: that analysis came from an older
-`sonda`), and `tomlChanges`, when the repository changed them, newest
-first.
+The project view gives its `profile` and whether the main branch's latest
+analysis applied the current settings (`profileApplied`), and, for each
+rule not at its default, whether it's `on`, what set it (`setBy`:
+`default`, `sonda_toml`, `profile`, or `project`), the setting's note,
+author and time, its `severity` and what changed it (`severityBy`), and
+`hiddenIssues`, the open findings the server leaves out. It also returns
+`sondaToml`, the repository's `[rules]` in that analysis (null when
+unknown: it came from an older `sonda`), and `tomlChanges`, when the
+repository changed them, newest first.
 
-The server only leaves out what the scanner reported: it can't turn on a
-rule that `sonda.toml` disables, or an off-by-default rule it doesn't
-enable. When a project's server setting says on for such a rule, the view
-marks it `conflict`. Notes are at most 500 characters, and an unknown rule
-id is a `422`.
+When the latest scan didn't apply the server's settings (no upload, `sonda
+upload` of an earlier report, or an older `sonda`), a rule the server
+turns on but `sonda.toml` leaves off never ran: the view marks it
+`conflict`. Notes are at most 500 characters, and an unknown rule id is a
+`422`.
 
 ## Exposing it beyond this machine
 

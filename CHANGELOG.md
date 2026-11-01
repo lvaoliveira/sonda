@@ -227,6 +227,15 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
+- Rule profiles on the server (ADR-0018): named sets of rules, on or off
+  with an optional severity, managed by admins (`/api/rule-profiles`). The
+  built-in "sonda way" holds the catalog's defaults; one profile is the
+  default, and each project uses it or one an admin chooses
+  (`PUT /api/projects/{key}/rule-profile`), with its own adjustments on top.
+  `GET /api/projects/{key}/rule-profile` gives what a scan of the project
+  applies, readable by analysis tokens for their project; reports record
+  the profile they applied. ADR-0016's global settings become a "Server
+  settings" profile, made the default.
 - Web app: a project's **Settings** page (ADR-0017), linked from its page,
   starts with its **Rules**: the repository's `sonda.toml` settings (or
   "unknown" from an older scan), every rule whose state differs from its

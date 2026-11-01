@@ -6,7 +6,8 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, dependencies, drill, gates, ingest, issues, new_code,
-    overview, projects, review, rule_settings, rules, security, session, throttle, tokens,
+    overview, profiles, projects, review, rule_settings, rules, security, session, throttle,
+    tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -69,6 +70,8 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/security", get(security::get_security))
         .route("/security/review", get(review::get_review))
         .route("/gates", get(gates::list_gates))
+        .route("/rule-profiles", get(profiles::list))
+        .route("/rule-profiles/{id}", get(profiles::get))
         .route("/issues", get(issues::list_issues))
         .route("/issues/{id}", get(issues::get_issue))
         .route_layer(middleware::from_fn_with_state(
@@ -86,6 +89,12 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
             state.clone(),
             api::require_write,
         ));
+    let profile_read = Router::new()
+        .route("/projects/{key}/rule-profile", get(profiles::get_effective))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::require_profile_read,
+        ));
     let account = Router::new()
         .route("/me/password", put(users::change_own_password))
         .route("/me/tokens", get(tokens::list_mine).post(tokens::create))
@@ -99,6 +108,13 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
         .route("/rule-settings", put(rule_settings::put_global))
+        .route("/rule-profiles", post(profiles::post))
+        .route(
+            "/rule-profiles/{id}",
+            patch(profiles::patch).delete(profiles::delete),
+        )
+        .route("/rule-profiles/{id}/rules", put(profiles::put_rule))
+        .route("/projects/{key}/rule-profile", put(profiles::put_project))
         .route(
             "/projects/{key}/rule-settings",
             put(rule_settings::put_project),
@@ -123,6 +139,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .merge(reads)
         .merge(triage)
         .merge(account)
+        .merge(profile_read)
         .merge(admin)
         .merge(sessions)
         // An unknown API path is a 404, never the web app's index.html.
