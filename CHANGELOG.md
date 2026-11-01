@@ -9,8 +9,8 @@ file, the report formats and the public library API.
 
 ### Added
 
-- `sonda scan` analyzes JavaScript/TypeScript, Python, Java and C/C++ with 1175
-  rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
+- `sonda scan` analyzes JavaScript/TypeScript, Python, Java, C/C++ and C#
+  ([ADR-0015](docs/adr/0015-csharp.md)) with 1220 rules. See [docs/rules.md](docs/rules.md), which shows noncompliant and
   compliant examples for each rule.
 - Metrics: lines of code, comment lines, functions, cyclomatic and cognitive
   complexity, technical debt, and cross-file duplication.
@@ -230,6 +230,11 @@ file, the report formats and the public library API.
   owner), so CI tokens can belong to a `ci` service user instead of a
   person whose account may be disabled. `POST /api/tokens` with a `user`;
   the token lists show which admin generated each one (`createdBy`).
+- Web app on phones and narrow windows: below 900px the navigation becomes a
+  menu opened from the header, pages use the full width, and the Issues
+  screen shows the list, then the chosen issue with a way back. Every
+  screen was checked to fit without sideways scrolling at 320, 390, 768
+  and 1280 pixels.
 - Service users: an admin adds a user without a password (Add a user →
   Service user), such as `ci`. It can't sign in, only owns tokens, and must
   be a member; setting a password later makes it an ordinary user.

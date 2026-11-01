@@ -151,7 +151,7 @@ export function TokenTable({ tokens, showOwner = false, onRevoke }: { tokens: Ap
   const th = 'border-b border-line px-2 py-2 text-left font-normal'
   const td = 'border-b border-line px-2 py-2 align-top'
   return (
-    <div className="overflow-x-auto">
+    <div className="relative overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
         <thead className="text-xs text-fg-muted">
           <tr>
