@@ -613,7 +613,7 @@ fn params<'t>(method: Node<'t>, src: &[u8]) -> Vec<Param<'t>> {
                     let modifiers: Vec<u8> = c
                         .named_children(&mut pc)
                         .filter(|x| x.kind() == "modifier")
-                        .flat_map(|x| text(x, src).iter().copied().chain([b' ']))
+                        .flat_map(|x| text(x, src).iter().copied().chain(*b" "))
                         .collect();
                     let mut dc = c.walk();
                     let default = c
