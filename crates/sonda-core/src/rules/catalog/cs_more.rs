@@ -910,20 +910,20 @@ const TEST_ATTRIBUTES: &[&[u8]] = &[
     b"Fact",
 ];
 
-fn is_test_method(method: Node, src: &[u8]) -> bool {
+pub(super) fn is_test_method(method: Node, src: &[u8]) -> bool {
     attribute_names(method, src)
         .iter()
         .any(|(_, n)| TEST_ATTRIBUTES.contains(n))
 }
 
-fn members(declaration: Node) -> Vec<Node> {
+pub(super) fn members(declaration: Node) -> Vec<Node> {
     declaration
         .child_by_field_name("body")
         .map(cs_statements)
         .unwrap_or_default()
 }
 
-fn declarators(field: Node) -> Vec<Node> {
+pub(super) fn declarators(field: Node) -> Vec<Node> {
     let mut cursor = field.walk();
     let Some(declaration) = field
         .named_children(&mut cursor)
@@ -954,7 +954,7 @@ fn mutable_fields<'s>(declaration: Node, src: &'s [u8], statics: bool) -> Vec<&'
 }
 
 /// The class or struct around a node, a few dozen levels up at most.
-fn enclosing_type(node: Node) -> Option<Node> {
+pub(super) fn enclosing_type(node: Node) -> Option<Node> {
     let mut current = node.parent();
     for _ in 0..128 {
         let n = current?;
@@ -1017,7 +1017,7 @@ fn is_mutable_collection_type(ty: Node, src: &[u8]) -> bool {
     ty.kind() == "array_type" || MUTABLE_COLLECTIONS.contains(&simple_name(ty, src))
 }
 
-fn declared_type(field: Node) -> Option<Node> {
+pub(super) fn declared_type(field: Node) -> Option<Node> {
     let mut cursor = field.walk();
     field
         .named_children(&mut cursor)
@@ -1028,7 +1028,7 @@ fn declared_type(field: Node) -> Option<Node> {
 /// The message template of a logging call: its first string argument
 /// among the first three (after an EventId and an exception), when the
 /// receiver looks like a logger.
-fn log_template<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn log_template<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let function = call.child_by_field_name("function")?;
     let method = text(function.child_by_field_name("name")?, src);
     let receiver = function.child_by_field_name("expression")?;
@@ -1057,7 +1057,7 @@ fn log_template<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 /// Placeholder names in a message template (`{Name}`, `{@Name}`,
 /// `{Name:format}`), or Err when braces don't balance or one is empty.
-fn template_placeholders(value: &[u8]) -> Result<Vec<&[u8]>, ()> {
+pub(super) fn template_placeholders(value: &[u8]) -> Result<Vec<&[u8]>, ()> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < value.len() {
