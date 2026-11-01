@@ -126,7 +126,10 @@ pub(crate) fn analyze(
         code_lines: scan.code_lines,
         tokens: scan.tokens,
         has_syntax_errors: root.has_error(),
-        facts: java_facts(&ctx, lang, root),
+        facts: java_facts(&ctx, lang, root)
+            .into_iter()
+            .chain(js_facts(&ctx, lang, root, rules))
+            .collect(),
         semantic_incomplete,
         sha256: Digest(sha2::Sha256::digest(bytes).into()),
     })
@@ -305,6 +308,172 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
 }
 
 /// An issue that belongs to a file as a whole, found by looking at the project.
+/// The packages a JavaScript or TypeScript file imports, one fact each:
+/// `import` = `<package>\t<line>`. Only read when the dependency rule is on.
+fn js_facts(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet) -> Vec<(String, String)> {
+    if !matches!(lang, Lang::JavaScript | Lang::TypeScript | Lang::Tsx)
+        || rules.get(rules::JS_DEPENDENCY_NOT_DECLARED).is_none()
+    {
+        return Vec::new();
+    }
+    let mut facts = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let source = match n.kind() {
+            "import_statement" | "export_statement" => n.child_by_field_name("source"),
+            "call_expression"
+                if n.child_by_field_name("function")
+                    .is_some_and(|f| matches!(ctx.text(f), "require" | "import")) =>
+            {
+                n.child_by_field_name("arguments")
+                    .and_then(|a| a.named_child(0))
+                    .filter(|a| a.kind() == "string")
+            }
+            _ => None,
+        };
+        if let Some(source) = source {
+            let t = ctx.text(source);
+            let spec = t.get(1..t.len().saturating_sub(1)).unwrap_or("");
+            if let Some(package) = package_of(spec) {
+                facts.push((
+                    "import".to_string(),
+                    format!("{package}\t{}", source.start_position().row + 1),
+                ));
+            }
+        }
+        let mut c = n.walk();
+        let kids: Vec<Node> = n.named_children(&mut c).collect();
+        stack.extend(kids);
+    }
+    facts
+}
+
+/// The npm package a module specifier names, or None for relative paths,
+/// Node's own modules and aliases.
+fn package_of(spec: &str) -> Option<String> {
+    const BUILTINS: &[&str] = &[
+        "assert",
+        "async_hooks",
+        "buffer",
+        "child_process",
+        "cluster",
+        "console",
+        "constants",
+        "crypto",
+        "dgram",
+        "diagnostics_channel",
+        "dns",
+        "domain",
+        "events",
+        "fs",
+        "http",
+        "http2",
+        "https",
+        "inspector",
+        "module",
+        "net",
+        "os",
+        "path",
+        "perf_hooks",
+        "process",
+        "punycode",
+        "querystring",
+        "readline",
+        "repl",
+        "stream",
+        "string_decoder",
+        "sys",
+        "timers",
+        "tls",
+        "trace_events",
+        "tty",
+        "url",
+        "util",
+        "v8",
+        "vm",
+        "wasi",
+        "worker_threads",
+        "zlib",
+        "test",
+    ];
+    if spec.is_empty()
+        || spec.starts_with(['.', '/', '#', '~', '$'])
+        || spec.starts_with("node:")
+        || spec.starts_with("@/")
+        || spec.contains(':')
+    {
+        return None;
+    }
+    let mut parts = spec.split('/');
+    let first = parts.next()?;
+    let name = if first.starts_with('@') {
+        format!("{first}/{}", parts.next()?)
+    } else {
+        first.to_string()
+    };
+    let root = name.split('/').next().unwrap_or("");
+    if BUILTINS.contains(&root) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Imports of packages that the nearest `package.json` (or one above it)
+/// does not declare. `manifests` holds each package.json's directory and
+/// every name it declares or is called.
+pub(crate) fn js_dependency_rules(
+    files: &mut [FileAnalysis],
+    rules: &RuleSet,
+    manifests: &[(String, Vec<String>)],
+) {
+    let Some(rule) = rules.get(rules::JS_DEPENDENCY_NOT_DECLARED) else {
+        return;
+    };
+    if manifests.is_empty() {
+        return;
+    }
+    // Workspace packages import each other by their names.
+    let workspace: std::collections::HashSet<&str> = manifests
+        .iter()
+        .flat_map(|(_, names)| names.iter().map(String::as_str))
+        .collect();
+    for f in files.iter_mut() {
+        let dir = f.path.rsplit_once('/').map_or("", |(d, _)| d);
+        let applicable: Vec<&(String, Vec<String>)> = manifests
+            .iter()
+            .filter(|(m, _)| m.is_empty() || dir == m || dir.starts_with(&format!("{m}/")))
+            .collect();
+        if applicable.is_empty() {
+            continue;
+        }
+        let declared: std::collections::HashSet<&str> = applicable
+            .iter()
+            .flat_map(|(_, names)| names.iter().map(String::as_str))
+            .collect();
+        let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let imports: Vec<(String, usize)> = f
+            .facts
+            .iter()
+            .filter(|(k, _)| k == "import")
+            .filter_map(|(_, v)| {
+                let (name, line) = v.split_once('\t')?;
+                Some((name.to_string(), line.parse().ok()?))
+            })
+            .collect();
+        for (name, line) in imports {
+            if declared.contains(name.as_str())
+                || workspace.contains(name.as_str())
+                || !reported.insert(name.clone())
+            {
+                continue;
+            }
+            let msg = format!("Add {name} to the dependencies in package.json.");
+            let issue = project_issue(rule, &f.path, line, msg);
+            f.issues.push(issue);
+        }
+    }
+}
+
 fn project_issue(rule: &ActiveRule, path: &str, line: usize, message: String) -> Issue {
     let mut hasher = sha2::Sha256::new();
     for field in [
