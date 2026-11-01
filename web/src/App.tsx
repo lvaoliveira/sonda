@@ -15,7 +15,9 @@ import { IssuesPage } from '@/pages/IssuesPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { ProjectPage } from '@/pages/ProjectPage'
+import { ProjectRulesPage } from '@/pages/ProjectRulesPage'
 import { ProjectSettingsPage } from '@/pages/ProjectSettingsPage'
+import { QualityProfilesPage } from '@/pages/QualityProfilesPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RulesPage } from '@/pages/RulesPage'
 import { SecurityPage } from '@/pages/SecurityPage'
@@ -41,6 +43,7 @@ export function AppRoutes() {
           <Route path="/analyses/:id" element={<AnalysisPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
+          <Route path="/projects/:key/rules" element={<ProjectRulesPage />} />
           <Route path="/projects/:key/settings" element={<ProjectSettingsPage />} />
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />
           <Route path="/projects/:key/dependencies" element={<DependenciesPage />} />
@@ -51,6 +54,7 @@ export function AppRoutes() {
           <Route path="/gates" element={<GatesPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/rules" element={<RulesPage />} />
+          <Route path="/quality-profiles" element={<QualityProfilesPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="*" element={<NotFoundPage />} />

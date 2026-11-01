@@ -5,10 +5,19 @@ mod c;
 mod common;
 mod cs;
 mod cs_bugs;
+mod cs_classes;
 mod cs_extra;
+mod cs_final;
+mod cs_flow;
 mod cs_more;
+mod cs_opt;
+mod cs_opt2;
+mod cs_opt3;
 mod cs_security;
 mod cs_smells;
+mod cs_tail;
+mod cs_typed;
+mod cs_types;
 mod java;
 mod java_bugs;
 mod java_close;
@@ -110,6 +119,14 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_smells::RULES, cs_smells::OFF_BY_DEFAULT),
     (cs_more::RULES, cs_more::OFF_BY_DEFAULT),
     (cs_extra::RULES, cs_extra::OFF_BY_DEFAULT),
+    (cs_final::RULES, cs_final::OFF_BY_DEFAULT),
+    (cs_tail::RULES, cs_tail::OFF_BY_DEFAULT),
+    (cs_opt::RULES, cs_opt::OFF_BY_DEFAULT),
+    (cs_opt2::RULES, cs_opt2::OFF_BY_DEFAULT),
+    (cs_opt3::RULES, cs_opt3::OFF_BY_DEFAULT),
+    (cs_typed::RULES, cs_typed::OFF_BY_DEFAULT),
+    (cs_classes::RULES, cs_classes::OFF_BY_DEFAULT),
+    (cs_flow::RULES, cs_flow::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

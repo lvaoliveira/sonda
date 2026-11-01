@@ -220,13 +220,16 @@ struct TrackedIssue {
     category: String,
     accepted: bool,
     first_at: f64,
+    /// When it left the open issues: fixed, or set aside.
     fixed_at: Option<f64>,
+    /// Left because the scan didn't run its rule: not a fix (ADR-0018).
+    set_aside: bool,
     /// Found by the branch's first analysis: the baseline, not "new" or
     /// "introduced", or uploading a project would look like a flood.
     baseline: bool,
 }
 
-type IssueRow = (i64, String, String, bool, f64, Option<f64>, bool);
+type IssueRow = (i64, String, String, bool, f64, Option<f64>, bool, bool);
 
 /// A new blocker or critical issue: project, severity, message, path, line,
 /// when it was first seen, its id and its branch.
@@ -307,7 +310,7 @@ pub async fn get_overview(
         "SELECT i.project_id, i.severity, i.category,
                 i.status IN ('accepted', 'false_positive') OR rule_off(i.project_id, i.rule),
                 extract(epoch FROM fa.received_at)::float8,
-                extract(epoch FROM xa.received_at)::float8,
+                extract(epoch FROM xa.received_at)::float8, i.rule_not_run,
                 i.first_analysis_id = (SELECT min(b.id) FROM analyses b
                                        WHERE b.project_id = i.project_id AND b.branch = i.branch)
          FROM issues i
@@ -319,14 +322,17 @@ pub async fn get_overview(
     .await?
     .into_iter()
     .map(
-        |(project, severity, category, accepted, first_at, fixed_at, baseline)| TrackedIssue {
-            project,
-            severity,
-            category,
-            accepted,
-            first_at,
-            fixed_at,
-            baseline,
+        |(project, severity, category, accepted, first_at, fixed_at, set_aside, baseline)| {
+            TrackedIssue {
+                project,
+                severity,
+                category,
+                accepted,
+                first_at,
+                fixed_at,
+                set_aside,
+                baseline,
+            }
         },
     )
     .collect();
@@ -893,7 +899,7 @@ fn flow(points: &[f64], step: f64, issues: &[TrackedIssue]) -> Vec<FlowBucket> {
                     .count() as u32,
                 resolved: issues
                     .iter()
-                    .filter(|i| i.fixed_at.is_some_and(within))
+                    .filter(|i| !i.set_aside && i.fixed_at.is_some_and(within))
                     .count() as u32,
                 open: issues
                     .iter()

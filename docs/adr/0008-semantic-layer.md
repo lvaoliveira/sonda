@@ -2,8 +2,9 @@
 
 - Status: **accepted; S1 in progress.** It's built in phases, after the
   first syntactic rule batches of [ADR-0007](0007-sonarqube-rule-parity.md).
-  S1 is built for JavaScript/TypeScript (`semantic/`), with twelve rules; the
-  rest of S1 is on the [roadmap](../roadmap.md).
+  S1 is built for JavaScript/TypeScript (`semantic/`), with twelve rules,
+  and for C# ([ADR-0015](0015-csharp.md)), whose declarations also keep
+  their written types; the rest of S1 is on the [roadmap](../roadmap.md).
 - Date: 2026-10-30
 
 ## Context

@@ -18,7 +18,18 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
-| C# | 446 | 217 | 13 | 216 | 0 | 0 |
+| C# | 446 | 353 | 90 | 3 | 0 | 0 |
+
+## Known gaps
+
+Rules sonda leaves out on purpose, and the decision records that say what
+would change that.
+
+| Language | Key | Reason |
+|---|---|---|
+| C# | S1944 | Invalid casts: needs the values reaching a cast and types from other files. [Why](../adr/0015-csharp.md) |
+| C# | S3220 | Calls resolving to a `params` overload: needs C#'s overload resolution. [Why](../adr/0015-csharp.md) |
+| C# | S6802 | Lambdas in loops in Blazor markup: checks `.razor` files, which sonda doesn't parse. [Why](../adr/0015-csharp.md) |
 
 ## Security standards
 

@@ -234,4 +234,10 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("cs/request-validation-disabled", &[79], &[A03]),
     ("cs/unsafe-code", &[119, 787], &[]),
     ("cs/world-permissions", &[266, 732], &[A01, A04]),
+    ("cs/regex-without-timeout", &[400, 1333], &[]),
+    ("cs/random-secret", &[326, 330, 338, 1241], &[A02]),
+    ("cs/unsafe-csp", &[693], &[A05]),
+    ("cs/xml-signature-unverified-key", &[347], &[A02]),
+    ("cs/conflicting-transparency", &[269], &[A05]),
+    ("cs/deserialization-skips-validation", &[502], &[A08]),
 ];

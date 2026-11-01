@@ -74,6 +74,9 @@ pub struct Outcome {
     /// The `[rules]` settings the scan ran with, which the report carries
     /// so the server can show them (ADR-0016).
     pub rules: config::RulesConfig,
+    /// The ids of the rules the scan ran, sorted: the server leaves a
+    /// finding of any other rule aside instead of calling it fixed.
+    pub active_rules: Vec<&'static str>,
 }
 
 /// Analyzes `options.root` and evaluates the quality gate.
@@ -100,6 +103,7 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
         measures,
         gate,
         rules: config.rules.clone(),
+        active_rules: rules.ids(),
     })
 }
 

@@ -1,3 +1,4 @@
+import { Settings } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
@@ -18,8 +19,9 @@ export function ProjectPage() {
   const [params] = useSearchParams()
   const branch = params.get('branch') ?? undefined
   const detail = useAsync(() => api.project(key, branch), [api, key, branch])
+  const name = detail.state === 'ready' ? detail.data.name : null
   return (
-    <AppShell crumbs={[{ label: 'Projects', to: '/projects' }, { label: key, to: `/projects/${encodeURIComponent(key)}` }]}>
+    <AppShell crumbs={[{ label: 'Projects', to: '/projects' }, { label: name ?? key, to: `/projects/${encodeURIComponent(key)}` }]}>
       {detail.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
       {detail.state === 'error' && (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
@@ -42,9 +44,16 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   return (
     <>
       <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h1 className="m-0 text-[30px] leading-[1.1] font-semibold tracking-[-0.035em]">{p.key}</h1>
-          <Link to={`${projectUrl}/settings`} className="text-[13px]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="m-0 text-[30px] leading-[1.1] font-semibold tracking-[-0.035em] break-words">{p.name ?? p.key}</h1>
+            {p.name && <Mono className="text-xs text-fg-muted">{p.key}</Mono>}
+          </div>
+          <Link
+            to={`${projectUrl}/settings`}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-[13px] text-[13px] font-medium text-fg no-underline edge-strong"
+          >
+            <Settings size={14} strokeWidth={2} aria-hidden="true" />
             Settings
           </Link>
         </div>
@@ -87,7 +96,65 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
       <History history={p.history} branch={p.branch} />
       <Components p={p} />
       <Dependencies p={p} />
+      <RulesSummary project={p.key} />
     </>
+  )
+}
+
+/** The project's rules at a glance (ADR-0016, ADR-0018), linking to its Rules page. */
+function RulesSummary({ project }: { project: string }) {
+  const api = useApi()
+  const rules = useAsync(() => api.projectRules(project), [api, project])
+  const url = `/projects/${encodeURIComponent(project)}/rules`
+  const r = rules.state === 'ready' ? rules.data : null
+  const off = r ? r.rules.filter((x) => !x.state.on) : []
+  const sources = (
+    [
+      ['default', 'by default'],
+      ['sonda_toml', 'in sonda.toml'],
+      ['profile', 'by the profile'],
+      ['project', 'for this project'],
+    ] as const
+  )
+    .map(([s, label]) => [off.filter((x) => x.state.setBy === s).length, label] as const)
+    .filter(([n]) => n > 0)
+    .map(([n, label]) => `${n} ${label}`)
+    .join(', ')
+  return (
+    <Card
+      id="rules"
+      title="Rules"
+      subtitle={r ? `For ${r.languages.map(languageLabel).join(', ') || 'no languages yet'}, on ${r.mainBranch}` : 'The rules this project runs'}
+      aside={
+        r && (
+          <Link to={url} className="text-[13px]">
+            All {formatNumber(r.rules.length)} →
+          </Link>
+        )
+      }
+    >
+      {rules.state === 'loading' && <div aria-busy="true" className="h-8 rounded-md bg-panel-2" />}
+      {rules.state === 'error' && <p role="alert" className="m-0 text-[13px]">Could not load the rules: {rules.error.message}</p>}
+      {r && (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 text-[13px] text-fg-muted">
+            <span>
+              <Mono className="text-[22px] text-fg">{formatNumber(r.rules.length - off.length)}</Mono> on
+            </span>
+            <span>
+              <Mono className="text-fg">{formatNumber(off.length)}</Mono> off{sources && ` (${sources})`}
+            </span>
+            <span>
+              profile <span className="font-semibold text-fg">{r.profile.name}</span>
+              {!r.profile.chosen && ' (the default)'}
+            </span>
+          </div>
+          {r.profileApplied === false && (
+            <p className="m-0 text-[13px] text-warn">The latest scan didn't apply the current settings; they apply from the next sonda scan --upload.</p>
+          )}
+        </div>
+      )}
+    </Card>
   )
 }
 

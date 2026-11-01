@@ -5,6 +5,7 @@ import {
   CircleDot,
   Folder,
   LayoutGrid,
+  ListChecks,
   LogOut,
   type LucideIcon,
   Menu,
@@ -42,6 +43,7 @@ const NAV: (NavItem | 'Configure')[] = [
   'Configure',
   { to: '/gates', label: 'Quality gates', icon: CircleCheck },
   { to: '/rules', label: 'Rules', icon: BookOpen },
+  { to: '/quality-profiles', label: 'Quality profiles', icon: ListChecks },
   { to: '/admin', label: 'Administration', icon: SlidersHorizontal, adminOnly: true },
 ]
 

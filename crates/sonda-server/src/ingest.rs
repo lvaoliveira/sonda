@@ -83,6 +83,20 @@ struct Report {
     /// send them: absent, not empty.
     #[serde(default)]
     rule_settings: Option<RuleSettingsIn>,
+    /// The server's rule profile the scan applied (ADR-0018); absent when
+    /// it applied none.
+    #[serde(default)]
+    rule_profile: Option<RuleProfileIn>,
+    /// The ids of the rules the scan ran; older CLIs don't send them, and
+    /// then every missing issue is fixed, as before.
+    #[serde(default)]
+    active_rules: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct RuleProfileIn {
+    name: String,
+    revision: String,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +165,10 @@ pub struct Analysis {
     pub dependencies_recorded: bool,
     /// sonda.toml's `[rules]`, normalized; `None` from an older CLI.
     pub rule_settings: Option<Value>,
+    /// `{"name", "revision"}` of the profile the scan applied.
+    pub rule_profile: Option<Value>,
+    /// The rules the scan ran; `None` from an older CLI.
+    pub active_rules: Option<Vec<String>>,
 }
 
 pub struct StoredDependency {
@@ -522,6 +540,21 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         .map(validate_rule_settings)
         .transpose()
         .map_err(invalid)?;
+    let rule_profile = match r.rule_profile {
+        Some(p) if (1..=100).contains(&p.name.len()) && (1..=100).contains(&p.revision.len()) => {
+            Some(serde_json::json!({ "name": p.name, "revision": p.revision }))
+        }
+        Some(_) => return Err(invalid("the report's rule profile is invalid".into())),
+        None => None,
+    };
+    if r.active_rules.as_ref().is_some_and(|ids| {
+        ids.len() > MAX_RULE_SETTINGS
+            || ids
+                .iter()
+                .any(|id| !(1..=100).contains(&id.len()) || id.chars().any(char::is_control))
+    }) {
+        return Err(invalid("the report's active rules are invalid".into()));
+    }
     let dependencies_recorded = r.dependencies.is_some();
     let dependencies =
         validate_dependencies(r.dependencies.unwrap_or_default()).map_err(invalid)?;
@@ -543,6 +576,8 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         dependencies,
         dependencies_recorded,
         rule_settings,
+        rule_profile,
+        active_rules: r.active_rules,
     })
 }
 

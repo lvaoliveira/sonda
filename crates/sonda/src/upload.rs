@@ -6,6 +6,9 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use sonda_core::config::RulesConfig;
+use sonda_core::model::Severity;
+use sonda_core::report::AppliedProfile;
 use sonda_core::upload::{self, Meta};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +22,8 @@ const MAX_REPORT_BYTES: u64 = 256 << 20;
 const MAX_ERROR_BYTES: u64 = 4 << 10;
 /// How much of a successful answer to read: counts and the gate's labels.
 const MAX_ANSWER_BYTES: u64 = 64 << 10;
+/// A profile lists at most every rule, with a severity each.
+const MAX_PROFILE_BYTES: u64 = 1 << 20;
 
 #[derive(Args)]
 pub struct UploadArgs {
@@ -91,6 +96,114 @@ pub struct Checked {
     meta: Meta,
 }
 
+/// The rule settings the server says a scan of the project applies
+/// (ADR-0018): its profile with the project's own adjustments.
+pub struct ServerRules {
+    profile: String,
+    revision: String,
+    rules: Vec<ServerRule>,
+}
+
+struct ServerRule {
+    rule: String,
+    on: bool,
+    severity: Option<Severity>,
+}
+
+impl ServerRules {
+    /// Reads the server's answer, refusing anything malformed rather than
+    /// guessing.
+    fn parse(text: &str) -> Result<Self> {
+        let v: serde_json::Value = serde_json::from_str(text)?;
+        let text_field = |name: &str| {
+            v[name]
+                .as_str()
+                .filter(|s| (1..=100).contains(&s.len()))
+                .map(String::from)
+                .with_context(|| format!("no valid {name:?}"))
+        };
+        let rules = v["rules"]
+            .as_array()
+            .context("no \"rules\" list")?
+            .iter()
+            .map(|r| {
+                Ok(ServerRule {
+                    rule: r["rule"]
+                        .as_str()
+                        .context("a rule without an id")?
+                        .to_string(),
+                    on: r["on"].as_bool().context("a rule without \"on\"")?,
+                    severity: match &r["severity"] {
+                        serde_json::Value::Null => None,
+                        s => {
+                            Some(serde_json::from_value(s.clone()).context("an unknown severity")?)
+                        }
+                    },
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(ServerRules {
+            profile: text_field("profile")?,
+            revision: text_field("revision")?,
+            rules,
+        })
+    }
+
+    /// Applies the server's settings over `rules` (sonda.toml's): where the
+    /// server sets a rule, it wins. Returns the ids this sonda doesn't
+    /// know, which it skips: the server may be newer.
+    pub fn apply(&self, rules: &mut RulesConfig) -> Vec<String> {
+        let mut unknown = Vec::new();
+        for s in &self.rules {
+            let Some(rule) = sonda_core::rules::RULES.iter().find(|r| r.id == s.rule) else {
+                unknown.push(s.rule.clone());
+                continue;
+            };
+            rules.disabled.retain(|id| id != rule.id);
+            rules.enabled.retain(|id| id != rule.id);
+            if !s.on {
+                rules.disabled.push(rule.id.to_string());
+            } else if !rule.on_by_default() {
+                rules.enabled.push(rule.id.to_string());
+            }
+            if let Some(severity) = s.severity {
+                rules.severity.insert(rule.id.to_string(), severity);
+            }
+        }
+        unknown
+    }
+
+    /// What the report records as applied.
+    pub fn applied(&self) -> AppliedProfile {
+        AppliedProfile {
+            name: self.profile.clone(),
+            revision: self.revision.clone(),
+        }
+    }
+
+    /// For the scan's output, e.g. `"Strict": 3 rules set`.
+    pub fn describe(&self) -> String {
+        let n = self.rules.len();
+        format!(
+            "{:?}: {n} {} set",
+            sonda_core::report::terminal_safe(&self.profile),
+            if n == 1 { "rule" } else { "rules" }
+        )
+    }
+}
+
+fn agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(timeout))
+        // A redirect would carry the token somewhere the user did not name.
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .user_agent(concat!("sonda/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into()
+}
+
 impl Target {
     /// Everything that can fail locally fails here, before anything is
     /// scanned, read or sent.
@@ -114,6 +227,51 @@ impl Target {
 }
 
 impl Checked {
+    /// The rule settings the server applies to this project, fetched before
+    /// scanning (ADR-0018). `None` from an older server without rule
+    /// profiles; any other failure is an error, like the upload's would be.
+    pub fn fetch_rules(&self) -> Result<Option<ServerRules>> {
+        // `url` ends in `/api/analyses`; the project key is URL-safe
+        // (`validate_meta`).
+        let base = self.url.trim_end_matches("/analyses");
+        let url = format!("{base}/projects/{}/rule-profile", self.meta.project);
+        let mut response = agent(Duration::from_secs(30))
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .call()
+            .with_context(|| format!("fetching the project's rule settings from {url}"))?;
+        let status = response.status();
+        if status == 404 {
+            return Ok(None);
+        }
+        let mut text = String::new();
+        let limit = if status.is_success() {
+            MAX_PROFILE_BYTES
+        } else {
+            MAX_ERROR_BYTES
+        };
+        response
+            .body_mut()
+            .as_reader()
+            .take(limit)
+            .read_to_string(&mut text)
+            .with_context(|| format!("reading the rule settings from {url}"))?;
+        if !status.is_success() {
+            bail!(
+                "fetching the project's rule settings, the server answered {status}: {}",
+                text.trim()
+            );
+        }
+        let rules = ServerRules::parse(&text)
+            .with_context(|| format!("reading the rule settings from {url}"))?;
+        Ok(Some(rules))
+    }
+
+    /// The server, as the user named it.
+    pub fn server(&self) -> &str {
+        &self.server
+    }
+
     /// Sends `report` (JSON) and the sources under `root`. `scan_duration`
     /// is how long the scan took, when this process ran it.
     /// Returns whether the server's gate passed, when its answer says
@@ -137,16 +295,7 @@ impl Checked {
         let body = gzip(&serde_json::to_vec(&upload)?)?;
         tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
 
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .timeout_global(Some(Duration::from_secs(300)))
-            // A redirect would carry the token somewhere the user did not name.
-            .max_redirects(0)
-            .http_status_as_error(false)
-            .user_agent(concat!("sonda/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
-        let mut response = agent
+        let mut response = agent(Duration::from_secs(300))
             .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
@@ -227,6 +376,10 @@ fn summary(answer: &str) -> String {
             let mut s = format!(": {open} open issues ({new} new, {fixed} fixed");
             if reopened > 0 {
                 s += &format!(", {reopened} reopened");
+            }
+            // Missing because the scan didn't run their rule (ADR-0018).
+            if let Some(n) = count("set_aside").filter(|&n| n > 0) {
+                s += &format!(", {n} set aside: their rules didn't run");
             }
             s + ")"
         }

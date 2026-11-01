@@ -426,6 +426,7 @@ fn scan_files(
     let package_issues_before: Vec<usize> = files.iter().map(|f| f.issues.len()).collect();
     analysis::java_package_rules(&mut files, rules);
     analysis::js_dependency_rules(&mut files, rules, manifests);
+    analysis::cs_project_rules(&mut files, rules);
     for (f, before) in files.iter_mut().zip(package_issues_before) {
         for issue in &mut f.issues[before..] {
             issue.is_new = new_code.is_new(&f.path, issue.line);
@@ -782,6 +783,7 @@ mod tests {
             measures,
             gate,
             rules: cfg.rules.clone(),
+            active_rules: crate::rules::RuleSet::new(&cfg.rules).unwrap().ids(),
         }
     }
 
@@ -1100,6 +1102,76 @@ mod tests {
             .flat_map(|f| f.issues.iter().map(|i| (f.path.as_str(), i.line)))
             .collect();
         assert_eq!(hits, [("src/com/other/Svc.java", 3)]);
+    }
+
+    #[test]
+    fn csharp_partial_methods_and_resources_across_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (rel, body) in [
+            (
+                "App/Gen.cs",
+                "namespace App;\npartial class Form {\n  partial void OnLoaded();\n  partial void OnSaved();\n  public partial int Count();\n}\n",
+            ),
+            (
+                "App/Form.cs",
+                "namespace App;\npartial class Form {\n  partial void OnLoaded() { }\n  public partial int Count() => 1;\n}\n",
+            ),
+            (
+                "App/Model.Designer.cs",
+                "namespace App;\npartial class Model {\n  partial void OnCreated();\n}\n",
+            ),
+            (
+                "App/Properties/AssemblyInfo.cs",
+                "[assembly: AssemblyTitle(\"App\")]\n[assembly: AssemblyVersion(\"1.0.0.0\")]\n",
+            ),
+            (
+                "App/Properties/Resources.Designer.cs",
+                "namespace App.Properties;\nclass Resources { static System.Resources.ResourceManager rm; }\n",
+            ),
+            (
+                "Lib/Properties/AssemblyInfo.cs",
+                "[assembly: AssemblyTitle(\"Lib\")]\n[assembly: AssemblyVersion(\"1.0.0.0\")]\n",
+            ),
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ["cs/neutral-resources-language".to_string()].to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
+            advisories: None,
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let hits: Vec<(&str, &str, usize)> = r
+            .files
+            .iter()
+            .flat_map(|f| f.issues.iter().map(|i| (i.rule, f.path.as_str(), i.line)))
+            .filter(|(rule, _, _)| {
+                matches!(
+                    *rule,
+                    "cs/partial-method-not-implemented" | "cs/neutral-resources-language"
+                )
+            })
+            .collect();
+        assert_eq!(
+            hits,
+            [
+                ("cs/partial-method-not-implemented", "App/Gen.cs", 4),
+                (
+                    "cs/neutral-resources-language",
+                    "App/Properties/AssemblyInfo.cs",
+                    1
+                ),
+            ]
+        );
     }
 
     /// Renders every format; `reverse` feeds the post-discovery stage its

@@ -227,14 +227,53 @@ file, the report formats and the public library API.
   and revoke everyone's. Uploads record their token, and actions by token
   are audited as `ada (token ci-shop)`. `SONDA_TOKEN` keeps working and is
   now optional.
-- Web app: a project's **Settings** page (ADR-0017), linked from its page,
-  starts with its **Rules**: the repository's `sonda.toml` settings (or
-  "unknown" from an older scan), every rule whose state differs from its
-  default with what set it, who, when and why, the findings left out,
-  conflicts, and when `sonda.toml` changed; admins set a rule on or off for
-  the project, or turn any rule off there. The **Rules** page says where
-  each rule is off, and admins turn a rule off for every project, or back
-  on.
+- A finding missing because the scan didn't run its rule (turned off by a
+  profile or `sonda.toml`) is no longer counted as fixed: reports list
+  their `active_rules`, and the server sets such findings aside, out of
+  the open issues but also out of every fixed count, list, trend and
+  time-to-fix, and brings them back without a "reopened" when the rule
+  runs again. The upload's summary says how many were set aside.
+- `sonda scan --upload` applies the server's rule settings (ADR-0018):
+  before scanning it fetches the project's rule profile and adjustments,
+  and where the server sets a rule (on, off, severity) the server wins over
+  `sonda.toml`. Rules this sonda doesn't know are skipped with a warning.
+  The scan stops before it starts if the settings can't be fetched; a
+  server without profiles leaves `sonda.toml` deciding. The report records
+  the profile it applied (`rule_profile`) beside `sonda.toml`'s own
+  `rule_settings`.
+- Rule profiles on the server (ADR-0018): named sets of rules, on or off
+  with an optional severity, managed by admins (`/api/rule-profiles`). The
+  built-in "sonda way" holds the catalog's defaults; one profile is the
+  default, and each project uses it or one an admin chooses
+  (`PUT /api/projects/{key}/rule-profile`), with its own adjustments on top.
+  `GET /api/projects/{key}/rule-profile` gives what a scan of the project
+  applies, readable by analysis tokens for their project; reports record
+  the profile they applied. ADR-0016's global settings become a "Server
+  settings" profile, made the default.
+- Web app: a project's **Rules** page, linked from a Rules section on its
+  page (after Dependencies: rules on, off and by what, and the profile), with the
+  Rules page's structure (search, language, type and state filters, list
+  and detail) and only the rules for the project's languages: each with
+  its state there, what set it (default, `sonda.toml`, its profile, the
+  project), who, when and why, its findings here and those left out, and
+  conflicts. Admins enable or disable each rule for the project, or let it
+  follow the profile, and choose the project's rule profile. The page also
+  shows the repository's `sonda.toml` settings and when they changed. The
+  catalog's **Rules** page says where each rule is off and which profiles
+  set it, and admins turn a rule off in the default profile, or back on.
+- Project settings (ADR-0017): each project has a **Settings** page, linked
+  from its page, where admins give it a display name (screens show it with
+  the key under it; the key never changes) and choose its main branch among
+  the branches with analyses, which every screen then counts and where new
+  code starts over. Members read them, and each change is recorded with who
+  made it (`GET`/`PATCH /api/projects/{key}/settings`).
+- Web app: a **Quality profiles** page, under Configure (ADR-0018): each
+  profile, the default, built in, and the projects using it, with its rules
+  in the Rules page's structure (search, language, type, and whether the
+  profile sets them, those it sets listed first). Admins create a profile,
+  empty or as a copy, rename it, make it the default and delete it, and turn
+  each rule on or off in it with a severity and a note, or leave it at its
+  default. "sonda way" stays read-only, and members read.
 - Rule settings on the server (ADR-0016): admins turn a rule off for every
   project or for one (`PUT /api/rule-settings`,
   `PUT /api/projects/{key}/rule-settings`), and a project can turn back on

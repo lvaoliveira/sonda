@@ -66,7 +66,7 @@ describe('the HTTP API client', () => {
     await api.setRuleOff('js/no-var', true, 'Too noisy.')
     await api.setProjectRule('shop', 'js/no-var', 'inherit')
     expect(calls.map((c) => [c.init.method ?? 'GET', c.url, c.init.body ?? null])).toEqual([
-      ['GET', '/api/projects/shop/rule-settings', null],
+      ['GET', '/api/projects/shop/rules', null],
       ['PUT', '/api/rule-settings', '{"rule":"js/no-var","off":true,"note":"Too noisy."}'],
       ['PUT', '/api/projects/shop/rule-settings', '{"rule":"js/no-var","state":"inherit"}'],
     ])

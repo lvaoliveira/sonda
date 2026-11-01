@@ -73,12 +73,17 @@ fn rule<'a>(catalog: &'a Value, id: &str) -> &'a Value {
         .unwrap()
 }
 
-fn state<'a>(settings: &'a Value, id: &str) -> Option<&'a Value> {
-    settings["rules"]
+/// A rule's state in a project's rules, with its finding counts.
+fn state(rules: &Value, id: &str) -> Option<Value> {
+    let r = rules["rules"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["rule"] == id)
+        .find(|r| r["id"] == id)?;
+    let mut s = r["state"].clone();
+    s["hiddenIssues"] = r["hiddenIssues"].clone();
+    s["openIssues"] = r["openIssues"].clone();
+    Some(s)
 }
 
 #[tokio::test]
@@ -158,12 +163,12 @@ async fn admins_turn_rules_off_globally_or_per_project() {
     );
 
     // Each project's view says what decided each rule.
-    let shop = get(&app, &max, "/api/projects/shop/rule-settings").await;
+    let shop = get(&app, &max, "/api/projects/shop/rules").await;
     let s = state(&shop, "js/no-eval").unwrap();
-    assert_eq!((&s["on"], &s["setBy"]), (&json!(false), &json!("server")));
+    assert_eq!((&s["on"], &s["setBy"]), (&json!(false), &json!("profile")));
     assert_eq!(s["change"]["changedBy"], "ada");
     assert_eq!(s["hiddenIssues"], 1);
-    let blog = get(&app, &max, "/api/projects/blog/rule-settings").await;
+    let blog = get(&app, &max, "/api/projects/blog/rules").await;
     let s = state(&blog, "js/no-eval").unwrap();
     assert_eq!(
         (&s["on"], &s["setBy"], &s["projectSetting"]),
@@ -224,7 +229,7 @@ async fn the_repositorys_settings_show_with_conflicts_and_changes() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{s}");
 
-    let view = get(&app, &ada, "/api/projects/shop/rule-settings").await;
+    let view = get(&app, &ada, "/api/projects/shop/rules").await;
     assert_eq!(view["sondaToml"]["disabled"], json!(["js/no-var"]));
     let no_var = state(&view, "js/no-var").unwrap();
     assert_eq!(
@@ -237,8 +242,15 @@ async fn the_repositorys_settings_show_with_conflicts_and_changes() {
         (&json!(true), &json!("sonda_toml"))
     );
     assert_eq!(state(&view, "js/no-eval").unwrap()["severity"], "minor");
-    // Rules at their default aren't listed.
-    assert!(state(&view, "js/eqeqeq").is_none());
+    // Every rule for the project's languages is listed, at its default too,
+    // and only those.
+    assert_eq!(view["languages"], json!(["javascript"]));
+    let eqeqeq = state(&view, "js/eqeqeq").unwrap();
+    assert_eq!(
+        (&eqeqeq["on"], &eqeqeq["setBy"]),
+        (&json!(true), &json!("default"))
+    );
+    assert!(state(&view, "py/no-eval").is_none());
     let changes: Vec<(String, String)> = view["tomlChanges"]
         .as_array()
         .unwrap()
@@ -267,7 +279,7 @@ async fn the_repositorys_settings_show_with_conflicts_and_changes() {
     // The server can't turn on what the scanner never ran: shown, not hidden.
     let on = json!({ "rule": "js/no-var", "state": "on" });
     send(&app, put("/api/projects/shop/rule-settings", &ada, on)).await;
-    let view = get(&app, &ada, "/api/projects/shop/rule-settings").await;
+    let view = get(&app, &ada, "/api/projects/shop/rules").await;
     let no_var = state(&view, "js/no-var").unwrap();
     assert_eq!(
         (&no_var["on"], &no_var["setBy"], &no_var["conflict"]),
@@ -281,6 +293,6 @@ async fn the_repositorys_settings_show_with_conflicts_and_changes() {
         .unwrap()
         .remove("rule_settings");
     upload(&db, &older).await;
-    let view = get(&app, &ada, "/api/projects/shop/rule-settings").await;
+    let view = get(&app, &ada, "/api/projects/shop/rules").await;
     assert_eq!(view["sondaToml"], Value::Null);
 }

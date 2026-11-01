@@ -396,22 +396,28 @@ pub async fn get_analysis(
     }))
 }
 
-/// The issues whose `column` (first seen, or fixed) is this analysis.
+/// The issues whose `column` (first seen, or fixed) is this analysis. An
+/// issue set aside because the scan didn't run its rule isn't a fix.
 async fn changes(
     pool: &sqlx::PgPool,
     column: &'static str,
     analysis: i64,
 ) -> Result<Changes, sqlx::Error> {
+    let fixes_only = if column == "fixed_analysis_id" {
+        "AND NOT rule_not_run"
+    } else {
+        ""
+    };
     let counts: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT severity, count(*) FROM issues
-         WHERE {column} = $1 AND NOT rule_off(project_id, rule) GROUP BY severity"
+         WHERE {column} = $1 AND NOT rule_off(project_id, rule) {fixes_only} GROUP BY severity"
     )))
     .bind(analysis)
     .fetch_all(pool)
     .await?;
     let items: Vec<IssueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, severity, category, rule, message, path, line FROM issues
-         WHERE {column} = $1 AND NOT rule_off(project_id, rule)
+         WHERE {column} = $1 AND NOT rule_off(project_id, rule) {fixes_only}
          ORDER BY array_position(ARRAY['blocker', 'critical', 'major', 'minor', 'info'], severity),
                   path, line, id
          LIMIT $2"

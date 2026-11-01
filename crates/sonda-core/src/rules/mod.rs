@@ -35,6 +35,8 @@ pub(crate) const JAVA_PARSE_FAILURE: &str = "java/parse-failure";
 pub(crate) const JAVA_PACKAGE_INFO_MISSING: &str = "java/package-info-missing";
 pub(crate) const JAVA_PACKAGE_INFO_ONLY: &str = "java/package-info-only";
 pub(crate) const JAVA_COMPONENT_NOT_SCANNED: &str = "java/component-not-scanned";
+pub(crate) const CS_PARTIAL_METHOD_NOT_IMPLEMENTED: &str = "cs/partial-method-not-implemented";
+pub(crate) const CS_NEUTRAL_RESOURCES_LANGUAGE: &str = "cs/neutral-resources-language";
 pub(crate) const COMMENTED_OUT_CODE: &str = "common/commented-out-code";
 
 /// Extra check on the node captured as `@match`.
@@ -315,6 +317,13 @@ impl RuleSet {
             match_capture: match_capture.unwrap_or_default(),
             patterns,
         }))
+    }
+
+    /// The active rules' ids, sorted.
+    pub(crate) fn ids(&self) -> Vec<&'static str> {
+        let mut ids: Vec<&'static str> = self.active.iter().map(|a| a.rule.id).collect();
+        ids.sort_unstable();
+        ids
     }
 
     pub(crate) fn get(&self, id: &str) -> Option<&ActiveRule> {
