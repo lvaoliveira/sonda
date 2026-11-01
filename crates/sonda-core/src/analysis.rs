@@ -1491,7 +1491,10 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(rules_in("src/db.js").contains(&"js/hardcoded-password"));
-        assert_eq!(rules_in("src/db.test.js"), ["js/no-var"]);
+        assert_eq!(
+            rules_in("src/db.test.js"),
+            ["js/test-file-without-tests", "js/no-var"]
+        );
     }
 
     #[test]
