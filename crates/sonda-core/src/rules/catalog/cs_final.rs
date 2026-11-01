@@ -1416,9 +1416,7 @@ fn overwritten_initializer<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
 }
 
 fn serializable_without_constructor<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if find_attribute(class, "Serializable", src).is_none() {
-        return None;
-    }
+    find_attribute(class, "Serializable", src)?;
     let mut cursor = class.walk();
     let implements = class
         .named_children(&mut cursor)
