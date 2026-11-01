@@ -82,6 +82,16 @@ rule reports only what declarations in the file prove, and is `related`
 to its SonarQube key when typed analysis would find more. What it can't
 see: inherited members, types inferred across calls, and other files.
 
+A rule on the model is `exact` when it implements its key's documented
+behavior: SonarQube's description, examples and listed exceptions, no more
+and no fewer. A name whose type the file doesn't declare then gives no
+finding, which costs recall, not scope. It stays `related` when it checks
+fewer patterns than documented, narrows them on purpose to avoid false
+positives, or depends on declarations that usually live in other files
+(base classes, interfaces, enums). Rules from the batches before the model
+were re-audited against this bar; those it could make exact moved to
+`cs_semantic.rs` with their ids unchanged.
+
 Rules that need declared types are `Check::Semantic`. Walking up from a
 node to find its scope costs that node's depth for every `parent()`, which
 made a query-based version quadratic on deeply nested code; the model is
