@@ -9,6 +9,7 @@ mod cs_extra;
 mod cs_final;
 mod cs_more;
 mod cs_opt;
+mod cs_opt2;
 mod cs_security;
 mod cs_smells;
 mod cs_tail;
@@ -108,6 +109,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_final::RULES, cs_final::OFF_BY_DEFAULT),
     (cs_tail::RULES, cs_tail::OFF_BY_DEFAULT),
     (cs_opt::RULES, cs_opt::OFF_BY_DEFAULT),
+    (cs_opt2::RULES, cs_opt2::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.
