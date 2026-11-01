@@ -30,6 +30,7 @@ pub(crate) const JAVA_ASSERTION_IN_MAIN: &str = "java/assertion-in-production";
 pub(crate) const JS_MODULE_IMPORTS_ITSELF: &str = "js/module-imports-itself";
 pub(crate) const JS_DEFAULT_EXPORT_NAME: &str = "js/default-export-name";
 pub(crate) const JS_TEST_FILE_WITHOUT_TESTS: &str = "js/test-file-without-tests";
+pub(crate) const JS_DEPENDENCY_NOT_DECLARED: &str = "js/dependency-not-declared";
 pub(crate) const JS_LICENSE_HEADER: &str = "js/missing-license-header";
 pub(crate) const JAVA_PARSE_FAILURE: &str = "java/parse-failure";
 pub(crate) const JAVA_PACKAGE_INFO_MISSING: &str = "java/package-info-missing";

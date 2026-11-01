@@ -817,10 +817,39 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
 | `RUST_LOG` | Log filter. Default `sonda=info,sqlx=warn`. |
+| `SONDA_LOG_FORMAT` | `text` (the default) or `json`, one object per line for log collectors. See [Logs](#logs). |
 
 PostgreSQL 15 or newer. On startup the server waits up to 30 seconds for
 the database, then applies pending migrations, each in a transaction. If a
 migration fails, the server exits instead of serving.
+
+## Logs
+
+Every response carries an `x-request-id` header. A reverse proxy's own
+`x-request-id` is kept when it is 1 to 64 letters, digits, `.`, `_` or
+`-`, so its logs and sonda's share the id. Otherwise the server makes one
+up. When a user reports an error, that id finds it in the logs.
+
+Each API request logs one line when it completes, at `info` (`warn` for
+5xx), and every line written while handling it, such as `internal error`,
+carries the same span:
+
+```
+INFO request{id=4f0c... method=GET route=/api/projects/{key}}: request status=200 duration_ms=12.4
+```
+
+- `route` is the route's template, never the path: no project keys, file
+  paths or search text reach the logs, and neither do headers, which carry
+  tokens and session cookies.
+- `/api/health` and the web app's files log at `debug`.
+- `RUST_LOG=sonda=warn` keeps only 5xx and errors, still with their ids.
+
+With `SONDA_LOG_FORMAT=json`, the event's fields are top-level keys and the
+request's are under `span`:
+
+```json
+{"timestamp":"...","level":"INFO","message":"request","status":200,"duration_ms":12.4,"target":"sonda_server::observability","span":{"id":"4f0c...","method":"GET","route":"/api/projects/{key}","name":"request"}}
+```
 
 ## Running without Docker
 

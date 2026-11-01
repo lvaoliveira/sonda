@@ -39,13 +39,17 @@ mod java_tail;
 mod java_tests;
 mod js;
 mod js_a11y;
+mod js_checks;
 mod js_extra;
+mod js_last;
 mod js_modern;
 mod js_more;
+mod js_regex;
 mod js_security;
 mod js_semantic;
 mod js_syntax;
 mod js_syntax2;
+mod js_vue;
 mod py;
 mod py_cdk;
 mod py_extra;
@@ -80,6 +84,10 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (js_more::RULES, &[]),
     (js_semantic::RULES, js_semantic::OFF_BY_DEFAULT),
     (js_syntax::RULES, js_syntax::OFF_BY_DEFAULT),
+    (js_regex::RULES, js_regex::OFF_BY_DEFAULT),
+    (js_checks::RULES, js_checks::OFF_BY_DEFAULT),
+    (js_last::RULES, js_last::OFF_BY_DEFAULT),
+    (js_vue::RULES, js_vue::OFF_BY_DEFAULT),
     (js_syntax2::RULES, js_syntax2::OFF_BY_DEFAULT),
     (py::RULES, &[]),
     (py_security::RULES, &[]),

@@ -195,7 +195,10 @@ pub(super) fn repeats_something_empty(r: &Regex) -> bool {
         matches!(n, Rx::Repeat { inner, max, mode, .. }
                 if *mode != Mode::Possessive
                     && max.is_none_or(|m| m > 1)
-                    && !matches!(**inner, Rx::Assertion(_) | Rx::Look { .. })
+                    && !matches!(
+                        **inner,
+                        Rx::Assertion(_) | Rx::Look { .. } | Rx::BackrefIndex(_) | Rx::BackrefName(_)
+                    )
                     && nullable(inner))
     })
 }
