@@ -221,8 +221,9 @@ const LINE_ISSUE_CAP: usize = 100;
 fn scan_lines(ctx: &Ctx, rules: &RuleSet, ncloc: usize, issues: &mut Vec<Issue>) {
     let trailing = rules.get(rules::TRAILING_WHITESPACE);
     let long = rules.get(rules::LINE_LENGTH);
-    if trailing.is_some() || long.is_some() {
-        let (mut trailing_count, mut long_count) = (0, 0);
+    let tabs = rules.get(rules::TAB_CHARACTER);
+    if trailing.is_some() || long.is_some() || tabs.is_some() {
+        let (mut trailing_count, mut long_count, mut tab_count) = (0, 0, 0);
         for row in 0..ctx.lines.count() {
             let line = ctx.lines.text(row);
             let line = line.strip_suffix('\r').unwrap_or(line);
@@ -234,6 +235,15 @@ fn scan_lines(ctx: &Ctx, rules: &RuleSet, ncloc: usize, issues: &mut Vec<Issue>)
                     let msg = "Remove the trailing whitespace from this line.".to_string();
                     issues.push(ctx.issue_on_line(rule, row, columns, msg));
                 }
+            }
+            if let Some(rule) = tabs
+                && tab_count < LINE_ISSUE_CAP
+                && let Some(at) = line.find('\t')
+            {
+                tab_count += 1;
+                let column = line[..at].chars().count();
+                let msg = "Replace this tab with spaces.".to_string();
+                issues.push(ctx.issue_on_line(rule, row, (column, column + 1), msg));
             }
             if let Some(rule) = long {
                 let width = line.chars().count();

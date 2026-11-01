@@ -1391,11 +1391,11 @@ fn class_body(class: Node) -> Option<Node> {
     class.child_by_field_name("body")
 }
 
-fn class_members(class: Node) -> Vec<Node> {
+pub(super) fn class_members(class: Node) -> Vec<Node> {
     class_body(class).map(members).unwrap_or_default()
 }
 
-fn named_children(node: Node) -> Vec<Node> {
+pub(super) fn named_children(node: Node) -> Vec<Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).collect()
 }
@@ -1439,13 +1439,13 @@ pub(super) fn declared_type<'t>(from: Node<'t>, name: &[u8], src: &[u8]) -> Opti
     None
 }
 
-fn declared_field<'t>(class: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+pub(super) fn declared_field<'t>(class: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
     class_members(class)
         .into_iter()
         .find(|m| m.kind() == "field_declaration" && declarator_names(*m, src).contains(&name))
 }
 
-fn type_text<'s>(node: Option<Node>, src: &'s [u8]) -> &'s [u8] {
+pub(super) fn type_text<'s>(node: Option<Node>, src: &'s [u8]) -> &'s [u8] {
     node.map_or(&b""[..], |n| text(n, src))
 }
 
@@ -1554,7 +1554,7 @@ fn class_lacks_clone(class: Node, src: &[u8]) -> bool {
         .any(|m| m.kind() == "method_declaration" && name_text(*m, src) == b"clone")
 }
 
-fn name_text<'s>(node: Node, src: &'s [u8]) -> &'s [u8] {
+pub(super) fn name_text<'s>(node: Node, src: &'s [u8]) -> &'s [u8] {
     node.child_by_field_name("name")
         .map_or(&b""[..], |n| text(n, src))
 }
