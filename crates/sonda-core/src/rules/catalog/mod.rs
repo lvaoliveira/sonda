@@ -10,6 +10,7 @@ mod cs_final;
 mod cs_more;
 mod cs_security;
 mod cs_smells;
+mod cs_tail;
 mod java;
 mod java_bugs;
 mod java_close;
@@ -100,6 +101,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_more::RULES, cs_more::OFF_BY_DEFAULT),
     (cs_extra::RULES, cs_extra::OFF_BY_DEFAULT),
     (cs_final::RULES, cs_final::OFF_BY_DEFAULT),
+    (cs_tail::RULES, cs_tail::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.
