@@ -307,7 +307,35 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         None
     };
     let started = std::time::Instant::now();
-    let cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
+    let mut cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
+    // An uploading scan applies the server's rule settings, where they set a
+    // rule, over sonda.toml's (ADR-0018). The report keeps sonda.toml's own,
+    // so the server can show both.
+    let toml_rules = cfg.rules.clone();
+    let mut applied = None;
+    if let Some(target) = &upload {
+        match target.fetch_rules()? {
+            Some(server) => {
+                let unknown = server.apply(&mut cfg.rules);
+                eprintln!("sonda: rule profile {} on the server", server.describe());
+                if !unknown.is_empty() {
+                    eprintln!(
+                        "sonda: skipped rules this sonda doesn't know (the server is newer): {}",
+                        unknown
+                            .iter()
+                            .map(|r| sonda_core::report::terminal_safe(r).into_owned())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                applied = Some(server.applied());
+            }
+            None => eprintln!(
+                "sonda: {} has no rule profiles; scanning with sonda.toml alone",
+                target.server()
+            ),
+        }
+    }
     let isolation = if args.no_isolation {
         Isolation::InProcess
     } else {
@@ -326,10 +354,16 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         advisories: args.advisories,
     };
     let root = opts.root.clone();
-    let outcome = sonda_core::run(&opts, &cfg)?;
+    let mut outcome = sonda_core::run(&opts, &cfg)?;
+    outcome.rules = toml_rules;
     let scan_duration = started.elapsed();
     let passed = outcome.gate.passed;
-    let rendered = report::render(&report::build(&outcome, args.only_new), args.format.into());
+    let build = |only_new| {
+        let mut r = report::build(&outcome, only_new);
+        r.rule_profile = applied.clone();
+        r
+    };
+    let rendered = report::render(&build(args.only_new), args.format.into());
 
     match &args.output {
         Some(path) => {
@@ -349,7 +383,7 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
     if let Some(target) = upload {
         // The server gets the full JSON report, whatever --format and
         // --only-new chose for this one.
-        let report = report::render(&report::build(&outcome, false), report::Format::Json);
+        let report = report::render(&build(false), report::Format::Json);
         if let Some(server) = target.send(report.as_bytes(), &root, Some(scan_duration))? {
             passed = server;
         }
