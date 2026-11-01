@@ -2,7 +2,7 @@
 //! SonarQube's default profile that a syntax tree can check. Queries stay
 //! cheap on deep trees: see the notes in `js_modern.rs`.
 
-use super::java_bugs::{find_in_scope, operator_text, statements};
+use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::text;
 use super::java_smells::count_word;
 use super::*;
@@ -810,6 +810,16 @@ pub(super) fn cs_string_value<'s>(node: Node, src: &'s [u8]) -> Option<&'s [u8]>
     body.strip_suffix(b"\"")
 }
 
+/// A block's or body's named children without comments. (C#'s grammar has
+/// one `comment` kind, unlike Java's line and block comments.)
+pub(super) fn cs_statements(block: Node) -> Vec<Node> {
+    let mut cursor = block.walk();
+    block
+        .named_children(&mut cursor)
+        .filter(|n| n.kind() != "comment")
+        .collect()
+}
+
 /// Whether a declaration has `word` among its modifiers.
 pub(super) fn cs_has_modifier(declaration: Node, word: &str, src: &[u8]) -> bool {
     let mut cursor = declaration.walk();
@@ -1112,7 +1122,7 @@ fn accessor_ignores_value(node: Node, src: &[u8]) -> bool {
     };
     let only_throws = match body.kind() {
         "block" => {
-            let stmts = statements(body);
+            let stmts = cs_statements(body);
             stmts.is_empty() || (stmts.len() == 1 && stmts[0].kind() == "throw_statement")
         }
         _ => operand(body).is_some_and(|e| e.kind() == "throw_expression"),
@@ -1309,7 +1319,7 @@ fn only_rethrows(node: Node, _: &[u8]) -> bool {
     let Some(body) = node.child_by_field_name("body") else {
         return false;
     };
-    let stmts = statements(body);
+    let stmts = cs_statements(body);
     let rethrows =
         stmts.len() == 1 && stmts[0].kind() == "throw_statement" && operand(stmts[0]).is_none();
     if !rethrows {
@@ -1475,7 +1485,7 @@ fn is_redundant_jump(node: Node, _: &[u8]) -> bool {
 fn class_members(class: Node) -> Vec<Node> {
     class
         .child_by_field_name("body")
-        .map(statements)
+        .map(cs_statements)
         .unwrap_or_default()
 }
 
