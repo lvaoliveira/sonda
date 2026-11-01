@@ -372,34 +372,42 @@ impl<'t> Binder<'t, '_> {
             }
         }
         let inner = self.m.push_scope(scope, ScopeKind::Function);
-        let list: Vec<Node<'t>> = match node.child_by_field_name("parameters") {
+        // (name, type, declaring node) per parameter. A `params T[] rest`
+        // parameter has its type and name on the list itself.
+        let mut list: Vec<(Node<'t>, Option<Node<'t>>, Node<'t>)> = Vec::new();
+        match node.child_by_field_name("parameters") {
             Some(p) if matches!(p.kind(), "parameter_list" | "bracketed_parameter_list") => {
                 let mut cursor = p.walk();
-                p.named_children(&mut cursor)
-                    .filter(|c| c.kind() == "parameter")
-                    .collect()
-            }
-            Some(p) => vec![p],
-            None => Vec::new(),
-        };
-        let mut params = Vec::with_capacity(list.len());
-        for p in list {
-            let first = self.m.decls.len();
-            let name = if p.kind() == "parameter" {
-                p.child_by_field_name("name")
-            } else {
-                Some(p)
-            };
-            if let Some(name) = name {
-                let ty = if p.kind() == "parameter" {
-                    p.child_by_field_name("type")
-                } else {
-                    None
-                };
-                self.declare(inner, name, DeclKind::Param, ty, false);
-                if let Some(d) = self.m.decls.last_mut() {
-                    d.declarator = Some(p);
+                if cursor.goto_first_child() {
+                    let mut params_type = None;
+                    loop {
+                        let c = cursor.node();
+                        match cursor.field_name() {
+                            Some("type") => params_type = Some(c),
+                            Some("name") => list.push((c, params_type.take(), p)),
+                            _ if c.kind() == "parameter" => {
+                                if let Some(name) = c.child_by_field_name("name") {
+                                    list.push((name, c.child_by_field_name("type"), c));
+                                }
+                            }
+                            _ => {}
+                        }
+                        if !cursor.goto_next_sibling() {
+                            break;
+                        }
+                    }
                 }
+            }
+            // `x => ...`
+            Some(p) => list.push((p, None, p)),
+            None => {}
+        }
+        let mut params = Vec::with_capacity(list.len());
+        for (name, ty, declarator) in list {
+            let first = self.m.decls.len();
+            self.declare(inner, name, DeclKind::Param, ty, false);
+            if let Some(d) = self.m.decls.last_mut() {
+                d.declarator = Some(declarator);
             }
             params.push((first..self.m.decls.len()).collect());
         }
@@ -625,7 +633,7 @@ mod tests {
         let src = "
 class A {
   int count; static string Name; P Prop { get; set; }
-  void F(int p, out int o) {
+  void F(int p, out int o, params string[] rest) {
     var local = 1; o = 2;
     this.count = p; count++;
     foreach (var item in items) { G(item); }
@@ -641,6 +649,8 @@ class A {
             assert_eq!(decl(m, "count"), (DeclKind::Field, 1, 2));
             assert_eq!(decl(m, "p"), (DeclKind::Param, 1, 0));
             assert_eq!(decl(m, "o"), (DeclKind::Param, 0, 1));
+            assert_eq!(decl(m, "rest"), (DeclKind::Param, 0, 0));
+            assert_eq!(ty(m, src, "rest").as_deref(), Some("string[]"));
             assert_eq!(decl(m, "local"), (DeclKind::Let, 2, 1));
             assert_eq!(decl(m, "Prop"), (DeclKind::Property, 0, 0));
             assert_eq!(decl(m, "item"), (DeclKind::Let, 1, 1));
