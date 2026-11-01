@@ -7,6 +7,7 @@ mod java;
 mod java_bugs;
 mod java_extra;
 mod java_final;
+mod java_flow;
 mod java_last;
 mod java_more;
 mod java_regex;
@@ -73,6 +74,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_final::RULES,
         java_tail::RULES,
         java_rest::RULES,
+        java_flow::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -194,6 +196,10 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/loops-over-same-collection",
     "java/lambda-explicit-types",
     "java/inner-class-static",
+    // Outside SonarQube's default profile.
+    "java/deprecated-call",
+    "java/hash-key-without-hashcode",
+    "java/tree-key-not-comparable",
 ];
 
 // ---------------------------------------------------- shared filters
