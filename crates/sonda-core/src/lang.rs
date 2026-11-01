@@ -43,7 +43,8 @@ impl Lang {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
             "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
-            "ts" | "mts" | "cts" => Lang::TypeScript,
+            // A Vue single-file component: its <script> blocks, read as TypeScript.
+            "ts" | "mts" | "cts" | "vue" => Lang::TypeScript,
             "tsx" => Lang::Tsx,
             "py" | "pyi" => Lang::Python,
             "java" => Lang::Java,

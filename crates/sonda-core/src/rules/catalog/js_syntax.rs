@@ -1210,15 +1210,31 @@ pub(super) fn root_node(node: Node) -> Node {
 /// Visits every descendant of `node`; `visit` returns false to skip a
 /// node's children.
 pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
+    // Iterative, on one cursor: deeply nested code must not overflow the
+    // stack, and large files must not pay for an allocation per node.
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if visit(child) {
-            walk(child, visit);
+    if !cursor.goto_first_child() {
+        return;
+    }
+    let mut depth = 1usize;
+    loop {
+        if visit(cursor.node()) && cursor.goto_first_child() {
+            depth += 1;
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if depth == 1 || !cursor.goto_parent() {
+                return;
+            }
+            depth -= 1;
         }
     }
 }
 
-fn strip_parens(mut node: Node) -> Node {
+pub(super) fn strip_parens(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         match node.named_child(0) {
             Some(inner) => node = inner,
@@ -1711,7 +1727,7 @@ fn has_trailing_zero(number: Node, src: &[u8]) -> bool {
     }
 }
 
-fn used_as_a_condition(call: Node, src: &[u8]) -> bool {
+pub(super) fn used_as_a_condition(call: Node, src: &[u8]) -> bool {
     let Some(function) = call.child_by_field_name("function") else {
         return false;
     };

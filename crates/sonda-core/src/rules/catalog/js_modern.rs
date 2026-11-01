@@ -13,6 +13,7 @@
 //! frequent nodes should not call them in a loop.
 
 use super::js::{find_below, has_token, string_content, text};
+use super::js_more::{is_provably_array, is_provably_string};
 use super::*;
 
 pub(super) static RULES: &[Rule] = &[
@@ -799,8 +800,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "const last = arr[arr.length - 1];",
-            good: "const last = arr.at(-1);",
+            bad: "const arr = [1, 2];\nconst last = arr[arr.length - 1];",
+            good: "const arr = [1, 2];\nconst last = arr.at(-1);",
         }),
     },
     Rule {
@@ -1248,7 +1249,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "try { f(); } catch (e) { g(e); }",
+            bad: "try { f(); } catch (problem) { g(problem); }",
             good: "try { f(); } catch (error) { g(error); }",
         }),
     },
@@ -1996,6 +1997,11 @@ fn reads_from_the_end(subscript: Node, src: &[u8]) -> bool {
     if measured.is_none_or(|m| text(m, src) != text(object, src)) {
         return false;
     }
+    // SonarQube reports it where the receiver is known to be an array or a
+    // string; `.at()` does not exist on whatever a parameter might be.
+    if !(is_provably_array(object, src, 0) || is_provably_string(object, src, 0)) {
+        return false;
+    }
     // Writing to an element has no at() form.
     !subscript.parent().is_some_and(|p| {
         (matches!(
@@ -2067,16 +2073,56 @@ fn throw_follows_type_check(throw: Node, src: &[u8]) -> bool {
             return false;
         }
         if n.kind() == "if_statement" {
-            return n.child_by_field_name("condition").is_some_and(|c| {
-                let t = text(c, src);
-                [&b"typeof "[..], b"instanceof", b"Array.isArray"]
-                    .iter()
-                    .any(|needle| t.windows(needle.len()).any(|w| w == *needle))
-            });
+            return n
+                .child_by_field_name("condition")
+                .is_some_and(|c| is_only_type_checks(c, src));
         }
         p = n.parent();
     }
     false
+}
+
+/// Whether every part of a condition checks a value's type: `typeof`,
+/// `instanceof` and the standard predicates, joined by `&&`, `||` and `!`.
+fn is_only_type_checks(node: Node, src: &[u8]) -> bool {
+    match node.kind() {
+        "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|c| is_only_type_checks(c, src)),
+        // `!Array.isArray(x)` is not one: SonarQube leaves negations alone.
+        "unary_expression" => text(node, src).starts_with(b"typeof"),
+        "binary_expression" => {
+            let op = node
+                .child_by_field_name("operator")
+                .map(|o| text(o, src))
+                .unwrap_or_default();
+            match op {
+                b"&&" | b"||" => ["left", "right"].iter().all(|f| {
+                    node.child_by_field_name(f)
+                        .is_some_and(|c| is_only_type_checks(c, src))
+                }),
+                b"instanceof" => true,
+                _ => ["left", "right"].iter().any(|f| {
+                    node.child_by_field_name(f)
+                        .is_some_and(|c| text(c, src).starts_with(b"typeof"))
+                }),
+            }
+        }
+        "call_expression" => node.child_by_field_name("function").is_some_and(|f| {
+            matches!(
+                text(f, src),
+                b"Array.isArray"
+                    | b"Number.isNaN"
+                    | b"Number.isInteger"
+                    | b"Number.isFinite"
+                    | b"Number.isSafeInteger"
+                    | b"Buffer.isBuffer"
+                    | b"isNaN"
+                    | b"isFinite"
+            )
+        }),
+        _ => false,
+    }
 }
 
 fn import_list_is_empty(import: Node, _: &[u8]) -> bool {
@@ -2374,7 +2420,20 @@ fn catch_name_not_error(catch: Node, src: &[u8]) -> bool {
         return false;
     };
     let t = text(name, src);
-    !(t == b"error" || t.starts_with(b"_") || t.ends_with(b"Error"))
+    // SonarQube's default `ignore` list: e, ex, *exception, *err, _*, a$1
+    // style names, cause and reason.
+    let lower = t.to_ascii_lowercase();
+    let generated = t.len() > 2
+        && t[0].is_ascii_alphanumeric()
+        && t[1] == b'$'
+        && t[2..].iter().all(u8::is_ascii_digit);
+    !(t == b"error"
+        || t.ends_with(b"Error")
+        || t.starts_with(b"_")
+        || matches!(lower.as_slice(), b"e" | b"ex" | b"cause" | b"reason")
+        || lower.ends_with(b"exception")
+        || lower.ends_with(b"err")
+        || generated)
 }
 
 fn reassigns_parameter_with_literal(statement: Node, src: &[u8]) -> bool {
@@ -2604,8 +2663,8 @@ class G extends A { constructor() { super(...arguments); } }";
 
     #[test]
     fn catch_parameter_names() {
-        let src = "try {} catch (e) {}\ntry {} catch (error) {}\ntry {} catch (_) {}\ntry {} catch (fetchError) {}\ntry {} catch (err) {}";
-        assert_eq!(flagged("js/catch-parameter-name", JS, src), [1, 5]);
+        let src = "try {} catch (e) {}\ntry {} catch (error) {}\ntry {} catch (_) {}\ntry {} catch (fetchError) {}\ntry {} catch (err) {}\ntry {} catch (problem) {}";
+        assert_eq!(flagged("js/catch-parameter-name", JS, src), [6]);
     }
 
     #[test]
@@ -2642,8 +2701,8 @@ class G extends A { constructor() { super(...arguments); } }";
 
     #[test]
     fn at_negative_index_only_for_reads() {
-        let src = "const a = arr[arr.length - 1];\narr[arr.length - 1] = 2;\nconst b = other[arr.length - 1];";
-        assert_eq!(flagged("js/negative-index", JS, src), [1]);
+        let src = "const arr = [1, 2];\nconst a = arr[arr.length - 1];\narr[arr.length - 1] = 2;\nconst b = other[arr.length - 1];\nfunction f(p) { return p[p.length - 1]; }";
+        assert_eq!(flagged("js/negative-index", JS, src), [2]);
     }
 
     #[test]
