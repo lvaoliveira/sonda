@@ -171,6 +171,8 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/activemq-untrusted-classes", &[502], &[A08]),
     ("java/servlet-throws", &[600], &[]),
     ("java/static-iv", &[323], &[A02]),
+    // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
+    ("java/regex-catastrophic-backtracking", &[1333], &[]),
     ("c/no-gets", &[120, 242], &[]),
     ("c/unsafe-string-function", &[120, 676], &[]),
     ("cs/weak-hash", &[1240], &[A02]),

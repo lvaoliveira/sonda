@@ -15,7 +15,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | JavaScript | 461 | 286 | 41 | 82 | 52 | 0 |
 | TypeScript | 481 | 294 | 41 | 93 | 53 | 0 |
 | Python | 397 | 359 | 14 | 24 | 0 | 0 |
-| Java | 703 | 377 | 11 | 294 | 0 | 21 |
+| Java | 703 | 454 | 11 | 217 | 0 | 21 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 | C# | 446 | 91 | 7 | 348 | 0 | 0 |
@@ -36,6 +36,7 @@ aren't compared.
 | `py/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
 | `java/broadcast-without-permission` | CWE-927 | CWE-927, A04 |
 | `java/hardcoded-ip` | none | CWE-547, A01 |
+| `java/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
 | `cs/request-size-unlimited` | CWE-400, CWE-770 | CWE-400, CWE-770, A05 |
 
 Per-language details: the `.csv` files in this directory.
