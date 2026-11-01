@@ -1033,6 +1033,9 @@ fn is_null_coalescing_shape(node: Node, src: &[u8]) -> bool {
     kept.is_some_and(|k| same_code(unparenthesized(k), subject, src))
 }
 
+/// An optional parameter: its position and its default value's text.
+type OptionalParameter<'s> = (usize, &'s [u8]);
+
 fn default_passed_explicitly<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     // Methods of this class: name, and (position, default text) of their
     // optional parameters. Overloaded names are skipped: which one a call
@@ -1041,7 +1044,7 @@ fn default_passed_explicitly<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>
         .into_iter()
         .filter(|m| m.kind() == "method_declaration")
         .collect();
-    let defaults: Vec<(&[u8], Vec<(usize, &[u8])>)> = methods
+    let defaults: Vec<(&[u8], Vec<OptionalParameter>)> = methods
         .iter()
         .filter_map(|m| {
             let name = text(m.child_by_field_name("name")?, src);
