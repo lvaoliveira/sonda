@@ -23,6 +23,26 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
 
 pub(super) static RULES: &[Rule] = &[
     Rule {
+        id: "js/find-for-existence",
+        name: "Prefer .some() over .find() when only checking existence",
+        description: "find() returns the element; if only its presence matters, some() says so.",
+        message: "Use .some().",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S7754")],
+        check: Check::Query {
+            langs: JS_TS,
+            query: r#"(call_expression function: (member_expression property: (property_identifier) @p (#eq? @p "find"))) @match"#,
+            filter: Some(Keep(find_result_only_tested)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "function f(items) { const hit = items.find((i) => i.ok); if (hit) { return 1; } return 0; }",
+            good: "function f(items) { if (items.some((i) => i.ok)) { return 1; } return 0; }",
+        }),
+    },
+    Rule {
         id: "js/unused-assignment",
         name: "Unused assignments should be removed",
         description: "A value that is overwritten or never read was computed for nothing.",
@@ -333,7 +353,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7721")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"[(function_declaration) (variable_declarator)] @match"#,
+            query: r#"(function_declaration) @match"#,
             filter: Some(Keep(function_captures_nothing)),
         },
         example: Some(Example {
@@ -973,9 +993,7 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             return false;
         }
         if n.kind() == "variable_declarator"
-            && let Some(name) = n
-                .child_by_field_name("name")
-                .filter(|x| x.kind() == "identifier")
+            && let Some(pattern) = n.child_by_field_name("name")
             && n.child_by_field_name("value").is_some()
             && n.parent()
                 .is_some_and(|d| matches!(d.kind(), "lexical_declaration" | "variable_declaration"))
@@ -986,7 +1004,22 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
                 )
             })
         {
-            locals.push((text(name, src), n));
+            // `const { a, ...rest } = x` keeps its siblings of a rest on purpose.
+            let mut names = Vec::new();
+            let has_rest = {
+                let mut found = false;
+                walk(pattern, &mut |c| {
+                    found |= c.kind() == "rest_pattern";
+                    true
+                });
+                found
+            };
+            if !has_rest {
+                pattern_names(pattern, src, &mut names);
+                for name in names {
+                    locals.push((name, n));
+                }
+            }
         }
         true
     });
@@ -2292,4 +2325,58 @@ fn cast_changes_nothing(node: Node, src: &[u8]) -> bool {
         }),
         _ => false,
     }
+}
+
+fn is_truthiness_test(id: Node) -> bool {
+    let Some(p) = id.parent() else {
+        return false;
+    };
+    match p.kind() {
+        "unary_expression" => text_starts_with_not(p),
+        "parenthesized_expression" => p.parent().is_some_and(|g| {
+            matches!(
+                g.kind(),
+                "if_statement" | "while_statement" | "do_statement"
+            )
+        }),
+        "ternary_expression" => p.child_by_field_name("condition") == Some(id),
+        "binary_expression" => p
+            .child_by_field_name("operator")
+            .is_some_and(|o| matches!(o.kind(), "&&" | "||")),
+        _ => false,
+    }
+}
+
+fn text_starts_with_not(unary: Node) -> bool {
+    unary
+        .child_by_field_name("operator")
+        .is_some_and(|o| o.kind() == "!")
+}
+
+fn find_result_only_tested(call: Node, src: &[u8]) -> bool {
+    let Some(parent) = call.parent() else {
+        return false;
+    };
+    // `if (items.find(...))` and `!items.find(...)`.
+    if is_truthiness_test(call) {
+        return true;
+    }
+    // `const hit = items.find(...)` where every later use asks only if it exists.
+    if parent.kind() != "variable_declarator" || parent.child_by_field_name("value") != Some(call) {
+        return false;
+    }
+    let Some(name) = parent
+        .child_by_field_name("name")
+        .filter(|n| n.kind() == "identifier")
+    else {
+        return false;
+    };
+    let Some(scope) = enclosing_function_of(parent) else {
+        return false;
+    };
+    let uses: Vec<Node> = references(scope)
+        .into_iter()
+        .filter(|r| text(*r, src) == text(name, src) && *r != name)
+        .collect();
+    !uses.is_empty() && uses.iter().all(|u| is_truthiness_test(*u))
 }

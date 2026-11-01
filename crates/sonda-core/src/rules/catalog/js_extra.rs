@@ -323,7 +323,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7776")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(variable_declarator name: (identifier) value: (array)) @match"#,
+            query: r#"(variable_declarator name: (identifier) value: [(array) (call_expression)]) @match"#,
             filter: Some(Keep(array_only_asks_includes)),
         },
         example: Some(Example {
@@ -1244,7 +1244,14 @@ fn spreads_a_literal(spread: Node, _: &[u8]) -> bool {
     let Some(parent) = spread.parent() else {
         return false;
     };
-    (arg.kind() == "array" && matches!(parent.kind(), "array" | "arguments"))
+    // `for (const x of [...set])`: the loop can iterate the set itself.
+    let copied_for_of = parent.kind() == "array"
+        && parent.named_child_count() == 1
+        && parent.parent().is_some_and(|g| {
+            g.kind() == "for_in_statement" && g.child_by_field_name("right") == Some(parent)
+        });
+    copied_for_of
+        || (arg.kind() == "array" && matches!(parent.kind(), "array" | "arguments"))
         || (arg.kind() == "object" && parent.kind() == "object")
 }
 
@@ -1357,8 +1364,10 @@ fn find_index_tests_equality(call: Node, src: &[u8]) -> bool {
 
 fn constant_assigned_in_constructor<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     let body = method.child_by_field_name("body")?;
-    named(body).into_iter().find(|s| {
-        s.kind() == "expression_statement"
+    // Only the statements at the very top count, as SonarQube does: once
+    // something else has run, a field initializer is no longer equivalent.
+    for s in named(body) {
+        let literal_to_this = s.kind() == "expression_statement"
             && s.named_child(0).is_some_and(|a| {
                 a.kind() == "assignment_expression"
                     && a.child_by_field_name("left").is_some_and(|l| {
@@ -1369,8 +1378,10 @@ fn constant_assigned_in_constructor<'t>(method: Node<'t>, _: &[u8]) -> Option<No
                     && a.child_by_field_name("right").is_some_and(|r| {
                         matches!(r.kind(), "number" | "string" | "true" | "false" | "null")
                     })
-            })
-    })
+            });
+        return literal_to_this.then_some(s);
+    }
+    None
 }
 
 fn import_exported_again<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1423,13 +1434,24 @@ fn array_only_asks_includes(declarator: Node, src: &[u8]) -> bool {
     if !is_const_declaration(declarator) {
         return false;
     }
-    let items = named(value);
-    if items.len() < 4
-        || !items
-            .iter()
-            .all(|i| matches!(i.kind(), "string" | "number"))
-    {
-        return false;
+    if value.kind() == "call_expression" {
+        // An array built by a call: only the methods that return one.
+        let builds_an_array = value
+            .child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("property"))
+            .is_some_and(|p| matches!(text(p, src), b"map" | b"filter" | b"flatMap" | b"slice"));
+        if !builds_an_array {
+            return false;
+        }
+    } else {
+        let items = named(value);
+        if items.len() < 4
+            || !items
+                .iter()
+                .all(|i| matches!(i.kind(), "string" | "number"))
+        {
+            return false;
+        }
     }
     let n = text(name, src);
     let scope = scope_text(declarator, src);

@@ -887,14 +887,35 @@ fn query_is_built_from_strings(call: Node, src: &[u8]) -> bool {
         return false;
     };
     match first.kind() {
-        "template_string" => {
-            find_below(first, true, |n| n.kind() == "template_substitution").is_some()
-        }
+        "template_string" => find_below(first, true, |n| {
+            n.kind() == "template_substitution"
+                && n.named_child(0)
+                    .is_none_or(|e| !is_numeric_expression(e, src))
+        })
+        .is_some(),
         "binary_expression" => {
             operator_text(first, src) == b"+"
                 && find_below(first, true, |n| n.kind() == "string").is_some()
                 && !all_literals(first)
         }
+        _ => false,
+    }
+}
+
+/// Whether the value is plainly a number, which cannot carry an injection.
+fn is_numeric_expression(expr: Node, src: &[u8]) -> bool {
+    match expr.kind() {
+        "number" => true,
+        "parenthesized_expression" => expr
+            .named_child(0)
+            .is_some_and(|e| is_numeric_expression(e, src)),
+        "call_expression" => expr.child_by_field_name("function").is_some_and(|f| {
+            let t = text(f, src);
+            t.starts_with(b"Math.") || matches!(t, b"Number" | b"parseInt" | b"parseFloat")
+        }),
+        "member_expression" => expr
+            .child_by_field_name("property")
+            .is_some_and(|p| text(p, src) == b"length"),
         _ => false,
     }
 }
@@ -973,7 +994,9 @@ fn remote_asset_lacks_integrity(element: Node, src: &[u8]) -> bool {
 }
 
 fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
-    if operator_text(binary, src) != b"&&" {
+    let and = operator_text(binary, src) == b"&&";
+    let or = operator_text(binary, src) == b"||";
+    if !and && !or {
         return false;
     }
     let (Some(l), Some(r)) = (
@@ -982,17 +1005,92 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    if !matches!(l.kind(), "identifier" | "member_expression" | "this") {
-        return false;
-    }
-    let reads = match r.kind() {
-        "member_expression" => r.child_by_field_name("object"),
-        "call_expression" => r
-            .child_by_field_name("function")
-            .and_then(|f| f.child_by_field_name("object")),
+    // The value the left side guards: `a && ...`, `a != null && ...`,
+    // `!a || ...`, `a == null || ...`.
+    let is_value = |n: Node| matches!(n.kind(), "identifier" | "member_expression" | "this");
+    let subject = match l.kind() {
+        "identifier" | "member_expression" | "this" if and => Some(l),
+        "unary_expression" if or => l
+            .child_by_field_name("argument")
+            .filter(|a| is_value(*a) && text(l, src).starts_with(b"!")),
+        "binary_expression" => {
+            let op = operator_text(l, src);
+            let wanted: &[&[u8]] = if and {
+                &[b"!=", b"!=="]
+            } else {
+                &[b"==", b"==="]
+            };
+            let (a, b) = (
+                l.child_by_field_name("left"),
+                l.child_by_field_name("right"),
+            );
+            let nullish = |n: Node| matches!(n.kind(), "null" | "undefined");
+            match (a, b) {
+                (Some(a), Some(b)) if wanted.contains(&op) && is_value(a) && nullish(b) => Some(a),
+                _ => None,
+            }
+        }
         _ => None,
     };
-    reads.is_some_and(|o| text(o, src) == text(l, src))
+    let Some(subject) = subject else {
+        return false;
+    };
+    reads_property_of(r, text(subject, src), src, and)
+}
+
+/// Whether `expr` reads a property or calls a method of `subject`, in a way
+/// an optional chain can replace: the chain itself, an equality test of it
+/// (after `&&`), or its negation or null test (after `||`). A relational
+/// comparison is left alone, as SonarQube does: `undefined > 0` is not the
+/// same answer as short-circuiting.
+fn reads_property_of(expr: Node, subject: &[u8], src: &[u8], and: bool) -> bool {
+    let mut node = expr;
+    loop {
+        match node.kind() {
+            "member_expression" | "subscript_expression" => {
+                let Some(object) = node.child_by_field_name("object") else {
+                    return false;
+                };
+                if text(object, src) == subject {
+                    return true;
+                }
+                node = object;
+            }
+            "call_expression" => match node.child_by_field_name("function") {
+                Some(f) => node = f,
+                None => return false,
+            },
+            "binary_expression" => {
+                let op = operator_text(node, src);
+                let equality = matches!(op, b"==" | b"===" | b"!=" | b"!==");
+                if !equality {
+                    return false;
+                }
+                let (Some(left), Some(right)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) else {
+                    return false;
+                };
+                let nullish = |n: Node| matches!(n.kind(), "null" | "undefined");
+                if !and && !nullish(right) {
+                    return false;
+                }
+                node = left;
+            }
+            "unary_expression" if !and && text(node, src).starts_with(b"!") => {
+                match node.child_by_field_name("argument") {
+                    Some(a) => node = a,
+                    None => return false,
+                }
+            }
+            "parenthesized_expression" | "non_null_expression" => match node.named_child(0) {
+                Some(inner) => node = inner,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
 }
 
 fn ternary_is_a_nullish_default(ternary: Node, src: &[u8]) -> bool {
@@ -1431,6 +1529,11 @@ mod tests {
     fn expressions() {
         let src = "const a = user && user.name;\nconst b = user.profile && user.profile.name;\nconst c = user && other.name;\nconst d = x != null ? x : 'd';\nconst e = x == null ? 'd' : x;\nconst f = x != null ? y : 'd';\nconst g = items.sort();\nconst h = [...items].sort();\nlist.push(1);\nlist.push(2);\nother.push(3);\nlist.map(function (x) { return this.f(x); }, this);\nlist.map((x) => x);\n_.map(list, fn, this);\nvoid fetchData();\nvoid 0;\nconst n = 1_00_000;\nconst o = 100_000;\nconst p = 0xFF_FF;\nconst q = node._reactInternals;";
         assert_eq!(flagged("js/optional-chaining-preferred", JS, src), [1, 2]);
+        let more = "const a = !meta || !meta.enabled;\nconst b = last && last.end === h;\nconst c = !prices || !prices[hour];\nconst d = p != null && p.usePrice != null;\nconst e = a && other.name;\nconst f = !a || b.c;";
+        assert_eq!(
+            flagged("js/optional-chaining-preferred", JS, more),
+            [1, 2, 3, 4]
+        );
         assert_eq!(flagged("js/nullish-coalescing-preferred", JS, src), [4, 5]);
         assert_eq!(flagged("js/sort-assigned", JS, src), [7]);
         assert_eq!(flagged("js/consecutive-push", JS, src), [10]);

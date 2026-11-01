@@ -1248,7 +1248,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "try { f(); } catch (e) { g(e); }",
+            bad: "try { f(); } catch (problem) { g(problem); }",
             good: "try { f(); } catch (error) { g(error); }",
         }),
     },
@@ -2067,16 +2067,64 @@ fn throw_follows_type_check(throw: Node, src: &[u8]) -> bool {
             return false;
         }
         if n.kind() == "if_statement" {
-            return n.child_by_field_name("condition").is_some_and(|c| {
-                let t = text(c, src);
-                [&b"typeof "[..], b"instanceof", b"Array.isArray"]
-                    .iter()
-                    .any(|needle| t.windows(needle.len()).any(|w| w == *needle))
-            });
+            return n
+                .child_by_field_name("condition")
+                .is_some_and(|c| is_only_type_checks(c, src));
         }
         p = n.parent();
     }
     false
+}
+
+/// Whether every part of a condition checks a value's type: `typeof`,
+/// `instanceof` and the standard predicates, joined by `&&`, `||` and `!`.
+fn is_only_type_checks(node: Node, src: &[u8]) -> bool {
+    match node.kind() {
+        "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|c| is_only_type_checks(c, src)),
+        "unary_expression" => {
+            let t = text(node, src);
+            if t.starts_with(b"typeof") {
+                return true;
+            }
+            t.starts_with(b"!")
+                && node
+                    .child_by_field_name("argument")
+                    .is_some_and(|a| is_only_type_checks(a, src))
+        }
+        "binary_expression" => {
+            let op = node
+                .child_by_field_name("operator")
+                .map(|o| text(o, src))
+                .unwrap_or_default();
+            match op {
+                b"&&" | b"||" => ["left", "right"].iter().all(|f| {
+                    node.child_by_field_name(f)
+                        .is_some_and(|c| is_only_type_checks(c, src))
+                }),
+                b"instanceof" => true,
+                _ => ["left", "right"].iter().any(|f| {
+                    node.child_by_field_name(f)
+                        .is_some_and(|c| text(c, src).starts_with(b"typeof"))
+                }),
+            }
+        }
+        "call_expression" => node.child_by_field_name("function").is_some_and(|f| {
+            matches!(
+                text(f, src),
+                b"Array.isArray"
+                    | b"Number.isNaN"
+                    | b"Number.isInteger"
+                    | b"Number.isFinite"
+                    | b"Number.isSafeInteger"
+                    | b"Buffer.isBuffer"
+                    | b"isNaN"
+                    | b"isFinite"
+            )
+        }),
+        _ => false,
+    }
 }
 
 fn import_list_is_empty(import: Node, _: &[u8]) -> bool {
@@ -2374,7 +2422,20 @@ fn catch_name_not_error(catch: Node, src: &[u8]) -> bool {
         return false;
     };
     let t = text(name, src);
-    !(t == b"error" || t.starts_with(b"_") || t.ends_with(b"Error"))
+    // SonarQube's default `ignore` list: e, ex, *exception, *err, _*, a$1
+    // style names, cause and reason.
+    let lower = t.to_ascii_lowercase();
+    let generated = t.len() > 2
+        && t[0].is_ascii_alphanumeric()
+        && t[1] == b'$'
+        && t[2..].iter().all(u8::is_ascii_digit);
+    !(t == b"error"
+        || t.ends_with(b"Error")
+        || t.starts_with(b"_")
+        || matches!(lower.as_slice(), b"e" | b"ex" | b"cause" | b"reason")
+        || lower.ends_with(b"exception")
+        || lower.ends_with(b"err")
+        || generated)
 }
 
 fn reassigns_parameter_with_literal(statement: Node, src: &[u8]) -> bool {
@@ -2604,8 +2665,8 @@ class G extends A { constructor() { super(...arguments); } }";
 
     #[test]
     fn catch_parameter_names() {
-        let src = "try {} catch (e) {}\ntry {} catch (error) {}\ntry {} catch (_) {}\ntry {} catch (fetchError) {}\ntry {} catch (err) {}";
-        assert_eq!(flagged("js/catch-parameter-name", JS, src), [1, 5]);
+        let src = "try {} catch (e) {}\ntry {} catch (error) {}\ntry {} catch (_) {}\ntry {} catch (fetchError) {}\ntry {} catch (err) {}\ntry {} catch (problem) {}";
+        assert_eq!(flagged("js/catch-parameter-name", JS, src), [6]);
     }
 
     #[test]

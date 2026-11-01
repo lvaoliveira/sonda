@@ -4033,26 +4033,31 @@ fn is_property_of_arguments(name: Node, src: &[u8]) -> bool {
 }
 
 fn has_nested_ternary(ternary: Node, _: &[u8]) -> bool {
-    let nested = ["condition", "consequence", "alternative"].iter().any(|f| {
-        let mut part = ternary.child_by_field_name(f);
-        while let Some(p) = part.filter(|p| p.kind() == "parenthesized_expression") {
-            part = p.named_child(0);
-        }
-        part.is_some_and(|p| p.kind() == "ternary_expression")
-    });
-    nested && reports_chain(ternary)
-}
-
-/// Whether `ternary` is the outermost of its chain (so a chain reports
-/// once), and the chain doesn't sit directly in a JSX `{...}`, the usual
-/// way to render loading/empty/list states. Walks up only from ternaries
-/// already found nested, so the parent lookups stay rare.
-fn reports_chain(ternary: Node) -> bool {
+    // Reported on the inner conditional, as SonarQube does: that is the one
+    // that makes the outer hard to read.
     let mut parent = ternary.parent();
     while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
         parent = p.parent();
     }
-    parent.is_none_or(|p| !matches!(p.kind(), "ternary_expression" | "jsx_expression"))
+    parent.is_some_and(|p| p.kind() == "ternary_expression") && !chain_is_a_jsx_state(ternary)
+}
+
+/// Whether the chain `ternary` belongs to sits directly in a JSX `{...}`,
+/// the usual way to render loading/empty/list states. Walks up only from
+/// ternaries already found nested, so the parent lookups stay rare.
+fn chain_is_a_jsx_state(ternary: Node) -> bool {
+    let mut node = ternary;
+    loop {
+        let mut parent = node.parent();
+        while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
+            parent = p.parent();
+        }
+        match parent {
+            Some(p) if p.kind() == "ternary_expression" => node = p,
+            Some(p) => return p.kind() == "jsx_expression",
+            None => return false,
+        }
+    }
 }
 
 /// `return;` or `continue;`, with no value or label.
@@ -5930,7 +5935,7 @@ v = load
         assert_eq!(flagged("js/eslint-disable-all", JS, src), [1, 2]);
         assert!(flagged("js/octal-literal", JS, src).is_empty());
         assert!(flagged("js/octal-escape", JS, src).is_empty());
-        assert_eq!(flagged("js/nested-ternary", JS, src), [6, 7]);
+        assert_eq!(flagged("js/nested-ternary", JS, src), [6, 6, 7]);
         let jsx = "const v = <div>{!rows ? <Spinner /> : rows.length ? <List /> : x ? <A /> : <B />}</div>;";
         assert!(flagged("js/nested-ternary", JS, jsx).is_empty());
         assert_eq!(flagged("js/call-arguments-new-line", JS, src), [9]);

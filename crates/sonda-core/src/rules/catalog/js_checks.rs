@@ -398,7 +398,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7785")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(program (expression_statement (call_expression function: (parenthesized_expression)) ) @match)"#,
+            query: r#"(program (expression_statement (call_expression)) @match)"#,
             filter: Some(Keep(is_async_iife_in_a_module)),
         },
         example: Some(Example {
@@ -786,7 +786,12 @@ fn sorts_numbers_by_default(call: Node, src: &[u8]) -> bool {
         "identifier" => array_declaration(root_node(call), text(receiver, src), src),
         _ => None,
     };
-    array.is_some_and(|a| named(a).iter().any(|e| literal_kind(*e) == Some("number")))
+    // `[...set].sort()`: what the spread yields is not known to be strings.
+    array.is_some_and(|a| {
+        named(a)
+            .iter()
+            .any(|e| literal_kind(*e) == Some("number") || e.kind() == "spread_element")
+    })
 }
 
 fn constructor_is_an_arrow(new_expr: Node, src: &[u8]) -> bool {
@@ -989,7 +994,20 @@ fn foreach_with_a_callback(call: Node, _: &[u8]) -> bool {
     })
 }
 
-fn is_async_iife_in_a_module(statement: Node, _: &[u8]) -> bool {
+fn is_async_iife_in_a_module(statement: Node, src: &[u8]) -> bool {
+    // `main().catch(...)`: a promise chain on a call, in a module.
+    if let Some(call) = statement
+        .named_child(0)
+        .filter(|c| c.kind() == "call_expression")
+        && let Some(f) = call.child_by_field_name("function")
+        && f.kind() == "member_expression"
+        && f.child_by_field_name("property")
+            .is_some_and(|p| matches!(text(p, src), b"catch" | b"then" | b"finally"))
+        && f.child_by_field_name("object")
+            .is_some_and(|o| o.kind() == "call_expression")
+    {
+        return is_module(statement);
+    }
     let Some(function) = statement
         .named_child(0)
         .and_then(|c| c.child_by_field_name("function"))
