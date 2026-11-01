@@ -1711,7 +1711,7 @@ fn has_trailing_zero(number: Node, src: &[u8]) -> bool {
     }
 }
 
-fn used_as_a_condition(call: Node, src: &[u8]) -> bool {
+pub(super) fn used_as_a_condition(call: Node, src: &[u8]) -> bool {
     let Some(function) = call.child_by_field_name("function") else {
         return false;
     };
