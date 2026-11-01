@@ -1020,7 +1020,7 @@ fn factory_captures_key<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 /// Without types, `.Result` and `.Wait()` are only known to block when the
 /// receiver visibly is a task: an `...Async(...)` call, a `Task.` call, or a
 /// variable named like one.
-fn looks_like_task(receiver: Node, src: &[u8]) -> bool {
+pub(super) fn looks_like_task(receiver: Node, src: &[u8]) -> bool {
     let t = text(receiver, src);
     if receiver.kind() == "invocation_expression" {
         let name = receiver
@@ -1034,7 +1034,7 @@ fn looks_like_task(receiver: Node, src: &[u8]) -> bool {
 }
 
 /// `await Task.WhenAll(a, b); var x = a.Result;` reads a finished task.
-fn awaited_by_when_all(body: Node, task: Node, read: Node, src: &[u8]) -> bool {
+pub(super) fn awaited_by_when_all(body: Node, task: Node, read: Node, src: &[u8]) -> bool {
     let name = text(task, src);
     find_in_scope(body, CS_SCOPE_STOPS, |n| {
         n.kind() == "invocation_expression"
