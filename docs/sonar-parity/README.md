@@ -18,7 +18,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
-| C# | 446 | 298 | 29 | 119 | 0 | 0 |
+| C# | 446 | 324 | 41 | 81 | 0 | 0 |
 
 ## Security standards
 
