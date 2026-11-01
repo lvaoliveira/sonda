@@ -232,17 +232,19 @@ fn is_mixed_into_an_expression(update: Node, _: &[u8]) -> bool {
 fn parameter_names<'t>(node: Node<'t>, src: &'t [u8]) -> Vec<&'t [u8]> {
     let mut out = Vec::new();
     if node.kind() == "catch_clause" {
-        if let Some(p) = node.child_by_field_name("parameter") {
-            if p.kind() == "identifier" {
-                out.push(text(p, src));
-            }
+        if let Some(p) = node
+            .child_by_field_name("parameter")
+            .filter(|p| p.kind() == "identifier")
+        {
+            out.push(text(p, src));
         }
         return out;
     }
-    if let Some(p) = node.child_by_field_name("parameter") {
-        if p.kind() == "identifier" {
-            out.push(text(p, src));
-        }
+    if let Some(p) = node
+        .child_by_field_name("parameter")
+        .filter(|p| p.kind() == "identifier")
+    {
+        out.push(text(p, src));
     }
     if let Some(params) = node.child_by_field_name("parameters") {
         for p in named(params) {
