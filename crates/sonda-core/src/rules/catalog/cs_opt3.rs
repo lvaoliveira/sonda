@@ -330,12 +330,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S4025")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(class_declaration (base_list) body: (declaration_list)) @match",
-            filter: Some(Find(field_shadowed_by_case)),
-        },
+        sonar: &[exact("S4025")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class Fruit { protected string plantingSeason; }\nclass Raspberry : Fruit { protected string plantingseason; }",
@@ -984,66 +980,6 @@ fn handle_without_finalizer(name: Node, src: &[u8]) -> bool {
     holds_handle
         && has_base(class, src, b"IDisposable")
         && !ms.iter().any(|m| m.kind() == "destructor_declaration")
-}
-
-fn non_private_fields<'s>(class: Node, src: &'s [u8]) -> Vec<(&'s [u8], bool)> {
-    members(class)
-        .into_iter()
-        .filter(|m| m.kind() == "field_declaration")
-        .filter(|m| {
-            ["public", "protected", "internal"]
-                .iter()
-                .any(|v| cs_has_modifier(*m, v, src))
-        })
-        .flat_map(|m| {
-            let is_static = cs_has_modifier(m, "static", src);
-            declarators(m).into_iter().filter_map(move |d| {
-                d.child_by_field_name("name")
-                    .map(|n| (text(n, src), is_static))
-            })
-        })
-        .collect()
-}
-
-fn field_shadowed_by_case<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let base = {
-        let mut cursor = class.walk();
-        let list = class
-            .named_children(&mut cursor)
-            .find(|c| c.kind() == "base_list")?;
-        simple_name(list.named_child(0)?, src)
-    };
-    // The base class must be declared in this file.
-    let mut root = class;
-    while let Some(p) = root.parent() {
-        root = p;
-    }
-    let base_class = find_in_scope(root, &["block"], |n| {
-        n.kind() == "class_declaration"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == base)
-    })?;
-    let inherited = non_private_fields(base_class, src);
-    if inherited.is_empty() {
-        return None;
-    }
-    members(class)
-        .into_iter()
-        .filter(|m| m.kind() == "field_declaration")
-        .flat_map(|m| {
-            let is_static = cs_has_modifier(m, "static", src);
-            declarators(m).into_iter().map(move |d| (d, is_static))
-        })
-        .find_map(|(d, is_static)| {
-            let name = d.child_by_field_name("name")?;
-            let n = text(name, src);
-            inherited
-                .iter()
-                .any(|(b, base_static)| {
-                    *b != n && b.eq_ignore_ascii_case(n) && !(is_static && *base_static)
-                })
-                .then_some(name)
-        })
 }
 
 fn hidden_explicit_implementation<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

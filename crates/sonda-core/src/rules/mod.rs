@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
+pub(crate) use catalog::cs_project;
 pub use owasp::{Edition, Owasp};
 
 pub(crate) const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
@@ -396,7 +397,9 @@ mod tests {
         let rules = RuleSet::new(&cfg.rules).expect("all queries compile");
         for r in RULES.iter() {
             let Some(ex) = &r.example else { continue };
-            let bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
+            let mut bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
+            // Project-level rules see the example as a project of one file.
+            crate::analysis::cs_project_rules(std::slice::from_mut(&mut bad), &rules);
             assert!(
                 bad.issues.iter().any(|i| i.rule == r.id),
                 "{} did not flag its bad example:\n{}\nissues: {:?}",
@@ -404,7 +407,8 @@ mod tests {
                 ex.bad,
                 bad.issues.iter().map(|i| i.rule).collect::<Vec<_>>()
             );
-            let good = analyze("good", ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
+            let mut good = analyze("good", ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
+            crate::analysis::cs_project_rules(std::slice::from_mut(&mut good), &rules);
             assert!(
                 !good.issues.iter().any(|i| i.rule == r.id),
                 "{} flagged its good example:\n{}",
