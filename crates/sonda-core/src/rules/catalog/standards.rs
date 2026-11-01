@@ -179,6 +179,7 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/regex-catastrophic-backtracking", &[1333], &[]),
     ("js/regex-catastrophic-backtracking", &[1333], &[]),
     ("js/template-autoescape-disabled", &[79], &[A03]),
+    ("js/wallet-phrase-hardcoded", &[798], &[A07]),
     ("java/debug-enabled", &[215, 489], &[A05]),
     ("java/autoescape-disabled", &[79], &[A03]),
     ("java/upload-size-unlimited", &[400, 770], &[]),

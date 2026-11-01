@@ -138,24 +138,43 @@ pub(crate) fn analyze(
 /// the file, moving the line and re-indenting it keep the fingerprint;
 /// changing the flagged line itself does not. `issues` must be sorted.
 fn fingerprints(ctx: &Ctx, issues: &mut [Issue]) {
-    let mut seen: HashMap<(&str, String), u64> = HashMap::new();
+    use sha2::Digest as _;
+    // Many issues can share one very long line (minified code, a generated
+    // file): the line is normalized and hashed once per rule, not per issue.
+    let mut text_ids: HashMap<String, usize> = HashMap::new();
+    let mut line_text: HashMap<usize, usize> = HashMap::new();
+    let mut seen: HashMap<(&str, usize), (sha2::Sha256, u64)> = HashMap::new();
     for issue in issues {
-        let line: String = ctx
-            .lines
-            .text(issue.line - 1)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        let mut hasher = sha2::Sha256::new();
-        // Length-prefixed fields, so no two different inputs hash the same
-        // bytes; the tag lets the algorithm change without silent collisions.
-        for field in ["sonda-fingerprint-v1", issue.rule, ctx.path, &line] {
-            hasher.update((field.len() as u64).to_le_bytes());
-            hasher.update(field.as_bytes());
-        }
-        let occurrence = seen.entry((issue.rule, line)).or_insert(0);
-        hasher.update(occurrence.to_le_bytes());
-        *occurrence += 1;
+        let row = issue.line - 1;
+        let id = *line_text.entry(row).or_insert_with(|| {
+            let line: String = ctx
+                .lines
+                .text(row)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            let next = text_ids.len();
+            *text_ids.entry(line).or_insert(next)
+        });
+        let entry = seen.entry((issue.rule, id)).or_insert_with(|| {
+            let line = ctx
+                .lines
+                .text(row)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>();
+            let mut hasher = sha2::Sha256::new();
+            // Length-prefixed fields, so no two different inputs hash the same
+            // bytes; the tag lets the algorithm change without silent collisions.
+            for field in ["sonda-fingerprint-v1", issue.rule, ctx.path, &line] {
+                hasher.update((field.len() as u64).to_le_bytes());
+                hasher.update(field.as_bytes());
+            }
+            (hasher, 0)
+        });
+        let mut hasher = entry.0.clone();
+        hasher.update(entry.1.to_le_bytes());
+        entry.1 += 1;
         let hash = hasher.finalize();
         let mut short = [0; 16];
         short.copy_from_slice(&hash[..16]);
@@ -1362,6 +1381,9 @@ fn is_suppressed(line: &str, rule: &str) -> bool {
 struct LineIndex<'a> {
     src: &'a str,
     starts: Vec<usize>,
+    /// An ASCII file has one byte per character: columns need no counting,
+    /// which keeps a file of one very long line from costing a scan per issue.
+    ascii: bool,
 }
 
 impl<'a> LineIndex<'a> {
@@ -1369,7 +1391,11 @@ impl<'a> LineIndex<'a> {
         let starts = std::iter::once(0)
             .chain(src.match_indices('\n').map(|(i, _)| i + 1))
             .collect();
-        LineIndex { src, starts }
+        LineIndex {
+            src,
+            starts,
+            ascii: src.is_ascii(),
+        }
     }
 
     fn count(&self) -> usize {
@@ -1391,6 +1417,9 @@ impl<'a> LineIndex<'a> {
 
     /// Converts a tree-sitter byte column to a 1-based character column.
     fn char_column(&self, row: usize, byte_col: usize) -> usize {
+        if self.ascii {
+            return byte_col + 1;
+        }
         let line = self.text(row);
         let cut = byte_col.min(line.len());
         line.get(..cut).map_or(cut, |s| s.chars().count()) + 1

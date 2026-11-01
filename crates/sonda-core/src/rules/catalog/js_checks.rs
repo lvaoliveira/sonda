@@ -537,13 +537,13 @@ pub(super) static RULES: &[Rule] = &[
         effort_minutes: 10,
         sonar: &[exact("S2301")],
         check: Check::Query {
-            langs: TS,
+            langs: JS_TS,
             query: r#"[(function_declaration) (function_expression) (arrow_function) (method_definition) (generator_function) (generator_function_declaration)] @match"#,
             filter: Some(Keep(branches_on_a_boolean_parameter)),
         },
         example: Some(Example {
-            lang: Lang::TypeScript,
-            bad: "function f(flag: boolean) { if (flag) { g(); } else { h(); } }",
+            lang: Lang::JavaScript,
+            bad: "function f(flag = false) { if (flag) { g(); } else { h(); } }",
             good: "function f() { g(); }",
         }),
     },
@@ -612,7 +612,7 @@ pub(super) static RULES: &[Rule] = &[
 // ------------------------------------------------------------- helpers
 
 /// The kind of value a literal expression is, when it is one.
-fn literal_kind(node: Node) -> Option<&'static str> {
+pub(super) fn literal_kind(node: Node) -> Option<&'static str> {
     let mut node = node;
     while node.kind() == "parenthesized_expression" {
         node = node.named_child(0)?;
@@ -1194,13 +1194,26 @@ fn branches_on_a_boolean_parameter(function: Node, src: &[u8]) -> bool {
     };
     let flags: Vec<&[u8]> = named(params)
         .into_iter()
-        .filter(|p| {
-            p.kind() == "required_parameter"
-                && p.child_by_field_name("type")
-                    .is_some_and(|t| text(t, src) == b": boolean")
+        .filter_map(|p| match p.kind() {
+            "required_parameter" => {
+                let typed = p
+                    .child_by_field_name("type")
+                    .is_some_and(|t| text(t, src) == b": boolean");
+                let defaulted = p
+                    .child_by_field_name("value")
+                    .is_some_and(|v| matches!(v.kind(), "true" | "false"));
+                (typed || defaulted)
+                    .then(|| p.child_by_field_name("pattern").map(|n| text(n, src)))
+                    .flatten()
+            }
+            "assignment_pattern" => {
+                let v = p.child_by_field_name("right")?;
+                matches!(v.kind(), "true" | "false")
+                    .then(|| p.child_by_field_name("left").map(|n| text(n, src)))
+                    .flatten()
+            }
+            _ => None,
         })
-        .filter_map(|p| p.child_by_field_name("pattern"))
-        .map(|p| text(p, src))
         .collect();
     if flags.is_empty() {
         return false;

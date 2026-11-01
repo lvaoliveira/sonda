@@ -12,8 +12,8 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
-| JavaScript | 461 | 394 | 41 | 18 | 8 | 0 |
-| TypeScript | 481 | 413 | 41 | 19 | 8 | 0 |
+| JavaScript | 461 | 415 | 41 | 4 | 1 | 0 |
+| TypeScript | 481 | 434 | 41 | 6 | 0 | 0 |
 | Python | 397 | 360 | 14 | 23 | 0 | 0 |
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
@@ -26,7 +26,7 @@ CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with
 SonarQube's for the keys each rule covers exactly. Rules without an exact key
 aren't compared.
 
-14 rules differ:
+15 rules differ:
 
 | Rule | sonda | SonarQube |
 |---|---|---|
@@ -34,6 +34,7 @@ aren't compared.
 | `js/iam-action-wildcard` | CWE-269, A01 | CWE-269 |
 | `js/iam-kms-resource-wildcard` | CWE-284, A01 | CWE-284, CWE-732 |
 | `js/regex-catastrophic-backtracking` | CWE-1333 | CWE-1333, A04 |
+| `js/wallet-phrase-hardcoded` | CWE-798, A07 | CWE-259, CWE-798, A07 |
 | `js/static-assets-after-session` | CWE-200, A01 | CWE-16, CWE-668 |
 | `py/hardcoded-ip` | none | CWE-547, A01 |
 | `py/upload-with-body` | CWE-20, A03 | none |

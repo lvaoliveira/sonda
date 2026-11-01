@@ -30,6 +30,7 @@ mod js;
 mod js_a11y;
 mod js_checks;
 mod js_extra;
+mod js_last;
 mod js_modern;
 mod js_more;
 mod js_regex;
@@ -73,6 +74,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (js_syntax::RULES, js_syntax::OFF_BY_DEFAULT),
     (js_regex::RULES, js_regex::OFF_BY_DEFAULT),
     (js_checks::RULES, js_checks::OFF_BY_DEFAULT),
+    (js_last::RULES, js_last::OFF_BY_DEFAULT),
     (js_syntax2::RULES, js_syntax2::OFF_BY_DEFAULT),
     (py::RULES, &[]),
     (py_security::RULES, &[]),

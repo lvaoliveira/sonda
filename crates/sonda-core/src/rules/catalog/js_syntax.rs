@@ -1210,22 +1210,31 @@ pub(super) fn root_node(node: Node) -> Node {
 /// Visits every descendant of `node`; `visit` returns false to skip a
 /// node's children.
 pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
-    // Iterative: a deeply nested file must not overflow the stack.
-    let mut stack: Vec<Node<'t>> = {
-        let mut cursor = node.walk();
-        let kids: Vec<Node<'t>> = node.children(&mut cursor).collect();
-        kids.into_iter().rev().collect()
-    };
-    while let Some(n) = stack.pop() {
-        if visit(n) {
-            let mut cursor = n.walk();
-            let kids: Vec<Node<'t>> = n.children(&mut cursor).collect();
-            stack.extend(kids.into_iter().rev());
+    // Iterative, on one cursor: deeply nested code must not overflow the
+    // stack, and large files must not pay for an allocation per node.
+    let mut cursor = node.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    let mut depth = 1usize;
+    loop {
+        if visit(cursor.node()) && cursor.goto_first_child() {
+            depth += 1;
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if depth == 1 || !cursor.goto_parent() {
+                return;
+            }
+            depth -= 1;
         }
     }
 }
 
-fn strip_parens(mut node: Node) -> Node {
+pub(super) fn strip_parens(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         match node.named_child(0) {
             Some(inner) => node = inner,
