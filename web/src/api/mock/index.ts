@@ -280,6 +280,30 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       guard()
       return wait(ruleSettings.profiles(projectKeys))
     },
+    ruleProfile: async (id) => {
+      guard()
+      return wait(ruleSettings.profileDetail(id, projectKeys, new Map(catalog.rules.map((r) => [r.id, r.name]))))
+    },
+    createRuleProfile: async (name, copyFrom) => {
+      requireAdmin()
+      return wait(ruleSettings.createProfile(name, session.user!.username, copyFrom))
+    },
+    updateRuleProfile: async (id, patch) => {
+      requireAdmin()
+      ruleSettings.updateProfile(id, patch)
+      await wait(null)
+    },
+    deleteRuleProfile: async (id) => {
+      requireAdmin()
+      ruleSettings.deleteProfile(id)
+      await wait(null)
+    },
+    setProfileRule: async (id, rule, state, severity, note) => {
+      requireAdmin()
+      findRule(rule)
+      ruleSettings.setProfileRule(id, rule, state, session.user!.username, severity, note)
+      await wait(null)
+    },
     setProjectProfile: async (key, profile) => {
       requireAdmin()
       if (!projectKeys.includes(key)) throw new Error('not found')

@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type RuleProfileSummary, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type RuleProfileDetail, type RuleProfileSummary, type QualityGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -111,6 +111,17 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     ruleProfiles: () => call<RuleProfileSummary[]>('GET', '/rule-profiles'),
     setProjectProfile: async (key, profile) => {
       await call<unknown>('PUT', `/projects/${encodeURIComponent(key)}/rule-profile`, { profile })
+    },
+    ruleProfile: (id) => call<RuleProfileDetail>('GET', `/rule-profiles/${id}`),
+    createRuleProfile: (name, copyFrom) => call<{ id: number; name: string }>('POST', '/rule-profiles', { name, ...(copyFrom !== undefined ? { copyFrom } : {}) }),
+    updateRuleProfile: async (id, patch) => {
+      await call<unknown>('PATCH', `/rule-profiles/${id}`, patch)
+    },
+    deleteRuleProfile: async (id) => {
+      await call<unknown>('DELETE', `/rule-profiles/${id}`)
+    },
+    setProfileRule: async (id, rule, state, severity, note) => {
+      await call<unknown>('PUT', `/rule-profiles/${id}/rules`, { rule, state, ...(severity ? { severity } : {}), ...(note ? { note } : {}) })
     },
     setRuleOff: async (rule, off, note) => {
       await call<unknown>('PUT', '/rule-settings', { rule, off, ...(note ? { note } : {}) })

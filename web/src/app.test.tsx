@@ -945,6 +945,66 @@ describe('Rule settings', () => {
   })
 })
 
+describe('Quality profiles', () => {
+  it('lets admins create a profile, set its rules, copy, rename, make it the default and delete it', async () => {
+    const user = userEvent.setup()
+    renderAt('/quality-profiles')
+    const list = await screen.findByRole('list', { name: 'Profiles' })
+    expect(within(list).getByRole('button', { name: /sonda way/ })).toHaveTextContent('sonda waydefaultbuilt in')
+    // The built-in profile is the catalog's defaults: nothing to change.
+    const profile = screen.getByRole('region', { name: 'sonda way' })
+    expect(within(profile).queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
+    expect(within(profile).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Turn off' })).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('New profile name'), 'Strict')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByRole('region', { name: 'Strict' })).toHaveTextContent('0 rules set')
+    await user.click(screen.getByRole('option', { name: /SQL queries should not be built/ }))
+    const here = screen.getByRole('region', { name: 'In this profile' })
+    expect(here).toHaveTextContent('Not set: on, as the catalog has it.')
+    await user.selectOptions(within(here).getByLabelText('Severity for go/sql-string-concat'), 'blocker')
+    await user.type(within(here).getByLabelText('Why, for go/sql-string-concat in this profile'), 'We use an ORM.')
+    await user.click(within(here).getByRole('button', { name: 'Turn off' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'In this profile' })).toHaveTextContent('Off · severity blocker · by mara'))
+    expect(screen.getByRole('region', { name: 'In this profile' })).toHaveTextContent('“We use an ORM.”')
+    expect(screen.getByRole('option', { name: /SQL queries should not be built/ })).toHaveTextContent('off in this profile, blocker')
+    await user.click(screen.getByRole('button', { name: 'Set' }))
+    expect(within(screen.getByRole('listbox', { name: 'Rules' })).getAllByRole('option')).toHaveLength(1)
+
+    // A copy starts with the same settings.
+    await user.type(screen.getByLabelText('New profile name'), 'Strict copy')
+    await user.selectOptions(screen.getByLabelText('Copy from'), 'A copy of Strict')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByRole('region', { name: 'Strict copy' })).toHaveTextContent('1 rule set')
+
+    // Rename it, make it the default, then delete it once it isn't.
+    const copy = screen.getByRole('region', { name: 'Strict copy' })
+    await user.clear(within(copy).getByLabelText('Profile name'))
+    await user.type(within(copy).getByLabelText('Profile name'), 'Lenient')
+    await user.click(within(copy).getByRole('button', { name: 'Rename' }))
+    const lenient = await screen.findByRole('region', { name: 'Lenient' })
+    await user.click(within(lenient).getByRole('button', { name: 'Make it the default' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Profiles' })).getByRole('button', { name: /Lenient/ })).toHaveTextContent('default'))
+    expect(within(screen.getByRole('region', { name: 'Lenient' })).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    await user.click(within(screen.getByRole('list', { name: 'Profiles' })).getByRole('button', { name: /sonda way/ }))
+    await user.click(within(await screen.findByRole('region', { name: 'sonda way' })).getByRole('button', { name: 'Make it the default' }))
+    await user.click(within(screen.getByRole('list', { name: 'Profiles' })).getByRole('button', { name: /Lenient/ }))
+    await user.click(within(await screen.findByRole('region', { name: 'Lenient' })).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Profiles' })).queryByRole('button', { name: /Lenient/ })).not.toBeInTheDocument())
+  })
+
+  it('is read-only for members', async () => {
+    const api = createMockApi(0)
+    const shell = api.shell
+    renderAt('/quality-profiles', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
+    await screen.findByRole('region', { name: 'sonda way' })
+    expect(screen.queryByLabelText('New profile name')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'In this profile' })).toHaveTextContent('Not set')
+    expect(screen.queryByRole('button', { name: 'Turn on' })).not.toBeInTheDocument()
+  })
+})
+
 describe('Shell', () => {
   it('marks the current page, and every screen in the navigation exists', async () => {
     const user = userEvent.setup()
