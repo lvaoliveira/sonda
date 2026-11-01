@@ -58,10 +58,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
             get(dependencies::get_dependencies),
         )
         .route("/projects/{key}/coverage", get(coverage::get_coverage))
-        .route(
-            "/projects/{key}/rule-settings",
-            get(rule_settings::get_project),
-        )
+        .route("/projects/{key}/rules", get(rule_settings::get_project))
         .route(
             "/projects/{key}/coverage/file",
             get(coverage::get_file_coverage),

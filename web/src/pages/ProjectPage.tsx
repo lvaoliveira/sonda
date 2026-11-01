@@ -44,8 +44,8 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <h1 className="m-0 text-[30px] leading-[1.1] font-semibold tracking-[-0.035em]">{p.key}</h1>
-          <Link to={`${projectUrl}/settings`} className="text-[13px]">
-            Settings
+          <Link to={`${projectUrl}/rules`} className="text-[13px]">
+            Rules
           </Link>
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13.5px] text-fg-muted">

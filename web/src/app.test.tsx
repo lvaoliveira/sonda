@@ -868,57 +868,76 @@ describe('Overview', () => {
 })
 
 describe('Rule settings', () => {
-  it('shows a project\u2019s rules with what set them, and lets admins change them', async () => {
+  it('shows a project\u2019s rules, only for its languages, with their state there', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')
-    await user.click(await screen.findByRole('link', { name: 'Settings' }))
-    const card = await screen.findByRole('region', { name: 'Rules' })
-    expect(card).toHaveTextContent('1 disabled, 1 enabled, 1 severity changed')
-    expect(card).toHaveTextContent('Profile sonda way (the default)')
-    const off = within(card).getByRole('listitem', { name: 'Rule go/unchecked-error' })
-    expect(off).toHaveTextContent('Off')
-    expect(off).toHaveTextContent("The repository's sonda.toml")
-    expect(within(card).getByRole('listitem', { name: 'Rule rust/undocumented-unsafe' })).toHaveTextContent('On')
-    expect(within(card).getByRole('listitem', { name: 'Rule py/broad-except' })).toHaveTextContent('severity minor in sonda.toml')
-    expect(screen.getByRole('region', { name: 'Changes in sonda.toml' })).toHaveTextContent('go/unchecked-errorturned off')
+    await screen.findByRole('heading', { level: 1, name: 'payments-platform' })
+    // The project's own Rules link, not the sidebar's catalog.
+    const link = screen.getAllByRole('link', { name: 'Rules' }).find((a) => a.getAttribute('href') === '/projects/payments-platform/rules')!
+    await user.click(link)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Rules' })).toBeInTheDocument()
+    // Go, Rust, TypeScript and Python: not the two Java rules.
+    const list = screen.getByRole('listbox', { name: 'Rules' })
+    expect(within(list).getAllByRole('option')).toHaveLength(10)
+    expect(within(list).queryByRole('option', { name: /hard-coded/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/rules for/)).toHaveTextContent('profile sonda way (the default)')
+    const unchecked = within(list).getByRole('option', { name: /Returned errors should be checked/ })
+    expect(unchecked).toHaveTextContent('off(sonda.toml)')
+    await user.click(unchecked)
+    const here = screen.getByRole('region', { name: 'In this project' })
+    expect(here).toHaveTextContent("Off · The repository's sonda.toml")
+    // Filter by state.
+    await user.click(screen.getByRole('button', { name: 'Off' }))
+    expect(within(list).getAllByRole('option')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'Off' }))
+    // The repository's own settings, and when they changed.
+    const toml = screen.getByRole('region', { name: "The repository's sonda.toml" })
+    expect(toml).toHaveTextContent('1 disabled, 1 enabled, 1 severity changed')
+    expect(within(toml).getByRole('list', { name: 'Changes in sonda.toml' })).toHaveTextContent('go/unchecked-errorturned off')
+  })
 
-    // Off for this project only, with why.
-    await user.type(within(card).getByLabelText('Rule to turn off'), 'go/sql-string-concat')
-    await user.type(within(card).getByLabelText("Why it's off"), 'Covered by our ORM.')
-    await user.click(within(card).getByRole('button', { name: 'Turn off here' }))
-    const row = await within(card).findByRole('listitem', { name: 'Rule go/sql-string-concat' })
-    expect(row).toHaveTextContent('This project, over its profile')
-    expect(row).toHaveTextContent('by mara')
-    expect(row).toHaveTextContent('“Covered by our ORM.”')
-    expect(row).toHaveTextContent('1 open findings left out')
-
-    // The server can't turn on what sonda.toml turns off: shown, not hidden.
-    await user.selectOptions(within(off).getByLabelText('Server setting for go/unchecked-error'), 'on')
-    await user.click(within(off).getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(within(card).getByRole('listitem', { name: 'Rule go/unchecked-error' })).toHaveTextContent('the server setting has no effect'))
+  it('lets admins disable and enable a rule for one project', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform/rules#go%2Fsql-string-concat')
+    const here = await screen.findByRole('region', { name: 'In this project' })
+    expect(here).toHaveTextContent('On · Default')
+    await user.type(within(here).getByLabelText('Why, for go/sql-string-concat'), 'Covered by our ORM.')
+    await user.click(within(here).getByRole('button', { name: 'Disable here' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('Off · This project, over its profile'))
+    expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('by mara')
+    expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('“Covered by our ORM.”')
+    expect(screen.getByText(/left out while it's off/)).toHaveTextContent('1 left out')
+    await user.click(screen.getByRole('button', { name: 'Follow the profile' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'In this project' })).toHaveTextContent('On · Default'))
+    // The profile it uses.
+    await user.selectOptions(screen.getByLabelText('Rule profile'), 'sonda way')
+    await waitFor(() => expect(screen.getByText(/rules for/)).toHaveTextContent(/profile sonda way$/))
   })
 
   it('says when the repository\u2019s settings are unknown, and is read-only for members', async () => {
     const api = createMockApi(0)
     const shell = api.shell
-    renderAt('/projects/billing-service/settings', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
-    const card = await screen.findByRole('region', { name: 'Rules' })
-    expect(card).toHaveTextContent('settings are unknown')
-    expect(screen.getByText(/read-only: admins change these/)).toBeInTheDocument()
-    expect(within(card).queryByLabelText('Rule to turn off')).not.toBeInTheDocument()
+    renderAt('/projects/billing-service/rules', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
+    const toml = await screen.findByRole('region', { name: "The repository's sonda.toml" })
+    expect(toml).toHaveTextContent('Unknown: the latest analysis came from an older sonda')
+    const here = screen.getByRole('region', { name: 'In this project' })
+    expect(within(here).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Rule profile')).not.toBeInTheDocument()
   })
 
-  it('lets admins turn a rule off for every project, and shows where it\u2019s off', async () => {
+  it('lets admins turn a rule off in the default profile, and shows where it\u2019s off', async () => {
     const user = userEvent.setup()
     renderAt('/rules#go%2Fsql-string-concat')
     const where = await screen.findByRole('region', { name: "Where it's off" })
     expect(where).toHaveTextContent('On in every project.')
     await user.type(within(where).getByLabelText("Why it's off"), 'Too noisy for us.')
-    await user.click(within(where).getByRole('button', { name: 'Turn off for every project' }))
-    await waitFor(() => expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('Off on the server for every project'))
-    expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('by mara')
-    expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('“Too noisy for us.”')
-    expect(screen.getByRole('option', { name: /SQL queries should not be built/ })).toHaveTextContent('off on the server')
+    await user.click(within(where).getByRole('button', { name: 'Turn off in the default profile' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: "Where it's off" })).toHaveTextContent('Off in the default profile'))
+    const after = screen.getByRole('region', { name: "Where it's off" })
+    expect(after).toHaveTextContent('by mara')
+    expect(after).toHaveTextContent('“Too noisy for us.”')
+    expect(after).toHaveTextContent('In profiles: Server settings (off)')
+    expect(screen.getByRole('option', { name: /SQL queries should not be built/ })).toHaveTextContent('off in the default profile')
     // A sonda.toml turns this one off in a project.
     await user.click(screen.getByRole('option', { name: /Returned errors should be checked/ }))
     expect(await screen.findByRole('region', { name: "Where it's off" })).toHaveTextContent('Off in 1 project: 1 by their sonda.toml, 0 on the server.')

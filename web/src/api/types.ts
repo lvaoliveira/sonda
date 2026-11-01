@@ -294,7 +294,8 @@ export interface IssuePatch {
 // ------------------------------------------------------------------- rules
 
 /** A rule of sonda's catalog. Read-only: rules are configured per repository in sonda.toml. */
-export interface Rule {
+/** A rule as the catalog describes it, the same everywhere. */
+export interface RuleInfo {
   id: string
   name: string
   description: string
@@ -305,13 +306,6 @@ export interface Rule {
   effortMinutes: number
   /** False for rules a repository must list in `rules.enabled`. */
   onByDefault: boolean
-  /** Set when the server turns it off for every project (ADR-0016). */
-  serverOff: RuleSettingChange | null
-  /** In how many projects it's off, by what turned it off; null when on everywhere. */
-  offIn: { sondaToml: number; server: number } | null
-  /** Open or confirmed issues on each project's main branch. */
-  openIssues: number
-  projects: number
   tags: string[]
   /** CWE ids the rule relates to. */
   cwe: number[]
@@ -321,6 +315,19 @@ export interface Rule {
   owasp2021: { id: string; title: string }[]
   noncompliant: string | null
   compliant: string | null
+}
+
+/** A catalog rule, across every project. */
+export interface Rule extends RuleInfo {
+  /** Set when the default profile turns it off (ADR-0016, ADR-0018). */
+  serverOff: RuleSettingChange | null
+  /** The profiles that set it. */
+  inProfiles: { id: number; name: string; on: boolean; severity: Severity | null }[]
+  /** In how many projects it's off, by what turned it off; null when on everywhere. */
+  offIn: { sondaToml: number; server: number } | null
+  /** Open or confirmed issues on each project's main branch. */
+  openIssues: number
+  projects: number
 }
 
 /** Who changed a rule setting on the server, when, and why. */
@@ -333,9 +340,8 @@ export interface RuleSettingChange {
 /** What decided a rule's state for a project (ADR-0016). */
 export type RuleSetBy = 'default' | 'sonda_toml' | 'profile' | 'project'
 
+/** A rule's state in one project, and what decided it (ADR-0016, ADR-0018). */
 export interface ProjectRuleState {
-  rule: string
-  name: string
   on: boolean
   setBy: RuleSetBy
   /** The server setting that decided it. */
@@ -346,10 +352,30 @@ export interface ProjectRuleState {
   severityBy: 'profile' | 'sonda_toml' | null
   /** The server says on, but the latest scan didn't apply its settings and never ran it. */
   conflict: boolean
-  /** Open findings on the main branch the server leaves out. */
-  hiddenIssues: number
-  /** This project's own server setting. */
+  /** This project's own setting, over its profile. */
   projectSetting: 'on' | 'off' | null
+}
+
+/** A rule for one project: the catalog's description, its state there, and its findings. */
+export interface ProjectRule extends RuleInfo {
+  state: ProjectRuleState
+  /** Open or confirmed findings on the main branch that count. */
+  openIssues: number
+  /** Open findings the server leaves out, since the rule is off. */
+  hiddenIssues: number
+}
+
+/** A rule profile, as lists show it (ADR-0018). */
+export interface RuleProfileSummary {
+  id: number
+  name: string
+  /** "sonda way": the catalog's defaults, read-only. */
+  builtin: boolean
+  isDefault: boolean
+  /** Rules it sets. */
+  rules: number
+  /** Projects using it, by choice or as the default. */
+  projects: string[]
 }
 
 /** sonda.toml's `[rules]`, as an analysis recorded them. */
@@ -368,8 +394,10 @@ export interface ProjectRules {
   profileApplied: boolean | null
   /** From the main branch's latest analysis; null when unknown (an older sonda). */
   sondaToml: SondaTomlRules | null
-  /** Every rule whose state differs from its default for this project. */
-  rules: ProjectRuleState[]
+  /** The languages of the main branch's latest analysis, as in reports. */
+  languages: string[]
+  /** Every rule for those languages, in catalog order. */
+  rules: ProjectRule[]
   /** When the repository changed its settings, newest first. */
   tomlChanges: { analysisId: number; sha: string; at: string; rule: string; change: 'disabled' | 're-enabled' | 'enabled' | 'unset' | 'severity' }[]
 }
@@ -1033,7 +1061,11 @@ export interface SondaApi {
   updateIssue(id: number, patch: IssuePatch): Promise<IssueDetail>
   rules(): Promise<RuleCatalog>
   /** Every rule whose state differs from its default for the project, and what set it. */
+  /** The rules for the project's languages, each with its state there. */
   projectRules(key: string): Promise<ProjectRules>
+  ruleProfiles(): Promise<RuleProfileSummary[]>
+  /** Admins: the project's profile, or null for the default. */
+  setProjectProfile(key: string, profile: number | null): Promise<void>
   /** Admins: off for every project, or back on. */
   setRuleOff(rule: string, off: boolean, note?: string): Promise<void>
   /** Admins: on or off for one project, over the global setting, or `inherit` to follow it. */
