@@ -5,6 +5,7 @@ mod c;
 mod common;
 mod cs;
 mod cs_bugs;
+mod cs_more;
 mod cs_security;
 mod cs_smells;
 mod java;
@@ -88,6 +89,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_security::RULES, &[]),
     (cs_bugs::RULES, &[]),
     (cs_smells::RULES, cs_smells::OFF_BY_DEFAULT),
+    (cs_more::RULES, cs_more::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.
