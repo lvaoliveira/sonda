@@ -13,6 +13,7 @@ mod cs_more;
 mod cs_opt;
 mod cs_opt2;
 mod cs_opt3;
+pub(crate) mod cs_project;
 mod cs_security;
 mod cs_semantic;
 mod cs_smells;

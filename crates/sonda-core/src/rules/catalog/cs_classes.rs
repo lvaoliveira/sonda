@@ -1,15 +1,16 @@
 //! C# rules about classes and their members, batch 12 (ADR-0007, ADR-0015):
 //! overrides and the declarations they override, instance members, the
 //! dispose pattern, controllers. Built on the C# semantic model
-//! (`semantic/cs.rs`). A base type or interface is only known when it's
-//! declared in the same file, so rules that compare with one are `related`
-//! to their SonarQube key: they miss what other files declare. Queries stay
-//! cheap on deep trees: see the notes in `js_modern.rs`.
+//! (`semantic/cs.rs`). Rules that compare a declaration with its base types
+//! or interfaces are `Check::Structural`: they run on the project index,
+//! across files (`cs_project.rs`, ADR-0019). The others here see one file,
+//! so those that need another file's types are `related` to their key.
+//! Queries stay cheap on deep trees: see the notes in `js_modern.rs`.
 
 use super::cs::{cs_has_modifier, simple_name};
 use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
 use super::cs_more::members;
-use super::cs_types::{derives_from, type_of_name, walk_tree};
+use super::cs_types::{type_of_name, walk_tree};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
@@ -95,10 +96,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 30,
         sonar: &[related("S110")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: inheritance_too_deep,
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class A1 { } class A2 : A1 { } class A3 : A2 { } class A4 : A3 { } class A5 : A4 { } class A6 : A5 { } class A7 : A6 { }",
@@ -114,11 +112,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 2,
-        sonar: &[related("S927")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: parameter_names_differ,
-        },
+        sonar: &[exact("S927")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "interface IAccount { void Add(int money); } class Account : IAccount { public void Add(int amount) { } }",
@@ -134,11 +129,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S1006")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: overrides_change_defaults,
-        },
+        sonar: &[exact("S1006")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class Base { public virtual void Run(int distance = 42) { } } class Derived : Base { public override void Run(int distance = 5) { } }",
@@ -273,11 +265,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 1,
-        sonar: &[related("S3262")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: override_drops_params,
-        },
+        sonar: &[exact("S3262")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class Base { public virtual void Log(params string[] parts) { } } class Derived : Base { public override void Log(string[] parts) { } }",
@@ -292,11 +281,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 1,
-        sonar: &[related("S3600")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: override_adds_params,
-        },
+        sonar: &[exact("S3600")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class Base { public virtual void Log(string[] parts) { } } class Derived : Base { public override void Log(params string[] parts) { } }",
@@ -332,11 +318,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 10,
-        sonar: &[related("S3444")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: interface_members_collide,
-        },
+        sonar: &[exact("S3444")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "interface IA { int Id { get; } } interface IB { int Id { get; } } interface IC : IA, IB { }",
@@ -354,10 +337,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 15,
         sonar: &[related("S3881")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: dispose_pattern_broken,
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "public class Holder : IDisposable { public virtual void Dispose() { } }",
@@ -373,11 +353,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S4015")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: hides_with_less_visibility,
-        },
+        sonar: &[exact("S4015")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class Base { public void Run(int n) { } } class Derived : Base { private void Run(int n) { } }",
@@ -393,11 +370,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 10,
-        sonar: &[related("S4019")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: hides_base_with_wider_types,
-        },
+        sonar: &[exact("S4019")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class Base { internal void Write(string s) { } } class Derived : Base { internal void Write(object o) { } }",
@@ -528,32 +502,6 @@ fn looks_like_interface(name: &[u8]) -> bool {
     name.len() > 1 && name[0] == b'I' && name[1].is_ascii_uppercase()
 }
 
-/// The base class declared in this file, if the first base type is one.
-fn base_class<'t>(
-    types: &HashMap<&str, Vec<Node<'t>>>,
-    declaration: Node<'t>,
-    src: &[u8],
-) -> Option<Node<'t>> {
-    let first = *base_entries(declaration).first()?;
-    unique(
-        types,
-        simple_name(first, src),
-        &["class_declaration", "record_declaration"],
-    )
-}
-
-/// The interfaces declared in this file that a type lists as bases.
-fn interfaces_of<'t>(
-    types: &HashMap<&str, Vec<Node<'t>>>,
-    declaration: Node<'t>,
-    src: &[u8],
-) -> Vec<Node<'t>> {
-    base_entries(declaration)
-        .into_iter()
-        .filter_map(|b| unique(types, simple_name(b, src), &["interface_declaration"]))
-        .collect()
-}
-
 /// Whether a type's bases could include a class (declared anywhere): its
 /// first base type doesn't look like an interface.
 fn may_have_base_class(declaration: Node, src: &[u8]) -> bool {
@@ -579,8 +527,6 @@ fn name_of<'s>(node: Node, src: &'s [u8]) -> &'s [u8] {
 struct Param<'t> {
     name: Node<'t>,
     ty: Option<Node<'t>>,
-    is_params: bool,
-    default: Option<Node<'t>>,
     modifiers: Vec<u8>,
 }
 
@@ -603,8 +549,6 @@ fn params<'t>(method: Node<'t>, src: &[u8]) -> Vec<Param<'t>> {
             Some("name") => out.push(Param {
                 name: c,
                 ty: ty.take(),
-                is_params: true,
-                default: None,
                 modifiers: b"params".to_vec(),
             }),
             _ if c.kind() == "parameter" => {
@@ -615,15 +559,9 @@ fn params<'t>(method: Node<'t>, src: &[u8]) -> Vec<Param<'t>> {
                         .filter(|x| x.kind() == "modifier")
                         .flat_map(|x| text(x, src).iter().copied().chain(*b" "))
                         .collect();
-                    let mut dc = c.walk();
-                    let default = c
-                        .named_children(&mut dc)
-                        .find(|x| x.start_byte() >= name.end_byte());
                     out.push(Param {
                         name,
                         ty: c.child_by_field_name("type"),
-                        is_params: false,
-                        default,
                         modifiers,
                     });
                 }
@@ -644,73 +582,6 @@ fn methods<'t>(declaration: Node<'t>) -> Vec<Node<'t>> {
         .collect()
 }
 
-/// A method of `declaration` named `name` with `arity` parameters.
-fn method_like<'t>(
-    declaration: Node<'t>,
-    name: &[u8],
-    arity: usize,
-    src: &[u8],
-) -> Option<Node<'t>> {
-    methods(declaration)
-        .into_iter()
-        .find(|m| name_of(*m, src) == name && params(*m, src).len() == arity)
-}
-
-/// The method an override overrides, among base classes declared here.
-fn overridden<'t>(
-    types: &HashMap<&str, Vec<Node<'t>>>,
-    class: Node<'t>,
-    method: Node<'t>,
-    src: &[u8],
-) -> Option<Node<'t>> {
-    let name = name_of(method, src);
-    let arity = params(method, src).len();
-    let mut current = class;
-    for _ in 0..8 {
-        current = base_class(types, current, src)?;
-        if let Some(m) = method_like(current, name, arity, src) {
-            return Some(m);
-        }
-    }
-    None
-}
-
-/// The declaration a method implements or overrides, when it's in this
-/// file: the overridden method, or the same-named method of an interface
-/// the type lists, or the other half of a partial method.
-fn counterpart<'t>(
-    types: &HashMap<&str, Vec<Node<'t>>>,
-    class: Node<'t>,
-    method: Node<'t>,
-    src: &[u8],
-) -> Option<Node<'t>> {
-    if cs_has_modifier(method, "override", src) {
-        return overridden(types, class, method, src);
-    }
-    let name = name_of(method, src);
-    let arity = params(method, src).len();
-    if cs_has_modifier(method, "partial", src) {
-        // The declaration without a body pairs with the one with a body.
-        let has_body = method.child_by_field_name("body").is_some();
-        return types
-            .get(std::str::from_utf8(name_of(class, src)).ok()?)
-            .and_then(|parts| {
-                parts.iter().flat_map(|p| methods(*p)).find(|m| {
-                    *m != method
-                        && name_of(*m, src) == name
-                        && params(*m, src).len() == arity
-                        && m.child_by_field_name("body").is_some() != has_body
-                })
-            });
-    }
-    if cs_has_modifier(method, "public", src) {
-        return interfaces_of(types, class, src)
-            .into_iter()
-            .find_map(|i| method_like(i, name, arity, src));
-    }
-    None
-}
-
 /// Classes, structs and records declared in the file.
 fn classes<'t>(types: &HashMap<&str, Vec<Node<'t>>>) -> Vec<Node<'t>> {
     let mut all: Vec<Node<'t>> = types
@@ -728,119 +599,7 @@ fn classes<'t>(types: &HashMap<&str, Vec<Node<'t>>>) -> Vec<Node<'t>> {
     all
 }
 
-/// For each override or implementation with a counterpart in this file,
-/// the pairs of parameters at the same position.
-fn paired_params<'t>(
-    m: &Model<'t>,
-    src: &[u8],
-    mut each: impl FnMut(Node<'t>, &Param<'t>, &Param<'t>),
-) {
-    let types = type_index(m);
-    for class in classes(&types) {
-        for method in methods(class) {
-            let Some(other) = counterpart(&types, class, method, src) else {
-                continue;
-            };
-            let (mine, theirs) = (params(method, src), params(other, src));
-            if mine.len() != theirs.len() {
-                continue;
-            }
-            for (a, b) in mine.iter().zip(&theirs) {
-                each(method, a, b);
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------- filters
-
-fn inheritance_too_deep<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    classes(&types)
-        .into_iter()
-        .filter(|c| c.kind() == "class_declaration")
-        .filter(|class| {
-            let mut depth = 0;
-            let mut current = *class;
-            let mut seen = vec![*class];
-            for _ in 0..12 {
-                let Some(first) = base_entries(current).first().copied() else {
-                    break;
-                };
-                let name = simple_name(first, src);
-                // `Options : Options<object>`: a base named like a class seen
-                // on the way is another type (another arity), declared elsewhere.
-                match unique(&types, name, &["class_declaration"]).filter(|b| !seen.contains(b)) {
-                    Some(base) => {
-                        seen.push(base);
-                        depth += 1;
-                        current = base;
-                    }
-                    // A base class declared elsewhere: one more level, at least.
-                    None if !looks_like_interface(name) => {
-                        depth += 1;
-                        break;
-                    }
-                    None => break,
-                }
-            }
-            depth > 5
-        })
-        .filter_map(|c| c.child_by_field_name("name"))
-        .collect()
-}
-
-fn parameter_names_differ<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    let mut reported = Vec::new();
-    paired_params(m, src, |method, mine, theirs| {
-        // One finding per method: the first differing name. `_` says the
-        // parameter is unused on purpose.
-        let discard = text(mine.name, src).iter().all(|b| *b == b'_');
-        if text(mine.name, src) != text(theirs.name, src)
-            && !discard
-            && !reported.contains(&method.id())
-        {
-            reported.push(method.id());
-            found.push(mine.name);
-        }
-    });
-    found
-}
-
-fn overrides_change_defaults<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    paired_params(m, src, |_, mine, theirs| {
-        // Partial methods can't have defaults on both halves; compare
-        // values only where both are written.
-        if let (Some(a), Some(b)) = (mine.default, theirs.default)
-            && text(a, src) != text(b, src)
-        {
-            found.push(a);
-        }
-    });
-    found
-}
-
-fn override_drops_params<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    paired_params(m, src, |method, mine, theirs| {
-        if cs_has_modifier(method, "override", src) && theirs.is_params && !mine.is_params {
-            found.push(mine.name);
-        }
-    });
-    found
-}
-
-fn override_adds_params<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    paired_params(m, src, |method, mine, theirs| {
-        if cs_has_modifier(method, "override", src) && mine.is_params && !theirs.is_params {
-            found.push(mine.name);
-        }
-    });
-    found
-}
 
 fn is_private(declaration: Node, src: &[u8]) -> bool {
     !["public", "protected", "internal"]
@@ -1407,179 +1166,12 @@ fn static_only_used_nested<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
         .collect()
 }
 
-fn interface_members_collide<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let mut found = Vec::new();
-    for list in types.values() {
-        for interface in list.iter().filter(|d| d.kind() == "interface_declaration") {
-            let bases = interfaces_of(&types, *interface, src);
-            if bases.len() < 2 {
-                continue;
-            }
-            let own: Vec<&[u8]> = members(*interface)
-                .iter()
-                .map(|x| name_of(*x, src))
-                .collect();
-            let names: Vec<Vec<&[u8]>> = bases
-                .iter()
-                .map(|b| {
-                    members(*b)
-                        .iter()
-                        .map(|x| name_of(*x, src))
-                        .filter(|n| !n.is_empty())
-                        .collect()
-                })
-                .collect();
-            let collides = names.iter().enumerate().any(|(i, a)| {
-                a.iter()
-                    .any(|n| !own.contains(n) && names.iter().skip(i + 1).any(|b| b.contains(n)))
-            });
-            if collides {
-                found.extend(interface.child_by_field_name("name"));
-            }
-        }
-    }
-    found.sort_by_key(Node::start_byte);
-    found
-}
-
-fn calls_in(body: Node, src: &[u8], call: &[u8]) -> bool {
-    let t: Vec<u8> = text(body, src)
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    t.windows(call.len()).any(|w| w == call)
-}
-
-fn dispose_pattern_broken<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let mut found = Vec::new();
-    for class in classes(&types)
-        .into_iter()
-        .filter(|c| c.kind() == "class_declaration")
-    {
-        let lists_idisposable = base_entries(class)
-            .iter()
-            .any(|b| simple_name(*b, src) == b"IDisposable");
-        if !lists_idisposable
-            || ["sealed", "static"]
-                .iter()
-                .any(|w| cs_has_modifier(class, w, src))
-        {
-            continue;
-        }
-        // A base class declared here that's disposable already: its pattern.
-        if base_class(&types, class, src).is_some() {
-            continue;
-        }
-        let ms = methods(class);
-        let dispose = ms
-            .iter()
-            .find(|x| name_of(**x, src) == b"Dispose" && params(**x, src).is_empty())
-            .copied();
-        let dispose_bool = ms.iter().find(|x| {
-            name_of(**x, src) == b"Dispose"
-                && params(**x, src)
-                    .first()
-                    .is_some_and(|p| p.ty.is_some_and(|t| text(t, src) == b"bool"))
-        });
-        let finalizer = members(class)
-            .into_iter()
-            .find(|x| x.kind() == "destructor_declaration");
-        let problem = if let Some(d) = dispose
-            .filter(|d| cs_has_modifier(*d, "virtual", src) || cs_has_modifier(*d, "abstract", src))
-        {
-            d.child_by_field_name("name")
-        } else if !dispose_bool.is_some_and(|d| {
-            cs_has_modifier(*d, "protected", src)
-                && (cs_has_modifier(*d, "virtual", src) || cs_has_modifier(*d, "abstract", src))
-        }) {
-            class.child_by_field_name("name")
-        } else if let Some(d) = dispose.filter(|d| {
-            d.child_by_field_name("body").is_some_and(|b| {
-                !calls_in(b, src, b"Dispose(true)")
-                    || !calls_in(b, src, b"GC.SuppressFinalize(this)")
-            })
-        }) {
-            d.child_by_field_name("name")
-        } else {
-            finalizer
-                .filter(|f| {
-                    f.child_by_field_name("body")
-                        .is_some_and(|b| !calls_in(b, src, b"Dispose(false)"))
-                })
-                .and_then(|f| f.child_by_field_name("name"))
-        };
-        found.extend(problem);
-    }
-    found
-}
-
 /// A parameter list's types, as written.
 fn signature<'s>(method: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     params(method, src)
         .iter()
         .map(|p| p.ty.map_or(&b""[..], |t| text(t, src)))
         .collect()
-}
-
-fn hides_with_less_visibility<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let mut found = Vec::new();
-    for class in classes(&types) {
-        let Some(base) = base_class(&types, class, src) else {
-            continue;
-        };
-        for method in methods(class)
-            .into_iter()
-            .filter(|x| is_private(*x, src) && !cs_has_modifier(*x, "override", src))
-        {
-            let hidden = methods(base).into_iter().any(|b| {
-                name_of(b, src) == name_of(method, src)
-                    && signature(b, src) == signature(method, src)
-                    && !is_private(b, src)
-                    && !["virtual", "abstract", "override"]
-                        .iter()
-                        .any(|w| cs_has_modifier(b, w, src))
-            });
-            if hidden {
-                found.extend(method.child_by_field_name("name"));
-            }
-        }
-    }
-    found
-}
-
-fn hides_base_with_wider_types<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let mut found = Vec::new();
-    for class in classes(&types) {
-        let Some(base) = base_class(&types, class, src) else {
-            continue;
-        };
-        for method in methods(class)
-            .into_iter()
-            .filter(|x| !cs_has_modifier(*x, "override", src))
-        {
-            let mine = signature(method, src);
-            let hides = methods(base).into_iter().any(|b| {
-                let theirs = signature(b, src);
-                name_of(b, src) == name_of(method, src)
-                    && !is_private(b, src)
-                    && theirs.len() == mine.len()
-                    && theirs != mine
-                    && mine
-                        .iter()
-                        .zip(&theirs)
-                        .all(|(a, b)| a == b || *a == b"object" || derives_from(m, b, a, src))
-            });
-            if hides {
-                found.extend(method.child_by_field_name("name"));
-            }
-        }
-    }
-    found
 }
 
 fn shared_part_created<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {

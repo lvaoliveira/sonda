@@ -73,7 +73,10 @@ warning, not its syntactic ones.
 
 **Per file only.** Cross-file rules (unused exports, call-graph taint)
 need project-wide summaries. That's a later decision, because it touches
-the worker model.
+the worker model. [ADR-0019](0019-cross-file-declarations.md) takes the
+first step without changing it: files report summaries of their
+declarations, and rules that compare declarations across files run on an
+index of them.
 
 ## Consequences
 

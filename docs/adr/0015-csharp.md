@@ -92,6 +92,10 @@ positives, or depends on declarations that usually live in other files
 were re-audited against this bar; those it could make exact moved to
 `cs_semantic.rs` with their ids unchanged.
 
+Rules that compare a declaration with its base classes, interfaces or the
+other half of a partial method see the whole project: they run on an index
+of every file's declarations ([ADR-0019](0019-cross-file-declarations.md)).
+
 Rules that need declared types are `Check::Semantic`. Walking up from a
 node to find its scope costs that node's depth for every `parent()`, which
 made a query-based version quadratic on deeply nested code; the model is

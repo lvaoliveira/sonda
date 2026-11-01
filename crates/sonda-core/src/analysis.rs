@@ -340,6 +340,14 @@ pub(crate) fn is_classic_assembly_info(names: &[&str]) -> bool {
 /// NeutralResourcesLanguage.
 fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
     let mut facts = Vec::new();
+    // The types this file declares, for rules that compare declarations
+    // across files (ADR-0019).
+    let index = crate::semantic::cs_index::extract(root, ctx.src.as_bytes());
+    if !index.types.is_empty()
+        && let Ok(json) = serde_json::to_string(&index)
+    {
+        facts.push((crate::semantic::cs_index::FACT.to_string(), json));
+    }
     if ctx.src.contains("ResourceManager") {
         facts.push(("cs-resources".to_string(), String::new()));
     }
@@ -451,6 +459,19 @@ fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
 /// methods implemented in no file, and AssemblyInfo without
 /// NeutralResourcesLanguage in a project that uses resources.
 pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    // Declarations compared across files (ADR-0019).
+    let active: Vec<&str> = rules::cs_project::RULES
+        .iter()
+        .copied()
+        .filter(|r| rules.get(r).is_some())
+        .collect();
+    let found = rules::cs_project::run(files.iter().map(|f| f.facts.as_slice()), &active);
+    for (rule, file, span) in found {
+        if let Some(r) = rules.get(rule) {
+            let issue = project_issue_at(r, &files[file].path, span, r.rule.message.to_string());
+            files[file].issues.push(issue);
+        }
+    }
     let fact = |f: &FileAnalysis, kind: &str| -> Vec<String> {
         f.facts
             .iter()
@@ -512,6 +533,20 @@ pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             }
         }
     }
+}
+
+/// An issue found by looking at the project, at a span a fact recorded.
+fn project_issue_at(
+    rule: &ActiveRule,
+    path: &str,
+    span: crate::semantic::cs_index::Span,
+    message: String,
+) -> Issue {
+    let mut issue = project_issue(rule, path, span.line, message);
+    issue.column = span.column;
+    issue.end_line = span.end_line;
+    issue.end_column = span.end_column;
+    issue
 }
 
 /// An issue that belongs to a file as a whole, found by looking at the project.
