@@ -1,6 +1,6 @@
 # ADR-0019: Observability for the server
 
-- Status: **proposed**
+- Status: **accepted**
 - Date: 2026-11-01
 - Builds on ADR-0005 (the sonda server) and ADR-0009 (the advisory sync)
 
