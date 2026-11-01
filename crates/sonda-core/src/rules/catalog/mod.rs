@@ -14,6 +14,7 @@ mod cs_opt;
 mod cs_opt2;
 mod cs_opt3;
 mod cs_security;
+mod cs_semantic;
 mod cs_smells;
 mod cs_tail;
 mod cs_typed;
@@ -127,6 +128,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_typed::RULES, cs_typed::OFF_BY_DEFAULT),
     (cs_classes::RULES, cs_classes::OFF_BY_DEFAULT),
     (cs_flow::RULES, cs_flow::OFF_BY_DEFAULT),
+    (cs_semantic::RULES, cs_semantic::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

@@ -451,26 +451,6 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
-        id: "cs/event-never-used",
-        name: "Events should be raised",
-        description: "An event that nothing in its class raises never fires; subscribers wait for nothing.",
-        message: "Raise this event, or remove it.",
-        category: CodeSmell,
-        severity: Major,
-        effort_minutes: 5,
-        sonar: &[related("S3264")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(class_declaration name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(unused_event)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { public event EventHandler Changed; public void Set() { } }",
-            good: "class A { public event EventHandler Changed; public void Set() { Changed?.Invoke(this, EventArgs.Empty); } }",
-        }),
-    },
-    Rule {
         id: "cs/static-constructor-only-initializes",
         name: "Static fields should be initialized inline",
         description: "A static constructor that only assigns static fields says the same as their \
@@ -1432,24 +1412,6 @@ fn unsealed_private_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     (!derived).then_some(name)
 }
 
-fn unused_event<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if class.has_error() || cs_has_modifier(class, "partial", src) {
-        return None;
-    }
-    let whole = text(class, src);
-    members(class)
-        .into_iter()
-        .filter(|m| {
-            m.kind() == "event_field_declaration"
-                && !["override", "abstract", "virtual"]
-                    .iter()
-                    .any(|x| cs_has_modifier(*m, x, src))
-        })
-        .flat_map(declarators)
-        .filter_map(|d| d.child_by_field_name("name"))
-        .find(|n| count_word(whole, text(*n, src)) == 1)
-}
-
 fn only_assigns_static_fields(constructor: Node, src: &[u8]) -> bool {
     if !cs_has_modifier(constructor, "static", src) {
         return false;
@@ -1854,7 +1816,6 @@ mod tests {
     fn nested_classes_events_methods() {
         let src = "namespace N;\nclass Outer {\nprivate class A { }\nprivate class B { }\nprivate class C : B { }\nprivate sealed class D { }\npublic class E { }\npublic event EventHandler Used;\npublic event EventHandler Unused;\nvoid R() { Used?.Invoke(this, EventArgs.Empty); Used?.Invoke(null, EventArgs.Empty); Used.Invoke(this, null); }\nvoid F() { G(); H(); }\nvoid K() { G(); H(); }\nvoid M(int a) { G(); H(); }\n[DllImport(\"x\")] public static extern int Run();\n[DllImport(\"x\")] static extern int Hidden();\n}";
         assert_eq!(flagged("cs/private-class-not-sealed", src), [3, 5]);
-        assert_eq!(flagged("cs/event-never-used", src), [9]);
         assert_eq!(flagged("cs/event-args-null", src), [10]);
         assert_eq!(flagged("cs/identical-methods", src), [12]);
         assert_eq!(flagged("cs/public-extern", src), [14]);
