@@ -453,6 +453,13 @@ file, the report formats and the public library API.
   instead of one pass per rule. With the 28 new rules, a scan of 120 MB of
   JavaScript is 30% faster than before them, and a 20,000-term expression
   that took 6 s now takes 0.4 s.
+- `sonda-server` request ids and request logs
+  ([ADR-0019](docs/adr/0019-observability.md)): every response carries an
+  `x-request-id` (a reverse proxy's own is kept when well formed), and each
+  API request logs one line with its id, method, route template, status and
+  duration. Error lines written while handling a request carry its id.
+  Paths, query strings and headers are never logged.
+  `SONDA_LOG_FORMAT=json` writes one JSON object per line.
 
 ### Security
 
