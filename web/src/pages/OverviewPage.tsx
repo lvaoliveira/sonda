@@ -572,7 +572,7 @@ function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: n
         </Link>
       }
     >
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <table className="w-full min-w-[780px] border-collapse text-[13.5px]">
           <thead>
             <tr className="font-mono text-[9.5px] tracking-[.06em] text-fg-faint uppercase">
@@ -686,7 +686,7 @@ function Recent({ data }: { data: Overview }) {
         </Link>
       }
     >
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         {data.recent.map((a) => {
           const g = GATE[a.state]
           const noteColor = a.state === 'failed' ? 'var(--sd-crit)' : a.state === 'partial' ? 'var(--sd-warn)' : a.state === 'running' ? 'var(--sd-info)' : 'var(--sd-muted)'

@@ -166,6 +166,7 @@ describe('labels', () => {
 
   it('names languages and initials', () => {
     expect(languageLabel('cpp')).toBe('C++')
+    expect(languageLabel('csharp')).toBe('C#')
     expect(languageLabel('kotlin')).toBe('kotlin')
     expect(initials('Ann Marie Lee')).toBe('AM')
     expect(initials('')).toBe('··')

@@ -3,6 +3,8 @@
 
 mod c;
 mod common;
+mod cs;
+mod cs_security;
 mod java;
 mod java_bugs;
 mod java_extra;
@@ -35,7 +37,7 @@ pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
-pub(super) use crate::lang::{C_CPP, C_ONLY, JAVA, JS_TS, JSX, Lang, PYTHON, TS};
+pub(super) use crate::lang::{C_CPP, C_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, TS};
 pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
 pub(super) use crate::model::Severity::{Blocker, Critical, Info, Major, Minor};
 use std::sync::LazyLock;
@@ -74,6 +76,8 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_tail::RULES,
         java_rest::RULES,
         c::RULES,
+        cs::RULES,
+        cs_security::RULES,
     ]
     .into_iter()
     .flatten()
@@ -194,6 +198,10 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/loops-over-same-collection",
     "java/lambda-explicit-types",
     "java/inner-class-static",
+    // Outside SonarQube's default C# profile.
+    "cs/protected-in-sealed",
+    "cs/redundant-constructor",
+    "cs/empty-string-comparison",
 ];
 
 // ---------------------------------------------------- shared filters
