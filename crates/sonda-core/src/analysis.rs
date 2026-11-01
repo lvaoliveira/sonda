@@ -87,6 +87,7 @@ pub(crate) fn analyze(
     let scan = scan_tokens(&ctx, syn, root, rules, &mut issues);
     scan_lines(&ctx, rules, scan.code_lines.len(), &mut issues);
     scan_java_files(&ctx, lang, root, rules, &mut issues);
+    scan_js_files(&ctx, lang, root, rules, &mut issues);
 
     metrics.lines = ctx.lines.count();
     metrics.ncloc = scan.code_lines.len();
@@ -454,6 +455,130 @@ fn scan_java_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &
             let mut c = n.walk();
             let kids: Vec<Node> = n.children(&mut c).collect();
             stack.extend(kids.into_iter().rev());
+        }
+    }
+}
+
+/// Rules about a JavaScript or TypeScript file as a whole, which need its name.
+fn scan_js_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mut Vec<Issue>) {
+    if !matches!(lang, Lang::JavaScript | Lang::TypeScript | Lang::Tsx) {
+        return;
+    }
+    let path = ctx.path.replace('\\', "/");
+    let file = path.rsplit('/').next().unwrap_or(&path);
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    let mut cursor = root.walk();
+    let children: Vec<Node> = root.named_children(&mut cursor).collect();
+    let strip_ext = |s: &str| {
+        for ext in [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"] {
+            if let Some(base) = s.strip_suffix(ext) {
+                return base.to_string();
+            }
+        }
+        s.to_string()
+    };
+    if let Some(rule) = rules.get(rules::JS_MODULE_IMPORTS_ITSELF) {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            let source = match n.kind() {
+                "import_statement" | "export_statement" => n.child_by_field_name("source"),
+                "call_expression"
+                    if n.child_by_field_name("function")
+                        .is_some_and(|f| ctx.text(f) == "require") =>
+                {
+                    n.child_by_field_name("arguments")
+                        .and_then(|a| a.named_child(0))
+                        .filter(|a| a.kind() == "string")
+                }
+                _ => None,
+            };
+            if let Some(source) = source {
+                let t = ctx.text(source);
+                let spec = t.get(1..t.len().saturating_sub(1)).unwrap_or("");
+                if let Some(rest) = spec.strip_prefix("./")
+                    && strip_ext(rest) == stem
+                {
+                    let msg = "Remove this import: the module imports itself.".to_string();
+                    issues.push(ctx.issue(rule, source, msg, rule.rule.effort_minutes));
+                }
+            }
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.named_children(&mut c).collect();
+            stack.extend(kids);
+        }
+    }
+    if let Some(rule) = rules.get(rules::JS_DEFAULT_EXPORT_NAME)
+        && stem != "index"
+    {
+        let norm = |s: &str| {
+            s.chars()
+                .filter(|c| !matches!(c, '-' | '_' | '.'))
+                .collect::<String>()
+                .to_lowercase()
+        };
+        for export in children.iter().filter(|n| n.kind() == "export_statement") {
+            let mut c = export.walk();
+            if !export.children(&mut c).any(|k| k.kind() == "default") {
+                continue;
+            }
+            let named = export
+                .child_by_field_name("declaration")
+                .and_then(|d| d.child_by_field_name("name"))
+                .or_else(|| {
+                    export
+                        .child_by_field_name("value")
+                        .filter(|v| v.kind() == "identifier")
+                });
+            if let Some(name) = named
+                && norm(ctx.text(name)) != norm(stem)
+            {
+                let msg = format!("Rename the file or the default export {}.", ctx.text(name));
+                issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
+            }
+        }
+    }
+    let is_test_file = stem.ends_with(".test")
+        || stem.ends_with(".spec")
+        || path.contains("/__tests__/")
+        || path.starts_with("__tests__/");
+    if is_test_file && let Some(rule) = rules.get(rules::JS_TEST_FILE_WITHOUT_TESTS) {
+        let mut has_test = false;
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "call_expression" {
+                let mut f = n.child_by_field_name("function");
+                while let Some(m) = f.filter(|m| m.kind() == "member_expression") {
+                    f = m.child_by_field_name("object");
+                }
+                if f.is_some_and(|f| matches!(ctx.text(f), "it" | "test" | "specify")) {
+                    has_test = true;
+                    break;
+                }
+            }
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.named_children(&mut c).collect();
+            stack.extend(kids);
+        }
+        if !has_test {
+            let at = children.first().copied().unwrap_or(root);
+            let msg = "Add a test case to this file, or delete it.".to_string();
+            issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
+        }
+    }
+    if let Some(rule) = rules.get(rules::JS_LICENSE_HEADER) {
+        let first = children
+            .iter()
+            .find(|n| n.kind() != "hash_bang_line" && n.kind() != "hashbang_comment");
+        let has_header = first.is_some_and(|n| {
+            n.kind() == "comment" && {
+                let t = ctx.text(*n).to_lowercase();
+                t.contains("copyright") || t.contains("license")
+            }
+        });
+        if !has_header {
+            let at = first.copied().unwrap_or(root);
+            let msg = "Add a copyright or license header to this file.".to_string();
+            issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
         }
     }
 }
@@ -1366,7 +1491,10 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(rules_in("src/db.js").contains(&"js/hardcoded-password"));
-        assert_eq!(rules_in("src/db.test.js"), ["js/no-var"]);
+        assert_eq!(
+            rules_in("src/db.test.js"),
+            ["js/test-file-without-tests", "js/no-var"]
+        );
     }
 
     #[test]
@@ -1524,6 +1652,70 @@ pub(crate) mod tests {
         assert_eq!(hit(rules::TRAILING_WHITESPACE), [1]);
         assert_eq!(hit(rules::LINE_LENGTH), [3]);
         assert_eq!(hit(rules::FINAL_NEWLINE), [4]);
+    }
+
+    #[test]
+    fn js_rules_that_need_the_path() {
+        let ids = [
+            rules::JS_MODULE_IMPORTS_ITSELF,
+            rules::JS_DEFAULT_EXPORT_NAME,
+            rules::JS_TEST_FILE_WITHOUT_TESTS,
+            rules::JS_LICENSE_HEADER,
+        ];
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ids.map(String::from).to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let hits = |path: &str, src: &str| -> Vec<&'static str> {
+            analyze(path, Lang::TypeScript, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .map(|i| i.rule)
+                .filter(|r| ids.contains(r))
+                .collect()
+        };
+        let header = "// Copyright Acme\n";
+        assert_eq!(
+            hits("src/a.ts", &format!("{header}import x from './a';\n")),
+            [rules::JS_MODULE_IMPORTS_ITSELF]
+        );
+        assert!(hits("src/a.ts", &format!("{header}import x from './b';\n")).is_empty());
+        assert_eq!(
+            hits(
+                "src/user-service.ts",
+                &format!("{header}export default class Other {{}}\n")
+            ),
+            [rules::JS_DEFAULT_EXPORT_NAME]
+        );
+        assert!(
+            hits(
+                "src/user-service.ts",
+                &format!("{header}export default class UserService {{}}\n")
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            hits("src/a.test.ts", &format!("{header}const x = 1;\n")),
+            [rules::JS_TEST_FILE_WITHOUT_TESTS]
+        );
+        assert!(
+            hits(
+                "src/a.test.ts",
+                &format!("{header}describe('a', () => {{ it('b', () => {{}}); }});\n")
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            hits("src/a.ts", "const x = 1;\n"),
+            [rules::JS_LICENSE_HEADER]
+        );
+        assert!(
+            hits(
+                "src/a.ts",
+                "#!/usr/bin/env node\n/* MIT License */\nconst x = 1;\n"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
