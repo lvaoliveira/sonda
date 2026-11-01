@@ -165,7 +165,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Info,
         effort_minutes: 0,
-        sonar: &[exact("NoSonar")],
+        sonar: &[exact("NoSonar"), exact("S1291")],
         check: Check::Structural,
         example: None,
     },
