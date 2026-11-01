@@ -27,6 +27,9 @@ pub(crate) struct FileAnalysis {
     pub(crate) code_lines: Vec<usize>,
     pub(crate) tokens: Vec<Token>,
     pub(crate) has_syntax_errors: bool,
+    /// Small (kind, value) facts for rules that look across files, such as
+    /// the package a Java file declares. Empty for other languages.
+    pub(crate) facts: Vec<(String, String)>,
     /// The semantic layer ran out of time: semantic rules found nothing.
     pub(crate) semantic_incomplete: bool,
     /// Of the exact bytes analyzed, so a later upload can prove it sends the same source.
@@ -83,12 +86,15 @@ pub(crate) fn analyze(
     measure_functions(&ctx, syn, root, rules, cfg, &mut issues, &mut metrics);
     let scan = scan_tokens(&ctx, syn, root, rules, &mut issues);
     scan_lines(&ctx, rules, scan.code_lines.len(), &mut issues);
+    scan_java_files(&ctx, lang, root, rules, &mut issues);
 
     metrics.lines = ctx.lines.count();
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
-    issues.retain(|i| !is_suppressed(ctx.lines.text(i.line - 1), i.rule));
+    issues.retain(|i| {
+        i.rule == rules::NOSONAR_COMMENT || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+    });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
         (
@@ -119,6 +125,7 @@ pub(crate) fn analyze(
         code_lines: scan.code_lines,
         tokens: scan.tokens,
         has_syntax_errors: root.has_error(),
+        facts: java_facts(&ctx, lang, root),
         semantic_incomplete,
         sha256: Digest(sha2::Sha256::digest(bytes).into()),
     })
@@ -208,6 +215,246 @@ impl<'a> Ctx<'a> {
 
     fn text(&self, node: Node) -> &'a str {
         &self.src[node.byte_range()]
+    }
+}
+
+/// The facts the project-level Java rules need from this file: its package,
+/// the base packages its Spring scan annotations cover, and the lines of
+/// the components it declares.
+fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
+    if lang != Lang::Java {
+        return Vec::new();
+    }
+    let mut facts = Vec::new();
+    let mut cursor = root.walk();
+    let children: Vec<Node> = root.named_children(&mut cursor).collect();
+    let package = children
+        .iter()
+        .find(|n| n.kind() == "package_declaration")
+        .and_then(|d| {
+            d.named_children(&mut d.walk())
+                .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
+        })
+        .map(|n| ctx.text(n).to_string());
+    if let Some(p) = &package {
+        facts.push(("package".to_string(), p.clone()));
+    }
+    for class in children.iter().filter(|n| n.kind() == "class_declaration") {
+        let Some(mods) = class
+            .children(&mut class.walk())
+            .find(|c| c.kind() == "modifiers")
+        else {
+            continue;
+        };
+        let t = ctx.text(mods);
+        if t.contains("@SpringBootApplication") || t.contains("@ComponentScan") {
+            let mut bases: Vec<String> = Vec::new();
+            let mut stack = vec![mods];
+            while let Some(n) = stack.pop() {
+                if n.kind() == "string_literal" {
+                    bases.push(ctx.text(n).trim_matches('"').to_string());
+                }
+                let mut c = n.walk();
+                stack.extend(n.named_children(&mut c));
+            }
+            if bases.is_empty() {
+                bases.extend(package.clone());
+            }
+            for b in bases {
+                facts.push(("scan".to_string(), b));
+            }
+        }
+        if [
+            "@Component",
+            "@Service",
+            "@Repository",
+            "@Controller",
+            "@RestController",
+            "@Configuration",
+        ]
+        .iter()
+        .any(|a| t.contains(a))
+        {
+            facts.push((
+                "component".to_string(),
+                (class.start_position().row + 1).to_string(),
+            ));
+        }
+    }
+    facts
+}
+
+/// An issue that belongs to a file as a whole, found by looking at the project.
+fn project_issue(rule: &ActiveRule, path: &str, line: usize, message: String) -> Issue {
+    let mut hasher = sha2::Sha256::new();
+    for field in [
+        "sonda-fingerprint-v1",
+        rule.rule.id,
+        path,
+        &line.to_string(),
+    ] {
+        hasher.update((field.len() as u64).to_le_bytes());
+        hasher.update(field.as_bytes());
+    }
+    let hash = hasher.finalize();
+    let mut short = [0; 16];
+    short.copy_from_slice(&hash[..16]);
+    Issue {
+        rule: rule.rule.id,
+        severity: rule.severity,
+        category: rule.rule.category,
+        message,
+        path: path.to_string(),
+        line,
+        column: 1,
+        end_line: line,
+        end_column: 1,
+        effort_minutes: rule.rule.effort_minutes,
+        is_new: true,
+        fingerprint: Digest(short),
+    }
+}
+
+/// Rules about Java packages, which only the whole project can answer: a
+/// directory of Java files has a package-info.java, or has nothing else.
+pub(crate) fn java_package_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    let missing = rules.get(rules::JAVA_PACKAGE_INFO_MISSING);
+    let only = rules.get(rules::JAVA_PACKAGE_INFO_ONLY);
+    if let Some(rule) = rules.get(rules::JAVA_COMPONENT_NOT_SCANNED) {
+        let fact = |f: &FileAnalysis, kind: &str| -> Vec<String> {
+            f.facts
+                .iter()
+                .filter(|(k, _)| k == kind)
+                .map(|(_, v)| v.clone())
+                .collect()
+        };
+        let bases: Vec<String> = files.iter().flat_map(|f| fact(f, "scan")).collect();
+        if !bases.is_empty() {
+            for f in files.iter_mut() {
+                let Some(package) = fact(f, "package").into_iter().next() else {
+                    continue;
+                };
+                let covered = bases
+                    .iter()
+                    .any(|b| package == *b || package.starts_with(&format!("{b}.")));
+                if covered {
+                    continue;
+                }
+                for line in fact(f, "component") {
+                    let line = line.parse().unwrap_or(1);
+                    let msg = format!(
+                        "Package {package} is outside every @ComponentScan base package, so this bean is not registered."
+                    );
+                    let issue = project_issue(rule, &f.path, line, msg);
+                    f.issues.push(issue);
+                }
+            }
+        }
+    }
+    if missing.is_none() && only.is_none() {
+        return;
+    }
+    let mut dirs: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, f) in files.iter().enumerate() {
+        if f.lang == Lang::Java {
+            let dir = f.path.rsplit_once('/').map_or("", |(d, _)| d);
+            dirs.entry(dir.to_string()).or_default().push(i);
+        }
+    }
+    for members in dirs.values() {
+        let is_info = |i: &usize| files[*i].path.ends_with("package-info.java");
+        let infos: Vec<usize> = members.iter().copied().filter(is_info).collect();
+        let others = members.len() - infos.len();
+        if infos.is_empty()
+            && others > 0
+            && let Some(rule) = missing
+        {
+            let first = members[0];
+            let issue = project_issue(
+                rule,
+                &files[first].path,
+                1,
+                "Add a package-info.java to document this package.".into(),
+            );
+            files[first].issues.push(issue);
+        } else if others == 0
+            && let (Some(rule), Some(&info)) = (only, infos.first())
+        {
+            let issue = project_issue(
+                rule,
+                &files[info].path,
+                1,
+                "Remove this package: it holds only its package-info.java.".into(),
+            );
+            files[info].issues.push(issue);
+        }
+    }
+}
+
+/// Rules about a Java file's place in the project, which need its path.
+fn scan_java_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mut Vec<Issue>) {
+    if lang != Lang::Java {
+        return;
+    }
+    let path = ctx.path.replace('\\', "/");
+    let in_main = path.starts_with("src/main/") || path.contains("/src/main/");
+    let mut cursor = root.walk();
+    let children: Vec<Node> = root.named_children(&mut cursor).collect();
+    if let Some(rule) = rules.get(rules::JAVA_PACKAGE_DIRECTORY)
+        && let Some(decl) = children.iter().find(|n| n.kind() == "package_declaration")
+        && let Some(name) = decl
+            .named_children(&mut decl.walk())
+            .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
+        && let Some((dir, _)) = path.rsplit_once('/')
+    {
+        let expected = ctx.text(name).replace('.', "/");
+        if !(dir == expected || dir.ends_with(&format!("/{expected}"))) {
+            let msg = format!(
+                "Move this file to a directory matching package {}.",
+                ctx.text(name)
+            );
+            issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
+        }
+    }
+    if in_main {
+        if let Some(rule) = rules.get(rules::JAVA_TEST_IN_MAIN) {
+            let marker = children
+                .iter()
+                .filter(|n| n.kind() == "class_declaration")
+                .find(|c| ctx.text(**c).contains("@Test"));
+            if let Some(class) = marker {
+                let msg = "Move this test class to the test source directory.".to_string();
+                issues.push(ctx.issue(rule, *class, msg, rule.rule.effort_minutes));
+            }
+        }
+        if let Some(rule) = rules.get(rules::JAVA_ASSERTION_IN_MAIN) {
+            for import in children.iter().filter(|n| n.kind() == "import_declaration") {
+                let t = ctx.text(*import);
+                if t.contains("org.junit.")
+                    || t.contains("org.assertj.")
+                    || t.contains("org.testng.")
+                {
+                    let msg = "Remove the test library from production code.".to_string();
+                    issues.push(ctx.issue(rule, *import, msg, rule.rule.effort_minutes));
+                }
+            }
+        }
+    }
+    if let Some(rule) = rules.get(rules::JAVA_PARSE_FAILURE)
+        && root.has_error()
+    {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if n.is_error() || n.is_missing() {
+                let msg = "The parser could not understand this part of the file.".to_string();
+                issues.push(ctx.issue(rule, n, msg, 0));
+                break;
+            }
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.children(&mut c).collect();
+            stack.extend(kids.into_iter().rev());
+        }
     }
 }
 
@@ -593,6 +840,7 @@ fn scan_tokens(
     let todo_rule = rules.get(rules::TODO_COMMENT);
     let code_rule = rules.get(rules::COMMENTED_OUT_CODE);
     let trailing_rule = rules.get(rules::TRAILING_COMMENT);
+    let nosonar_rule = rules.get(rules::NOSONAR_COMMENT);
     let mark = |flags: &mut Vec<bool>, node: Node| {
         flags[node.start_position().row..=last_row(node)].fill(true);
     };
@@ -607,6 +855,12 @@ fn scan_tokens(
                 .min(ctx.lines.text(node.start_position().row).len())]
                 .trim()
                 .is_empty();
+            if let Some(rule) = nosonar_rule
+                && ctx.text(node).contains("NOSONAR")
+            {
+                let msg = "Review this NOSONAR suppression.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
             if let Some(rule) = trailing_rule
                 && !alone
                 && !is_pragma_comment(ctx.text(node))
@@ -1270,6 +1524,55 @@ pub(crate) mod tests {
         assert_eq!(hit(rules::TRAILING_WHITESPACE), [1]);
         assert_eq!(hit(rules::LINE_LENGTH), [3]);
         assert_eq!(hit(rules::FINAL_NEWLINE), [4]);
+    }
+
+    #[test]
+    fn java_rules_that_need_the_path() {
+        let mut cfg = Config::default();
+        cfg.rules.enabled = [
+            rules::JAVA_PACKAGE_DIRECTORY,
+            rules::JAVA_TEST_IN_MAIN,
+            rules::JAVA_PARSE_FAILURE,
+            rules::NOSONAR_COMMENT,
+        ]
+        .map(String::from)
+        .to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let hits = |path: &str, src: &str| -> Vec<&'static str> {
+            analyze(path, Lang::Java, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .map(|i| i.rule)
+                .filter(|r| {
+                    [
+                        rules::JAVA_PACKAGE_DIRECTORY,
+                        rules::JAVA_TEST_IN_MAIN,
+                        rules::JAVA_PARSE_FAILURE,
+                        rules::NOSONAR_COMMENT,
+                    ]
+                    .contains(r)
+                })
+                .collect()
+        };
+        let ok = "package com.acme;\nclass A {}\n";
+        assert!(hits("src/main/java/com/acme/A.java", ok).is_empty());
+        assert_eq!(
+            hits("src/main/java/com/other/A.java", ok),
+            [rules::JAVA_PACKAGE_DIRECTORY]
+        );
+        let test = "package com.acme;\nclass A { @Test void t() {} }\n";
+        assert_eq!(
+            hits("src/main/java/com/acme/A.java", test),
+            [rules::JAVA_TEST_IN_MAIN]
+        );
+        assert!(hits("src/test/java/com/acme/A.java", test).is_empty());
+        assert_eq!(
+            hits("a/A.java", "class A { int x = ; }\n"),
+            [rules::JAVA_PARSE_FAILURE]
+        );
+        let nosonar = "class A { int x; // NOSONAR\n}\n";
+        assert_eq!(hits("a/A.java", nosonar), [rules::NOSONAR_COMMENT]);
     }
 
     #[test]

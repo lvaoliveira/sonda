@@ -10,11 +10,14 @@ mod cs_security;
 mod cs_smells;
 mod java;
 mod java_bugs;
+mod java_close;
 mod java_end;
 mod java_extra;
 mod java_final;
+mod java_final2;
 mod java_flow;
 mod java_last;
+mod java_last2;
 mod java_more;
 mod java_regex;
 mod java_rest;
@@ -77,13 +80,16 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (java_more::RULES, &[]),
     (java_tests::RULES, &[]),
     (java_extra::RULES, java_extra::OFF_BY_DEFAULT),
-    (java_regex::RULES, &[]),
+    (java_regex::RULES, java_regex::OFF_BY_DEFAULT),
     (java_last::RULES, java_last::OFF_BY_DEFAULT),
     (java_final::RULES, java_final::OFF_BY_DEFAULT),
     (java_tail::RULES, java_tail::OFF_BY_DEFAULT),
     (java_rest::RULES, &[]),
     (java_flow::RULES, java_flow::OFF_BY_DEFAULT),
     (java_end::RULES, java_end::OFF_BY_DEFAULT),
+    (java_close::RULES, java_close::OFF_BY_DEFAULT),
+    (java_last2::RULES, java_last2::OFF_BY_DEFAULT),
+    (java_final2::RULES, java_final2::OFF_BY_DEFAULT),
     (c::RULES, &[]),
     (cs::RULES, cs::OFF_BY_DEFAULT),
     (cs_security::RULES, &[]),

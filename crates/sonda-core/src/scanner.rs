@@ -421,6 +421,16 @@ fn scan_files(
         }
     }
 
+    let package_issues_before: Vec<usize> = files.iter().map(|f| f.issues.len()).collect();
+    analysis::java_package_rules(&mut files, rules);
+    for (f, before) in files.iter_mut().zip(package_issues_before) {
+        for issue in &mut f.issues[before..] {
+            issue.is_new = new_code.is_new(&f.path, issue.line);
+        }
+        f.issues
+            .sort_by(|a, b| (a.line, a.column, a.rule).cmp(&(b.line, b.column, b.rule)));
+    }
+
     let started = Instant::now();
     let tokens: Vec<&[analysis::Token]> = files.iter().map(|f| f.tokens.as_slice()).collect();
     let duplication = duplication::detect(
@@ -881,6 +891,89 @@ mod tests {
         let r = scan(&opts, &cfg, &rules).unwrap();
         assert_eq!(r.files.len(), 1);
         assert_eq!(r.warnings, vec!["big.py: skipped, larger than 1 KB"]);
+    }
+
+    #[test]
+    fn java_packages_need_their_package_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (rel, body) in [
+            ("src/a/A.java", "package a; class A {}"),
+            ("src/b/B.java", "package b; class B {}"),
+            ("src/b/package-info.java", "package b;"),
+            ("src/c/package-info.java", "package c;"),
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ["java/package-info-missing".to_string()].to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
+            advisories: None,
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let hits: Vec<(&str, &str)> = r
+            .files
+            .iter()
+            .flat_map(|f| f.issues.iter().map(|i| (f.path.as_str(), i.rule)))
+            .filter(|(_, rule)| rule.starts_with("java/package-info"))
+            .collect();
+        assert_eq!(
+            hits,
+            [
+                ("src/a/A.java", "java/package-info-missing"),
+                ("src/c/package-info.java", "java/package-info-only"),
+            ]
+        );
+    }
+
+    #[test]
+    fn spring_components_outside_the_scan_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (rel, body) in [
+            (
+                "src/com/acme/App.java",
+                "package com.acme;\n@SpringBootApplication\nclass App {}\n",
+            ),
+            (
+                "src/com/acme/web/Ok.java",
+                "package com.acme.web;\n@RestController\nclass Ok {}\n",
+            ),
+            (
+                "src/com/other/Svc.java",
+                "package com.other;\n\n@Service\nclass Svc {}\n",
+            ),
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ["java/component-not-scanned".to_string()].to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
+            advisories: None,
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let hits: Vec<(&str, usize)> = r
+            .files
+            .iter()
+            .flat_map(|f| f.issues.iter().map(|i| (f.path.as_str(), i.line)))
+            .collect();
+        assert_eq!(hits, [("src/com/other/Svc.java", 3)]);
     }
 
     /// Renders every format; `reverse` feeds the post-discovery stage its

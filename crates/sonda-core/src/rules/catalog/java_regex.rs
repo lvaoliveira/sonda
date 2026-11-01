@@ -9,6 +9,10 @@ use super::regex_checks as checks;
 use super::*;
 use crate::regex::{Flags, Regex, parse_java};
 
+/// This module's rules that are off unless `rules.enabled` lists them
+/// (see `catalog::OFF_BY_DEFAULT`).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &["java/regex-ascii-letters"];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/regex-invalid",
@@ -451,6 +455,26 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "java/regex-ascii-letters",
+        name: "Unicode-aware versions of character classes should be preferred",
+        description: "[a-zA-Z] misses accented letters.",
+        message: "Use \\p{L}.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5867")],
+        check: Check::Query {
+            langs: JAVA,
+            query: r#"(method_invocation name: (identifier) @n (#any-of? @n "compile" "matches" "replaceAll" "replaceFirst" "split")) @match"#,
+            filter: Some(Find(has_ascii_letter_class)),
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: "class A { void f() { Pattern p = Pattern.compile(\"[a-zA-Z]+\"); } }",
+            good: "class A { void f() { Pattern p = Pattern.compile(\"\\\\p{L}+\"); } }",
+        }),
+    },
+    Rule {
         id: "java/regex-multiline-empty-lines",
         name: "Empty lines should not be tested with regex MULTILINE flag",
         description: "With MULTILINE, ^$ also matches an empty string at the end of the input, not just blank lines.",
@@ -748,6 +772,10 @@ fn regex_is_invalid<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 fn control_escape_out_of_range<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     find_in_pattern(call, src, checks::control_escape_out_of_range)
+}
+
+fn has_ascii_letter_class<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    find_in_pattern(call, src, checks::has_ascii_letter_class)
 }
 
 fn multiline_matches_empty_lines<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

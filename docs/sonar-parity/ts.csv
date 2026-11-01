@@ -109,7 +109,7 @@ typescript:S2208,code_smell,critical,no,main,syntactic,todo,,,
 typescript:S2234,code_smell,major,yes,main,types,todo,,,
 typescript:S2245,vulnerability,major,yes,main,syntactic,partial,js/math-random-secret,326 330 338 1241,A02
 typescript:S2251,bug,major,yes,main,syntactic,done,js/for-wrong-direction,,
-typescript:S2260,code_smell,major,no,main,syntactic,todo,,,
+typescript:S2260,code_smell,major,no,main,syntactic,done,java/parse-failure,,
 typescript:S2301,code_smell,major,yes,main,types,todo,,,
 typescript:S2310,code_smell,major,yes,main,syntactic,done,js/loop-counter-assigned,,
 typescript:S2376,code_smell,major,no,main,syntactic,todo,,,
