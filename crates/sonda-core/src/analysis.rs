@@ -83,12 +83,15 @@ pub(crate) fn analyze(
     measure_functions(&ctx, syn, root, rules, cfg, &mut issues, &mut metrics);
     let scan = scan_tokens(&ctx, syn, root, rules, &mut issues);
     scan_lines(&ctx, rules, scan.code_lines.len(), &mut issues);
+    scan_java_files(&ctx, lang, root, rules, &mut issues);
 
     metrics.lines = ctx.lines.count();
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
-    issues.retain(|i| !is_suppressed(ctx.lines.text(i.line - 1), i.rule));
+    issues.retain(|i| {
+        i.rule == rules::NOSONAR_COMMENT || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+    });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
         (
@@ -208,6 +211,72 @@ impl<'a> Ctx<'a> {
 
     fn text(&self, node: Node) -> &'a str {
         &self.src[node.byte_range()]
+    }
+}
+
+/// Rules about a Java file's place in the project, which need its path.
+fn scan_java_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mut Vec<Issue>) {
+    if lang != Lang::Java {
+        return;
+    }
+    let path = ctx.path.replace('\\', "/");
+    let in_main = path.starts_with("src/main/") || path.contains("/src/main/");
+    let mut cursor = root.walk();
+    let children: Vec<Node> = root.named_children(&mut cursor).collect();
+    if let Some(rule) = rules.get(rules::JAVA_PACKAGE_DIRECTORY)
+        && let Some(decl) = children.iter().find(|n| n.kind() == "package_declaration")
+        && let Some(name) = decl
+            .named_children(&mut decl.walk())
+            .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
+        && let Some((dir, _)) = path.rsplit_once('/')
+    {
+        let expected = ctx.text(name).replace('.', "/");
+        if !(dir == expected || dir.ends_with(&format!("/{expected}"))) {
+            let msg = format!(
+                "Move this file to a directory matching package {}.",
+                ctx.text(name)
+            );
+            issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
+        }
+    }
+    if in_main {
+        if let Some(rule) = rules.get(rules::JAVA_TEST_IN_MAIN) {
+            let marker = children
+                .iter()
+                .filter(|n| n.kind() == "class_declaration")
+                .find(|c| ctx.text(**c).contains("@Test"));
+            if let Some(class) = marker {
+                let msg = "Move this test class to the test source directory.".to_string();
+                issues.push(ctx.issue(rule, *class, msg, rule.rule.effort_minutes));
+            }
+        }
+        if let Some(rule) = rules.get(rules::JAVA_ASSERTION_IN_MAIN) {
+            for import in children.iter().filter(|n| n.kind() == "import_declaration") {
+                let t = ctx.text(*import);
+                if t.contains("org.junit.")
+                    || t.contains("org.assertj.")
+                    || t.contains("org.testng.")
+                {
+                    let msg = "Remove the test library from production code.".to_string();
+                    issues.push(ctx.issue(rule, *import, msg, rule.rule.effort_minutes));
+                }
+            }
+        }
+    }
+    if let Some(rule) = rules.get(rules::JAVA_PARSE_FAILURE)
+        && root.has_error()
+    {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if n.is_error() || n.is_missing() {
+                let msg = "The parser could not understand this part of the file.".to_string();
+                issues.push(ctx.issue(rule, n, msg, 0));
+                break;
+            }
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.children(&mut c).collect();
+            stack.extend(kids.into_iter().rev());
+        }
     }
 }
 
@@ -593,6 +662,7 @@ fn scan_tokens(
     let todo_rule = rules.get(rules::TODO_COMMENT);
     let code_rule = rules.get(rules::COMMENTED_OUT_CODE);
     let trailing_rule = rules.get(rules::TRAILING_COMMENT);
+    let nosonar_rule = rules.get(rules::NOSONAR_COMMENT);
     let mark = |flags: &mut Vec<bool>, node: Node| {
         flags[node.start_position().row..=last_row(node)].fill(true);
     };
@@ -607,6 +677,12 @@ fn scan_tokens(
                 .min(ctx.lines.text(node.start_position().row).len())]
                 .trim()
                 .is_empty();
+            if let Some(rule) = nosonar_rule
+                && ctx.text(node).contains("NOSONAR")
+            {
+                let msg = "Review this NOSONAR suppression.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
             if let Some(rule) = trailing_rule
                 && !alone
                 && !is_pragma_comment(ctx.text(node))
@@ -1245,6 +1321,55 @@ pub(crate) mod tests {
         assert_eq!(hit(rules::TRAILING_WHITESPACE), [1]);
         assert_eq!(hit(rules::LINE_LENGTH), [3]);
         assert_eq!(hit(rules::FINAL_NEWLINE), [4]);
+    }
+
+    #[test]
+    fn java_rules_that_need_the_path() {
+        let mut cfg = Config::default();
+        cfg.rules.enabled = [
+            rules::JAVA_PACKAGE_DIRECTORY,
+            rules::JAVA_TEST_IN_MAIN,
+            rules::JAVA_PARSE_FAILURE,
+            rules::NOSONAR_COMMENT,
+        ]
+        .map(String::from)
+        .to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let hits = |path: &str, src: &str| -> Vec<&'static str> {
+            analyze(path, Lang::Java, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .map(|i| i.rule)
+                .filter(|r| {
+                    [
+                        rules::JAVA_PACKAGE_DIRECTORY,
+                        rules::JAVA_TEST_IN_MAIN,
+                        rules::JAVA_PARSE_FAILURE,
+                        rules::NOSONAR_COMMENT,
+                    ]
+                    .contains(r)
+                })
+                .collect()
+        };
+        let ok = "package com.acme;\nclass A {}\n";
+        assert!(hits("src/main/java/com/acme/A.java", ok).is_empty());
+        assert_eq!(
+            hits("src/main/java/com/other/A.java", ok),
+            [rules::JAVA_PACKAGE_DIRECTORY]
+        );
+        let test = "package com.acme;\nclass A { @Test void t() {} }\n";
+        assert_eq!(
+            hits("src/main/java/com/acme/A.java", test),
+            [rules::JAVA_TEST_IN_MAIN]
+        );
+        assert!(hits("src/test/java/com/acme/A.java", test).is_empty());
+        assert_eq!(
+            hits("a/A.java", "class A { int x = ; }\n"),
+            [rules::JAVA_PARSE_FAILURE]
+        );
+        let nosonar = "class A { int x; // NOSONAR\n}\n";
+        assert_eq!(hits("a/A.java", nosonar), [rules::NOSONAR_COMMENT]);
     }
 
     #[test]

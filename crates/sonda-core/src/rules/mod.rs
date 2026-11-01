@@ -21,6 +21,11 @@ pub(crate) const FILE_LENGTH: &str = "common/file-length";
 pub(crate) const FINAL_NEWLINE: &str = "common/final-newline";
 pub(crate) const TAB_CHARACTER: &str = "common/tab-character";
 pub(crate) const TRAILING_COMMENT: &str = "common/trailing-comment";
+pub(crate) const NOSONAR_COMMENT: &str = "common/nosonar-comment";
+pub(crate) const JAVA_PACKAGE_DIRECTORY: &str = "java/package-directory";
+pub(crate) const JAVA_TEST_IN_MAIN: &str = "java/test-in-production-source";
+pub(crate) const JAVA_ASSERTION_IN_MAIN: &str = "java/assertion-in-production";
+pub(crate) const JAVA_PARSE_FAILURE: &str = "java/parse-failure";
 pub(crate) const COMMENTED_OUT_CODE: &str = "common/commented-out-code";
 
 /// Extra check on the node captured as `@match`.

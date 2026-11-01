@@ -5,6 +5,7 @@ mod c;
 mod common;
 mod java;
 mod java_bugs;
+mod java_close;
 mod java_end;
 mod java_extra;
 mod java_final;
@@ -77,6 +78,7 @@ pub static RULES: LazyLock<Vec<&'static Rule>> = LazyLock::new(|| {
         java_rest::RULES,
         java_flow::RULES,
         java_end::RULES,
+        java_close::RULES,
         c::RULES,
     ]
     .into_iter()
@@ -137,6 +139,10 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "common/final-newline",
     "common/tab-character",
     "common/trailing-comment",
+    "common/nosonar-comment",
+    "java/package-directory",
+    "java/test-in-production-source",
+    "java/parse-failure",
     // Java style rules outside SonarQube's default profile that fire on most
     // real code: escaped Unicode, suppressions, public fields, boolean
     // parameters, legacy collections, brace and else conventions.
@@ -214,6 +220,28 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "java/private-fields-no-constructor",
     "java/declared-too-early",
     "java/class-could-be-record",
+    // Batch 18: outside SonarQube's default profile, or tied to a newer Java version.
+    "java/indentation-inconsistent",
+    "java/equals-asymmetric",
+    "java/catch-exception-needlessly",
+    "java/list-search-in-loop",
+    "java/concrete-parameter",
+    "java/annotation-default-passed",
+    "java/serializable-optional-field",
+    "java/test-swallows-everything",
+    "java/component-field-not-injected",
+    "java/record-accessor-override",
+    "java/gyroscope-sensor",
+    "java/switch-to-expression",
+    "java/import-order",
+    "java/record-pattern",
+    "java/single-if-in-pattern-case",
+    "java/extra-comment-slashes",
+    "java/gatherer-initializer",
+    "java/gatherer-default-finisher",
+    "java/class-builder-method-body",
+    "java/text-block-in-expression",
+    "java/one-line-text-block",
 ];
 
 // ---------------------------------------------------- shared filters

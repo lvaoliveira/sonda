@@ -12,10 +12,10 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
-| JavaScript | 461 | 286 | 41 | 82 | 52 | 0 |
-| TypeScript | 481 | 294 | 41 | 93 | 53 | 0 |
-| Python | 397 | 359 | 14 | 24 | 0 | 0 |
-| Java | 703 | 620 | 11 | 71 | 0 | 1 |
+| JavaScript | 461 | 287 | 41 | 81 | 52 | 0 |
+| TypeScript | 481 | 295 | 41 | 92 | 53 | 0 |
+| Python | 397 | 360 | 14 | 23 | 0 | 0 |
+| Java | 703 | 655 | 11 | 37 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 

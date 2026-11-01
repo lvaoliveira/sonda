@@ -117,7 +117,7 @@ javascript:S2234,code_smell,major,yes,main,types,todo,,,
 javascript:S2245,vulnerability,major,yes,main,syntactic,partial,js/math-random-secret,326 330 338 1241,A02
 javascript:S2251,bug,major,yes,main,syntactic,done,js/for-wrong-direction,,
 javascript:S2259,bug,major,yes,main,types,todo,,,
-javascript:S2260,code_smell,major,no,main,syntactic,todo,,,
+javascript:S2260,code_smell,major,no,main,syntactic,done,java/parse-failure,,
 javascript:S2301,code_smell,major,yes,main,types,todo,,,
 javascript:S2310,code_smell,major,yes,main,syntactic,done,js/loop-counter-assigned,,
 javascript:S2376,code_smell,major,no,main,syntactic,todo,,,
