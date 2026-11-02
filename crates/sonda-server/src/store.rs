@@ -109,10 +109,10 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
 
     let analysis_id: i64 = sqlx::query_scalar(
         "INSERT INTO analyses (project_id, branch, commit_sha, tool_version,
-             new_code_reference, measures, gate, gate_passed, warnings, codeowners,
+             new_code_reference, measures, gate, scan_gate, gate_passed, warnings, codeowners,
              project_version, commit_message, scan_duration_ms, dependencies_recorded,
              token_id, rule_settings, rule_profile)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          RETURNING id",
     )
     .bind(project_id)

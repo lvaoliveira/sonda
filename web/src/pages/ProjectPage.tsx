@@ -7,7 +7,7 @@ import { AppShell } from '@/components/shell/AppShell'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { HealthBar, PipMeter, Sparkline } from '@/components/sonda/meters'
-import { GateConditions } from '@/components/sonda/gate'
+import { GateConditions, GateSource } from '@/components/sonda/gate'
 import { GateDot, GateStatus } from '@/components/sonda/status'
 import { componentLabel, componentUrl, coverageUrl, dependenciesUrl } from '@/lib/links'
 import { compactCount, formatAge, formatDebt, formatNumber, shortDate } from '@/lib/format'
@@ -218,7 +218,7 @@ function Gate({ p }: { p: ProjectDetail }) {
           ? 'The gate has no conditions'
           : `${failing} of ${p.gate.conditions.length} conditions failing${noData ? ` · ${noData} without data` : ''}${ignored ? ` · ${ignored} ignored` : ''}`
       }
-      aside={<span className="text-xs text-fg-faint">from the repository’s sonda.toml</span>}
+      aside={<GateSource serverGate={p.gate.serverGate} />}
     >
       <GateConditions conditions={p.gate.conditions} />
     </Card>

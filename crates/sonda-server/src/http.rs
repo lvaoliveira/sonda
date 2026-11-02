@@ -6,8 +6,8 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, deleted_projects, dependencies, drill, gates, ingest,
-    issues, new_code, overview, profiles, project_settings, projects, review, rule_settings, rules,
-    security, session, throttle, tokens,
+    issues, new_code, overview, profiles, project_settings, projects, quality_gates, review,
+    rule_settings, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -108,6 +108,11 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/projects/{key}/settings", patch(project_settings::patch))
         .route("/projects/{key}", delete(deleted_projects::delete))
         .route("/deleted-projects", get(deleted_projects::list))
+        .route("/quality-gates", post(quality_gates::post))
+        .route(
+            "/quality-gates/{id}",
+            put(quality_gates::put).delete(quality_gates::delete),
+        )
         .route(
             "/deleted-projects/{id}/allow",
             post(deleted_projects::allow),

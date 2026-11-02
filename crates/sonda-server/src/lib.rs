@@ -26,6 +26,7 @@ pub mod overview;
 pub mod profiles;
 pub mod project_settings;
 pub mod projects;
+pub mod quality_gates;
 pub mod review;
 pub mod rule_settings;
 pub mod rules;

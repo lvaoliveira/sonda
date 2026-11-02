@@ -411,11 +411,13 @@ them, and each change is recorded with who made it, from what to what.
   version's, and a start an admin set on the old branch no longer applies.
   The old branch keeps its numbers until its next analysis, which judges
   its new code by its scan again, as on any other branch.
+- **Quality gate:** `sonda.toml`'s, or a server gate an admin chooses (see
+  [Quality gates](#quality-gates)).
 
 | Endpoint | |
 |---|---|
-| `GET /api/projects/{key}/settings` | `name`, `mainBranch`, the `branches` with analyses (how many, and the latest's time), and the last 50 `changes`, newest first. |
-| `PATCH /api/projects/{key}/settings` `{"name": "Payments", "mainBranch": "develop"}` | Admins: either or both; `"name": null` removes the name. A name over 100 characters, or a branch without analyses, is a `422`. |
+| `GET /api/projects/{key}/settings` | `name`, `mainBranch`, `qualityGate` (a server gate's `id` and `name`, or null for `sonda.toml`'s), the `branches` with analyses (how many, and the latest's time), and the last 50 `changes`, newest first. |
+| `PATCH /api/projects/{key}/settings` `{"name": "Payments", "mainBranch": "develop", "qualityGate": 3}` | Admins: any of them; `"name": null` removes the name, `"qualityGate": null` goes back to `sonda.toml`'s gate. A name over 100 characters, a branch without analyses, or an unknown gate is a `422`. |
 
 #### Deleting a project
 
@@ -442,15 +444,43 @@ next upload then starts a new project.
 
 ## Quality gates
 
-`GET /api/gates` lists the quality gates projects use, read-only. A gate is
-defined in each repository's `sonda.toml` and stored with every analysis.
-Projects whose latest main-branch analysis used the same conditions share
-a gate, whatever their order in the file. The one equal to sonda's
-built-in default is named "Default"; others are "Custom gate 1", "2", and
-so on. The default comes first, then the rest by how many projects use them.
+A project's gate comes from one of two places
+([ADR-0017](adr/0017-project-settings.md)):
+
+- **Its repository's `sonda.toml`** (the default): the gate is stored with
+  every analysis. Projects whose latest main-branch analysis used the same
+  conditions share a gate, whatever their order in the file. The one equal
+  to sonda's built-in default is named "Default"; others are "Custom gate
+  1", "2", and so on.
+- **A server gate**, which admins create, edit and delete on the Quality
+  gates page, with the same metrics and operators as
+  `[[gate.conditions]]`, and which a project uses once an admin chooses it
+  in its Settings. It wins over `sonda.toml`'s: the server judges the
+  project's latest analysis on every branch by it at once, and every
+  upload after. The upload's answer carries its result, so
+  `sonda scan --upload` passes or fails on it (ADR-0014). A scan without an
+  upload still uses `sonda.toml`'s. Editing a server gate judges its
+  projects again at once; choosing `sonda.toml`'s again brings back each
+  analysis's own conditions. A gate a project uses can't be deleted.
+
+The project and analysis pages say which gate judged a result
+(`gate.serverGate`: its `id` and `name`, or null for `sonda.toml`'s).
+
+`GET /api/gates` lists them all: the default first, then server gates
+(even those no project uses yet), then the rest by how many projects use
+them. It also lists the `metrics` a condition can test.
+
+| Endpoint | |
+|---|---|
+| `POST /api/quality-gates` `{"name": "Strict", "conditions": [{"metric": "new_coverage", "op": "lt", "threshold": 90}]}` | Admins: a server gate. Names are unique, 1 to 100 characters, with 1 to 50 conditions; an unknown metric or operator is a `422`. |
+| `PUT /api/quality-gates/{id}` (the same body) | Admins: its name and conditions; answers the projects judged again. |
+| `DELETE /api/quality-gates/{id}` | Admins: a `422` naming the projects that use it, if any. |
+| `PATCH /api/projects/{key}/settings` `{"qualityGate": 3}` | Admins: the project's server gate, or `null` for `sonda.toml`'s (see [Project settings](#project-settings)). |
 
 Each gate has:
-- an `id`: a short hash of its conditions, stable while they don't change;
+- an `id`: a short hash of its conditions, stable while they don't change,
+  or `server-<id>` for a server gate, which also has `server` (its `id`,
+  and who changed it last and when);
 - its conditions, each with how many of the gate's projects fail it now
   and how many lack data;
 - its projects with their current gate state;

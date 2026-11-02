@@ -44,6 +44,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "project_changes",
             "project_rule_settings",
             "projects",
+            "quality_gates",
             "rule_profile_rules",
             "rule_profiles",
             "sessions",

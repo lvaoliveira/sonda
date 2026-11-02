@@ -98,6 +98,7 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
         { label: 'Coverage on new code < 80%', metric: 'new_coverage', actual: p.coverage == null ? null : 76.8, status: p.coverage == null ? 'no_data' : failing ? 'error' : 'ok' },
         { label: 'Duplication on new code > 3%', metric: 'new_duplicated_lines_density', actual: 1.4, status: 'ok' },
       ],
+      serverGate: null,
     },
     score: p.score,
     ratings: {

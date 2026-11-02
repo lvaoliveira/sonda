@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { ProjectSettingChange, ProjectSettings, ProjectSettingsPatch } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
@@ -53,6 +53,7 @@ function Settings({ settings, isAdmin, save }: { settings: ProjectSettings; isAd
         <NameSetting settings={settings} isAdmin={isAdmin} save={save} />
         <MainBranchSetting settings={settings} isAdmin={isAdmin} save={save} />
       </Card>
+      <QualityGateSetting settings={settings} isAdmin={isAdmin} save={save} />
       <Card id="changes" title="Changes" subtitle="Who changed a setting, newest first">
         {settings.changes.length === 0 ? (
           <p className="m-0 text-[13px] text-fg-muted">No changes yet.</p>
@@ -123,8 +124,61 @@ function DangerZone({ settings }: { settings: ProjectSettings }) {
 
 function describe(c: ProjectSettingChange) {
   if (c.setting === 'main_branch') return `Main branch ${c.old ?? '?'} → ${c.new ?? '?'}`
+  if (c.setting === 'quality_gate') return `Quality gate ${c.old ?? 'sonda.toml’s'} → ${c.new ?? 'sonda.toml’s'}`
   if (c.new === null) return `Name “${c.old}” removed`
   return c.old === null ? `Named “${c.new}”` : `Renamed “${c.old}” → “${c.new}”`
+}
+
+/** The gate the server judges the project by (ADR-0017): its sonda.toml's, or a server gate. */
+function QualityGateSetting({ settings, isAdmin, save }: SettingProps) {
+  const api = useApi()
+  const gates = useAsync(() => api.gates(), [api])
+  const server = gates.state === 'ready' ? gates.data.gates.filter((g) => g.server) : []
+  const current = settings.qualityGate?.id ?? null
+  const [choice, setChoice] = useState(current === null ? '' : String(current))
+  const { busy, error, run } = useSave(save)
+  const chosen = choice === '' ? null : Number(choice)
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    void run({ qualityGate: chosen })
+  }
+  return (
+    <Card id="quality-gate" title="Quality gate" subtitle="The conditions every analysis of the project must meet">
+      <p className="m-0 text-[13px] text-fg-muted">
+        By default, the gate in the repository’s <Mono className="text-[12px]">sonda.toml</Mono>. A server gate wins over it: the server judges the latest
+        analyses by it at once, and every upload, whose answer CI follows. A scan without an upload still uses sonda.toml’s.{' '}
+        <Link to="/gates">All gates →</Link>
+      </p>
+      {isAdmin ? (
+        <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Quality gate"
+            value={choice}
+            onChange={(e) => setChoice(e.target.value)}
+            className="h-8 max-w-full rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge"
+          >
+            <option value="">The gate in sonda.toml</option>
+            {server.map((g) => (
+              <option key={g.server!.id} value={g.server!.id}>
+                {g.name} · {g.conditions.length} {g.conditions.length === 1 ? 'condition' : 'conditions'}
+              </option>
+            ))}
+          </select>
+          <Button type="submit" primary disabled={busy || chosen === current}>
+            Use this gate
+          </Button>
+          {gates.state === 'ready' && server.length === 0 && (
+            <span className="text-xs text-fg-faint">
+              No server gates yet: <Link to="/gates">create one</Link>.
+            </span>
+          )}
+        </form>
+      ) : (
+        <p className="m-0 text-[13px]">{settings.qualityGate ? settings.qualityGate.name : 'The gate in sonda.toml'}</p>
+      )}
+      <SaveError error={error} />
+    </Card>
+  )
 }
 
 /** A save's state: busy, and its error. */

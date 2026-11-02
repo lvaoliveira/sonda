@@ -261,6 +261,13 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Quality gates on the server (ADR-0017): admins create, edit and delete
+  gates on the Quality gates page, with sonda.toml's metrics and
+  operators, and choose one in a project's Settings. It wins over the
+  repository's sonda.toml: the server judges the latest analyses by it at
+  once and every upload after, so `sonda scan --upload` passes or fails on
+  it. Project and analysis pages say which gate judged a result. A gate a
+  project uses can't be deleted (`/api/quality-gates`).
 - Deleting a project (ADR-0017): admins delete one in its Settings page's
   Danger zone by typing its key. Its analyses, issues, sources it alone
   had, dependencies, reviews and settings go, and its project analysis
