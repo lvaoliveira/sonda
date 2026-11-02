@@ -460,6 +460,10 @@ file, the report formats and the public library API.
   duration. Error lines written while handling a request carry its id.
   Paths, query strings and headers are never logged.
   `SONDA_LOG_FORMAT=json` writes one JSON object per line.
+- `sonda-server` Prometheus metrics on a listener of their own
+  (`SONDA_METRICS_LISTEN`, off by default, never the API's port):
+  `sonda_http_requests_total` and `sonda_http_request_duration_seconds` by
+  method and route template ([ADR-0019](docs/adr/0019-observability.md)).
 
 ### Security
 

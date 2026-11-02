@@ -17,6 +17,10 @@ struct Cli {
     /// Address to listen on. Anything but localhost exposes the server.
     #[arg(long, env = "SONDA_LISTEN", default_value = "127.0.0.1:9000")]
     listen: SocketAddr,
+    /// Address to serve Prometheus metrics on, at /metrics (off when unset).
+    /// Unauthenticated: keep it off the public network.
+    #[arg(long, env = "SONDA_METRICS_LISTEN")]
+    metrics_listen: Option<SocketAddr>,
     /// Directory of the built web app (web/dist) to serve.
     #[arg(long, env = "SONDA_WEB_DIR")]
     web_dir: Option<PathBuf>,
@@ -86,7 +90,10 @@ fn main() -> ExitCode {
 async fn start(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
-            let config = Config::load(cli.listen, cli.web_dir, &ProcessEnv)?;
+            let config = Config {
+                metrics_listen: cli.metrics_listen,
+                ..Config::load(cli.listen, cli.web_dir, &ProcessEnv)?
+            };
             sonda_server::run(config).await
         }
         Some(Command::Advisories {

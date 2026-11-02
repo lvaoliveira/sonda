@@ -104,6 +104,25 @@ async fn every_response_carries_a_request_id() {
 }
 
 #[tokio::test]
+async fn metrics_are_served_on_their_own_router_only() {
+    let state = state(unreachable_pool());
+    let metrics = state.metrics.clone();
+    let api = http::router(state, None);
+    get(api.clone(), "/api/no-such-route").await;
+    for path in ["/metrics", "/api/metrics"] {
+        let (status, _) = get(api.clone(), path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    let (status, body) = get(http::metrics_router(metrics), "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"sonda_http_requests_total{method="GET",route="-",status="404"} 3"#),
+        "{body}"
+    );
+    assert!(body.ends_with("# EOF\n"), "{body}");
+}
+
+#[tokio::test]
 async fn health_is_503_when_the_database_is_down() {
     let (status, _) = get(http::router(state(unreachable_pool()), None), "/api/health").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
