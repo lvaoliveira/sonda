@@ -1,6 +1,7 @@
 # ADR-0022: Types from the platform's declarations
 
-- Status: **proposed**
+- Status: **accepted; step 1 built.** The summary, its loader and
+  framework base types in the project index, with four rules (below).
 - Date: 2026-11-02
 
 ## Context
@@ -15,14 +16,14 @@ they never open files, use the network or start processes
 
 C# is where the question is concrete. 61 of its SonarQube rules are
 `related`, not `exact` ([ADR-0015](0015-csharp.md)). Read one by one, about
-half of them aren't missing a type checker. They're missing what the .NET
+30 of them aren't missing a type checker. They're missing what the .NET
 platform declares, which no file of the project says:
 
 | What's missing | Rules |
 |---|---|
-| A framework type's bases and interfaces: is a `FileStream` disposable, how deep is `Form`'s chain | S110, S2325, S2930, S2931, S3215, S3881 |
-| The type of an expression that goes through a framework member: `GetItems().ToList()`, `File.OpenRead(p)`, `client.GetAsync(u)` | S1312, S1449, S1698, S1858, S1905, S3172, S3217, S3242, S4462, S5034, S6602, S6603, S6605, S6608, S6609, S6613, S6966 |
-| A framework method's overloads, parameters and attributes: is there an `IFormatProvider` or `Uri` overload, is the method `[Pure]`, is the parameter `[Localizable]` | S2201, S2234, S3254, S4005, S4055, S4056, S4058 |
+| A framework type's bases and interfaces: is a `FileStream` disposable, how deep is `Exception`'s chain | S110, S2931, S3215, S3881 |
+| The type of an expression or name that goes through a framework member: `GetItems().ToList()`, `File.OpenRead(p)`, an inherited instance member | S1312, S1449, S1698, S1858, S1905, S2325, S3172, S3217, S3242, S4462, S5034, S6602, S6603, S6605, S6608, S6609, S6613, S6966 |
+| A framework method's overloads and parameters: is there an `IFormatProvider` or `Uri` overload | S2201, S2234, S3254, S4005, S4055, S4056, S4058 |
 | What a framework namespace declares | S1128 |
 
 Today these rules report only what a declaration in the project proves,
@@ -32,8 +33,11 @@ keeps them free of false positives and short on recall.
 The rest are out of this ADR's scope: four need the project file, not types
 (SDK-style projects generate assembly attributes: S3904, S3990, S3992,
 S4026), two need taint or inter-procedural analysis (S2077, S5766), and
-about 24 were narrowed on purpose, security hotspots among them. Some of
+about 25 were narrowed on purpose, security hotspots among them. Some of
 those may move once framework types are known; each is re-audited then.
+S2930, first counted with the hierarchy row, is one of them: its
+documentation tracks nine named types and four factory methods, not every
+disposable.
 
 The platform's declarations are published as data. `Microsoft.NETCore.App.Ref`
 and `Microsoft.AspNetCore.App.Ref` are the reference assemblies the compiler
@@ -51,25 +55,47 @@ same scan gives the same result everywhere.
 ### The platform summary
 
 - **Contents:** each public type's full name, arity, kind, base type,
-  interfaces and a few attributes (`[Flags]`, `[Obsolete]`); each public
-  member's kind, name, static or not, return type, and parameters (type,
-  default, `params`, `this` for extension methods); and the attributes
-  rules read (`[Pure]`, `[Localizable]`). Nothing else: no internal
-  members, no documentation.
+  interfaces and a few attributes (`[Flags]`, `[Obsolete]`, abstract,
+  sealed, static); each public or protected member's kind, name, static or
+  not, return type, generic arity, and parameters (type, name, `ref`/`out`/`in`,
+  optional, `params`, `[StringSyntax]` such as `Regex` or `Uri`), with
+  extension methods marked. Nothing else: no internal members, no
+  documentation. Reference assemblies define `[Pure]` and `[Localizable]`
+  but apply them nowhere, so rules that SonarQube documents through them
+  (S2201, S4055) can't read them from the summary.
 - **Source:** the reference packs of the current .NET LTS, .NET 8 first,
   downloaded by version and checksum.
-- **Extraction** is a development tool in the repository (`tools/`), not
-  part of the shipped crates. It reads the assemblies' metadata tables
-  and writes the summary in a compact format: interned names, compressed.
-  The output is committed, with the pack versions it came from, and
-  regenerated on each LTS.
+- **Extraction** is a development tool in the repository (`tools/netref`,
+  its own workspace), not part of the shipped crates. It reads the
+  assemblies' metadata tables with `cildec` (no dependencies, no unsafe
+  code) and writes deflated JSON. `tools/netref/regenerate.sh` downloads
+  the packs and checks their SHA-256; the output is committed
+  (`crates/sonda-core/data`), deterministic, and regenerated on each LTS.
 - **Loading:** workers never open files (ADR-0004), so the summary is
   embedded in the binary and decoded in memory, once per worker on first
-  use. A compressed format needs a pure-Rust decoder, which goes through
-  the dependency policy like any other.
-- **Budget:** at most 2 MB in the binary, decoded in under 50 ms. Measured
-  before this ADR is accepted.
+  use, with `flate2`'s pure-Rust backend, already a dependency of the CLI
+  and server.
+- **Budget:** at most 2 MB in the binary, decoded in under 50 ms. Measured:
+  .NET 8's two packs give 6,697 types and 63,034 members, 611 KB deflated,
+  decoded in under 40 ms in a release build. Scan time on the seven-project
+  corpus didn't change.
 - **Licensing:** the packs' MIT notice ships with the data.
+
+### Names to platform types
+
+The project index ([ADR-0020](0020-cross-file-declarations.md)) resolves
+a type name the way C# does, as far as declarations tell:
+
+1. a type nested in the enclosing types, then a project type, which shadows
+   a platform type of the same name;
+2. a platform type through the namespace and those enclosing it, the
+   file's `using` directives, and the project's `global using` ones;
+3. the SDK's implicit usings (`System`, `System.IO`, `System.Linq` and the
+   rest of `Microsoft.NET.Sdk`'s), only when every namespace the file
+   imports is the project's or the platform's, so a third-party type of the
+   same name can't be taken for a platform one.
+
+A name that stays ambiguous or unknown resolves to nothing.
 
 ### Inference on top
 
@@ -98,8 +124,8 @@ declares, a third-party package's, costs recall.
 The summary describes one framework version, and projects target others.
 Rules that only read declarations (is this type disposable?) are stable
 across versions. Rules that recommend an API (use `string.Create`,
-`Order.Find`) must not recommend one the project's target lacks: each
-member records whether .NET Standard 2.0 has it, and rules recommending
+`Order.Find`) must not recommend one the project's target lacks: step 3
+adds whether .NET Standard 2.0 has each member, and rules recommending
 one that it doesn't stay `related` until sonda reads the project's target
 framework, which is a separate decision.
 
@@ -112,12 +138,29 @@ declarations and light inference, not the project's own checker.
 
 ### Order of work
 
-1. The extraction tool, the summary, its loader, and framework bases in the
-   project index's inheritance: S110, S2325, S2930, S2931, S3215, S3881.
-2. Expression typing through framework members: the 17 rules of the second
+1. **Built.** The extraction tool, the summary, its loader, and framework
+   types in the project index. Exact now:
+   - S110: depth counts framework base classes, and Object, as
+     SonarQube's documentation counts "starting from Object";
+   - S3881: the whole documented pattern, including a re-listed
+     `IDisposable` when a base already implements it, explicit
+     implementations, and base calls in derived classes;
+   - S2931: fields a class creates with `new`, in an initializer or any
+     member, whose type is disposable through the project or the platform;
+   - S3215: casts of a variable whose declared type is an interface to a
+     class or struct, both resolved in the project or the platform.
+
+   On the corpus, the new findings are all true positives under the
+   documentation: explicit `IDisposable.Dispose` (JsonReader, JsonWriter),
+   classes listing `IDisposable` without `Dispose(bool)` next to a project
+   base class, `StringWriter` and `TextWriter` fields in non-disposable
+   classes, and generic interface casts. Casts of third-party interfaces
+   (xUnit's `ITestOutputHelper`) are no longer reported: their type is
+   unknown.
+2. Expression typing through framework members: the 18 rules of the second
    row above.
-3. Overloads, parameters and attributes: S2201, S2234, S3254, S4005, S4055,
-   S4056, S4058, then S1128.
+3. Overloads and parameters: S2234, S3254, S4005, S4056, S4058, then S1128;
+   S2201 and S4055 with their documented lists.
 
 Each step re-audits its rules against the corpus, as ADR-0007 requires,
 before marking them `exact`.
@@ -136,10 +179,10 @@ before marking them `exact`.
 
 ## Consequences
 
-- A generated data file in the repository and about 1 MB more in the
-  binary, regenerated on each .NET LTS.
+- A generated data file in the repository and 611 KB more in the binary,
+  regenerated on each .NET LTS.
 - A development tool with its own metadata-reading dependency, outside the
   shipped crates and their dependency policy.
-- About 31 C# rules can become `exact` without giving up the
+- About 30 C# rules can become `exact` without giving up the
   no-false-positive bar, and third-party types stay unknown.
 - ADR-0008's S4 row points here.

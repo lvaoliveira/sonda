@@ -47,24 +47,26 @@ once per scan, on that index.
 - **The rules** are `Check::Structural`. They keep their ids and their catalog entries, and their checks live in `rules/catalog/cs_project.rs`. Findings point at the exact parameter, member or type, not at column 1.
 - **Their examples and tests** run the project pass over the example as a project of one file, so bad/good examples remain tests (ADR-0007).
 
-The rules on the index are sixteen C# rules:
+The rules on the index are eighteen C# rules:
 - parameter names (S927), defaults (S1006) and `params` (S3262, S3600) against the declaration overridden or implemented;
 - base methods hidden by private (S4015) or wider (S4019) methods;
 - inheritance depth (S110);
 - colliding interface members (S3444);
 - base fields differing by case (S4025);
 - the dispose pattern (S3881);
+- disposable fields in classes that aren't disposable (S2931);
 - on use sites:
   - bitwise operations on enums without `[Flags]` (S3265);
   - arrays written out for `params` parameters (S3878);
   - shared MEF parts created with `new` (S4277);
   - extensions in the namespace of the type they extend (S4226);
   - durable entity interfaces (S6424);
-  - controller action models with under-posted value types (S6964).
+  - controller action models with under-posted value types (S6964);
+  - interface references cast to concrete types (S3215).
 
 ## Consequences
 
-- **What stays unseen:** types from referenced assemblies (NuGet packages, the framework) aren't in the project, so they resolve to nothing. That costs recall: an `Equals(object other)` override isn't compared with `object.Equals(object obj)`. By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`. Fourteen of the sixteen are now. S110 stays `related`, because SonarQube counts framework base classes too. S3881 stays `related`, because it checks part of SonarQube's list.
+- **What stays unseen:** types from referenced packages aren't in the project, so they resolve to nothing. That costs recall. The framework's own types do resolve, through the summary of its reference packs ([ADR-0022](0022-platform-types.md)). By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`, and all eighteen are.
 - **Cost:** extraction is one cursor walk that copies no member bodies, and builds the semantic model only for files with a site that needs it. The scan time of the seven reference projects is unchanged (3.0 s). The project pass parses one JSON summary per C# file. The summaries hold declarations and sites only, a small fraction of each file's size.
 - **The worker model is unchanged.** Workers still analyze one file each and return facts; only what a fact can carry grew. A rule that needs more than declarations from other files (call graphs, data flow across calls) still needs a decision of its own.
 - **Other languages can use the same scheme** when their rules need it, Java first.
