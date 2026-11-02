@@ -925,8 +925,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1192")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(module) @match"#,
-            filter: Some(Find(string_repeated_often)),
+            query: r#"(string) @match"#,
+            filter: Some(Keep(is_first_of_a_repeated_string)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -1050,8 +1050,8 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(assignment left: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile"))
-(parameters (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile"))
-(default_parameter name: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile"))"#,
+(assignment left: (pattern_list (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile")))
+(for_statement left: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile"))"#,
             filter: None,
         },
         example: Some(Example {
@@ -1432,7 +1432,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5906")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(call function: (attribute object: (identifier) @o attribute: (identifier) @a (#eq? @o "self") (#any-of? @a "assertTrue" "assertFalse"))) @match"#,
+            query: r#"(call function: (attribute object: (identifier) @o attribute: (identifier) @a (#eq? @o "self") (#any-of? @a "assertTrue" "assertFalse" "assertEqual" "assertNotEqual"))) @match"#,
             filter: Some(Keep(asserts_a_comparison)),
         },
         example: Some(Example {
@@ -2728,44 +2728,73 @@ fn raises_base_exception(raise: Node, src: &[u8]) -> bool {
     name.is_some_and(|n| matches!(text(n, src), b"Exception" | b"BaseException"))
 }
 
-fn string_repeated_often<'t>(module: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut counts: std::collections::HashMap<&[u8], (usize, Node<'t>)> =
-        std::collections::HashMap::new();
-    let mut cursor = module.walk();
-    if !cursor.goto_first_child() {
-        return None;
+/// Whether this is the first of three or more equal literals in the file, as
+/// SonarQube counts them: ten characters or more, not a bare identifier.
+fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    type Counts = HashMap<Vec<u8>, (usize, usize)>;
+    thread_local! {
+        static CACHE: RefCell<Option<((usize, usize), Counts)>> = const { RefCell::new(None) };
     }
-    loop {
-        let n = cursor.node();
-        if n.kind() == "string"
-            && n.parent()
-                .is_some_and(|p| p.kind() != "expression_statement")
-            && let Some(value) = string_value(n, src).filter(|v| v.len() >= 10)
+    let eligible = |n: Node| -> Option<Vec<u8>> {
+        if n.kind() != "string"
+            || n.parent()
+                .is_none_or(|p| p.kind() == "expression_statement")
         {
-            counts
-                .entry(value)
-                .and_modify(|e| e.0 += 1)
-                .or_insert((1, n));
+            return None;
         }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return counts
-                    .values()
-                    .filter(|(count, _)| *count >= 3)
-                    .map(|(_, node)| *node)
-                    .min_by_key(|n| n.start_byte());
+        let v = string_value(n, src).filter(|v| v.len() >= 10)?;
+        let identifier_like = v.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        (!identifier_like).then(|| v.to_vec())
+    };
+    let Some(mine) = eligible(string) else {
+        return false;
+    };
+    let key = (src.as_ptr() as usize, src.len());
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut counts: Counts = HashMap::new();
+            let mut root = string;
+            while let Some(p) = root.parent() {
+                root = p;
             }
+            let mut cursor = root.walk();
+            if cursor.goto_first_child() {
+                'walk: loop {
+                    let n = cursor.node();
+                    if let Some(v) = eligible(n) {
+                        let e = counts.entry(v).or_insert((0, n.start_byte()));
+                        e.0 += 1;
+                    }
+                    if cursor.goto_first_child() {
+                        continue;
+                    }
+                    while !cursor.goto_next_sibling() {
+                        if !cursor.goto_parent() {
+                            break 'walk;
+                        }
+                    }
+                }
+            }
+            *c = Some((key, counts));
         }
-    }
+        c.as_ref()
+            .and_then(|(_, counts)| counts.get(&mine))
+            .is_some_and(|(count, first)| *count >= 3 && *first == string.start_byte())
+    })
 }
 
 fn negates_a_simple_comparison(not: Node, src: &[u8]) -> bool {
     not.child_by_field_name("argument")
         .and_then(|c| two_operands(c, src))
-        .is_some_and(|(_, op, _)| matches!(op, b"==" | b"!=" | b"<" | b">" | b"<=" | b">="))
+        .is_some_and(|(_, op, _)| {
+            matches!(
+                op,
+                b"==" | b"!=" | b"<" | b">" | b"<=" | b">=" | b"in" | b"is" | b"not in" | b"is not"
+            )
+        })
 }
 
 fn parentheses_fit_on_one_line(paren: Node, _: &[u8]) -> bool {
@@ -3011,8 +3040,18 @@ fn inner_loop_reuses_variable<'t>(for_: Node<'t>, src: &[u8]) -> Option<Node<'t>
     })
 }
 
-fn asserts_a_comparison(call: Node, _: &[u8]) -> bool {
+fn asserts_a_comparison(call: Node, src: &[u8]) -> bool {
     let args = call_arguments(call);
+    let method = call
+        .child_by_field_name("function")
+        .and_then(|f| f.child_by_field_name("attribute"))
+        .map(|a| text(a, src))
+        .unwrap_or_default();
+    if matches!(method, b"assertEqual" | b"assertNotEqual") {
+        // assertEqual(x, True) is assertTrue(x); assertEqual(x, None) is assertIsNone(x).
+        return matches!(args.as_slice(), [a, b] | [a, b, _]
+            if [a, b].iter().any(|v| matches!(v.kind(), "true" | "false" | "none")));
+    }
     matches!(args.as_slice(), [only] if only.kind() == "comparison_operator")
 }
 
@@ -3234,7 +3273,7 @@ mod tests {
         assert_eq!(flagged("py/numpy-nan-equality", src), [6]);
         assert_eq!(flagged("py/startswith-slice", src), [7]);
         assert_eq!(flagged("py/type-comparison", src), [9]);
-        assert_eq!(flagged("py/inverted-boolean", src), [11]);
+        assert_eq!(flagged("py/inverted-boolean", src), [11, 12]);
         assert_eq!(flagged("py/empty-collection-membership", src), [13]);
     }
 

@@ -771,7 +771,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S116")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(assignment left: (attribute object: (identifier) @o attribute: (identifier) @match (#eq? @o "self")))"#,
+            query: r#"(assignment left: (attribute object: (identifier) @o attribute: (identifier) @match (#eq? @o "self")))
+(class_definition body: (block (expression_statement (assignment left: (identifier) @match))))"#,
             filter: Some(Keep(name_is_not_snake_case)),
         },
         example: Some(Example {
@@ -896,7 +897,11 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1481")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(assignment left: (identifier) @match)"#,
+            query: r#"(assignment left: (identifier) @match)
+(assignment left: (pattern_list (identifier) @match))
+(for_statement left: (identifier) @match)
+(for_statement left: (pattern_list (identifier) @match))
+(except_clause (as_pattern alias: (as_pattern_target (identifier) @match)))"#,
             filter: Some(Keep(local_is_never_read)),
         },
         example: Some(Example {
@@ -916,8 +921,11 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1172")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(function_definition) @match"#,
-            filter: Some(Find(parameter_is_unused)),
+            query: r#"(parameters (identifier) @match)
+(parameters (default_parameter name: (identifier) @match))
+(parameters (typed_parameter (identifier) @match))
+(parameters (typed_default_parameter name: (identifier) @match))"#,
+            filter: Some(Keep(parameter_is_unused)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -2647,11 +2655,206 @@ const FRAMEWORK_METHODS: &[&[u8]] = &[
     b"defaultTestResult",
 ];
 
+const STDLIB_MODULES: &[&str] = &[
+    "abc",
+    "argparse",
+    "array",
+    "ast",
+    "asyncio",
+    "atexit",
+    "base64",
+    "binascii",
+    "bisect",
+    "builtins",
+    "bz2",
+    "calendar",
+    "cgi",
+    "cmd",
+    "code",
+    "codecs",
+    "collections",
+    "colorsys",
+    "concurrent",
+    "configparser",
+    "contextlib",
+    "copy",
+    "copyreg",
+    "csv",
+    "ctypes",
+    "dataclasses",
+    "datetime",
+    "dbm",
+    "decimal",
+    "difflib",
+    "dis",
+    "doctest",
+    "email",
+    "encodings",
+    "enum",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "filecmp",
+    "fileinput",
+    "fnmatch",
+    "fractions",
+    "ftplib",
+    "functools",
+    "gc",
+    "getopt",
+    "getpass",
+    "gettext",
+    "glob",
+    "gzip",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "html",
+    "http",
+    "imaplib",
+    "importlib",
+    "inspect",
+    "io",
+    "ipaddress",
+    "itertools",
+    "json",
+    "keyword",
+    "linecache",
+    "locale",
+    "logging",
+    "lzma",
+    "mailbox",
+    "math",
+    "mimetypes",
+    "mmap",
+    "multiprocessing",
+    "numbers",
+    "operator",
+    "optparse",
+    "os",
+    "pathlib",
+    "pickle",
+    "pkgutil",
+    "platform",
+    "plistlib",
+    "poplib",
+    "pprint",
+    "profile",
+    "queue",
+    "random",
+    "re",
+    "readline",
+    "reprlib",
+    "resource",
+    "sched",
+    "secrets",
+    "select",
+    "selectors",
+    "shelve",
+    "shlex",
+    "shutil",
+    "signal",
+    "site",
+    "smtplib",
+    "socket",
+    "socketserver",
+    "sqlite3",
+    "ssl",
+    "stat",
+    "statistics",
+    "string",
+    "struct",
+    "subprocess",
+    "sys",
+    "sysconfig",
+    "tarfile",
+    "telnetlib",
+    "tempfile",
+    "textwrap",
+    "threading",
+    "time",
+    "timeit",
+    "tkinter",
+    "token",
+    "tokenize",
+    "trace",
+    "traceback",
+    "tracemalloc",
+    "types",
+    "typing",
+    "unicodedata",
+    "unittest",
+    "urllib",
+    "uuid",
+    "venv",
+    "warnings",
+    "weakref",
+    "webbrowser",
+    "wsgiref",
+    "xml",
+    "xmlrpc",
+    "zipfile",
+    "zlib",
+    "zoneinfo",
+];
+
+/// Whether `class` extends something from the standard library, so that its
+/// methods may be overrides whose names the library chose.
+pub(super) fn extends_a_standard_library_class(class: Node, src: &[u8]) -> bool {
+    let Some(supers) = class.child_by_field_name("superclasses") else {
+        return false;
+    };
+    let mut root = class;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    // `from xml.sax import handler` / `from logging import Handler`.
+    let imported: Vec<(Vec<u8>, bool)> = statements(root)
+        .into_iter()
+        .filter(|s| s.kind() == "import_from_statement")
+        .flat_map(|s| {
+            let module = s
+                .child_by_field_name("module_name")
+                .map(|m| text(m, src).to_vec())
+                .unwrap_or_default();
+            let stdlib = STDLIB_MODULES.iter().any(|m| {
+                module.starts_with(m.as_bytes()) && module.get(m.len()).is_none_or(|b| *b == b'.')
+            });
+            let mut cursor = s.walk();
+            s.children_by_field_name("name", &mut cursor)
+                .map(|n| {
+                    let name = match n.kind() {
+                        "aliased_import" => n.child_by_field_name("alias").map(|a| text(a, src)),
+                        _ => Some(text(n, src)),
+                    };
+                    (name.unwrap_or_default().to_vec(), stdlib)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    statements(supers).iter().any(|b| {
+        let t = text(*b, src);
+        let first = t.split(|c| *c == b'.').next().unwrap_or_default();
+        STDLIB_MODULES.iter().any(|m| m.as_bytes() == first)
+            || imported
+                .iter()
+                .any(|(name, stdlib)| *stdlib && name.as_slice() == first)
+    })
+}
+
 fn method_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
     let Some(function) = name.parent() else {
         return false;
     };
     let n = text(name, src);
+    // An override of a standard-library method keeps the library's name.
+    if function
+        .parent()
+        .and_then(|b| b.parent())
+        .is_some_and(|c| c.kind() == "class_definition" && extends_a_standard_library_class(c, src))
+    {
+        return false;
+    }
     in_class(function)
         && !is_dunder(n)
         && !FRAMEWORK_METHODS.contains(&n)
@@ -2670,7 +2873,11 @@ fn name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
     let n = text(name, src);
     let t = n.trim_ascii_start();
     let t = t.strip_prefix(b"_").unwrap_or(t);
-    !is_dunder(n) && !t.is_empty() && !is_snake_case(t)
+    // CONSTANT_CASE is a constant, whoever holds it.
+    let constant = !t.is_empty()
+        && t.iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_');
+    !is_dunder(n) && !t.is_empty() && !is_snake_case(t) && !constant
 }
 
 fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
@@ -2785,7 +2992,26 @@ fn import_is_unused(import: Node, src: &[u8]) -> bool {
 
 fn local_is_never_read(name: Node, src: &[u8]) -> bool {
     let n = text(name, src);
-    if n.starts_with(b"_") || name.parent().is_none_or(|p| p.kind() != "assignment") {
+    // `except E as exc:` where exc is never mentioned in the handler.
+    if let Some(clause) = name
+        .parent()
+        .filter(|p| p.kind() == "as_pattern_target")
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .filter(|p| p.kind() == "except_clause")
+    {
+        return !n.starts_with(b"_")
+            && body_of(clause).is_some_and(|b| count_word(text(b, src), n) == 0);
+    }
+    // Assigned alone, unpacked from a tuple, or taking the values of a loop.
+    let kind = name.parent().map_or("", |p| p.kind());
+    let unpacked = kind == "pattern_list"
+        && name
+            .parent()
+            .and_then(|p| p.parent())
+            .is_some_and(|g| matches!(g.kind(), "assignment" | "for_statement"));
+    let loop_variable = kind == "for_statement";
+    if n.starts_with(b"_") || !(kind == "assignment" || unpacked || loop_variable) {
         return false;
     }
     let Some(function) = nearest_function(name, 20) else {
@@ -2798,24 +3024,115 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
         && !contains_ignoring_case(whole, b"exec(")
 }
 
-fn parameter_is_unused<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Nested functions are often callbacks with a fixed signature.
-    if !function.parent().is_some_and(|p| p.kind() == "module") {
-        return None;
+fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
+    let n = text(name, src);
+    // The parameter list belongs to a def, not a lambda.
+    let Some(function) = name
+        .parent()
+        .and_then(|p| {
+            if p.kind() == "parameters" {
+                Some(p)
+            } else {
+                p.parent()
+            }
+        })
+        .and_then(|params| params.parent())
+        .filter(|f| f.kind() == "function_definition")
+    else {
+        return false;
+    };
+    if n.starts_with(b"_") || matches!(n, b"self" | b"cls") {
+        return false;
     }
-    let body = body_of(function)?;
-    if is_stub_body(body) {
-        return None;
+    let fname = name_of(function, src);
+    // Decorated functions are registered by framework conventions, and the
+    // dunder methods have the signature a protocol gives them.
+    if is_decorated(function) || (is_dunder(fname) && fname != b"__init__") {
+        return false;
     }
-    let (params, _) = plain_parameters(function, src);
+    let Some(body) = body_of(function) else {
+        return false;
+    };
+    // Nested functions are callbacks with a signature somebody else chose.
+    let owner = function.parent().and_then(|p| {
+        if p.kind() == "decorated_definition" {
+            p.parent()
+        } else {
+            Some(p)
+        }
+    });
+    if !owner.is_some_and(|o| {
+        o.kind() == "module"
+            || o.kind() == "block" && o.parent().is_some_and(|c| c.kind() == "class_definition")
+    }) {
+        return false;
+    }
+    // A public method of a class that extends the standard library is most
+    // likely an override: its signature belongs to the library.
+    if !fname.starts_with(b"_")
+        && function
+            .parent()
+            .filter(|b| b.kind() == "block")
+            .and_then(|b| b.parent())
+            .is_some_and(|c| {
+                c.kind() == "class_definition" && extends_a_standard_library_class(c, src)
+            })
+    {
+        return false;
+    }
+    // A body with nothing in it is an interface, not dead code.
+    let only_pass = statements(body).iter().all(|s| match s.kind() {
+        "pass_statement" | "raise_statement" => true,
+        "expression_statement" => s
+            .named_child(0)
+            .is_some_and(|e| matches!(e.kind(), "string" | "ellipsis")),
+        _ => false,
+    });
+    if only_pass {
+        return false;
+    }
     let whole = text(body, src);
-    if contains_ignoring_case(whole, b"locals()") {
-        return None;
+    if [&b"locals()"[..], b"vars()", b"eval(", b"exec("]
+        .iter()
+        .any(|w| contains_ignoring_case(whole, w))
+    {
+        return false;
     }
-    params
-        .into_iter()
-        .find(|(_, n)| !n.starts_with(b"_") && count_word(whole, n) == 0)
-        .map(|(p, _)| p)
+    // A method that a base class of this file declares is an override.
+    if overrides_a_method_of_this_file(function, fname, src) {
+        return false;
+    }
+    count_word(whole, n) == 0
+}
+
+/// Whether `function` is a method of a class whose base, defined in this file,
+/// has a method of the same name.
+fn overrides_a_method_of_this_file(function: Node, name: &[u8], src: &[u8]) -> bool {
+    let Some(class) = function
+        .parent()
+        .and_then(|b| b.parent())
+        .filter(|c| c.kind() == "class_definition")
+    else {
+        return false;
+    };
+    let Some(supers) = class.child_by_field_name("superclasses") else {
+        return false;
+    };
+    let mut root = class;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    statements(supers).iter().any(|base| {
+        statements(root).into_iter().any(|s| {
+            s.kind() == "class_definition"
+                && name_of(s, src) == text(*base, src)
+                && body_of(s).is_some_and(|b| {
+                    statements(b)
+                        .iter()
+                        .any(|m| m.kind() == "function_definition" && name_of(*m, src) == name)
+                })
+        })
+    })
 }
 
 fn has_many_returns(function: Node, _: &[u8]) -> bool {

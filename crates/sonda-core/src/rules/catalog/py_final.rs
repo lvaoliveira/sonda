@@ -16,6 +16,67 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &["py/long-integer-suffix"];
 
 pub(super) static RULES: &[Rule] = &[
     Rule {
+        id: "py/unused-test-method",
+        name: "Test methods should be discoverable",
+        description: "unittest runs only the methods whose name starts with test: another method is never run unless something calls it.",
+        message: "Rename this method so that it starts with \"test\", or remove it.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S5899")],
+        check: Check::Query {
+            langs: PYTHON,
+            query: r#"(function_definition name: (identifier) @match)"#,
+            filter: Some(Keep(method_unittest_will_not_run)),
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "import unittest\n\nclass T(unittest.TestCase):\n    def check_api(self):\n        self.assertEqual(1, 1)\n",
+            good: "import unittest\n\nclass T(unittest.TestCase):\n    def test_api(self):\n        self.assertEqual(1, 1)\n",
+        }),
+    },
+    Rule {
+        id: "py/default-parameter-modified",
+        name: "Function parameters' default values should not be modified or assigned",
+        description: "The default is created once and shared by every call that omits the argument: changing it changes it for all of them.",
+        message: "Change this default value to None and initialize the parameter inside the function.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S5717")],
+        check: Check::Query {
+            langs: PYTHON,
+            query: r#"(parameters (default_parameter name: (identifier) @match))
+(parameters (typed_default_parameter name: (identifier) @match))"#,
+            filter: Some(Keep(default_is_modified_in_the_body)),
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "def add(item, seen=set()):\n    seen.add(item)\n    return seen\n",
+            good: "def add(item, seen=None):\n    seen = set() if seen is None else seen\n    seen.add(item)\n    return seen\n",
+        }),
+    },
+    Rule {
+        id: "py/cleartext-protocol-client",
+        name: "Clear-text protocols should not be used",
+        description: "FTP, Telnet and plain SMTP send data, including credentials, unencrypted.",
+        message: "Use the encrypted version of this protocol (SFTP, SSH, FTPS, SMTPS).",
+        category: Vulnerability,
+        severity: Minor,
+        effort_minutes: 10,
+        sonar: &[exact("S5332")],
+        check: Check::Query {
+            langs: PYTHON,
+            query: r#"(call function: [(identifier) (attribute)] @f (#match? @f "^(ftplib\\.)?FTP$|^(telnetlib\\.)?Telnet$")) @match"#,
+            filter: None,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "import ftplib\nftp = ftplib.FTP('example.org')\n",
+            good: "import ftplib\nftp = ftplib.FTP_TLS('example.org')\n",
+        }),
+    },
+    Rule {
         id: "py/argument-passed-twice",
         name: "Function arguments should be passed only once",
         description: "A parameter given by position and again by keyword raises a TypeError.",
@@ -1050,6 +1111,176 @@ fn is_backtick_string(string: Node, src: &[u8]) -> bool {
 
 fn has_lowercase_long_suffix(integer: Node, src: &[u8]) -> bool {
     text(integer, src).last() == Some(&b'l')
+}
+
+// ---------------------------------------------------------------- tests and defaults
+
+const UNITTEST_HOOKS: &[&[u8]] = &[
+    b"setUp",
+    b"tearDown",
+    b"setUpClass",
+    b"tearDownClass",
+    b"asyncSetUp",
+    b"asyncTearDown",
+    b"run",
+    b"debug",
+    b"id",
+    b"shortDescription",
+    b"countTestCases",
+    b"defaultTestResult",
+    b"subTest",
+    b"doCleanups",
+    b"skipTest",
+    b"fail",
+];
+
+fn method_unittest_will_not_run(name_node: Node, src: &[u8]) -> bool {
+    let Some(method) = name_node
+        .parent()
+        .filter(|m| m.kind() == "function_definition")
+    else {
+        return false;
+    };
+    // A method of a class that is a test case and nothing else: with other
+    // bases it may be a mixin that a real test case pulls in.
+    let Some(class) = method
+        .parent()
+        .and_then(|b| b.parent())
+        .filter(|c| c.kind() == "class_definition")
+    else {
+        return false;
+    };
+    let Some(supers) = class.child_by_field_name("superclasses") else {
+        return false;
+    };
+    let bases = statements(supers);
+    let [base] = bases.as_slice() else {
+        return false;
+    };
+    if !matches!(
+        text(*base, src),
+        b"unittest.TestCase"
+            | b"TestCase"
+            | b"unittest.IsolatedAsyncioTestCase"
+            | b"IsolatedAsyncioTestCase"
+    ) {
+        return false;
+    }
+    let name = text(name_node, src);
+    if name.starts_with(b"test")
+        || name.starts_with(b"_")
+        || UNITTEST_HOOKS.contains(&name)
+        || method
+            .parent()
+            .is_some_and(|p| p.kind() == "decorated_definition")
+    {
+        return false;
+    }
+    let Some(body) = body_of(class) else {
+        return false;
+    };
+    let whole = text(body, src);
+    // Mentioned elsewhere in the class: a helper another method calls.
+    let mentions = whole
+        .windows(name.len())
+        .enumerate()
+        .filter(|(i, w)| {
+            *w == name
+                && !whole
+                    .get(i.wrapping_sub(1))
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                && !whole
+                    .get(i + name.len())
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        })
+        .count();
+    mentions <= 1
+}
+
+fn default_is_modified_in_the_body(name: Node, src: &[u8]) -> bool {
+    const MUTATORS: &[&[u8]] = &[
+        b"append",
+        b"extend",
+        b"insert",
+        b"remove",
+        b"pop",
+        b"clear",
+        b"update",
+        b"add",
+        b"discard",
+        b"sort",
+        b"reverse",
+        b"setdefault",
+        b"popitem",
+    ];
+    let Some(function) = name
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .filter(|f| f.kind() == "function_definition")
+    else {
+        return false;
+    };
+    let Some(body) = function.child_by_field_name("body") else {
+        return false;
+    };
+    let param = text(name, src);
+    // A parameter that is rebound (`seen = seen or set()`) holds a new object.
+    let mut rebound = false;
+    walk(body, &mut |n| {
+        if n.kind() == "assignment"
+            && n.child_by_field_name("left")
+                .is_some_and(|l| l.kind() == "identifier" && text(l, src) == param)
+        {
+            rebound = true;
+        }
+        !rebound
+    });
+    if rebound {
+        return false;
+    }
+    let mut modified = false;
+    walk(body, &mut |n| {
+        if modified
+            || matches!(
+                n.kind(),
+                "function_definition" | "lambda" | "class_definition"
+            )
+        {
+            return false;
+        }
+        let is_param =
+            |x: Option<Node>| x.is_some_and(|x| x.kind() == "identifier" && text(x, src) == param);
+        match n.kind() {
+            // param.attr = ..., param[i] = ..., param += ...
+            "assignment" | "augmented_assignment" => {
+                if let Some(left) = n.child_by_field_name("left") {
+                    modified |= match left.kind() {
+                        "attribute" => is_param(left.child_by_field_name("object")),
+                        "subscript" => is_param(left.child_by_field_name("value")),
+                        "identifier" => n.kind() == "augmented_assignment" && is_param(Some(left)),
+                        _ => false,
+                    };
+                }
+            }
+            "call" => {
+                if let Some(f) = n.child_by_field_name("function")
+                    && f.kind() == "attribute"
+                    && is_param(f.child_by_field_name("object"))
+                    && f.child_by_field_name("attribute")
+                        .is_some_and(|a| MUTATORS.contains(&text(a, src)))
+                {
+                    modified = true;
+                }
+            }
+            "delete_statement" => {
+                modified |= text(n, src).windows(param.len()).any(|w| w == param);
+            }
+            _ => {}
+        }
+        true
+    });
+    modified
 }
 
 // ---------------------------------------------------------------- Django

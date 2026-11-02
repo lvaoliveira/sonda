@@ -1804,8 +1804,17 @@ fn function_captures_nothing(function: Node, src: &[u8]) -> bool {
         return false;
     }
     let own = declared_names(func, src);
+    // Anything declared in any function around it counts: a function that
+    // reads a component's state cannot leave the component.
+    let outermost = {
+        let mut top = enclosing;
+        while let Some(up) = enclosing_function_of(top) {
+            top = up;
+        }
+        top
+    };
     let outer_scope: Vec<&[u8]> = {
-        let all = declared_names(enclosing, src);
+        let all = declared_names(outermost, src);
         let inner = declared_names(func, src);
         all.into_iter().filter(|n| !inner.contains(n)).collect()
     };
