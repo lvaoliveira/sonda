@@ -94,9 +94,10 @@ pub(crate) fn analyze(
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
-    // C#'s `#pragma warning disable S1234` regions silence SonarQube keys.
+    // C#'s `#pragma warning disable S1234` regions and `[SuppressMessage]`
+    // attributes silence SonarQube keys.
     let pragmas = if lang == Lang::CSharp {
-        pragma_regions(src)
+        suppressed_regions(src, root)
     } else {
         Vec::new()
     };
@@ -105,7 +106,7 @@ pub(crate) fn analyze(
         i.rule == rules::NOSONAR_COMMENT
             || i.rule == "py/suppression-comment-format"
             || !(is_suppressed(ctx.lines.text(i.line - 1), i.rule)
-                || silenced_by_pragma(&pragmas, i.line, i.rule))
+                || silenced_in(&pragmas, i.line, i.rule))
     });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
@@ -373,11 +374,19 @@ pub(crate) fn is_classic_assembly_info(names: &[&str]) -> bool {
 /// NeutralResourcesLanguage.
 fn cs_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> {
     let mut facts = Vec::new();
-    let pragmas = pragma_regions(ctx.src);
+    let pragmas = suppressed_regions(ctx.src, root);
     if !pragmas.is_empty()
         && let Ok(json) = serde_json::to_string(&pragmas)
     {
-        facts.push((PRAGMA_FACT.to_string(), json));
+        facts.push((SUPPRESSION_FACT.to_string(), json));
+    }
+    if ctx.src.contains("SuppressMessage") {
+        let globals = global_suppressions(ctx.src, root);
+        if !globals.is_empty()
+            && let Ok(json) = serde_json::to_string(&globals)
+        {
+            facts.push((GLOBAL_SUPPRESSION_FACT.to_string(), json));
+        }
     }
     // The types this file declares, for rules that compare declarations
     // across files (ADR-0020).
@@ -572,14 +581,43 @@ pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             }
         }
     }
-    // Pragma regions silence what the project pass found too.
-    for f in files.iter_mut() {
-        let Some((_, json)) = f.facts.iter().find(|(k, _)| k == PRAGMA_FACT) else {
-            continue;
-        };
-        let regions: Vec<PragmaRegion> = serde_json::from_str(json).unwrap_or_default();
-        f.issues
-            .retain(|i| !silenced_by_pragma(&regions, i.line, i.rule));
+    // Pragma regions and attributes silence what the project pass found
+    // too, and assembly-level suppressions silence the declarations they
+    // target, in whichever file those are.
+    let globals: Vec<GlobalSuppression> = files
+        .iter()
+        .filter_map(|f| f.facts.iter().find(|(k, _)| k == GLOBAL_SUPPRESSION_FACT))
+        .flat_map(|(_, json)| {
+            serde_json::from_str::<Vec<GlobalSuppression>>(json).unwrap_or_default()
+        })
+        .collect();
+    let targets: Vec<(&str, &str)> = globals
+        .iter()
+        .map(|g| (g.scope.as_str(), g.target.as_str()))
+        .collect();
+    let targeted: Vec<(usize, String, usize, usize)> =
+        rules::cs_project::targeted_regions(files.iter().map(|f| f.facts.as_slice()), &targets)
+            .into_iter()
+            .map(|(g, file, start, end)| (file, globals[g].key.clone(), start, end))
+            .collect();
+    for (i, f) in files.iter_mut().enumerate() {
+        let mut regions: Vec<SuppressedRegion> = f
+            .facts
+            .iter()
+            .find(|(k, _)| k == SUPPRESSION_FACT)
+            .and_then(|(_, json)| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        regions.extend(targeted.iter().filter(|(file, _, _, _)| *file == i).map(
+            |(_, key, start, end)| SuppressedRegion {
+                key: Some(key.clone()),
+                start: *start,
+                end: *end,
+            },
+        ));
+        if !regions.is_empty() {
+            f.issues
+                .retain(|issue| !silenced_in(&regions, issue.line, issue.rule));
+        }
     }
 }
 
@@ -1866,25 +1904,26 @@ fn todo_tag(comment: &str) -> Option<&'static str> {
 
 /// `NOSONAR` or `sonda-ignore` on a line suppresses every issue on it;
 /// `sonda-ignore: rule-a, rule-b` suppresses only the listed rules.
-/// A region of a C# file where `#pragma warning disable` silences a
+/// A region of a C# file where `#pragma warning disable` or a
+/// `[SuppressMessage]` attribute silences a
 /// SonarQube key, or every warning when `key` is None: lines `start` to
 /// `end`, both included.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct PragmaRegion {
+pub(crate) struct SuppressedRegion {
     key: Option<String>,
     start: usize,
     end: usize,
 }
 
-/// The fact kind a C# file's pragma regions travel under, for issues the
+/// The fact kind a C# file's suppressed regions travel under, for issues the
 /// project pass adds.
-const PRAGMA_FACT: &str = "cs-pragmas";
+const SUPPRESSION_FACT: &str = "cs-suppressions";
 
 /// The `#pragma warning disable`/`restore` regions of a C# file, as Roslyn
 /// applies them: from the line after `disable` to the line before the
 /// matching `restore`, or to the end of the file. Without a list, `disable`
 /// silences every warning and `restore` ends every region.
-pub(crate) fn pragma_regions(src: &str) -> Vec<PragmaRegion> {
+pub(crate) fn pragma_regions(src: &str) -> Vec<SuppressedRegion> {
     let mut open: Vec<(Option<String>, usize)> = Vec::new();
     let mut regions = Vec::new();
     for (i, line) in src.lines().enumerate() {
@@ -1924,7 +1963,7 @@ pub(crate) fn pragma_regions(src: &str) -> Vec<PragmaRegion> {
                     codes.is_empty() || k.as_ref().is_some_and(|k| codes.contains(k))
                 });
                 open = still;
-                regions.extend(closed.into_iter().map(|(key, start)| PragmaRegion {
+                regions.extend(closed.into_iter().map(|(key, start)| SuppressedRegion {
                     key,
                     start,
                     end: line_no - 1,
@@ -1933,7 +1972,7 @@ pub(crate) fn pragma_regions(src: &str) -> Vec<PragmaRegion> {
             _ => {}
         }
     }
-    regions.extend(open.into_iter().map(|(key, start)| PragmaRegion {
+    regions.extend(open.into_iter().map(|(key, start)| SuppressedRegion {
         key,
         start,
         end: usize::MAX,
@@ -1941,9 +1980,138 @@ pub(crate) fn pragma_regions(src: &str) -> Vec<PragmaRegion> {
     regions
 }
 
-/// Whether a pragma region silences `rule` on `line`: every rule, or the
+/// An attribute's arguments: (name, value) for each, the name of `checkId:`
+/// or `Target =`, none for a positional one. Values lose their quotes.
+fn attribute_arguments<'s>(attribute: Node, src: &'s str) -> Vec<(Option<&'s str>, &'s str)> {
+    let Some(args) = attribute
+        .named_children(&mut attribute.walk())
+        .find(|c| c.kind() == "attribute_argument_list")
+    else {
+        return Vec::new();
+    };
+    args.named_children(&mut args.walk())
+        .filter(|a| a.kind() == "attribute_argument" && a.named_child_count() > 0)
+        .filter_map(|a| {
+            let value = a.named_child(a.named_child_count() as u32 - 1)?;
+            let value = src[value.byte_range()].trim_matches(|c| c == '"' || c == '@');
+            let name = (a.named_child_count() > 1)
+                .then(|| src[a.byte_range()].split([':', '=']).next())
+                .flatten()
+                .map(str::trim)
+                .filter(|n| n.chars().all(|c| c.is_alphanumeric() || c == '_'));
+            Some((name, value))
+        })
+        .collect()
+}
+
+/// The SonarQube key a `[SuppressMessage(category, checkId)]` names: its
+/// check id up to the colon (`"S2190:Recursion should..."`).
+fn suppressed_key(attribute: Node, src: &str) -> Option<String> {
+    let args = attribute_arguments(attribute, src);
+    let id = args
+        .iter()
+        .find(|(name, _)| *name == Some("checkId"))
+        .or_else(|| args.iter().filter(|(name, _)| name.is_none()).nth(1))?
+        .1;
+    let key = id.split(':').next()?.trim();
+    (!key.is_empty()).then(|| key.to_string())
+}
+
+/// A named argument of an attribute: the value of `Target = "~M:..."`.
+fn named_argument(attribute: Node, name: &str, src: &str) -> Option<String> {
+    attribute_arguments(attribute, src)
+        .into_iter()
+        .find(|(n, _)| *n == Some(name))
+        .map(|(_, value)| value.to_string())
+}
+
+fn is_suppress_message(attribute: Node, src: &str) -> bool {
+    attribute.child_by_field_name("name").is_some_and(|n| {
+        let name = src[n.byte_range()].rsplit('.').next().unwrap_or_default();
+        let name = name.strip_suffix("Attribute").unwrap_or(name);
+        matches!(name, "SuppressMessage" | "UnconditionalSuppressMessage")
+    })
+}
+
+/// Pragma regions, and the declarations a `[SuppressMessage]` attribute on
+/// them silences, over their whole extent.
+pub(crate) fn suppressed_regions(src: &str, root: Node) -> Vec<SuppressedRegion> {
+    let mut regions = pragma_regions(src);
+    if !src.contains("SuppressMessage") {
+        return regions;
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "attribute_list" {
+            // On a declaration; `[assembly: ...]` ones are global attributes.
+            if let Some(target) = n.parent().filter(|p| p.kind() != "global_attribute") {
+                let mut c = n.walk();
+                for a in n
+                    .named_children(&mut c)
+                    .filter(|a| a.kind() == "attribute" && is_suppress_message(*a, src))
+                {
+                    if let Some(key) = suppressed_key(a, src) {
+                        regions.push(SuppressedRegion {
+                            key: Some(key),
+                            start: target.start_position().row + 1,
+                            end: target.end_position().row + 1,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+        // Attributes sit on declarations, not in method bodies.
+        if matches!(n.kind(), "block" | "arrow_expression_clause") {
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    regions
+}
+
+/// An assembly-level `[SuppressMessage]`: its key, and the scope and target
+/// the project pass resolves against the project's declarations.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct GlobalSuppression {
+    pub(crate) key: String,
+    pub(crate) scope: String,
+    pub(crate) target: String,
+}
+
+/// The fact kind a file's assembly-level suppressions travel under.
+const GLOBAL_SUPPRESSION_FACT: &str = "cs-global-suppressions";
+
+fn global_suppressions(src: &str, root: Node) -> Vec<GlobalSuppression> {
+    let mut out = Vec::new();
+    let mut cursor = root.walk();
+    for global in root
+        .named_children(&mut cursor)
+        .filter(|g| g.kind() == "global_attribute")
+    {
+        let mut c = global.walk();
+        for a in global
+            .named_children(&mut c)
+            .filter(|a| a.kind() == "attribute" && is_suppress_message(*a, src))
+        {
+            if let Some(key) = suppressed_key(a, src) {
+                out.push(GlobalSuppression {
+                    key,
+                    scope: named_argument(a, "Scope", src)
+                        .unwrap_or_default()
+                        .to_ascii_lowercase(),
+                    target: named_argument(a, "Target", src).unwrap_or_default(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Whether a suppressed region silences `rule` on `line`: every rule, or the
 /// rules that reference the SonarQube key it names, exactly or not.
-fn silenced_by_pragma(regions: &[PragmaRegion], line: usize, rule: &str) -> bool {
+fn silenced_in(regions: &[SuppressedRegion], line: usize, rule: &str) -> bool {
     if regions.is_empty() {
         return false;
     }
@@ -2467,22 +2635,22 @@ pub(crate) mod tests {
         assert_eq!(
             pragma_regions(src),
             [
-                PragmaRegion {
+                SuppressedRegion {
                     key: Some("S1244".into()),
                     start: 4,
                     end: 4
                 },
-                PragmaRegion {
+                SuppressedRegion {
                     key: Some("CA1822".into()),
                     start: 8,
                     end: 8
                 },
-                PragmaRegion {
+                SuppressedRegion {
                     key: Some("S1244".into()),
                     start: 8,
                     end: 8
                 },
-                PragmaRegion {
+                SuppressedRegion {
                     key: None,
                     start: 12,
                     end: usize::MAX
@@ -2497,6 +2665,43 @@ pub(crate) mod tests {
             .map(|i| i.line)
             .collect();
         assert_eq!(floats, [6, 10]);
+    }
+
+    #[test]
+    fn csharp_suppress_message_attributes() {
+        let src = "using System.Diagnostics.CodeAnalysis;\nclass A {\n[SuppressMessage(\"Major Code Smell\", \"S1244:Floating point numbers should not be tested for equality\", Justification = \"exact\")]\nbool F(double x) {\nreturn x == 0.1;\n}\n[SuppressMessage(\"Style\", \"S9999\")]\nbool G(double x) {\nreturn x == 0.2;\n}\n}\n[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(\"Bug\", checkId: \"S1244\")]\nclass B {\nbool H(double x) => x == 0.3;\n}\n";
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&Lang::CSharp.grammar()).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let regions = suppressed_regions(src, tree.root_node());
+        assert_eq!(
+            regions,
+            [
+                SuppressedRegion {
+                    key: Some("S1244".into()),
+                    start: 12,
+                    end: 15
+                },
+                SuppressedRegion {
+                    key: Some("S9999".into()),
+                    start: 7,
+                    end: 10
+                },
+                SuppressedRegion {
+                    key: Some("S1244".into()),
+                    start: 3,
+                    end: 6
+                },
+            ]
+        );
+        let a = run(Lang::CSharp, src);
+        let floats: Vec<usize> = a
+            .issues
+            .iter()
+            .filter(|i| i.rule == "cs/float-equality")
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(floats, [9]);
     }
 
     #[test]
