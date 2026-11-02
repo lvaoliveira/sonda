@@ -192,7 +192,9 @@ SBOM), then match that list against published vulnerabilities.
 
 ## Pull request decoration: GitHub, GitLab and Bitbucket
 
-**Status:** planned (2026-11-01), nothing built. As SonarQube does, the
+**Status:** designed for GitHub in
+[ADR-0021](adr/0021-pull-request-decoration.md) (proposed, 2026-11-02);
+nothing built. As SonarQube does, the
 result of analyzing a pull request (or GitLab merge request) shows on the
 pull request itself: a summary comment, inline comments on new issues, and
 a status check that can block merging when the gate fails. Today only
