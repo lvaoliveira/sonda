@@ -494,6 +494,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Deeply nested JavaScript and TypeScript took far longer since the last
+  JavaScript rules: `js/unused-assignment` asked every reference to a
+  local for its ancestors, which in tree-sitter means a search from the
+  root each time, and suppression comments were re-read from the whole
+  line for every issue on it. A function nested 20,000 levels deep that
+  reads one local at every level timed out (15 s) and now takes 5 s; the
+  existing 20,000-level test went from 24 s to 3 s.
 - On the server, `new_vulnerable_dependencies` and its severe variant
   counted every vulnerable dependency as new when the main branch's new
   code period started at an analysis from a CLI that didn't upload

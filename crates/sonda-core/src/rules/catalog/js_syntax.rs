@@ -1234,6 +1234,36 @@ pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool)
     }
 }
 
+/// `walk`, also passing each node's ancestors from `node` down, nearest
+/// last. `parent()` searches down from the root, so calling it for every
+/// node visited is quadratic in deeply nested code; the walk already knows.
+pub(super) fn walk_with_ancestors<'t>(
+    node: Node<'t>,
+    visit: &mut impl FnMut(Node<'t>, &[Node<'t>]) -> bool,
+) {
+    let mut cursor = node.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    let mut ancestors = vec![node];
+    loop {
+        let n = cursor.node();
+        if visit(n, &ancestors) && cursor.goto_first_child() {
+            ancestors.push(n);
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if ancestors.len() == 1 || !cursor.goto_parent() {
+                return;
+            }
+            ancestors.pop();
+        }
+    }
+}
+
 pub(super) fn strip_parens(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         match node.named_child(0) {

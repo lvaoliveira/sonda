@@ -1277,9 +1277,13 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
             return false;
         }
     }
+    if !reads_property_of(r, text(subject, src), src, and) {
+        return false;
+    }
     // `a && a.x === 1 && a.y === 2`: SonarQube leaves a chain whose later
     // operands are comparisons of the same value, which cannot join one
-    // optional chain.
+    // optional chain. Asked last: `parent()` searches down from the root, so
+    // asking it for every `&&` is quadratic in deeply nested code.
     if and
         && let Some(outer) = binary.parent().filter(|p| {
             p.kind() == "binary_expression"
@@ -1292,7 +1296,7 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
     {
         return false;
     }
-    reads_property_of(r, text(subject, src), src, and)
+    true
 }
 
 /// Whether `expr` reads a property or calls a method of `subject`, in a way

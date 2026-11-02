@@ -94,11 +94,17 @@ pub(crate) fn analyze(
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
+    // Each line's suppression is read once: a file of one very long line can
+    // have thousands of issues on it.
+    let mut suppressions: HashMap<usize, Suppression> = HashMap::new();
     issues.retain(|i| {
         // A malformed suppression comment cannot suppress the report about itself.
         i.rule == rules::NOSONAR_COMMENT
             || i.rule == "py/suppression-comment-format"
-            || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+            || !suppressions
+                .entry(i.line)
+                .or_insert_with(|| Suppression::of(ctx.lines.text(i.line - 1)))
+                .covers(i.rule)
     });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
@@ -1842,23 +1848,46 @@ fn todo_tag(comment: &str) -> Option<&'static str> {
     })
 }
 
-/// `NOSONAR` or `sonda-ignore` on a line suppresses every issue on it;
-/// `sonda-ignore: rule-a, rule-b` suppresses only the listed rules.
+/// What a line's suppression comment covers: `NOSONAR` or `sonda-ignore`
+/// suppresses every issue on it; `sonda-ignore: rule-a, rule-b` only the
+/// listed rules.
+enum Suppression<'a> {
+    Nothing,
+    Everything,
+    Rules(Vec<&'a str>),
+}
+
+impl<'a> Suppression<'a> {
+    fn of(line: &'a str) -> Self {
+        if line.contains("NOSONAR") {
+            return Self::Everything;
+        }
+        let Some(pos) = line.find("sonda-ignore") else {
+            return Self::Nothing;
+        };
+        let rest = line[pos + "sonda-ignore".len()..].trim_start();
+        match rest.strip_prefix(':') {
+            None => Self::Everything,
+            Some(ids) => Self::Rules(
+                ids.split([',', ' ', '\t'])
+                    .map(|s| s.trim_end_matches("*/").trim())
+                    .collect(),
+            ),
+        }
+    }
+
+    fn covers(&self, rule: &str) -> bool {
+        match self {
+            Self::Nothing => false,
+            Self::Everything => true,
+            Self::Rules(ids) => ids.contains(&rule),
+        }
+    }
+}
+
+#[cfg(test)]
 fn is_suppressed(line: &str, rule: &str) -> bool {
-    if line.contains("NOSONAR") {
-        return true;
-    }
-    let Some(pos) = line.find("sonda-ignore") else {
-        return false;
-    };
-    let rest = line[pos + "sonda-ignore".len()..].trim_start();
-    match rest.strip_prefix(':') {
-        None => true,
-        Some(ids) => ids
-            .split([',', ' ', '\t'])
-            .map(|s| s.trim_end_matches("*/").trim())
-            .any(|id| id == rule),
-    }
+    Suppression::of(line).covers(rule)
 }
 
 struct LineIndex<'a> {
@@ -1950,6 +1979,22 @@ pub(crate) mod tests {
         );
         let a = run(Lang::JavaScript, &ifs);
         assert_eq!(a.metrics.complexity, depth as u32 + 1);
+    }
+
+    /// Regression: js/unused-assignment asked every reference for its
+    /// ancestors, and `parent()` searches down from the root, so a local
+    /// used at every level of deep nesting cost the cube of the depth.
+    #[test]
+    fn locals_used_in_deeply_nested_code_stay_cheap() {
+        let depth = 5_000;
+        let src = format!(
+            "function g(items) {{\nlet a = f();\nconst hit = items.find(f);\n{}{}}}\n",
+            "if (a && hit) {\na = 2;\n".repeat(depth),
+            "}\n".repeat(depth)
+        );
+        let a = run(Lang::JavaScript, &src);
+        assert_eq!(a.metrics.functions, 1);
+        assert!(!rules_hit(&a).contains(&"js/unused-assignment"));
     }
 
     #[test]
