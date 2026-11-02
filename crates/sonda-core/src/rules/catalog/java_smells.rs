@@ -1157,7 +1157,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_invocation object: (object_creation_expression) name: (identifier) @n (#eq? @n "getClass")) @match"#,
-            filter: Some(Keep(creates_a_plain_object)),
+            filter: None,
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1349,7 +1349,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/control-character-in-literal",
         name: "Whitespace and control characters in literals should be explicit",
-        description: "A literal tab is invisible and easy to lose in an editor.",
+        description: "A literal tab or other invisible character is easy to lose in an editor.",
         message: "Use \\t.",
         category: CodeSmell,
         severity: Major,
@@ -3347,14 +3347,6 @@ fn class_is_empty(class: Node, _: &[u8]) -> bool {
         })
 }
 
-fn creates_a_plain_object(call: Node, _: &[u8]) -> bool {
-    // `new Object() {...}.getClass()` is how an anonymous class is obtained.
-    call.child_by_field_name("object").is_some_and(|c| {
-        let mut cursor = c.walk();
-        !c.children(&mut cursor).any(|k| k.kind() == "class_body")
-    })
-}
-
 fn has_arguments(creation: Node, _: &[u8]) -> bool {
     !call_arguments(creation).is_empty()
 }
@@ -3462,7 +3454,16 @@ fn public_static_holds_mutable_state(field: Node, src: &[u8]) -> bool {
 }
 
 fn contains_a_tab_character(string: Node, src: &[u8]) -> bool {
-    text(string, src).contains(&b'\t')
+    // A raw tab, other control characters or an invisible Unicode separator.
+    std::str::from_utf8(text(string, src)).is_ok_and(|t| {
+        t.chars().any(|c| {
+            (c.is_control() && !matches!(c, '\n' | '\r'))
+                || matches!(
+                    c,
+                    '\u{200B}'..='\u{200F}' | '\u{2028}' | '\u{2029}' | '\u{2060}' | '\u{FEFF}'
+                )
+        })
+    })
 }
 
 fn concatenates_text(arg: Node, src: &[u8]) -> bool {
@@ -4336,7 +4337,7 @@ mod tests {
         assert!(flagged("java/identical-methods", src).is_empty());
         assert_eq!(flagged("java/mutable-public-static", src), [12]);
         assert_eq!(flagged("java/unused-local-variable", src), [13]);
-        assert_eq!(flagged("java/object-for-get-class", src), [15]);
+        assert_eq!(flagged("java/object-for-get-class", src), [14, 15]);
         assert_eq!(flagged("java/junit-assert-simplifiable", src), [16]);
     }
 
