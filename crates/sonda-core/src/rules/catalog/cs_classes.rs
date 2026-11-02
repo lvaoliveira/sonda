@@ -135,26 +135,6 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
-        id: "cs/field-could-be-local",
-        name: "Private fields only used as locals should be locals",
-        description: "A field that every method assigns before reading carries no state between calls; as a \
-                      field, it suggests otherwise and isn't thread-safe.",
-        message: "Make this field a local variable in the methods that use it.",
-        category: CodeSmell,
-        severity: Minor,
-        effort_minutes: 5,
-        sonar: &[related("S1450")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: fields_used_as_locals,
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class Foo { private int total; public int Sum(int x) { total = x + 5; return total * 2; } }",
-            good: "class Foo { public int Sum(int x) { var total = x + 5; return total * 2; } }",
-        }),
-    },
-    Rule {
         id: "cs/argument-order",
         name: "Arguments should be passed in the order of the parameters they're named after",
         description: "`Divide(dividend, divisor)` to a method declared `Divide(divisor, dividend)` is almost \
@@ -602,11 +582,6 @@ fn member_scope(m: &Model, mut scope: ScopeId) -> Option<ScopeId> {
     }
 }
 
-/// The function node owning each function scope.
-fn function_nodes<'t>(m: &Model<'t>) -> HashMap<ScopeId, Node<'t>> {
-    m.functions.iter().map(|f| (f.scope, f.node)).collect()
-}
-
 /// The references to each declaration, in source order.
 fn refs_by_decl(m: &Model) -> Vec<Vec<usize>> {
     let mut by = vec![Vec::new(); m.decls.len()];
@@ -616,82 +591,6 @@ fn refs_by_decl(m: &Model) -> Vec<Vec<usize>> {
         }
     }
     by
-}
-
-/// A write that is a whole statement of the member's body, run on every
-/// call: `x = ...;` or `this.x = ...;` directly in the body block.
-fn unconditional_write(reference: Node, function: Node) -> bool {
-    let mut node = reference;
-    for _ in 0..2 {
-        let Some(p) = node.parent() else {
-            return false;
-        };
-        node = p;
-        if node.kind() == "assignment_expression" {
-            break;
-        }
-    }
-    node.kind() == "assignment_expression"
-        && node.parent().is_some_and(|s| {
-            s.kind() == "expression_statement"
-                && s.parent()
-                    .is_some_and(|b| Some(b) == function.child_by_field_name("body"))
-        })
-}
-
-fn fields_used_as_locals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let by_decl = refs_by_decl(m);
-    let functions = function_nodes(m);
-    m.decls
-        .iter()
-        .enumerate()
-        .filter(|(i, d)| {
-            if d.kind != DeclKind::Field || d.reads == 0 || d.is_static || by_decl[*i].is_empty() {
-                return false;
-            }
-            // A plain private field with no initializer or attributes.
-            let Some(declarator) = d
-                .declarator
-                .filter(|x| x.kind() == "variable_declarator" && x.named_child_count() == 1)
-            else {
-                return false;
-            };
-            let Some(field) = declarator
-                .parent()
-                .and_then(|v| v.parent())
-                .filter(|f| f.kind() == "field_declaration")
-            else {
-                return false;
-            };
-            if !is_private(field, src) || !attribute_names(field, src).is_empty() {
-                return false;
-            }
-            // Per member that uses it, the first use is an unconditional write.
-            let mut first_use: HashMap<ScopeId, usize> = HashMap::new();
-            for &r in &by_decl[*i] {
-                let Some(member) = member_scope(m, m.refs[r].scope) else {
-                    return false;
-                };
-                // A lambda or local function may run more than once per call.
-                if m.function_scope(m.refs[r].scope) != member {
-                    return false;
-                }
-                let entry = first_use.entry(member).or_insert(r);
-                if m.refs[r].node.start_byte() < m.refs[*entry].node.start_byte() {
-                    *entry = r;
-                }
-            }
-            first_use.iter().all(|(member, r)| {
-                let reference = &m.refs[*r];
-                reference.write
-                    && !reference.read
-                    && functions.get(member).is_some_and(|f| {
-                        f.kind() == "method_declaration" && unconditional_write(reference.node, *f)
-                    })
-            })
-        })
-        .map(|(_, d)| d.node)
-        .collect()
 }
 
 fn arguments_swapped<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
@@ -1432,7 +1331,6 @@ mod tests {
     #[test]
     fn fields_and_statics() {
         let src = "namespace N;\nclass Foo {\nprivate int total;\nprivate int kept;\nprivate int cond;\npublic int Sum(int x) { total = x + 5; return total * 2; }\npublic void Keep(int x) { kept += x; }\npublic int Read() => kept;\npublic int C(int x) { if (x > 0) { cond = x; } return cond; }\nprivate int Twice(int a) { return a * 2; }\nprivate int Scaled(int a) { return a * kept; }\nprivate int This(int a) { return this.GetHashCode() + a; }\n}\nclass Derived : Base { private int Helper(int a) => a; }";
-        assert_eq!(flagged("cs/field-could-be-local", src), [3]);
         assert_eq!(flagged("cs/could-be-static", src), [10]);
     }
 

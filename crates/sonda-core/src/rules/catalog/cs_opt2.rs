@@ -18,7 +18,6 @@ use super::*;
 /// Rules that are off unless `rules.enabled` lists them (see
 /// `catalog::OFF_BY_DEFAULT`): all of this module's.
 pub(super) static OFF_BY_DEFAULT: &[&str] = &[
-    "cs/parameter-overwritten",
     "cs/disposable-fields-without-idisposable",
     "cs/lock-on-local",
     "cs/redundant-to-string",
@@ -60,27 +59,6 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
 
 pub(super) static RULES: &[Rule] = &[
     // ---- Bugs ----
-    Rule {
-        id: "cs/parameter-overwritten",
-        name: "Parameters should not be overwritten before they're read",
-        description: "Assigning a parameter before reading it throws away the caller's argument; the method \
-                      probably meant a local.",
-        message: "Read this parameter before overwriting it, or use a local variable.",
-        category: Bug,
-        severity: Minor,
-        effort_minutes: 5,
-        sonar: &[related("S1226")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(method_declaration parameters: (parameter_list) body: (block)) @match",
-            filter: Some(Find(overwritten_parameter)),
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { int F(int limit) { limit = 10; return limit * 2; } }",
-            good: "class A { int F(int limit) { limit = Math.Min(limit, 10); return limit * 2; } }",
-        }),
-    },
     Rule {
         id: "cs/disposable-fields-without-idisposable",
         name: "Classes with disposable fields should be disposable",
@@ -861,24 +839,6 @@ pub(super) static RULES: &[Rule] = &[
 ];
 
 // ---------------------------------------------------- filters
-
-fn overwritten_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let params = method.child_by_field_name("parameters")?;
-    let mut cursor = params.walk();
-    // ref and out parameters are written on purpose.
-    let names: Vec<&[u8]> = params
-        .named_children(&mut cursor)
-        .filter(|p| p.kind() == "parameter" && !has_parameter_modifier(*p, &[b"ref", b"out"], src))
-        .filter_map(|p| p.child_by_field_name("name").map(|n| text(n, src)))
-        .collect();
-    let body = method.child_by_field_name("body")?;
-    let first = *cs_statements(body).first()?;
-    let assignment = operand(first)
-        .filter(|e| e.kind() == "assignment_expression" && operator_text(*e, src) == b"=")?;
-    let target = text(assignment.child_by_field_name("left")?, src);
-    let value = assignment.child_by_field_name("right")?;
-    (names.contains(&target) && count_word(text(value, src), target) == 0).then_some(assignment)
-}
 
 /// `ref`, `out`, `this`... on a parameter, past any attributes.
 pub(super) fn has_parameter_modifier(parameter: Node, wanted: &[&[u8]], src: &[u8]) -> bool {
@@ -1809,7 +1769,6 @@ mod tests {
         let src = class(
             "int F(int limit) { limit = 10; return limit; }\nint G(int limit) { limit = Math.Min(limit, 10); return limit; }\nvoid H() { var sync = new object(); lock (sync) { } lock (field) { } }",
         );
-        assert_eq!(flagged("cs/parameter-overwritten", &src), [3]);
         assert_eq!(flagged("cs/lock-on-local", &src), [5]);
         let d = "namespace N;\nclass Log { private readonly FileStream file = File.OpenWrite(\"x\"); }\nclass Ok : IDisposable { private Timer t = new Timer(); public void Dispose() { } }\nclass Given { private readonly Stream s; public Given(Stream s) { this.s = s; } }";
         assert_eq!(flagged("cs/disposable-fields-without-idisposable", d), [2]);
@@ -1919,7 +1878,6 @@ mod tests {
             "cs/async-method-name",
             "cs/nested-generic-signature",
             "cs/uninferable-type-parameter",
-            "cs/parameter-overwritten",
             "cs/lock-on-local",
             "cs/explicit-delegate-creation",
             "cs/indexer-parameter-type",
