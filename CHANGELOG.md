@@ -479,6 +479,11 @@ file, the report formats and the public library API.
   (`SONDA_METRICS_LISTEN`, off by default, never the API's port):
   `sonda_http_requests_total` and `sonda_http_request_duration_seconds` by
   method and route template ([ADR-0019](docs/adr/0019-observability.md)).
+- `sonda-server` metrics for uploads (`sonda_uploads_total` by result,
+  including uploads cut off by the timeout or the client, and
+  `sonda_upload_duration_seconds`), the database pool's idle, in-use and
+  maximum connections, and the daily advisory sync's runs, last success and
+  imported advisories.
 
 ### Security
 

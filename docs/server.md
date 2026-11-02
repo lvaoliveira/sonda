@@ -930,6 +930,13 @@ services:
 |---|---|---|
 | `sonda_http_requests_total` | `method`, `route`, `status` | Requests completed. |
 | `sonda_http_request_duration_seconds` | `method`, `route` | Time to answer, as a histogram from 5 ms to the 30 s request timeout. |
+| `sonda_uploads_total` | `result` | Uploads that reached the handler: `stored`; `rejected` (invalid, unsupported encoding, a token for another project); `failed` (an internal error); `cancelled` (the request timed out or the client went away). Unauthenticated and oversized uploads are refused before that, and show only in the request metrics. |
+| `sonda_upload_duration_seconds` | | Time to store an analysis, for stored uploads only: decoding, storing, and refreshing new code and gates. |
+| `sonda_db_pool_connections` | `state` | Database connections open, `idle` or `in_use`, read at each scrape. |
+| `sonda_db_pool_max_connections` | | The most connections the pool opens (10). |
+| `sonda_advisory_sync_runs_total` | `result` | Runs of the daily sync (`SONDA_ADVISORY_SYNC=true`): `ok`, `record_errors` (completed, some records not imported), or `failed`. `sonda-server advisories sync` from cron runs in its own process and isn't counted. |
+| `sonda_advisory_sync_last_success_timestamp_seconds` | | When a sync last completed, as a Unix time; 0 until one has. |
+| `sonda_advisory_sync_advisories_imported_total` | | Advisories the daily sync added or updated. |
 
 Labels are bounded, so the number of series is too:
 - `route` is the route's template (`/api/projects/{key}`), or `-` for
@@ -937,7 +944,20 @@ Labels are bounded, so the number of series is too:
 - `method` is one of the standard methods, or `other`;
 - project keys, branches and users never become labels.
 
-Counters start at zero when the server starts, as Prometheus expects.
+Counters start at zero when the server starts, as Prometheus expects, and
+every `result` is listed from the start, so `rate()` and alerts work
+before the first one happens. Alerts worth having:
+
+```yaml
+- alert: SondaUploadsFailing
+  expr: increase(sonda_uploads_total{result=~"failed|cancelled"}[1h]) > 0
+- alert: SondaDatabasePoolFull
+  expr: sonda_db_pool_connections{state="in_use"} >= sonda_db_pool_max_connections
+  for: 5m
+# Only with SONDA_ADVISORY_SYNC=true: two missed daily syncs.
+- alert: SondaAdvisorySyncStale
+  expr: time() - sonda_advisory_sync_last_success_timestamp_seconds > 2 * 86400
+```
 
 ## Running without Docker
 
