@@ -5,6 +5,7 @@
 
 use crate::api::ApiError;
 use crate::http::State;
+use crate::observability::UploadResult;
 use crate::store;
 use axum::Json;
 use axum::body::Bytes;
@@ -206,6 +207,24 @@ pub struct StoredIssue {
 pub async fn create(
     axum::extract::State(state): axum::extract::State<State>,
     axum::extract::Extension(caller): axum::extract::Extension<crate::api::Caller>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<store::Summary>), ApiError> {
+    // Counted however it ends, including a timeout or a client that goes
+    // away, which drop this future and with it `upload` (ADR-0019).
+    let upload = state.metrics.start_upload();
+    let result = store_upload(&state, caller, headers, body).await;
+    upload.finish(match &result {
+        Ok(_) => UploadResult::Stored,
+        Err(ApiError::Internal(_)) => UploadResult::Failed,
+        Err(_) => UploadResult::Rejected,
+    });
+    result
+}
+
+async fn store_upload(
+    state: &State,
+    caller: crate::api::Caller,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<store::Summary>), ApiError> {

@@ -180,14 +180,20 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
 /// The metrics listener's routes (`SONDA_METRICS_LISTEN`): `GET /metrics`
 /// and nothing else. Unauthenticated, so it must not share the API's
 /// address; whoever can reach it is up to the operator (ADR-0019).
-pub fn metrics_router(metrics: Arc<observability::Metrics>) -> Router {
+pub fn metrics_router(metrics: Arc<observability::Metrics>, pool: sqlx::PgPool) -> Router {
     Router::new()
         .route(
             "/metrics",
             get(
-                |axum::extract::State(metrics): axum::extract::State<
+                |axum::extract::State((metrics, pool)): axum::extract::State<(
                     Arc<observability::Metrics>,
-                >| async move {
+                    sqlx::PgPool,
+                )>| async move {
+                    metrics.observe_pool(
+                        pool.size(),
+                        pool.num_idle(),
+                        pool.options().get_max_connections(),
+                    );
                     match metrics.encode() {
                         Ok(text) => (
                             [(
@@ -202,7 +208,7 @@ pub fn metrics_router(metrics: Arc<observability::Metrics>) -> Router {
                 },
             ),
         )
-        .with_state(metrics)
+        .with_state((metrics, pool))
 }
 
 /// For load balancers and `docker compose`: 200 when the database answers.
