@@ -261,6 +261,14 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Pull request analyses (ADR-0021): in a GitHub Actions `pull_request` job,
+  `sonda scan --upload` and `sonda upload` say which pull request the
+  analysis belongs to (or `--pull-request` and `--pull-request-base`
+  elsewhere). The server keeps them apart from branches, under
+  `pr:<number>`, lists them on the project page, names them on analyses,
+  and removes them 30 days after their last analysis. A fork's pull
+  request is scanned but not uploaded. Branch names like `pr:12` are kept
+  for pull requests.
 - Quality gates on the server (ADR-0017): admins create, edit and delete
   gates on the Quality gates page, with sonda.toml's metrics and
   operators, and choose one in a project's Settings. It wins over the

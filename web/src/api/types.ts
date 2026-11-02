@@ -573,6 +573,8 @@ export interface ProjectDetail {
   dependencies: DependencySummary | null
   /** On the main branch, where new code starts (ADR-0011); null on other branches. */
   newCodePeriod: NewCodePeriod | null
+  /** Its pull requests, most recently analyzed first (ADR-0021); not among `branches`. */
+  pullRequests: PullRequestRow[]
 }
 
 /** The main branch's new code period: it starts at this analysis. */
@@ -937,7 +939,9 @@ export interface AnalysisQuery {
 export interface AnalysisRow {
   id: number
   project: string
+  /** For a pull request, the internal `pr:<number>`. */
   branch: string
+  pullRequest: PullRequestRef
   sha: string
   /** The commit's subject line, when the upload had one. */
   message: string | null
@@ -984,8 +988,10 @@ export interface AnalysisChanges {
 export interface AnalysisDetail {
   id: number
   project: string
+  /** For a pull request, the internal `pr:<number>`. */
   branch: string
   mainBranch: string
+  pullRequest: PullRequestRef
   sha: string
   /** The commit's subject line, when the upload had one. */
   message: string | null
@@ -1194,4 +1200,20 @@ export interface DeletedProject {
   deletedAt: string
   allowedBy: string | null
   allowedAt: string | null
+}
+
+/** The pull request an analysis belongs to (ADR-0021); null for a branch's. */
+export type PullRequestRef = { number: number; base: string; head: string } | null
+
+/** A pull request as of its latest analysis. */
+export interface PullRequestRow {
+  number: number
+  base: string
+  head: string
+  analysis: number
+  sha: string
+  gate: GateState
+  newIssues: number | null
+  analyzedAt: string
+  ago: string
 }

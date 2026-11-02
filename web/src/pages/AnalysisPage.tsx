@@ -7,7 +7,7 @@ import { Segmented } from '@/components/sonda/controls'
 import { GateConditions, GateSource } from '@/components/sonda/gate'
 import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { GateStatus, SeverityGlyph } from '@/components/sonda/status'
-import { formatDebt, formatNumber } from '@/lib/format'
+import { branchLabel, formatDebt, formatNumber } from '@/lib/format'
 import { CATEGORY_LABEL, SEVERITY, SEVERITY_ORDER, coverageColor, languageLabel } from '@/lib/visual'
 
 export function AnalysisPage() {
@@ -48,7 +48,10 @@ function severitySummary(c: AnalysisChanges): string {
 
 function Analysis({ a }: { a: AnalysisDetail }) {
   const skipped = a.warnings.filter((w) => w.includes(': skipped')).length
-  const projectUrl = `/projects/${encodeURIComponent(a.project)}${a.branch === a.mainBranch ? '' : `?branch=${encodeURIComponent(a.branch)}`}`
+  // A pull request's analyses are listed on the project page, not among its branches.
+  const projectUrl = `/projects/${encodeURIComponent(a.project)}${
+    a.pullRequest ? '#pull-requests' : a.branch === a.mainBranch ? '' : `?branch=${encodeURIComponent(a.branch)}`
+  }`
   const tiles: { label: string; value: string; sub: string; color?: string; href?: string }[] = [
     { label: 'Files analyzed', value: formatNumber(a.files), sub: skipped ? `${skipped} skipped` : a.languages.map((l) => languageLabel(l.id)).join(', ') },
     a.baseline
@@ -79,7 +82,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
         {a.message && <p className="m-0 text-[15px] text-fg">{a.message}</p>}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px] text-fg-muted">
           <Link to={projectUrl} className="font-mono text-[12.5px]">
-            {a.branch}
+            {a.pullRequest ? `pull request ${branchLabel(a)}` : a.branch}
           </Link>
           <time dateTime={a.analyzedAt}>
             {at.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' })} UTC
@@ -89,7 +92,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
           <span>uploaded by {a.uploadedBy}</span>
           {a.newCodeReference && <span>new code since {a.newCodeReference}</span>}
           <span className="ml-auto flex gap-3 text-[13px]">
-            {a.previous ? <Link to={`/analyses/${a.previous.id}`}>← {a.previous.sha.slice(0, 7)}</Link> : <span className="text-fg-faint">first on {a.branch}</span>}
+            {a.previous ? <Link to={`/analyses/${a.previous.id}`}>← {a.previous.sha.slice(0, 7)}</Link> : <span className="text-fg-faint">first on {branchLabel(a)}</span>}
             {a.next ? <Link to={`/analyses/${a.next.id}`}>{a.next.sha.slice(0, 7)} →</Link> : <span className="text-fg-faint">latest</span>}
           </span>
         </div>

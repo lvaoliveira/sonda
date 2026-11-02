@@ -1434,3 +1434,99 @@ fn upload_refuses_before_sending_anything() {
     let unsafe_path = stderr(&upload(dir.path(), out.path(), nowhere).output().unwrap());
     assert!(unsafe_path.contains("unsafe path"), "{unsafe_path}");
 }
+
+/// A GitHub Actions `pull_request` event for pull request 12 of acme/shop,
+/// from `head_repo`.
+fn pull_request_event(dir: &Path, head_repo: &str) -> std::path::PathBuf {
+    let path = dir.join("event.json");
+    let event = serde_json::json!({"pull_request": {
+        "number": 12,
+        "base": {"ref": "main", "repo": {"full_name": "acme/shop"}},
+        "head": {"ref": "fix/login", "sha": "b".repeat(40), "repo": {"full_name": head_repo}},
+    }});
+    std::fs::write(&path, event.to_string()).unwrap();
+    path
+}
+
+#[test]
+fn scan_upload_sends_a_pull_request_and_falls_back_on_an_older_server() {
+    // ADR-0021.
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let older = (
+        "400 Bad Request",
+        r#"{"error":"the body is not a sonda upload: unknown field `pull_request`"}"#,
+    );
+    let (url, server) = fake_server_seq(vec![
+        NO_PROFILES,
+        older,
+        ("201 Created", r#"{"analysis_id":7}"#),
+    ]);
+    let result = scan_upload(dir.path(), &url)
+        .args(["--pull-request", "7", "--pull-request-base", "develop"])
+        .output()
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert_eq!(
+        uploaded(&requests[1])["pull_request"],
+        serde_json::json!({"number": 7, "base": "develop", "head": "main"})
+    );
+    // The older server gets the branch, as before pull requests.
+    assert!(uploaded(&requests[2]).get("pull_request").is_none());
+    assert!(
+        stderr(&result)
+            .contains("doesn't know pull requests yet; uploading to branch main instead"),
+        "{}",
+        stderr(&result)
+    );
+
+    // Both options, or neither.
+    let result = scan_upload(dir.path(), "http://127.0.0.1:9")
+        .args(["--pull-request", "7"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&result), 2, "{}", stderr(&result));
+}
+
+#[test]
+fn scan_upload_reads_github_pull_requests_and_skips_forks() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let events = tempfile::tempdir().unwrap();
+    let github = |cmd: &mut Command, event: &Path| {
+        cmd.env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_EVENT_NAME", "pull_request")
+            .env("GITHUB_EVENT_PATH", event);
+    };
+
+    let own = pull_request_event(events.path(), "acme/shop");
+    let (url, server) = fake_server_seq(vec![NO_PROFILES, ("201 Created", r#"{"analysis_id":7}"#)]);
+    let mut cmd = scan_upload(dir.path(), &url);
+    github(&mut cmd, &own);
+    let result = cmd.output().unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert_eq!(
+        uploaded(&requests[1])["pull_request"],
+        serde_json::json!({
+            "number": 12, "base": "main", "head": "fix/login",
+            "head_sha": "b".repeat(40), "repository": "acme/shop",
+        })
+    );
+    assert!(
+        stderr(&result).contains("for payments/pull request #12"),
+        "{}",
+        stderr(&result)
+    );
+
+    // A fork's: scanned, not uploaded. Nothing listens on this port.
+    let fork = pull_request_event(events.path(), "someone/shop");
+    let mut cmd = scan_upload(dir.path(), "http://127.0.0.1:9");
+    github(&mut cmd, &fork);
+    let result = cmd.output().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains("pull request #12 comes from a fork"),
+        "{}",
+        stderr(&result)
+    );
+}

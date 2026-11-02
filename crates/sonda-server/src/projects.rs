@@ -76,6 +76,9 @@ pub struct ProjectDetail {
     /// On the main branch, where new code starts (ADR-0011); null on other
     /// branches, whose new code is what their scans compared with.
     pub new_code_period: Option<crate::new_code::Period>,
+    /// Its pull requests, most recently analyzed first (ADR-0021); kept
+    /// out of `branches`.
+    pub pull_requests: Vec<crate::pull_requests::PullRequestRow>,
 }
 
 #[derive(Serialize)]
@@ -239,7 +242,7 @@ pub async fn get_project(
     let branches: Vec<(String, f64, Value, bool)> = sqlx::query_as(
         "SELECT DISTINCT ON (branch) branch, extract(epoch FROM received_at)::float8, gate,
                 gate_passed
-         FROM analyses WHERE project_id = $1 ORDER BY branch, id DESC",
+         FROM analyses WHERE project_id = $1 AND pull_request IS NULL ORDER BY branch, id DESC",
     )
     .bind(project)
     .fetch_all(pool)
@@ -329,6 +332,7 @@ pub async fn get_project(
     let languages = language_shares(&files);
     let components = components(&files, &issues, codeowners.as_deref());
     let dependencies = crate::dependencies::summary(pool, project, analysis).await?;
+    let pull_requests = crate::pull_requests::list(pool, project, now).await?;
     let new_code_period = if branch == main_branch {
         crate::new_code::period(pool, project).await?
     } else {
@@ -362,6 +366,7 @@ pub async fn get_project(
         components,
         dependencies,
         new_code_period,
+        pull_requests,
     }))
 }
 

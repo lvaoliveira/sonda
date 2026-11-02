@@ -27,6 +27,7 @@ pub mod overview;
 pub mod profiles;
 pub mod project_settings;
 pub mod projects;
+pub mod pull_requests;
 pub mod quality_gates;
 pub mod review;
 pub mod rule_settings;
@@ -64,6 +65,23 @@ pub async fn run(config: Config) -> Result<()> {
                     Err(e) => tracing::warn!(error = %e, "advisory sync failed; retrying later"),
                 }
                 tokio::time::sleep(advisory_sync::INTERVAL).await;
+            }
+        });
+    }
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                match pull_requests::remove_stale(&pool).await {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        tracing::info!(pull_requests = n, "removed stale pull request analyses")
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "removing stale pull requests failed; retrying later")
+                    }
+                }
+                tokio::time::sleep(pull_requests::CLEANUP_INTERVAL).await;
             }
         });
     }

@@ -1,6 +1,7 @@
 # ADR-0021: Pull request decoration, GitHub first
 
-- Status: **proposed**
+- Status: **accepted** (2026-11-02). Built: pull request analyses. Next: the
+  GitHub App and posting, then updating on triage.
 - Date: 2026-11-02
 - Builds on ADR-0010 (new code in CI), ADR-0012 (tokens), ADR-0014 (CI follows
   the server's gate) and ADR-0017 (project settings); plans the roadmap's
