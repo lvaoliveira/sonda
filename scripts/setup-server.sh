@@ -34,8 +34,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -n "$port" ]; then
-  is_number "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] ||
+  if ! is_number "$port" || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
     die "--port must be a port number"
+  fi
 fi
 if [ -n "$app_id" ]; then
   is_number "$app_id" || die "--github-app's id is a number, from the App's settings page"
