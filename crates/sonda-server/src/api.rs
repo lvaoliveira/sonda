@@ -123,7 +123,7 @@ pub async fn caller(state: &State, headers: &HeaderMap) -> Result<Caller, ApiErr
             return Ok(Caller::UserToken(user, token));
         }
     }
-    if let Some(token) = session::from_headers(headers)
+    if let Some(token) = session::from_headers(headers, state.cookie)
         && let Some(user) = session::user(&state.pool, token).await?
     {
         return Ok(Caller::User(user));

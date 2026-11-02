@@ -36,6 +36,8 @@ pub struct State {
     pub metrics: Arc<observability::Metrics>,
     /// The GitHub App that decorates pull requests (ADR-0021), if any.
     pub github: Option<Arc<crate::github::App>>,
+    /// The session cookie: `Secure` unless SONDA_PLAIN_HTTP.
+    pub cookie: session::Cookie,
 }
 
 pub fn router(state: State, web_dir: Option<&Path>) -> Router {
@@ -302,7 +304,10 @@ async fn sign_in(
     let token = session::create(&state.pool, id).await?;
     Ok((
         StatusCode::NO_CONTENT,
-        [(header::SET_COOKIE, session::set_cookie(Some(&token)))],
+        [(
+            header::SET_COOKIE,
+            session::set_cookie(Some(&token), state.cookie),
+        )],
     )
         .into_response())
 }
@@ -311,12 +316,12 @@ async fn sign_out(
     axum::extract::State(state): axum::extract::State<State>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(token) = session::from_headers(&headers) {
+    if let Some(token) = session::from_headers(&headers, state.cookie) {
         session::delete(&state.pool, token).await?;
     }
     Ok((
         StatusCode::NO_CONTENT,
-        [(header::SET_COOKIE, session::set_cookie(None))],
+        [(header::SET_COOKIE, session::set_cookie(None, state.cookie))],
     )
         .into_response())
 }

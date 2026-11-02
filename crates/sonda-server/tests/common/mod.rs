@@ -97,6 +97,7 @@ pub fn state_with(pool: PgPool, reads_require_auth: bool) -> http::State {
         reads_require_auth,
         metrics: Default::default(),
         github: None,
+        cookie: Default::default(),
     }
 }
 

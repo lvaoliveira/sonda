@@ -1,0 +1,13 @@
+# Plain HTTP on this machine's LAN address too, for a trusted home or office
+# network. Added by `scripts/setup-server.sh --lan`, which keeps the address
+# in .env and lists this file in .env's COMPOSE_FILE. The 127.0.0.1 port
+# stays, for uploads from this machine.
+services:
+  sonda:
+    ports: ["${SONDA_LAN_ADDRESS:?run scripts/setup-server.sh --lan}:${SONDA_PORT:-9000}:9000"]
+    environment:
+      # A session cookie browsers accept over plain HTTP: anyone who can see
+      # this network's traffic can take a session (docs/server.md).
+      SONDA_PLAIN_HTTP: "true"
+      # Links in pull request decorations point here, unless set otherwise.
+      SONDA_PUBLIC_URL: ${SONDA_PUBLIC_URL:-http://${SONDA_LAN_ADDRESS}:${SONDA_PORT:-9000}}
