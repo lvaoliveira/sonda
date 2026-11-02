@@ -589,7 +589,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S8696")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(binary_expression operator: ["==" "!="]) @match"#,
+            query: r#"(binary_expression operator: ["==" "!="]) @match
+(method_invocation object: (identifier) @o name: (identifier) @n (#eq? @o "System") (#eq? @n "identityHashCode")) @match"#,
             filter: Some(Keep(compares_value_based_by_identity)),
         },
         example: Some(Example {
@@ -1619,6 +1620,30 @@ fn nests_min_and_max(call: Node, src: &[u8]) -> bool {
 }
 
 fn compares_value_based_by_identity(binary: Node, src: &[u8]) -> bool {
+    // `System.identityHashCode(x)` of a boxed or value-based `x`.
+    if binary.kind() == "method_invocation" {
+        return call_arguments(binary).first().is_some_and(|a| {
+            a.kind() == "identifier"
+                && matches!(
+                    base_type(type_text(declared_type(binary, text(*a, src), src), src)),
+                    b"Integer"
+                        | b"Long"
+                        | b"Short"
+                        | b"Byte"
+                        | b"Character"
+                        | b"Boolean"
+                        | b"Double"
+                        | b"Float"
+                        | b"Optional"
+                        | b"LocalDate"
+                        | b"LocalDateTime"
+                        | b"LocalTime"
+                        | b"Instant"
+                        | b"Duration"
+                        | b"Period"
+                )
+        });
+    }
     const VALUE_BASED: &[&[u8]] = &[
         b"Optional",
         b"LocalDate",

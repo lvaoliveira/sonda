@@ -92,7 +92,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S115")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(field_declaration) @match"#,
+            query: r#"[(field_declaration) (constant_declaration) (enum_constant)] @match"#,
             filter: Some(Keep(constant_name_not_upper_snake)),
         },
         example: Some(Example {
@@ -2588,13 +2588,42 @@ fn is_valid_constant(name: &[u8]) -> bool {
 }
 
 fn constant_name_not_upper_snake(field: Node, src: &[u8]) -> bool {
-    if !(has_modifier(field, "static") && has_modifier(field, "final")) {
+    if field.kind() == "enum_constant" {
+        return field
+            .child_by_field_name("name")
+            .is_some_and(|n| !is_valid_constant(text(n, src)));
+    }
+    // Interface constants are static and final without saying so.
+    if field.kind() != "constant_declaration"
+        && !(has_modifier(field, "static") && has_modifier(field, "final"))
+    {
         return false;
     }
-    let is_logger = field
-        .child_by_field_name("type")
-        .is_some_and(|t| text(t, src).ends_with(b"Logger") || text(t, src).ends_with(b"Log"));
-    !is_logger
+    // Only plain values read as constants; a `static final` map or set is
+    // an ordinary object reference and SonarQube leaves its name alone.
+    let is_plain_value = field.child_by_field_name("type").is_some_and(|t| {
+        matches!(
+            text(t, src),
+            b"int"
+                | b"long"
+                | b"short"
+                | b"byte"
+                | b"char"
+                | b"boolean"
+                | b"float"
+                | b"double"
+                | b"String"
+                | b"Integer"
+                | b"Long"
+                | b"Short"
+                | b"Byte"
+                | b"Character"
+                | b"Boolean"
+                | b"Float"
+                | b"Double"
+        )
+    });
+    is_plain_value
         && declarator_names(field, src)
             .iter()
             .any(|n| *n != b"serialVersionUID" && !is_valid_constant(n))
@@ -3334,7 +3363,6 @@ fn negates_a_comparison(unary: Node, src: &[u8]) -> bool {
 fn class_is_empty(class: Node, _: &[u8]) -> bool {
     class.child_by_field_name("superclass").is_none()
         && class.child_by_field_name("interfaces").is_none()
-        && class.child_by_field_name("type_parameters").is_none()
         && modifiers_of(class).is_none_or(|m| {
             let mut c = m.walk();
             !m.children(&mut c)
