@@ -322,6 +322,7 @@ mod architecture {
         ("semantic/js.rs", include_str!("semantic/js.rs")),
         ("semantic/cs.rs", include_str!("semantic/cs.rs")),
         ("semantic/cs_index.rs", include_str!("semantic/cs_index.rs")),
+        ("semantic/dotnet.rs", include_str!("semantic/dotnet.rs")),
         (
             "rules/catalog/cs_project.rs",
             include_str!("rules/catalog/cs_project.rs"),

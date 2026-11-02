@@ -8,7 +8,7 @@ use super::cs::{
     simple_name, unparenthesized,
 };
 use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
-use super::cs_more::{declarators, declared_type, enclosing_type, is_test_method, members};
+use super::cs_more::{declared_type, enclosing_type, is_test_method, members};
 use super::cs_tail::{awaited_by_when_all, looks_like_task};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::{contains_ignoring_case, text};
@@ -62,22 +62,18 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/disposable-fields-without-idisposable",
         name: "Classes with disposable fields should be disposable",
-        description: "A class that creates a stream, timer or client and keeps it in a field must dispose of it, \
-                      which callers can only trigger through IDisposable.",
+        description: "A class that creates an IDisposable and keeps it in a field owns it and must dispose of \
+                      it, which callers can only trigger through IDisposable.",
         message: "Implement IDisposable and dispose of this field.",
         category: Bug,
         severity: Blocker,
         effort_minutes: 15,
-        sonar: &[related("S2931")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(class_declaration name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(owned_disposable_field)),
-        },
+        sonar: &[exact("S2931")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class Log { private readonly FileStream file = File.OpenWrite(\"log\"); }",
-            good: "class Log : IDisposable { private readonly FileStream file = File.OpenWrite(\"log\"); public void Dispose() => file.Dispose(); }",
+            bad: "using System.IO;\nclass Log { private FileStream file; void Open() { file = new FileStream(\"log\", FileMode.Create); } }",
+            good: "using System;\nusing System.IO;\nclass Log : IDisposable { private FileStream file = new FileStream(\"log\", FileMode.Create); public void Dispose() => file.Dispose(); }",
         }),
     },
     Rule {
@@ -846,55 +842,6 @@ pub(super) fn has_parameter_modifier(parameter: Node, wanted: &[&[u8]], src: &[u
     parameter
         .named_children(&mut cursor)
         .any(|m| m.kind() == "modifier" && wanted.contains(&text(m, src)))
-}
-
-pub(super) const DISPOSABLE_TYPES: &[&[u8]] = &[
-    b"Stream",
-    b"FileStream",
-    b"MemoryStream",
-    b"StreamReader",
-    b"StreamWriter",
-    b"Timer",
-    b"HttpClient",
-    b"SqlConnection",
-    b"DbConnection",
-    b"Process",
-    b"CancellationTokenSource",
-    b"SemaphoreSlim",
-    b"Socket",
-    b"TcpClient",
-    b"BinaryReader",
-    b"BinaryWriter",
-    b"ManualResetEvent",
-    b"AutoResetEvent",
-];
-
-fn owned_disposable_field<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut cursor = class.walk();
-    if class
-        .named_children(&mut cursor)
-        .any(|c| c.kind() == "base_list")
-        || cs_has_modifier(class, "static", src)
-    {
-        return None;
-    }
-    // Fields the class creates itself (an initializer with `new` or a
-    // factory call), not ones it was given.
-    members(class)
-        .into_iter()
-        .filter(|m| m.kind() == "field_declaration" && !cs_has_modifier(*m, "static", src))
-        .find_map(|f| {
-            let ty = declared_type(f)?;
-            if !DISPOSABLE_TYPES.contains(&simple_name(ty, src)) {
-                return None;
-            }
-            declarators(f).into_iter().find(|d| {
-                let value = text(*d, src);
-                value.windows(4).any(|w| w == b"new ")
-                    || value.windows(5).any(|w| w == b"Open(")
-                    || value.windows(9).any(|w| w == b"OpenWrite")
-            })
-        })
 }
 
 fn is_local_variable(name: Node, src: &[u8]) -> bool {
@@ -1770,8 +1717,6 @@ mod tests {
             "int F(int limit) { limit = 10; return limit; }\nint G(int limit) { limit = Math.Min(limit, 10); return limit; }\nvoid H() { var sync = new object(); lock (sync) { } lock (field) { } }",
         );
         assert_eq!(flagged("cs/lock-on-local", &src), [5]);
-        let d = "namespace N;\nclass Log { private readonly FileStream file = File.OpenWrite(\"x\"); }\nclass Ok : IDisposable { private Timer t = new Timer(); public void Dispose() { } }\nclass Given { private readonly Stream s; public Given(Stream s) { this.s = s; } }";
-        assert_eq!(flagged("cs/disposable-fields-without-idisposable", d), [2]);
     }
 
     #[test]

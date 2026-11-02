@@ -15,6 +15,7 @@ categories = ["development-tools"]
 fuzzing = []
 
 [dependencies]
+flate2.workspace = true
 ignore.workspace = true
 rayon.workspace = true
 serde.workspace = true

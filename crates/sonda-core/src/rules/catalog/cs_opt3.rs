@@ -225,15 +225,12 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 15,
-        sonar: &[related("S3215")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: downcasts_interface,
-        },
+        sonar: &[exact("S3215")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { int F(IShape s) { var c = (Circle)s; return c.Radius; } }",
-            good: "class A { int F(IShape s) { return s.Size; } }",
+            bad: "interface IShape { int Size { get; } }\nclass Circle : IShape { public int Size => 1; public int Radius; }\nclass A { int F(IShape s) { var c = (Circle)s; return c.Radius; } }",
+            good: "interface IShape { int Size { get; } }\nclass A { int F(IShape s) { return s.Size; } }",
         }),
     },
     Rule {
@@ -866,43 +863,6 @@ fn has_base_list(declaration: Node) -> bool {
         .any(|c| c.kind() == "base_list")
 }
 
-fn looks_like_interface(name: &[u8]) -> bool {
-    name.len() > 1 && name[0] == b'I' && name[1].is_ascii_uppercase()
-}
-
-fn downcasts_interface<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    walk_tree(m, |node, _| {
-        let (target, value) = match node.kind() {
-            "cast_expression" => (
-                node.child_by_field_name("type"),
-                node.child_by_field_name("value"),
-            ),
-            "as_expression" => (
-                node.child_by_field_name("right"),
-                node.child_by_field_name("left"),
-            ),
-            _ => return,
-        };
-        let (Some(target), Some(value)) = (target, value) else {
-            return;
-        };
-        if target.kind() != "identifier" || value.kind() != "identifier" {
-            return;
-        }
-        let target = text(target, src);
-        if looks_like_interface(target) || is_type_parameter_name(target) || target == b"Object" {
-            return;
-        }
-        if type_of_name(m, value)
-            .is_some_and(|t| t.kind() == "identifier" && looks_like_interface(text(t, src)))
-        {
-            found.push(node);
-        }
-    });
-    found
-}
-
 fn is_action_or_func(ty: Node, src: &[u8]) -> bool {
     matches!(simple_name(ty, src), b"Action" | b"Func")
 }
@@ -1257,7 +1217,6 @@ mod tests {
     #[test]
     fn types_and_casts() {
         let src = "class A {\nIShape shape;\nint F(IShape s, Base b) {\nvar c = (Circle)s;\nvar d = s as Circle;\nvar e = (IRound)s;\nvar f = (Circle)b;\nvar g = (Circle)shape;\nreturn 0;\n}\npublic event Action<int> Changed;\npublic event EventHandler<ChangedEventArgs> Ok;\n}";
-        assert_eq!(flagged("cs/interface-downcast", src), [4, 5, 8]);
         assert_eq!(flagged("cs/event-handler-signature", src), [11]);
     }
 

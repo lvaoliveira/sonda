@@ -149,10 +149,19 @@ impl Rule {
         catalog::standards(self.id)
     }
 
+    /// The languages it checks. A structural rule's are in its id's
+    /// prefix; `common/` rules check every language.
     pub fn langs(&self) -> &'static [Lang] {
+        use crate::lang::{ALL, CSHARP, JAVA, JS_TS, PYTHON};
         match self.check {
             Check::Query { langs, .. } | Check::Semantic { langs, .. } => langs,
-            Check::Structural => crate::lang::ALL,
+            Check::Structural => match self.id.split('/').next() {
+                Some("cs") => CSHARP,
+                Some("java") => JAVA,
+                Some("py") => PYTHON,
+                Some("js") => JS_TS,
+                _ => ALL,
+            },
         }
     }
 }
@@ -369,6 +378,25 @@ mod tests {
         assert_eq!(ids.len(), RULES.len(), "duplicate rule id");
         for r in RULES.iter() {
             assert!(r.id.contains('/'), "{} needs a family prefix", r.id);
+        }
+    }
+
+    #[test]
+    fn structural_rules_check_their_own_language() {
+        let langs = |id: &str| find(id).unwrap().langs();
+        assert_eq!(langs("cs/deep-inheritance"), [Lang::CSharp]);
+        assert_eq!(langs("java/package-info-missing"), [Lang::Java]);
+        assert_eq!(langs("common/file-length"), crate::lang::ALL);
+        for r in RULES
+            .iter()
+            .filter(|r| matches!(r.check, Check::Structural))
+        {
+            let prefix = r.id.split('/').next().unwrap();
+            assert!(
+                matches!(prefix, "cs" | "java" | "py" | "js" | "common"),
+                "{}: no languages for its prefix",
+                r.id
+            );
         }
     }
 
