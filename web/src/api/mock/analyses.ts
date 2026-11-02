@@ -14,7 +14,9 @@ const ROWS: AnalysisRow[] = PROJECT_LIST.projects
   .map(({ offset, project, branch, gate }) => ({
     id: 911 + offset,
     project,
-    branch,
+    // One is a pull request's (ADR-0021).
+    branch: offset === 3 ? 'pr:42' : branch,
+    pullRequest: offset === 3 ? { number: 42, base: 'main', head: 'fix/refund-rounding' } : null,
     sha: offset === 0 ? '9f3c2a1e7b04' : `${(((offset + 1) * 2_654_435_761) >>> 0).toString(16).padStart(8, '0')}a1c3`,
     analyzedAt: new Date(NOW - offset * 2.5 * 3_600_000).toISOString(),
     // One without, as an upload from outside git has.
@@ -62,6 +64,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
     project: row.project,
     branch: row.branch,
     mainBranch: 'main',
+    pullRequest: row.pullRequest,
     sha: row.sha,
     message: row.message,
     duration: row.duration,

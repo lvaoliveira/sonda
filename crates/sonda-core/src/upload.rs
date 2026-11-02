@@ -11,7 +11,7 @@ use crate::error::Error;
 use crate::model::Sha256;
 use crate::report::REPORT_VERSION;
 use crate::scanner::open_nonblocking;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest as _;
 use std::collections::HashSet;
@@ -33,6 +33,43 @@ pub struct Meta {
     /// The project's version, such as `2.3.0`. On the main branch, a new
     /// version starts a new code period (ADR-0011).
     pub version: Option<String>,
+    /// The pull request it belongs to, if any (ADR-0021).
+    pub pull_request: Option<PullRequest>,
+}
+
+/// The pull request an analysis belongs to (ADR-0021). The server keeps its
+/// analyses apart from branches, under [`pull_request_branch`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PullRequest {
+    pub number: u64,
+    /// The branch it merges into.
+    pub base: String,
+    /// The branch it merges from.
+    pub head: String,
+    /// The head commit, where GitHub shows checks. CI checks out a merge
+    /// commit instead, so this comes from the event, not `--commit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    /// The repository it's in, as `owner/name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+}
+
+/// The highest pull request number accepted; GitHub's are far below it.
+pub const MAX_PULL_REQUEST: u64 = 1_000_000_000;
+
+/// Where the server tracks a pull request's analyses and issues: a branch
+/// key no git branch can have, since git refuses `:` in ref names.
+pub fn pull_request_branch(number: u64) -> String {
+    format!("pr:{number}")
+}
+
+/// Whether a branch name is one of those keys.
+pub fn is_pull_request_branch(branch: &str) -> bool {
+    branch
+        .strip_prefix("pr:")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The body of `POST /api/analyses`.
@@ -43,6 +80,8 @@ pub struct Upload {
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PullRequest>,
     /// The commit's subject line, from git in `root` when it has the
     /// commit; shown with the analysis.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,6 +129,7 @@ pub fn prepare(report_json: &[u8], root: &Path, meta: Meta) -> Result<Upload, Er
         scan_duration_ms: None,
         commit: meta.commit.to_ascii_lowercase(),
         version: meta.version,
+        pull_request: meta.pull_request,
         report,
         sources,
         codeowners: read_codeowners(root),
@@ -131,11 +171,32 @@ pub fn check_project_key(p: &str) -> Result<(), Error> {
 pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
     let bad = |msg: String| Err(Error::InvalidArgument(msg));
     check_project_key(&meta.project)?;
-    let b = &meta.branch;
-    if b.is_empty() || b.len() > 255 || b.chars().any(char::is_control) {
+    check_branch(&meta.branch)?;
+    if is_pull_request_branch(&meta.branch) {
         return bad(format!(
-            "invalid branch {b:?}: use 1-255 characters, no control characters"
+            "invalid branch {:?}: names like pr:12 are kept for pull requests; \
+             use --pull-request instead",
+            meta.branch
         ));
+    }
+    if let Some(pr) = &meta.pull_request {
+        if !(1..=MAX_PULL_REQUEST).contains(&pr.number) {
+            return bad(format!("invalid pull request number {}", pr.number));
+        }
+        check_branch(&pr.base)?;
+        check_branch(&pr.head)?;
+        if let Some(sha) = &pr.head_sha
+            && !(matches!(sha.len(), 40 | 64) && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return bad(format!(
+                "invalid pull request head commit {sha:?}: expected 40 or 64 hex digits"
+            ));
+        }
+        if let Some(r) = &pr.repository
+            && !is_repository(r)
+        {
+            return bad(format!("invalid repository {r:?}: expected owner/name"));
+        }
     }
     let c = &meta.commit;
     if !(7..=64).contains(&c.len()) || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -149,6 +210,70 @@ pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+fn check_branch(b: &str) -> Result<(), Error> {
+    if b.is_empty() || b.len() > 255 || b.chars().any(char::is_control) {
+        return Err(Error::InvalidArgument(format!(
+            "invalid branch {b:?}: use 1-255 characters, no control characters"
+        )));
+    }
+    Ok(())
+}
+
+/// `owner/name`, as GitHub allows them.
+fn is_repository(r: &str) -> bool {
+    let part = |p: &str| {
+        !p.is_empty()
+            && p.len() <= 100
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    matches!(r.split_once('/'), Some((owner, name)) if part(owner) && part(name))
+}
+
+/// What GitHub Actions says about the pull request being built.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CiPullRequest {
+    /// Not a `pull_request` event, or not GitHub Actions.
+    None,
+    PullRequest(PullRequest),
+    /// From a fork, whose CI usually has no secrets: not uploaded
+    /// (ADR-0021).
+    Fork(u64),
+}
+
+/// The pull request of a GitHub Actions `pull_request` event, read through
+/// `var`, from the event file.
+pub fn github_pull_request(var: &dyn Fn(&str) -> Option<String>) -> CiPullRequest {
+    if var("GITHUB_ACTIONS").as_deref() != Some("true")
+        || var("GITHUB_EVENT_NAME").as_deref() != Some("pull_request")
+    {
+        return CiPullRequest::None;
+    }
+    let Some(event) = crate::git::github_event(var) else {
+        return CiPullRequest::None;
+    };
+    let pr = &event["pull_request"];
+    let (Some(number), Some(base), Some(head)) = (
+        pr["number"].as_u64(),
+        pr["base"]["ref"].as_str(),
+        pr["head"]["ref"].as_str(),
+    ) else {
+        return CiPullRequest::None;
+    };
+    let repository = pr["base"]["repo"]["full_name"].as_str();
+    // A deleted fork has no head repository.
+    if pr["head"]["repo"]["full_name"].as_str() != repository {
+        return CiPullRequest::Fork(number);
+    }
+    CiPullRequest::PullRequest(PullRequest {
+        number,
+        base: base.to_string(),
+        head: head.to_string(),
+        head_sha: pr["head"]["sha"].as_str().map(str::to_string),
+        repository: repository.map(str::to_string),
+    })
 }
 
 /// The `(path, sha256)` of every file in the report, checked.
@@ -332,7 +457,106 @@ mod tests {
             branch: "main".into(),
             commit: "ABCDEF1".into(),
             version: None,
+            pull_request: None,
         }
+    }
+
+    fn pull_request() -> PullRequest {
+        PullRequest {
+            number: 12,
+            base: "main".into(),
+            head: "fix/login".into(),
+            head_sha: Some("a".repeat(40)),
+            repository: Some("acme/shop".into()),
+        }
+    }
+
+    #[test]
+    fn pull_request_metadata_is_checked_and_its_branch_key_is_reserved() {
+        let with = |pr: PullRequest| Meta {
+            pull_request: Some(pr),
+            ..meta()
+        };
+        assert!(validate_meta(&with(pull_request())).is_ok());
+        for bad in [
+            PullRequest {
+                number: 0,
+                ..pull_request()
+            },
+            PullRequest {
+                base: String::new(),
+                ..pull_request()
+            },
+            PullRequest {
+                head_sha: Some("abc".into()),
+                ..pull_request()
+            },
+            PullRequest {
+                repository: Some("shop".into()),
+                ..pull_request()
+            },
+            PullRequest {
+                repository: Some("acme/shop/x".into()),
+                ..pull_request()
+            },
+        ] {
+            assert!(validate_meta(&with(bad.clone())).is_err(), "{bad:?}");
+        }
+        // Git refuses ':' in branch names, so only these are taken.
+        assert_eq!(pull_request_branch(12), "pr:12");
+        for (branch, ok) in [
+            ("pr:12", false),
+            ("pr:", true),
+            ("pr:1a", true),
+            ("pr-12", true),
+        ] {
+            let m = Meta {
+                branch: branch.into(),
+                ..meta()
+            };
+            assert_eq!(validate_meta(&m).is_ok(), ok, "{branch}");
+        }
+    }
+
+    #[test]
+    fn github_pull_request_events_are_read_and_forks_recognized() {
+        let dir = tempfile::tempdir().unwrap();
+        let event = |head_repo: &str| {
+            let path = dir
+                .path()
+                .join(format!("{}.json", head_repo.replace('/', "_")));
+            std::fs::write(
+                &path,
+                serde_json::json!({"pull_request": {
+                    "number": 12,
+                    "base": {"ref": "main", "repo": {"full_name": "acme/shop"}},
+                    "head": {"ref": "fix/login", "sha": "a".repeat(40), "repo": {"full_name": head_repo}},
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let (own, fork) = (event("acme/shop"), event("someone/shop"));
+        let env = |name: &'static str, path: &str| {
+            let path = path.to_string();
+            move |v: &str| match v {
+                "GITHUB_ACTIONS" => Some("true".into()),
+                "GITHUB_EVENT_NAME" => Some(name.into()),
+                "GITHUB_EVENT_PATH" => Some(path.clone()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            github_pull_request(&env("pull_request", &own)),
+            CiPullRequest::PullRequest(pull_request())
+        );
+        assert_eq!(
+            github_pull_request(&env("pull_request", &fork)),
+            CiPullRequest::Fork(12)
+        );
+        assert_eq!(github_pull_request(&env("push", &own)), CiPullRequest::None);
+        assert_eq!(github_pull_request(&|_| None), CiPullRequest::None);
     }
 
     fn report_for(files: &[(&str, &[u8])]) -> Vec<u8> {

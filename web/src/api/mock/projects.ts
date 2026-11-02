@@ -124,6 +124,11 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
     // A release branch analyzed before lockfiles were read.
     dependencies: on === main ? DEPENDENCY_SUMMARY : null,
     newCodePeriod: on === main ? newCodePeriod(p.key, history) : null,
+    // As the mock analyses have it: billing-service's pull request 42.
+    pullRequests:
+      p.key === 'billing-service'
+        ? [{ number: 42, base: 'main', head: 'fix/refund-rounding', analysis: 914, sha: 'c7a4b2e1a1c3', gate: 'passed', newIssues: 0, analyzedAt: new Date(NOW - 7.5 * 3_600_000).toISOString(), ago: '7h' }]
+        : [],
   }
 }
 

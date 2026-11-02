@@ -15,7 +15,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sonda_core::model::Severity;
 use sonda_core::report::REPORT_VERSION;
-use sonda_core::upload::{Meta, check_relative_path, parse_sha256, validate_meta};
+use sonda_core::upload::{
+    Meta, PullRequest, check_relative_path, parse_sha256, pull_request_branch, validate_meta,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
 
@@ -42,6 +44,10 @@ struct Upload {
     /// The project's version; older clients don't send it.
     #[serde(default)]
     version: Option<String>,
+    /// The pull request it belongs to (ADR-0021); older clients don't send
+    /// it.
+    #[serde(default)]
+    pull_request: Option<PullRequest>,
     /// The commit's subject line; older clients, and scans outside git,
     /// don't send it.
     #[serde(default)]
@@ -375,13 +381,22 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     {
         return Err(invalid("the CODEOWNERS file is too large".into()));
     }
-    let meta = Meta {
+    let mut meta = Meta {
         project: upload.project,
         branch: upload.branch,
         commit: upload.commit.to_ascii_lowercase(),
         version: upload.version,
+        pull_request: upload.pull_request.map(|mut pr| {
+            pr.head_sha = pr.head_sha.map(|s| s.to_ascii_lowercase());
+            pr
+        }),
     };
     validate_meta(&meta).map_err(|e| invalid(e.to_string()))?;
+    // A pull request's analyses and issues are tracked as a branch of their
+    // own, apart from real branches (ADR-0021).
+    if let Some(pr) = &meta.pull_request {
+        meta.branch = pull_request_branch(pr.number);
+    }
     if upload.commit_message.as_ref().is_some_and(|m| {
         m.trim().is_empty() || m.chars().count() > 300 || m.chars().any(char::is_control)
     }) {

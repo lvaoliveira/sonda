@@ -168,18 +168,9 @@ impl Ci {
         }
         let pr_base = var("GITHUB_BASE_REF").filter(|b| validate_ref(b).is_ok());
         let push_before = (var("GITHUB_EVENT_NAME").as_deref() == Some("push"))
-            .then(|| var("GITHUB_EVENT_PATH"))
+            .then(|| github_event(var))
             .flatten()
-            .and_then(|path| {
-                let mut text = String::new();
-                std::fs::File::open(path)
-                    .ok()?
-                    .take(MAX_EVENT_BYTES)
-                    .read_to_string(&mut text)
-                    .ok()?;
-                let event: serde_json::Value = serde_json::from_str(&text).ok()?;
-                event["before"].as_str().map(str::to_string)
-            })
+            .and_then(|event| event["before"].as_str().map(str::to_string))
             // All zeros: the push created the branch, so there's no before.
             .filter(|sha| {
                 (sha.len() == 40 || sha.len() == 64)
@@ -191,6 +182,17 @@ impl Ci {
             push_before,
         }
     }
+}
+
+/// The GitHub Actions event that started the job, from `GITHUB_EVENT_PATH`.
+pub(crate) fn github_event(var: &dyn Fn(&str) -> Option<String>) -> Option<serde_json::Value> {
+    let mut text = String::new();
+    std::fs::File::open(var("GITHUB_EVENT_PATH")?)
+        .ok()?
+        .take(MAX_EVENT_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// Picks the new-code reference when none is given (ADR-0010), first match

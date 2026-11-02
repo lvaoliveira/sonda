@@ -149,22 +149,32 @@ pub async fn delete(
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    // Contents another project's analysis also has stay. Lock them first,
-    // so an upload now referencing one waits, and the check after sees it.
+    remove_unused_sources(&mut tx, &contents).await?;
+    tx.commit().await?;
+    tracing::info!(project = %key, by = %actor, analyses, "deleted project");
+    Ok(Json(deleted(row)))
+}
+
+/// Removes those of `contents` no analysis has any more, after analyses
+/// were deleted in `tx`. Contents another analysis also has stay. Locking
+/// them first makes an upload now referencing one wait, and the check after
+/// see it.
+pub(crate) async fn remove_unused_sources(
+    tx: &mut Transaction<'_, Postgres>,
+    contents: &[Vec<u8>],
+) -> sqlx::Result<()> {
     sqlx::query("SELECT 1 FROM sources WHERE sha256 = ANY($1) FOR UPDATE")
-        .bind(&contents)
-        .execute(&mut *tx)
+        .bind(contents)
+        .execute(&mut **tx)
         .await?;
     sqlx::query(
         "DELETE FROM sources s WHERE s.sha256 = ANY($1)
            AND NOT EXISTS (SELECT 1 FROM analysis_files f WHERE f.sha256 = s.sha256)",
     )
-    .bind(&contents)
-    .execute(&mut *tx)
+    .bind(contents)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
-    tracing::info!(project = %key, by = %actor, analyses, "deleted project");
-    Ok(Json(deleted(row)))
+    Ok(())
 }
 
 /// `GET /api/deleted-projects`, admins only: newest first.

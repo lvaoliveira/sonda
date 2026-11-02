@@ -595,6 +595,32 @@ include all.
 
 An unknown project or file is `404`; a branch without analyses is `400`.
 
+### Pull requests
+
+An upload can belong to a pull request
+([ADR-0021](adr/0021-pull-request-decoration.md)): `pull_request` carries
+its `number`, `base` and `head` branches, and from GitHub Actions its
+`head_sha` and `repository` (`owner/name`). `sonda` sends it in a GitHub
+Actions `pull_request` job, or with `--pull-request` and
+`--pull-request-base`.
+
+- **Stored apart from branches**, under the branch key `pr:<number>`
+  (which no git branch can have, since git refuses `:` in branch names;
+  uploads with such a `branch` are a `422`). Issue tracking, new code, the
+  gate (a server gate too) and triage work as on any branch.
+- **Not a branch:** pull requests aren't in a project's `branches`, its
+  main-branch choices, or anything counted on the main branch (Overview,
+  Projects, Security, Rules). `GET /api/projects/{key}` lists them as
+  `pullRequests` (number, branches, latest analysis, gate, new issues),
+  and analyses carry `pullRequest` (`number`, `base`, `head`), null on a
+  branch's. `GET /api/issues?branch=pr:12` lists a pull request's issues.
+- **A project first seen through a pull request** gets its base as the
+  main branch.
+- **Removed 30 days** after a pull request's last analysis, with its issues
+  and the file contents nothing else has. The server checks hourly.
+
+Decorating the pull request on GitHub is the next part of ADR-0021.
+
 ## New code on the main branch
 
 Branches are judged on the change their scan compared with: a pull request,
