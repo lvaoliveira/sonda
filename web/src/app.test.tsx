@@ -1234,14 +1234,27 @@ describe('Connecting a repository', () => {
     expect(screen.getByRole('textbox', { name: 'Project key' })).toHaveValue('shop')
     await user.click(screen.getByRole('button', { name: 'Connect' }))
 
+    // One step at a time: the secret first, so the workflow's first run has it.
     expect(await screen.findByLabelText('Secret')).toHaveTextContent(/^sonda_p_/)
     expect(screen.getByLabelText('Name')).toHaveTextContent('SONDA_TOKEN')
     expect(screen.getByRole('link', { name: 'Open the secrets page on GitHub' })).toHaveAttribute('href', 'https://github.com/acme/shop/settings/secrets/actions/new')
+    expect(screen.getByRole('region', { name: '3. Add the workflow' })).toHaveTextContent('After step 2')
+    expect(screen.queryByRole('link', { name: /Create .* on GitHub/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Done' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: "I've added the secret" }))
+    expect(screen.queryByLabelText('Secret')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '1. Add the upload token as a repository secret' })).toHaveTextContent('Done')
+    expect(screen.getByLabelText('Command')).toHaveTextContent('scripts/install-cli.sh')
+    await user.click(screen.getByRole('button', { name: "It's installed" }))
     const create = screen.getByRole('link', { name: 'Create .github/workflows/sonda.yml on GitHub' })
     const workflow = new URL(create.getAttribute('href')!).searchParams.get('value')!
     expect(workflow).toContain('--project shop')
     expect(workflow).toContain('--server http://localhost')
-    expect(screen.getByLabelText('Command')).toHaveTextContent('scripts/install-cli.sh')
+    // A done step shows again, its token included.
+    await user.click(within(screen.getByRole('region', { name: '1. Add the upload token as a repository secret' })).getByRole('button', { name: 'Show again' }))
+    expect(screen.getByLabelText('Secret')).toHaveTextContent(/^sonda_p_/)
+    await user.click(screen.getByRole('button', { name: "I've added the secret" }))
+    await user.click(screen.getByRole('button', { name: "It's installed" }))
 
     // Done waits for the workflow's first analysis.
     await user.click(screen.getByRole('button', { name: 'Done' }))
@@ -1285,7 +1298,9 @@ describe('Connecting a repository', () => {
     })
     await user.type(await screen.findByRole('textbox', { name: 'GitHub repository URL' }), 'https://github.com/acme/shop')
     await user.click(screen.getByRole('button', { name: 'Connect' }))
-    await user.click(await screen.findByRole('button', { name: 'Done' }))
+    await user.click(await screen.findByRole('button', { name: "I've added the secret" }))
+    await user.click(screen.getByRole('button', { name: "It's installed" }))
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     const connected = await screen.findByRole('region', { name: 'Connected' })
     expect(connected).toHaveTextContent('The first analysis arrived, from #7 add-sonda → main')
     expect(within(connected).getByRole('link', { name: 'View the analysis' })).toHaveAttribute('href', '/analyses/4242')

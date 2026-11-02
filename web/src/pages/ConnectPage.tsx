@@ -1,4 +1,4 @@
-import { ExternalLink } from 'lucide-react'
+import { Check, ExternalLink } from 'lucide-react'
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
@@ -168,15 +168,62 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
 function Steps({ done }: { done: Connected }) {
   const { settings, token, runner, server } = done
   const [finished, setFinished] = useState(false)
+  // One step at a time, in order: the workflow runs CI as soon as it's
+  // committed, so the secret (and a runner's CLI) must be there first.
+  const [current, setCurrent] = useState(0)
   const repository = settings.githubRepository!
   const yaml = workflowYaml({ project: settings.key, mainBranch: settings.mainBranch, server, runner })
+  const steps: { title: string; body: ReactNode; confirm?: string }[] = [
+    {
+      title: 'Add the upload token as a repository secret',
+      confirm: "I've added the secret",
+      body: (
+        <>
+          <p className="m-0 text-[13px] text-fg-muted">It's shown only now. Paste the name and the token on GitHub's page, then click Add secret.</p>
+          <Copyable label="Name" value={SECRET_NAME} />
+          <Copyable label="Secret" value={token} />
+          <ExternalButton href={newSecretUrl(repository)}>Open the secrets page on GitHub</ExternalButton>
+        </>
+      ),
+    },
+    ...(runner === 'self-hosted'
+      ? [
+          {
+            title: 'Install the CLI where the runner runs',
+            confirm: "It's installed",
+            body: (
+              <>
+                <p className="m-0 text-[13px] text-fg-muted">The workflow runs it from ~/.local/bin. In sonda's checkout on that machine:</p>
+                <Copyable label="Command" value="scripts/install-cli.sh" />
+              </>
+            ),
+          },
+        ]
+      : []),
+    {
+      title: 'Add the workflow',
+      body: (
+        <>
+          <p className="m-0 text-[13px] text-fg-muted">
+            GitHub opens it filled in. In the commit dialog, choose <strong className="text-fg">Create a new branch</strong> and start a pull request, rather than committing to{' '}
+            {settings.mainBranch}: that pull request is the first one sonda checks and comments on.
+          </p>
+          <pre className="m-0 max-h-[320px] overflow-auto rounded-lg bg-canvas p-4 font-mono text-[11.5px] leading-relaxed edge">{yaml}</pre>
+          <div className="flex flex-wrap gap-2.5">
+            <ExternalButton href={newFileUrl(repository, settings.mainBranch, WORKFLOW_PATH, yaml)}>Create {WORKFLOW_PATH} on GitHub</ExternalButton>
+            <CopyButton value={yaml}>Copy the workflow</CopyButton>
+          </div>
+        </>
+      ),
+    },
+  ]
   return (
     <>
       <PageHeader
         title="Connect a repository"
         summary={
           <>
-            <Mono className="text-xs text-fg">{settings.key}</Mono> is linked to <Mono className="text-xs text-fg">{repository}</Mono>. Two steps on GitHub finish it.
+            <Mono className="text-xs text-fg">{settings.key}</Mono> is linked to <Mono className="text-xs text-fg">{repository}</Mono>. Finish these steps in order.
           </>
         }
       />
@@ -185,38 +232,32 @@ function Steps({ done }: { done: Connected }) {
           This server has no GitHub App, so results won't be posted on pull requests; analyses still upload. Setting one up is in docs/server.md.
         </p>
       )}
-      <Step n={1} title="Add the upload token as a repository secret">
-        <p className="m-0 text-[13px] text-fg-muted">It's shown only now. Paste the name and the token on GitHub's page, then click Add secret.</p>
-        <Copyable label="Name" value={SECRET_NAME} />
-        <Copyable label="Secret" value={token} />
-        <ExternalButton href={newSecretUrl(repository)}>Open the secrets page on GitHub</ExternalButton>
-      </Step>
-      <Step n={2} title="Add the workflow">
-        <p className="m-0 text-[13px] text-fg-muted">
-          GitHub opens it filled in. In the commit dialog, create a new branch and start a pull request: that pull request is the first one sonda checks and comments on.
-        </p>
-        <pre className="m-0 max-h-[320px] overflow-auto rounded-lg bg-canvas p-4 font-mono text-[11.5px] leading-relaxed edge">{yaml}</pre>
-        <div className="flex flex-wrap gap-2.5">
-          <ExternalButton href={newFileUrl(repository, settings.mainBranch, WORKFLOW_PATH, yaml)}>Create {WORKFLOW_PATH} on GitHub</ExternalButton>
-          <CopyButton value={yaml}>Copy the workflow</CopyButton>
-        </div>
-      </Step>
-      {runner === 'self-hosted' && (
-        <Step n={3} title="Install the CLI where the runner runs">
-          <p className="m-0 text-[13px] text-fg-muted">The workflow runs it from ~/.local/bin. In sonda's checkout on that machine:</p>
-          <Copyable label="Command" value="scripts/install-cli.sh" />
-        </Step>
-      )}
-      {finished ? (
-        <FirstAnalysis project={settings.key} n={runner === 'self-hosted' ? 4 : 3} />
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button primary onClick={() => setFinished(true)}>
-            Done
-          </Button>
-          <span className="text-[13px] text-fg-muted">sonda then waits for the workflow's first analysis, to confirm it's connected.</span>
-        </div>
-      )}
+      {steps.map((step, i) => {
+        const state = i < current ? 'done' : i === current ? 'current' : 'locked'
+        return (
+          <Step key={step.title} n={i + 1} title={step.title} state={state} onReopen={() => setCurrent(i)}>
+            {step.body}
+            {state === 'current' &&
+              (i < steps.length - 1 ? (
+                <div>
+                  <Button primary onClick={() => setCurrent(i + 1)}>
+                    {step.confirm}
+                  </Button>
+                </div>
+              ) : (
+                !finished && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button primary onClick={() => setFinished(true)}>
+                      Done
+                    </Button>
+                    <span className="text-[13px] text-fg-muted">sonda then waits for the workflow's first analysis, to confirm it's connected.</span>
+                  </div>
+                )
+              ))}
+          </Step>
+        )
+      })}
+      {finished && <FirstAnalysis project={settings.key} n={steps.length + 1} />}
     </>
   )
 }
@@ -287,10 +328,28 @@ function FirstAnalysis({ project, n }: { project: string; n: number }) {
   )
 }
 
-function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+/** A step: the current one shows everything; a done one only that it's done; a later one only its title. */
+function Step({ n, title, state = 'current', onReopen, children }: { n: number; title: string; state?: 'done' | 'current' | 'locked'; onReopen?: () => void; children: ReactNode }) {
   return (
-    <Card id={`step-${n}`} title={`${n}. ${title}`}>
-      <div className="flex max-w-[720px] min-w-0 flex-col gap-3">{children}</div>
+    <Card
+      id={`step-${n}`}
+      title={`${n}. ${title}`}
+      className={state === 'locked' ? 'opacity-55' : ''}
+      aside={
+        state === 'done' ? (
+          <div className="flex items-center gap-2.5 text-[13px]">
+            <span className="flex items-center gap-1 text-ok">
+              <Check size={14} strokeWidth={2.5} aria-hidden="true" />
+              Done
+            </span>
+            {onReopen && <Button onClick={onReopen}>Show again</Button>}
+          </div>
+        ) : state === 'locked' ? (
+          <span className="text-[13px] text-fg-muted">After step {n - 1}</span>
+        ) : undefined
+      }
+    >
+      {state === 'current' && <div className="flex max-w-[720px] min-w-0 flex-col gap-3">{children}</div>}
     </Card>
   )
 }
