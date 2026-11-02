@@ -787,7 +787,6 @@ fn is_private_host(host: &str) -> bool {
         ".test",
         ".example",
         ".invalid",
-        ".internal",
         ".lan",
     ]
     .iter()

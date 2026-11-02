@@ -4051,25 +4051,7 @@ fn has_nested_ternary(ternary: Node, _: &[u8]) -> bool {
     while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
         parent = p.parent();
     }
-    parent.is_some_and(|p| p.kind() == "ternary_expression") && !chain_is_a_jsx_state(ternary)
-}
-
-/// Whether the chain `ternary` belongs to sits directly in a JSX `{...}`,
-/// the usual way to render loading/empty/list states. Walks up only from
-/// ternaries already found nested, so the parent lookups stay rare.
-fn chain_is_a_jsx_state(ternary: Node) -> bool {
-    let mut node = ternary;
-    loop {
-        let mut parent = node.parent();
-        while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
-            parent = p.parent();
-        }
-        match parent {
-            Some(p) if p.kind() == "ternary_expression" => node = p,
-            Some(p) => return p.kind() == "jsx_expression",
-            None => return false,
-        }
-    }
+    parent.is_some_and(|p| p.kind() == "ternary_expression")
 }
 
 /// `return;` or `continue;`, with no value or label.
@@ -4518,10 +4500,39 @@ fn use_state_badly_named(declarator: Node, src: &[u8]) -> bool {
 fn is_called_conditionally(call: Node, src: &[u8]) -> bool {
     let mut conditional = false;
     let mut child = call;
+    // The statement of the function body this call belongs to.
+    let mut top_statement = None;
     while let Some(parent) = child.parent() {
         let kind = parent.kind();
+        if kind == "statement_block"
+            && parent
+                .parent()
+                .is_some_and(|g| FUNCTIONS.contains(&g.kind()))
+        {
+            top_statement = Some(child);
+        }
         if FUNCTIONS.contains(&kind) {
-            return conditional && is_component_or_hook(parent, src);
+            // A hook after `if (...) return` runs on some renders only.
+            let after_early_return = top_statement.is_some_and(|top| {
+                let mut prev = top.prev_named_sibling();
+                while let Some(p) = prev {
+                    if p.kind() == "if_statement"
+                        && p.child_by_field_name("alternative").is_none()
+                        && p.child_by_field_name("consequence").is_some_and(|c| {
+                            c.kind() == "return_statement"
+                                || (c.kind() == "statement_block"
+                                    && c.named_child_count() > 0
+                                    && c.named_child((c.named_child_count() - 1) as u32)
+                                        .is_some_and(|l| l.kind() == "return_statement"))
+                        })
+                    {
+                        return true;
+                    }
+                    prev = p.prev_named_sibling();
+                }
+                false
+            });
+            return (conditional || after_early_return) && is_component_or_hook(parent, src);
         }
         if kind == "program" {
             return false;
@@ -5949,7 +5960,8 @@ v = load
         assert!(flagged("js/octal-escape", JS, src).is_empty());
         assert_eq!(flagged("js/nested-ternary", JS, src), [6, 6, 7]);
         let jsx = "const v = <div>{!rows ? <Spinner /> : rows.length ? <List /> : x ? <A /> : <B />}</div>;";
-        assert!(flagged("js/nested-ternary", JS, jsx).is_empty());
+        // SonarQube reports these too: a nested ternary is one wherever it sits.
+        assert_eq!(flagged("js/nested-ternary", JS, jsx), [1, 1]);
         assert_eq!(flagged("js/call-arguments-new-line", JS, src), [9]);
         let jumps = "const f = () => { g(); return; };\nwhile (a) { b(); continue; }\nfunction h() { return; /* done */ }";
         assert_eq!(flagged("js/redundant-jump", TS, jumps), [1, 2]);

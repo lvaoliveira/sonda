@@ -329,24 +329,31 @@ fn reassigned_parameter<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         return None;
     }
     let body = node.child_by_field_name("body")?;
-    let mut found = None;
+    // A value is "ignored" when the parameter is overwritten before anything
+    // reads it: the first mention of the name in the body must be the write.
+    let mut mentions: Vec<(usize, Node, bool)> = Vec::new();
     walk(body, &mut |n| {
-        if found.is_some() || is_function_kind(n.kind()) {
+        if is_function_kind(n.kind()) {
             return false;
         }
-        let target = match n.kind() {
-            "assignment_expression" | "augmented_assignment_expression" => {
-                n.child_by_field_name("left")
-            }
-            "update_expression" => n.child_by_field_name("argument"),
-            _ => None,
-        };
-        if target.is_some_and(|t| t.kind() == "identifier" && names.contains(&text(t, src))) {
-            found = Some(n);
+        if n.kind() == "identifier" && names.contains(&text(n, src)) {
+            let plain_write = n.parent().is_some_and(|p| {
+                p.kind() == "assignment_expression" && p.child_by_field_name("left") == Some(n)
+            });
+            mentions.push((n.start_byte(), n, plain_write));
         }
         true
     });
-    found
+    names.iter().find_map(|name| {
+        let mut own: Vec<_> = mentions
+            .iter()
+            .filter(|(_, n, _)| text(*n, src) == *name)
+            .collect();
+        own.sort_by_key(|(at, _, _)| *at);
+        own.first()
+            .filter(|(_, _, write)| *write)
+            .and_then(|(_, n, _)| n.parent())
+    })
 }
 
 fn session_middleware_comes_first(call: Node, src: &[u8]) -> bool {
@@ -499,8 +506,40 @@ fn var_used_before_declaration<'t>(function: Node<'t>, src: &[u8]) -> Option<Nod
 
 fn is_inline_element(node: Node, src: &[u8]) -> bool {
     const INLINE: &[&[u8]] = &[
-        b"a", b"b", b"i", b"em", b"strong", b"span", b"code", b"small", b"abbr", b"label", b"cite",
-        b"kbd", b"mark", b"q", b"s", b"sub", b"sup", b"u", b"button",
+        b"a",
+        b"b",
+        b"i",
+        b"em",
+        b"strong",
+        b"span",
+        b"code",
+        b"small",
+        b"abbr",
+        b"label",
+        b"cite",
+        b"kbd",
+        b"mark",
+        b"q",
+        b"s",
+        b"sub",
+        b"sup",
+        b"u",
+        b"button",
+        b"input",
+        b"select",
+        b"textarea",
+        b"img",
+        b"br",
+        b"big",
+        b"tt",
+        b"acronym",
+        b"dfn",
+        b"samp",
+        b"time",
+        b"var",
+        b"bdo",
+        b"map",
+        b"object",
     ];
     let open = match node.kind() {
         "jsx_element" => node.child_by_field_name("open_tag"),

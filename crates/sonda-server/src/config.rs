@@ -30,6 +30,12 @@ pub struct Config {
     /// Where to serve `GET /metrics` (ADR-0019); `None`, the default, serves
     /// no metrics. Never the API's address: metrics are unauthenticated.
     pub metrics_listen: Option<SocketAddr>,
+    /// The GitHub App that decorates pull requests (ADR-0021); `None` keeps
+    /// the server from calling GitHub.
+    pub github: Option<crate::github::App>,
+    /// The server's address as people reach it (SONDA_PUBLIC_URL), for
+    /// links in pull request decorations; `None` leaves them out.
+    pub public_url: Option<String>,
 }
 
 /// The API token, kept only as a hash.
@@ -92,6 +98,8 @@ impl Config {
             admin,
             advisory_sync: advisory_sync(env)?,
             metrics_listen: None,
+            github: github(env)?,
+            public_url: public_url(env)?,
         })
     }
 }
@@ -111,6 +119,39 @@ pub fn advisory_sync(env: &dyn Env) -> Result<Option<String>> {
         Some("true") => url().map(Some),
         Some(other) => bail!("SONDA_ADVISORY_SYNC must be true or false, not {other:?}"),
     }
+}
+
+/// The GitHub App (ADR-0021): SONDA_GITHUB_APP_ID and its private key
+/// (SONDA_GITHUB_APP_PRIVATE_KEY, or _FILE), both or neither;
+/// SONDA_GITHUB_API_URL for an Enterprise Server.
+pub fn github(env: &dyn Env) -> Result<Option<crate::github::App>> {
+    let id = env.var("SONDA_GITHUB_APP_ID").filter(|v| !v.is_empty());
+    let key = secret(env, "SONDA_GITHUB_APP_PRIVATE_KEY")?;
+    let (id, key) = match (id, key) {
+        (None, None) => return Ok(None),
+        (Some(id), Some(key)) => (id, key),
+        _ => bail!(
+            "set both SONDA_GITHUB_APP_ID and SONDA_GITHUB_APP_PRIVATE_KEY (or _FILE), or neither"
+        ),
+    };
+    let api = env
+        .var("SONDA_GITHUB_API_URL")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| crate::github::DEFAULT_API_URL.into());
+    let api = crate::advisory_sync::check_base_url(&api)
+        .map_err(|e| anyhow::anyhow!("SONDA_GITHUB_API_URL: {e}"))?;
+    crate::github::App::new(id, &key, api).map(Some)
+}
+
+/// SONDA_PUBLIC_URL, such as `https://sonda.example.com`.
+pub fn public_url(env: &dyn Env) -> Result<Option<String>> {
+    env.var("SONDA_PUBLIC_URL")
+        .filter(|v| !v.is_empty())
+        .map(|url| {
+            crate::advisory_sync::check_base_url(&url)
+                .map_err(|e| anyhow::anyhow!("SONDA_PUBLIC_URL: {e}"))
+        })
+        .transpose()
 }
 
 /// How the server writes logs (ADR-0019).
@@ -227,6 +268,33 @@ mod tests {
                 .is_none()
         );
         assert!(load(&[url, ("SONDA_TOKEN", "")]).unwrap().token.is_none());
+    }
+
+    #[test]
+    fn the_github_app_needs_its_id_and_key_together() {
+        let env = |vars: &[(&'static str, &str)]| {
+            FakeEnv(vars.iter().map(|(k, v)| (*k, v.to_string())).collect())
+        };
+        assert!(github(&env(&[])).unwrap().is_none());
+        let only_id = github(&env(&[("SONDA_GITHUB_APP_ID", "123")])).unwrap_err();
+        assert!(only_id.to_string().contains("both"), "{only_id}");
+        let only_key = github(&env(&[("SONDA_GITHUB_APP_PRIVATE_KEY", "x")])).unwrap_err();
+        assert!(only_key.to_string().contains("both"), "{only_key}");
+        let plain = github(&env(&[
+            ("SONDA_GITHUB_APP_ID", "123"),
+            ("SONDA_GITHUB_APP_PRIVATE_KEY", "x"),
+            ("SONDA_GITHUB_API_URL", "http://github.example.com"),
+        ]))
+        .unwrap_err();
+        assert!(
+            plain.to_string().contains("SONDA_GITHUB_API_URL"),
+            "{plain}"
+        );
+        assert!(public_url(&env(&[("SONDA_PUBLIC_URL", "ftp://x")])).is_err());
+        assert_eq!(
+            public_url(&env(&[("SONDA_PUBLIC_URL", "https://sonda.example.com/")])).unwrap(),
+            Some("https://sonda.example.com".into())
+        );
     }
 
     #[test]

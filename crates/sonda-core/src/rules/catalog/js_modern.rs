@@ -877,12 +877,12 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: r#"(call_expression function: (member_expression property: (property_identifier) @p (#eq? @p "replace")) arguments: (arguments . (regex flags: (regex_flags) @f (#match? @f "g")))) @match"#,
-            filter: None,
+            filter: Some(Keep(replaces_all_in_a_known_string)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "s.replace(/a/g, 'b');",
-            good: "s.replaceAll('a', 'b');",
+            bad: "'abc'.replace(/a/g, 'b');",
+            good: "'abc'.replaceAll('a', 'b');",
         }),
     },
     Rule {
@@ -1284,7 +1284,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2681")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(if_statement consequence: (expression_statement)) @match
+            query: r#"(if_statement consequence: [(expression_statement) (return_statement) (throw_statement) (break_statement) (continue_statement)]) @match
 (for_statement body: (expression_statement)) @match
 (while_statement body: (expression_statement)) @match"#,
             filter: Some(Keep(next_line_looks_guarded)),
@@ -1455,9 +1455,6 @@ fn directly_in_template_substitution(template: Node, _: &[u8]) -> bool {
     while let Some(n) = p {
         if n.kind() == "template_substitution" {
             return true;
-        }
-        if kind_in(n, FUNCTION_KINDS) {
-            return false;
         }
         p = n.parent();
     }
@@ -2482,6 +2479,11 @@ fn next_line_looks_guarded(parent: Node, _: &[u8]) -> bool {
     let Some(next) = parent.next_named_sibling() else {
         return false;
     };
+    // `if (x) a(); b();` on one line reads the same way: b() looks guarded.
+    if next.start_position().row == body.end_position().row && body.kind() == "expression_statement"
+    {
+        return true;
+    }
     body.start_position().row > parent.start_position().row
         && next.start_position().row > body.end_position().row
         && next.start_position().column == body.start_position().column
@@ -2566,6 +2568,12 @@ fn in_playwright_action(pair: Node, src: &[u8]) -> bool {
                     | b"focus"
             )
         })
+}
+
+fn replaces_all_in_a_known_string(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("function")
+        .and_then(|f| f.child_by_field_name("object"))
+        .is_some_and(|o| is_provably_string(o, src, 0))
 }
 
 #[cfg(test)]

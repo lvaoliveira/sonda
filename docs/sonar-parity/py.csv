@@ -113,7 +113,7 @@ python:S4830,vulnerability,critical,yes,main,syntactic,done,py/tls-unverified,29
 python:S5042,code_smell,major,no,main,syntactic,deprecated,,,
 python:S5122,vulnerability,major,yes,main,syntactic,partial,py/cors-any-origin,346 942,A05 A07
 python:S5247,vulnerability,major,yes,main,syntactic,done,py/autoescape-disabled,79,A03
-python:S5332,vulnerability,minor,yes,main,syntactic,partial,py/cleartext-url,200 319,A02
+python:S5332,vulnerability,minor,yes,main,syntactic,done,py/cleartext-protocol-client,200 319,A02
 python:S5344,vulnerability,critical,yes,main,syntactic,done,py/password-fast-hash,256 916,A02 A04
 python:S5361,code_smell,critical,yes,all,syntactic,done,py/re-sub-literal,,
 python:S5439,vulnerability,blocker,no,main,syntactic,deprecated,,,
@@ -139,7 +139,7 @@ python:S5709,code_smell,critical,yes,all,syntactic,done,py/exception-base-class,
 python:S5712,code_smell,critical,yes,all,syntactic,done,py/not-implemented-error,,
 python:S5713,code_smell,minor,yes,all,syntactic,done,py/except-parent-and-child,,
 python:S5714,bug,blocker,yes,all,syntactic,done,py/except-boolean-expression,,
-python:S5717,code_smell,critical,yes,main,syntactic,partial,py/mutable-default,,
+python:S5717,code_smell,critical,yes,main,syntactic,done,py/default-parameter-modified,,
 python:S5719,bug,blocker,yes,all,syntactic,done,py/method-without-self,,
 python:S5720,code_smell,critical,yes,all,syntactic,done,py/self-parameter-name,,
 python:S5722,bug,blocker,yes,all,syntactic,done,py/special-method-arity,,
@@ -172,7 +172,7 @@ python:S5868,bug,major,yes,all,syntactic,done,py/regex-grapheme-in-class,,
 python:S5869,code_smell,major,yes,all,syntactic,done,py/regex-duplicate-class-member,,
 python:S5886,code_smell,major,yes,all,syntactic,done,py/return-type-mismatch,,
 python:S5890,code_smell,major,yes,all,syntactic,done,py/annotation-mismatch,,
-python:S5899,code_smell,major,yes,test,syntactic,done,py/test-name-case,,
+python:S5899,code_smell,major,yes,test,syntactic,done,py/test-name-case py/unused-test-method,,
 python:S5905,bug,blocker,yes,all,syntactic,done,py/assert-tuple,,
 python:S5906,code_smell,minor,yes,test,syntactic,done,py/unittest-specific-assertion,,
 python:S5914,code_smell,major,yes,test,syntactic,done,py/assert-constant,,

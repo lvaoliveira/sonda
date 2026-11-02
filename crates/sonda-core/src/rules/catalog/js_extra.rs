@@ -3,8 +3,8 @@
 //! Angular checks. Queries stay cheap on deep trees: see `js_modern.rs`.
 
 use super::js::{
-    attribute, find_below, has_spread, has_token, opening_tag, static_value, string_content,
-    tag_name, text,
+    attribute, attributes, find_below, has_spread, has_token, opening_tag, static_value,
+    string_content, tag_name, text,
 };
 use super::js_modern::collect_below;
 use super::*;
@@ -413,6 +413,26 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "js/click-without-keyboard",
+        name: "Visible, non-interactive elements with click handlers must have at least one keyboard listener",
+        description: "A click handler on a div is invisible to someone who cannot use a mouse.",
+        message: "Add a keyboard handler, or use a button.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S1082")],
+        check: Check::Query {
+            langs: JSX,
+            query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "onClick")) @match"#,
+            filter: Some(Find(click_without_keyboard)),
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const d = <div onClick={go}>x</div>;",
+            good: "const d = <div onClick={go} onKeyDown={go}>x</div>;",
+        }),
+    },
+    Rule {
         id: "js/handler-on-plain-element",
         name: "Non-interactive elements should not have event handlers",
         description: "A div with onClick can't be reached or activated from the keyboard.",
@@ -424,7 +444,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JSX,
             query: r#"(jsx_attribute (property_identifier) @a (#match? @a "^on(Click|DoubleClick|MouseDown|MouseUp|KeyDown|KeyUp|KeyPress)$")) @match"#,
-            filter: Some(Keep(handler_on_plain_element)),
+            filter: Some(Find(element_with_handler_on_plain_element)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -1443,7 +1463,7 @@ fn array_only_asks_includes(declarator: Node, src: &[u8]) -> bool {
         }
     } else {
         let items = named(value);
-        if items.len() < 4
+        if items.len() < 2
             || !items
                 .iter()
                 .all(|i| matches!(i.kind(), "string" | "number"))
@@ -1535,6 +1555,56 @@ const INTERACTIVE_ROLES: &[&[u8]] = &[
 fn element_tag<'a>(attr: Node<'a>, src: &'a [u8]) -> Option<(Node<'a>, &'a [u8])> {
     let opening = attr.parent()?;
     tag_name(opening, src).map(|t| (opening, t))
+}
+
+/// The element, reported once, at its first handler attribute.
+fn element_with_handler_on_plain_element<'t>(attr: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !handler_on_plain_element(attr, src) {
+        return None;
+    }
+    let opening = attr.parent()?;
+    let handler = |a: &Node| {
+        a.kind() == "jsx_attribute"
+            && a.named_child(0).is_some_and(|n| {
+                matches!(
+                    text(n, src),
+                    b"onClick"
+                        | b"onDoubleClick"
+                        | b"onMouseDown"
+                        | b"onMouseUp"
+                        | b"onKeyDown"
+                        | b"onKeyUp"
+                        | b"onKeyPress"
+                )
+            })
+    };
+    let first = attributes(opening).into_iter().find(handler)?;
+    (first.id() == attr.id()).then_some(opening)
+}
+
+/// A click handler on an element a keyboard cannot reach or activate.
+fn click_without_keyboard<'t>(attr: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let opening = attr.parent()?;
+    let tag = tag_name(opening, src)?;
+    if !tag.first().is_some_and(u8::is_ascii_lowercase) || has_spread(opening) {
+        return None;
+    }
+    let interactive = match tag {
+        b"button" | b"input" | b"select" | b"textarea" | b"option" | b"summary" | b"details"
+        | b"label" | b"audio" | b"video" => true,
+        b"a" => attribute(opening, "href", src).is_some(),
+        _ => false,
+    };
+    let aria_hidden = attribute(opening, "aria-hidden", src)
+        .and_then(|a| static_value(a, src))
+        .is_some_and(|v| v == b"true");
+    let presentation = attribute(opening, "role", src)
+        .and_then(|a| static_value(a, src))
+        .is_some_and(|v| matches!(v, b"presentation" | b"none"));
+    let keyed = ["onKeyDown", "onKeyUp", "onKeyPress"]
+        .iter()
+        .any(|k| attribute(opening, k, src).is_some());
+    (!interactive && !aria_hidden && !presentation && !keyed).then_some(opening)
 }
 
 fn handler_on_plain_element(attr: Node, src: &[u8]) -> bool {

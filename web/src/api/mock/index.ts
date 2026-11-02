@@ -53,7 +53,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     if (d) throw new Error(`project "${key}" was deleted by ${d.deletedBy} on ${d.deletedAt.slice(0, 10)}; an admin can allow its key again on the Admin page`)
   }
   // Each project's settings and their changes (ADR-0017), newest first.
-  const settings = new Map<string, MockProjectSettings & { qualityGate: number | null; changes: ProjectSettingChange[] }>()
+  const settings = new Map<string, MockProjectSettings & { qualityGate: number | null; githubRepository: string | null; changes: ProjectSettingChange[] }>()
   // Gates held on the server (ADR-0017).
   const serverGates: { id: number; name: string; conditions: GateConditionInput[]; changedBy: string; changedAt: string }[] = []
   let nextGate = 1
@@ -76,7 +76,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const settingsOf = (key: string) => {
     if (!projectKeys.includes(key)) throw new Error('not found')
     let s = settings.get(key)
-    if (!s) settings.set(key, (s = { name: null, mainBranch: 'main', qualityGate: null, changes: [] }))
+    if (!s) settings.set(key, (s = { name: null, mainBranch: 'main', qualityGate: null, githubRepository: null, changes: [] }))
     return s
   }
   /** What the project list shows of them. */
@@ -91,6 +91,9 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       name: s.name,
       mainBranch: s.mainBranch,
       qualityGate: gateRef(s.qualityGate),
+      githubRepository: s.githubRepository,
+      // The mock server has a GitHub App.
+      githubApp: true,
       branches: [...BRANCHES].sort((a, b) => Number(b.name === s.mainBranch) - Number(a.name === s.mainBranch)),
       changes: s.changes,
     }
@@ -333,6 +336,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       if (name && name.length > 100) throw new Error('a project name is at most 100 characters')
       const quality = patch.qualityGate === undefined ? s.qualityGate : patch.qualityGate
       if (quality !== null && !gateRef(quality)) throw new Error(`no quality gate ${quality}`)
+      const repository = patch.githubRepository === undefined ? s.githubRepository : patch.githubRepository?.trim() || null
+      if (repository && !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repository)) throw new Error(`"${repository}" is not a GitHub repository: use owner/name`)
       const main = patch.mainBranch ?? s.mainBranch
       if (!BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
       const by = session.user!.username
@@ -343,7 +348,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
         clearNewCodePeriod(project)
       }
       if (quality !== s.qualityGate) s.changes.unshift({ setting: 'quality_gate', old: gateRef(s.qualityGate)?.name ?? null, new: gateRef(quality)?.name ?? null, by, at })
-      Object.assign(s, { name, mainBranch: main, qualityGate: quality })
+      if (repository !== s.githubRepository) s.changes.unshift({ setting: 'github_repository', old: s.githubRepository, new: repository, by, at })
+      Object.assign(s, { name, mainBranch: main, qualityGate: quality, githubRepository: repository })
       return wait(settingsView(project))
     },
     deleteProject: async (project, confirm) => {

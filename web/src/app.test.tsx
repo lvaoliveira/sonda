@@ -454,6 +454,7 @@ describe('Analyses', () => {
     await user.click(within(prs).getByRole('link', { name: '#42' }))
     const back = await screen.findByRole('link', { name: 'pull request #42 fix/refund-rounding → main' })
     expect(back).toHaveAttribute('href', '/projects/billing-service#pull-requests')
+    expect(screen.getByText('posted on GitHub')).toBeInTheDocument()
 
     const { unmount } = renderAt('/analyses')
     const list = await screen.findAllByRole('list', { name: 'Analyses' })
@@ -1075,6 +1076,19 @@ describe('Project settings', () => {
     await user.click(within(list).getByRole('button', { name: 'Allow the key again' }))
     await waitFor(() => expect(screen.getByRole('list', { name: 'Deleted projects' })).toHaveTextContent('allowed again by mara'))
     expect(within(screen.getByRole('list', { name: 'Deleted projects' })).queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('links a project to its GitHub repository', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform/settings')
+    const github = await screen.findByRole('region', { name: 'GitHub' })
+    expect(within(github).queryByRole('status')).not.toBeInTheDocument()
+    await user.type(within(github).getByRole('textbox', { name: 'GitHub repository' }), 'acme')
+    await user.click(within(github).getByRole('button', { name: 'Save repository' }))
+    expect(await within(github).findByRole('alert')).toHaveTextContent('"acme" is not a GitHub repository: use owner/name')
+    await user.type(within(github).getByRole('textbox', { name: 'GitHub repository' }), '/payments')
+    await user.click(within(github).getByRole('button', { name: 'Save repository' }))
+    await waitFor(() => expect(screen.getByRole('list', { name: 'Setting changes' })).toHaveTextContent('GitHub repository none → acme/payments'))
   })
 
   it('is read-only for members', async () => {

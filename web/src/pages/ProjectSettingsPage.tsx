@@ -54,6 +54,7 @@ function Settings({ settings, isAdmin, save }: { settings: ProjectSettings; isAd
         <MainBranchSetting settings={settings} isAdmin={isAdmin} save={save} />
       </Card>
       <QualityGateSetting settings={settings} isAdmin={isAdmin} save={save} />
+      <GithubSetting settings={settings} isAdmin={isAdmin} save={save} />
       <Card id="changes" title="Changes" subtitle="Who changed a setting, newest first">
         {settings.changes.length === 0 ? (
           <p className="m-0 text-[13px] text-fg-muted">No changes yet.</p>
@@ -124,6 +125,7 @@ function DangerZone({ settings }: { settings: ProjectSettings }) {
 
 function describe(c: ProjectSettingChange) {
   if (c.setting === 'main_branch') return `Main branch ${c.old ?? '?'} → ${c.new ?? '?'}`
+  if (c.setting === 'github_repository') return `GitHub repository ${c.old ?? 'none'} → ${c.new ?? 'none'}`
   if (c.setting === 'quality_gate') return `Quality gate ${c.old ?? 'sonda.toml’s'} → ${c.new ?? 'sonda.toml’s'}`
   if (c.new === null) return `Name “${c.old}” removed`
   return c.old === null ? `Named “${c.new}”` : `Renamed “${c.old}” → “${c.new}”`
@@ -175,6 +177,50 @@ function QualityGateSetting({ settings, isAdmin, save }: SettingProps) {
         </form>
       ) : (
         <p className="m-0 text-[13px]">{settings.qualityGate ? settings.qualityGate.name : 'The gate in sonda.toml'}</p>
+      )}
+      <SaveError error={error} />
+    </Card>
+  )
+}
+
+/** The GitHub repository whose pull requests sonda decorates (ADR-0021). */
+function GithubSetting({ settings, isAdmin, save }: SettingProps) {
+  const [repository, setRepository] = useState(settings.githubRepository ?? '')
+  const { busy, error, run } = useSave(save)
+  const changed = repository.trim() !== (settings.githubRepository ?? '')
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    void run({ githubRepository: repository.trim() || null })
+  }
+  return (
+    <Card id="github" title="GitHub" subtitle="Pull requests from this repository get a sonda check and a summary comment">
+      <p className="m-0 text-[13px] text-fg-muted">
+        A pull request's scan in GitHub Actions uploads with its repository. Uploads from this one get a <Mono className="text-[12px]">sonda</Mono> check,
+        annotations on new issues and one summary comment; uploads from any other repository post nothing.
+      </p>
+      {!settings.githubApp && (
+        <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+          This server has no GitHub App, so nothing is posted yet. An admin sets <Mono className="text-[12px]">SONDA_GITHUB_APP_ID</Mono> and its private key
+          (see the server docs).
+        </p>
+      )}
+      {isAdmin ? (
+        <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+          <input
+            aria-label="GitHub repository"
+            placeholder="owner/name"
+            maxLength={201}
+            spellCheck={false}
+            value={repository}
+            onChange={(e) => setRepository(e.target.value)}
+            className="h-8 w-[260px] max-w-full rounded-md border-0 bg-canvas px-2 font-mono text-[12.5px] edge"
+          />
+          <Button type="submit" primary disabled={busy || !changed}>
+            Save repository
+          </Button>
+        </form>
+      ) : (
+        <p className="m-0 font-mono text-[13px]">{settings.githubRepository ?? <span className="font-sans text-fg-muted">None</span>}</p>
       )}
       <SaveError error={error} />
     </Card>

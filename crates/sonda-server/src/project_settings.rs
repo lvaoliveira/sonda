@@ -21,6 +21,11 @@ pub struct Settings {
     pub main_branch: String,
     /// The server gate it's judged by; null for the gate in its sonda.toml.
     pub quality_gate: Option<GateRef>,
+    /// The GitHub repository (`owner/name`) its pull requests are decorated
+    /// in (ADR-0021).
+    pub github_repository: Option<String>,
+    /// Whether the server has a GitHub App to decorate them with.
+    pub github_app: bool,
     /// Every branch with analyses, the main one first, then by name.
     pub branches: Vec<Branch>,
     /// Newest first.
@@ -45,8 +50,8 @@ pub struct Branch {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
-    /// `name`, `main_branch` or `quality_gate` (by name; null for the gate
-    /// in sonda.toml).
+    /// `name`, `main_branch`, `quality_gate` (by name; null for the gate
+    /// in sonda.toml) or `github_repository`.
     pub setting: String,
     pub old: Option<String>,
     pub new: Option<String>,
@@ -76,9 +81,17 @@ async fn gate_of(pool: &PgPool, project: i64) -> sqlx::Result<Option<GateRef>> {
     .await
 }
 
-async fn load(pool: &PgPool, key: String) -> Result<Settings, ApiError> {
+async fn repository_of(pool: &PgPool, project: i64) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar("SELECT github_repository FROM projects WHERE id = $1")
+        .bind(project)
+        .fetch_one(pool)
+        .await
+}
+
+async fn load(pool: &PgPool, key: String, github_app: bool) -> Result<Settings, ApiError> {
     let (id, name, main_branch) = project(pool, &key).await?;
     let quality_gate = gate_of(pool, id).await?;
+    let github_repository = repository_of(pool, id).await?;
     let now: f64 = sqlx::query_scalar("SELECT extract(epoch FROM now())::float8")
         .fetch_one(pool)
         .await?;
@@ -112,6 +125,8 @@ async fn load(pool: &PgPool, key: String) -> Result<Settings, ApiError> {
         name,
         main_branch,
         quality_gate,
+        github_repository,
+        github_app,
         branches,
         changes: changes
             .into_iter()
@@ -131,7 +146,9 @@ pub async fn get(
     axum::extract::State(state): axum::extract::State<State>,
     Path(key): Path<String>,
 ) -> Result<Json<Settings>, ApiError> {
-    load(&state.pool, key).await.map(Json)
+    load(&state.pool, key, state.github.is_some())
+        .await
+        .map(Json)
 }
 
 #[derive(Deserialize)]
@@ -145,6 +162,9 @@ pub struct Patch {
     /// leaves it.
     #[serde(default, deserialize_with = "present")]
     quality_gate: Option<Option<i64>>,
+    /// `owner/name`, or null for none; absent leaves it.
+    #[serde(default, deserialize_with = "present")]
+    github_repository: Option<Option<String>>,
 }
 
 /// Tells an explicit null (`Some(None)`) from an absent field (`None`).
@@ -191,6 +211,21 @@ pub async fn patch(
                 .ok_or_else(|| ApiError::Unprocessable(format!("no quality gate {g}")))?,
         ),
     };
+    let old_repository = repository_of(pool, id).await?;
+    let repository = match patch.github_repository {
+        None => old_repository.clone(),
+        Some(r) => {
+            let r = r.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+            if let Some(r) = &r
+                && !sonda_core::upload::is_repository(r)
+            {
+                return Err(ApiError::Unprocessable(format!(
+                    "{r:?} is not a GitHub repository: use owner/name"
+                )));
+            }
+            r
+        }
+    };
     let main = patch.main_branch.unwrap_or_else(|| old_main.clone());
     if main != old_main {
         let analyzed: bool = sqlx::query_scalar(
@@ -217,6 +252,7 @@ pub async fn patch(
             old_gate.as_ref().map(|g| g.name.clone()),
             gate.as_ref().map(|g| g.name.clone()),
         ),
+        ("github_repository", old_repository, repository.clone()),
     ] {
         if old != new {
             sqlx::query(
@@ -232,12 +268,15 @@ pub async fn patch(
             .await?;
         }
     }
-    sqlx::query("UPDATE projects SET name = $2, quality_gate_id = $3 WHERE id = $1")
-        .bind(id)
-        .bind(&name)
-        .bind(gate.as_ref().map(|g| g.id))
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE projects SET name = $2, quality_gate_id = $3, github_repository = $4 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&name)
+    .bind(gate.as_ref().map(|g| g.id))
+    .bind(&repository)
+    .execute(&mut *tx)
+    .await?;
     if main != old_main {
         sqlx::query("UPDATE projects SET main_branch = $2, new_code_since = NULL WHERE id = $1")
             .bind(id)
@@ -255,5 +294,5 @@ pub async fn patch(
         crate::dependencies::refresh_gates(pool, crate::dependencies::GateScope::Project(id))
             .await?;
     }
-    load(pool, key).await.map(Json)
+    load(pool, key, state.github.is_some()).await.map(Json)
 }
