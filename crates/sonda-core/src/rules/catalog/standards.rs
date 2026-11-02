@@ -102,6 +102,7 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("py/graphql-introspection-enabled", &[200], &[A05]),
     ("py/graphql-no-depth-limit", &[770], &[]),
     ("py/django-custom-password-hasher", &[327], &[A02]),
+    ("py/cleartext-protocol-client", &[319], &[A02]),
     ("py/xml-signature-no-x509", &[347], &[A02]),
     ("py/no-eval", &[95], &[A03]),
     ("py/subprocess-shell", &[78], &[A03]),

@@ -55,6 +55,17 @@ The first batch reviewed its findings on five open-source projects
 (Newtonsoft.Json, Polly, AutoMapper, Serilog and MediatR, 2,646 files); the
 scan took under a second per project.
 
+### Suppressions
+
+Code that SonarQube analyzed carries its suppressions: `#pragma warning
+disable S2190` and `restore`, which Roslyn applies to SonarQube's rules
+since they are Roslyn diagnostics. sonda honors them the same way, so a
+team's existing suppressions keep working: a region silences every sonda
+rule that references the key, exactly or not, and a bare `disable`
+silences every rule. Files report their regions as a fact, so the
+project-level rules ([ADR-0020](0020-cross-file-declarations.md)) honor
+them too. `[SuppressMessage]` attributes aren't read yet.
+
 ### Preprocessor directives
 
 tree-sitter doesn't run the preprocessor. `#if`/`#else` blocks that split a

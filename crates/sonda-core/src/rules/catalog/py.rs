@@ -118,7 +118,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: "(except_clause) @match",
-            filter: Some(Keep(bare_except)),
+            filter: Some(Keep(catches_everything_without_reraising)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -147,3 +147,51 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
 ];
+
+/// `except:` and `except BaseException` that never re-raise: they also catch
+/// SystemExit and KeyboardInterrupt.
+fn catches_everything_without_reraising(clause: Node, src: &[u8]) -> bool {
+    let bare = bare_except(clause, src);
+    let base_exception = clause
+        .named_child(0)
+        .map(|c| {
+            let t = text_of(c, src);
+            t == b"BaseException"
+                || (c.kind() == "as_pattern"
+                    && c.named_child(0)
+                        .is_some_and(|v| text_of(v, src) == b"BaseException"))
+        })
+        .unwrap_or(false);
+    if !bare && !base_exception {
+        return false;
+    }
+    let Some(body) = clause
+        .named_children(&mut clause.walk())
+        .filter(|c| c.kind() == "block")
+        .last()
+    else {
+        return false;
+    };
+    let mut reraises = false;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "raise_statement" {
+            reraises = true;
+            break;
+        }
+        if matches!(
+            n.kind(),
+            "function_definition" | "class_definition" | "lambda"
+        ) {
+            continue;
+        }
+        let mut c = n.walk();
+        let kids: Vec<Node> = n.named_children(&mut c).collect();
+        stack.extend(kids);
+    }
+    !reraises
+}
+
+fn text_of<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
+    &src[node.byte_range()]
+}

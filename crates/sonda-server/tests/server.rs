@@ -115,12 +115,21 @@ async fn metrics_are_served_on_their_own_router_only() {
         let (status, _) = get(api.clone(), path).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
     }
-    let (status, body) = get(http::metrics_router(metrics), "/metrics").await;
+    let (status, body) = get(
+        http::metrics_router(metrics, unreachable_pool()),
+        "/metrics",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        body.contains(r#"sonda_http_requests_total{method="GET",route="-",status="404"} 3"#),
-        "{body}"
-    );
+    for line in [
+        r#"sonda_http_requests_total{method="GET",route="-",status="404"} 3"#,
+        // Read from the pool at scrape time: none open, as it never connects.
+        r#"sonda_db_pool_connections{state="idle"} 0"#,
+        r#"sonda_db_pool_connections{state="in_use"} 0"#,
+        "sonda_db_pool_max_connections 10",
+    ] {
+        assert!(body.contains(line), "{line} not in\n{body}");
+    }
     assert!(body.ends_with("# EOF\n"), "{body}");
 }
 

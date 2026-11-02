@@ -51,20 +51,28 @@ pub async fn run(config: Config) -> Result<()> {
     let pool = db::connect(config.database).await?;
     db::migrate(&pool).await?;
     users::bootstrap_admin(&pool, config.admin).await?;
+    let metrics = std::sync::Arc::new(observability::Metrics::default());
     if let Some(base_url) = config.advisory_sync {
         tracing::info!(source = %base_url, "syncing advisories daily");
         let pool = pool.clone();
+        let metrics = metrics.clone();
         tokio::spawn(async move {
             loop {
                 match advisory_sync::sync_once(&pool, &base_url).await {
-                    Ok(s) => tracing::info!(
-                        read = s.read,
-                        imported = s.imported,
-                        errors = s.errors,
-                        first_errors = ?s.first_errors,
-                        "synced advisories"
-                    ),
-                    Err(e) => tracing::warn!(error = %e, "advisory sync failed; retrying later"),
+                    Ok(s) => {
+                        tracing::info!(
+                            read = s.read,
+                            imported = s.imported,
+                            errors = s.errors,
+                            first_errors = ?s.first_errors,
+                            "synced advisories"
+                        );
+                        metrics.record_advisory_sync(Some(&s));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "advisory sync failed; retrying later");
+                        metrics.record_advisory_sync(None);
+                    }
                 }
                 tokio::time::sleep(advisory_sync::INTERVAL).await;
             }
@@ -91,7 +99,6 @@ pub async fn run(config: Config) -> Result<()> {
     if reads_require_auth {
         tracing::info!("reads require the token or a session (not listening on loopback only)");
     }
-    let metrics = std::sync::Arc::new(observability::Metrics::default());
     let github = config.github.map(std::sync::Arc::new);
     if let Some(app) = &github {
         tracing::info!(app = ?app, "decorating pull requests on GitHub");
@@ -106,7 +113,7 @@ pub async fn run(config: Config) -> Result<()> {
         });
     }
     let state = http::State {
-        pool,
+        pool: pool.clone(),
         token: config.token.map(std::sync::Arc::new),
         reads_require_auth,
         metrics: metrics.clone(),
@@ -124,7 +131,8 @@ pub async fn run(config: Config) -> Result<()> {
         // No graceful shutdown: the task ends with the runtime once the API
         // server has drained, and a scrape cut short loses nothing.
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(metrics_listener, http::metrics_router(metrics)).await {
+            if let Err(e) = axum::serve(metrics_listener, http::metrics_router(metrics, pool)).await
+            {
                 tracing::error!(error = %e, "the metrics listener stopped");
             }
         });
