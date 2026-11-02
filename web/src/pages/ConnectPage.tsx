@@ -7,8 +7,7 @@ import { AppShell } from '@/components/shell/AppShell'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { GateStatus } from '@/components/sonda/status'
-import { isRepository, localServer, newFileUrl, newSecretUrl, projectKeyFor, type Runner, SECRET_NAME, serverProblem, WORKFLOW_PATH, workflowYaml } from '@/lib/connect'
-
+import { localServer, newFileUrl, newSecretUrl, parseRepository, projectKeyFor, type Runner, SECRET_NAME, serverProblem, WORKFLOW_PATH, workflowYaml } from '@/lib/connect'
 import { branchLabel } from '@/lib/format'
 
 /** How often Done checks for the first analysis. */
@@ -57,10 +56,11 @@ interface Connected {
 
 function Connect({ waiting }: { waiting: WaitingProject | null }) {
   const api = useApi()
-  const [repository, setRepository] = useState(waiting?.githubRepository ?? '')
+  const [repository, setRepository] = useState(waiting?.githubRepository ? `https://github.com/${waiting.githubRepository}` : '')
+  const repo = parseRepository(repository)
   // Follows the repository's name until edited.
   const [key, setKey] = useState<string | null>(waiting?.key ?? null)
-  const projectKey = key ?? projectKeyFor(repository)
+  const projectKey = key ?? projectKeyFor(repo ?? '')
   const [mainBranch, setMainBranch] = useState('main')
   const [runner, setRunner] = useState<Runner>('self-hosted')
   const [server, setServer] = useState(localServer(window.location))
@@ -72,13 +72,13 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
     setRunner(r)
     setServer(r === 'self-hosted' ? localServer(window.location) : window.location.protocol === 'https:' ? window.location.origin : '')
   }
-  const problem = repository && !isRepository(repository.trim()) ? 'Use owner/name, such as acme/shop.' : server ? serverProblem(server, runner) : null
+  const problem = repository.trim() && !repo ? "Paste the repository's GitHub URL, such as https://github.com/acme/shop." : server ? serverProblem(server, runner) : null
 
   const connect = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
     setError(null)
-    const repo = repository.trim()
+    if (!repo) return
     try {
       if (!waiting) await api.createProject(projectKey, mainBranch.trim())
       const settings = await api.updateProjectSettings(projectKey, { githubRepository: repo })
@@ -108,8 +108,17 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
       <Card title="Repository" subtitle="sonda creates the project and its upload token; you add them on GitHub's own pages next. sonda gets no access to the repository.">
         <form onSubmit={(e) => void connect(e)} className="flex max-w-[560px] flex-col gap-4">
           <label className="flex flex-col gap-1.5 text-[13px]">
-            GitHub repository
-            <input className={input} value={repository} onChange={(e) => setRepository(e.target.value)} placeholder="owner/name" autoComplete="off" required disabled={!!waiting} />
+            GitHub repository URL
+            <input
+              className={input}
+              value={repository}
+              onChange={(e) => setRepository(e.target.value)}
+              placeholder="https://github.com/owner/name"
+              autoComplete="off"
+              inputMode="url"
+              required
+              disabled={!!waiting}
+            />
           </label>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
             <label className="flex flex-col gap-1.5 text-[13px]">
@@ -146,7 +155,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
             </p>
           )}
           <div>
-            <Button primary type="submit" disabled={busy || !repository || !projectKey || !server || !!problem}>
+            <Button primary type="submit" disabled={busy || !repo || !projectKey || !server || !!problem}>
               {busy ? 'Connecting…' : 'Connect'}
             </Button>
           </div>

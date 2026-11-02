@@ -1226,9 +1226,9 @@ describe('Connecting a repository', () => {
     renderAt('/', emptyApi())
     await screen.findByText('No soundings yet')
     await user.click(await screen.findByRole('link', { name: 'Connect a repository' }))
-    const repository = await screen.findByRole('textbox', { name: 'GitHub repository' })
-    await user.type(repository, 'acme')
-    expect(screen.getByText('Use owner/name, such as acme/shop.')).toBeInTheDocument()
+    const repository = await screen.findByRole('textbox', { name: 'GitHub repository URL' })
+    await user.type(repository, 'https://github.com/acme')
+    expect(screen.getByText("Paste the repository's GitHub URL, such as https://github.com/acme/shop.")).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled()
     await user.type(repository, '/shop')
     expect(screen.getByRole('textbox', { name: 'Project key' })).toHaveValue('shop')
@@ -1252,14 +1252,14 @@ describe('Connecting a repository', () => {
     const waiting = await screen.findByRole('region', { name: 'Waiting for a first analysis' })
     expect(waiting).toHaveTextContent('shopacme/shop')
     await user.click(within(waiting).getByRole('link', { name: 'Show the steps again' }))
-    expect(await screen.findByRole('textbox', { name: 'GitHub repository' })).toHaveValue('acme/shop')
+    expect(await screen.findByRole('textbox', { name: 'GitHub repository URL' })).toHaveValue('https://github.com/acme/shop')
     expect(screen.getByRole('textbox', { name: 'Project key' })).toBeDisabled()
   })
 
   it("refuses a server GitHub's runners can't reach, and a key that exists", async () => {
     const user = userEvent.setup()
     renderAt('/connect', emptyApi())
-    await user.type(await screen.findByRole('textbox', { name: 'GitHub repository' }), 'acme/payments-platform')
+    await user.type(await screen.findByRole('textbox', { name: 'GitHub repository URL' }), 'https://github.com/acme/payments-platform')
     await user.click(screen.getByRole('button', { name: 'GitHub-hosted' }))
     const server = screen.getByRole('textbox', { name: 'Server address the runner uploads to' })
     await user.type(server, 'http://localhost:9000')
@@ -1283,7 +1283,7 @@ describe('Connecting a repository', () => {
         return { total: 1, offset: 0, limit: 1, items: [{ ...row, id: 4242, project: 'shop', branch: 'pr:7', pullRequest: { number: 7, base: 'main', head: 'add-sonda' } }] }
       },
     })
-    await user.type(await screen.findByRole('textbox', { name: 'GitHub repository' }), 'acme/shop')
+    await user.type(await screen.findByRole('textbox', { name: 'GitHub repository URL' }), 'https://github.com/acme/shop')
     await user.click(screen.getByRole('button', { name: 'Connect' }))
     await user.click(await screen.findByRole('button', { name: 'Done' }))
     const connected = await screen.findByRole('region', { name: 'Connected' })

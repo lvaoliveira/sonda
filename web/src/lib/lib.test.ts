@@ -3,7 +3,7 @@ import issuesData from '@/api/mock/issues.json'
 import { queryIssues } from '@/api/mock/query'
 import type { IssueDetail } from '@/api/types'
 import { areaPoints, linePoints, ringDash, waffleCells } from './charts'
-import { isRepository, localServer, newFileUrl, newSecretUrl, projectKeyFor, serverProblem, workflowYaml } from './connect'
+import { isRepository, localServer, newFileUrl, newSecretUrl, parseRepository, projectKeyFor, serverProblem, workflowYaml } from './connect'
 import { compactCount, formatAge, formatEffort } from './format'
 import { initials } from './identity'
 import { DEFAULT_FILTER, filterFromParams, issueSearchParams, toQuery } from './issues'
@@ -178,6 +178,19 @@ describe('connecting a repository', () => {
   it('checks repositories and derives a project key from one', () => {
     expect(isRepository('acme/shop')).toBe(true)
     for (const bad of ['acme', 'acme/shop/x', 'acme/ shop', '/shop']) expect(isRepository(bad), bad).toBe(false)
+    for (const pasted of [
+      'https://github.com/acme/shop',
+      'https://github.com/acme/shop/',
+      'https://github.com/acme/shop.git',
+      'https://www.github.com/acme/shop/tree/main/src',
+      'https://github.com/acme/shop?tab=readme',
+      'github.com/acme/shop',
+      'git@github.com:acme/shop.git',
+      '  acme/shop  ',
+    ])
+      expect(parseRepository(pasted), pasted).toBe('acme/shop')
+    for (const bad of ['https://gitlab.com/acme/shop', 'https://github.com/acme', 'https://github.com/', 'acme', 'ftp://github.com/acme/shop'])
+      expect(parseRepository(bad), bad).toBeNull()
     expect(projectKeyFor('acme/shop.web')).toBe('shop.web')
     expect(projectKeyFor('acme/.dotfiles')).toBe('dotfiles')
   })
