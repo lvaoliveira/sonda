@@ -94,11 +94,18 @@ pub(crate) fn analyze(
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
+    // C#'s `#pragma warning disable S1234` regions silence SonarQube keys.
+    let pragmas = if lang == Lang::CSharp {
+        pragma_regions(src)
+    } else {
+        Vec::new()
+    };
     issues.retain(|i| {
         // A malformed suppression comment cannot suppress the report about itself.
         i.rule == rules::NOSONAR_COMMENT
             || i.rule == "py/suppression-comment-format"
-            || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+            || !(is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+                || silenced_by_pragma(&pragmas, i.line, i.rule))
     });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
@@ -366,6 +373,12 @@ pub(crate) fn is_classic_assembly_info(names: &[&str]) -> bool {
 /// NeutralResourcesLanguage.
 fn cs_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> {
     let mut facts = Vec::new();
+    let pragmas = pragma_regions(ctx.src);
+    if !pragmas.is_empty()
+        && let Ok(json) = serde_json::to_string(&pragmas)
+    {
+        facts.push((PRAGMA_FACT.to_string(), json));
+    }
     // The types this file declares, for rules that compare declarations
     // across files (ADR-0020).
     let index = crate::semantic::cs_index::extract(root, ctx.src.as_bytes(), deadline);
@@ -558,6 +571,15 @@ pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                 }
             }
         }
+    }
+    // Pragma regions silence what the project pass found too.
+    for f in files.iter_mut() {
+        let Some((_, json)) = f.facts.iter().find(|(k, _)| k == PRAGMA_FACT) else {
+            continue;
+        };
+        let regions: Vec<PragmaRegion> = serde_json::from_str(json).unwrap_or_default();
+        f.issues
+            .retain(|i| !silenced_by_pragma(&regions, i.line, i.rule));
     }
 }
 
@@ -1844,6 +1866,95 @@ fn todo_tag(comment: &str) -> Option<&'static str> {
 
 /// `NOSONAR` or `sonda-ignore` on a line suppresses every issue on it;
 /// `sonda-ignore: rule-a, rule-b` suppresses only the listed rules.
+/// A region of a C# file where `#pragma warning disable` silences a
+/// SonarQube key, or every warning when `key` is None: lines `start` to
+/// `end`, both included.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PragmaRegion {
+    key: Option<String>,
+    start: usize,
+    end: usize,
+}
+
+/// The fact kind a C# file's pragma regions travel under, for issues the
+/// project pass adds.
+const PRAGMA_FACT: &str = "cs-pragmas";
+
+/// The `#pragma warning disable`/`restore` regions of a C# file, as Roslyn
+/// applies them: from the line after `disable` to the line before the
+/// matching `restore`, or to the end of the file. Without a list, `disable`
+/// silences every warning and `restore` ends every region.
+pub(crate) fn pragma_regions(src: &str) -> Vec<PragmaRegion> {
+    let mut open: Vec<(Option<String>, usize)> = Vec::new();
+    let mut regions = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        let Some(rest) = line.trim_start().strip_prefix('#') else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        if words.next() != Some("pragma") || words.next() != Some("warning") {
+            continue;
+        }
+        let action = words.next();
+        let rest = rest.split("//").next().unwrap_or_default();
+        let codes: Vec<String> = rest
+            .split_whitespace()
+            .skip(3)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split(',')
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+        let line_no = i + 1;
+        match action {
+            Some("disable") if codes.is_empty() => open.push((None, line_no + 1)),
+            Some("disable") => {
+                for code in codes {
+                    if !open
+                        .iter()
+                        .any(|(k, _)| k.as_deref() == Some(code.as_str()))
+                    {
+                        open.push((Some(code), line_no + 1));
+                    }
+                }
+            }
+            Some("restore") => {
+                let (closed, still): (Vec<_>, Vec<_>) = open.into_iter().partition(|(k, _)| {
+                    codes.is_empty() || k.as_ref().is_some_and(|k| codes.contains(k))
+                });
+                open = still;
+                regions.extend(closed.into_iter().map(|(key, start)| PragmaRegion {
+                    key,
+                    start,
+                    end: line_no - 1,
+                }));
+            }
+            _ => {}
+        }
+    }
+    regions.extend(open.into_iter().map(|(key, start)| PragmaRegion {
+        key,
+        start,
+        end: usize::MAX,
+    }));
+    regions
+}
+
+/// Whether a pragma region silences `rule` on `line`: every rule, or the
+/// rules that reference the SonarQube key it names, exactly or not.
+fn silenced_by_pragma(regions: &[PragmaRegion], line: usize, rule: &str) -> bool {
+    if regions.is_empty() {
+        return false;
+    }
+    let keys: Vec<&str> = rules::find(rule)
+        .map(|r| r.sonar.iter().map(|s| s.key).collect())
+        .unwrap_or_default();
+    regions.iter().any(|r| {
+        line >= r.start && line <= r.end && r.key.as_deref().is_none_or(|k| keys.contains(&k))
+    })
+}
+
 fn is_suppressed(line: &str, rule: &str) -> bool {
     if line.contains("NOSONAR") {
         return true;
@@ -2348,6 +2459,44 @@ pub(crate) mod tests {
         ));
         let a = run(Lang::JavaScript, "eval(x); // sonda-ignore\nvar y = 1;\n");
         assert_eq!(rules_hit(&a), vec!["js/no-var"]);
+    }
+
+    #[test]
+    fn csharp_pragma_regions() {
+        let src = "class A {\nbool F(double x) {\n#pragma warning disable S1244 // compared on purpose\nvar a = x == 0.1;\n#pragma warning restore S1244\nvar b = x == 0.2;\n#pragma warning disable CA1822, S1244\nvar c = x == 0.3;\n#pragma warning restore\nvar d = x == 0.4;\n#pragma warning disable\nvar e = x == 0.5;\nreturn a;\n}\n}\n";
+        assert_eq!(
+            pragma_regions(src),
+            [
+                PragmaRegion {
+                    key: Some("S1244".into()),
+                    start: 4,
+                    end: 4
+                },
+                PragmaRegion {
+                    key: Some("CA1822".into()),
+                    start: 8,
+                    end: 8
+                },
+                PragmaRegion {
+                    key: Some("S1244".into()),
+                    start: 8,
+                    end: 8
+                },
+                PragmaRegion {
+                    key: None,
+                    start: 12,
+                    end: usize::MAX
+                },
+            ]
+        );
+        let a = run(Lang::CSharp, src);
+        let floats: Vec<usize> = a
+            .issues
+            .iter()
+            .filter(|i| i.rule == "cs/float-equality")
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(floats, [6, 10]);
     }
 
     #[test]
