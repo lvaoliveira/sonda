@@ -131,7 +131,7 @@ pub(crate) fn analyze(
         tokens: scan.tokens,
         has_syntax_errors: root.has_error(),
         facts: match lang {
-            Lang::CSharp => cs_facts(&ctx, root),
+            Lang::CSharp => cs_facts(&ctx, root, deadline),
             _ => java_facts(&ctx, lang, root)
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
@@ -364,11 +364,11 @@ pub(crate) fn is_classic_assembly_info(names: &[&str]) -> bool {
 /// methods (declared only, or implemented), whether it uses resources, and
 /// where its classic AssemblyInfo attributes are when they lack
 /// NeutralResourcesLanguage.
-fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
+fn cs_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> {
     let mut facts = Vec::new();
     // The types this file declares, for rules that compare declarations
     // across files (ADR-0020).
-    let index = crate::semantic::cs_index::extract(root, ctx.src.as_bytes());
+    let index = crate::semantic::cs_index::extract(root, ctx.src.as_bytes(), deadline);
     if !index.types.is_empty()
         && let Ok(json) = serde_json::to_string(&index)
     {

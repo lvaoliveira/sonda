@@ -1,7 +1,7 @@
 # Compatibility with SonarQube rules
 
 Which SonarQube rule keys have an equivalent in sonda ([ADR-0007](../adr/0007-sonarqube-rule-parity.md)).
-Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.124771.
+Refreshed by `scripts/sonar_parity.py` on 2026-11-02, against SonarQube 26.7.0.124771.
 
 - **done**: a sonda rule covers it (`exact` in sonda's catalog);
   **partial**: a sonda rule is related but differs, for example syntactic where
@@ -18,7 +18,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-01, against SonarQube 26.7.0.1
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
-| C# | 446 | 372 | 71 | 3 | 0 | 0 |
+| C# | 446 | 378 | 65 | 3 | 0 | 0 |
 
 ## Known gaps
 

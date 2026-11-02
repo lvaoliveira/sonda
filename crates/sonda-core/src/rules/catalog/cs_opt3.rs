@@ -5,12 +5,10 @@
 //! in `js_modern.rs`.
 
 use super::cs::{cs_has_modifier, cs_statements, cs_string_value, simple_name, squeezed};
-use super::cs_bugs::{attribute_names, cs_call_arguments};
+use super::cs_bugs::cs_call_arguments;
 use super::cs_final::is_azure_function;
 use super::cs_more::{declarators, declared_type, members};
-use super::cs_opt2::{
-    enclosing_method, has_parameter_modifier, is_type_parameter_name, may_implement_contract,
-};
+use super::cs_opt2::{enclosing_method, is_type_parameter_name, may_implement_contract};
 use super::cs_types::{is_generic, type_of_name, walk_tree};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_last::count_nodes;
@@ -410,12 +408,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S4226")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(method_declaration (modifier) parameters: (parameter_list . (parameter (modifier) type: (_) @match)))",
-            filter: Some(Keep(extends_neighbour_type)),
-        },
+        sonar: &[exact("S4226")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "namespace Shop { class Order { } static class OrderExtensions { public static int Total(this Order o) => 0; } }",
@@ -1102,43 +1096,6 @@ fn locale_not_set(creation: Node, src: &[u8]) -> bool {
         })
         .is_none()
     })
-}
-
-fn extends_neighbour_type(ty: Node, src: &[u8]) -> bool {
-    let Some(parameter) = ty.parent() else {
-        return false;
-    };
-    if !has_parameter_modifier(parameter, &[b"this"], src) {
-        return false;
-    }
-    let extended = simple_name(ty, src);
-    // The namespace the extension is in: the nearest block namespace, or the
-    // whole file for a file-scoped one.
-    let mut scope = ty;
-    while let Some(p) = scope.parent() {
-        scope = p;
-        if scope.kind() == "namespace_declaration" {
-            break;
-        }
-    }
-    let generated = |n: Node| {
-        attribute_names(n, src)
-            .iter()
-            .any(|(_, a)| *a == b"GeneratedCode")
-    };
-    find_in_scope(scope, &["block", "method_declaration"], |n| {
-        matches!(
-            n.kind(),
-            "class_declaration"
-                | "struct_declaration"
-                | "record_declaration"
-                | "interface_declaration"
-        ) && n
-            .child_by_field_name("name")
-            .is_some_and(|x| text(x, src) == extended)
-            && !generated(n)
-    })
-    .is_some()
 }
 
 fn function_without_try(name: Node, src: &[u8]) -> bool {

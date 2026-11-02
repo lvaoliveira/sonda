@@ -421,7 +421,7 @@ java:S3753,bug,blocker,yes,main,syntactic,done,java/session-attributes-not-compl
 java:S3776,code_smell,critical,yes,main,syntactic,done,common/cognitive-complexity,,
 java:S3824,code_smell,major,yes,all,dataflow,done,java/map-get-then-put,,
 java:S3864,code_smell,major,yes,main,syntactic,done,java/stream-peek,,
-java:S3878,code_smell,minor,yes,main,syntactic,done,java/varargs-array,,
+java:S3878,code_smell,minor,yes,main,syntactic,done,java/varargs-array cs/array-for-params,,
 java:S3923,bug,major,yes,main,syntactic,done,java/identical-branches,,
 java:S3937,code_smell,critical,no,main,syntactic,done,java/irregular-number-pattern,,
 java:S3958,bug,major,yes,all,dataflow,done,java/stream-intermediate-unused,,
