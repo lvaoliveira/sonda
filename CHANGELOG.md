@@ -537,6 +537,12 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The static Linux CLI (`scripts/install-cli.sh`'s musl build) skipped
+  every JavaScript, TypeScript, Python, Java and C# file on x86_64: "the
+  parser was killed by the sandbox". musl opens files there with `open`,
+  not `openat`, and the worker's sandbox refused only `openat`, so std's
+  probe of `/proc/self/cgroup` (for the regex crate's CPU count) killed the
+  worker instead of failing. `open` is now refused like `openat`.
 - Deeply nested code took time that grew with the square of its depth in
   two places every language goes through: resolving each name climbed the
   whole scope chain, and cognitive complexity asked each `&&`/`||` for its

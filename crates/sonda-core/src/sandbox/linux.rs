@@ -11,9 +11,7 @@ const ALLOWED: &[&str] = &[
     // Its pipes.
     "read",
     "write",
-    // Refused by the second filter (see `filter_json`); listed so that
-    // refusal, not a kill, is what happens.
-    "openat",
+    // (Opening a file: refused by the second filter, see `open_calls`.)
     // Std's CPU-count probe (the regex crate calls it while compiling the
     // `#match?` predicate of java/weak-hash): reads the worker's own mask.
     "sched_getaffinity",
@@ -42,9 +40,22 @@ const ALLOWED: &[&str] = &[
     "exit_group",
 ];
 
-fn filter_json(pid: i32) -> String {
+/// The calls that open a file on `arch`, all refused alike. On x86_64 musl
+/// opens files with the older `open`, not `openat` as glibc does (std reads
+/// `/proc/self/cgroup` with it when the regex crate asks for the CPU count);
+/// aarch64 has no `open`.
+fn open_calls(arch: TargetArch) -> &'static [&'static str] {
+    match arch {
+        TargetArch::x86_64 => &["openat", "open"],
+        _ => &["openat"],
+    }
+}
+
+fn filter_json(pid: i32, arch: TargetArch) -> String {
+    let opens = open_calls(arch);
     let mut rules: Vec<serde_json::Value> = ALLOWED
         .iter()
+        .chain(opens)
         .map(|name| json!({ "syscall": name }))
         .collect();
     rules.push(json!({
@@ -65,7 +76,7 @@ fn filter_json(pid: i32) -> String {
         "no_files": {
             "mismatch_action": "allow",
             "filter_action": { "errno": EACCES },
-            "filter": [{ "syscall": "openat" }],
+            "filter": opens.iter().map(|name| json!({ "syscall": name })).collect::<Vec<_>>(),
         }
     })
     .to_string()
@@ -78,7 +89,8 @@ pub(super) fn enter() -> Result<(), String> {
     let fail = |e: &dyn std::fmt::Display| format!("seccomp: {e}");
     let arch = TargetArch::try_from(std::env::consts::ARCH).map_err(|e| fail(&e))?;
     let pid = rustix::process::getpid().as_raw_nonzero().get();
-    let mut filters = compile_from_json(filter_json(pid).as_bytes(), arch).map_err(|e| fail(&e))?;
+    let mut filters =
+        compile_from_json(filter_json(pid, arch).as_bytes(), arch).map_err(|e| fail(&e))?;
     // Both filters stay active (also sets PR_SET_NO_NEW_PRIVS). The
     // allow-list must go last: installing a filter takes `prctl` and
     // `seccomp` calls, which the allow-list itself would kill.
@@ -98,8 +110,26 @@ mod tests {
     #[test]
     fn filter_compiles_for_supported_architectures() {
         for arch in [TargetArch::x86_64, TargetArch::aarch64] {
-            let filters = compile_from_json(filter_json(1234).as_bytes(), arch).unwrap();
+            let filters = compile_from_json(filter_json(1234, arch).as_bytes(), arch).unwrap();
             assert!(!filters["worker"].is_empty() && !filters["no_files"].is_empty());
         }
+    }
+
+    #[test]
+    fn every_way_to_open_a_file_is_refused_not_killed() {
+        for arch in [TargetArch::x86_64, TargetArch::aarch64] {
+            let filters: serde_json::Value = serde_json::from_str(&filter_json(1, arch)).unwrap();
+            for name in open_calls(arch) {
+                let listed = |filter: &str| {
+                    filters[filter]["filter"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|r| r["syscall"] == *name)
+                };
+                assert!(listed("worker") && listed("no_files"), "{name}");
+            }
+        }
+        assert!(open_calls(TargetArch::x86_64).contains(&"open"));
     }
 }
