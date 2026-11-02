@@ -853,23 +853,24 @@ fn declared_names<'a>(root: Node<'_>, src: &'a [u8]) -> Vec<&'a [u8]> {
 /// ones that only name something excluded.
 fn references<'t>(node: Node<'t>) -> Vec<Node<'t>> {
     let mut out = Vec::new();
-    let mut visit = |n: Node<'t>| {
-        if matches!(n.kind(), "identifier" | "shorthand_property_identifier") {
-            let skip = n.parent().is_some_and(|p| match p.kind() {
-                "export_specifier" => p.child_by_field_name("alias") == Some(n),
-                "import_specifier" => true,
-                "labeled_statement" => true,
-                "jsx_opening_element" | "jsx_self_closing_element" | "jsx_closing_element" => false,
-                _ => false,
-            });
-            if !skip {
-                out.push(n);
-            }
+    let names_only = |n: Node, p: Node| match p.kind() {
+        "export_specifier" => p.child_by_field_name("alias") == Some(n),
+        "import_specifier" | "labeled_statement" => true,
+        _ => false,
+    };
+    if matches!(node.kind(), "identifier" | "shorthand_property_identifier")
+        && node.parent().is_none_or(|p| !names_only(node, p))
+    {
+        out.push(node);
+    }
+    super::js_syntax::walk_parented(node, &mut |n, parent| {
+        if matches!(n.kind(), "identifier" | "shorthand_property_identifier")
+            && !names_only(n, parent)
+        {
+            out.push(n);
         }
         true
-    };
-    visit(node);
-    walk(node, &mut visit);
+    });
     out
 }
 

@@ -1234,6 +1234,37 @@ pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool)
     }
 }
 
+/// [`walk`] that also hands over each node's parent, kept on a stack:
+/// `Node::parent` walks down from the root, which costs the nesting depth
+/// every time.
+pub(super) fn walk_parented<'t>(
+    node: Node<'t>,
+    visit: &mut impl FnMut(Node<'t>, Node<'t>) -> bool,
+) {
+    let mut cursor = node.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    let mut ancestors = vec![node];
+    loop {
+        let parent = *ancestors.last().unwrap_or(&node);
+        let current = cursor.node();
+        if visit(current, parent) && cursor.goto_first_child() {
+            ancestors.push(current);
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if ancestors.len() == 1 || !cursor.goto_parent() {
+                return;
+            }
+            ancestors.pop();
+        }
+    }
+}
+
 pub(super) fn strip_parens(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         match node.named_child(0) {
