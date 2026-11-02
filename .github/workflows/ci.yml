@@ -180,30 +180,9 @@ jobs:
           persist-credentials: false
       - run: shellcheck scripts/*.sh
       - run: scripts/install-cli.sh
-      # One small file per language, each parsed in the sandbox: a system call
-      # this build makes that the seccomp allow-list misses kills that
-      # language's parser, which a scan only reports as skipped files. Fail on
-      # it instead, and let strace name the call.
-      - name: Every language parses in the sandbox
-        run: |
-          mkdir -p /tmp/langs && cd /tmp/langs
-          printf 'export function f(a) { return a == null ? 0 : a.length }\n' > a.js
-          printf 'export const f = (a: string[]): number => a.length\n' > a.ts
-          printf 'export const C = () => <p>{1}</p>\n' > a.tsx
-          printf 'def f(a):\n    return len(a)\n' > a.py
-          printf 'class A { int f(String a) { return a.length(); } }\n' > A.java
-          printf 'class A { int F(string a) => a.Length; }\n' > A.cs
-          printf 'int f(const char *a) { return a[0]; }\n' > a.c
-          printf 'int f(const char *a) { return a[0]; }\n' > a.cpp
-          ~/.local/bin/sonda scan . --format json -o /tmp/langs.json || [ $? -eq 1 ]
-          if jq -e '[.warnings[] | select(test("sandbox"))] | length > 0' /tmp/langs.json; then
-            jq -r '.warnings[]' /tmp/langs.json
-            sudo apt-get install -y -qq strace > /dev/null
-            strace -f -o /tmp/strace.log ~/.local/bin/sonda scan . -o /dev/null || true
-            grep -B5 SIGSYS /tmp/strace.log | head -60
-            exit 1
-          fi
-          jq -r '.files[] | "\(.path) \(.language)"' /tmp/langs.json
+      # Every language parses in the sandbox; strace names a call it misses.
+      - run: sudo apt-get install -y -qq strace > /dev/null
+      - run: scripts/check-languages.sh
 
   supply-chain:
     runs-on: ubuntu-latest

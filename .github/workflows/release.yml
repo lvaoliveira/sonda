@@ -1,0 +1,111 @@
+name: Release
+
+# A `v*` tag publishes a GitHub Release (docs/release-1.0.md, M0): the CLI as
+# static Linux binaries from the image's `cli` target, built on each
+# architecture's own runner, each checked to parse every language in its
+# sandbox and to report the tag's version, with SHA-256 checksums; the notes
+# are the tag's CHANGELOG section. The release stays a draft until every
+# binary is attached, so a failed build never publishes half a release.
+#
+# A pull request that changes what a release is made of runs the same
+# builds and checks, without creating or publishing anything.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - Dockerfile
+      - scripts/install-cli.sh
+      - scripts/check-languages.sh
+
+permissions: {}
+
+# One release per tag at a time.
+concurrency:
+  group: release-${{ github.ref_name }}
+
+jobs:
+  draft:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag is Cargo.toml's version and has changelog notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          if ! grep -qx "version = \"$version\"" Cargo.toml; then
+            echo "::error::the tag is $GITHUB_REF_NAME, but Cargo.toml's version isn't $version"
+            exit 1
+          fi
+          awk -v v="$version" '/^## \[/ { p = index($0, "## [" v "]") == 1; next } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "sonda $version" --notes-file "$RUNNER_TEMP/notes.md"
+
+  cli:
+    needs: draft
+    # On a pull request `draft` is skipped, and the builds still run.
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/install-cli.sh "$RUNNER_TEMP/bin"
+      - run: sudo apt-get install -y -qq strace > /dev/null
+      - run: scripts/check-languages.sh "$RUNNER_TEMP/bin/sonda"
+      - name: It reports the version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if ! "$RUNNER_TEMP/bin/sonda" --version | grep -qw -- "$version"; then
+            echo "::error::the binary doesn't report version $version"
+            exit 1
+          fi
+      - name: Attach it, with its checksum
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          name="sonda-$version-$ARCH-linux"
+          cd "$RUNNER_TEMP"
+          cp bin/sonda "$name"
+          sha256sum "$name" > "$name.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    needs: cli
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checksums in one file, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir sums
+          cat sums/*.sha256 > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

@@ -7,6 +7,18 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-02
+
+The first release. sonda analyzes JavaScript and TypeScript, Python, Java,
+C# and C/C++ for bugs, vulnerabilities and code smells, with SonarQube's
+rules as its reference, and measures complexity, duplication, coverage and
+technical debt, judged by a quality gate. It runs as a CLI, locally or in
+CI, and as a server that keeps analyses, tracks and triages issues across
+them, and decorates GitHub pull requests. `scripts/setup-server.sh` starts
+the server with Docker Compose; the CLI for Linux is attached to this
+release. Before 1.0, minor versions may change what
+[docs/release-1.0.md](https://github.com/lvaoliveira/sonda/blob/main/docs/release-1.0.md) will make stable.
+
 ### Added
 
 - `sonda scan` analyzes JavaScript/TypeScript, Python, Java, C/C++ and C#
