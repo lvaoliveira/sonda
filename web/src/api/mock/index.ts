@@ -106,7 +106,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   /** As the server: findings of a rule the server turned off leave lists. */
   const counted = () => issues.filter((i) => !ruleSettings.off(i.rule, i.project))
   const signedIn = options.signedIn ?? true
-  const session: Session = { user: signedIn ? users[0] : null, authenticated: signedIn, readsRequireAuth: options.readsRequireAuth ?? false }
+  const session: Session = { user: signedIn ? users[0] : null, authenticated: signedIn, readsRequireAuth: options.readsRequireAuth ?? false, version: '0.1.0' }
   const asUser = (u: UserRow): User => ({ id: u.id, username: u.username, displayName: u.displayName, role: u.role, disabled: u.disabled })
   const findUser = (id: number) => {
     const user = users.find((u) => u.id === id)
@@ -133,6 +133,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     isAdmin: session.user?.role === 'admin',
     counts: { projects: 312, components: 611, issues: 1342, security: 23 },
     me: session.user?.username ?? null,
+    version: session.version,
   })
 
   const findIssue = (id: number) => {

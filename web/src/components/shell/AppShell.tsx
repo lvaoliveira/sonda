@@ -97,6 +97,11 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
           <Link to="/" onClick={close} className="flex h-full flex-1 items-center gap-2.5 px-[18px] text-fg hover:text-fg">
             <Logo />
             <span className="text-[17px] font-semibold tracking-[-0.03em]">sonda</span>
+            {data?.version && (
+              <span title="Server version" className="font-mono text-[10.5px] text-fg-faint">
+                {data.version}
+              </span>
+            )}
           </Link>
           <button
             type="button"

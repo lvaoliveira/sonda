@@ -1197,6 +1197,12 @@ describe('Shell', () => {
     expect(open).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it("shows the server's version beside the wordmark", async () => {
+    renderAt('/rules')
+    const nav = await screen.findByRole('complementary', { name: 'Primary' })
+    expect(await within(nav).findByTitle('Server version')).toHaveTextContent('0.1.0')
+  })
+
   it('toggles and remembers the theme', async () => {
     const user = userEvent.setup()
     renderAt('/rules')

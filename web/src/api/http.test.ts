@@ -86,13 +86,14 @@ describe('the HTTP API client', () => {
 
   it('builds the shell from the signed-in user and real counts, leaving unknown ones out', async () => {
     const ann = { id: 2, username: 'ann', displayName: 'Ann Lee', role: 'admin', disabled: false }
-    const { fn } = fakeFetch((url) => json(url.endsWith('/session') ? { user: ann, authenticated: true, readsRequireAuth: true } : page))
+    const { fn } = fakeFetch((url) => json(url.endsWith('/session') ? { user: ann, authenticated: true, readsRequireAuth: true, version: '1.2.3' } : page))
     const shell = await createHttpApi('/api', fn).shell()
     expect(shell.counts).toEqual({ projects: null, components: null, issues: 3, security: 2 })
     expect(shell.me).toBe('ann')
     expect(shell.user).toEqual({ name: 'Ann Lee', handle: '@ann', initials: 'AL' })
     expect(shell.isAdmin).toBe(true)
     expect(shell.org.projectCount).toBeNull()
+    expect(shell.version).toBe('1.2.3')
   })
 
   it('signs in with username and password, and manages users', async () => {

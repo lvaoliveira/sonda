@@ -7,6 +7,12 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Added
+
+- The web app shows the server's version beside the wordmark, and the
+  server logs it at startup. `GET /api/session` reports it to whoever can
+  read.
+
 ## [0.1.0] - 2026-11-02
 
 The first release. sonda analyzes JavaScript and TypeScript, Python, Java,

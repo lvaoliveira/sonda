@@ -57,6 +57,7 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
         isAdmin: user?.role === 'admin',
         counts: { projects: null, components: null, issues: open.total, security: open.facets.category.vulnerability ?? 0 },
         me: user?.username ?? null,
+        version: session.version,
       } satisfies Shell
     },
     // There are no teams yet (`teams: false`), so the scope is always "all".
