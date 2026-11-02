@@ -1,7 +1,7 @@
 //! What several endpoints compute the same way from stored analyses:
 //! ratings (ADR-0005), gate states, condition labels, and formats.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub(crate) const DAY: f64 = 86_400.0;
@@ -137,12 +137,13 @@ pub(crate) fn duration_text(ms: i64) -> String {
     }
 }
 
-pub(crate) fn condition_label(c: &Value) -> String {
-    let metric = c["metric"].as_str().unwrap_or("?");
-    let name = match metric {
+/// A metric as people read it: "Coverage on new code", "New bugs".
+pub(crate) fn metric_name(metric: &str) -> String {
+    match metric {
         "new_coverage" => "Coverage on new code".to_string(),
         "new_duplicated_lines_density" => "Duplication on new code".to_string(),
         "duplicated_lines_density" => "Duplication".to_string(),
+        "ncloc" => "Lines of code".to_string(),
         m => {
             let words = m.replace('_', " ");
             let mut chars = words.chars();
@@ -150,7 +151,17 @@ pub(crate) fn condition_label(c: &Value) -> String {
                 f.to_uppercase().collect::<String>() + chars.as_str()
             })
         }
-    };
+    }
+}
+
+/// Whether a metric is a percentage.
+pub(crate) fn is_percent(metric: &str) -> bool {
+    metric.contains("coverage") || metric.contains("density")
+}
+
+pub(crate) fn condition_label(c: &Value) -> String {
+    let metric = c["metric"].as_str().unwrap_or("?");
+    let name = metric_name(metric);
     let op = match c["op"].as_str().unwrap_or("") {
         "gt" => ">",
         "lt" => "<",
@@ -166,11 +177,7 @@ pub(crate) fn condition_label(c: &Value) -> String {
             format!("{t}")
         }
     });
-    let unit = if metric.contains("coverage") || metric.contains("density") {
-        "%"
-    } else {
-        ""
-    };
+    let unit = if is_percent(metric) { "%" } else { "" };
     format!("{name} {op} {threshold}{unit}")
 }
 
@@ -211,9 +218,28 @@ pub(crate) fn iso_date(epoch: f64) -> String {
 // ------------------------------------------------- a stored analysis
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GateDetail {
     pub state: &'static str,
     pub conditions: Vec<ConditionRow>,
+    /// The server gate that judged it (ADR-0017); null when it was the
+    /// gate the scan brought, from sonda.toml.
+    pub server_gate: Option<ServerGateRef>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ServerGateRef {
+    pub id: i64,
+    pub name: String,
+}
+
+/// A stored gate as screens show it.
+pub(crate) fn gate_detail(passed: bool, gate: &Value) -> GateDetail {
+    GateDetail {
+        state: gate_state(passed, gate),
+        conditions: conditions(gate),
+        server_gate: serde_json::from_value(gate["server_gate"].clone()).ok(),
+    }
 }
 
 #[derive(Serialize)]

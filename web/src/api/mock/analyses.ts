@@ -69,7 +69,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
     analyzedAt: row.analyzedAt,
     toolVersion: row.toolVersion,
     newCodeReference: 'origin/main',
-    gate: failing ? project.gate : { state: 'passed', conditions: project.gate.conditions.map((c) => ({ ...c, status: 'ok' })) },
+    gate: failing ? project.gate : { state: 'passed', conditions: project.gate.conditions.map((c) => ({ ...c, status: 'ok' })), serverGate: null },
     measures: project.measures,
     files: 3_912,
     languages: project.languages.map((l, k) => ({ id: l.id, files: Math.round(2_000 / 2 ** k) })),

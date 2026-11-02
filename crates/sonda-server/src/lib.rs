@@ -27,6 +27,7 @@ pub mod overview;
 pub mod profiles;
 pub mod project_settings;
 pub mod projects;
+pub mod quality_gates;
 pub mod review;
 pub mod rule_settings;
 pub mod rules;
@@ -70,15 +71,30 @@ pub async fn run(config: Config) -> Result<()> {
     if reads_require_auth {
         tracing::info!("reads require the token or a session (not listening on loopback only)");
     }
+    let metrics = std::sync::Arc::new(observability::Metrics::default());
     let state = http::State {
         pool,
         token: config.token.map(std::sync::Arc::new),
         reads_require_auth,
+        metrics: metrics.clone(),
     };
     let app = http::router(state, config.web_dir.as_deref());
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
+    if let Some(address) = config.metrics_listen {
+        let metrics_listener = TcpListener::bind(address)
+            .await
+            .with_context(|| format!("listening for metrics on {address}"))?;
+        tracing::info!(%address, "serving metrics");
+        // No graceful shutdown: the task ends with the runtime once the API
+        // server has drained, and a scrape cut short loses nothing.
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(metrics_listener, http::metrics_router(metrics)).await {
+                tracing::error!(error = %e, "the metrics listener stopped");
+            }
+        });
+    }
     tracing::info!(address = %config.listen, "listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())

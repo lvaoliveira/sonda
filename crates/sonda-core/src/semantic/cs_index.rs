@@ -54,6 +54,14 @@ pub(crate) struct MemberDecl {
     /// Calls written in the body that dispose-pattern checks look for.
     pub(crate) calls: Vec<String>,
     pub(crate) span: Span,
+    #[serde(default)]
+    pub(crate) attributes: Vec<String>,
+    /// A property's accessors: "get", "set", "init".
+    #[serde(default)]
+    pub(crate) accessors: Vec<String>,
+    /// A method with type parameters of its own.
+    #[serde(default)]
+    pub(crate) generic: bool,
 }
 
 impl MemberDecl {
@@ -103,11 +111,38 @@ impl TypeDecl {
     }
 }
 
-/// What one file declares, and the namespaces it imports.
+/// A place in a file where a type or method declared elsewhere is used,
+/// for rules that need that declaration to judge it.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct Site {
+    /// "bitwise" (an enum's members combined with `|`, `&` or `^`),
+    /// "params-array" (an array written for a `params` parameter), "new",
+    /// "entity" (a durable entity interface), "extension" (the type an
+    /// extension method extends), "action-param" (a controller action's
+    /// parameter type).
+    pub(crate) kind: String,
+    /// The type, or for "params-array" the method, the site names.
+    pub(crate) name: String,
+    pub(crate) arity: usize,
+    /// The namespace the site is written in.
+    pub(crate) namespace: String,
+    /// The full name of the type the site is written in.
+    pub(crate) owner: String,
+    /// For "params-array": the receiver's type, when not the owner.
+    pub(crate) receiver: Option<String>,
+    /// For "params-array": the number of arguments.
+    pub(crate) count: usize,
+    pub(crate) span: Span,
+}
+
+/// What one file declares, the namespaces it imports, and where it uses
+/// declarations from elsewhere.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub(crate) struct FileIndex {
     pub(crate) usings: Vec<String>,
     pub(crate) types: Vec<TypeDecl>,
+    #[serde(default)]
+    pub(crate) sites: Vec<Site>,
 }
 
 /// The fact kind a file's index travels under.
@@ -185,11 +220,15 @@ impl Extractor<'_> {
                 if let Some(name) = a.child_by_field_name("name") {
                     let full = self.text(name);
                     let last = full.rsplit('.').next().unwrap_or(&full).to_string();
-                    out.push(
-                        last.strip_suffix("Attribute")
-                            .map(str::to_string)
-                            .unwrap_or(last),
-                    );
+                    let last = last
+                        .strip_suffix("Attribute")
+                        .map(str::to_string)
+                        .unwrap_or(last);
+                    // [PartCreationPolicy(CreationPolicy.Shared)]
+                    if last == "PartCreationPolicy" && self.text(a).contains("Shared") {
+                        out.push("PartCreationPolicy.Shared".to_string());
+                    }
+                    out.push(last);
                 }
             }
         }
@@ -280,6 +319,25 @@ impl Extractor<'_> {
             _ => return Vec::new(),
         };
         let modifiers = self.modifiers(n);
+        let attributes = self.attributes(n);
+        // A property's get, set and init.
+        let accessors: Vec<String> = n
+            .child_by_field_name("accessors")
+            .map(|list| {
+                let mut c = list.walk();
+                list.named_children(&mut c)
+                    .filter_map(|acc| {
+                        let mut ac = acc.walk();
+                        let keyword = acc
+                            .children(&mut ac)
+                            .find(|k| matches!(k.kind(), "get" | "set" | "init"));
+                        keyword
+                            .map(|k| k.kind().to_string())
+                            .or_else(|| acc.child_by_field_name("name").map(|k| self.text(k)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut cursor = n.walk();
         let explicit = n
             .named_children(&mut cursor)
@@ -342,6 +400,9 @@ impl Extractor<'_> {
                     has_body: false,
                     calls: Vec::new(),
                     span: self.span(name),
+                    attributes: attributes.clone(),
+                    accessors: Vec::new(),
+                    generic: false,
                 })
                 .collect();
         }
@@ -356,23 +417,124 @@ impl Extractor<'_> {
             has_body: body.is_some(),
             calls,
             span: self.span(name.unwrap_or(n)),
+            attributes,
+            accessors,
+            generic: n
+                .named_children(&mut n.walk())
+                .any(|c| c.kind() == "type_parameter_list"),
         }]
     }
 }
 
-/// Summarizes the types a C# file declares. One iterative walk: types are
-/// found at any depth, with their namespace and enclosing types.
-pub(crate) fn extract(root: Node, src: &[u8]) -> FileIndex {
+/// Names the durable entity APIs take an entity interface through.
+const ENTITY_CALLS: &[&str] = &[
+    "SignalEntityAsync",
+    "SignalEntity",
+    "CreateEntityProxy",
+    "ReadEntityStateAsync",
+];
+
+/// A site waiting for a variable's declared type, which takes the semantic
+/// model: (the site, the operands or receiver whose type names it).
+type Pending<'t> = (Site, Vec<Node<'t>>);
+
+impl Extractor<'_> {
+    /// The enum an operand of `|`, `&` or `^` names directly, `Color.Red`.
+    fn enum_member(&self, n: Node) -> Option<String> {
+        let n = unparenthesized(n);
+        (n.kind() == "member_access_expression")
+            .then(|| n.child_by_field_name("expression"))
+            .flatten()
+            .filter(|e| {
+                matches!(
+                    e.kind(),
+                    "identifier" | "member_access_expression" | "qualified_name"
+                )
+            })
+            .map(|e| self.simple(e))
+    }
+
+    fn simple(&self, n: Node) -> String {
+        match n.kind() {
+            "member_access_expression" | "qualified_name" => n
+                .child_by_field_name("name")
+                .map_or_else(|| self.text(n), |x| self.simple(x)),
+            "generic_name" => n
+                .named_child(0)
+                .map_or_else(|| self.text(n), |x| self.text(x)),
+            _ => self.text(n),
+        }
+    }
+
+    fn site(
+        &self,
+        kind: &str,
+        name: String,
+        arity: usize,
+        ns: &str,
+        owner: &str,
+        span: Span,
+    ) -> Site {
+        Site {
+            kind: kind.to_string(),
+            name,
+            arity,
+            namespace: ns.to_string(),
+            owner: owner.to_string(),
+            receiver: None,
+            count: 0,
+            span,
+        }
+    }
+}
+
+fn unparenthesized(mut n: Node) -> Node {
+    while n.kind() == "parenthesized_expression" {
+        match n.named_child(0) {
+            Some(inner) => n = inner,
+            None => break,
+        }
+    }
+    n
+}
+
+/// Summarizes what a C# file declares, and where it uses declarations a
+/// project rule has to look up. One iterative walk; the semantic model is
+/// built only when a site needs a variable's declared type.
+pub(crate) fn extract(root: Node, src: &[u8], deadline: std::time::Instant) -> FileIndex {
     let x = Extractor { src };
     let mut index = FileIndex::default();
-    // (depth, name) of enclosing namespaces and types.
+    // (depth, name) of enclosing namespaces; (depth, name, arity) of types.
     let mut namespaces: Vec<(usize, String)> = Vec::new();
     let mut file_namespace = String::new();
-    let mut outer: Vec<(usize, String)> = Vec::new();
+    let mut outer: Vec<(usize, String, usize)> = Vec::new();
+    let mut pending: Vec<Pending> = Vec::new();
     let mut cursor = root.walk();
     let mut depth = 0;
     loop {
         let node = cursor.node();
+        let ns = || {
+            let mut parts: Vec<&str> = Vec::new();
+            if !file_namespace.is_empty() {
+                parts.push(&file_namespace);
+            }
+            parts.extend(namespaces.iter().map(|(_, n)| n.as_str()));
+            parts.join(".")
+        };
+        // The full name of the innermost enclosing type, as `full_name` has it.
+        let owner = || {
+            let Some((_, name, arity)) = outer.last() else {
+                return String::new();
+            };
+            let namespace = ns();
+            let mut parts: Vec<&str> = Vec::new();
+            if !namespace.is_empty() {
+                parts.push(&namespace);
+            }
+            parts.extend(outer[..outer.len() - 1].iter().map(|(_, n, _)| n.as_str()));
+            parts.push(name);
+            format!("{}`{arity}", parts.join("."))
+        };
         match node.kind() {
             "using_directive" => {
                 // Plain `using N;`, not aliases or `using static`.
@@ -395,15 +557,194 @@ pub(crate) fn extract(root: Node, src: &[u8]) -> FileIndex {
                     namespaces.push((depth, x.text(n)));
                 }
             }
+            "binary_expression" => {
+                let op = node
+                    .child_by_field_name("operator")
+                    .map(|o| x.text(o))
+                    .unwrap_or_default();
+                if matches!(op.as_str(), "|" | "&" | "^")
+                    && let (Some(l), Some(r)) = (
+                        node.child_by_field_name("left"),
+                        node.child_by_field_name("right"),
+                    )
+                {
+                    match (x.enum_member(l), x.enum_member(r)) {
+                        (Some(a), Some(b)) if a == b => {
+                            index.sites.push(x.site(
+                                "bitwise",
+                                a,
+                                0,
+                                &ns(),
+                                &owner(),
+                                x.span(node),
+                            ));
+                        }
+                        // `flags | Color.Red`: the variable's declared type decides.
+                        (Some(a), None) | (None, Some(a)) => {
+                            let variable = if x.enum_member(l).is_some() { r } else { l };
+                            if unparenthesized(variable).kind() == "identifier" {
+                                pending.push((
+                                    x.site("bitwise", a, 0, &ns(), &owner(), x.span(node)),
+                                    vec![unparenthesized(variable)],
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "invocation_expression" => {
+                let args: Vec<Node> = node
+                    .child_by_field_name("arguments")
+                    .map(|a| {
+                        let mut c = a.walk();
+                        a.named_children(&mut c)
+                            .filter_map(|arg| {
+                                arg.named_child(arg.named_child_count().saturating_sub(1) as u32)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // An array written out for the last argument.
+                // `[.. xs]` spreads a sequence into the array, which `params`
+                // can't do on its own.
+                let spreads = |a: &Node| {
+                    let mut c = a.walk();
+                    a.named_children(&mut c).any(|e| {
+                        e.named_child(0)
+                            .is_some_and(|x| x.kind() == "spread_element")
+                    })
+                };
+                let written = args.last().filter(|a| {
+                    a.kind() == "implicit_array_creation_expression"
+                        || (a.kind() == "collection_expression" && !spreads(a))
+                        || (a.kind() == "array_creation_expression" && a.named_child_count() >= 2)
+                });
+                if let (Some(last), Some(function)) =
+                    (written, node.child_by_field_name("function"))
+                {
+                    let mut site = x.site(
+                        "params-array",
+                        String::new(),
+                        0,
+                        &ns(),
+                        &owner(),
+                        x.span(*last),
+                    );
+                    site.count = args.len();
+                    match function.kind() {
+                        "identifier" | "generic_name" => {
+                            site.name = x.simple(function);
+                            index.sites.push(site);
+                        }
+                        "member_access_expression" => {
+                            site.name = function
+                                .child_by_field_name("name")
+                                .map(|n| x.simple(n))
+                                .unwrap_or_default();
+                            match function.child_by_field_name("expression") {
+                                // `this.M(...)`: the owner's.
+                                Some(r) if x.text(r) == "this" => index.sites.push(site),
+                                // `Type.M(...)` or `variable.M(...)`: the model tells.
+                                Some(r) if r.kind() == "identifier" => {
+                                    pending.push((site, vec![r]))
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "object_creation_expression" => {
+                if let Some(t) = node.child_by_field_name("type") {
+                    let arity = if t.kind() == "generic_name" {
+                        t.named_child(1).map_or(0, |a| a.named_child_count())
+                    } else {
+                        0
+                    };
+                    index.sites.push(x.site(
+                        "new",
+                        x.simple(t),
+                        arity,
+                        &ns(),
+                        &owner(),
+                        x.span(node),
+                    ));
+                }
+            }
+            "generic_name" => {
+                if ENTITY_CALLS.contains(&x.simple(node).as_str())
+                    && let Some(arg) = node.named_child(1).and_then(|a| a.named_child(0))
+                {
+                    index.sites.push(x.site(
+                        "entity",
+                        x.simple(arg),
+                        0,
+                        &ns(),
+                        &owner(),
+                        x.span(node),
+                    ));
+                }
+            }
+            "parameter" => {
+                let mut c = node.walk();
+                let this = node
+                    .named_children(&mut c)
+                    .any(|m| m.kind() == "modifier" && x.text(m) == "this");
+                if this && let Some(t) = node.child_by_field_name("type") {
+                    let arity = if t.kind() == "generic_name" {
+                        t.named_child(1).map_or(0, |a| a.named_child_count())
+                    } else {
+                        0
+                    };
+                    index.sites.push(x.site(
+                        "extension",
+                        x.simple(t),
+                        arity,
+                        &ns(),
+                        &owner(),
+                        x.span(t),
+                    ));
+                }
+            }
+            "method_declaration" => {
+                // A public action of a class named like a controller: its
+                // parameters' types may be request models.
+                let controller = outer
+                    .last()
+                    .is_some_and(|(_, n, _)| n.ends_with("Controller"));
+                let modifiers = x.modifiers(node);
+                if controller
+                    && modifiers.iter().any(|m| m == "public")
+                    && !modifiers.iter().any(|m| m == "static")
+                    && let Some(list) = node.child_by_field_name("parameters")
+                {
+                    let mut c = list.walk();
+                    for p in list
+                        .named_children(&mut c)
+                        .filter(|p| p.kind() == "parameter")
+                    {
+                        if x.attributes(p).iter().any(|a| a == "FromServices") {
+                            continue;
+                        }
+                        if let Some(t) = p.child_by_field_name("type") {
+                            index.sites.push(x.site(
+                                "action-param",
+                                x.simple(t),
+                                0,
+                                &ns(),
+                                &owner(),
+                                x.span(t),
+                            ));
+                        }
+                    }
+                }
+            }
             k => {
                 if let Some((_, kind)) = TYPE_KINDS.iter().find(|(tk, _)| *tk == k)
                     && let Some(name) = node.child_by_field_name("name")
                 {
-                    let mut ns: Vec<&str> = Vec::new();
-                    if !file_namespace.is_empty() {
-                        ns.push(&file_namespace);
-                    }
-                    ns.extend(namespaces.iter().map(|(_, n)| n.as_str()));
                     let mut c = node.walk();
                     let type_params = node
                         .named_children(&mut c)
@@ -425,11 +766,12 @@ pub(crate) fn extract(root: Node, src: &[u8]) -> FileIndex {
                             b.named_children(&mut c).flat_map(|m| x.member(m)).collect()
                         })
                         .unwrap_or_default();
+                    let arity = type_params.map_or(0, |p| p.named_child_count());
                     index.types.push(TypeDecl {
                         name: x.text(name),
-                        arity: type_params.map_or(0, |p| p.named_child_count()),
-                        namespace: ns.join("."),
-                        outer: outer.iter().map(|(_, n)| n.clone()).collect(),
+                        arity,
+                        namespace: ns(),
+                        outer: outer.iter().map(|(_, n, _)| n.clone()).collect(),
                         kind: kind.to_string(),
                         modifiers: x.modifiers(node),
                         attributes: x.attributes(node),
@@ -437,25 +779,11 @@ pub(crate) fn extract(root: Node, src: &[u8]) -> FileIndex {
                         members,
                         span: x.span(name),
                     });
-                    outer.push((depth, x.text(name)));
+                    outer.push((depth, x.text(name), arity));
                 }
             }
         }
-        // Types are only declared at namespace and type level: skip member
-        // bodies, initializers and parameter lists.
-        let declares = !matches!(
-            node.kind(),
-            "block"
-                | "arrow_expression_clause"
-                | "accessor_list"
-                | "parameter_list"
-                | "variable_declaration"
-                | "enum_member_declaration_list"
-                | "attribute_list"
-                | "base_list"
-                | "type_parameter_constraints_clause"
-        );
-        if declares && cursor.goto_first_child() {
+        if cursor.goto_first_child() {
             depth += 1;
             continue;
         }
@@ -463,16 +791,72 @@ pub(crate) fn extract(root: Node, src: &[u8]) -> FileIndex {
             while namespaces.last().is_some_and(|(d, _)| *d >= depth) {
                 namespaces.pop();
             }
-            while outer.last().is_some_and(|(d, _)| *d >= depth) {
+            while outer.last().is_some_and(|(d, _, _)| *d >= depth) {
                 outer.pop();
             }
             if cursor.goto_next_sibling() {
                 break;
             }
             if !cursor.goto_parent() {
+                resolve_pending(&mut index, pending, root, src, deadline);
                 return index;
             }
             depth -= 1;
+        }
+    }
+}
+
+/// Settles the sites that need a variable's declared type: an operand of a
+/// bitwise operation must have the enum's type, and a call's receiver names
+/// its type, or is a type itself (`Type.M(...)`) when it declares nothing.
+fn resolve_pending(
+    index: &mut FileIndex,
+    pending: Vec<Pending>,
+    root: Node,
+    src: &[u8],
+    deadline: std::time::Instant,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let Some(model) = super::build(crate::lang::Lang::CSharp, root, src, deadline) else {
+        return;
+    };
+    let x = Extractor { src };
+    // A name's declared type: written, or `var x = new T()`.
+    let declared = |n: Node| -> Option<Option<String>> {
+        let d = model.decl_of(n)?;
+        let ty = d.ty.or_else(|| {
+            d.declarator
+                .filter(|v| v.kind() == "variable_declarator" && v.named_child_count() > 1)
+                .and_then(|v| v.named_child(v.named_child_count() as u32 - 1))
+                .filter(|v| v.kind() == "object_creation_expression")
+                .and_then(|v| v.child_by_field_name("type"))
+        });
+        Some(ty.map(|t| x.simple(t)))
+    };
+    for (mut site, nodes) in pending {
+        let Some(&n) = nodes.first() else {
+            continue;
+        };
+        match site.kind.as_str() {
+            "bitwise" => {
+                if declared(n).flatten().is_some_and(|t| t == site.name) {
+                    index.sites.push(site);
+                }
+            }
+            _ => match declared(n) {
+                Some(Some(t)) => {
+                    site.receiver = Some(t);
+                    index.sites.push(site);
+                }
+                Some(None) => {}
+                // Not a variable: a type with static methods.
+                None => {
+                    site.receiver = Some(x.text(n));
+                    index.sites.push(site);
+                }
+            },
         }
     }
 }
@@ -524,6 +908,16 @@ impl<'a> ProjectIndex<'a> {
         index
     }
 
+    /// The files indexed, in the order given to `new`.
+    pub(crate) fn files(&self) -> &[&'a FileIndex] {
+        &self.files
+    }
+
+    /// The type with a full name, as `TypeDecl::full_name` writes it.
+    pub(crate) fn type_named(&self, full_name: &str) -> Option<TypeId> {
+        self.by_full_name.get(full_name).copied()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.types.len()
     }
@@ -558,6 +952,11 @@ impl<'a> ProjectIndex<'a> {
     /// namespaces visible there. None for types from other assemblies and
     /// names that stay ambiguous.
     pub(crate) fn resolve(&self, file: usize, from: &TypeDecl, r: &TypeRef) -> Option<TypeId> {
+        self.resolve_in(file, &from.namespace, r)
+    }
+
+    /// `resolve`, from code in `namespace` of `file`.
+    pub(crate) fn resolve_in(&self, file: usize, namespace: &str, r: &TypeRef) -> Option<TypeId> {
         let candidates = self.by_name.get(&(r.name.clone(), r.arity))?;
         if let [one] = candidates.as_slice() {
             return Some(*one);
@@ -568,8 +967,8 @@ impl<'a> ProjectIndex<'a> {
             .copied()
             .filter(|id| {
                 let ns = &self.decl(*id).1.namespace;
-                ns == &from.namespace
-                    || from.namespace.starts_with(&format!("{ns}."))
+                ns == namespace
+                    || namespace.starts_with(&format!("{ns}."))
                     || usings.iter().any(|u| u == ns)
             })
             .collect();

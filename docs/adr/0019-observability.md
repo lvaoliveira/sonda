@@ -95,8 +95,9 @@ that serves `GET /metrics` in the Prometheus text format, and nothing else.
   - `sonda_advisory_sync_runs_total{result}`,
     `sonda_advisory_sync_last_success_timestamp_seconds` and
     `sonda_advisory_sync_advisories_imported_total`.
-- **Labels are bounded.** `route` is the template and `status` the code,
-  so the number of time series has a fixed upper bound. Project keys,
+- **Labels are bounded.** `route` is the template, `method` one of the
+  standard methods or `other` (a client can send any token), and `status`
+  the code, so the number of time series has a fixed upper bound. Project keys,
   branches and users never become labels: projects are created by
   uploads, so labels from them could grow without limit.
 - **The crate:** `prometheus-client`, the Prometheus project's own Rust

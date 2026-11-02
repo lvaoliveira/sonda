@@ -43,27 +43,28 @@ once per scan, on that index.
   - It groups the parts of partial types by full name.
   - It resolves a type name as C# does at the level summaries allow: by simple name and arity, then narrowed to the namespaces visible from the referencing file (its own, enclosing ones, and its `using` directives).
   - A name that stays ambiguous resolves to nothing.
+- **Use sites.** A use in one file can need a declaration from another: `Color.Red | Color.Blue` is wrong only if `Color` has no `[Flags]`. So the summary also lists such sites, by kind, with the type or method they name, their namespace, the type they're written in, and their span. A site that names a variable needs its declared type, which the semantic model gives. The extractor builds the model only when such a site exists.
 - **The rules** are `Check::Structural`. They keep their ids and their catalog entries, and their checks live in `rules/catalog/cs_project.rs`. Findings point at the exact parameter, member or type, not at column 1.
 - **Their examples and tests** run the project pass over the example as a project of one file, so bad/good examples remain tests (ADR-0007).
 
-The first rules on the index are ten C# rules:
+The rules on the index are sixteen C# rules:
 - parameter names (S927), defaults (S1006) and `params` (S3262, S3600) against the declaration overridden or implemented;
 - base methods hidden by private (S4015) or wider (S4019) methods;
 - inheritance depth (S110);
 - colliding interface members (S3444);
 - base fields differing by case (S4025);
-- the dispose pattern (S3881).
+- the dispose pattern (S3881);
+- on use sites:
+  - bitwise operations on enums without `[Flags]` (S3265);
+  - arrays written out for `params` parameters (S3878);
+  - shared MEF parts created with `new` (S4277);
+  - extensions in the namespace of the type they extend (S4226);
+  - durable entity interfaces (S6424);
+  - controller action models with under-posted value types (S6964).
 
 ## Consequences
 
-- **What stays unseen:** types from referenced assemblies (NuGet packages, the framework) aren't in the project, so they resolve to nothing. That costs recall: an `Equals(object other)` override isn't compared with `object.Equals(object obj)`. By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`. Eight of the ten are now. S110 stays `related`, because SonarQube counts framework base classes too. S3881 stays `related`, because it checks part of SonarQube's list.
-- **Cost:** extraction skips member bodies, so the scan time of the seven reference projects is unchanged (3.0 s). The project pass parses one JSON summary per C# file. The summaries hold declarations only, a small fraction of each file's size.
+- **What stays unseen:** types from referenced assemblies (NuGet packages, the framework) aren't in the project, so they resolve to nothing. That costs recall: an `Equals(object other)` override isn't compared with `object.Equals(object obj)`. By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`. Fourteen of the sixteen are now. S110 stays `related`, because SonarQube counts framework base classes too. S3881 stays `related`, because it checks part of SonarQube's list.
+- **Cost:** extraction is one cursor walk that copies no member bodies, and builds the semantic model only for files with a site that needs it. The scan time of the seven reference projects is unchanged (3.0 s). The project pass parses one JSON summary per C# file. The summaries hold declarations and sites only, a small fraction of each file's size.
 - **The worker model is unchanged.** Workers still analyze one file each and return facts; only what a fact can carry grew. A rule that needs more than declarations from other files (call graphs, data flow across calls) still needs a decision of its own.
-- **More rules can move to the index:**
-  - bitwise operations on enums declared elsewhere (S3265);
-  - arrays passed to `params` methods of other files (S3878);
-  - extensions in the namespace of the extended type (S4226);
-  - action models declared elsewhere (S6964);
-  - shared MEF parts and durable entity interfaces (S4277, S6424).
-
-  Other languages can use the same scheme when their rules need it, Java first.
+- **Other languages can use the same scheme** when their rules need it, Java first.

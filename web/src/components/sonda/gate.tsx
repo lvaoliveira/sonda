@@ -1,4 +1,5 @@
-import type { GateCondition } from '@/api/types'
+import { Link } from 'react-router'
+import type { GateCondition, ServerGateRef } from '@/api/types'
 import { Mono } from './layout'
 
 const CONDITION_MARK: Record<GateCondition['status'], { glyph: string; color: string; label: string }> = {
@@ -31,5 +32,19 @@ export function GateConditions({ conditions }: { conditions: GateCondition[] }) 
         )
       })}
     </ul>
+  )
+}
+
+/** Which gate judged a result (ADR-0017): a server gate, or the repository's sonda.toml. */
+export function GateSource({ serverGate }: { serverGate: ServerGateRef }) {
+  return serverGate ? (
+    <span className="text-xs text-fg-faint">
+      server gate{' '}
+      <Link to={`/gates#server-${serverGate.id}`} className="text-fg-muted">
+        {serverGate.name}
+      </Link>
+    </span>
+  ) : (
+    <span className="text-xs text-fg-faint">from the repository’s sonda.toml</span>
   )
 }
