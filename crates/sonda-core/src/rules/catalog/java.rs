@@ -16,7 +16,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(binary_expression operator: ["==" "!="]) @match"#,
-            filter: Some(Keep(has_string_literal_operand)),
+            filter: Some(Keep(super::java_extra::compares_boxed_names_by_reference)),
         },
         example: Some(Example {
             lang: Lang::Java,

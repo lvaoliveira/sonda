@@ -2161,7 +2161,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(if_statement) @match"#,
-            filter: Some(Keep(if_only_wraps_another_if)),
+            filter: Some(Find(if_only_wraps_another_if)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -3827,22 +3827,23 @@ fn label_is_unused(labeled: Node, src: &[u8]) -> bool {
     .is_none()
 }
 
-fn if_only_wraps_another_if(statement: Node, _: &[u8]) -> bool {
-    if statement.child_by_field_name("alternative").is_some() {
-        return false;
-    }
-    let Some(body) = statement.child_by_field_name("consequence") else {
-        return false;
-    };
+/// The inner `if`, where SonarQube reports the merge.
+fn if_only_wraps_another_if<'t>(statement: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    statement
+        .child_by_field_name("alternative")
+        .is_none()
+        .then_some(())?;
+    let body = statement.child_by_field_name("consequence")?;
     let inner = if body.kind() == "block" {
         match statements(body).as_slice() {
             [only] => *only,
-            _ => return false,
+            _ => return None,
         }
     } else {
         body
     };
-    inner.kind() == "if_statement" && inner.child_by_field_name("alternative").is_none()
+    (inner.kind() == "if_statement" && inner.child_by_field_name("alternative").is_none())
+        .then_some(inner)
 }
 
 fn parentheses_fit_on_one_line(paren: Node, _: &[u8]) -> bool {
@@ -4459,5 +4460,11 @@ mod tests {
     fn write_only_private_fields_are_unused() {
         let src = "class A {\nprivate final Object written;\nprivate final Object read;\nA(Object written, Object read) { this.written = written; this.read = read; }\nObject get() { return read; }\n}";
         assert_eq!(flagged("java/unused-private-field", src), [2]);
+    }
+
+    #[test]
+    fn string_names_compared_by_reference() {
+        let src = "class A {\nboolean f(String a, String b, int n, int m) { return a == b; }\nboolean g(int n, int m) { return n == m; }\nboolean h(Integer a, String b) { return a == b; }\n}";
+        assert_eq!(flagged("java/string-reference-equality", src), [2, 4]);
     }
 }

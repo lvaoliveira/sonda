@@ -1460,6 +1460,34 @@ pub(super) fn declared_field<'t>(class: Node<'t>, name: &[u8], src: &[u8]) -> Op
         .find(|m| m.kind() == "field_declaration" && declarator_names(*m, src).contains(&name))
 }
 
+/// `==` between two names declared as String or a boxed type compares
+/// references; a string literal on either side is caught by the simpler check.
+pub(super) fn compares_boxed_names_by_reference(binary: Node, src: &[u8]) -> bool {
+    if super::has_string_literal_operand(binary, src) {
+        return true;
+    }
+    let boxed = |side: &str| {
+        binary
+            .child_by_field_name(side)
+            .filter(|n| n.kind() == "identifier")
+            .is_some_and(|n| {
+                matches!(
+                    type_text(declared_type(binary, text(n, src), src), src),
+                    b"String"
+                        | b"Integer"
+                        | b"Long"
+                        | b"Short"
+                        | b"Byte"
+                        | b"Character"
+                        | b"Boolean"
+                        | b"Double"
+                        | b"Float"
+                )
+            })
+    };
+    boxed("left") && boxed("right")
+}
+
 pub(super) fn type_text<'s>(node: Option<Node>, src: &'s [u8]) -> &'s [u8] {
     node.map_or(&b""[..], |n| text(n, src))
 }
