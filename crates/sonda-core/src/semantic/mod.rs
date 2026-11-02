@@ -237,11 +237,34 @@ impl<'t> Model<'t> {
             .enumerate()
             .map(|(i, r)| (r.node.id(), i))
             .collect();
-        for i in 0..self.refs.len() {
-            let decl = self.lookup(self.refs[i].scope, &self.refs[i].name);
-            let r = &mut self.refs[i];
+        // What each scope a lookup climbed through resolved the name to, so
+        // the next reference stops at the first scope that knows: deeply
+        // nested code would otherwise climb the whole chain per reference.
+        let mut known: HashMap<(ScopeId, &str), Option<DeclId>> = HashMap::new();
+        let mut climbed = Vec::new();
+        let mut decls = Vec::with_capacity(self.refs.len());
+        for r in &self.refs {
+            let name = r.name.as_str();
+            let mut scope = Some(r.scope);
+            let decl = loop {
+                let Some(s) = scope else { break None };
+                if let Some(&decl) = known.get(&(s, name)) {
+                    break decl;
+                }
+                climbed.push(s);
+                if let Some(&first) = self.scopes[s].names.get(name).and_then(|d| d.first()) {
+                    break Some(first);
+                }
+                scope = self.scopes[s].parent;
+            };
+            for s in climbed.drain(..) {
+                known.insert((s, name), decl);
+            }
+            decls.push(decl);
+        }
+        for (r, decl) in self.refs.iter_mut().zip(decls) {
             r.decl = decl;
-            if let Some(d) = r.decl {
+            if let Some(d) = decl {
                 self.decls[d].reads += u32::from(r.read);
                 self.decls[d].writes += u32::from(r.write);
             }

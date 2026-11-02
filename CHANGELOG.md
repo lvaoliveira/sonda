@@ -514,6 +514,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Deeply nested code took time that grew with the square of its depth in
+  two places every language goes through: resolving each name climbed the
+  whole scope chain, and cognitive complexity asked each `&&`/`||` for its
+  parent. Name lookups are now cached per scope and the parent's operator
+  is passed down, with byte-identical reports. A JavaScript function 20,000
+  levels deep with `if (a && hit)` at every level timed out (15 s) and was
+  skipped; it now takes about 1.5 s.
 - Deeply nested JavaScript and TypeScript took far longer since the last
   JavaScript rules: `js/unused-assignment` asked every reference to a
   local for its ancestors, which in tree-sitter means a search from the

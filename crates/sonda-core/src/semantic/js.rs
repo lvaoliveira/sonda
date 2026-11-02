@@ -587,6 +587,30 @@ const h = () => { let y; y = 1; };
         });
     }
 
+    /// Lookups are cached per scope and name (`Model::resolve`): a shadowing
+    /// declaration must win below it and nowhere else, whatever order the
+    /// references come in, and an undeclared name stays undeclared.
+    #[test]
+    fn shadowing_resolves_per_scope() {
+        let src = "
+let a = 1;
+{ a; { let a = 2; a; { a; } } a; z; { z; } }
+{ { a; } }
+";
+        with_model(Lang::JavaScript, src, |m| {
+            let reads: Vec<u32> = m
+                .decls
+                .iter()
+                .filter(|d| d.name == "a")
+                .map(|d| d.reads)
+                .collect();
+            assert_eq!(reads, [3, 2], "outer a, then the inner one");
+            let z: Vec<_> = m.refs.iter().filter(|r| r.name == "z").collect();
+            assert_eq!(z.len(), 2);
+            assert!(z.iter().all(|r| r.decl.is_none()));
+        });
+    }
+
     #[test]
     fn typescript_types_and_jsx_count_as_uses() {
         let src = "
