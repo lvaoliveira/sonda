@@ -96,6 +96,14 @@ Rules that compare a declaration with its base classes, interfaces or the
 other half of a partial method see the whole project: they run on an index
 of every file's declarations ([ADR-0020](0020-cross-file-declarations.md)).
 
+Rules about values and paths use ADR-0008's phases S2 and S3
+(`semantic/cs_cfg.rs`): a control-flow graph per function, with exception
+edges from every block of a `try`, and liveness over it. Writes that may
+not happen (`a && Try(out x)`, a `?:` branch, `??=`) don't end an earlier
+value's life. A function with preprocessor directives or parse errors gets
+no graph: its `#if` branches hold several configurations, so rules treat
+what it reads as unknown.
+
 Rules that need declared types are `Check::Semantic`. Walking up from a
 node to find its scope costs that node's depth for every `parent()`, which
 made a query-based version quadratic on deeply nested code; the model is
