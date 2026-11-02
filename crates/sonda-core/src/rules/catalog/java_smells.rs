@@ -3,7 +3,7 @@
 
 use super::java_bugs::{
     SCOPE_STOPS, find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments,
-    operator_text, owning_declaration, parameter_types, returns_null, statements,
+    operator_text, owning_declaration, parameter_types, statements,
 };
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, is_all_literals, method_name, string_value,
@@ -1338,7 +1338,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_declaration type: (type_identifier) @t (#eq? @t "Boolean")) @match"#,
-            filter: Some(Find(returns_null)),
+            filter: Some(Find(returns_null_from_any_method)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2404,8 +2404,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1192")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(program) @match"#,
-            filter: Some(Find(string_repeated_often)),
+            query: r#"(string_literal) @match"#,
+            filter: Some(Keep(is_first_of_a_repeated_string)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2903,9 +2903,16 @@ fn returns_null_for_collection<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<
     })
 }
 
+fn returns_null_from_any_method<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let body = method.child_by_field_name("body")?;
+    find_in_scope(body, SCOPE_STOPS, |n| {
+        n.kind() == "return_statement"
+            && n.named_child(0).is_some_and(|v| v.kind() == "null_literal")
+    })
+}
+
 fn final_literal_field_is_not_static(field: Node, _: &[u8]) -> bool {
     field.parent().is_some_and(|p| p.kind() == "class_body")
-        && has_modifier(field, "public")
         && has_modifier(field, "final")
         && !has_modifier(field, "static")
         && children_of_kind(field, "variable_declarator")
@@ -3970,17 +3977,18 @@ fn local_is_never_used(declaration: Node, src: &[u8]) -> bool {
         .any(|n| *n != b"_" && count_word(text(scope, src), n) == 1)
 }
 
-fn string_repeated_often<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut counts: std::collections::HashMap<&[u8], (usize, Node<'t>)> =
-        std::collections::HashMap::new();
-    let mut cursor = program.walk();
-    if !cursor.goto_first_child() {
-        return None;
+/// Whether this is the first of three or more equal literals in the file,
+/// as SonarQube counts them: ten characters or more, outside annotations.
+fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    type Counts = HashMap<Vec<u8>, (usize, usize)>;
+    thread_local! {
+        static CACHE: RefCell<Option<((usize, usize), Counts)>> = const { RefCell::new(None) };
     }
-    loop {
-        let n = cursor.node();
-        if n.kind() == "string_literal"
-            && !n.parent().is_some_and(|p| {
+    let eligible = |n: Node| -> Option<Vec<u8>> {
+        if n.kind() != "string_literal"
+            || n.parent().is_some_and(|p| {
                 matches!(
                     p.kind(),
                     "element_value_pair"
@@ -3989,26 +3997,48 @@ fn string_repeated_often<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
                         | "marker_annotation"
                 )
             })
-            && let Some(value) = string_value(n, src).filter(|v| v.len() >= 10)
         {
-            counts
-                .entry(value)
-                .and_modify(|e| e.0 += 1)
-                .or_insert((1, n));
+            return None;
         }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return counts
-                    .values()
-                    .filter(|(count, _)| *count >= 3)
-                    .map(|(_, node)| *node)
-                    .min_by_key(|n| n.start_byte());
+        string_value(n, src)
+            .filter(|v| v.len() >= 10)
+            .map(<[u8]>::to_vec)
+    };
+    let Some(mine) = eligible(string) else {
+        return false;
+    };
+    let key = (src.as_ptr() as usize, src.len());
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut counts: Counts = HashMap::new();
+            let mut root = string;
+            while let Some(p) = root.parent() {
+                root = p;
             }
+            let mut cursor = root.walk();
+            if cursor.goto_first_child() {
+                'walk: loop {
+                    let n = cursor.node();
+                    if let Some(v) = eligible(n) {
+                        counts.entry(v).or_insert((0, n.start_byte())).0 += 1;
+                    }
+                    if cursor.goto_first_child() {
+                        continue;
+                    }
+                    while !cursor.goto_next_sibling() {
+                        if !cursor.goto_parent() {
+                            break 'walk;
+                        }
+                    }
+                }
+            }
+            *c = Some((key, counts));
         }
-    }
+        c.as_ref()
+            .and_then(|(_, counts)| counts.get(&mine))
+            .is_some_and(|(count, first)| *count >= 3 && *first == string.start_byte())
+    })
 }
 
 fn casts_after_instanceof(statement: Node, src: &[u8]) -> bool {

@@ -477,19 +477,6 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
     if updates.is_empty() {
         return None;
     }
-    let idents = |n: Node| -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        let mut stack = vec![n];
-        while let Some(x) = stack.pop() {
-            if x.kind() == "identifier" {
-                out.push(text(x, src).to_vec());
-            }
-            let mut c = x.walk();
-            stack.extend(x.named_children(&mut c));
-        }
-        out
-    };
-    let updated: Vec<Vec<u8>> = updates.iter().flat_map(|u| idents(*u)).collect();
     // method calls in the condition (list.size()) are not plain variables
     // only operands of a comparison are bounds; a bare flag is a different idiom
     let mut compared: Vec<Vec<u8>> = Vec::new();
@@ -512,10 +499,9 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
         let mut c = x.walk();
         stack.extend(x.named_children(&mut c));
     }
-    let bound: Vec<Vec<u8>> = compared
-        .into_iter()
-        .filter(|i| !updated.contains(i))
-        .collect();
+    // The counter itself (compared and updated by the loop header) is also
+    // off limits inside the body.
+    let bound: Vec<Vec<u8>> = compared;
     let body = for_statement.child_by_field_name("body")?;
     find_node(body, |n| {
         let target = match n.kind() {
