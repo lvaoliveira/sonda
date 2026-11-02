@@ -323,7 +323,8 @@ fn scan_files(
     // relies on this sort.
     paths.sort_by(|a, b| a.rel.cmp(&b.rel));
     let root = &opts.root;
-    let coverage = load_coverage(&opts.coverage, root)?;
+    let scanned: HashSet<&str> = paths.iter().map(|p| p.rel.as_str()).collect();
+    let coverage = load_coverage(&opts.coverage, root, &scanned)?;
     // Saturating: the config may come from the analyzed repository.
     let max_bytes = cfg.scan.max_file_size_kb.saturating_mul(1024);
     let timeout = Duration::from_secs(cfg.scan.file_timeout_secs);
@@ -735,7 +736,17 @@ pub(crate) fn open_nonblocking(path: &Path) -> std::io::Result<File> {
 
 /// Reads the LCOV reports the user named. Unlike analyzed files, these are
 /// explicit inputs, so a missing or unreadable one is an error.
-fn load_coverage(paths: &[PathBuf], root: &Path) -> Result<Coverage, Error> {
+///
+/// Test runners write `SF:` paths relative to where they ran, which isn't
+/// always the scan root: vitest in `node/` writes `src/a.js` for
+/// `node/src/a.js`. A relative path is tried under the report's directory
+/// and each of its parents, then the root, and the first that names a scanned
+/// file is the one: tests ran nearer the report than the root.
+fn load_coverage(
+    paths: &[PathBuf],
+    root: &Path,
+    scanned: &HashSet<&str>,
+) -> Result<Coverage, Error> {
     let canonical_root = root.canonicalize().ok();
     let mut roots = vec![root];
     roots.extend(canonical_root.as_deref());
@@ -745,9 +756,50 @@ fn load_coverage(paths: &[PathBuf], root: &Path) -> Result<Coverage, Error> {
             path: path.clone(),
             source,
         })?;
-        coverage.merge_lcov(&text, &roots);
+        let bases = report_dirs(path, canonical_root.as_deref());
+        coverage.merge_lcov_resolving(&text, &roots, |rel| {
+            if Path::new(&rel).is_absolute() {
+                return rel;
+            }
+            bases
+                .iter()
+                .filter_map(|base| normalize(&format!("{base}/{rel}")))
+                .find(|candidate| scanned.contains(candidate.as_str()))
+                .unwrap_or(rel)
+        });
     }
     Ok(coverage)
+}
+
+/// The report's directory and its parents, root-relative, deepest first,
+/// the root itself excluded; none when the report isn't under the root.
+fn report_dirs(report: &Path, canonical_root: Option<&Path>) -> Vec<String> {
+    let (Some(root), Ok(report)) = (canonical_root, report.canonicalize()) else {
+        return Vec::new();
+    };
+    let Ok(rel) = report.strip_prefix(root) else {
+        return Vec::new();
+    };
+    rel.ancestors()
+        .skip(1)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| relative(dir, Path::new("")))
+        .collect()
+}
+
+/// `a/b/../c` as `a/c`; none if it climbs above the root.
+fn normalize(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 fn relative(path: &Path, root: &Path) -> String {
@@ -914,6 +966,66 @@ mod tests {
         assert_eq!(m[&Metric::Vulnerabilities], Some(1.0));
         assert_eq!(m[&Metric::NewBugs], Some(2.0)); // no reference: everything is new
         assert_eq!(m[&Metric::Coverage], Some(50.0));
+    }
+
+    #[test]
+    fn coverage_paths_are_found_from_where_the_tests_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |p: &str, s: &str| {
+            let full = root.join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, s).unwrap();
+        };
+        // Tests ran in node/ (vitest), so its report says src/a.js; a root
+        // src/a.js exists too, and isn't the one.
+        write("node/src/a.js", "var a = 1;\nvar b = 2;\n");
+        write("node/lib/b.js", "var c = 3;\n");
+        write("src/a.js", "var d = 4;\n");
+        write("tools/t.js", "var e = 5;\n");
+        write(
+            "node/coverage/lcov.info",
+            "SF:src/a.js\nDA:1,1\nDA:2,0\nend_of_record\n\
+             SF:./lib/../lib/b.js\nDA:1,1\nend_of_record\n\
+             SF:tools/t.js\nDA:1,0\nend_of_record\n\
+             SF:../../escape.js\nDA:1,1\nend_of_record\n",
+        );
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![root.join("node/coverage/lcov.info")],
+            isolation: Isolation::InProcess,
+            jobs: None,
+            advisories: None,
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let covered: Vec<_> = r
+            .files
+            .iter()
+            .map(|f| {
+                let lines = r.coverage.files.get(&f.path).map(|hits| {
+                    hits.iter()
+                        .filter(|(_, h)| **h > 0)
+                        .map(|(l, _)| *l)
+                        .collect::<Vec<_>>()
+                });
+                (f.path.as_str(), lines)
+            })
+            .collect();
+        assert_eq!(
+            covered,
+            vec![
+                ("node/lib/b.js", Some(vec![1])),
+                ("node/src/a.js", Some(vec![1])),
+                ("src/a.js", None),
+                // Not under node/: the root, as before.
+                ("tools/t.js", Some(vec![])),
+            ]
+        );
+        assert_eq!(normalize("a/../../b"), None);
+        assert_eq!(normalize("./a/./b/../c"), Some("a/c".into()));
     }
 
     #[test]

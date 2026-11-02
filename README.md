@@ -29,7 +29,7 @@ Quality gate: FAILED
 - **Rules** for bugs, vulnerabilities and code smells. See [docs/rules.md](docs/rules.md).
 - **Metrics**: lines of code, comment lines, functions, cyclomatic and cognitive complexity, and technical debt.
 - **Duplication**: token-based copy-paste detection across files.
-- **Coverage**: imported from LCOV, which istanbul/c8/vitest, coverage.py, gcov/lcov and llvm-cov all produce.
+- **Coverage**: imported from LCOV, which istanbul/c8/vitest, coverage.py, gcov/lcov and llvm-cov all produce. Relative paths are matched from the report's directory up to the scan root, so a report written where tests ran in a subdirectory (`node/coverage/lcov.info`) finds its files.
 - **New code**: everything changed since the merge base with a branch (committed or not), plus untracked files. Each issue and metric is reported both overall and for new code, the "clean as you code" approach.
 - **Quality gate**: configurable conditions on any metric. Exit code 1 when it fails.
 - **Output**: human-readable text, JSON, or SARIF 2.1.0 for GitHub code scanning, GitLab and IDEs. Security rules carry their CWE ids and OWASP Top 10 categories.

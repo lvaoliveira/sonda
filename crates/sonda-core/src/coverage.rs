@@ -22,7 +22,19 @@ impl Coverage {
     /// Adds one LCOV report. `SF:` paths under a root are made relative to the
     /// first of `roots` they are under (pass the scan root as given and
     /// canonicalized, so symlinked roots such as macOS `/tmp` match).
+    #[cfg(test)]
     pub(crate) fn merge_lcov(&mut self, text: &str, roots: &[&Path]) {
+        self.merge_lcov_resolving(text, roots, |path| path);
+    }
+
+    /// [`merge_lcov`](Self::merge_lcov), with `resolve` given each record's
+    /// root-relative path to say which file it is.
+    pub(crate) fn merge_lcov_resolving(
+        &mut self,
+        text: &str,
+        roots: &[&Path],
+        resolve: impl Fn(String) -> String,
+    ) {
         let mut current: Option<String> = None;
         // The record's functions by name, in `FN` order: `FNDA` names a
         // function, and writers emit one per `FN`, in the same order, so
@@ -31,7 +43,7 @@ impl Coverage {
         for line in text.lines() {
             let line = line.trim();
             if let Some(sf) = line.strip_prefix("SF:") {
-                current = Some(relative_path(Path::new(sf), roots));
+                current = Some(resolve(relative_path(Path::new(sf), roots)));
                 by_name.clear();
             } else if let Some(da) = line.strip_prefix("DA:") {
                 let (Some(file), Some((ln, rest))) = (&current, da.split_once(',')) else {
