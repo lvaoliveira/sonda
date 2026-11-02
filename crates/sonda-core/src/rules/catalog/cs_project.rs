@@ -9,6 +9,9 @@
 use crate::semantic::cs_index::{
     FACT, FileIndex, MemberDecl, ParamDecl, ProjectIndex, Span, TypeDecl, TypeId, TypeRef,
 };
+use crate::semantic::dotnet::{self, PlatformType};
+
+const DISPOSABLE: &str = "System.IDisposable";
 
 /// A finding: the rule, the index of the file it's in, and where.
 pub(crate) type Finding = (&'static str, usize, Span);
@@ -31,6 +34,8 @@ pub(crate) const RULES: &[&str] = &[
     "cs/extension-in-same-namespace",
     "cs/durable-entity-interface",
     "cs/underposting-value-type",
+    "cs/disposable-fields-without-idisposable",
+    "cs/interface-downcast",
 ];
 
 /// The findings of the rules `active` lists, for files given as their
@@ -58,6 +63,9 @@ pub(crate) fn run<'f>(
         match decl.kind.as_str() {
             "class" | "struct" | "record" => {
                 overrides_and_implementations(&index, id, &on, &mut found);
+                if decl.kind != "struct" && on("cs/disposable-fields-without-idisposable") {
+                    disposable_fields(&index, id, &mut found);
+                }
                 if decl.kind == "class" {
                     if on("cs/deep-inheritance") {
                         deep_inheritance(&index, id, &mut found);
@@ -357,21 +365,49 @@ fn canonical_default(value: &str) -> &str {
     }
 }
 
+/// A class's base class, as far as the project and the platform tell.
+enum Base {
+    /// None but Object: no base type, or only interfaces.
+    Object,
+    Project(TypeId),
+    Platform(&'static PlatformType),
+    /// A class neither declares, from another library.
+    Unknown,
+}
+
+fn base_of(index: &ProjectIndex, id: TypeId) -> Base {
+    let Some((file, part, first)) = index
+        .parts(id)
+        .iter()
+        .find_map(|(f, t)| t.bases.first().map(|b| (*f, *t, b)))
+    else {
+        return Base::Object;
+    };
+    if let Some(b) = index.resolve(file, part, first) {
+        return match index.decl(b).1.kind.as_str() {
+            "class" | "record" => Base::Project(b),
+            _ => Base::Object,
+        };
+    }
+    match index.platform_type(file, &part.namespace, first) {
+        Some(p) if p.kind == "class" => Base::Platform(p),
+        Some(_) => Base::Object,
+        None if looks_like_interface(&first.name) => Base::Object,
+        None => Base::Unknown,
+    }
+}
+
+/// Classes more than five levels from Object, the platform's base classes
+/// and Object included. A base from another library counts as one level:
+/// the least it can be.
 fn deep_inheritance(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
     let ancestors = index.ancestors(id);
-    let mut depth = ancestors.len();
-    // A base class from another assembly: one more level, at least.
     let last = *ancestors.last().unwrap_or(&id);
-    let (file, part) = index.decl(last);
-    if let Some(first) = index.parts(last).iter().find_map(|(_, t)| t.bases.first())
-        && !looks_like_interface(&first.name)
-        && index
-            .resolve(file, part, first)
-            .is_none_or(|b| b == last || ancestors.contains(&b) || b == id)
-    {
-        depth += 1;
-    }
-    if depth > 5 {
+    let rest = match base_of(index, last) {
+        Base::Platform(p) => dotnet::platform().base_chain(&p.name).len(),
+        _ => 1,
+    };
+    if ancestors.len() + rest > 5 {
         let (file, decl) = index.decl(id);
         found.push(("cs/deep-inheritance", file, decl.span));
     }
@@ -401,6 +437,7 @@ fn derives_from(
     let reference = TypeRef {
         name: simple(derived),
         arity: 0,
+        ..TypeRef::default()
     };
     index.resolve(file, from, &reference).is_some_and(|d| {
         index
@@ -502,53 +539,100 @@ fn colliding_members(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>)
     }
 }
 
+/// The dispose pattern, for classes that implement IDisposable themselves
+/// or through a base class. Sealed classes are left out.
 fn dispose_pattern(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
     let (file, decl) = index.decl(id);
-    let lists = index
-        .bases(id)
+    if index
+        .parts(id)
         .iter()
-        .any(|(_, _, b)| b.name == "IDisposable");
-    if !lists
-        || index
-            .parts(id)
-            .iter()
-            .any(|(_, t)| t.has("sealed") || t.has("static"))
+        .any(|(_, t)| t.has("sealed") || t.has("static"))
     {
         return;
     }
-    // A project base class is where the pattern lives.
-    if index.base_class(id).is_some() {
+    let lists = index
+        .bases(id)
+        .iter()
+        .any(|(_, _, b)| b.name == "IDisposable" && b.arity == 0);
+    let base_disposable = match base_of(index, id) {
+        Base::Object => false,
+        Base::Project(b) => match index.implements(b, DISPOSABLE) {
+            Some(d) => d,
+            None => return,
+        },
+        Base::Platform(p) => dotnet::platform().implements(&p.name, DISPOSABLE),
+        Base::Unknown => return,
+    };
+    if !lists && !base_disposable {
         return;
     }
-    let members: Vec<(usize, &MemberDecl)> = index.members(id).collect();
-    let dispose = members
-        .iter()
-        .find(|(_, m)| m.kind == "method" && m.name == "Dispose" && m.params.is_empty());
-    let dispose_bool = members.iter().find(|(_, m)| {
+    let members: Vec<&MemberDecl> = index.members(id).map(|(_, m)| m).collect();
+    let dispose = |explicit: bool| {
+        members.iter().find(|m| {
+            m.kind == "method"
+                && m.name == "Dispose"
+                && m.params.is_empty()
+                && m.explicit == explicit
+        })
+    };
+    let dispose_bool = members.iter().find(|m| {
         m.kind == "method"
             && m.name == "Dispose"
-            && m.params.first().is_some_and(|p| p.ty == "bool")
+            && m.params.len() == 1
+            && matches!(
+                m.params[0].ty.as_str(),
+                "bool" | "Boolean" | "System.Boolean"
+            )
     });
-    let finalizer = members.iter().find(|(_, m)| m.kind == "destructor");
+    let finalizer = members.iter().find(|m| m.kind == "destructor");
     let calls = |m: &MemberDecl, c: &str| m.calls.iter().any(|x| x == c);
-    let problem =
-        if let Some((f, d)) = dispose.filter(|(_, d)| d.has("virtual") || d.has("abstract")) {
-            Some((*f, d.span))
-        } else if !dispose_bool
-            .is_some_and(|(_, d)| d.has("protected") && (d.has("virtual") || d.has("abstract")))
-        {
-            Some((file, decl.span))
-        } else if let Some((f, d)) = dispose.filter(|(_, d)| {
-            d.has_body && (!calls(d, "Dispose(true)") || !calls(d, "GC.SuppressFinalize(this)"))
-        }) {
-            Some((*f, d.span))
+    let only = |m: &MemberDecl, body: &str| calls(m, &format!("only:{body}"));
+    let (public_dispose, explicit_dispose) = (dispose(false), dispose(true));
+    let problem = (lists && base_disposable)
+        || explicit_dispose.is_some()
+        || finalizer.is_some_and(|f| f.has_body && !only(f, "Dispose(false)"))
+        || if base_disposable {
+            // Each level releases its base's resources too.
+            [public_dispose, dispose_bool]
+                .into_iter()
+                .flatten()
+                .any(|m| m.has_body && !calls(m, "base.Dispose("))
         } else {
-            finalizer
-                .filter(|(_, f)| f.has_body && !calls(f, "Dispose(false)"))
-                .map(|(f, d)| (*f, d.span))
+            public_dispose.is_some_and(|d| d.has("virtual") || d.has("abstract"))
+                || !dispose_bool
+                    .is_some_and(|d| d.has("protected") && (d.has("virtual") || d.has("abstract")))
+                || public_dispose.is_some_and(|d| {
+                    d.has_body && !only(d, "Dispose(true);GC.SuppressFinalize(this)")
+                })
         };
-    if let Some((f, span)) = problem {
-        found.push(("cs/dispose-pattern", f, span));
+    if problem {
+        found.push(("cs/dispose-pattern", file, decl.span));
+    }
+}
+
+/// A class that creates an IDisposable and keeps it in a field must be
+/// IDisposable itself, so its owner can release it. Tasks are the
+/// documented exception.
+fn disposable_fields(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
+    if index.parts(id).iter().any(|(_, t)| t.has("static")) {
+        return;
+    }
+    let owner = index.parts(id).iter().find(|(file, part)| {
+        part.members.iter().any(|m| {
+            m.kind == "field"
+                && m.created
+                && !m.has("static")
+                && TypeRef::parse(&m.returns).is_some_and(|r| {
+                    !matches!(r.name.as_str(), "Task" | "ValueTask")
+                        && index.type_implements(*file, &part.namespace, &r, DISPOSABLE)
+                            == Some(true)
+                })
+        })
+    });
+    if let Some((file, part)) = owner
+        && index.implements(id, DISPOSABLE) == Some(false)
+    {
+        found.push(("cs/disposable-fields-without-idisposable", *file, part.span));
     }
 }
 
@@ -603,19 +687,48 @@ fn uses(index: &ProjectIndex, on: &dyn Fn(&str) -> bool, found: &mut Vec<Finding
             let named = TypeRef {
                 name: site.name.clone(),
                 arity: site.arity,
+                ..TypeRef::default()
             };
             let resolved = || index.resolve_in(file, &site.namespace, &named);
             match site.kind.as_str() {
                 "bitwise" if on("cs/bitwise-on-non-flags-enum") => {
-                    let non_flags = resolved().is_some_and(|id| {
-                        index.decl(id).1.kind == "enum"
-                            && !index
-                                .parts(id)
-                                .iter()
-                                .any(|(_, t)| t.attributes.iter().any(|a| a == "Flags"))
-                    });
+                    let non_flags = match resolved() {
+                        Some(id) => {
+                            index.decl(id).1.kind == "enum"
+                                && !index
+                                    .parts(id)
+                                    .iter()
+                                    .any(|(_, t)| t.attributes.iter().any(|a| a == "Flags"))
+                        }
+                        None => index
+                            .platform_type(file, &site.namespace, &named)
+                            .is_some_and(|p| p.kind == "enum" && !p.has("Flags")),
+                    };
                     if non_flags {
                         found.push(("cs/bitwise-on-non-flags-enum", file, site.span));
+                    }
+                }
+                "cast" if on("cs/interface-downcast") => {
+                    let kind = |text: &str| -> Option<(String, String)> {
+                        let r = TypeRef::parse(text)?;
+                        match index.resolve_at(file, &site.namespace, &site.owner, &r) {
+                            Some(id) => {
+                                let (_, t) = index.decl(id);
+                                Some((t.kind.clone(), t.full_name()))
+                            }
+                            None => index
+                                .platform_type(file, &site.namespace, &r)
+                                .map(|p| (p.kind.clone(), p.name.clone())),
+                        }
+                    };
+                    let from = site.receiver.as_deref().and_then(kind);
+                    let to = kind(&site.name);
+                    if let (Some((from, _)), Some((to, target))) = (from, to)
+                        && from == "interface"
+                        && matches!(to.as_str(), "class" | "struct" | "record")
+                        && target != "System.Object"
+                    {
+                        found.push(("cs/interface-downcast", file, site.span));
                     }
                 }
                 "params-array" if on("cs/array-for-params") => {
@@ -627,6 +740,7 @@ fn uses(index: &ProjectIndex, on: &dyn Fn(&str) -> bool, found: &mut Vec<Finding
                             &TypeRef {
                                 name: t.clone(),
                                 arity: 0,
+                                ..TypeRef::default()
                             },
                         ),
                     };
@@ -737,6 +851,7 @@ fn uses(index: &ProjectIndex, on: &dyn Fn(&str) -> bool, found: &mut Vec<Finding
                         &TypeRef {
                             name: property.returns.clone(),
                             arity: 0,
+                            ..TypeRef::default()
                         },
                     )
                     .is_some_and(|t| matches!(index.decl(t).1.kind.as_str(), "enum" | "struct"));
@@ -917,6 +1032,128 @@ mod tests {
         assert_eq!(
             project("cs/hiding-member-less-visible", &refs),
             [("Raspberry.cs".into(), 4)]
+        );
+    }
+
+    #[test]
+    fn platform_types_from_the_reference_packs() {
+        let files = [
+            (
+                "Streams.cs",
+                "using System.IO;\nnamespace N;\npublic class S1 : MemoryStream { }\npublic class S2 : S1 { }\npublic class S3 : S2 { }\n",
+            ),
+            (
+                "Errors.cs",
+                "namespace N;\npublic class E1 : System.Exception { }\npublic class E2 : E1 { }\n",
+            ),
+            (
+                "Plain.cs",
+                "namespace N;\npublic class P1 { }\npublic class P2 : P1 { }\npublic class P3 : P2 { }\npublic class P4 : P3 { }\npublic class P5 : P4 { }\npublic class P6 : P5 { }\n",
+            ),
+        ];
+        // MemoryStream, Stream, MarshalByRefObject and Object: S3 is six
+        // levels deep, P6 too, Object included.
+        assert_eq!(
+            project("cs/deep-inheritance", &files),
+            [("Plain.cs".into(), 7), ("Streams.cs".into(), 5)]
+        );
+    }
+
+    #[test]
+    fn disposable_fields() {
+        let files = [
+            (
+                "Log.cs",
+                "using System;\nusing System.IO;\nusing System.Threading;\nusing System.Threading.Tasks;\nnamespace N;\n\
+                 class Log { private FileStream file; void Open(string p) { this.file = new FileStream(p, FileMode.Open); } }\n\
+                 class Ok : IDisposable { private Timer t = new Timer(_ => { }); public void Dispose() => t.Dispose(); }\n\
+                 class Given { private readonly Stream s; public Given(Stream s) { this.s = s; } }\n\
+                 class Work { private Task t = new Task(() => { }); }\n\
+                 class Holder { private Resource r = new(); }\n\
+                 class Derived : Base { private FileStream f = new FileStream(\"x\", FileMode.Open); }\n\
+                 class Static { private static FileStream f = new FileStream(\"x\", FileMode.Open); }\n",
+            ),
+            (
+                "Resource.cs",
+                "namespace N;\npublic class Resource : System.IDisposable { public void Dispose() { } }\npublic class Base : Resource { }\n",
+            ),
+            (
+                "Vendor.cs",
+                "using System.IO;\nusing Vendor.Lib;\nnamespace N;\nclass Plugin : VendorBase { private FileStream f = new FileStream(\"x\", FileMode.Open); }\nclass Wrapper { private VendorHandle h = new VendorHandle(); }\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/disposable-fields-without-idisposable", &files),
+            [("Log.cs".into(), 6), ("Log.cs".into(), 10)]
+        );
+    }
+
+    #[test]
+    fn interface_downcasts() {
+        let files = [
+            (
+                "Shapes.cs",
+                "namespace N;\npublic interface IShape { }\npublic interface IRound : IShape { }\npublic class Circle : IShape { }\npublic class Base { }\n",
+            ),
+            (
+                "Nested.cs",
+                "namespace N;\npublic class Tests {\n  public interface IPerson { }\n  public class Employee : IPerson { }\n  void F(IPerson p) { var e = (Employee)p; }\n}\npublic class Other { public class Employee { } public interface IPerson { } }\n",
+            ),
+            (
+                "Use.cs",
+                "using System.Collections.Generic;\nnamespace N;\nclass A {\nIShape shape;\nint F(IShape s, Base b, IEnumerable<int> xs) {\nvar c = (Circle)s;\nvar d = s as Circle;\nvar e = (IRound)s;\nvar f = (Circle)b;\nvar g = (Circle)shape;\nvar h = (List<int>)xs;\nvar i = (IList<int>)xs;\nvar j = (object)s;\nvar k = (Object)s;\nreturn 0;\n}\n}\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/interface-downcast", &files),
+            [
+                ("Nested.cs".into(), 5),
+                ("Use.cs".into(), 6),
+                ("Use.cs".into(), 7),
+                ("Use.cs".into(), 10),
+                ("Use.cs".into(), 11)
+            ]
+        );
+    }
+
+    #[test]
+    fn dispose_pattern_as_documented() {
+        let files = [
+            (
+                "Foo.cs",
+                "using System;\nnamespace N;\n\
+                 public class Foo1 : IDisposable { public void Dispose() { } }\n\
+                 public sealed class Sealed : IDisposable { public void Dispose() { } }\n\
+                 public class Foo2 : IDisposable { void IDisposable.Dispose() { Dispose(true); GC.SuppressFinalize(this); } protected virtual void Dispose(bool disposing) { } }\n\
+                 public class Foo3 : IDisposable { public virtual void Dispose() { Dispose(true); GC.SuppressFinalize(this); } protected virtual void Dispose(bool disposing) { } }\n\
+                 public class Foo4 : IDisposable { public void Dispose() { Dispose(true); GC.SuppressFinalize(this); } protected virtual void Dispose(bool disposing) { } ~Foo4() { Cleanup(); } void Cleanup() { } }\n\
+                 public class Good : IDisposable { public void Dispose() { Dispose(true); GC.SuppressFinalize(this); } protected virtual void Dispose(bool disposing) { } ~Good() { Dispose(false); } }\n\
+                 public class Extra : IDisposable { public void Dispose() { Log(); Dispose(true); GC.SuppressFinalize(this); } protected virtual void Dispose(bool disposing) { } void Log() { } }\n\
+                 public class Named : IDisposable { public void Dispose() { this.Dispose(disposing: true); GC.SuppressFinalize(this); } protected virtual void Dispose(bool disposing) { } }\n",
+            ),
+            (
+                "Derived.cs",
+                "using System;\nusing System.IO;\nnamespace N;\n\
+                 public class Calls : Good { protected override void Dispose(bool disposing) { base.Dispose(disposing); } }\n\
+                 public class Forgets : Good { protected override void Dispose(bool disposing) { } }\n\
+                 public class Relists : Good, IDisposable { }\n\
+                 public class OwnStream : MemoryStream { protected override void Dispose(bool disposing) { base.Dispose(disposing); } }\n\
+                 public class LeakyStream : MemoryStream { protected override void Dispose(bool disposing) { } }\n\
+                 public class Vendor : Vendor.Lib.Thing, IDisposable { public void Dispose() { } }\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/dispose-pattern", &files),
+            [
+                ("Derived.cs".into(), 5),
+                ("Derived.cs".into(), 6),
+                ("Derived.cs".into(), 8),
+                ("Foo.cs".into(), 3),
+                ("Foo.cs".into(), 5),
+                ("Foo.cs".into(), 6),
+                ("Foo.cs".into(), 7),
+                ("Foo.cs".into(), 9)
+            ]
         );
     }
 

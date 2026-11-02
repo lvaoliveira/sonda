@@ -11,6 +11,7 @@
 //! several types share it. Types from referenced assemblies aren't in the
 //! project, so they resolve to nothing.
 
+use super::dotnet::{self, PlatformType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -24,11 +25,52 @@ pub(crate) struct Span {
     pub(crate) end_column: usize,
 }
 
-/// A reference to a type by its simple name and number of type arguments.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+/// A reference to a type by its simple name and number of type arguments,
+/// and what qualifies it where it's written: `System.IO` in
+/// `System.IO.Stream`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub(crate) struct TypeRef {
     pub(crate) name: String,
     pub(crate) arity: usize,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) qualifier: String,
+}
+
+impl TypeRef {
+    /// The reference a type written as text names: `List<int>`,
+    /// `System.IO.Stream`, `Stream?`. None for arrays, tuples and pointers.
+    pub(crate) fn parse(text: &str) -> Option<TypeRef> {
+        let text = text.trim().trim_end_matches('?');
+        let text = text.strip_prefix("global::").unwrap_or(text);
+        if text.is_empty() || text.ends_with(']') || text.ends_with('*') || text.starts_with('(') {
+            return None;
+        }
+        let (path, arity) = match text.find('<') {
+            Some(open) => {
+                let args = &text[open + 1..text.rfind('>')?];
+                let mut depth = 0;
+                let commas = args
+                    .chars()
+                    .filter(|c| {
+                        match c {
+                            '<' | '(' => depth += 1,
+                            '>' | ')' => depth -= 1,
+                            _ => {}
+                        }
+                        *c == ',' && depth == 0
+                    })
+                    .count();
+                (&text[..open], commas + 1)
+            }
+            None => (text, 0),
+        };
+        let (qualifier, name) = path.rsplit_once('.').unwrap_or(("", path));
+        Some(TypeRef {
+            name: name.to_string(),
+            arity,
+            qualifier: qualifier.to_string(),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -62,6 +104,10 @@ pub(crate) struct MemberDecl {
     /// A method with type parameters of its own.
     #[serde(default)]
     pub(crate) generic: bool,
+    /// A field the type assigns a `new` object to, in its initializer or
+    /// any member.
+    #[serde(default)]
+    pub(crate) created: bool,
     /// The first and last line of the whole declaration, attributes
     /// included.
     #[serde(default)]
@@ -124,6 +170,7 @@ impl TypeDecl {
 pub(crate) struct Site {
     /// "bitwise" (an enum's members combined with `|`, `&` or `^`),
     /// "params-array" (an array written for a `params` parameter), "new",
+    /// "cast" (a variable cast to a type, or converted with `as`),
     /// "entity" (a durable entity interface), "extension" (the type an
     /// extension method extends), "action-param" (a controller action's
     /// parameter type).
@@ -135,7 +182,8 @@ pub(crate) struct Site {
     pub(crate) namespace: String,
     /// The full name of the type the site is written in.
     pub(crate) owner: String,
-    /// For "params-array": the receiver's type, when not the owner.
+    /// For "params-array": the receiver's type, when not the owner; for
+    /// "cast", the variable's declared type.
     pub(crate) receiver: Option<String>,
     /// For "params-array": the number of arguments.
     pub(crate) count: usize,
@@ -147,6 +195,9 @@ pub(crate) struct Site {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub(crate) struct FileIndex {
     pub(crate) usings: Vec<String>,
+    /// `global using N;`, which every file of the project imports.
+    #[serde(default)]
+    pub(crate) global_usings: Vec<String>,
     pub(crate) types: Vec<TypeDecl>,
     #[serde(default)]
     pub(crate) sites: Vec<Site>,
@@ -247,17 +298,35 @@ impl Extractor<'_> {
             "generic_name" => TypeRef {
                 name: n.named_child(0).map(|i| self.text(i)).unwrap_or_default(),
                 arity: n.named_child(1).map_or(0, |a| a.named_child_count()),
+                ..TypeRef::default()
             },
             "qualified_name" => n.child_by_field_name("name").map_or_else(
                 || TypeRef {
                     name: self.text(n),
-                    arity: 0,
+                    ..TypeRef::default()
                 },
-                |x| self.type_ref(x),
+                |x| {
+                    let qualifier = n
+                        .child_by_field_name("qualifier")
+                        .map(|q| self.text(q))
+                        .unwrap_or_default();
+                    TypeRef {
+                        qualifier: qualifier
+                            .strip_prefix("global::")
+                            .unwrap_or(&qualifier)
+                            .to_string(),
+                        ..self.type_ref(x)
+                    }
+                },
             ),
+            // `class B(int x) : A(x)`
+            "primary_constructor_base_type" => n
+                .child_by_field_name("type")
+                .or_else(|| n.named_child(0))
+                .map_or_else(TypeRef::default, |t| self.type_ref(t)),
             _ => TypeRef {
                 name: self.text(n),
-                arity: 0,
+                ..TypeRef::default()
             },
         }
     }
@@ -362,16 +431,29 @@ impl Extractor<'_> {
                     .text(b)
                     .chars()
                     .filter(|c| !c.is_whitespace())
-                    .collect();
-                [
+                    .collect::<String>()
+                    .replace("disposing:", "");
+                let mut found: Vec<String> = [
                     "Dispose(true)",
                     "Dispose(false)",
                     "GC.SuppressFinalize(this)",
+                    "base.Dispose(",
                 ]
                 .iter()
                 .filter(|c| compact.contains(*c))
                 .map(|c| c.to_string())
-                .collect()
+                .collect();
+                // Nothing but the pattern's calls: `only:` and the calls.
+                let only = compact
+                    .trim_start_matches("=>")
+                    .trim_start_matches('{')
+                    .trim_end_matches('}')
+                    .replace("this.", "");
+                let only = only.trim_end_matches(';');
+                if !only.is_empty() && !only.contains(['{', '}']) {
+                    found.push(format!("only:{only}"));
+                }
+                found
             })
             .unwrap_or_default();
         let returns = n
@@ -396,8 +478,8 @@ impl Extractor<'_> {
             return variables
                 .named_children(&mut vc)
                 .filter(|d| d.kind() == "variable_declarator")
-                .filter_map(|d| d.child_by_field_name("name"))
-                .map(|name| MemberDecl {
+                .filter_map(|d| Some((d, d.child_by_field_name("name")?)))
+                .map(|(d, name)| MemberDecl {
                     kind: kind.to_string(),
                     name: self.text(name),
                     modifiers: modifiers.clone(),
@@ -410,6 +492,10 @@ impl Extractor<'_> {
                     attributes: attributes.clone(),
                     accessors: Vec::new(),
                     generic: false,
+                    created: d
+                        .child_by_field_name("value")
+                        .or_else(|| d.named_child(d.named_child_count() as u32 - 1))
+                        .is_some_and(is_creation),
                     lines: lines(n),
                 })
                 .collect();
@@ -430,6 +516,7 @@ impl Extractor<'_> {
             generic: n
                 .named_children(&mut n.walk())
                 .any(|c| c.kind() == "type_parameter_list"),
+            created: false,
             lines: lines(n),
         }]
     }
@@ -497,6 +584,49 @@ impl Extractor<'_> {
     }
 }
 
+/// `new T(...)`, `new(...)`, or one of them in parentheses.
+fn is_creation(n: Node) -> bool {
+    matches!(
+        unparenthesized(n).kind(),
+        "object_creation_expression" | "implicit_object_creation_expression"
+    )
+}
+
+/// Fields a type's members assign a `new` object to: `f = new T()` or
+/// `this.f = new T()`. Nested types are their own.
+fn created_fields(body: Node, x: &Extractor) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack: Vec<Node> = {
+        let mut c = body.walk();
+        body.named_children(&mut c).collect()
+    };
+    while let Some(n) = stack.pop() {
+        if TYPE_KINDS.iter().any(|(k, _)| *k == n.kind()) {
+            continue;
+        }
+        if n.kind() == "assignment_expression"
+            && n.child_by_field_name("right").is_some_and(is_creation)
+            && let Some(left) = n.child_by_field_name("left")
+        {
+            let name = match left.kind() {
+                "identifier" => Some(left),
+                "member_access_expression"
+                    if left
+                        .child_by_field_name("expression")
+                        .is_some_and(|e| e.kind() == "this_expression" || x.text(e) == "this") =>
+                {
+                    left.child_by_field_name("name")
+                }
+                _ => None,
+            };
+            out.extend(name.map(|n| x.text(n)));
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    out
+}
+
 fn lines(n: Node) -> (usize, usize) {
     (n.start_position().row + 1, n.end_position().row + 1)
 }
@@ -556,7 +686,11 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: std::time::Instant) -> F
                     && !t.contains("static")
                     && let Some(n) = node.named_child(0)
                 {
-                    index.usings.push(x.text(n));
+                    if t.starts_with("global") {
+                        index.global_usings.push(x.text(n));
+                    } else {
+                        index.usings.push(x.text(n));
+                    }
                 }
             }
             "file_scoped_namespace_declaration" => {
@@ -568,6 +702,34 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: std::time::Instant) -> F
             "namespace_declaration" => {
                 if let Some(n) = node.child_by_field_name("name") {
                     namespaces.push((depth, x.text(n)));
+                }
+            }
+            // `(Concrete)value` and `value as Concrete`: the variable's
+            // declared type and the target decide.
+            "cast_expression" | "as_expression" => {
+                let (target, value) = if node.kind() == "cast_expression" {
+                    (
+                        node.child_by_field_name("type"),
+                        node.child_by_field_name("value"),
+                    )
+                } else {
+                    (
+                        node.child_by_field_name("right"),
+                        node.child_by_field_name("left"),
+                    )
+                };
+                if let (Some(target), Some(value)) = (target, value)
+                    && matches!(
+                        target.kind(),
+                        "identifier" | "generic_name" | "qualified_name"
+                    )
+                    && unparenthesized(value).kind() == "identifier"
+                {
+                    let name = x.type_text(target);
+                    pending.push((
+                        x.site("cast", name, 0, &ns(), &owner(), x.span(node)),
+                        vec![unparenthesized(value)],
+                    ));
                 }
             }
             "binary_expression" => {
@@ -771,14 +933,25 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: std::time::Instant) -> F
                             b.named_children(&mut c).map(|t| x.type_ref(t)).collect()
                         })
                         .unwrap_or_default();
-                    let members = node
+                    let body = node
                         .child_by_field_name("body")
-                        .filter(|b| b.kind() == "declaration_list")
+                        .filter(|b| b.kind() == "declaration_list");
+                    let mut members: Vec<MemberDecl> = body
                         .map(|b| {
                             let mut c = b.walk();
                             b.named_children(&mut c).flat_map(|m| x.member(m)).collect()
                         })
                         .unwrap_or_default();
+                    if let Some(b) = body {
+                        for field in created_fields(b, &x) {
+                            for m in members
+                                .iter_mut()
+                                .filter(|m| m.kind == "field" && m.name == field)
+                            {
+                                m.created = true;
+                            }
+                        }
+                    }
                     let arity = type_params.map_or(0, |p| p.named_child_count());
                     index.types.push(TypeDecl {
                         name: x.text(name),
@@ -859,6 +1032,13 @@ fn resolve_pending(
                     index.sites.push(site);
                 }
             }
+            // The variable's declared type as written, generics included.
+            "cast" => {
+                if let Some(t) = model.decl_of(n).and_then(|d| d.ty) {
+                    site.receiver = Some(x.type_text(t));
+                    index.sites.push(site);
+                }
+            }
             _ => match declared(n) {
                 Some(Some(t)) => {
                     site.receiver = Some(t);
@@ -886,6 +1066,8 @@ pub(crate) struct ProjectIndex<'a> {
     by_full_name: HashMap<String, usize>,
     /// (simple name, arity) to the types that have it.
     by_name: HashMap<(String, usize), Vec<usize>>,
+    /// The namespaces the project declares types in.
+    namespaces: std::collections::HashSet<String>,
 }
 
 /// A type of the project: its parts across files.
@@ -898,6 +1080,7 @@ impl<'a> ProjectIndex<'a> {
             types: Vec::new(),
             by_full_name: HashMap::new(),
             by_name: HashMap::new(),
+            namespaces: std::collections::HashSet::new(),
         };
         for (file, f) in index.files.iter().enumerate() {
             for t in &f.types {
@@ -917,6 +1100,7 @@ impl<'a> ProjectIndex<'a> {
                     }
                 };
                 index.types[id].push((file, t));
+                index.namespaces.insert(t.namespace.clone());
             }
         }
         index
@@ -967,6 +1151,31 @@ impl<'a> ProjectIndex<'a> {
     /// names that stay ambiguous.
     pub(crate) fn resolve(&self, file: usize, from: &TypeDecl, r: &TypeRef) -> Option<TypeId> {
         self.resolve_in(file, &from.namespace, r)
+    }
+
+    /// `resolve_in`, from code inside the type `owner` (a full name): its
+    /// nested types, and those of the types enclosing it, come first, as in
+    /// C#'s lookup.
+    pub(crate) fn resolve_at(
+        &self,
+        file: usize,
+        namespace: &str,
+        owner: &str,
+        r: &TypeRef,
+    ) -> Option<TypeId> {
+        if r.qualifier.is_empty() {
+            let mut path = owner.split('`').next().unwrap_or(owner);
+            while path.len() > namespace.len() {
+                if let Some(id) = self.type_named(&format!("{path}.{}`{}", r.name, r.arity)) {
+                    return Some(id);
+                }
+                let Some((outer, _)) = path.rsplit_once('.') else {
+                    break;
+                };
+                path = outer;
+            }
+        }
+        self.resolve_in(file, namespace, r)
     }
 
     /// `resolve`, from code in `namespace` of `file`.
@@ -1027,4 +1236,139 @@ impl<'a> ProjectIndex<'a> {
         }
         out
     }
+
+    /// The platform type `r` names, written in `namespace` of `file`
+    /// (ADR-0022): through the namespace and those enclosing it, the file's
+    /// usings and the project's global ones. None when the project declares
+    /// a type of that name, which would shadow it, or when the name stays
+    /// unresolved or ambiguous.
+    pub(crate) fn platform_type(
+        &self,
+        file: usize,
+        namespace: &str,
+        r: &TypeRef,
+    ) -> Option<&'static PlatformType> {
+        if r.qualifier.is_empty() && self.by_name.contains_key(&(r.name.clone(), r.arity)) {
+            return None;
+        }
+        let platform = dotnet::platform();
+        let own = if r.arity > 0 {
+            format!("{}`{}", r.name, r.arity)
+        } else {
+            r.name.clone()
+        };
+        let path = if r.qualifier.is_empty() {
+            own
+        } else {
+            format!("{}.{own}", r.qualifier)
+        };
+        let lookup = |prefixes: &mut dyn Iterator<Item = &str>| -> Vec<&'static PlatformType> {
+            let mut found: Vec<&'static PlatformType> = Vec::new();
+            for prefix in prefixes {
+                let key = if prefix.is_empty() {
+                    path.clone()
+                } else {
+                    format!("{prefix}.{path}")
+                };
+                if let Some(t) = platform.get(&key)
+                    && !found.iter().any(|f| std::ptr::eq(*f, t))
+                {
+                    found.push(t);
+                }
+            }
+            found
+        };
+        let enclosing =
+            std::iter::successors(Some(namespace), |ns| ns.rsplit_once('.').map(|(p, _)| p))
+                .filter(|ns| !ns.is_empty());
+        let usings: Vec<&str> = self.files[file]
+            .usings
+            .iter()
+            .chain(self.global_usings())
+            .map(String::as_str)
+            .collect();
+        let mut prefixes = std::iter::once("")
+            .chain(enclosing)
+            .chain(usings.iter().copied());
+        match lookup(&mut prefixes).as_slice() {
+            [one] => return Some(*one),
+            [] => {}
+            _ => return None,
+        }
+        // The SDK's implicit usings, when nothing the file imports could
+        // declare the name instead.
+        let known = |ns: &str| platform.has_namespace(ns) || self.namespaces.contains(ns);
+        if !r.qualifier.is_empty() || !usings.iter().all(|u| known(u)) {
+            return None;
+        }
+        match lookup(&mut IMPLICIT_USINGS.iter().copied()).as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
+    fn global_usings(&self) -> impl Iterator<Item = &String> + '_ {
+        self.files.iter().flat_map(|f| f.global_usings.iter())
+    }
+
+    /// Whether a project type implements a platform interface such as
+    /// `System.IDisposable`, through its bases in the project and the
+    /// platform. None when a base resolves to neither.
+    pub(crate) fn implements(&self, id: TypeId, interface: &str) -> Option<bool> {
+        let platform = dotnet::platform();
+        let mut todo = vec![id];
+        let mut seen = Vec::new();
+        let mut unknown = false;
+        while let Some(t) = todo.pop() {
+            if seen.contains(&t) || seen.len() > 64 {
+                continue;
+            }
+            seen.push(t);
+            for (file, part, base) in self.types[t]
+                .iter()
+                .flat_map(|(f, p)| p.bases.iter().map(move |b| (*f, *p, b)))
+            {
+                if let Some(b) = self.resolve(file, part, base) {
+                    todo.push(b);
+                } else if let Some(p) = self.platform_type(file, &part.namespace, base) {
+                    if platform.implements(&p.name, interface) {
+                        return Some(true);
+                    }
+                } else {
+                    unknown = true;
+                }
+            }
+        }
+        (!unknown).then_some(false)
+    }
+
+    /// Whether a type written in `namespace` of `file` implements a
+    /// platform interface: a project type or a platform one. None when the
+    /// name resolves to neither.
+    pub(crate) fn type_implements(
+        &self,
+        file: usize,
+        namespace: &str,
+        r: &TypeRef,
+        interface: &str,
+    ) -> Option<bool> {
+        match self.resolve_in(file, namespace, r) {
+            Some(id) => self.implements(id, interface),
+            None => self
+                .platform_type(file, namespace, r)
+                .map(|p| dotnet::platform().implements(&p.name, interface)),
+        }
+    }
 }
+
+/// The namespaces SDK-style projects import implicitly
+/// (`<ImplicitUsings>`): Microsoft.NET.Sdk's.
+const IMPLICIT_USINGS: &[&str] = &[
+    "System",
+    "System.Collections.Generic",
+    "System.IO",
+    "System.Linq",
+    "System.Net.Http",
+    "System.Threading",
+    "System.Threading.Tasks",
+];

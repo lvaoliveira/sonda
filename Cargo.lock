@@ -1643,6 +1643,7 @@ dependencies = [
 name = "sonda-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "ignore",
  "proptest",
  "rayon",

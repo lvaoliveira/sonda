@@ -92,7 +92,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 30,
-        sonar: &[related("S110")],
+        sonar: &[exact("S110")],
         check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
@@ -313,7 +313,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 15,
-        sonar: &[related("S3881")],
+        sonar: &[exact("S3881")],
         check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,

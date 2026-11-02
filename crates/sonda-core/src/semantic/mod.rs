@@ -9,6 +9,7 @@
 mod cs;
 pub(crate) mod cs_cfg;
 pub(crate) mod cs_index;
+pub(crate) mod dotnet;
 mod js;
 
 use crate::lang::Lang;
