@@ -6,7 +6,7 @@
 use super::cs::{CS_SCOPE_STOPS, cs_has_modifier, operand, simple_name};
 use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_more::{enclosing_type, members};
-use super::java_bugs::{find_in_scope, operator_text};
+use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
 use super::*;
@@ -181,12 +181,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S3265")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(compilation_unit) @match",
-            filter: Some(Find(non_flags_bitwise)),
-        },
+        sonar: &[exact("S3265")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "enum Color { Red, Green, Blue } class A { Color F() => Color.Red | Color.Blue; }",
@@ -202,12 +198,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S3878")],
-        check: Check::Query {
-            langs: CSHARP,
-            query: "(class_declaration body: (declaration_list)) @match",
-            filter: Some(Find(array_passed_to_params)),
-        },
+        sonar: &[exact("S3878")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class A { void Log(params string[] parts) { } void F() { Log(new[] { \"a\", \"b\" }); } }",
@@ -691,84 +683,6 @@ fn explicit_caller_info<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         methods
             .iter()
             .any(|(m, position)| *m == name && positional > *position)
-    })
-}
-
-fn non_flags_bitwise<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Enums declared in this file without [Flags].
-    let mut enums: Vec<&[u8]> = Vec::new();
-    let mut stack = vec![unit];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "enum_declaration" {
-            let flags = attribute_names(n, src).iter().any(|(_, a)| *a == b"Flags");
-            if !flags && let Some(name) = n.child_by_field_name("name") {
-                enums.push(text(name, src));
-            }
-            continue;
-        }
-        if matches!(n.kind(), "method_declaration" | "block") {
-            continue;
-        }
-        let mut c = n.walk();
-        stack.extend(n.named_children(&mut c));
-    }
-    if enums.is_empty() {
-        return None;
-    }
-    let is_member = |n: Option<Node>| {
-        n.is_some_and(|n| {
-            n.kind() == "member_access_expression"
-                && n.child_by_field_name("expression")
-                    .is_some_and(|e| enums.contains(&simple_name(e, src)))
-        })
-    };
-    find_in_scope(unit, &[], |n| {
-        n.kind() == "binary_expression"
-            && matches!(operator_text(n, src), b"|" | b"&" | b"^")
-            && is_member(n.child_by_field_name("left"))
-            && is_member(n.child_by_field_name("right"))
-    })
-}
-
-fn array_passed_to_params<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Methods of this class whose last parameter is `params`, by name and
-    // the number of parameters before it.
-    let methods: Vec<(&[u8], usize)> = members(class)
-        .into_iter()
-        .filter(|m| m.kind() == "method_declaration")
-        .filter_map(|m| {
-            // tree-sitter-c-sharp puts a `params T[] x` parameter's type and
-            // name on the list itself, not in a `parameter` node.
-            let params = m.child_by_field_name("parameters")?;
-            if count_word(text(params, src), b"params") == 0 {
-                return None;
-            }
-            let mut c = params.walk();
-            let before = params
-                .named_children(&mut c)
-                .filter(|p| p.kind() == "parameter")
-                .count();
-            Some((text(m.child_by_field_name("name")?, src), before))
-        })
-        .collect();
-    if methods.is_empty() {
-        return None;
-    }
-    let body = class.child_by_field_name("body")?;
-    find_in_scope(body, &[], |n| {
-        if n.kind() != "invocation_expression" {
-            return false;
-        }
-        let name = n.child_by_field_name("function").map(|f| text(f, src));
-        let args = cs_call_arguments(n);
-        methods.iter().any(|(m, before)| {
-            Some(*m) == name
-                && args.len() == before + 1
-                && args.last().is_some_and(|a| {
-                    matches!(a.kind(), "implicit_array_creation_expression")
-                        || a.kind() == "array_creation_expression" && a.named_child_count() >= 2
-                })
-        })
     })
 }
 

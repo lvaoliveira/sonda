@@ -8,7 +8,7 @@
 //! Queries stay cheap on deep trees: see the notes in `js_modern.rs`.
 
 use super::cs::{cs_has_modifier, simple_name};
-use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
+use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_more::members;
 use super::cs_types::{type_of_name, walk_tree};
 use super::java_bugs::{find_in_scope, operator_text};
@@ -53,11 +53,8 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Critical,
         effort_minutes: 10,
-        sonar: &[related("S4277")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: shared_part_created,
-        },
+        sonar: &[exact("S4277")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "[Export(typeof(IFoo))] [PartCreationPolicy(CreationPolicy.Shared)] class Foo : IFoo { }\nclass P { void F() { var f = new Foo(); } }",
@@ -387,11 +384,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Blocker,
         effort_minutes: 10,
-        sonar: &[related("S6424")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: entity_interface_violations,
-        },
+        sonar: &[exact("S6424")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "interface ICounter { void Add(int a, int b); }\nclass F { Task G(IDurableEntityClient c, EntityId id) => c.SignalEntityAsync<ICounter>(id, x => x.Add(1, 2)); }",
@@ -427,11 +421,8 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 2,
-        sonar: &[related("S6964")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: underposting_properties,
-        },
+        sonar: &[exact("S6964")],
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "public class Order { public int Quantity { get; set; } }\npublic class OrdersController : ControllerBase { [HttpPost] public IActionResult Create(Order order) => Ok(); }",
@@ -472,18 +463,6 @@ fn type_index<'m, 't>(m: &'m Model<'t>) -> HashMap<&'m str, Vec<Node<'t>>> {
         }
     }
     index
-}
-
-/// The one declaration of `name` among `kinds`, if the file has exactly one.
-fn unique<'t>(
-    types: &HashMap<&str, Vec<Node<'t>>>,
-    name: &[u8],
-    kinds: &[&str],
-) -> Option<Node<'t>> {
-    match types.get(std::str::from_utf8(name).ok()?)?.as_slice() {
-        [one] if kinds.contains(&one.kind()) => Some(*one),
-        _ => None,
-    }
 }
 
 fn base_entries(declaration: Node) -> Vec<Node> {
@@ -1174,36 +1153,6 @@ fn signature<'s>(method: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
         .collect()
 }
 
-fn shared_part_created<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let shared: Vec<&[u8]> = classes(&types)
-        .into_iter()
-        .filter(|c| {
-            attribute_names(*c, src).iter().any(|(a, n)| {
-                matches!(*n, b"PartCreationPolicy" | b"PartCreationPolicyAttribute")
-                    && attribute_arguments(*a)
-                        .iter()
-                        .any(|(_, v)| text(*v, src).ends_with(b"Shared"))
-            })
-        })
-        .map(|c| name_of(c, src))
-        .collect();
-    if shared.is_empty() {
-        return Vec::new();
-    }
-    let mut found = Vec::new();
-    walk_tree(m, |node, _| {
-        if node.kind() == "object_creation_expression"
-            && node
-                .child_by_field_name("type")
-                .is_some_and(|t| shared.contains(&simple_name(t, src)))
-        {
-            found.push(node);
-        }
-    });
-    found
-}
-
 fn validates(body: Node) -> bool {
     find_in_scope(body, &[], |n| {
         matches!(n.kind(), "throw_statement" | "throw_expression")
@@ -1264,50 +1213,6 @@ fn deserialization_without_validation<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node
 
 fn simple_name_bytes(ty: &[u8]) -> &[u8] {
     ty.rsplit(|b| *b == b'.').next().unwrap_or(ty)
-}
-
-const ENTITY_CALLS: &[&[u8]] = &[
-    b"SignalEntityAsync",
-    b"SignalEntity",
-    b"CreateEntityProxy",
-    b"ReadEntityStateAsync",
-];
-
-fn entity_interface_violations<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let mut interfaces: Vec<Node<'t>> = Vec::new();
-    walk_tree(m, |node, _| {
-        if node.kind() != "generic_name" || !ENTITY_CALLS.contains(&simple_name(node, src)) {
-            return;
-        }
-        let Some(arg) = node.named_child(1).and_then(|a| a.named_child(0)) else {
-            return;
-        };
-        if let Some(i) = unique(&types, simple_name(arg, src), &["interface_declaration"])
-            && !interfaces.contains(&i)
-        {
-            interfaces.push(i);
-        }
-    });
-    let mut found = Vec::new();
-    for interface in interfaces {
-        if type_parameters(interface).is_some() {
-            found.extend(interface.child_by_field_name("name"));
-            continue;
-        }
-        for member in members(interface) {
-            let ok = member.kind() == "method_declaration"
-                && type_parameters(member).is_none()
-                && params(member, src).len() <= 1
-                && member
-                    .child_by_field_name("returns")
-                    .is_some_and(|r| matches!(simple_name(r, src), b"void" | b"Task"));
-            if !ok {
-                found.push(member.child_by_field_name("name").unwrap_or(member));
-            }
-        }
-    }
-    found
 }
 
 fn is_controller(class: Node, src: &[u8]) -> bool {
@@ -1455,90 +1360,6 @@ fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
         }
         if groups.len() > 1 {
             found.extend(class.child_by_field_name("name"));
-        }
-    }
-    found
-}
-
-const VALUE_PROPERTY_TYPES: &[&[u8]] = &[
-    b"int",
-    b"long",
-    b"short",
-    b"byte",
-    b"uint",
-    b"ulong",
-    b"ushort",
-    b"sbyte",
-    b"bool",
-    b"decimal",
-    b"double",
-    b"float",
-    b"char",
-    b"DateTime",
-    b"DateTimeOffset",
-    b"TimeSpan",
-    b"Guid",
-    b"DateOnly",
-    b"TimeOnly",
-];
-
-fn underposting_properties<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    // Model types: parameters of controller actions, declared in this file.
-    let mut models: Vec<Node<'t>> = Vec::new();
-    for class in classes(&types)
-        .into_iter()
-        .filter(|c| is_controller(*c, src))
-    {
-        for action in methods(class)
-            .into_iter()
-            .filter(|x| cs_has_modifier(*x, "public", src))
-        {
-            for p in params(action, src) {
-                let Some(ty) = p.ty else { continue };
-                let from_services = p.name.parent().is_some_and(|d| {
-                    attribute_names(d, src)
-                        .iter()
-                        .any(|(_, n)| *n == b"FromServices")
-                });
-                if let Some(model) = unique(
-                    &types,
-                    simple_name(ty, src),
-                    &["class_declaration", "record_declaration"],
-                ) && !from_services
-                    && !models.contains(&model)
-                {
-                    models.push(model);
-                }
-            }
-        }
-    }
-    let enums: Vec<&[u8]> = types
-        .iter()
-        .filter(|(_, v)| v.iter().all(|d| d.kind() == "enum_declaration"))
-        .map(|(k, _)| k.as_bytes())
-        .collect();
-    let mut found = Vec::new();
-    for model in models {
-        for property in members(model)
-            .into_iter()
-            .filter(|x| x.kind() == "property_declaration" && cs_has_modifier(*x, "public", src))
-        {
-            let Some(ty) = property.child_by_field_name("type") else {
-                continue;
-            };
-            let t = text(ty, src);
-            let value = VALUE_PROPERTY_TYPES.contains(&t) || enums.contains(&t);
-            let required = cs_has_modifier(property, "required", src)
-                || attribute_names(property, src)
-                    .iter()
-                    .any(|(_, n)| matches!(*n, b"Required" | b"JsonRequired" | b"BindRequired"));
-            let settable = property.child_by_field_name("accessors").is_some_and(|a| {
-                count_word(text(a, src), b"set") > 0 || count_word(text(a, src), b"init") > 0
-            });
-            if value && !required && settable {
-                found.push(ty);
-            }
         }
     }
     found

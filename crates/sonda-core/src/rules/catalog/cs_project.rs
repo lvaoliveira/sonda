@@ -25,6 +25,12 @@ pub(crate) const RULES: &[&str] = &[
     "cs/interface-colliding-members",
     "cs/field-differs-from-base-by-case",
     "cs/dispose-pattern",
+    "cs/bitwise-on-non-flags-enum",
+    "cs/array-for-params",
+    "cs/shared-part-created-with-new",
+    "cs/extension-in-same-namespace",
+    "cs/durable-entity-interface",
+    "cs/underposting-value-type",
 ];
 
 /// The findings of the rules `active` lists, for files given as their
@@ -73,6 +79,7 @@ pub(crate) fn run<'f>(
             _ => {}
         }
     }
+    uses(&index, &on, &mut found);
     found
         .into_iter()
         .map(|(rule, file, span)| (rule, parsed[file].0, span))
@@ -417,6 +424,207 @@ fn dispose_pattern(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
     }
 }
 
+/// Value types a request model's property may have, besides the project's
+/// own enums and structs.
+const VALUE_TYPES: &[&str] = &[
+    "int",
+    "long",
+    "short",
+    "byte",
+    "uint",
+    "ulong",
+    "ushort",
+    "sbyte",
+    "bool",
+    "decimal",
+    "double",
+    "float",
+    "char",
+    "DateTime",
+    "DateTimeOffset",
+    "TimeSpan",
+    "Guid",
+    "DateOnly",
+    "TimeOnly",
+];
+
+/// A controller: an [ApiController], or a class whose bases, through the
+/// project, reach Controller or ControllerBase.
+fn is_controller(index: &ProjectIndex, id: TypeId) -> bool {
+    let attributed = index
+        .parts(id)
+        .iter()
+        .any(|(_, t)| t.attributes.iter().any(|a| a == "ApiController"));
+    let mut chain = vec![id];
+    chain.extend(index.ancestors(id));
+    attributed
+        || chain
+            .iter()
+            .flat_map(|t| index.bases(*t))
+            .any(|(_, _, b)| matches!(b.name.as_str(), "Controller" | "ControllerBase"))
+}
+
+/// Rules judging a use in one file by a declaration in another: enum
+/// operations, arrays for `params`, `new` of shared parts, extensions,
+/// entity interfaces and action models.
+fn uses(index: &ProjectIndex, on: &dyn Fn(&str) -> bool, found: &mut Vec<Finding>) {
+    let mut entities: Vec<TypeId> = Vec::new();
+    let mut models: Vec<TypeId> = Vec::new();
+    for (file, f) in index.files().iter().enumerate() {
+        for site in &f.sites {
+            let named = TypeRef {
+                name: site.name.clone(),
+                arity: site.arity,
+            };
+            let resolved = || index.resolve_in(file, &site.namespace, &named);
+            match site.kind.as_str() {
+                "bitwise" if on("cs/bitwise-on-non-flags-enum") => {
+                    let non_flags = resolved().is_some_and(|id| {
+                        index.decl(id).1.kind == "enum"
+                            && !index
+                                .parts(id)
+                                .iter()
+                                .any(|(_, t)| t.attributes.iter().any(|a| a == "Flags"))
+                    });
+                    if non_flags {
+                        found.push(("cs/bitwise-on-non-flags-enum", file, site.span));
+                    }
+                }
+                "params-array" if on("cs/array-for-params") => {
+                    let target = match &site.receiver {
+                        None => index.type_named(&site.owner),
+                        Some(t) => index.resolve_in(
+                            file,
+                            &site.namespace,
+                            &TypeRef {
+                                name: t.clone(),
+                                arity: 0,
+                            },
+                        ),
+                    };
+                    let Some(target) = target else {
+                        continue;
+                    };
+                    let mut types = vec![target];
+                    types.extend(index.ancestors(target));
+                    let candidates: Vec<&MemberDecl> = types
+                        .iter()
+                        .flat_map(|t| index.members(*t).map(|(_, m)| m).collect::<Vec<_>>())
+                        .filter(|m| {
+                            m.kind == "method"
+                                && m.name == site.name
+                                && m.params.len() == site.count
+                        })
+                        .collect();
+                    // The call binds to a `params` method when no overload of
+                    // its arity takes the array as a plain parameter.
+                    let to_params = candidates
+                        .iter()
+                        .any(|m| m.params.last().is_some_and(|p| p.is_params))
+                        && !candidates
+                            .iter()
+                            .any(|m| m.params.last().is_some_and(|p| !p.is_params));
+                    if to_params {
+                        found.push(("cs/array-for-params", file, site.span));
+                    }
+                }
+                "new" if on("cs/shared-part-created-with-new") => {
+                    let shared = resolved().is_some_and(|id| {
+                        index.parts(id).iter().any(|(_, t)| {
+                            t.attributes
+                                .iter()
+                                .any(|a| a == "PartCreationPolicy.Shared")
+                        })
+                    });
+                    if shared {
+                        found.push(("cs/shared-part-created-with-new", file, site.span));
+                    }
+                }
+                "extension" if on("cs/extension-in-same-namespace") => {
+                    let neighbour = resolved().is_some_and(|id| {
+                        let (_, d) = index.decl(id);
+                        matches!(d.kind.as_str(), "class" | "struct" | "record" | "interface")
+                            && d.namespace == site.namespace
+                            && !index
+                                .parts(id)
+                                .iter()
+                                .any(|(_, t)| t.attributes.iter().any(|a| a == "GeneratedCode"))
+                    });
+                    if neighbour {
+                        found.push(("cs/extension-in-same-namespace", file, site.span));
+                    }
+                }
+                "entity" if on("cs/durable-entity-interface") => {
+                    if let Some(id) = resolved().filter(|id| index.decl(*id).1.kind == "interface")
+                        && !entities.contains(&id)
+                    {
+                        entities.push(id);
+                    }
+                }
+                "action-param" if on("cs/underposting-value-type") => {
+                    let controller = index
+                        .type_named(&site.owner)
+                        .is_some_and(|c| is_controller(index, c));
+                    if controller
+                        && let Some(id) = resolved().filter(|id| {
+                            matches!(index.decl(*id).1.kind.as_str(), "class" | "record")
+                        })
+                        && !models.contains(&id)
+                    {
+                        models.push(id);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for id in entities {
+        let (file, decl) = index.decl(id);
+        if decl.arity > 0 {
+            found.push(("cs/durable-entity-interface", file, decl.span));
+            continue;
+        }
+        for (f, member) in index.members(id) {
+            let returns = member.returns.split('<').next().unwrap_or_default();
+            let ok = member.kind == "method"
+                && !member.generic
+                && member.params.len() <= 1
+                && matches!(returns, "void" | "Task");
+            if !ok {
+                found.push(("cs/durable-entity-interface", f, member.span));
+            }
+        }
+    }
+    for id in models {
+        for (f, property) in index
+            .members(id)
+            .filter(|(_, m)| m.kind == "property" && m.has("public"))
+        {
+            let (_, part) = index.decl(id);
+            let value = VALUE_TYPES.contains(&property.returns.as_str())
+                || index
+                    .resolve_in(
+                        f,
+                        &part.namespace,
+                        &TypeRef {
+                            name: property.returns.clone(),
+                            arity: 0,
+                        },
+                    )
+                    .is_some_and(|t| matches!(index.decl(t).1.kind.as_str(), "enum" | "struct"));
+            let required = property.has("required")
+                || property
+                    .attributes
+                    .iter()
+                    .any(|a| matches!(a.as_str(), "Required" | "JsonRequired" | "BindRequired"));
+            let settable = property.accessors.iter().any(|a| a == "set" || a == "init");
+            if value && !required && settable {
+                found.push(("cs/underposting-value-type", f, property.span));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::tests::far_deadline;
@@ -576,5 +784,90 @@ mod tests {
         );
         // The pattern is complete across the two parts.
         assert_eq!(project("cs/dispose-pattern", &files), []);
+    }
+
+    #[test]
+    fn uses_judged_by_declarations_elsewhere() {
+        let files = [
+            (
+                "Color.cs",
+                "namespace N;\npublic enum Color { Red, Blue }\n",
+            ),
+            (
+                "Access.cs",
+                "namespace N;\n[Flags]\npublic enum Access { Read = 1, Write = 2 }\n",
+            ),
+            (
+                "Log.cs",
+                "namespace N;\npublic static class Log {\n  public static void Write(params string[] parts) { }\n  public static void Take(string[] xs) { }\n}\n",
+            ),
+            (
+                "Logger.cs",
+                "namespace N;\npublic class Logger { public void Write(params string[] parts) { } }\n",
+            ),
+            (
+                "Part.cs",
+                "namespace N;\n[Export(typeof(IFoo))]\n[PartCreationPolicy(CreationPolicy.Shared)]\npublic class Part { }\n",
+            ),
+            (
+                "Use.cs",
+                "namespace N;\npublic class Use {\n  void F(Color c, Access a) {\n    var x = Color.Red | Color.Blue;\n    var y = Access.Read | Access.Write;\n    var z = c & Color.Red;\n    Log.Write(new[] { \"a\", \"b\" });\n    Log.Take(new[] { \"a\" });\n    Log.Write([.. names]);\n    var l = new Logger();\n    l.Write(new string[] { \"x\" });\n    var p = new Part();\n  }\n}\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/bitwise-on-non-flags-enum", &files),
+            [("Use.cs".into(), 4), ("Use.cs".into(), 6)]
+        );
+        assert_eq!(
+            project("cs/array-for-params", &files),
+            [("Use.cs".into(), 7), ("Use.cs".into(), 11)]
+        );
+        assert_eq!(
+            project("cs/shared-part-created-with-new", &files),
+            [("Use.cs".into(), 12)]
+        );
+    }
+
+    #[test]
+    fn extensions_entities_and_models_across_files() {
+        let files = [
+            ("Order.cs", "namespace Shop;\npublic class Order { }\n"),
+            (
+                "Ext.cs",
+                "namespace Shop;\npublic static class OrderExt {\n  public static int Total(this Order o) => 0;\n}\n",
+            ),
+            (
+                "Helpers/Ext.cs",
+                "namespace Shop.Helpers;\npublic static class More {\n  public static int Count(this Shop.Order o) => 0;\n}\n",
+            ),
+            (
+                "ICounter.cs",
+                "namespace Shop;\npublic interface ICounter {\n  void Add(int a, int b);\n  int Get();\n  void Reset();\n}\n",
+            ),
+            (
+                "Fn.cs",
+                "namespace Shop;\npublic class Fn {\n  Task G(IDurableEntityClient c, EntityId id) => c.SignalEntityAsync<ICounter>(id, x => x.Reset());\n}\n",
+            ),
+            (
+                "Models/OrderModel.cs",
+                "namespace Shop;\npublic class OrderModel {\n  public int Quantity { get; set; }\n  public int? Max { get; set; }\n  public required int Min { get; set; }\n  public string Name { get; set; }\n}\n",
+            ),
+            (
+                "Controllers/OrdersController.cs",
+                "namespace Shop;\n[ApiController]\npublic class OrdersController : ControllerBase {\n  public IActionResult Create(OrderModel order) => Ok();\n}\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/extension-in-same-namespace", &files),
+            [("Ext.cs".into(), 3)]
+        );
+        assert_eq!(
+            project("cs/durable-entity-interface", &files),
+            [("ICounter.cs".into(), 3), ("ICounter.cs".into(), 4)]
+        );
+        assert_eq!(
+            project("cs/underposting-value-type", &files),
+            [("Models/OrderModel.cs".into(), 3)]
+        );
     }
 }
