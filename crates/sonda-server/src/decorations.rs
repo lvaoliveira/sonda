@@ -343,7 +343,7 @@ async fn content(
     ))
 }
 
-/// Posts the decorations that are due, at most [`BATCH`]; returns how many
+/// Posts the decorations that are due, at most `BATCH`; returns how many
 /// were posted. Claimed with `SKIP LOCKED` and a five-minute lease, so
 /// several servers never post the same one at once.
 pub async fn post_due(
