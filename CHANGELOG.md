@@ -543,6 +543,11 @@ file, the report formats and the public library API.
   not `openat`, and the worker's sandbox refused only `openat`, so std's
   probe of `/proc/self/cgroup` (for the regex crate's CPU count) killed the
   worker instead of failing. `open` is now refused like `openat`.
+- Coverage from tests run in a subdirectory attached to no file: vitest in
+  `node/` writes `SF:src/a.js` for `node/src/a.js`, which a scan from the
+  repository root didn't match. A relative path is now tried under the
+  report's directory and each of its parents, then the root, and the first
+  that names a scanned file is the one.
 - Deeply nested code took time that grew with the square of its depth in
   two places every language goes through: resolving each name climbed the
   whole scope chain, and cognitive complexity asked each `&&`/`||` for its
