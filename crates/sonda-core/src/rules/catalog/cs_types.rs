@@ -7,11 +7,62 @@
 //! sound on its own, and say so with `related` references.
 
 use super::cs::simple_name;
-use super::cs_bugs::cs_integer;
+use super::cs_bugs::{cs_call_arguments, cs_integer};
 use super::java_bugs::operator_text;
 use super::java_security::text;
 use super::*;
+use crate::semantic::cs_infer::{Found, Infer, Ty};
 use crate::semantic::{Decl, DeclKind, Model};
+
+/// Calls of LINQ's `Enumerable` methods named in `methods` with the given
+/// number of arguments, the receiver not counted, with the receiver's type,
+/// for each call the types resolve (ADR-0022). A call that may also be
+/// `Queryable`'s, on an `IQueryable`, isn't one.
+pub(super) fn enumerable_calls<'t>(
+    m: &Model<'t>,
+    src: &[u8],
+    methods: &[(&str, usize)],
+) -> Vec<(Node<'t>, Ty)> {
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    walk_tree(m, |call, _| {
+        if call.kind() != "invocation_expression" {
+            return;
+        }
+        let Some(name) = call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "member_access_expression")
+            .and_then(|f| f.child_by_field_name("name"))
+        else {
+            return;
+        };
+        let arguments = cs_call_arguments(call).len();
+        if !methods
+            .iter()
+            .any(|(n, a)| n.as_bytes() == text(name, src) && *a == arguments)
+        {
+            return;
+        }
+        if let Some(c) = infer.call(call)
+            && c.extension
+            && c.methods.iter().all(|f| {
+                matches!(f, Found::Platform { declaring, .. } if declaring.name == "System.Linq.Enumerable")
+            })
+            && let Some(receiver) = c.receiver
+        {
+            found.push((call, receiver));
+        }
+    });
+    found
+}
+
+/// Whether a type is one of these platform generic types, or an array when
+/// `arrays` says so.
+pub(super) fn is_one_of(ty: &Ty, keys: &[&str], arrays: bool) -> bool {
+    matches!(ty, Ty::Array(_)) && arrays || keys.iter().any(|k| ty.is(k))
+}
 
 /// Calls `f` with every node of the file and its ancestors, outermost
 /// first: one cursor walk, so rules need no `parent()` calls, which cost a

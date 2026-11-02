@@ -9,7 +9,7 @@ use super::cs_bugs::cs_call_arguments;
 use super::cs_final::is_azure_function;
 use super::cs_more::{declarators, declared_type, members};
 use super::cs_opt2::{enclosing_method, is_type_parameter_name, may_implement_contract};
-use super::cs_types::{is_generic, type_of_name, walk_tree};
+use super::cs_types::{enumerable_calls, is_one_of};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_last::count_nodes;
 use super::java_security::{contains_ignoring_case, text};
@@ -463,7 +463,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S6602")],
+        sonar: &[exact("S6602")],
         check: Check::Semantic {
             langs: CSHARP,
             find: use_list_find,
@@ -482,7 +482,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S6603")],
+        sonar: &[exact("S6603")],
         check: Check::Semantic {
             langs: CSHARP,
             find: use_list_true_for_all,
@@ -501,7 +501,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S6605")],
+        sonar: &[exact("S6605")],
         check: Check::Semantic {
             langs: CSHARP,
             find: use_list_exists,
@@ -1130,46 +1130,40 @@ fn function_catch_without_log<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'
     })
 }
 
-/// Calls `xs.Method(predicate)` on a receiver declared as a `List<T>`.
-fn predicate_calls_on_list<'t>(m: &Model<'t>, method: &[u8], src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    walk_tree(m, |call, _| {
-        if call.kind() != "invocation_expression" {
-            return;
-        }
-        let Some(function) = call
-            .child_by_field_name("function")
-            .filter(|f| f.kind() == "member_access_expression")
-        else {
-            return;
-        };
-        let named = function
-            .child_by_field_name("name")
-            .is_some_and(|n| text(n, src) == method);
-        let args = cs_call_arguments(call);
-        let predicate = matches!(args.as_slice(), [a] if a.kind() == "lambda_expression" || a.kind() == "identifier");
-        let list = function
-            .child_by_field_name("expression")
-            .filter(|r| r.kind() == "identifier")
-            .and_then(|r| type_of_name(m, r))
-            .is_some_and(|t| is_generic(t, b"List", src));
-        if named && predicate && list {
-            found.push(call);
-        }
-    });
-    found
+const LIST: &str = "System.Collections.Generic.List`1";
+const IMMUTABLE_LIST: &str = "System.Collections.Immutable.ImmutableList`1";
+const IMMUTABLE_LIST_BUILDER: &str = "System.Collections.Immutable.ImmutableList.Builder";
+
+/// `xs.Method(predicate)`, LINQ's, on a receiver of one of these types or
+/// an array, which have the collection-specific method instead.
+fn predicate_calls_on<'t>(
+    m: &Model<'t>,
+    src: &[u8],
+    method: &str,
+    receivers: &[&str],
+) -> Vec<Node<'t>> {
+    enumerable_calls(m, src, &[(method, 1)])
+        .into_iter()
+        .filter(|(_, receiver)| is_one_of(receiver, receivers, true))
+        .map(|(call, _)| call)
+        .collect()
 }
 
 fn use_list_find<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    predicate_calls_on_list(m, b"FirstOrDefault", src)
+    predicate_calls_on(m, src, "FirstOrDefault", &[LIST, IMMUTABLE_LIST])
 }
 
 fn use_list_true_for_all<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    predicate_calls_on_list(m, b"All", src)
+    predicate_calls_on(
+        m,
+        src,
+        "All",
+        &[LIST, IMMUTABLE_LIST, IMMUTABLE_LIST_BUILDER],
+    )
 }
 
 fn use_list_exists<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    predicate_calls_on_list(m, b"Any", src)
+    predicate_calls_on(m, src, "Any", &[LIST, IMMUTABLE_LIST])
 }
 
 #[cfg(test)]
@@ -1256,6 +1250,7 @@ mod tests {
         let src = "class A {\nList<int> items;\nbool F(List<int> xs, IEnumerable<int> ys, int[] zs) {\nvar a = xs.FirstOrDefault(x => x > 1);\nvar b = xs.All(x => x > 1);\nvar c = xs.Any(x => x > 1);\nvar d = ys.Any(x => x > 1);\nvar e = xs.Any();\nvar f = items.Any(x => x > 1);\nvar local = new List<int>();\nvar g = local.Any(IsBig);\nreturn zs.Any(x => x > 1);\n}\n}";
         assert_eq!(flagged("cs/use-list-find", src), [4]);
         assert_eq!(flagged("cs/use-list-true-for-all", src), [5]);
-        assert_eq!(flagged("cs/use-list-exists", src), [6, 9, 11]);
+        // Arrays have Array.Exists.
+        assert_eq!(flagged("cs/use-list-exists", src), [6, 9, 11, 12]);
     }
 }

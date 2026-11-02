@@ -91,9 +91,11 @@ a type name the way C# does, as far as declarations tell:
 2. a platform type through the namespace and those enclosing it, the
    file's `using` directives, and the project's `global using` ones;
 3. the SDK's implicit usings (`System`, `System.IO`, `System.Linq` and the
-   rest of `Microsoft.NET.Sdk`'s), only when every namespace the file
-   imports is the project's or the platform's, so a third-party type of the
-   same name can't be taken for a platform one.
+   rest of `Microsoft.NET.Sdk`'s), when every namespace the file imports is
+   the project's or the platform's, so a third-party type of the same name
+   can't be taken for a platform one, or when the file imports none of
+   those namespaces itself, which projects without implicit usings nearly
+   always do (`using System;`).
 
 A name that stays ambiguous or unknown resolves to nothing.
 
@@ -124,10 +126,13 @@ declares, a third-party package's, costs recall.
 The summary describes one framework version, and projects target others.
 Rules that only read declarations (is this type disposable?) are stable
 across versions. Rules that recommend an API (use `string.Create`,
-`Order.Find`) must not recommend one the project's target lacks: step 3
-adds whether .NET Standard 2.0 has each member, and rules recommending
-one that it doesn't stay `related` until sonda reads the project's target
-framework, which is a separate decision.
+`Order.Find`) must not recommend one the project's target lacks. Each
+member records whether .NET Standard 2.0 has it with the same signature
+(`NETStandard.Library` 2.0.3, read only for that), and a rule recommending
+one that it doesn't stays `related` until sonda reads the project's target
+framework, which is a separate decision. S6966 is such a rule: its own
+example, `File.ReadAllLinesAsync`, and `CancellationTokenSource.CancelAsync`
+came after .NET Standard 2.0, so it recommends only what that has.
 
 ### Other languages
 
@@ -157,8 +162,39 @@ declarations and light inference, not the project's own checker.
    classes, and generic interface casts. Casts of third-party interfaces
    (xUnit's `ITestOutputHelper`) are no longer reported: their type is
    unknown.
-2. Expression typing through framework members: the 18 rules of the second
-   row above.
+2. Expression typing through framework members (`semantic/cs_infer.rs`):
+   a type for names, `var` initializers, member access, calls (overloads
+   by number of arguments, all candidates agreeing), `new`, casts,
+   `await`, indexers, literals and `foreach` variables; members found on
+   the nearest type declaring the name, base classes before interfaces,
+   with generic arguments substituted; extension methods from imported
+   namespaces, binding the method's type parameters from the receiver.
+   Object's own methods (`ToString`, `GetType`) type on any receiver.
+
+   **2a, built.** Exact now: S1449, S1858, S4462, S6602, S6603, S6605,
+   S6608, S6609 and S6613; S6966 stays `related` (above). Each was
+   re-audited against its documentation, which changed two of them beyond
+   types: S1858 no longer reports value types, its documented exception,
+   or interpolation, which it doesn't document; S4462 reports
+   `Task.WaitAny`, `Task.WaitAll` and `Thread.Sleep` in async methods, and
+   leaves out what its documentation does (Main methods, tasks from
+   `Task.Run` or `Task.Factory.StartNew`), while a task awaited through
+   `Task.WhenAll`, which it doesn't document, is now reported. A call on an
+   `IQueryable`, which may be `Queryable`'s, isn't taken for LINQ's.
+
+   The SDK's implicit usings apply when nothing a file imports could
+   declare a name instead, or when the file imports none of their
+   namespaces itself: projects without implicit usings write `using
+   System;` in nearly every file.
+
+   On the corpus, the collection rules went from 12 findings to 49, mostly
+   arrays from reflection (`GetMethods()`, `GetInterfaces()`) and lists
+   returned by calls, all true positives; the others' new findings are too.
+   Calls on lambda parameters and on types from other files of the project
+   stay unknown.
+
+   **2b.** S1312, S1698, S1905, S2325, S3172, S3217, S3242 and S5034, which
+   need conversions, flow or other files' declarations too.
 3. Overloads and parameters: S2234, S3254, S4005, S4056, S4058, then S1128;
    S2201 and S4055 with their documented lists.
 

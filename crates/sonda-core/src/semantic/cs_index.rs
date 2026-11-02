@@ -1296,9 +1296,12 @@ impl<'a> ProjectIndex<'a> {
             _ => return None,
         }
         // The SDK's implicit usings, when nothing the file imports could
-        // declare the name instead.
+        // declare the name instead, or when the file imports none of their
+        // namespaces itself, which projects without them nearly always do.
         let known = |ns: &str| platform.has_namespace(ns) || self.namespaces.contains(ns);
-        if !r.qualifier.is_empty() || !usings.iter().all(|u| known(u)) {
+        let implicit =
+            usings.iter().all(|u| known(u)) || !usings.iter().any(|u| IMPLICIT_USINGS.contains(u));
+        if !r.qualifier.is_empty() || !implicit {
             return None;
         }
         match lookup(&mut IMPLICIT_USINGS.iter().copied()).as_slice() {

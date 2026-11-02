@@ -10,6 +10,7 @@ mod cs_dataflow;
 mod cs_extra;
 mod cs_final;
 mod cs_flow;
+mod cs_inferred;
 mod cs_more;
 mod cs_opt;
 mod cs_opt2;

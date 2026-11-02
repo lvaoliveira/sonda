@@ -3,7 +3,10 @@
 //!
 //! Usage: `sonda-netref OUT LABEL DIR [LABEL DIR]...`, where each DIR holds
 //! a reference pack's `ref/<tfm>/*.dll` and LABEL names it ("Microsoft.NETCore.App.Ref 8.0.11").
-//! OUT is written as deflated JSON, the format `sonda-core` embeds.
+//! OUT is written as deflated JSON, the format `sonda-core` embeds. A LABEL
+//! starting with `baseline:` adds no types: members of the other packs it
+//! also declares, with the same signature, are tagged "ns20" (.NET
+//! Standard 2.0, which every target has).
 //!
 //! Type names are keys like the project index's (`semantic/cs_index.rs`):
 //! namespace, enclosing types without their arity, then the type with its
@@ -90,16 +93,38 @@ fn main() -> Res<()> {
         return Err("usage: sonda-netref OUT LABEL DIR [LABEL DIR]...".into());
     }
     let mut types: BTreeMap<String, TypeEntry> = BTreeMap::new();
+    let mut baseline: BTreeMap<String, TypeEntry> = BTreeMap::new();
     let mut packs = Vec::new();
     for pair in args[1..].chunks(2) {
         packs.push(pair[0].clone());
+        let into = if pair[0].starts_with("baseline:") {
+            &mut baseline
+        } else {
+            &mut types
+        };
         let mut dlls: Vec<_> = std::fs::read_dir(&pair[1])?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "dll"))
             .collect();
         dlls.sort();
         for dll in dlls {
-            extract(&dll, &mut types).map_err(|e| format!("{}: {e}", dll.display()))?;
+            extract(&dll, into).map_err(|e| format!("{}: {e}", dll.display()))?;
+        }
+    }
+    let signature = |t: &TypeEntry, m: &Member| {
+        let params: Vec<&str> = m.p.iter().map(|p| p.t.as_str()).collect();
+        format!("{}|{}|{}|{}|{}", t.n, m.k, m.n, m.g, params.join(","))
+    };
+    let common: std::collections::HashSet<String> = baseline
+        .values()
+        .flat_map(|t| t.m.iter().map(move |m| signature(t, m)))
+        .collect();
+    for t in types.values_mut() {
+        let tagged: Vec<bool> = t.m.iter().map(|m| common.contains(&signature(t, m))).collect();
+        for (m, in_baseline) in t.m.iter_mut().zip(tagged) {
+            if in_baseline {
+                m.a.push("ns20");
+            }
         }
     }
     let summary = Summary {

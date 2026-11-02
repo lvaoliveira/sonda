@@ -37268,20 +37268,24 @@ class A { object F(ConcurrentDictionary<string, int> d, string key) { return d.G
 
 ## cs/blocking-call-in-async
 
-**Async methods should await, not block.** `.Result`, `.Wait()` and Thread.Sleep in an async method hold a thread while waiting and can deadlock; the awaitable form doesn't.
+**Async methods should call the awaitable version of a method.** A synchronous call in an async method blocks its thread, where the method's awaitable version would release it while waiting.
 
 SonarQube: S6966 (related)
 
 Noncompliant:
 
 ```csharp
-class A { async Task F() { Thread.Sleep(100); await G(); } }
+using System.IO;
+using System.Threading.Tasks;
+class A { async Task<int> F(Stream s, byte[] b) { await Task.Yield(); return s.Read(b, 0, b.Length); } }
 ```
 
 Compliant:
 
 ```csharp
-class A { async Task F() { await Task.Delay(100); await G(); } }
+using System.IO;
+using System.Threading.Tasks;
+class A { async Task<int> F(Stream s, byte[] b) { return await s.ReadAsync(b, 0, b.Length); } }
 ```
 
 ## cs/modelstate-not-checked
@@ -37708,11 +37712,11 @@ class A { private static readonly ILog Log = LogManager.GetLogger(typeof(A)); }
 
 ## cs/culture-sensitive-case
 
-**Case conversion should state its culture.** ToLower() and ToUpper() use the current culture, so "I".ToLower() isn't "i" in Turkish. Say which culture is meant.
+**String operations should state their culture.** ToLower(), ToUpper(), IndexOf(string), Compare and CompareTo use the current culture, as does ToString on floating-point and date values, so "I".ToLower() isn't "i" in Turkish. Say which culture is meant.
 
 Off by default: add `"cs/culture-sensitive-case"` to `rules.enabled` to run it.
 
-SonarQube: S1449 (related)
+SonarQube: S1449
 
 Noncompliant:
 
@@ -38331,22 +38335,22 @@ class A { readonly object sync = new object(); void F() { lock (sync) { G(); } }
 
 ## cs/redundant-to-string
 
-**ToString() should not be called when concatenating.** String concatenation and interpolation already call ToString().
+**ToString() calls should not be redundant.** A string is already a string, and concatenation and string.Format call ToString() on their own. Value types are left alone: without the call they would be boxed.
 
 Off by default: add `"cs/redundant-to-string"` to `rules.enabled` to run it.
 
-SonarQube: S1858 (related)
+SonarQube: S1858
 
 Noncompliant:
 
 ```csharp
-class A { string F(int n) { return "n = " + n.ToString(); } }
+class A { string F(object o) { return "o = " + o.ToString(); } }
 ```
 
 Compliant:
 
 ```csharp
-class A { string F(int n) { return "n = " + n; } }
+class A { string F(object o) { return "o = " + o; } }
 ```
 
 ## cs/use-null-coalescing
@@ -38911,21 +38915,24 @@ class A { Task F(string s) { if (s == null) { throw new ArgumentNullException(na
 
 ## cs/blocking-async-call
 
-**Async calls should not be blocked on.** `.Result`, `.Wait()` and `.GetAwaiter().GetResult()` hold a thread while the task runs, and can deadlock where a synchronization context is in use.
+**Async calls should not be blocked on.** `.Result`, `.Wait()`, `.GetAwaiter().GetResult()`, Task.WaitAny and Task.WaitAll hold a thread while the task runs, as does Thread.Sleep in an async method, and can deadlock where a synchronization context is in use.
 
 Off by default: add `"cs/blocking-async-call"` to `rules.enabled` to run it.
 
-SonarQube: S4462 (related)
+SonarQube: S4462
 
 Noncompliant:
 
 ```csharp
+using System.Net.Http;
 class A { string F(HttpClient h) { return h.GetStringAsync("https://a.example").Result; } }
 ```
 
 Compliant:
 
 ```csharp
+using System.Net.Http;
+using System.Threading.Tasks;
 class A { async Task<string> F(HttpClient h) { return await h.GetStringAsync("https://a.example"); } }
 ```
 
@@ -39443,7 +39450,7 @@ class F { [FunctionName("Run")] public async Task Run(ILogger log) { try { await
 
 Off by default: add `"cs/use-list-find"` to `rules.enabled` to run it.
 
-SonarQube: S6602 (related)
+SonarQube: S6602
 
 Noncompliant:
 
@@ -39463,7 +39470,7 @@ class A { int F(List<int> xs) { return xs.Find(x => x > 1); } }
 
 Off by default: add `"cs/use-list-true-for-all"` to `rules.enabled` to run it.
 
-SonarQube: S6603 (related)
+SonarQube: S6603
 
 Noncompliant:
 
@@ -39483,7 +39490,7 @@ class A { bool F(List<int> xs) { return xs.TrueForAll(x => x > 1); } }
 
 Off by default: add `"cs/use-list-exists"` to `rules.enabled` to run it.
 
-SonarQube: S6605 (related)
+SonarQube: S6605
 
 Noncompliant:
 
@@ -39791,7 +39798,7 @@ class A { int F(int i) { return i; } }
 
 **Lists and arrays should be indexed instead of using First, Last or ElementAt.** On a list or an array, `xs[0]` reads the element directly, where First() goes through LINQ.
 
-SonarQube: S6608 (related)
+SonarQube: S6608
 
 Noncompliant:
 
@@ -39809,7 +39816,7 @@ class A { int F(List<int> xs) { return xs[0]; } }
 
 **Sorted sets' Min and Max properties should be used.** SortedSet<T> keeps its smallest and largest elements at hand; the LINQ Min() and Max() walk the whole set.
 
-SonarQube: S6609 (related)
+SonarQube: S6609
 
 Noncompliant:
 
@@ -39827,7 +39834,7 @@ class A { int F(SortedSet<int> xs) { return xs.Min; } }
 
 **LinkedList's First and Last properties should be used.** LinkedList<T> holds its first and last nodes; the LINQ First() and Last() enumerate.
 
-SonarQube: S6613 (related)
+SonarQube: S6613
 
 Noncompliant:
 

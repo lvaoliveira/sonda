@@ -39,13 +39,11 @@ pub(crate) struct PlatformType {
     #[serde(rename = "a", default)]
     pub(crate) tags: Vec<String>,
     #[serde(rename = "m", default)]
-    #[expect(dead_code, reason = "read by expression typing, ADR-0022 step 2")]
     pub(crate) members: Vec<PlatformMember>,
 }
 
 /// A public or protected member of a platform type.
 #[derive(Deserialize, Debug)]
-#[expect(dead_code, reason = "read by expression typing, ADR-0022 step 2")]
 pub(crate) struct PlatformMember {
     /// "method", "constructor", "operator", "property", "field", "event".
     #[serde(rename = "k")]
@@ -61,17 +59,18 @@ pub(crate) struct PlatformMember {
     #[serde(rename = "g", default)]
     pub(crate) generic: u32,
     /// "static", "protected", "virtual", "abstract", "const", "readonly",
-    /// "get", "set", "init", "Extension", "Obsolete".
+    /// "get", "set", "init", "Extension", "Obsolete", and "ns20" when
+    /// .NET Standard 2.0 has it too, so every target framework does.
     #[serde(rename = "a", default)]
     pub(crate) tags: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
-#[expect(dead_code, reason = "read by expression typing, ADR-0022 step 2")]
 pub(crate) struct PlatformParam {
     #[serde(rename = "t")]
     pub(crate) ty: String,
     #[serde(rename = "n", default)]
+    #[expect(dead_code, reason = "read by argument-order checks, ADR-0022 step 3")]
     pub(crate) name: String,
     /// "ref", "out", "in", "params", "optional", and `StringSyntax` values
     /// such as "syntax:Regex".
@@ -86,7 +85,6 @@ impl PlatformType {
 }
 
 impl PlatformMember {
-    #[expect(dead_code, reason = "read by expression typing, ADR-0022 step 2")]
     pub(crate) fn has(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t == tag)
     }
@@ -97,6 +95,9 @@ pub(crate) struct Platform {
     types: HashMap<String, PlatformType>,
     /// The namespaces its types are in, and their enclosing ones.
     namespaces: std::collections::HashSet<String>,
+    /// Extension methods by name: (declaring type's key, its index among
+    /// that type's members).
+    extensions: HashMap<String, Vec<(String, usize)>>,
 }
 
 /// The platform, decoded on first use. Empty if the embedded data can't be
@@ -107,6 +108,7 @@ pub(crate) fn platform() -> &'static Platform {
         Platform::decode(DATA).unwrap_or_else(|| Platform {
             types: HashMap::new(),
             namespaces: std::collections::HashSet::new(),
+            extensions: HashMap::new(),
         })
     })
 }
@@ -126,7 +128,19 @@ impl Platform {
                 ns = outer;
             }
         }
+        let mut extensions: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+        for t in summary.types.iter().filter(|t| t.has("Extension")) {
+            for (i, m) in t.members.iter().enumerate() {
+                if m.kind == "method" && m.has("Extension") {
+                    extensions
+                        .entry(m.name.clone())
+                        .or_default()
+                        .push((t.name.clone(), i));
+                }
+            }
+        }
         Some(Platform {
+            extensions,
             types: summary
                 .types
                 .into_iter()
@@ -134,6 +148,19 @@ impl Platform {
                 .collect(),
             namespaces,
         })
+    }
+
+    /// The extension methods named `name`, with the type declaring each.
+    pub(crate) fn extensions(&self, name: &str) -> Vec<(&PlatformType, &PlatformMember)> {
+        self.extensions
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, i)| {
+                let t = self.types.get(key)?;
+                Some((t, t.members.get(*i)?))
+            })
+            .collect()
     }
 
     /// Whether the platform declares types in this namespace.
