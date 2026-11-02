@@ -1681,10 +1681,10 @@ fn complexity(func: Node, syn: &Syntax, src: &[u8]) -> Complexity {
         },
         stack: Vec::new(),
     };
-    w.children(func, 0);
+    w.children(func, 0, None);
     while let Some(step) = w.stack.pop() {
         match step {
-            Step::Visit(node, nesting) => w.visit(node, nesting),
+            Step::Visit(node, nesting, parent_op) => w.visit(node, nesting, parent_op),
             Step::If(node, nesting, flat) => w.visit_if(node, nesting, flat),
             Step::Else(node, nesting) => w.visit_else(node, nesting),
         }
@@ -1694,8 +1694,11 @@ fn complexity(func: Node, syn: &Syntax, src: &[u8]) -> Complexity {
 
 /// Pending work for the complexity walker. Visit order does not matter:
 /// every step only adds to the totals.
-enum Step<'t> {
-    Visit(Node<'t>, u32),
+enum Step<'s, 't> {
+    /// With the parent's boolean operator, when the parent is one: carried
+    /// down rather than asked for, as `parent()` searches from the root and
+    /// asking it per node is quadratic in deeply nested code.
+    Visit(Node<'t>, u32, Option<&'s str>),
     /// `flat` marks an else-if: it costs +1 without a nesting increment.
     If(Node<'t>, u32, bool),
     /// The alternative branch of an if, at the if's own nesting level.
@@ -1706,18 +1709,19 @@ struct ComplexityWalker<'a, 't> {
     syn: &'a Syntax,
     src: &'a [u8],
     c: Complexity,
-    stack: Vec<Step<'t>>,
+    stack: Vec<Step<'a, 't>>,
 }
 
-impl<'t> ComplexityWalker<'_, 't> {
-    fn children(&mut self, node: Node<'t>, nesting: u32) {
+impl<'a, 't> ComplexityWalker<'a, 't> {
+    /// Queues `node`'s named children; `op` is `node`'s boolean operator.
+    fn children(&mut self, node: Node<'t>, nesting: u32, op: Option<&'a str>) {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            self.stack.push(Step::Visit(child, nesting));
+            self.stack.push(Step::Visit(child, nesting, op));
         }
     }
 
-    fn visit(&mut self, node: Node<'t>, nesting: u32) {
+    fn visit(&mut self, node: Node<'t>, nesting: u32, parent_op: Option<&'a str>) {
         let kind = node.kind();
         if self.syn.functions.contains(&kind) {
             return;
@@ -1728,28 +1732,25 @@ impl<'t> ComplexityWalker<'_, 't> {
         if self.syn.branches.contains(&kind) {
             self.c.cyclomatic += 1;
             self.c.cognitive += 1 + nesting;
-            return self.children(node, nesting + 1);
+            return self.children(node, nesting + 1, None);
         }
         if self.syn.switches.contains(&kind) {
             self.c.cognitive += 1 + nesting;
-            return self.children(node, nesting + 1);
+            return self.children(node, nesting + 1, None);
         }
         if self.syn.cases.contains(&kind)
             && !is_default_case(node.utf8_text(self.src).unwrap_or(""))
         {
             self.c.cyclomatic += 1;
         }
-        if let Some(op) = logical_operator(node, self.src) {
+        let op = logical_operator(node, self.src);
+        if let Some(op) = op {
             self.c.cyclomatic += 1;
-            let continues_run = node
-                .parent()
-                .and_then(|p| logical_operator(p, self.src))
-                .is_some_and(|parent_op| parent_op == op);
-            if !continues_run {
+            if parent_op != Some(op) {
                 self.c.cognitive += 1;
             }
         }
-        self.children(node, nesting);
+        self.children(node, nesting, op);
     }
 
     fn visit_if(&mut self, node: Node<'t>, nesting: u32, flat: bool) {
@@ -1767,7 +1768,7 @@ impl<'t> ComplexityWalker<'_, 't> {
                 self.stack.push(if is_else {
                     Step::Else(child, nesting)
                 } else {
-                    Step::Visit(child, nesting + 1)
+                    Step::Visit(child, nesting + 1, None)
                 });
             }
             if !cursor.goto_next_sibling() {
@@ -1783,7 +1784,7 @@ impl<'t> ComplexityWalker<'_, 't> {
             "elif_clause" => {
                 self.c.cyclomatic += 1;
                 self.c.cognitive += 1;
-                self.children(node, nesting + 1);
+                self.children(node, nesting + 1, None);
             }
             "else_clause" => match only_named_child(node) {
                 Some(inner) if inner.kind() == "if_statement" => {
@@ -1791,12 +1792,12 @@ impl<'t> ComplexityWalker<'_, 't> {
                 }
                 _ => {
                     self.c.cognitive += 1;
-                    self.children(node, nesting + 1);
+                    self.children(node, nesting + 1, None);
                 }
             },
             _ => {
                 self.c.cognitive += 1;
-                self.stack.push(Step::Visit(node, nesting + 1));
+                self.stack.push(Step::Visit(node, nesting + 1, None));
             }
         }
     }
@@ -2274,6 +2275,27 @@ pub(crate) mod tests {
         let a = run(Lang::JavaScript, &src);
         assert_eq!(a.metrics.functions, 1);
         assert!(!rules_hit(&a).contains(&"js/unused-assignment"));
+    }
+
+    /// Regression: resolving a name climbed the scope chain once per
+    /// reference, and complexity asked each `&&` for its parent, so both grew
+    /// with the square of the depth. At 20,000 levels the file ran past 15
+    /// seconds and was skipped; it now takes about one in a debug build.
+    #[test]
+    fn deep_nesting_resolves_names_and_measures_complexity_in_time() {
+        let depth = 20_000;
+        let src = format!(
+            "function g(items) {{\nlet a = f();\nconst hit = items.find(f);\n{}{}}}\n",
+            "if (a && hit) {\na = 2;\n".repeat(depth),
+            "}\n".repeat(depth)
+        );
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(20);
+        let a = analyze("t", Lang::JavaScript, &src, &rules, &cfg, deadline).unwrap();
+        assert!(!a.semantic_incomplete);
+        // An `if` and an `&&` per level.
+        assert_eq!(a.metrics.complexity, 2 * depth as u32 + 1);
     }
 
     #[test]
