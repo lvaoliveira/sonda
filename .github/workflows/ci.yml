@@ -140,7 +140,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: scripts/setup-server.sh
+      # With HTTPS too, so Caddy's part is checked on a clean machine.
+      - run: scripts/setup-server.sh --https 127.0.0.1
       - name: Health, web app and API routing
         run: |
           for i in $(seq 1 30); do
@@ -150,6 +151,8 @@ jobs:
           curl -fsS http://127.0.0.1:9000/api/health | grep -q '"ok"'
           curl -fsS http://127.0.0.1:9000/issues | grep -qi '<!doctype html>'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/api/nope)" = 404
+      - name: HTTPS, trusting Caddy's root
+        run: curl -fsS --cacert caddy-root.crt https://127.0.0.1:9443/api/health | grep -q '"ok"'
       - name: Logs
         if: always()
         run: docker compose logs

@@ -266,6 +266,10 @@ file, the report formats and the public library API.
   reruns safely to upgrade. `--port` moves it off 9000 (or `SONDA_PORT`),
   and `--github-app ID KEY.pem` sets up pull request decoration. Settings
   are kept in `.env`.
+- `scripts/setup-server.sh --https` serves the web app over HTTPS on the
+  machine's LAN address, through Caddy with its own local certificate authority, whose
+  root certificate devices install once. Sign-in needs HTTPS anywhere but
+  `localhost`.
 - `scripts/install-cli.sh` installs the CLI on a Linux host without Rust:
   it builds a static binary in Docker (the image's new `cli` target).
 - Pull request decoration on GitHub (ADR-0021): with a GitHub App

@@ -27,7 +27,8 @@ later runs need none:
 |---|---|
 | `--port PORT` | Publish on `127.0.0.1:PORT` instead of 9000, when 9000 is taken. |
 | `--github-app ID KEY.pem` | Decorate pull requests with this GitHub App (see [Decorating pull requests on GitHub](#decorating-pull-requests-on-github)). |
-| `--public-url URL` | The server's address in those decorations. Default `http://localhost:PORT`. |
+| `--https [IP][:PORT]` | Also serve HTTPS on this machine's LAN address, port 9443 by default (see [HTTPS on a LAN address](#https-on-a-lan-address)). |
+| `--public-url URL` | The server's address in those decorations. Default the HTTPS address, else `http://localhost:PORT`. |
 
 To do it by hand instead:
 
@@ -918,7 +919,45 @@ turns on but `sonda.toml` leaves off never ran: the view marks it
 The port is published on `127.0.0.1` only. To reach the server from other
 machines, put a reverse proxy that terminates TLS (Caddy, nginx, a cloud
 load balancer) in front of `127.0.0.1:9000`, or reach it through an SSH
-tunnel (`ssh -L 9000:127.0.0.1:9000 host`). `sonda upload` refuses plain
+tunnel (`ssh -L 9000:127.0.0.1:9000 host`).
+
+Plain HTTP on another address doesn't work, by design: browsers accept the
+session cookie (`__Host-`, `Secure`) only over HTTPS or on `localhost`, so
+the page would load but sign-in would fail.
+
+### HTTPS on a LAN address
+
+For a server on a home or office network, with no domain name:
+
+```sh
+scripts/setup-server.sh --https
+```
+
+It adds Caddy (`compose.https.yaml`) on this machine's LAN address, the one
+its default route uses, such as `https://192.168.1.10:9443`, published on
+that address only. `--https 192.168.1.20` names another address, and
+`--https :8443` or `--https 192.168.1.20:8443` another port. No public authority certifies a private address, so the certificate
+comes from Caddy's own local authority. The script copies its root
+certificate to `caddy-root.crt`; install it once on each device that opens
+the server:
+
+| Device | |
+|---|---|
+| macOS | `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain caddy-root.crt` |
+| Windows | `certutil -addstore -f Root caddy-root.crt`, as administrator |
+| Linux | Copy it to `/usr/local/share/ca-certificates/` and run `sudo update-ca-certificates` |
+| iPhone, iPad | Send it to the device and install the profile, then turn it on under Settings → General → About → Certificate Trust Settings |
+| Android | Settings → Security → Encryption & credentials → Install a certificate → CA certificate |
+
+Firefox on Linux keeps its own list: import it under Settings → Privacy &
+Security → Certificates. The authority's keys live in the `caddy_data`
+volume and survive upgrades, so devices keep trusting it. **Treat that
+volume like a password:** a device that trusts this root trusts any
+certificate it signs, for any name.
+
+Uploads stay on `127.0.0.1`: the CLI trusts only public authorities, so it
+refuses this certificate. Decorations' links point at the HTTPS address
+unless `--public-url` says otherwise. `sonda upload` refuses plain
 HTTP to anything but localhost, so the token never crosses the network
 unencrypted.
 
