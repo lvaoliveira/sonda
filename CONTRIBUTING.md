@@ -194,6 +194,22 @@ other processes, and say why in a comment.
   public library API) in the PR and in `CHANGELOG.md`.
 - Contributions are licensed under MIT OR Apache-2.0, the project's license.
 
+### Cleaning up after merges
+
+Parallel work leaves worktrees, local branches and `target/` folders
+behind, and on macOS a busy worktree's `target/` grows by tens of GB in
+days. `scripts/clean-merged.sh` prints what it would clean, and `--yes`
+cleans it:
+- worktrees whose work is merged, with no uncommitted changes and nothing
+  changed in them for 12 hours (never the main one);
+- local branches whose work is merged, into `main` or as a merged pull
+  request (so squash merges count);
+- in the worktrees left, build files unused for 3 days, then the oldest
+  until each `target/` is under 20 GB (needs `cargo install cargo-sweep`).
+
+Run it by hand or nightly, when no work is in flight; a worktree in use is
+kept by the 12-hour rule, but its next build after a sweep is slower.
+
 ## AI-assisted contributions
 
 These are welcome, under the same bar. [CLAUDE.md](CLAUDE.md) summarizes the
