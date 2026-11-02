@@ -7,6 +7,7 @@
 //! loses only the semantic ones, with a warning.
 
 mod cs;
+pub(crate) mod cs_index;
 mod js;
 
 use crate::lang::Lang;

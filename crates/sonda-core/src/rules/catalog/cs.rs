@@ -1544,7 +1544,9 @@ pub(super) mod tests {
         // Rules that are off by default still have to work when enabled.
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t.cs", Lang::CSharp, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t.cs", Lang::CSharp, src, &rules, &cfg, far_deadline()).unwrap();
+        // Rules comparing declarations across files see this one alone.
+        crate::analysis::cs_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
