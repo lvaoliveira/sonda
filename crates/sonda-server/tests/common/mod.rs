@@ -152,6 +152,7 @@ pub fn upload_json_for(dir: &Path, files: &[(&str, &str)], project: &str, branch
         branch: branch.into(),
         commit: "0123abc".into(),
         version: None,
+        pull_request: None,
     };
     serde_json::to_value(upload::prepare(json.as_bytes(), dir, meta).unwrap()).unwrap()
 }

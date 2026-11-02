@@ -1234,12 +1234,12 @@ pub(super) fn walk<'t>(node: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool)
     }
 }
 
-/// [`walk`] that also hands over each node's parent, kept on a stack:
-/// `Node::parent` walks down from the root, which costs the nesting depth
-/// every time.
-pub(super) fn walk_parented<'t>(
+/// `walk`, also passing each node's ancestors from `node` down, nearest
+/// last. `parent()` searches down from the root, so calling it for every
+/// node visited is quadratic in deeply nested code; the walk already knows.
+pub(super) fn walk_with_ancestors<'t>(
     node: Node<'t>,
-    visit: &mut impl FnMut(Node<'t>, Node<'t>) -> bool,
+    visit: &mut impl FnMut(Node<'t>, &[Node<'t>]) -> bool,
 ) {
     let mut cursor = node.walk();
     if !cursor.goto_first_child() {
@@ -1247,10 +1247,9 @@ pub(super) fn walk_parented<'t>(
     }
     let mut ancestors = vec![node];
     loop {
-        let parent = *ancestors.last().unwrap_or(&node);
-        let current = cursor.node();
-        if visit(current, parent) && cursor.goto_first_child() {
-            ancestors.push(current);
+        let n = cursor.node();
+        if visit(n, &ancestors) && cursor.goto_first_child() {
+            ancestors.push(n);
             continue;
         }
         loop {

@@ -96,7 +96,14 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
          RETURNING id",
     )
     .bind(&a.meta.project)
-    .bind(&a.meta.branch)
+    // A project first seen through a pull request: its base is the main
+    // branch, never the pull request itself.
+    .bind(
+        a.meta
+            .pull_request
+            .as_ref()
+            .map_or(&a.meta.branch, |pr| &pr.base),
+    )
     .fetch_one(&mut *tx)
     .await?;
     // One ingestion per branch at a time, so concurrent uploads cannot both
@@ -107,12 +114,15 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
         .execute(&mut *tx)
         .await?;
 
+    let pr = a.meta.pull_request.as_ref();
     let analysis_id: i64 = sqlx::query_scalar(
         "INSERT INTO analyses (project_id, branch, commit_sha, tool_version,
              new_code_reference, measures, gate, scan_gate, gate_passed, warnings, codeowners,
              project_version, commit_message, scan_duration_ms, dependencies_recorded,
-             token_id, rule_settings, rule_profile)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+             token_id, rule_settings, rule_profile, pull_request, pull_request_base,
+             pull_request_head, pull_request_head_sha, pull_request_repository)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                 $18, $19, $20, $21, $22)
          RETURNING id",
     )
     .bind(project_id)
@@ -132,6 +142,11 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
     .bind(a.token_id)
     .bind(&a.rule_settings)
     .bind(&a.rule_profile)
+    .bind(pr.map(|p| p.number as i64))
+    .bind(pr.map(|p| &p.base))
+    .bind(pr.map(|p| &p.head))
+    .bind(pr.and_then(|p| p.head_sha.as_ref()))
+    .bind(pr.and_then(|p| p.repository.as_ref()))
     .fetch_one(&mut *tx)
     .await?;
 

@@ -6,6 +6,7 @@ mod common;
 mod cs;
 mod cs_bugs;
 mod cs_classes;
+mod cs_dataflow;
 mod cs_extra;
 mod cs_final;
 mod cs_flow;
@@ -131,6 +132,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_typed::RULES, cs_typed::OFF_BY_DEFAULT),
     (cs_classes::RULES, cs_classes::OFF_BY_DEFAULT),
     (cs_flow::RULES, cs_flow::OFF_BY_DEFAULT),
+    (cs_dataflow::RULES, cs_dataflow::OFF_BY_DEFAULT),
     (cs_semantic::RULES, cs_semantic::OFF_BY_DEFAULT),
 ];
 

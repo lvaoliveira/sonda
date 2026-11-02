@@ -8,7 +8,7 @@ use super::js::{
 };
 use super::js_checks::literal_kind;
 use super::js_extra::{named, operator_text};
-use super::js_syntax::{ancestors_in_function, is_function_kind, root_node, strip_parens, walk};
+use super::js_syntax::{is_function_kind, root_node, strip_parens, walk, walk_with_ancestors};
 use super::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
@@ -849,35 +849,60 @@ fn declared_names<'a>(root: Node<'_>, src: &'a [u8]) -> Vec<&'a [u8]> {
     out
 }
 
+/// An identifier that reads or writes a variable, with its parent and
+/// grandparent as the walk found them: `parent()` searches down from the
+/// root, so asking each reference for it is quadratic in deeply nested code.
+#[derive(Clone, Copy)]
+struct Ref<'t> {
+    node: Node<'t>,
+    parent: Option<Node<'t>>,
+    grandparent: Option<Node<'t>>,
+}
+
 /// The identifiers under `node` that read or write a variable, with the
 /// ones that only name something excluded.
-fn references<'t>(node: Node<'t>) -> Vec<Node<'t>> {
+fn references<'t>(node: Node<'t>) -> Vec<Ref<'t>> {
     let mut out = Vec::new();
-    let names_only = |n: Node, p: Node| match p.kind() {
-        "export_specifier" => p.child_by_field_name("alias") == Some(n),
-        "import_specifier" | "labeled_statement" => true,
-        _ => false,
-    };
-    if matches!(node.kind(), "identifier" | "shorthand_property_identifier")
-        && node.parent().is_none_or(|p| !names_only(node, p))
-    {
-        out.push(node);
-    }
-    super::js_syntax::walk_parented(node, &mut |n, parent| {
-        if matches!(n.kind(), "identifier" | "shorthand_property_identifier")
-            && !names_only(n, parent)
-        {
-            out.push(n);
+    // Above `node`: asked for at most once, and only if a reference needs it.
+    let mut above: Option<Option<Node<'t>>> = None;
+    let mut above = || *above.get_or_insert_with(|| node.parent());
+    let mut consider = |n: Node<'t>, parent: Option<Node<'t>>, grandparent: Option<Node<'t>>| {
+        if !matches!(n.kind(), "identifier" | "shorthand_property_identifier") {
+            return;
         }
+        let names_only = parent.is_some_and(|p| match p.kind() {
+            "export_specifier" => p.child_by_field_name("alias") == Some(n),
+            "import_specifier" | "labeled_statement" => true,
+            _ => false,
+        });
+        if !names_only {
+            out.push(Ref {
+                node: n,
+                parent,
+                grandparent,
+            });
+        }
+    };
+    if matches!(node.kind(), "identifier" | "shorthand_property_identifier") {
+        let parent = above();
+        consider(node, parent, parent.and_then(|p| p.parent()));
+    }
+    walk_with_ancestors(node, &mut |n, ancestors| {
+        let grandparent = match ancestors.len() {
+            1 => above(),
+            k => Some(ancestors[k - 2]),
+        };
+        consider(n, ancestors.last().copied(), grandparent);
         true
     });
     out
 }
 
-fn is_declaration_name(id: Node) -> bool {
-    let Some(p) = id.parent() else {
+fn is_declaration_name(id: Ref) -> bool {
+    let Some(p) = id.parent else {
         return false;
     };
+    let id = id.node;
     match p.kind() {
         "variable_declarator" => p.child_by_field_name("name") == Some(id),
         "function_declaration"
@@ -904,12 +929,12 @@ fn is_declaration_name(id: Node) -> bool {
     }
 }
 
-fn is_assignment_target(id: Node) -> bool {
-    id.parent().is_some_and(|p| {
+fn is_assignment_target(id: Ref) -> bool {
+    id.parent.is_some_and(|p| {
         (matches!(
             p.kind(),
             "assignment_expression" | "augmented_assignment_expression"
-        ) && p.child_by_field_name("left") == Some(id))
+        ) && p.child_by_field_name("left") == Some(id.node))
             || (p.kind() == "update_expression")
     })
 }
@@ -976,7 +1001,7 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
                 .is_some_and(|l| l.kind() == "identifier" && text(l, src) == name);
             let reads = next
                 .child_by_field_name("right")
-                .is_some_and(|r| references(r).iter().any(|i| text(*i, src) == name));
+                .is_some_and(|r| references(r).iter().any(|i| text(i.node, src) == name));
             let _ = value_end;
             if overwrites && !reads {
                 found = Some(first);
@@ -1030,24 +1055,23 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             return None;
         }
         let mut read = false;
-        for r in refs.iter().filter(|r| text(**r, src) == name) {
+        for r in refs.iter().filter(|r| text(r.node, src) == name) {
             if is_declaration_name(*r)
                 || is_assignment_target(*r)
-                    && r.parent().is_some_and(|p| p.kind() != "update_expression")
+                    && r.parent.is_some_and(|p| p.kind() != "update_expression")
             {
                 continue;
             }
             read = true;
             break;
         }
-        // A closure may read it later.
+        // A closure may read it later: the name directly under a nested
+        // function, as an arrow function's body.
         let captured = refs.iter().any(|r| {
-            text(*r, src) == name
-                && ancestors_in_function(*r)
-                    .last()
-                    .is_none_or(|top| top.byte_range() != body.byte_range() && false)
-                && r.start_byte() > body.start_byte()
-                && enclosing_function_of(*r).is_some_and(|f| f.id() != function.id())
+            text(r.node, src) == name
+                && r.node.start_byte() > body.start_byte()
+                && r.parent
+                    .is_some_and(|p| is_function_kind(p.kind()) && p.id() != function.id())
         });
         (!read && !captured).then_some(declarator)
     })
@@ -1796,6 +1820,7 @@ fn function_captures_nothing(function: Node, src: &[u8]) -> bool {
     };
     let mut free = references(func)
         .into_iter()
+        .map(|r| r.node)
         .filter(|r| !own.contains(&text(*r, src)));
     let name = name_owner
         .child_by_field_name("name")
@@ -2337,19 +2362,21 @@ fn cast_changes_nothing(node: Node, src: &[u8]) -> bool {
     }
 }
 
-fn is_truthiness_test(id: Node) -> bool {
-    let Some(p) = id.parent() else {
+/// Whether `id` is only tested for truthiness, given its parent and
+/// grandparent (from `references`, or asked for once).
+fn is_truthiness_test(id: Ref) -> bool {
+    let Some(p) = id.parent else {
         return false;
     };
     match p.kind() {
         "unary_expression" => text_starts_with_not(p),
-        "parenthesized_expression" => p.parent().is_some_and(|g| {
+        "parenthesized_expression" => id.grandparent.is_some_and(|g| {
             matches!(
                 g.kind(),
                 "if_statement" | "while_statement" | "do_statement"
             )
         }),
-        "ternary_expression" => p.child_by_field_name("condition") == Some(id),
+        "ternary_expression" => p.child_by_field_name("condition") == Some(id.node),
         "binary_expression" => p
             .child_by_field_name("operator")
             .is_some_and(|o| matches!(o.kind(), "&&" | "||")),
@@ -2368,7 +2395,11 @@ fn find_result_only_tested(call: Node, src: &[u8]) -> bool {
         return false;
     };
     // `if (items.find(...))` and `!items.find(...)`.
-    if is_truthiness_test(call) {
+    if is_truthiness_test(Ref {
+        node: call,
+        parent: Some(parent),
+        grandparent: parent.parent(),
+    }) {
         return true;
     }
     // `const hit = items.find(...)` where every later use asks only if it exists.
@@ -2384,9 +2415,9 @@ fn find_result_only_tested(call: Node, src: &[u8]) -> bool {
     let Some(scope) = enclosing_function_of(parent) else {
         return false;
     };
-    let uses: Vec<Node> = references(scope)
+    let uses: Vec<Ref> = references(scope)
         .into_iter()
-        .filter(|r| text(*r, src) == text(name, src) && *r != name)
+        .filter(|r| text(r.node, src) == text(name, src) && r.node != name)
         .collect();
     !uses.is_empty() && uses.iter().all(|u| is_truthiness_test(*u))
 }

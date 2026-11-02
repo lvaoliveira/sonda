@@ -261,6 +261,14 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Pull request analyses (ADR-0021): in a GitHub Actions `pull_request` job,
+  `sonda scan --upload` and `sonda upload` say which pull request the
+  analysis belongs to (or `--pull-request` and `--pull-request-base`
+  elsewhere). The server keeps them apart from branches, under
+  `pr:<number>`, lists them on the project page, names them on analyses,
+  and removes them 30 days after their last analysis. A fork's pull
+  request is scanned but not uploaded. Branch names like `pr:12` are kept
+  for pull requests.
 - Quality gates on the server (ADR-0017): admins create, edit and delete
   gates on the Quality gates page, with sonda.toml's metrics and
   operators, and choose one in a project's Settings. It wins over the
@@ -471,6 +479,11 @@ file, the report formats and the public library API.
   (`SONDA_METRICS_LISTEN`, off by default, never the API's port):
   `sonda_http_requests_total` and `sonda_http_request_duration_seconds` by
   method and route template ([ADR-0019](docs/adr/0019-observability.md)).
+- `sonda-server` metrics for uploads (`sonda_uploads_total` by result,
+  including uploads cut off by the timeout or the client, and
+  `sonda_upload_duration_seconds`), the database pool's idle, in-use and
+  maximum connections, and the daily advisory sync's runs, last success and
+  imported advisories.
 
 ### Security
 
@@ -494,6 +507,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Deeply nested JavaScript and TypeScript took far longer since the last
+  JavaScript rules: `js/unused-assignment` asked every reference to a
+  local for its ancestors, which in tree-sitter means a search from the
+  root each time, and suppression comments were re-read from the whole
+  line for every issue on it. A function nested 20,000 levels deep that
+  reads one local at every level timed out (15 s) and now takes 5 s; the
+  existing 20,000-level test went from 24 s to 3 s.
 - On the server, `new_vulnerable_dependencies` and its severe variant
   counted every vulnerable dependency as new when the main branch's new
   code period started at an analysis from a CLI that didn't upload

@@ -443,6 +443,28 @@ describe('Analyses', () => {
     expect(await screen.findByText(/0 of 4 conditions failing/)).toBeInTheDocument()
   })
 
+  it('shows pull requests apart from branches, on the project and its analyses', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/billing-service')
+    const prs = await screen.findByRole('list', { name: 'Pull requests' })
+    expect(within(prs).getAllByRole('listitem')).toHaveLength(1)
+    expect(prs).toHaveTextContent('#42fix/refund-rounding → main0 new issues')
+    // Not a branch: the branch selector doesn't offer it.
+    expect(within(screen.getByRole('combobox')).queryByRole('option', { name: /pr:42/ })).not.toBeInTheDocument()
+    await user.click(within(prs).getByRole('link', { name: '#42' }))
+    const back = await screen.findByRole('link', { name: 'pull request #42 fix/refund-rounding → main' })
+    expect(back).toHaveAttribute('href', '/projects/billing-service#pull-requests')
+
+    const { unmount } = renderAt('/analyses')
+    const list = await screen.findAllByRole('list', { name: 'Analyses' })
+    expect(within(list[0]).getByText(/#42 fix\/refund-rounding → main ·/)).toBeInTheDocument()
+    unmount()
+    // A project without pull requests has no such section.
+    renderAt('/projects/payments-platform')
+    await screen.findByRole('region', { name: 'History' })
+    expect(screen.queryByRole('region', { name: 'Pull requests' })).not.toBeInTheDocument()
+  })
+
   it('is reached from the Overview and from a project', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')
