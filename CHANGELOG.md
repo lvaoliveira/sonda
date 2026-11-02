@@ -266,6 +266,11 @@ file, the report formats and the public library API.
   reruns safely to upgrade. `--port` moves it off 9000 (or `SONDA_PORT`),
   and `--github-app ID KEY.pem` sets up pull request decoration. Settings
   are kept in `.env`.
+- `scripts/setup-server.sh --lan` serves the web app over plain HTTP on the
+  machine's LAN address, for a trusted network, with nothing to install on
+  devices. It sets `SONDA_PLAIN_HTTP=true`, which lets browsers sign in
+  over plain HTTP: the session cookie is then `sonda_session`, without
+  `Secure`. Off by default, and the server warns when it's on.
 - `scripts/setup-server.sh --https` serves the web app over HTTPS on the
   machine's LAN address, through Caddy with its own local certificate authority, whose
   root certificate devices install once. Sign-in needs HTTPS anywhere but

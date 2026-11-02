@@ -36,6 +36,9 @@ pub struct Config {
     /// The server's address as people reach it (SONDA_PUBLIC_URL), for
     /// links in pull request decorations; `None` leaves them out.
     pub public_url: Option<String>,
+    /// SONDA_PLAIN_HTTP: sign-in over plain HTTP on a trusted network, with
+    /// a session cookie that isn't `Secure`. Off by default.
+    pub plain_http: bool,
 }
 
 /// The API token, kept only as a hash.
@@ -90,6 +93,7 @@ impl Config {
             }
             None => None,
         };
+        let plain_http = plain_http(env)?;
         Ok(Self {
             listen,
             database,
@@ -99,7 +103,8 @@ impl Config {
             advisory_sync: advisory_sync(env)?,
             metrics_listen: None,
             github: github(env)?,
-            public_url: public_url(env)?,
+            public_url: public_url(env, plain_http)?,
+            plain_http,
         })
     }
 }
@@ -143,15 +148,28 @@ pub fn github(env: &dyn Env) -> Result<Option<crate::github::App>> {
     crate::github::App::new(id, &key, api).map(Some)
 }
 
-/// SONDA_PUBLIC_URL, such as `https://sonda.example.com`.
-pub fn public_url(env: &dyn Env) -> Result<Option<String>> {
+/// SONDA_PUBLIC_URL, such as `https://sonda.example.com`; `http://` to
+/// anywhere only with SONDA_PLAIN_HTTP.
+pub fn public_url(env: &dyn Env, plain_http: bool) -> Result<Option<String>> {
     env.var("SONDA_PUBLIC_URL")
         .filter(|v| !v.is_empty())
         .map(|url| {
+            if plain_http && url.starts_with("http://") {
+                return Ok(url.trim_end_matches('/').to_string());
+            }
             crate::advisory_sync::check_base_url(&url)
                 .map_err(|e| anyhow::anyhow!("SONDA_PUBLIC_URL: {e}"))
         })
         .transpose()
+}
+
+/// SONDA_PLAIN_HTTP: `true`, or off.
+pub fn plain_http(env: &dyn Env) -> Result<bool> {
+    match env.var("SONDA_PLAIN_HTTP").as_deref() {
+        None | Some("" | "false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(other) => bail!("SONDA_PLAIN_HTTP must be true or false, not {other:?}"),
+    }
 }
 
 /// How the server writes logs (ADR-0019).
@@ -290,10 +308,34 @@ mod tests {
             plain.to_string().contains("SONDA_GITHUB_API_URL"),
             "{plain}"
         );
-        assert!(public_url(&env(&[("SONDA_PUBLIC_URL", "ftp://x")])).is_err());
+        assert!(public_url(&env(&[("SONDA_PUBLIC_URL", "ftp://x")]), false).is_err());
         assert_eq!(
-            public_url(&env(&[("SONDA_PUBLIC_URL", "https://sonda.example.com/")])).unwrap(),
+            public_url(
+                &env(&[("SONDA_PUBLIC_URL", "https://sonda.example.com/")]),
+                false
+            )
+            .unwrap(),
             Some("https://sonda.example.com".into())
+        );
+    }
+
+    #[test]
+    fn plain_http_is_off_unless_asked_and_allows_an_http_public_url() {
+        let url = ("DATABASE_URL", "postgres://sonda@db/sonda");
+        assert!(!load(&[url]).unwrap().plain_http);
+        assert!(
+            !load(&[url, ("SONDA_PLAIN_HTTP", "false")])
+                .unwrap()
+                .plain_http
+        );
+        assert!(load(&[url, ("SONDA_PLAIN_HTTP", "yes")]).is_err());
+        let lan = ("SONDA_PUBLIC_URL", "http://192.168.1.10:9000");
+        assert!(load(&[url, lan]).is_err());
+        let config = load(&[url, lan, ("SONDA_PLAIN_HTTP", "true")]).unwrap();
+        assert!(config.plain_http);
+        assert_eq!(
+            config.public_url.as_deref(),
+            Some("http://192.168.1.10:9000")
         );
     }
 

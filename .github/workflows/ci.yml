@@ -140,8 +140,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # With HTTPS too, so Caddy's part is checked on a clean machine.
-      - run: scripts/setup-server.sh --https 127.0.0.1
+      # With the LAN address and HTTPS too, so both are checked on a clean
+      # machine.
+      - run: scripts/setup-server.sh --lan --https 127.0.0.1
       - name: Health, web app and API routing
         run: |
           for i in $(seq 1 30); do
@@ -151,6 +152,17 @@ jobs:
           curl -fsS http://127.0.0.1:9000/api/health | grep -q '"ok"'
           curl -fsS http://127.0.0.1:9000/issues | grep -qi '<!doctype html>'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/api/nope)" = 404
+      - name: Sign-in over plain HTTP on the LAN address
+        run: |
+          lan=$(sed -n 's/^SONDA_LAN_ADDRESS=//p' .env)
+          jq -n --rawfile p secrets/admin_password '{username: "admin", password: ($p | rtrimstr("\n"))}' > /tmp/sign-in.json
+          curl -fsS -D - -o /dev/null -H 'Content-Type: application/json' \
+            --data @/tmp/sign-in.json "http://$lan:9000/api/session" > /tmp/headers
+          grep -qi '^set-cookie: sonda_session=' /tmp/headers
+          if grep -i '^set-cookie:' /tmp/headers | grep -qi secure; then
+            echo "the session cookie is Secure, so browsers drop it over HTTP"
+            exit 1
+          fi
       - name: HTTPS, trusting Caddy's root
         run: curl -fsS --cacert caddy-root.crt https://127.0.0.1:9443/api/health | grep -q '"ok"'
       - name: Logs

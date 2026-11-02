@@ -367,7 +367,7 @@ pub async fn change_own_password(
         .bind(hash)
         .execute(&mut *tx)
         .await?;
-    let keep = crate::session::from_headers(&headers).map(crate::session::hash);
+    let keep = crate::session::from_headers(&headers, state.cookie).map(crate::session::hash);
     sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND token_sha256 IS DISTINCT FROM $2")
         .bind(user.id)
         .bind(keep)

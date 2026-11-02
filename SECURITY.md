@@ -177,6 +177,9 @@ What holds today:
     can't manage users or sign browsers in.
 - **Browsers hold only a session cookie.** It is `__Host-` prefixed,
   `HttpOnly`, `Secure` and `SameSite=Strict`, and expires after 12 hours.
+  `SONDA_PLAIN_HTTP=true`, for plain HTTP on a trusted network, drops
+  `Secure` and so the prefix; the server warns at startup that anyone who
+  can see the network's traffic can then take a session.
   The database stores only a SHA-256 hash of each session token, so a
   database leak yields no usable session. Signing out deletes the session
   server-side.

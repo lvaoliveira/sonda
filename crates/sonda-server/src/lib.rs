@@ -112,12 +112,22 @@ pub async fn run(config: Config) -> Result<()> {
             }
         });
     }
+    let cookie = if config.plain_http {
+        tracing::warn!(
+            "SONDA_PLAIN_HTTP: signing in over plain HTTP, so anyone who can see this \
+             network's traffic can take a session; use it on a trusted network only"
+        );
+        session::Cookie::PlainHttp
+    } else {
+        session::Cookie::Secure
+    };
     let state = http::State {
         pool: pool.clone(),
         token: config.token.map(std::sync::Arc::new),
         reads_require_auth,
         metrics: metrics.clone(),
         github,
+        cookie,
     };
     let app = http::router(state, config.web_dir.as_deref());
     let listener = TcpListener::bind(config.listen)

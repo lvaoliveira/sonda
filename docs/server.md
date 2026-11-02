@@ -27,6 +27,7 @@ later runs need none:
 |---|---|
 | `--port PORT` | Publish on `127.0.0.1:PORT` instead of 9000, when 9000 is taken. |
 | `--github-app ID KEY.pem` | Decorate pull requests with this GitHub App (see [Decorating pull requests on GitHub](#decorating-pull-requests-on-github)). |
+| `--lan [IP]` | Also serve plain HTTP on this machine's LAN address, for a trusted network (see [On a home network](#on-a-home-network)). |
 | `--https [IP][:PORT]` | Also serve HTTPS on this machine's LAN address, port 9443 by default (see [HTTPS on a LAN address](#https-on-a-lan-address)). |
 | `--public-url URL` | The server's address in those decorations. Default the HTTPS address, else `http://localhost:PORT`. |
 
@@ -921,13 +922,36 @@ machines, put a reverse proxy that terminates TLS (Caddy, nginx, a cloud
 load balancer) in front of `127.0.0.1:9000`, or reach it through an SSH
 tunnel (`ssh -L 9000:127.0.0.1:9000 host`).
 
-Plain HTTP on another address doesn't work, by design: browsers accept the
-session cookie (`__Host-`, `Secure`) only over HTTPS or on `localhost`, so
-the page would load but sign-in would fail.
+Plain HTTP on another address needs `SONDA_PLAIN_HTTP`: by default the
+session cookie is `__Host-` and `Secure`, which browsers accept only over
+HTTPS or on `localhost`, so the page would load but sign-in would fail.
+
+### On a home network
+
+For a server on a network you trust, such as your home's:
+
+```sh
+scripts/setup-server.sh --lan
+```
+
+It serves plain HTTP on this machine's LAN address too, the one its default
+route uses, such as `http://192.168.1.10:9000` (`--lan 192.168.1.20` names
+another), and keeps `127.0.0.1` for uploads from this machine. It sets
+`SONDA_PLAIN_HTTP=true`, so the session cookie is `sonda_session`, without
+`Secure`, and browsers keep it over plain HTTP. Nothing to install on any
+device.
+
+**The trade-off:** passwords and session cookies cross the network
+unencrypted, so anyone who can see its traffic, on the same Wi-Fi say, can
+take a session. Many self-hosted tools on home networks work this way; on a
+network you don't fully trust, use HTTPS instead. The server warns when it
+starts in this mode. Uploads from other machines still need HTTPS: the CLI
+sends a token over plain HTTP only to localhost.
 
 ### HTTPS on a LAN address
 
-For a server on a home or office network, with no domain name:
+For a server on a home or office network, with no domain name, and without
+plain HTTP's trade-off:
 
 ```sh
 scripts/setup-server.sh --https
@@ -978,7 +1002,8 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_GITHUB_APP_ID` | The GitHub App that decorates pull requests ([ADR-0021](adr/0021-pull-request-decoration.md)), with its key. Unset by default: the server never calls GitHub. |
 | `SONDA_GITHUB_APP_PRIVATE_KEY` / `SONDA_GITHUB_APP_PRIVATE_KEY_FILE` | The App's private key, PEM, as GitHub downloads it. Set with the App's id, or neither. |
 | `SONDA_GITHUB_API_URL` | A GitHub Enterprise Server's API, such as `https://github.example.com/api/v3`. Default `https://api.github.com`. |
-| `SONDA_PUBLIC_URL` | The server's address as people reach it, such as `https://sonda.example.com`, for links in pull request decorations. Without it, they have no link. |
+| `SONDA_PUBLIC_URL` | The server's address as people reach it, such as `https://sonda.example.com`, for links in pull request decorations; `http://` only to localhost, or anywhere with `SONDA_PLAIN_HTTP`. Without it, they have no link. |
+| `SONDA_PLAIN_HTTP` | `true` lets browsers sign in over plain HTTP anywhere, not only on `localhost`: the session cookie is `sonda_session`, without `Secure`. For a trusted network only (see [On a home network](#on-a-home-network)). Off by default. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
 | `SONDA_METRICS_LISTEN` (`--metrics-listen`) | Address to serve Prometheus metrics on, at `/metrics`. Unset by default, so no metrics are served. Unauthenticated: never the public address. See [Metrics](#metrics). |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
