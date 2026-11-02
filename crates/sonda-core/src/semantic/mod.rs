@@ -9,6 +9,7 @@
 mod cs;
 pub(crate) mod cs_cfg;
 pub(crate) mod cs_index;
+pub(crate) mod cs_infer;
 pub(crate) mod dotnet;
 mod js;
 
@@ -118,6 +119,8 @@ pub(crate) struct Model<'t> {
     pub(crate) has_jsx: bool,
     /// The file's syntax tree, for rules that look at more than names.
     pub(crate) root: Option<Node<'t>>,
+    /// C#: each type declaration and the scope of its members.
+    pub(crate) type_scopes: Vec<(Node<'t>, ScopeId)>,
     /// Each reference's index in `refs`, by its node's id.
     ref_index: HashMap<usize, usize>,
 }
@@ -137,6 +140,7 @@ impl<'t> Model<'t> {
             classes: Vec::new(),
             has_jsx: false,
             root: None,
+            type_scopes: Vec::new(),
             ref_index: HashMap::new(),
         }
     }

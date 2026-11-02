@@ -8,13 +8,14 @@ use super::cs::{simple_name, unparenthesized};
 use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
 use super::cs_more::members;
 use super::cs_types::{
-    derives_from, element_type, expression_type, initial_value, is_collection, is_delegate_type,
-    is_generic, is_value_type, normalized_type, numeric_range, numeric_value, shift_width,
-    type_of_name, walk_tree,
+    derives_from, element_type, enumerable_calls, expression_type, initial_value, is_collection,
+    is_delegate_type, is_one_of, is_value_type, normalized_type, numeric_range, numeric_value,
+    shift_width, type_of_name, walk_tree,
 };
 use super::java_bugs::operator_text;
 use super::java_security::{contains_ignoring_case, text};
 use super::*;
+use crate::semantic::cs_infer::Infer;
 use crate::semantic::{DeclKind, Model};
 
 /// Rules that are off unless `rules.enabled` lists them: none, every rule
@@ -363,7 +364,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S6608")],
+        sonar: &[exact("S6608")],
         check: Check::Semantic {
             langs: CSHARP,
             find: linq_on_indexable,
@@ -383,7 +384,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S6609")],
+        sonar: &[exact("S6609")],
         check: Check::Semantic {
             langs: CSHARP,
             find: linq_min_max_on_sorted_set,
@@ -402,7 +403,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S6613")],
+        sonar: &[exact("S6613")],
         check: Check::Semantic {
             langs: CSHARP,
             find: linq_first_last_on_linked_list,
@@ -1022,64 +1023,46 @@ fn casts_to_own_type<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     )
 }
 
-/// Calls `x.Name(...)` with one of `names` and `arity` arguments, on a
-/// receiver whose declared type `accepts`.
-fn calls_on<'t>(
-    m: &Model<'t>,
-    src: &[u8],
-    names: &[&[u8]],
-    arity: impl Fn(&[u8]) -> usize,
-    accepts: impl Fn(Node) -> bool,
-) -> Vec<Node<'t>> {
-    matching(m, &["invocation_expression"], |call, _| {
-        let method = method_name(call, src);
-        names.contains(&method)
-            && cs_call_arguments(call).len() == arity(method)
-            && receiver(call)
-                .filter(|r| r.kind() == "identifier")
-                .and_then(|r| type_of_name(m, r))
-                .is_some_and(&accepts)
-    })
-}
-
+/// `First()`, `Last()` and `ElementAt(i)` on a type with an indexer:
+/// one implementing IList, IList<T> or IReadOnlyList<T>.
 fn linq_on_indexable<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    const INDEXABLE: &[&[u8]] = &[
-        b"List",
-        b"IList",
-        b"IReadOnlyList",
-        b"ImmutableArray",
-        b"ImmutableList",
-        b"Collection",
-        b"ReadOnlyCollection",
-        b"ObservableCollection",
-    ];
-    calls_on(
-        m,
-        src,
-        &[b"First", b"Last", b"ElementAt"],
-        |method| usize::from(method == b"ElementAt"),
-        |t| t.kind() == "array_type" || INDEXABLE.iter().any(|n| is_generic(t, n, src)),
-    )
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    enumerable_calls(m, src, &[("First", 0), ("Last", 0), ("ElementAt", 1)])
+        .into_iter()
+        .filter(|(_, receiver)| {
+            infer.supertypes(receiver).iter().any(|t| {
+                t.is("System.Collections.IList")
+                    || t.is("System.Collections.Generic.IList`1")
+                    || t.is("System.Collections.Generic.IReadOnlyList`1")
+            })
+        })
+        .map(|(call, _)| call)
+        .collect()
 }
 
+/// `Min()` and `Max()` on sorted sets, which keep both at hand.
 fn linq_min_max_on_sorted_set<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    calls_on(
-        m,
-        src,
-        &[b"Min", b"Max"],
-        |_| 0,
-        |t| is_generic(t, b"SortedSet", src) || is_generic(t, b"ImmutableSortedSet", src),
-    )
+    const SETS: &[&str] = &[
+        "System.Collections.Generic.SortedSet`1",
+        "System.Collections.Immutable.ImmutableSortedSet`1",
+        "System.Collections.Immutable.ImmutableSortedSet.Builder",
+    ];
+    enumerable_calls(m, src, &[("Min", 0), ("Max", 0)])
+        .into_iter()
+        .filter(|(_, receiver)| is_one_of(receiver, SETS, false))
+        .map(|(call, _)| call)
+        .collect()
 }
 
+/// `First()` and `Last()` on a LinkedList, which holds both nodes.
 fn linq_first_last_on_linked_list<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    calls_on(
-        m,
-        src,
-        &[b"First", b"Last"],
-        |_| 0,
-        |t| is_generic(t, b"LinkedList", src),
-    )
+    enumerable_calls(m, src, &[("First", 0), ("Last", 0)])
+        .into_iter()
+        .filter(|(_, receiver)| receiver.is("System.Collections.Generic.LinkedList`1"))
+        .map(|(call, _)| call)
+        .collect()
 }
 
 #[cfg(test)]

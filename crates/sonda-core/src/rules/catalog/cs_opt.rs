@@ -404,21 +404,18 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/culture-sensitive-case",
-        name: "Case conversion should state its culture",
-        description: "ToLower() and ToUpper() use the current culture, so \"I\".ToLower() isn't \"i\" in Turkish. \
-                      Say which culture is meant.",
-        message: "Use ToLowerInvariant/ToUpperInvariant, or pass a CultureInfo.",
+        name: "String operations should state their culture",
+        description: "ToLower(), ToUpper(), IndexOf(string), Compare and CompareTo use the current culture, as \
+                      does ToString on floating-point and date values, so \"I\".ToLower() isn't \"i\" in \
+                      Turkish. Say which culture is meant.",
+        message: "Pass a CultureInfo, IFormatProvider or StringComparison, or use the invariant form.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[related("S1449")],
-        check: Check::Query {
+        sonar: &[exact("S1449")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression
-                        function: (member_access_expression name: (identifier) @n)
-                        arguments: (argument_list) @a
-                        (#any-of? @n "ToLower" "ToUpper")) @match"#,
-            filter: Some(Keep(no_arguments)),
+            find: super::cs_inferred::culture_dependent_calls,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -1285,11 +1282,6 @@ fn loose_logger_field<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     (created_here && !tidy).then(|| declarators(field).into_iter().next())?
 }
 
-fn no_arguments(call: Node, _: &[u8]) -> bool {
-    call.child_by_field_name("arguments")
-        .is_some_and(|a| a.named_child_count() == 0)
-}
-
 fn inner_switch<'t>(switch: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     let body = switch.child_by_field_name("body")?;
     find_in_scope(body, CS_SCOPE_STOPS, |n| n.kind() == "switch_statement")
@@ -1719,7 +1711,8 @@ mod tests {
         let arrow = "namespace N;\nclass A { int n; void Hit() => n++; }";
         assert!(flagged("cs/increment-in-expression", arrow).is_empty());
         assert_eq!(flagged("cs/complex-condition", &src), [7]);
-        assert_eq!(flagged("cs/culture-sensitive-case", &src), [9]);
+        let culture = "namespace N;\nclass A { void F(string s) {\ns = s.ToLower();\ns = s.ToLower(CultureInfo.InvariantCulture);\n} }";
+        assert_eq!(flagged("cs/culture-sensitive-case", culture), [3]);
         assert_eq!(flagged("cs/multiple-declarations", &src), [11]);
         assert_eq!(flagged("cs/redundant-parentheses-around-value", &src), [12]);
     }

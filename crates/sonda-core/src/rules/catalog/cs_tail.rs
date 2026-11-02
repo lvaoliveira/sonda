@@ -300,23 +300,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/blocking-call-in-async",
-        name: "Async methods should await, not block",
-        description: "`.Result`, `.Wait()` and Thread.Sleep in an async method hold a thread while waiting and \
-                      can deadlock; the awaitable form doesn't.",
-        message: "Await the asynchronous version (await t, await Task.Delay) instead.",
+        name: "Async methods should call the awaitable version of a method",
+        description: "A synchronous call in an async method blocks its thread, where the method's awaitable \
+                      version would release it while waiting.",
+        message: "Await the asynchronous version of this method instead.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
         sonar: &[related("S6966")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(method_declaration (modifier) body: (_)) @match",
-            filter: Some(Find(blocks_in_async)),
+            find: super::cs_inferred::sync_calls_in_async,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { async Task F() { Thread.Sleep(100); await G(); } }",
-            good: "class A { async Task F() { await Task.Delay(100); await G(); } }",
+            bad: "using System.IO;\nusing System.Threading.Tasks;\nclass A { async Task<int> F(Stream s, byte[] b) { await Task.Yield(); return s.Read(b, 0, b.Length); } }",
+            good: "using System.IO;\nusing System.Threading.Tasks;\nclass A { async Task<int> F(Stream s, byte[] b) { return await s.ReadAsync(b, 0, b.Length); } }",
         }),
     },
     Rule {
@@ -738,70 +737,6 @@ fn factory_captures_key<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-/// Without types, `.Result` and `.Wait()` are only known to block when the
-/// receiver visibly is a task: an `...Async(...)` call, a `Task.` call, or a
-/// variable named like one.
-pub(super) fn looks_like_task(receiver: Node, src: &[u8]) -> bool {
-    let t = text(receiver, src);
-    if receiver.kind() == "invocation_expression" {
-        let name = receiver
-            .child_by_field_name("function")
-            .map(|f| super::cs::simple_name(f, src))
-            .unwrap_or_default();
-        return name.ends_with(b"Async") || t.starts_with(b"Task.");
-    }
-    let lower = simple_name(receiver, src).to_ascii_lowercase();
-    lower == b"t" || lower.ends_with(b"task") || lower.ends_with(b"tasks")
-}
-
-/// `await Task.WhenAll(a, b); var x = a.Result;` reads a finished task.
-pub(super) fn awaited_by_when_all(body: Node, task: Node, read: Node, src: &[u8]) -> bool {
-    let name = text(task, src);
-    find_in_scope(body, CS_SCOPE_STOPS, |n| {
-        n.kind() == "invocation_expression"
-            && n.end_byte() <= read.start_byte()
-            && n.child_by_field_name("function")
-                .is_some_and(|f| text(f, src).ends_with(b"WhenAll"))
-            && cs_call_arguments(n).iter().any(|a| text(*a, src) == name)
-    })
-    .is_some()
-}
-
-fn blocks_in_async<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if !cs_has_modifier(method, "async", src) {
-        return None;
-    }
-    let body = method.child_by_field_name("body")?;
-    find_in_scope(body, CS_SCOPE_STOPS, |n| match n.kind() {
-        "member_access_expression" => {
-            n.child_by_field_name("name")
-                .is_some_and(|m| text(m, src) == b"Result")
-                && n.child_by_field_name("expression").is_some_and(|r| {
-                    looks_like_task(r, src) && !awaited_by_when_all(body, r, n, src)
-                })
-        }
-        "invocation_expression" => n.child_by_field_name("function").is_some_and(|f| {
-            if text(f, src) == b"Thread.Sleep" {
-                return true;
-            }
-            let method = f.child_by_field_name("name").map(|m| text(m, src));
-            let receiver = f.child_by_field_name("expression");
-            match method {
-                Some(b"Wait") => {
-                    receiver.is_some_and(|r| looks_like_task(r, src))
-                        && cs_call_arguments(n).is_empty()
-                }
-                // t.GetAwaiter().GetResult()
-                Some(b"GetResult") => {
-                    receiver.is_some_and(|r| text(r, src).ends_with(b".GetAwaiter()"))
-                }
-                _ => false,
-            }
-        }),
-        _ => false,
-    })
-}
-
 fn unchecked_post_action<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut cursor = class.walk();
     let is_controller = class
@@ -993,7 +928,6 @@ mod tests {
         assert_eq!(flagged("cs/azure-function-static-state", src), [5]);
         assert_eq!(flagged("cs/order-before-where", src), [8]);
         assert_eq!(flagged("cs/concurrent-dictionary-capture", src), [10]);
-        assert_eq!(flagged("cs/blocking-call-in-async", src), [13, 15]);
     }
 
     #[test]

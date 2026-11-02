@@ -8,8 +8,7 @@ use super::cs::{
     simple_name, unparenthesized,
 };
 use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
-use super::cs_more::{declared_type, enclosing_type, is_test_method, members};
-use super::cs_tail::{awaited_by_when_all, looks_like_task};
+use super::cs_more::{declared_type, enclosing_type, members};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
@@ -99,25 +98,22 @@ pub(super) static RULES: &[Rule] = &[
     // ---- Code smells ----
     Rule {
         id: "cs/redundant-to-string",
-        name: "ToString() should not be called when concatenating",
-        description: "String concatenation and interpolation already call ToString().",
+        name: "ToString() calls should not be redundant",
+        description: "A string is already a string, and concatenation and string.Format call ToString() on \
+                      their own. Value types are left alone: without the call they would be boxed.",
         message: "Remove this ToString() call.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S1858")],
-        check: Check::Query {
+        sonar: &[exact("S1858")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression
-                        function: (member_access_expression name: (identifier) @n)
-                        arguments: (argument_list) @a
-                        (#eq? @n "ToString")) @match"#,
-            filter: Some(Keep(to_string_in_concatenation)),
+            find: super::cs_inferred::redundant_to_string,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string F(int n) { return \"n = \" + n.ToString(); } }",
-            good: "class A { string F(int n) { return \"n = \" + n; } }",
+            bad: "class A { string F(object o) { return \"o = \" + o.ToString(); } }",
+            good: "class A { string F(object o) { return \"o = \" + o; } }",
         }),
     },
     Rule {
@@ -705,22 +701,22 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/blocking-async-call",
         name: "Async calls should not be blocked on",
-        description: "`.Result`, `.Wait()` and `.GetAwaiter().GetResult()` hold a thread while the task runs, \
-                      and can deadlock where a synchronization context is in use.",
+        description: "`.Result`, `.Wait()`, `.GetAwaiter().GetResult()`, Task.WaitAny and Task.WaitAll hold a \
+                      thread while the task runs, as does Thread.Sleep in an async method, and can deadlock where \
+                      a synchronization context is in use.",
         message: "Await this task instead of blocking on it.",
         category: CodeSmell,
         severity: Blocker,
         effort_minutes: 10,
-        sonar: &[related("S4462")],
-        check: Check::Query {
+        sonar: &[exact("S4462")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "[(member_access_expression name: (identifier)) (invocation_expression function: (member_access_expression))] @match",
-            filter: Some(Keep(blocks_on_task)),
+            find: super::cs_inferred::blocking_on_tasks,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string F(HttpClient h) { return h.GetStringAsync(\"https://a.example\").Result; } }",
-            good: "class A { async Task<string> F(HttpClient h) { return await h.GetStringAsync(\"https://a.example\"); } }",
+            bad: "using System.Net.Http;\nclass A { string F(HttpClient h) { return h.GetStringAsync(\"https://a.example\").Result; } }",
+            good: "using System.Net.Http;\nusing System.Threading.Tasks;\nclass A { async Task<string> F(HttpClient h) { return await h.GetStringAsync(\"https://a.example\"); } }",
         }),
     },
     Rule {
@@ -884,30 +880,6 @@ fn is_local_variable(name: Node, src: &[u8]) -> bool {
         current = scope.parent();
     }
     false
-}
-
-fn to_string_in_concatenation(call: Node, src: &[u8]) -> bool {
-    let no_args = call
-        .child_by_field_name("arguments")
-        .is_some_and(|a| a.named_child_count() == 0);
-    let Some(parent) = call.parent() else {
-        return false;
-    };
-    // `"x" + n.ToString()`: the other operand is a string literal.
-    let concatenated = parent.kind() == "binary_expression"
-        && operator_text(parent, src) == b"+"
-        && ["left", "right"].iter().any(|f| {
-            parent.child_by_field_name(f).is_some_and(|o| {
-                o != call
-                    && matches!(
-                        o.kind(),
-                        "string_literal" | "interpolated_string_expression"
-                    )
-            })
-        });
-    // `$"{n.ToString()}"`
-    let interpolated = parent.kind() == "interpolation";
-    no_args && (concatenated || interpolated)
 }
 
 fn is_null_coalescing_shape(node: Node, src: &[u8]) -> bool {
@@ -1604,46 +1576,6 @@ fn async_argument_check<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         })
 }
 
-fn blocks_on_task(node: Node, src: &[u8]) -> bool {
-    let blocks = if node.kind() == "member_access_expression" {
-        node.child_by_field_name("name")
-            .is_some_and(|m| text(m, src) == b"Result")
-            && !node.parent().is_some_and(|p| {
-                p.kind() == "invocation_expression"
-                    && p.child_by_field_name("function") == Some(node)
-            })
-            && node
-                .child_by_field_name("expression")
-                .is_some_and(|r| looks_like_task(r, src))
-    } else {
-        let Some(function) = node.child_by_field_name("function") else {
-            return false;
-        };
-        let method = function.child_by_field_name("name").map(|n| text(n, src));
-        let receiver = function.child_by_field_name("expression");
-        match method {
-            Some(b"Wait") => {
-                cs_call_arguments(node).is_empty()
-                    && receiver.is_some_and(|r| looks_like_task(r, src))
-            }
-            Some(b"GetResult") => {
-                receiver.is_some_and(|r| text(r, src).ends_with(b".GetAwaiter()"))
-            }
-            _ => false,
-        }
-    };
-    // Rare enough that walking up to the method is cheap: tests block on
-    // purpose, and a task awaited by Task.WhenAll has finished.
-    blocks
-        && !enclosing_method(node).is_some_and(|m| {
-            is_test_method(m, src)
-                || (node.kind() == "member_access_expression"
-                    && m.child_by_field_name("body")
-                        .zip(node.child_by_field_name("expression"))
-                        .is_some_and(|(body, task)| awaited_by_when_all(body, task, node, src)))
-        })
-}
-
 pub(super) fn enclosing_method(node: Node) -> Option<Node> {
     let mut current = node.parent();
     for _ in 0..128 {
@@ -1722,7 +1654,7 @@ mod tests {
     #[test]
     fn expressions() {
         let src = class(
-            "string F(int n, string a) {\nvar s = \"n=\" + n.ToString();\nvar t = $\"{n.ToString()}\";\nvar u = n.ToString();\nvar v = a != null ? a : \"\";\nvar w = a == null ? \"\" : a;\nvar x = a != null ? a.Length : 0;\nreturn s;\n}",
+            "string F(object n, string a) {\nvar s = \"n=\" + n.ToString();\nvar t = a.ToString();\nvar u = n.ToString();\nvar v = a != null ? a : \"\";\nvar w = a == null ? \"\" : a;\nvar x = a != null ? a.Length : 0;\nreturn s;\n}",
         );
         assert_eq!(flagged("cs/redundant-to-string", &src), [4, 5]);
         assert_eq!(flagged("cs/use-null-coalescing", &src), [7, 8]);
@@ -1795,7 +1727,8 @@ mod tests {
         assert_eq!(flagged("cs/normalize-to-upper", &src), [8]);
         assert_eq!(flagged("cs/async-method-name", &src), [11, 14]);
         assert_eq!(flagged("cs/async-argument-validation", &src), [14]);
-        assert_eq!(flagged("cs/blocking-async-call", &src), [15, 15]);
+        // GetAsync is declared nowhere: its type is unknown.
+        assert_eq!(flagged("cs/blocking-async-call", &src), [15]);
         assert_eq!(
             flagged("cs/exclude-from-coverage-without-justification", &src),
             [16]

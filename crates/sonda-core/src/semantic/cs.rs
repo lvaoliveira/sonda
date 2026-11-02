@@ -168,7 +168,9 @@ impl<'t> Binder<'t, '_> {
                 if let Some(name) = node.child_by_field_name("name") {
                     self.declare(scope, name, DeclKind::Class, None, false);
                 }
-                Some(self.m.push_scope(scope, ScopeKind::Type))
+                let members = self.m.push_scope(scope, ScopeKind::Type);
+                self.m.type_scopes.push((node, members));
+                Some(members)
             }
             "enum_declaration" | "delegate_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
