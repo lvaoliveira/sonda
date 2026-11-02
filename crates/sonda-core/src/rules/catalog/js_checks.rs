@@ -781,6 +781,11 @@ fn sorts_numbers_by_default(call: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
+    // SonarQube reports any array it knows of, strings included: the default
+    // order is by UTF-16 code unit, not by language.
+    if super::js_more::is_provably_array(receiver, src, 0) {
+        return true;
+    }
     let array = match receiver.kind() {
         "array" => Some(receiver),
         "identifier" => array_declaration(root_node(call), text(receiver, src), src),

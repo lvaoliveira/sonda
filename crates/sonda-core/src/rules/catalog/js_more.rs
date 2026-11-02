@@ -443,9 +443,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7778")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(statement_block) @match
-(program) @match"#,
-            filter: Some(Find(repeated_push)),
+            query: r#"(expression_statement (call_expression function: (member_expression property: (property_identifier) @p (#eq? @p "push")))) @match"#,
+            filter: Some(Keep(push_after_push)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -904,6 +903,14 @@ fn is_provably(expr: Node, src: &[u8], depth: usize, strings: bool) -> bool {
                 if matches!(t, b"String" | b"JSON.stringify") {
                     return true;
                 }
+                // fs.readFileSync(path, 'utf8') returns text.
+                if t.ends_with(b"readFileSync")
+                    && call_arguments_of(expr)
+                        .get(1)
+                        .is_some_and(|a| a.kind() == "string")
+                {
+                    return true;
+                }
                 f.child_by_field_name("property").is_some_and(|m| {
                     matches!(
                         text(m, src),
@@ -1035,6 +1042,12 @@ fn declares_parameter(function: Node, name: &[u8], src: &[u8]) -> bool {
         add(p);
     }
     names.contains(&name)
+}
+
+fn call_arguments_of(call: Node) -> Vec<Node> {
+    call.child_by_field_name("arguments")
+        .map(named)
+        .unwrap_or_default()
 }
 
 fn root_of(node: Node) -> Node {
@@ -1231,6 +1244,14 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
     // The value the left side guards: `a && ...`, `a != null && ...`,
     // `!a || ...`, `a == null || ...`.
     let is_value = |n: Node| matches!(n.kind(), "identifier" | "member_expression" | "this");
+    // In `a && b && b.c` the operand beside `b.c` is `b`, the end of the left chain.
+    let mut l = l;
+    while l.kind() == "binary_expression"
+        && operator_text(l, src) == operator_text(binary, src)
+        && let Some(last) = l.child_by_field_name("right")
+    {
+        l = last;
+    }
     let subject = match l.kind() {
         "identifier" | "member_expression" | "this" if and => Some(l),
         "unary_expression" if or => l
@@ -1333,6 +1354,20 @@ fn reads_property_of(expr: Node, subject: &[u8], src: &[u8], and: bool) -> bool 
                 if !and && !nullish(right) {
                     return false;
                 }
+                // `a && a.b !== null` is true for a nullish `a?.b`, so a rewrite
+                // would change the answer; only some nullish tests survive it.
+                if and && nullish(right) {
+                    let undefined = right.kind() == "undefined";
+                    let safe = match op {
+                        b"!=" => true,
+                        b"!==" => undefined,
+                        b"===" => !undefined,
+                        _ => false,
+                    };
+                    if !safe {
+                        return false;
+                    }
+                }
                 node = left;
             }
             "unary_expression" if !and && text(node, src).starts_with(b"!") => {
@@ -1382,8 +1417,10 @@ fn ternary_is_a_nullish_default(ternary: Node, src: &[u8]) -> bool {
     }
 }
 
-fn repeated_push<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let receiver = |s: Node<'t>| -> Option<&[u8]> {
+/// A `push` right after another `push` on the same receiver: every one but
+/// the first of a run is reported, as SonarQube does.
+fn push_after_push(statement: Node, src: &[u8]) -> bool {
+    let receiver = |s: Node| -> Option<Vec<u8>> {
         if s.kind() != "expression_statement" {
             return None;
         }
@@ -1395,12 +1432,18 @@ fn repeated_push<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         if text(property, src) != b"push" {
             return None;
         }
-        function.child_by_field_name("object").map(|o| text(o, src))
+        function
+            .child_by_field_name("object")
+            .map(|o| text(o, src).to_vec())
     };
-    named(block).windows(2).find_map(|pair| {
-        let (a, b) = (receiver(pair[0])?, receiver(pair[1])?);
-        (a == b).then_some(pair[1])
-    })
+    let mut previous = statement.prev_named_sibling();
+    while let Some(p) = previous.filter(|p| p.kind() == "comment") {
+        previous = p.prev_named_sibling();
+    }
+    match (receiver(statement), previous.and_then(receiver)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn passes_a_this_argument(call: Node, src: &[u8]) -> bool {
@@ -1419,9 +1462,23 @@ fn passes_a_this_argument(call: Node, src: &[u8]) -> bool {
 }
 
 fn void_is_not_void_zero(unary: Node, src: &[u8]) -> bool {
-    unary
-        .child_by_field_name("argument")
-        .is_some_and(|a| text(a, src) != b"0")
+    // `void (async () => {})()` marks a floating promise as intended;
+    // SonarQube leaves an immediately invoked function alone.
+    let Some(argument) = unary.child_by_field_name("argument") else {
+        return false;
+    };
+    let mut inner = argument;
+    while inner.kind() == "parenthesized_expression" {
+        match inner.named_child(0) {
+            Some(i) => inner = i,
+            None => break,
+        }
+    }
+    text(argument, src) != b"0"
+        && !(inner.kind() == "call_expression"
+            && inner
+                .child_by_field_name("function")
+                .is_some_and(|f| f.kind() == "parenthesized_expression"))
 }
 
 fn checks_index_of_for_positive(binary: Node, src: &[u8]) -> bool {
