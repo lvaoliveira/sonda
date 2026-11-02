@@ -11,16 +11,18 @@ as `admin`.
 
 ## Quick start (Docker Compose)
 
-From the repository root:
+From a checkout of a release (or of `main`, for what's next):
 
 ```sh
+git clone --branch v0.1.0 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 open http://127.0.0.1:9000     # sign in as admin, password in secrets/admin_password
 ```
 
 It creates the secrets below once, then builds this checkout and starts it,
 waiting until it's healthy. It's safe to rerun, so upgrading is
-`git pull && scripts/setup-server.sh`. Its options are kept in `.env`, so
+`git fetch --tags && git checkout v<next> && scripts/setup-server.sh` (back up
+first: there's no downgrade). Its options are kept in `.env`, so
 later runs need none:
 
 | Option | |

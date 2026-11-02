@@ -187,6 +187,22 @@ a dependency or std update. To find the call:
 Add a call to the allow-list only if it cannot reach files, the network or
 other processes, and say why in a comment.
 
+## Releasing
+
+1. In a pull request: set `version` in `Cargo.toml` (the workspace's, which
+   every crate shares) and move `CHANGELOG.md`'s `Unreleased` entries under
+   `## [x.y.z] - date`, with a short summary first. Merge it.
+2. Tag the merge commit and push the tag: `git tag vx.y.z && git push origin
+   vx.y.z`.
+
+The tag runs `.github/workflows/release.yml`: it checks the tag matches
+`Cargo.toml` and has changelog notes, builds the static Linux CLI on x86_64
+and arm64, checks each parses every language in its sandbox
+(`scripts/check-languages.sh`) and reports the version, and publishes the
+release with the binaries, their checksums and the changelog section as
+notes. Until every binary is attached it stays a draft; if a job fails,
+fix it on `main`, delete the draft and the tag, and tag again.
+
 ## Commits and pull requests
 
 - Keep each change small and focused, with a message that explains *why*.
