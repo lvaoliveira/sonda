@@ -416,9 +416,14 @@ On a new server, the empty Overview offers admins **Connect a repository**
    a new branch with a pull request: that pull request is the first one
    decorated.
 
+The page shows the steps one at a time, in order, each confirmed before the
+next opens: committing the workflow runs CI at once, so the secret, and a
+self-hosted runner's CLI, must be there first. **Done** then waits for the
+first analysis, which proves it's connected, and links to it.
+
 Choose where CI runs. On a self-hosted runner on the server's machine, the
 workflow uploads to `http://localhost:PORT` with the CLI from
-`scripts/install-cli.sh`. On GitHub's runners, it builds the CLI and needs
+`scripts/install-cli.sh`, installed as a step before the workflow. On GitHub's runners, it builds the CLI and needs
 the server's public `https://` address. sonda never writes to the
 repository: the GitHub App keeps its permissions. Until its main branch is
 analyzed, the project is listed as waiting, where an admin can show its
