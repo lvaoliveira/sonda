@@ -269,6 +269,10 @@ pub async fn create(
         crate::dependencies::GateScope::Analysis(summary.analysis_id),
     )
     .await?;
+    // A pull request's, after its gate is judged (ADR-0021).
+    if state.github.is_some() {
+        crate::decorations::enqueue(&state.pool, summary.analysis_id).await?;
+    }
     tracing::info!(
         analysis = summary.analysis_id,
         new = summary.issues.new,

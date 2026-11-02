@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { AnalysisChanges, AnalysisDetail, MeasureSet, Severity } from '@/api/types'
+import type { AnalysisChanges, AnalysisDetail, Decoration, MeasureSet, Severity } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Segmented } from '@/components/sonda/controls'
 import { GateConditions, GateSource } from '@/components/sonda/gate'
@@ -91,6 +91,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
           {a.duration && <span>scanned in {a.duration}</span>}
           <span>uploaded by {a.uploadedBy}</span>
           {a.newCodeReference && <span>new code since {a.newCodeReference}</span>}
+          {a.decoration && <DecorationState d={a.decoration} />}
           <span className="ml-auto flex gap-3 text-[13px]">
             {a.previous ? <Link to={`/analyses/${a.previous.id}`}>← {a.previous.sha.slice(0, 7)}</Link> : <span className="text-fg-faint">first on {branchLabel(a)}</span>}
             {a.next ? <Link to={`/analyses/${a.next.id}`}>{a.next.sha.slice(0, 7)} →</Link> : <span className="text-fg-faint">latest</span>}
@@ -262,5 +263,25 @@ function ChangeList({
         </ul>
       )}
     </Card>
+  )
+}
+
+const DECORATION: Record<Decoration['state'], string> = {
+  posted: 'posted on GitHub',
+  pending: 'waiting to post on GitHub',
+  failed: 'not posted on GitHub: gave up retrying',
+  not_posted: 'not posted on GitHub',
+  superseded: 'not posted on GitHub: a newer analysis was',
+}
+
+/** Whether the pull request's decoration reached GitHub, and if not, why (ADR-0021). */
+function DecorationState({ d }: { d: Decoration }) {
+  const tone = d.state === 'posted' ? 'text-ok' : d.state === 'pending' || d.state === 'superseded' ? 'text-fg-muted' : 'text-warn'
+  return (
+    <span className={tone} title={d.lastError ?? undefined}>
+      {DECORATION[d.state]}
+      {d.state === 'pending' && d.attempts > 0 && ` (attempt ${d.attempts})`}
+      {d.lastError && d.state !== 'posted' && d.state !== 'superseded' && `: ${d.lastError}`}
+    </span>
   )
 }

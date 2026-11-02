@@ -261,6 +261,13 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- Pull request decoration on GitHub (ADR-0021): with a GitHub App
+  configured (`SONDA_GITHUB_APP_ID` and its private key) and a project
+  linked to its repository in Settings, each pull request gets a `sonda`
+  check run following the gate, annotations on its new issues, and one
+  summary comment edited in place. A background task posts them and
+  retries for a day, so GitHub being down never fails an upload; the
+  analysis page says whether it was posted, and if not, why.
 - Pull request analyses (ADR-0021): in a GitHub Actions `pull_request` job,
   `sonda scan --upload` and `sonda upload` say which pull request the
   analysis belongs to (or `--pull-request` and `--pull-request-base`

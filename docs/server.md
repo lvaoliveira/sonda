@@ -619,7 +619,51 @@ Actions `pull_request` job, or with `--pull-request` and
 - **Removed 30 days** after a pull request's last analysis, with its issues
   and the file contents nothing else has. The server checks hourly.
 
-Decorating the pull request on GitHub is the next part of ADR-0021.
+#### Decorating pull requests on GitHub
+
+With a GitHub App configured, the server shows each pull request's result
+on the pull request itself:
+
+- **A `sonda` check run** on its head commit. Its conclusion is `success`
+  when the gate passes, `failure` when it fails, and `neutral` when
+  conditions lack data, so branch protection can require it. Its summary
+  says which conditions fail, the new issues by type and severity, and
+  coverage and duplication on new code.
+- **Annotations** on the new issues, at most 50, most severe first. Each
+  analysis's check run replaces the previous one, so a fixed issue's
+  annotation is gone with it. Accepted and false-positive issues get none.
+- **One summary comment**, found again by a hidden marker and edited in
+  place, never added twice.
+
+It's posted after the server judges the gate, by a background task, so a
+GitHub that's down never fails the upload or CI. The task retries with a
+doubling backoff for a day, and only a pull request's latest analysis is
+posted. The analysis page says whether it was posted, and if not, why.
+
+**Setting it up:**
+
+1. Create a GitHub App (Settings → Developer settings → GitHub Apps) with
+   these repository permissions: Checks (read and write), Pull requests
+   (read and write), Metadata (read). It needs no webhook. Generate a
+   private key.
+2. Install it on the repositories to decorate.
+3. Give the server `SONDA_GITHUB_APP_ID` and the key
+   (`SONDA_GITHUB_APP_PRIVATE_KEY_FILE`), and `SONDA_PUBLIC_URL` for links
+   back to the server (see [Configuration](#configuration)).
+4. In each project's Settings, an admin links its repository
+   (`owner/name`). Uploads from any other repository post nothing, so a
+   project can't decorate someone else's pull requests.
+
+The server signs a short-lived JWT with the key and exchanges it for a
+token limited to the one repository, which lasts an hour and lives only
+in memory. Neither is stored or logged. What's sent to GitHub is the
+summary and each annotation's path, lines, rule and message, never source
+code. Without an App, the server makes none of these calls.
+
+| Endpoint | |
+|---|---|
+| `PATCH /api/projects/{key}/settings` `{"githubRepository": "acme/shop"}` | Admins: the repository, or `null`. `GET` returns it, and `githubApp`, whether the server has an App. |
+| `GET /api/analyses/{id}` | A pull request's analysis has `decoration`: `state` (`pending`, `posted`, `failed`, `not_posted`, `superseded`), `attempts`, `lastError` and `postedAt`. |
 
 ## New code on the main branch
 
@@ -870,6 +914,10 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_ADMIN_USERNAME` | That admin's username. Default `admin`. |
 | `SONDA_ADVISORY_SYNC` | `true` syncs advisories from OSV daily (see [Known vulnerabilities](#known-vulnerabilities)). Off by default: the server makes no outbound connections. |
 | `SONDA_ADVISORY_SYNC_URL` | A mirror of OSV's exports to sync from instead: `https://`, or `http://` to localhost only. |
+| `SONDA_GITHUB_APP_ID` | The GitHub App that decorates pull requests ([ADR-0021](adr/0021-pull-request-decoration.md)), with its key. Unset by default: the server never calls GitHub. |
+| `SONDA_GITHUB_APP_PRIVATE_KEY` / `SONDA_GITHUB_APP_PRIVATE_KEY_FILE` | The App's private key, PEM, as GitHub downloads it. Set with the App's id, or neither. |
+| `SONDA_GITHUB_API_URL` | A GitHub Enterprise Server's API, such as `https://github.example.com/api/v3`. Default `https://api.github.com`. |
+| `SONDA_PUBLIC_URL` | The server's address as people reach it, such as `https://sonda.example.com`, for links in pull request decorations. Without it, they have no link. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
 | `SONDA_METRICS_LISTEN` (`--metrics-listen`) | Address to serve Prometheus metrics on, at `/metrics`. Unset by default, so no metrics are served. Unauthenticated: never the public address. See [Metrics](#metrics). |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |

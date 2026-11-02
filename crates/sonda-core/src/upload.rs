@@ -222,7 +222,7 @@ fn check_branch(b: &str) -> Result<(), Error> {
 }
 
 /// `owner/name`, as GitHub allows them.
-fn is_repository(r: &str) -> bool {
+pub fn is_repository(r: &str) -> bool {
     let part = |p: &str| {
         !p.is_empty()
             && p.len() <= 100

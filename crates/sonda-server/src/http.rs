@@ -34,6 +34,8 @@ pub struct State {
     /// Request counts and durations (ADR-0019), served on the metrics
     /// listener, never on this router.
     pub metrics: Arc<observability::Metrics>,
+    /// The GitHub App that decorates pull requests (ADR-0021), if any.
+    pub github: Option<Arc<crate::github::App>>,
 }
 
 pub fn router(state: State, web_dir: Option<&Path>) -> Router {

@@ -992,6 +992,8 @@ export interface AnalysisDetail {
   branch: string
   mainBranch: string
   pullRequest: PullRequestRef
+  /** Its decoration on GitHub (ADR-0021); null when none was queued. */
+  decoration: Decoration | null
   sha: string
   /** The commit's subject line, when the upload had one. */
   message: string | null
@@ -1160,6 +1162,10 @@ export interface ProjectSettings {
   mainBranch: string
   /** The server gate it's judged by; null for the gate in its sonda.toml. */
   qualityGate: ServerGateRef
+  /** The GitHub repository (`owner/name`) its pull requests are decorated in (ADR-0021). */
+  githubRepository: string | null
+  /** Whether the server has a GitHub App to decorate them with. */
+  githubApp: boolean
   /** Every branch with analyses, the main one first. */
   branches: { name: string; analyses: number; analyzedAt: string; ago: string }[]
   /** Who changed a setting, newest first. */
@@ -1168,7 +1174,7 @@ export interface ProjectSettings {
 
 export interface ProjectSettingChange {
   /** For `quality_gate`, gate names; null is the gate in sonda.toml. */
-  setting: 'name' | 'main_branch' | 'quality_gate'
+  setting: 'name' | 'main_branch' | 'quality_gate' | 'github_repository'
   old: string | null
   new: string | null
   by: string
@@ -1180,6 +1186,8 @@ export interface ProjectSettingsPatch {
   mainBranch?: string
   /** A server gate's id, or null for the gate in sonda.toml. */
   qualityGate?: number | null
+  /** `owner/name`, or null for none. */
+  githubRepository?: string | null
 }
 
 export interface SavedGate {
@@ -1216,4 +1224,13 @@ export interface PullRequestRow {
   newIssues: number | null
   analyzedAt: string
   ago: string
+}
+
+/** A pull request analysis's decoration on GitHub (ADR-0021). */
+export interface Decoration {
+  state: 'pending' | 'posted' | 'failed' | 'not_posted' | 'superseded'
+  attempts: number
+  /** Why it failed, or why it's not posted. */
+  lastError: string | null
+  postedAt: string | null
 }

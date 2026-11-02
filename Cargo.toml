@@ -11,6 +11,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/lvaoliveira/sonda"
 
 [workspace.dependencies]
+# Signing the GitHub App's JWTs (ADR-0021); both are already in the tree,
+# through rustls and its PEM handling.
+base64 = "0.22.1"
+ring = "0.17.14"
 sonda-core = { path = "crates/sonda-core", version = "0.1.0" }
 anyhow = "1.0.104"
 argon2 = "0.6.0"
