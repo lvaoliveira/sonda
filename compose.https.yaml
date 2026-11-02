@@ -1,0 +1,31 @@
+# HTTPS on a LAN address, through Caddy (caddy/Caddyfile). Added by
+# `scripts/setup-server.sh --https IP[:PORT]`, which keeps the address in
+# .env and lists this file in .env's COMPOSE_FILE. The server itself stays
+# on 127.0.0.1 for uploads from this machine.
+services:
+  sonda:
+    environment:
+      # Links in pull request decorations point here, unless set otherwise.
+      SONDA_PUBLIC_URL: ${SONDA_PUBLIC_URL:-https://${SONDA_HTTPS_HOST}:${SONDA_HTTPS_PORT:-9443}}
+
+  caddy:
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    # Published on that address only, not on every interface.
+    ports: ["${SONDA_HTTPS_HOST:?run scripts/setup-server.sh --https IP}:${SONDA_HTTPS_PORT:-9443}:443"]
+    environment:
+      SONDA_HTTPS_HOST: ${SONDA_HTTPS_HOST}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The local authority's keys: keeping them keeps devices trusting it.
+      - caddy_data:/data
+    tmpfs: [/config]
+    depends_on: [sonda]
+    read_only: true
+    cap_drop: [ALL]
+    # Caddy's binary carries this file capability, which it needs to start.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  caddy_data:

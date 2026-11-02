@@ -6,3 +6,5 @@
 compose.override.yaml
 # scripts/setup-server.sh's settings: the port, the GitHub App's id.
 /.env
+# Its copy of Caddy's root certificate, for installing on devices.
+/caddy-root.crt

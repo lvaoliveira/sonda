@@ -1,0 +1,19 @@
+# HTTPS in front of the server on a LAN address (compose.https.yaml, added by
+# `scripts/setup-server.sh --https IP`). No public authority certifies a
+# private address, so the certificate comes from Caddy's own local authority,
+# which each device trusts once its root certificate is installed
+# (docs/server.md, "HTTPS on a LAN address").
+{
+	admin off
+	# The root goes to devices by hand, not into this container's store.
+	skip_install_trust
+	# Browsers send no SNI to an IP address; answer with its certificate.
+	default_sni {$SONDA_HTTPS_HOST}
+	# HTTPS only: no listener on port 80 to redirect from.
+	auto_https disable_redirects
+}
+
+https://{$SONDA_HTTPS_HOST} {
+	tls internal
+	reverse_proxy sonda:9000
+}
