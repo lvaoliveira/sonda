@@ -6,6 +6,8 @@ use super::java_bugs::{
     find_in_scope, has_annotation, has_modifier, modifiers_of, operator_text, owning_declaration,
     parameter_types, statements,
 };
+use super::java_final::root_of;
+use super::java_flow::{find_declared_type, superclass_name};
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, method_name, string_value, text,
 };
@@ -1813,7 +1815,15 @@ fn update_ignores_tested_variables(for_loop: Node, src: &[u8]) -> bool {
 }
 
 fn transient_field_of_plain_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if class.child_by_field_name("superclass").is_some()
+    // A parent declared in this file that is itself plain is no excuse.
+    let plain_parent = superclass_name(class, src)
+        .and_then(|n| find_declared_type(root_of(class), n, src))
+        .is_some_and(|p| {
+            p.kind() == "class_declaration"
+                && p.child_by_field_name("superclass").is_none()
+                && p.child_by_field_name("interfaces").is_none()
+        });
+    if (class.child_by_field_name("superclass").is_some() && !plain_parent)
         || implements(class, src, b"Serializable")
         || implements(class, src, b"Externalizable")
         || class.child_by_field_name("interfaces").is_some()

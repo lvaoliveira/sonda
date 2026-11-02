@@ -3972,9 +3972,110 @@ fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
     }) {
         return false;
     }
-    declarator_names(field, src)
-        .iter()
-        .any(|n| *n != b"serialVersionUID" && count_word(src, n) == 1)
+    // Another class in the file using the same name does not use this field;
+    // only an access through an object (`x.name`) from outside could.
+    let class = enclosing_class(field);
+    declarator_names(field, src).iter().any(|n| {
+        if *n == b"serialVersionUID" {
+            return false;
+        }
+        match class {
+            Some(c) => {
+                !file_accesses_member(src, n)
+                    && (count_word(text(c, src), n) == 1 || field_is_only_written(c, n, src))
+            }
+            None => count_word(src, n) == 1,
+        }
+    })
+}
+
+/// Whether every use of the field inside the class is an assignment to it,
+/// so nothing ever reads the value.
+fn field_is_only_written(class: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut cursor = class.walk();
+    let (mut writes, mut reads) = (0, 0);
+    'walk: loop {
+        let n = cursor.node();
+        if n.kind() == "identifier" && text(n, src) == name {
+            let parent = n.parent();
+            let is_this_field = parent.is_some_and(|p| {
+                p.kind() == "field_access"
+                    && p.child_by_field_name("field")
+                        .is_some_and(|f| f.id() == n.id())
+            });
+            let target = if is_this_field { parent } else { Some(n) };
+            let assigned = target
+                .and_then(|t| t.parent().map(|p| (t, p)))
+                .is_some_and(|(t, p)| {
+                    p.kind() == "assignment_expression"
+                        && operator_text(p, src) == b"="
+                        && p.child_by_field_name("left")
+                            .is_some_and(|l| l.id() == t.id())
+                });
+            let declarator = parent.is_some_and(|p| p.kind() == "variable_declarator");
+            if declarator {
+                // the field itself, or a local of the same name
+            } else if assigned {
+                writes += 1;
+            } else if is_this_field || !name_is_shadowed(n, name, src) {
+                reads += 1;
+            }
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    writes > 0 && reads == 0
+}
+
+/// Whether a parameter or local of this name is in scope at `use_site`.
+fn name_is_shadowed(use_site: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut p = use_site.parent();
+    while let Some(n) = p {
+        if matches!(n.kind(), "method_declaration" | "constructor_declaration") {
+            let param = n.child_by_field_name("parameters").is_some_and(|ps| {
+                let mut c = ps.walk();
+                ps.named_children(&mut c).any(|fp| {
+                    fp.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name)
+                })
+            });
+            return param || count_word(text(n, src), name) > 0 && local_declares(n, name, src);
+        }
+        p = n.parent();
+    }
+    false
+}
+
+fn local_declares(scope: Node, name: &[u8], src: &[u8]) -> bool {
+    find_node(scope, |x| {
+        x.kind() == "local_variable_declaration" && declarator_names(x, src).contains(&name)
+    })
+    .is_some()
+}
+
+/// Whether `.name` appears anywhere in the file as a member access.
+fn file_accesses_member(src: &[u8], name: &[u8]) -> bool {
+    let mut dotted = Vec::with_capacity(name.len() + 1);
+    dotted.push(b'.');
+    dotted.extend_from_slice(name);
+    let mut from = 0;
+    while let Some(i) = src[from..].windows(dotted.len()).position(|w| w == dotted) {
+        let end = from + i + dotted.len();
+        let whole_word = !src
+            .get(end)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        if whole_word && !src[..from + i].ends_with(b"this") {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 fn private_class_is_never_used(class: Node, src: &[u8]) -> bool {
@@ -4352,5 +4453,11 @@ mod tests {
         assert_eq!(flagged("java/instance-initializer", src), [9]);
         assert_eq!(flagged("java/key-set-iteration", src), [10]);
         assert!(flagged("java/default-package", src).is_empty());
+    }
+
+    #[test]
+    fn write_only_private_fields_are_unused() {
+        let src = "class A {\nprivate final Object written;\nprivate final Object read;\nA(Object written, Object read) { this.written = written; this.read = read; }\nObject get() { return read; }\n}";
+        assert_eq!(flagged("java/unused-private-field", src), [2]);
     }
 }

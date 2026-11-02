@@ -1309,7 +1309,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2326")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
+            query: r#"[(method_declaration) (class_declaration) (interface_declaration)] @match"#,
             filter: Some(Find(method_has_unused_type_parameter)),
         },
         example: Some(Example {
