@@ -25,7 +25,8 @@ A **Connect a repository** page, for admins, linked from the empty
 Overview and from Projects, does what the server can do with the access it
 already has, and hands the rest to GitHub's own pages, prefilled:
 
-1. From `owner/name`, a project key (the repository's name, editable) and
+1. From the repository's URL as the browser shows it (or its SSH address,
+   or `owner/name`), a project key (the repository's name, editable) and
    a main branch, it creates the project (`POST /api/projects`), links the
    repository in its settings, and generates a project analysis token
    named after the repository, with no expiry, so CI doesn't stop on a
