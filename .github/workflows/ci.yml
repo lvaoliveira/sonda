@@ -132,23 +132,15 @@ jobs:
           prefix-key: v1-rust
       - run: cargo test -p sonda-server --all-targets --locked
 
-  # ADR-0005's acceptance check: `docker compose up` on a clean machine
-  # gives a working server.
+  # ADR-0005's acceptance check: the documented one command on a clean
+  # machine gives a working server.
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: docker compose build
-      - name: Create throwaway secrets
-        run: |
-          mkdir -m 700 secrets
-          openssl rand -hex 32 > secrets/db_password
-          openssl rand -hex 32 > secrets/sonda_token
-          openssl rand -base64 18 > secrets/admin_password
-          chmod 644 secrets/*
-      - run: docker compose up -d --wait
+      - run: scripts/setup-server.sh
       - name: Health, web app and API routing
         run: |
           for i in $(seq 1 30); do
@@ -163,6 +155,18 @@ jobs:
         run: docker compose logs
       - if: always()
         run: docker compose down -v
+
+  # The CLI for hosts without Rust: the image's `cli` target, installed.
+  docker-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck scripts/*.sh
+      - run: scripts/install-cli.sh
+      # It runs a real scan; exit 1 is a failing gate, not an error.
+      - run: ~/.local/bin/sonda scan crates/sonda/src -o /dev/null || [ $? -eq 1 ]
 
   supply-chain:
     runs-on: ubuntu-latest

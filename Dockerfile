@@ -23,6 +23,22 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked -p sonda-server \
     && cp target/release/sonda-server /sonda-server
 
+# The CLI as one static (musl) binary, for hosts without Rust:
+# scripts/install-cli.sh builds this target. Not part of the server image.
+FROM rust:1.99-alpine@sha256:7e9e2d068a107a2adafd19930011178d14a78326053cd4c3a9f7ad3fd049557d AS cli-build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target,id=sonda-cli-target \
+    cargo build --release --locked -p sonda \
+    && cp target/release/sonda /sonda
+
+FROM scratch AS cli
+COPY --from=cli-build /sonda /sonda
+
+# The server image: the default target, so it stays last.
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e
 COPY --from=build /sonda-server /usr/local/bin/sonda-server
 COPY --from=web /web/dist /usr/share/sonda/web
