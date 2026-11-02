@@ -22,6 +22,7 @@ pub mod http;
 pub mod ingest;
 pub mod issues;
 pub mod new_code;
+pub mod observability;
 pub mod overview;
 pub mod profiles;
 pub mod project_settings;

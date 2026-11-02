@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
+pub(crate) use catalog::cs_project;
 pub use owasp::{Edition, Owasp};
 
 pub(crate) const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
@@ -29,7 +30,10 @@ pub(crate) const JAVA_ASSERTION_IN_MAIN: &str = "java/assertion-in-production";
 pub(crate) const JS_MODULE_IMPORTS_ITSELF: &str = "js/module-imports-itself";
 pub(crate) const JS_DEFAULT_EXPORT_NAME: &str = "js/default-export-name";
 pub(crate) const JS_TEST_FILE_WITHOUT_TESTS: &str = "js/test-file-without-tests";
+pub(crate) const JS_DEPENDENCY_NOT_DECLARED: &str = "js/dependency-not-declared";
 pub(crate) const JS_LICENSE_HEADER: &str = "js/missing-license-header";
+pub(crate) const PY_MODULE_NAME: &str = "py/module-name";
+pub(crate) const PY_PARSE_FAILURE: &str = "py/parse-failure";
 pub(crate) const JAVA_PARSE_FAILURE: &str = "java/parse-failure";
 pub(crate) const JAVA_PACKAGE_INFO_MISSING: &str = "java/package-info-missing";
 pub(crate) const JAVA_PACKAGE_INFO_ONLY: &str = "java/package-info-only";
@@ -395,7 +399,9 @@ mod tests {
         let rules = RuleSet::new(&cfg.rules).expect("all queries compile");
         for r in RULES.iter() {
             let Some(ex) = &r.example else { continue };
-            let bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
+            let mut bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
+            // Project-level rules see the example as a project of one file.
+            crate::analysis::cs_project_rules(std::slice::from_mut(&mut bad), &rules);
             assert!(
                 bad.issues.iter().any(|i| i.rule == r.id),
                 "{} did not flag its bad example:\n{}\nissues: {:?}",
@@ -403,7 +409,8 @@ mod tests {
                 ex.bad,
                 bad.issues.iter().map(|i| i.rule).collect::<Vec<_>>()
             );
-            let good = analyze("good", ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
+            let mut good = analyze("good", ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
+            crate::analysis::cs_project_rules(std::slice::from_mut(&mut good), &rules);
             assert!(
                 !good.issues.iter().any(|i| i.rule == r.id),
                 "{} flagged its good example:\n{}",

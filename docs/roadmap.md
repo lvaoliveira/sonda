@@ -190,6 +190,97 @@ SBOM), then match that list against published vulnerabilities.
 - A new advisory synced into the mirror flags an already-analyzed project
   without a rescan.
 
+## Pull request decoration: GitHub, GitLab and Bitbucket
+
+**Status:** planned (2026-11-01), nothing built. As SonarQube does, the
+result of analyzing a pull request (or GitLab merge request) shows on the
+pull request itself: a summary comment, inline comments on new issues, and
+a status check that can block merging when the gate fails. Today only
+GitHub gets anything, by uploading SARIF to code scanning
+([README](../README.md#github-actions)), and nothing ties it to the
+server's gate.
+
+### Design sketch
+
+- **What appears on the pull request.**
+  - **One summary comment**, edited in place on every push rather than
+    added again: the gate (passed or failed, and which conditions fail),
+    new issues by type and severity, coverage and duplication on new code,
+    and a link to the analysis on the server.
+  - **Inline comments** on new issues, on the lines the pull request
+    changed only, each with the rule and a link to it. Capped per pull
+    request (the rest are counted in the summary), and resolved when a
+    later analysis finds the issue fixed. Accepted and false-positive
+    issues (ADR-0014) aren't commented on.
+  - **A status check** carrying the server's gate, so branch protection
+    can require it.
+- **Per forge.**
+  - **GitHub** (github.com and Enterprise Server): a GitHub App, which
+    gives the check run (with annotations), the comment and the inline
+    review comments with scoped, short-lived tokens.
+  - **GitLab** (gitlab.com and self-managed): a project or group access
+    token; a merge request note, discussions on the diff, and a commit
+    status (or an external status check).
+  - **Bitbucket** (Cloud and Data Center): an app password, or an HTTP
+    access token on Data Center; a pull request comment, and Code Insights
+    reports with annotations plus a build status for the gate.
+- **Connections.** An admin adds a connection per forge instance (its URL
+  and credentials) on the Administration page, and binds each project to
+  a repository on its Settings page (ADR-0017). The AI auto-fix item below
+  uses the same connections and bindings.
+- **Pull requests as analyses.** Today a pull request scan uploads as a
+  branch. The upload needs to say it's a pull request: its key, its source
+  and target branches, and the forge. The CLI detects these from GitHub
+  Actions, GitLab CI and Bitbucket Pipelines variables, as it already
+  detects a pull request's base for new code (ADR-0010), with options to
+  set them elsewhere. The server keeps pull request analyses apart from
+  branches (their own list on the project page, judged on their new code
+  against the target branch) and removes them some days after the pull
+  request is merged or closed.
+- **Who posts.** The server, after it stores the analysis and evaluates
+  the gate (ADR-0014), so the decoration matches what the server shows,
+  and the forge credentials stay on the server instead of in every
+  pipeline. Posting is asynchronous and retried; a forge that's down never
+  fails the upload.
+
+### Decisions to make when starting
+
+- **An ADR**, since this adds the server's first outbound calls to
+  forges, stored forge credentials, and pull requests as a kind of
+  analysis.
+- **Credentials:** encryption at rest, the narrowest scopes each forge
+  allows, rotation, and never returning them from the API. Shared with
+  AI auto-fix, so they're designed once.
+- **Outbound connections are opt-in.** Today the server makes none unless
+  advisory sync is turned on; a deployment without a connection stays
+  that way.
+- **Pull requests from forks:** CI for a fork's pull request usually has
+  no secrets, so it can't upload with a project token. Decide between
+  skipping forks, a separate upload-only token kind, or the server
+  fetching the result some other way.
+- **Noise:** the inline-comment cap, whether to comment at all when the
+  gate passes, and whether minor and info issues get inline comments.
+- **Idempotence:** find sonda's own comment (by a hidden marker) to edit
+  it, so a re-run or a second upload never duplicates comments, and
+  inline comments map to issues by fingerprint.
+- **Retention:** how long pull request analyses stay after the pull
+  request closes, and whether they count anywhere outside their own page.
+
+### Done when
+
+- On a fixture repository on each of GitHub, GitLab and Bitbucket, a pull
+  request that adds an issue gets one summary comment with the failing
+  gate, one inline comment on the changed line, and a failed status check
+  that branch protection uses to block merging.
+- A push that fixes it updates the same summary comment to passed,
+  resolves the inline comment, and turns the check green, without adding
+  comments.
+- An issue accepted on the server disappears from the summary and its
+  inline comment is resolved, without a new scan.
+- A forge that's unreachable doesn't fail the upload, and decoration
+  catches up once it's back.
+- Forge credentials never appear in an API response or a log line.
+
 ## AI auto-fix: issues, bugs and coverage gaps as pull requests
 
 **Status:** planned (2026-10-30), nothing built. An admin adds an AI API
@@ -209,8 +300,9 @@ never merges anything itself.
   - Entry points: a "Fix with AI" action on an issue, a bulk action on a
     filtered list, and later an option to fix everything that fails the
     gate on a branch.
-- **Integrations.** A GitHub App and a GitLab project or group token, per
-  project. The server clones the branch, applies the change on a new
+- **Integrations.** The forge connections and project bindings from pull
+  request decoration (above): a GitHub App, a GitLab project or group
+  token, or a Bitbucket token. The server clones the branch, applies the change on a new
   `sonda/fix-<issue>` branch, and opens the PR or MR. The description
   links the issue, its rule and the analysis that found it.
 - **AI provider.** One server-wide API token to start (Anthropic first,
@@ -281,5 +373,5 @@ never merges anything itself.
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules, and for C# ([ADR-0008](adr/0008-semantic-layer.md), [ADR-0015](adr/0015-csharp.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
 | **Last C# rules** | Three SonarQube C# rules have no sonda counterpart ([ADR-0015](adr/0015-csharp.md)): invalid casts (S1944) and calls resolving to a `params` overload (S3220) need type checking, and lambdas in Blazor loops (S6802) check `.razor` markup, which sonda doesn't parse. | S1944 and S3220 with semantic phase S4 (types, its own ADR). S6802 with a Razor grammar, reviewed like the C# one. |
 | **Page flicker while navigating** | Every page loads through `useAsync` (`web/src/api/hooks.ts`), which has no cache and shows a skeleton whenever its inputs change, so moving between pages or changing a filter flashes a placeholder before the content. | A small response cache in `useAsync`: show the last data for a request while it reloads, keep the previous page's data when only a filter changes, and show skeletons only after a short delay. |
-| **Observability** | The server writes plain-text logs (`RUST_LOG`) and has `GET /api/health`, which answers ok without checking the database. There are no request logs, request ids, metrics or traces, so a slow upload or a failing advisory sync is hard to see from outside. | Request logging with a request id (a `tower-http` trace layer); JSON logs as an option; a readiness check that pings PostgreSQL; a Prometheus `/metrics` endpoint for request counts and latencies, upload and analysis durations, the database pool and advisory sync results; OpenTelemetry trace export as an option. |
+| **Observability** | Started ([ADR-0019](adr/0019-observability.md)): request ids, request logs and `SONDA_LOG_FORMAT=json` are built, and `GET /api/health` already pings PostgreSQL. There are still no metrics, so a slow upload or a failing advisory sync is hard to see from outside. OpenTelemetry traces are left out for now (see the ADR). | A Prometheus `/metrics` endpoint on its own listener (`SONDA_METRICS_LISTEN`): request counts and latencies by route template first, then upload durations, the database pool and advisory sync results. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |

@@ -99,6 +99,9 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("py/s3-bucket-owner", &[441, 693], &[]),
     // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
     ("py/regex-catastrophic-backtracking", &[1333], &[]),
+    ("py/graphql-introspection-enabled", &[200], &[A05]),
+    ("py/graphql-no-depth-limit", &[770], &[]),
+    ("py/django-custom-password-hasher", &[327], &[A02]),
     ("py/xml-signature-no-x509", &[347], &[A02]),
     ("py/no-eval", &[95], &[A03]),
     ("py/subprocess-shell", &[78], &[A03]),
@@ -177,6 +180,9 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("java/static-iv", &[323], &[A02]),
     // CWE-1333 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
     ("java/regex-catastrophic-backtracking", &[1333], &[]),
+    ("js/regex-catastrophic-backtracking", &[1333], &[]),
+    ("js/template-autoescape-disabled", &[79], &[A03]),
+    ("js/wallet-phrase-hardcoded", &[798], &[A07]),
     ("java/debug-enabled", &[215, 489], &[A05]),
     ("java/autoescape-disabled", &[79], &[A03]),
     ("java/upload-size-unlimited", &[400, 770], &[]),

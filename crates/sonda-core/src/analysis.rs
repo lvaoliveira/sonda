@@ -88,13 +88,17 @@ pub(crate) fn analyze(
     scan_lines(&ctx, rules, scan.code_lines.len(), &mut issues);
     scan_java_files(&ctx, lang, root, rules, &mut issues);
     scan_js_files(&ctx, lang, root, rules, &mut issues);
+    scan_py_files(&ctx, lang, root, rules, &mut issues);
 
     metrics.lines = ctx.lines.count();
     metrics.ncloc = scan.code_lines.len();
     metrics.comment_lines = scan.comment_lines;
 
     issues.retain(|i| {
-        i.rule == rules::NOSONAR_COMMENT || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
+        // A malformed suppression comment cannot suppress the report about itself.
+        i.rule == rules::NOSONAR_COMMENT
+            || i.rule == "py/suppression-comment-format"
+            || !is_suppressed(ctx.lines.text(i.line - 1), i.rule)
     });
     // A total order, so output never depends on the order rules ran in.
     issues.sort_by(|a, b| {
@@ -128,7 +132,10 @@ pub(crate) fn analyze(
         has_syntax_errors: root.has_error(),
         facts: match lang {
             Lang::CSharp => cs_facts(&ctx, root),
-            _ => java_facts(&ctx, lang, root),
+            _ => java_facts(&ctx, lang, root)
+                .into_iter()
+                .chain(js_facts(&ctx, lang, root, rules))
+                .collect(),
         },
         semantic_incomplete,
         sha256: Digest(sha2::Sha256::digest(bytes).into()),
@@ -141,24 +148,43 @@ pub(crate) fn analyze(
 /// the file, moving the line and re-indenting it keep the fingerprint;
 /// changing the flagged line itself does not. `issues` must be sorted.
 fn fingerprints(ctx: &Ctx, issues: &mut [Issue]) {
-    let mut seen: HashMap<(&str, String), u64> = HashMap::new();
+    use sha2::Digest as _;
+    // Many issues can share one very long line (minified code, a generated
+    // file): the line is normalized and hashed once per rule, not per issue.
+    let mut text_ids: HashMap<String, usize> = HashMap::new();
+    let mut line_text: HashMap<usize, usize> = HashMap::new();
+    let mut seen: HashMap<(&str, usize), (sha2::Sha256, u64)> = HashMap::new();
     for issue in issues {
-        let line: String = ctx
-            .lines
-            .text(issue.line - 1)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        let mut hasher = sha2::Sha256::new();
-        // Length-prefixed fields, so no two different inputs hash the same
-        // bytes; the tag lets the algorithm change without silent collisions.
-        for field in ["sonda-fingerprint-v1", issue.rule, ctx.path, &line] {
-            hasher.update((field.len() as u64).to_le_bytes());
-            hasher.update(field.as_bytes());
-        }
-        let occurrence = seen.entry((issue.rule, line)).or_insert(0);
-        hasher.update(occurrence.to_le_bytes());
-        *occurrence += 1;
+        let row = issue.line - 1;
+        let id = *line_text.entry(row).or_insert_with(|| {
+            let line: String = ctx
+                .lines
+                .text(row)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            let next = text_ids.len();
+            *text_ids.entry(line).or_insert(next)
+        });
+        let entry = seen.entry((issue.rule, id)).or_insert_with(|| {
+            let line = ctx
+                .lines
+                .text(row)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>();
+            let mut hasher = sha2::Sha256::new();
+            // Length-prefixed fields, so no two different inputs hash the same
+            // bytes; the tag lets the algorithm change without silent collisions.
+            for field in ["sonda-fingerprint-v1", issue.rule, ctx.path, &line] {
+                hasher.update((field.len() as u64).to_le_bytes());
+                hasher.update(field.as_bytes());
+            }
+            (hasher, 0)
+        });
+        let mut hasher = entry.0.clone();
+        hasher.update(entry.1.to_le_bytes());
+        entry.1 += 1;
         let hash = hasher.finalize();
         let mut short = [0; 16];
         short.copy_from_slice(&hash[..16]);
@@ -340,6 +366,14 @@ pub(crate) fn is_classic_assembly_info(names: &[&str]) -> bool {
 /// NeutralResourcesLanguage.
 fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
     let mut facts = Vec::new();
+    // The types this file declares, for rules that compare declarations
+    // across files (ADR-0020).
+    let index = crate::semantic::cs_index::extract(root, ctx.src.as_bytes());
+    if !index.types.is_empty()
+        && let Ok(json) = serde_json::to_string(&index)
+    {
+        facts.push((crate::semantic::cs_index::FACT.to_string(), json));
+    }
     if ctx.src.contains("ResourceManager") {
         facts.push(("cs-resources".to_string(), String::new()));
     }
@@ -451,6 +485,19 @@ fn cs_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
 /// methods implemented in no file, and AssemblyInfo without
 /// NeutralResourcesLanguage in a project that uses resources.
 pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    // Declarations compared across files (ADR-0020).
+    let active: Vec<&str> = rules::cs_project::RULES
+        .iter()
+        .copied()
+        .filter(|r| rules.get(r).is_some())
+        .collect();
+    let found = rules::cs_project::run(files.iter().map(|f| f.facts.as_slice()), &active);
+    for (rule, file, span) in found {
+        if let Some(r) = rules.get(rule) {
+            let issue = project_issue_at(r, &files[file].path, span, r.rule.message.to_string());
+            files[file].issues.push(issue);
+        }
+    }
     let fact = |f: &FileAnalysis, kind: &str| -> Vec<String> {
         f.facts
             .iter()
@@ -514,7 +561,187 @@ pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
     }
 }
 
+/// An issue found by looking at the project, at a span a fact recorded.
+fn project_issue_at(
+    rule: &ActiveRule,
+    path: &str,
+    span: crate::semantic::cs_index::Span,
+    message: String,
+) -> Issue {
+    let mut issue = project_issue(rule, path, span.line, message);
+    issue.column = span.column;
+    issue.end_line = span.end_line;
+    issue.end_column = span.end_column;
+    issue
+}
+
 /// An issue that belongs to a file as a whole, found by looking at the project.
+/// The packages a JavaScript or TypeScript file imports, one fact each:
+/// `import` = `<package>\t<line>`. Only read when the dependency rule is on.
+fn js_facts(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet) -> Vec<(String, String)> {
+    if !matches!(lang, Lang::JavaScript | Lang::TypeScript | Lang::Tsx)
+        || rules.get(rules::JS_DEPENDENCY_NOT_DECLARED).is_none()
+    {
+        return Vec::new();
+    }
+    let mut facts = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let source = match n.kind() {
+            "import_statement" | "export_statement" => n.child_by_field_name("source"),
+            "call_expression"
+                if n.child_by_field_name("function")
+                    .is_some_and(|f| matches!(ctx.text(f), "require" | "import")) =>
+            {
+                n.child_by_field_name("arguments")
+                    .and_then(|a| a.named_child(0))
+                    .filter(|a| a.kind() == "string")
+            }
+            _ => None,
+        };
+        if let Some(source) = source {
+            let t = ctx.text(source);
+            let spec = t.get(1..t.len().saturating_sub(1)).unwrap_or("");
+            if let Some(package) = package_of(spec) {
+                facts.push((
+                    "import".to_string(),
+                    format!("{package}\t{}", source.start_position().row + 1),
+                ));
+            }
+        }
+        let mut c = n.walk();
+        let kids: Vec<Node> = n.named_children(&mut c).collect();
+        stack.extend(kids);
+    }
+    facts
+}
+
+/// The npm package a module specifier names, or None for relative paths,
+/// Node's own modules and aliases.
+fn package_of(spec: &str) -> Option<String> {
+    const BUILTINS: &[&str] = &[
+        "assert",
+        "async_hooks",
+        "buffer",
+        "child_process",
+        "cluster",
+        "console",
+        "constants",
+        "crypto",
+        "dgram",
+        "diagnostics_channel",
+        "dns",
+        "domain",
+        "events",
+        "fs",
+        "http",
+        "http2",
+        "https",
+        "inspector",
+        "module",
+        "net",
+        "os",
+        "path",
+        "perf_hooks",
+        "process",
+        "punycode",
+        "querystring",
+        "readline",
+        "repl",
+        "stream",
+        "string_decoder",
+        "sys",
+        "timers",
+        "tls",
+        "trace_events",
+        "tty",
+        "url",
+        "util",
+        "v8",
+        "vm",
+        "wasi",
+        "worker_threads",
+        "zlib",
+        "test",
+    ];
+    if spec.is_empty()
+        || spec.starts_with(['.', '/', '#', '~', '$'])
+        || spec.starts_with("node:")
+        || spec.starts_with("@/")
+        || spec.contains(':')
+    {
+        return None;
+    }
+    let mut parts = spec.split('/');
+    let first = parts.next()?;
+    let name = if first.starts_with('@') {
+        format!("{first}/{}", parts.next()?)
+    } else {
+        first.to_string()
+    };
+    let root = name.split('/').next().unwrap_or("");
+    if BUILTINS.contains(&root) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Imports of packages that the nearest `package.json` (or one above it)
+/// does not declare. `manifests` holds each package.json's directory and
+/// every name it declares or is called.
+pub(crate) fn js_dependency_rules(
+    files: &mut [FileAnalysis],
+    rules: &RuleSet,
+    manifests: &[(String, Vec<String>)],
+) {
+    let Some(rule) = rules.get(rules::JS_DEPENDENCY_NOT_DECLARED) else {
+        return;
+    };
+    if manifests.is_empty() {
+        return;
+    }
+    // Workspace packages import each other by their names.
+    let workspace: std::collections::HashSet<&str> = manifests
+        .iter()
+        .flat_map(|(_, names)| names.iter().map(String::as_str))
+        .collect();
+    for f in files.iter_mut() {
+        let dir = f.path.rsplit_once('/').map_or("", |(d, _)| d);
+        let applicable: Vec<&(String, Vec<String>)> = manifests
+            .iter()
+            .filter(|(m, _)| m.is_empty() || dir == m || dir.starts_with(&format!("{m}/")))
+            .collect();
+        if applicable.is_empty() {
+            continue;
+        }
+        let declared: std::collections::HashSet<&str> = applicable
+            .iter()
+            .flat_map(|(_, names)| names.iter().map(String::as_str))
+            .collect();
+        let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let imports: Vec<(String, usize)> = f
+            .facts
+            .iter()
+            .filter(|(k, _)| k == "import")
+            .filter_map(|(_, v)| {
+                let (name, line) = v.split_once('\t')?;
+                Some((name.to_string(), line.parse().ok()?))
+            })
+            .collect();
+        for (name, line) in imports {
+            if declared.contains(name.as_str())
+                || workspace.contains(name.as_str())
+                || !reported.insert(name.clone())
+            {
+                continue;
+            }
+            let msg = format!("Add {name} to the dependencies in package.json.");
+            let issue = project_issue(rule, &f.path, line, msg);
+            f.issues.push(issue);
+        }
+    }
+}
+
 fn project_issue(rule: &ActiveRule, path: &str, line: usize, message: String) -> Issue {
     let mut hasher = sha2::Sha256::new();
     for field in [
@@ -808,6 +1035,52 @@ fn scan_js_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mu
             let at = first.copied().unwrap_or(root);
             let msg = "Add a copyright or license header to this file.".to_string();
             issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
+        }
+    }
+}
+
+/// Rules about a Python file as a whole: its name and what the parser could
+/// not read.
+fn scan_py_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mut Vec<Issue>) {
+    if lang != Lang::Python {
+        return;
+    }
+    let path = ctx.path.replace('\\', "/");
+    let file = path.rsplit('/').next().unwrap_or(&path);
+    let stem = file
+        .strip_suffix(".pyi")
+        .or_else(|| file.strip_suffix(".py"))
+        .unwrap_or(file);
+    if let Some(rule) = rules.get(rules::PY_MODULE_NAME)
+        && !(stem.starts_with("__") && stem.ends_with("__"))
+    {
+        let test_prefix = stem.strip_prefix("test_").unwrap_or(stem);
+        let ok = test_prefix
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_lowercase())
+            && test_prefix
+                .chars()
+                .all(|c| c == '_' || c.is_ascii_lowercase() || c.is_ascii_digit());
+        if !ok {
+            let msg = format!("Rename the module {stem} to lower case with underscores.");
+            let at = root.named_child(0).unwrap_or(root);
+            issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
+        }
+    }
+    if let Some(rule) = rules.get(rules::PY_PARSE_FAILURE)
+        && root.has_error()
+    {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if n.is_error() || n.is_missing() {
+                let msg = "The parser could not understand this part of the file.".to_string();
+                issues.push(ctx.issue(rule, n, msg, 0));
+                break;
+            }
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.children(&mut c).collect();
+            stack.extend(kids.into_iter().rev());
         }
     }
 }
@@ -1591,6 +1864,9 @@ fn is_suppressed(line: &str, rule: &str) -> bool {
 struct LineIndex<'a> {
     src: &'a str,
     starts: Vec<usize>,
+    /// An ASCII file has one byte per character: columns need no counting,
+    /// which keeps a file of one very long line from costing a scan per issue.
+    ascii: bool,
 }
 
 impl<'a> LineIndex<'a> {
@@ -1598,7 +1874,11 @@ impl<'a> LineIndex<'a> {
         let starts = std::iter::once(0)
             .chain(src.match_indices('\n').map(|(i, _)| i + 1))
             .collect();
-        LineIndex { src, starts }
+        LineIndex {
+            src,
+            starts,
+            ascii: src.is_ascii(),
+        }
     }
 
     fn count(&self) -> usize {
@@ -1620,6 +1900,9 @@ impl<'a> LineIndex<'a> {
 
     /// Converts a tree-sitter byte column to a 1-based character column.
     fn char_column(&self, row: usize, byte_col: usize) -> usize {
+        if self.ascii {
+            return byte_col + 1;
+        }
         let line = self.text(row);
         let cut = byte_col.min(line.len());
         line.get(..cut).map_or(cut, |s| s.chars().count()) + 1
@@ -1881,6 +2164,28 @@ pub(crate) mod tests {
         assert_eq!(hit(rules::TRAILING_WHITESPACE), [1]);
         assert_eq!(hit(rules::LINE_LENGTH), [3]);
         assert_eq!(hit(rules::FINAL_NEWLINE), [4]);
+    }
+
+    #[test]
+    fn python_rules_that_need_the_path_or_a_parse_error() {
+        let ids = [rules::PY_MODULE_NAME, rules::PY_PARSE_FAILURE];
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ids.map(String::from).to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let hits = |path: &str, src: &str| -> Vec<&'static str> {
+            analyze(path, Lang::Python, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .map(|i| i.rule)
+                .filter(|r| ids.contains(r))
+                .collect()
+        };
+        assert!(hits("pkg/good_name.py", "x = 1\n").is_empty());
+        assert!(hits("pkg/__init__.py", "x = 1\n").is_empty());
+        assert!(hits("pkg/test_thing.py", "x = 1\n").is_empty());
+        assert_eq!(hits("pkg/BadName.py", "x = 1\n"), [rules::PY_MODULE_NAME]);
+        assert_eq!(hits("a.py", "x = (\n"), [rules::PY_PARSE_FAILURE]);
     }
 
     #[test]

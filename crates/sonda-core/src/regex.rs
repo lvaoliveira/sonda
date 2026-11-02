@@ -160,6 +160,10 @@ pub(crate) struct Flags {
     pub canon_eq: bool,
     pub unicode_case: bool,
     pub unicode_class: bool,
+    /// JavaScript: `\w` is ASCII-only while `\s` is Unicode.
+    pub js: bool,
+    /// JavaScript: the `u` or `v` flag.
+    pub unicode: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -281,6 +285,10 @@ struct Parser {
     nodes: usize,
     depth: usize,
     java: bool,
+    js: bool,
+    /// JavaScript: capturing groups in the whole pattern, and whether any is named.
+    total_groups: usize,
+    has_named: bool,
     bad_controls: usize,
 }
 
@@ -292,17 +300,56 @@ fn err<T>(message: &str) -> Result<T, ParseError> {
 
 /// Parses `pattern` as a Python `re` pattern.
 pub(crate) fn parse(pattern: &str, flags: Flags) -> Result<Regex, ParseError> {
-    parse_dialect(pattern, flags, false)
+    parse_dialect(pattern, flags, false, false)
+}
+
+/// Parses `pattern` as a JavaScript regular expression.
+pub(crate) fn parse_js(pattern: &str, mut flags: Flags) -> Result<Regex, ParseError> {
+    flags.js = true;
+    parse_dialect(pattern, flags, false, true)
 }
 
 /// Parses `pattern` as a `java.util.regex` pattern.
 pub(crate) fn parse_java(pattern: &str, flags: Flags) -> Result<Regex, ParseError> {
-    parse_dialect(pattern, flags, true)
+    parse_dialect(pattern, flags, true, false)
 }
 
-fn parse_dialect(pattern: &str, flags: Flags, java: bool) -> Result<Regex, ParseError> {
+/// JavaScript: how many capturing groups the pattern has, and whether any is named.
+fn prescan_groups(chars: &[char]) -> (usize, bool) {
+    let (mut groups, mut named, mut in_class, mut i) = (0, false, false, 0);
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 1,
+            ']' if in_class => in_class = false,
+            '[' if !in_class => in_class = true,
+            '(' if !in_class => {
+                if chars.get(i + 1) == Some(&'?') {
+                    if chars.get(i + 2) == Some(&'<')
+                        && !matches!(chars.get(i + 3), Some('=' | '!'))
+                    {
+                        groups += 1;
+                        named = true;
+                    }
+                } else {
+                    groups += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (groups, named)
+}
+
+fn parse_dialect(pattern: &str, flags: Flags, java: bool, js: bool) -> Result<Regex, ParseError> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let (total_groups, has_named) = if js {
+        prescan_groups(&chars)
+    } else {
+        (0, false)
+    };
     let mut p = Parser {
-        chars: pattern.chars().collect(),
+        chars,
         pos: 0,
         flags,
         groups: 0,
@@ -310,6 +357,9 @@ fn parse_dialect(pattern: &str, flags: Flags, java: bool) -> Result<Regex, Parse
         nodes: 0,
         depth: 0,
         java,
+        js,
+        total_groups,
+        has_named,
         bad_controls: 0,
     };
     let root = p.alternation()?;
@@ -546,9 +596,11 @@ impl Parser {
                 Node::Char('{')
             }
             '[' if self.java => self.java_class()?,
+            '[' if self.js => self.js_class()?,
             '[' => self.class()?,
             '(' => return self.group(),
             '\\' if self.java => self.java_escape()?,
+            '\\' if self.js => self.js_escape()?,
             '\\' => self.escape()?,
             c => Node::Char(c),
         }))
@@ -558,6 +610,9 @@ impl Parser {
         if self.eat('?') {
             if self.java {
                 return self.java_group();
+            }
+            if self.js {
+                return self.js_group();
             }
             if self.eat(':') {
                 return self.group_body(GroupKind::NonCapture, 0).map(Some);
@@ -1285,6 +1340,287 @@ enum Escaped {
     Items(Vec<ClassItem>),
 }
 
+// ---------------------------------------------------- JavaScript dialect
+
+impl Parser {
+    fn js_group(&mut self) -> Result<Option<Node>, ParseError> {
+        if self.eat(':') {
+            return self.group_body(GroupKind::NonCapture, 0).map(Some);
+        }
+        if self.eat('=') || self.eat('!') {
+            let negative = self.chars[self.pos - 1] == '!';
+            return self.look(true, negative).map(Some);
+        }
+        if self.looking_at("<=") || self.looking_at("<!") {
+            self.pos += 1;
+            let negative = self.eat('!');
+            if !negative {
+                self.pos += 1;
+            }
+            return self.look(false, negative).map(Some);
+        }
+        if self.eat('<') {
+            let name = self.js_group_name()?;
+            if self.names.contains(&name) {
+                return err("Duplicate capture group name");
+            }
+            self.names.push(name.clone());
+            self.groups += 1;
+            let index = self.groups;
+            return self.group_body(GroupKind::Named(name), index).map(Some);
+        }
+        err("Invalid group")
+    }
+
+    fn js_group_name(&mut self) -> Result<String, ParseError> {
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c != '>') {
+            self.pos += 1;
+        }
+        if !self.eat('>') {
+            return err("Invalid capture group name");
+        }
+        let name: String = self.chars[start..self.pos - 1].iter().collect();
+        let mut chars = name.chars();
+        let valid = chars
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$')
+            && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$');
+        if valid {
+            Ok(name)
+        } else {
+            err("Invalid capture group name")
+        }
+    }
+
+    /// Reads `n` hex digits; nothing is consumed when they are not all there.
+    fn try_hex(&mut self, n: usize) -> Option<u32> {
+        let digits: Option<Vec<u32>> = (0..n)
+            .map(|i| self.chars.get(self.pos + i).and_then(|c| c.to_digit(16)))
+            .collect();
+        let value = digits?.into_iter().fold(0u32, |acc, d| acc * 16 + d);
+        self.pos += n;
+        Some(value)
+    }
+
+    /// The escapes that stand for one character, after the escape letter `c`.
+    fn js_char(&mut self, c: char) -> Result<char, ParseError> {
+        Ok(match c {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            'f' => '\u{c}',
+            'v' => '\u{b}',
+            '0' if !self.peek().is_some_and(|d| d.is_ascii_digit()) => '\0',
+            'x' => match self.try_hex(2) {
+                Some(v) => char::from_u32(v).unwrap_or('\0'),
+                None if self.flags.unicode => return err("Invalid escape"),
+                None => 'x',
+            },
+            'u' => {
+                if self.flags.unicode && self.eat('{') {
+                    let start = self.pos;
+                    while self.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
+                        self.pos += 1;
+                    }
+                    let digits: String = self.chars[start..self.pos].iter().collect();
+                    if !self.eat('}') || digits.is_empty() {
+                        return err("Invalid Unicode escape");
+                    }
+                    match u32::from_str_radix(&digits, 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                    {
+                        Some(ch) => ch,
+                        None => return err("Invalid Unicode escape"),
+                    }
+                } else {
+                    match self.try_hex(4) {
+                        // A surrogate half: the pair is not tracked.
+                        Some(v) => char::from_u32(v).unwrap_or('\u{fffd}'),
+                        None if self.flags.unicode => return err("Invalid Unicode escape"),
+                        None => 'u',
+                    }
+                }
+            }
+            'c' => match self.peek().filter(char::is_ascii_alphabetic) {
+                Some(letter) => {
+                    self.pos += 1;
+                    char::from_u32(letter as u32 % 32).unwrap_or('\0')
+                }
+                None if self.flags.unicode => return err("Invalid unicode escape"),
+                None => {
+                    // `\c` alone is a literal backslash, then the c.
+                    self.pos -= 1;
+                    '\\'
+                }
+            },
+            c if self.flags.unicode && !"^$\\.*+?()[]{}|/".contains(c) => {
+                return err("Invalid escape");
+            }
+            c => c,
+        })
+    }
+
+    fn js_property(&mut self) -> Result<String, ParseError> {
+        if !self.eat('{') {
+            return err("Invalid property name");
+        }
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c != '}') {
+            self.pos += 1;
+        }
+        if !self.eat('}') {
+            return err("Invalid property name");
+        }
+        Ok(self.chars[start..self.pos - 1].iter().collect())
+    }
+
+    fn js_escape(&mut self) -> Result<Node, ParseError> {
+        let Some(c) = self.peek() else {
+            return err("\\ at end of pattern");
+        };
+        self.pos += 1;
+        Ok(match c {
+            'd' | 'D' | 's' | 'S' | 'w' | 'W' => Node::Shorthand(c),
+            'b' => Node::Assertion(Assertion::WordBoundary),
+            'B' => Node::Assertion(Assertion::NotWordBoundary),
+            'k' if self.has_named || self.flags.unicode => {
+                if !self.eat('<') {
+                    return err("Invalid named reference");
+                }
+                let name = self.js_group_name()?;
+                Node::BackrefName(name)
+            }
+            'p' | 'P' if self.flags.unicode => {
+                let name = self.js_property()?;
+                Node::Property {
+                    name,
+                    negated: c == 'P',
+                }
+            }
+            '1'..='9' => {
+                let mut n = c.to_digit(10).unwrap_or(0) as usize;
+                let save = self.pos;
+                while let Some(d) = self.peek().and_then(|d| d.to_digit(10)) {
+                    n = n * 10 + d as usize;
+                    self.pos += 1;
+                }
+                if n <= self.total_groups {
+                    Node::BackrefIndex(n)
+                } else if self.flags.unicode {
+                    return err("Invalid escape");
+                } else {
+                    // Legacy octal escape, or just the digit.
+                    self.pos = save;
+                    match c.to_digit(8) {
+                        Some(mut v) => {
+                            for _ in 0..2 {
+                                match self.peek().and_then(|d| d.to_digit(8)) {
+                                    Some(d) if v * 8 + d <= 0o377 => {
+                                        v = v * 8 + d;
+                                        self.pos += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            Node::Octal(char::from_u32(v).unwrap_or('\0'))
+                        }
+                        None => Node::Char(c),
+                    }
+                }
+            }
+            c => Node::Char(self.js_char(c)?),
+        })
+    }
+
+    fn js_class(&mut self) -> Result<Node, ParseError> {
+        let negated = self.eat('^');
+        let mut items = Vec::new();
+        loop {
+            let Some(c) = self.peek() else {
+                return err("Unterminated character class");
+            };
+            self.pos += 1;
+            if c == ']' {
+                break;
+            }
+            let lo = if c == '\\' {
+                match self.js_class_escape()? {
+                    ClassItem::Char(ch) => ch,
+                    other => {
+                        items.push(other);
+                        continue;
+                    }
+                }
+            } else {
+                c
+            };
+            if self.peek() == Some('-') && self.chars.get(self.pos + 1).is_some_and(|n| *n != ']') {
+                self.pos += 1;
+                let Some(h) = self.peek() else {
+                    return err("Unterminated character class");
+                };
+                self.pos += 1;
+                let hi = if h == '\\' {
+                    self.js_class_escape()?
+                } else {
+                    ClassItem::Char(h)
+                };
+                match hi {
+                    ClassItem::Char(hi) => {
+                        if hi < lo {
+                            return err("Range out of order in character class");
+                        }
+                        items.push(ClassItem::Range(lo, hi));
+                    }
+                    other => {
+                        if self.flags.unicode {
+                            return err("Invalid character class");
+                        }
+                        items.push(ClassItem::Char(lo));
+                        items.push(ClassItem::Char('-'));
+                        items.push(other);
+                    }
+                }
+            } else {
+                items.push(ClassItem::Char(lo));
+            }
+        }
+        Ok(Node::Class { negated, items })
+    }
+
+    fn js_class_escape(&mut self) -> Result<ClassItem, ParseError> {
+        let Some(c) = self.peek() else {
+            return err("\\ at end of pattern");
+        };
+        self.pos += 1;
+        Ok(match c {
+            'd' | 'D' | 's' | 'S' | 'w' | 'W' => ClassItem::Shorthand(c),
+            'b' => ClassItem::Char('\u{8}'),
+            '-' => ClassItem::Char('-'),
+            'p' | 'P' if self.flags.unicode => ClassItem::Property {
+                name: self.js_property()?,
+                negated: c == 'P',
+            },
+            '1'..='7' if !self.flags.unicode => {
+                let mut v = c.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    match self.peek().and_then(|d| d.to_digit(8)) {
+                        Some(d) if v * 8 + d <= 0o377 => {
+                            v = v * 8 + d;
+                            self.pos += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                ClassItem::Char(char::from_u32(v).unwrap_or('\0'))
+            }
+            c => ClassItem::Char(self.js_char(c)?),
+        })
+    }
+}
+
 // ---------------------------------------------------- analyses
 
 /// The characters a single-character node can match; None for nodes that
@@ -1299,7 +1635,7 @@ pub(crate) fn set_of(node: &Node, flags: &Flags) -> Option<Set> {
                 Set::of('\n').negate()
             }
         }
-        Node::Shorthand(c) => shorthand_set(*c, flags.ascii),
+        Node::Shorthand(c) => shorthand_set(*c, flags),
         Node::Class { negated, items } => {
             let mut s = items_set(items, flags)?;
             if flags.ignore_case {
@@ -1318,7 +1654,7 @@ fn items_set(items: &[ClassItem], flags: &Flags) -> Option<Set> {
         s = s.union(&match item {
             ClassItem::Char(c) => Set::of(*c),
             ClassItem::Range(lo, hi) => Set::range(*lo as u32, *hi as u32),
-            ClassItem::Shorthand(c) => shorthand_set(*c, flags.ascii),
+            ClassItem::Shorthand(c) => shorthand_set(*c, flags),
             ClassItem::Nested { negated, items } => {
                 let inner = items_set(items, flags)?;
                 if *negated { inner.negate() } else { inner }
@@ -1340,23 +1676,29 @@ fn items_set(items: &[ClassItem], flags: &Flags) -> Option<Set> {
     Some(s)
 }
 
-fn shorthand_set(c: char, ascii: bool) -> Set {
+fn shorthand_set(c: char, flags: &Flags) -> Set {
+    // JavaScript: `\w` and `\d` are ASCII even with the u flag, `\s` is not.
+    let (word_ascii, space_ascii) = if flags.js {
+        (true, false)
+    } else {
+        (flags.ascii, flags.ascii)
+    };
     match c {
         'h' => Set::of(' ')
             .union(&Set::of('\t'))
             .union(&Set::of('\u{a0}'))
             .union(&Set::range(0x2000, 0x200a)),
-        'H' => shorthand_set('h', ascii).negate(),
+        'H' => shorthand_set('h', flags).negate(),
         'v' => Set::range(0x0a, 0x0d)
             .union(&Set::of('\u{85}'))
             .union(&Set::range(0x2028, 0x2029)),
-        'V' => shorthand_set('v', ascii).negate(),
+        'V' => shorthand_set('v', flags).negate(),
         'd' => digit_set(),
         'D' => digit_set().negate(),
-        's' => space_set(ascii),
-        'S' => space_set(ascii).negate(),
-        'w' => word_set(ascii),
-        _ => word_set(ascii).negate(),
+        's' => space_set(space_ascii),
+        'S' => space_set(space_ascii).negate(),
+        'w' => word_set(word_ascii),
+        _ => word_set(word_ascii).negate(),
     }
 }
 
@@ -1629,5 +1971,59 @@ mod tests {
     fn deep_nesting_is_refused() {
         let p = format!("{}a{}", "(".repeat(200), ")".repeat(200));
         assert!(parse(&p, Flags::default()).is_err());
+    }
+
+    fn js(p: &str, flags: &str) -> Result<Regex, ParseError> {
+        parse_js(
+            p,
+            Flags {
+                unicode: flags.contains('u'),
+                ignore_case: flags.contains('i'),
+                ..Flags::default()
+            },
+        )
+    }
+
+    #[test]
+    fn javascript_dialect() {
+        for good in [
+            r"^(?<year>\d{4})-(?<m>\d\d)$",
+            r"(?<=\$)\d+(?!\d)",
+            r"[]",
+            r"[^]",
+            r"a{",
+            r"\1(a)",
+            r"[\w-.]+",
+            r"\k<x>",
+            r"\cJ\x41\u0041",
+            r"[a-z&&b]",
+        ] {
+            assert!(js(good, "").is_ok(), "{good}");
+        }
+        for bad in [
+            r"(a",
+            r"a)",
+            r"*a",
+            r"(?<n>a)(?<n>b)",
+            r"[b-a]",
+            r"(?P<n>a)",
+            r"a**",
+            r"(?<n",
+        ] {
+            assert!(js(bad, "").is_err(), "{bad}");
+        }
+        // Unicode mode is stricter, and gives \p its meaning.
+        assert!(js(r"\p{L}+", "u").is_ok());
+        assert!(js(r"\-", "u").is_err());
+        assert!(js(r"\p{L}", "").is_ok());
+        let r = js(r"(a)(?<n>b)\2", "").unwrap();
+        assert_eq!(r.groups, 2);
+        assert_eq!(r.names, ["n"]);
+        // \w is ASCII-only, \s is not.
+        let r = js(r"\w\s", "").unwrap();
+        let w = set_of(&Node::Shorthand('w'), &r.flags).unwrap();
+        assert!(!w.contains('é' as u32));
+        let s = set_of(&Node::Shorthand('s'), &r.flags).unwrap();
+        assert!(s.contains(0xa0));
     }
 }

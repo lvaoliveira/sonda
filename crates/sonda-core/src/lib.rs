@@ -320,6 +320,12 @@ mod architecture {
         ("codeowners.rs", include_str!("codeowners.rs")),
         ("semantic/mod.rs", include_str!("semantic/mod.rs")),
         ("semantic/js.rs", include_str!("semantic/js.rs")),
+        ("semantic/cs.rs", include_str!("semantic/cs.rs")),
+        ("semantic/cs_index.rs", include_str!("semantic/cs_index.rs")),
+        (
+            "rules/catalog/cs_project.rs",
+            include_str!("rules/catalog/cs_project.rs"),
+        ),
         ("deps/mod.rs", include_str!("deps/mod.rs")),
         ("deps/npm.rs", include_str!("deps/npm.rs")),
         ("deps/cargo.rs", include_str!("deps/cargo.rs")),

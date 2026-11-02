@@ -207,8 +207,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "const s = list.reduce((a, b) => a + b);",
-            good: "const s = list.reduce((a, b) => a + b, 0);",
+            bad: "const s = [1, 2, 3].reduce((a, b) => a + b);",
+            good: "const s = [1, 2, 3].reduce((a, b) => a + b, 0);",
         }),
     },
     Rule {
@@ -850,11 +850,234 @@ fn rejects_with_a_literal(call: Node, _: &[u8]) -> bool {
         })
 }
 
-fn reduces_without_initial_value(call: Node, _: &[u8]) -> bool {
+fn reduces_without_initial_value(call: Node, src: &[u8]) -> bool {
     let Some(args) = call.child_by_field_name("arguments") else {
         return false;
     };
+    // SonarQube reports it where the receiver is known to be an array: an
+    // `.reduce` on a parameter or any other unknown value may not be one.
     matches!(named(args).as_slice(), [only] if matches!(only.kind(), "arrow_function" | "function_expression"))
+        && call
+            .child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("object"))
+            .is_some_and(|o| is_provably_array(o, src, 0))
+}
+
+/// Whether the file itself shows `expr` to be an array: a literal, a
+/// well-known array producer, a method chain on one, a local declared as
+/// one, or a call to a function in this file that returns one.
+pub(super) fn is_provably_array(expr: Node, src: &[u8], depth: usize) -> bool {
+    is_provably(expr, src, depth, false)
+}
+
+/// The same for strings: a literal, a string method, `await res.text()`.
+pub(super) fn is_provably_string(expr: Node, src: &[u8], depth: usize) -> bool {
+    is_provably(expr, src, depth, true)
+}
+
+fn is_provably(expr: Node, src: &[u8], depth: usize, strings: bool) -> bool {
+    if depth > 6 {
+        return false;
+    }
+    let again = |e: Node| is_provably(e, src, depth + 1, strings);
+    if strings {
+        return match expr.kind() {
+            "string" | "template_string" => true,
+            "parenthesized_expression" => expr.named_child(0).is_some_and(again),
+            "await_expression" => expr.named_child(0).is_some_and(|c| {
+                c.child_by_field_name("function")
+                    .and_then(|f| f.child_by_field_name("property"))
+                    .is_some_and(|p| text(p, src) == b"text")
+            }),
+            "binary_expression" => {
+                operator_text(expr, src) == b"+"
+                    && ["left", "right"].iter().any(|f| {
+                        expr.child_by_field_name(f)
+                            .is_some_and(|c| matches!(c.kind(), "string" | "template_string"))
+                    })
+            }
+            "call_expression" => {
+                let Some(f) = expr.child_by_field_name("function") else {
+                    return false;
+                };
+                let t = text(f, src);
+                if matches!(t, b"String" | b"JSON.stringify") {
+                    return true;
+                }
+                f.child_by_field_name("property").is_some_and(|m| {
+                    matches!(
+                        text(m, src),
+                        b"toString"
+                            | b"trim"
+                            | b"toLowerCase"
+                            | b"toUpperCase"
+                            | b"padStart"
+                            | b"padEnd"
+                            | b"join"
+                            | b"toFixed"
+                    )
+                })
+            }
+            "identifier" => lookup_declared(expr, src, |v| is_provably(v, src, depth + 1, true)),
+            _ => false,
+        };
+    }
+    match expr.kind() {
+        "array" => true,
+        "parenthesized_expression" => expr
+            .named_child(0)
+            .is_some_and(|e| is_provably_array(e, src, depth + 1)),
+        "new_expression" => expr
+            .child_by_field_name("constructor")
+            .is_some_and(|c| text(c, src) == b"Array"),
+        "call_expression" => {
+            let Some(function) = expr.child_by_field_name("function") else {
+                return false;
+            };
+            let t = text(function, src);
+            if matches!(
+                t,
+                b"Array.from" | b"Array.of" | b"Object.keys" | b"Object.values" | b"Object.entries"
+            ) {
+                return true;
+            }
+            match function.kind() {
+                "member_expression" => {
+                    let method = function
+                        .child_by_field_name("property")
+                        .map(|p| text(p, src))
+                        .unwrap_or_default();
+                    match method {
+                        b"split" => true,
+                        b"map" | b"filter" | b"slice" | b"concat" | b"flat" | b"flatMap"
+                        | b"sort" | b"toSorted" | b"reverse" => function
+                            .child_by_field_name("object")
+                            .is_some_and(|o| is_provably_array(o, src, depth + 1)),
+                        _ => false,
+                    }
+                }
+                "identifier" => returns_an_array(expr, t, src, depth),
+                _ => false,
+            }
+        }
+        "identifier" => lookup_declared(expr, src, |v| is_provably(v, src, depth + 1, false)),
+        _ => false,
+    }
+}
+
+/// Whether the nearest scope declaring the identifier initializes it with a
+/// value `accept` approves: a parameter of a function is a value nobody has
+/// shown anything about.
+fn lookup_declared(id: Node, src: &[u8], accept: impl Fn(Node) -> bool) -> bool {
+    let name = text(id, src);
+    let mut scope = id.parent();
+    while let Some(s) = scope {
+        let is_function = matches!(
+            s.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "generator_function"
+                | "generator_function_declaration"
+                | "program"
+        );
+        if is_function {
+            if declares_parameter(s, name, src) {
+                return false;
+            }
+            let mut declared: Option<Node> = None;
+            crate::rules::catalog::js_syntax::walk(s, &mut |n| {
+                if declared.is_some() {
+                    return false;
+                }
+                if matches!(
+                    n.kind(),
+                    "function_declaration"
+                        | "function_expression"
+                        | "arrow_function"
+                        | "method_definition"
+                ) {
+                    return false;
+                }
+                if n.kind() == "variable_declarator"
+                    && n.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name)
+                {
+                    declared = Some(n);
+                }
+                true
+            });
+            if let Some(d) = declared {
+                return d.child_by_field_name("value").is_some_and(&accept);
+            }
+        }
+        scope = s.parent();
+    }
+    false
+}
+
+fn declares_parameter(function: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut names: Vec<&[u8]> = Vec::new();
+    let mut add = |n: Node| {
+        let mut stack = vec![n];
+        while let Some(p) = stack.pop() {
+            match p.kind() {
+                "identifier" | "shorthand_property_identifier_pattern" => names.push(text(p, src)),
+                _ => stack.extend(named(p)),
+            }
+        }
+    };
+    if let Some(params) = function.child_by_field_name("parameters") {
+        add(params);
+    }
+    if let Some(p) = function.child_by_field_name("parameter") {
+        add(p);
+    }
+    names.contains(&name)
+}
+
+fn root_of(node: Node) -> Node {
+    let mut cur = node;
+    while let Some(p) = cur.parent() {
+        cur = p;
+    }
+    cur
+}
+
+/// A call to a function declared in this file whose every return is an array.
+fn returns_an_array(call: Node, name: &[u8], src: &[u8], depth: usize) -> bool {
+    let mut declared = None;
+    crate::rules::catalog::js_syntax::walk(root_of(call), &mut |n| {
+        if declared.is_none()
+            && n.kind() == "function_declaration"
+            && n.child_by_field_name("name")
+                .is_some_and(|x| text(x, src) == name)
+        {
+            declared = Some(n);
+        }
+        declared.is_none()
+    });
+    let Some(function) = declared.and_then(|f| f.child_by_field_name("body")) else {
+        return false;
+    };
+    let mut returns = Vec::new();
+    crate::rules::catalog::js_syntax::walk(function, &mut |n| {
+        if matches!(
+            n.kind(),
+            "function_declaration" | "function_expression" | "arrow_function"
+        ) {
+            return false;
+        }
+        if n.kind() == "return_statement" {
+            returns.push(n.named_child(0));
+        }
+        true
+    });
+    !returns.is_empty()
+        && returns
+            .iter()
+            .all(|r| r.is_some_and(|v| is_provably_array(v, src, depth + 1)))
 }
 
 fn compares_dissimilar_literals(binary: Node, src: &[u8]) -> bool {
@@ -887,14 +1110,35 @@ fn query_is_built_from_strings(call: Node, src: &[u8]) -> bool {
         return false;
     };
     match first.kind() {
-        "template_string" => {
-            find_below(first, true, |n| n.kind() == "template_substitution").is_some()
-        }
+        "template_string" => find_below(first, true, |n| {
+            n.kind() == "template_substitution"
+                && n.named_child(0)
+                    .is_none_or(|e| !is_numeric_expression(e, src))
+        })
+        .is_some(),
         "binary_expression" => {
             operator_text(first, src) == b"+"
                 && find_below(first, true, |n| n.kind() == "string").is_some()
                 && !all_literals(first)
         }
+        _ => false,
+    }
+}
+
+/// Whether the value is plainly a number, which cannot carry an injection.
+fn is_numeric_expression(expr: Node, src: &[u8]) -> bool {
+    match expr.kind() {
+        "number" => true,
+        "parenthesized_expression" => expr
+            .named_child(0)
+            .is_some_and(|e| is_numeric_expression(e, src)),
+        "call_expression" => expr.child_by_field_name("function").is_some_and(|f| {
+            let t = text(f, src);
+            t.starts_with(b"Math.") || matches!(t, b"Number" | b"parseInt" | b"parseFloat")
+        }),
+        "member_expression" => expr
+            .child_by_field_name("property")
+            .is_some_and(|p| text(p, src) == b"length"),
         _ => false,
     }
 }
@@ -973,7 +1217,9 @@ fn remote_asset_lacks_integrity(element: Node, src: &[u8]) -> bool {
 }
 
 fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
-    if operator_text(binary, src) != b"&&" {
+    let and = operator_text(binary, src) == b"&&";
+    let or = operator_text(binary, src) == b"||";
+    if !and && !or {
         return false;
     }
     let (Some(l), Some(r)) = (
@@ -982,17 +1228,126 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    if !matches!(l.kind(), "identifier" | "member_expression" | "this") {
-        return false;
-    }
-    let reads = match r.kind() {
-        "member_expression" => r.child_by_field_name("object"),
-        "call_expression" => r
-            .child_by_field_name("function")
-            .and_then(|f| f.child_by_field_name("object")),
+    // The value the left side guards: `a && ...`, `a != null && ...`,
+    // `!a || ...`, `a == null || ...`.
+    let is_value = |n: Node| matches!(n.kind(), "identifier" | "member_expression" | "this");
+    let subject = match l.kind() {
+        "identifier" | "member_expression" | "this" if and => Some(l),
+        "unary_expression" if or => l
+            .child_by_field_name("argument")
+            .filter(|a| is_value(*a) && text(l, src).starts_with(b"!")),
+        "binary_expression" => {
+            let op = operator_text(l, src);
+            let wanted: &[&[u8]] = if and {
+                &[b"!=", b"!=="]
+            } else {
+                &[b"==", b"==="]
+            };
+            let (a, b) = (
+                l.child_by_field_name("left"),
+                l.child_by_field_name("right"),
+            );
+            let nullish = |n: Node| matches!(n.kind(), "null" | "undefined");
+            match (a, b) {
+                (Some(a), Some(b)) if wanted.contains(&op) && is_value(a) && nullish(b) => Some(a),
+                _ => None,
+            }
+        }
         _ => None,
     };
-    reads.is_some_and(|o| text(o, src) == text(l, src))
+    let Some(subject) = subject else {
+        return false;
+    };
+    // `!a || a.b` is `!a?.b` only when the right side is itself a negation
+    // or a null test; a plain read there would flip the result.
+    if or {
+        let mut right = r;
+        while right.kind() == "parenthesized_expression" {
+            match right.named_child(0) {
+                Some(inner) => right = inner,
+                None => return false,
+            }
+        }
+        let negated = right.kind() == "unary_expression" && text(right, src).starts_with(b"!");
+        let null_test = right.kind() == "binary_expression"
+            && right
+                .child_by_field_name("right")
+                .is_some_and(|n| matches!(n.kind(), "null" | "undefined"));
+        if !negated && !null_test {
+            return false;
+        }
+    }
+    // `a && a.x === 1 && a.y === 2`: SonarQube leaves a chain whose later
+    // operands are comparisons of the same value, which cannot join one
+    // optional chain.
+    if and
+        && let Some(outer) = binary.parent().filter(|p| {
+            p.kind() == "binary_expression"
+                && operator_text(*p, src) == b"&&"
+                && p.child_by_field_name("left") == Some(binary)
+        })
+        && let Some(next) = outer.child_by_field_name("right")
+        && next.kind() == "binary_expression"
+        && reads_property_of(next, text(subject, src), src, true)
+    {
+        return false;
+    }
+    reads_property_of(r, text(subject, src), src, and)
+}
+
+/// Whether `expr` reads a property or calls a method of `subject`, in a way
+/// an optional chain can replace: the chain itself, an equality test of it
+/// (after `&&`), or its negation or null test (after `||`). A relational
+/// comparison is left alone, as SonarQube does: `undefined > 0` is not the
+/// same answer as short-circuiting.
+fn reads_property_of(expr: Node, subject: &[u8], src: &[u8], and: bool) -> bool {
+    let mut node = expr;
+    loop {
+        match node.kind() {
+            "member_expression" | "subscript_expression" => {
+                let Some(object) = node.child_by_field_name("object") else {
+                    return false;
+                };
+                if text(object, src) == subject {
+                    return true;
+                }
+                node = object;
+            }
+            "call_expression" => match node.child_by_field_name("function") {
+                Some(f) => node = f,
+                None => return false,
+            },
+            "binary_expression" => {
+                let op = operator_text(node, src);
+                let equality = matches!(op, b"==" | b"===" | b"!=" | b"!==");
+                if !equality {
+                    return false;
+                }
+                let (Some(left), Some(right)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) else {
+                    return false;
+                };
+                let nullish = |n: Node| matches!(n.kind(), "null" | "undefined");
+                if !and && !nullish(right) {
+                    return false;
+                }
+                node = left;
+            }
+            "unary_expression" if !and && text(node, src).starts_with(b"!") => {
+                match node.child_by_field_name("argument") {
+                    Some(a) => node = a,
+                    None => return false,
+                }
+            }
+            "parenthesized_expression" | "non_null_expression" => match node.named_child(0) {
+                Some(inner) => node = inner,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
 }
 
 fn ternary_is_a_nullish_default(ternary: Node, src: &[u8]) -> bool {
@@ -1407,13 +1762,13 @@ mod tests {
 
     #[test]
     fn promises_and_callbacks() {
-        let src = "async function f() {\nawait 5;\nawait load();\nawait [1];\n}\nconst a = list.map(x => { x * 2; });\nconst b = list.map(x => { return x * 2; });\nconst c = list.map(x => x * 2);\nconst d = list.forEach(x => { x; });\nlist.forEach(async (x) => { await save(x); });\nlist.forEach((x) => { save(x); });\nconst e = Promise.reject('failed');\nconst g = Promise.reject(new Error('failed'));\nconst h = list.reduce((a, b) => a + b);\nconst i = list.reduce((a, b) => a + b, 0);\nconst j = list.map(parseInt);\nconst k = list.map((x) => parseInt(x, 10));";
+        let src = "async function f() {\nawait 5;\nawait load();\nawait [1];\n}\nconst a = list.map(x => { x * 2; });\nconst b = list.map(x => { return x * 2; });\nconst c = list.map(x => x * 2);\nconst d = list.forEach(x => { x; });\nlist.forEach(async (x) => { await save(x); });\nlist.forEach((x) => { save(x); });\nconst e = Promise.reject('failed');\nconst g = Promise.reject(new Error('failed'));\nconst h = [1, 2].reduce((a, b) => a + b);\nconst i = [1, 2].reduce((a, b) => a + b, 0);\nconst unknown = list.reduce((a, b) => a + b);\nconst j = list.map(parseInt);\nconst k = list.map((x) => parseInt(x, 10));";
         assert_eq!(flagged("js/await-non-promise", JS, src), [2, 4]);
         assert_eq!(flagged("js/callback-without-return", JS, src), [6]);
         assert_eq!(flagged("js/async-foreach", JS, src), [10]);
         assert_eq!(flagged("js/reject-with-literal", JS, src), [12]);
         assert_eq!(flagged("js/reduce-without-initial", JS, src), [14]);
-        assert_eq!(flagged("js/parseint-as-callback", JS, src), [16]);
+        assert_eq!(flagged("js/parseint-as-callback", JS, src), [17]);
     }
 
     #[test]
@@ -1431,6 +1786,11 @@ mod tests {
     fn expressions() {
         let src = "const a = user && user.name;\nconst b = user.profile && user.profile.name;\nconst c = user && other.name;\nconst d = x != null ? x : 'd';\nconst e = x == null ? 'd' : x;\nconst f = x != null ? y : 'd';\nconst g = items.sort();\nconst h = [...items].sort();\nlist.push(1);\nlist.push(2);\nother.push(3);\nlist.map(function (x) { return this.f(x); }, this);\nlist.map((x) => x);\n_.map(list, fn, this);\nvoid fetchData();\nvoid 0;\nconst n = 1_00_000;\nconst o = 100_000;\nconst p = 0xFF_FF;\nconst q = node._reactInternals;";
         assert_eq!(flagged("js/optional-chaining-preferred", JS, src), [1, 2]);
+        let more = "const a = !meta || !meta.enabled;\nconst b = last && last.end === h;\nconst c = !prices || !prices[hour];\nconst d = p != null && p.usePrice != null;\nconst e = a && other.name;\nconst f = !a || b.c;";
+        assert_eq!(
+            flagged("js/optional-chaining-preferred", JS, more),
+            [1, 2, 3, 4]
+        );
         assert_eq!(flagged("js/nullish-coalescing-preferred", JS, src), [4, 5]);
         assert_eq!(flagged("js/sort-assigned", JS, src), [7]);
         assert_eq!(flagged("js/consecutive-push", JS, src), [10]);

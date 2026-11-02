@@ -13,7 +13,9 @@ mod cs_more;
 mod cs_opt;
 mod cs_opt2;
 mod cs_opt3;
+pub(crate) mod cs_project;
 mod cs_security;
+mod cs_semantic;
 mod cs_smells;
 mod cs_tail;
 mod cs_typed;
@@ -37,16 +39,21 @@ mod java_tail;
 mod java_tests;
 mod js;
 mod js_a11y;
+mod js_checks;
 mod js_extra;
+mod js_last;
 mod js_modern;
 mod js_more;
+mod js_regex;
 mod js_security;
 mod js_semantic;
 mod js_syntax;
 mod js_syntax2;
+mod js_vue;
 mod py;
 mod py_cdk;
 mod py_extra;
+mod py_final;
 mod py_last;
 mod py_more;
 mod py_quality;
@@ -78,6 +85,10 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (js_more::RULES, &[]),
     (js_semantic::RULES, js_semantic::OFF_BY_DEFAULT),
     (js_syntax::RULES, js_syntax::OFF_BY_DEFAULT),
+    (js_regex::RULES, js_regex::OFF_BY_DEFAULT),
+    (js_checks::RULES, js_checks::OFF_BY_DEFAULT),
+    (js_last::RULES, js_last::OFF_BY_DEFAULT),
+    (js_vue::RULES, js_vue::OFF_BY_DEFAULT),
     (js_syntax2::RULES, js_syntax2::OFF_BY_DEFAULT),
     (py::RULES, &[]),
     (py_security::RULES, &[]),
@@ -87,6 +98,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (py_cdk::RULES, &[]),
     (py_regex::RULES, &[]),
     (py_last::RULES, py_last::OFF_BY_DEFAULT),
+    (py_final::RULES, py_final::OFF_BY_DEFAULT),
     (java::RULES, &[]),
     (java_security::RULES, &[]),
     (java_bugs::RULES, &[]),
@@ -119,6 +131,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_typed::RULES, cs_typed::OFF_BY_DEFAULT),
     (cs_classes::RULES, cs_classes::OFF_BY_DEFAULT),
     (cs_flow::RULES, cs_flow::OFF_BY_DEFAULT),
+    (cs_semantic::RULES, cs_semantic::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

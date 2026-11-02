@@ -109,6 +109,23 @@ pub fn advisory_sync(env: &dyn Env) -> Result<Option<String>> {
     }
 }
 
+/// How the server writes logs (ADR-0019).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Text,
+    /// One JSON object per line, for log collectors.
+    Json,
+}
+
+/// SONDA_LOG_FORMAT: `text` (the default) or `json`.
+pub fn log_format(env: &dyn Env) -> Result<LogFormat> {
+    match env.var("SONDA_LOG_FORMAT").as_deref() {
+        None | Some("" | "text") => Ok(LogFormat::Text),
+        Some("json") => Ok(LogFormat::Json),
+        Some(other) => bail!("SONDA_LOG_FORMAT must be text or json, not {other:?}"),
+    }
+}
+
 /// The database to connect to, from DATABASE_URL (or DATABASE_URL_FILE) and
 /// optionally DATABASE_PASSWORD (or DATABASE_PASSWORD_FILE).
 pub fn database(env: &dyn Env) -> Result<PgConnectOptions> {
@@ -234,6 +251,33 @@ mod tests {
                 ("SONDA_ADVISORY_SYNC_URL", "http://mirror.example.com")
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn log_format_is_text_unless_json_and_refuses_anything_else() {
+        let format = |vars: &[(&'static str, &str)]| {
+            log_format(&FakeEnv(
+                vars.iter().map(|(k, v)| (*k, v.to_string())).collect(),
+            ))
+        };
+        assert_eq!(format(&[]).unwrap(), LogFormat::Text);
+        assert_eq!(
+            format(&[("SONDA_LOG_FORMAT", "")]).unwrap(),
+            LogFormat::Text
+        );
+        assert_eq!(
+            format(&[("SONDA_LOG_FORMAT", "text")]).unwrap(),
+            LogFormat::Text
+        );
+        assert_eq!(
+            format(&[("SONDA_LOG_FORMAT", "json")]).unwrap(),
+            LogFormat::Json
+        );
+        let err = format(&[("SONDA_LOG_FORMAT", "JSON")]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "SONDA_LOG_FORMAT must be text or json, not \"JSON\""
         );
     }
 

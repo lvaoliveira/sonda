@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use sonda_server::config::{Config, ProcessEnv};
+use sonda_server::config::{Config, LogFormat, ProcessEnv, log_format};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -52,9 +52,27 @@ enum AdvisoriesAction {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let format = match log_format(&ProcessEnv) {
+        Ok(format) => format,
+        Err(e) => {
+            eprintln!("sonda-server: error: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("sonda=info,sqlx=warn"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let logs = tracing_subscriber::fmt().with_env_filter(filter);
+    match format {
+        LogFormat::Text => logs.init(),
+        // The event's fields at the top level, and the request span's (id,
+        // method, route) under "span".
+        LogFormat::Json => logs
+            .json()
+            .flatten_event(true)
+            .with_current_span(true)
+            .with_span_list(false)
+            .init(),
+    }
     match start(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

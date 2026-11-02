@@ -420,7 +420,7 @@ fn loop_polls_an_aws_call(loop_: Node, src: &[u8]) -> bool {
         })
 }
 
-fn is_lambda_handler(function: Node, src: &[u8]) -> bool {
+pub(super) fn is_lambda_handler(function: Node, src: &[u8]) -> bool {
     matches!(name_of(function, src), b"lambda_handler" | b"handler")
         && super::py_more::first_parameter_name(function, src) == Some(b"event")
 }
@@ -549,15 +549,15 @@ fn special_method_returns_wrong_type<'t>(function: Node<'t>, src: &[u8]) -> Opti
     })
 }
 
-struct Signature<'s> {
-    required: usize,
-    positional: Vec<&'s [u8]>,
-    keyword_only: Vec<&'s [u8]>,
-    star_args: bool,
-    star_kwargs: bool,
+pub(super) struct Signature<'s> {
+    pub(super) required: usize,
+    pub(super) positional: Vec<&'s [u8]>,
+    pub(super) keyword_only: Vec<&'s [u8]>,
+    pub(super) star_args: bool,
+    pub(super) star_kwargs: bool,
 }
 
-fn signature<'s>(function: Node, src: &'s [u8]) -> Option<Signature<'s>> {
+pub(super) fn signature<'s>(function: Node, src: &'s [u8]) -> Option<Signature<'s>> {
     let params = function.child_by_field_name("parameters")?;
     let mut sig = Signature {
         required: 0,

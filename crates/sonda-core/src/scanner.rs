@@ -79,7 +79,8 @@ pub(crate) fn scan(
         .as_deref()
         .map(load_advisories)
         .transpose()?;
-    let mut analysis = scan_files(opts, cfg, rules, found.files, found.warnings)?;
+    let manifests = load_manifests(&found.dependency_files, cfg);
+    let mut analysis = scan_files(opts, cfg, rules, found.files, found.warnings, &manifests)?;
     if let Some((advisories, warnings)) = advisories {
         let mut vulnerabilities = crate::advisories::check(&dependencies, &advisories);
         // New: not already affecting the project at the new-code reference.
@@ -316,6 +317,7 @@ fn scan_files(
     rules: &RuleSet,
     mut paths: Vec<Candidate>,
     mut warnings: Vec<String>,
+    manifests: &[(String, Vec<String>)],
 ) -> Result<ProjectAnalysis, Error> {
     // Every later stage (analysis order, duplication's "first occurrence")
     // relies on this sort.
@@ -423,6 +425,7 @@ fn scan_files(
 
     let package_issues_before: Vec<usize> = files.iter().map(|f| f.issues.len()).collect();
     analysis::java_package_rules(&mut files, rules);
+    analysis::js_dependency_rules(&mut files, rules, manifests);
     analysis::cs_project_rules(&mut files, rules);
     for (f, before) in files.iter_mut().zip(package_issues_before) {
         for issue in &mut f.issues[before..] {
@@ -588,6 +591,11 @@ fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<Strin
         .map_err(|e| format!("{rel}: {e}"))?
         .ok_or_else(|| format!("{rel}: skipped, larger than {max_kb} KB"))?;
     let src = String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))?;
+    let src = if rel.ends_with(".vue") {
+        vue_script_only(&src)
+    } else {
+        src
+    };
     if scan.skip_minified && JS_TS.contains(&c.lang) && looks_minified(&src) {
         return Err(format!(
             "{rel}: skipped, looks minified (average line over \
@@ -595,6 +603,73 @@ fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<Strin
         ));
     }
     Ok(src)
+}
+
+/// Each `package.json`'s directory and every package name it declares (all
+/// four dependency sections) or is called: what the dependency rule checks
+/// imports against.
+fn load_manifests(files: &[DependencyFile], cfg: &Config) -> Vec<(String, Vec<String>)> {
+    let max_bytes = cfg.scan.max_file_size_kb.saturating_mul(1024);
+    files
+        .iter()
+        .filter(|f| f.kind == FileKind::PackageJson)
+        .filter_map(|f| {
+            let bytes = read_listed(&f.path, f.id, max_bytes).ok().flatten()?;
+            let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            let mut names: Vec<String> = Vec::new();
+            if let Some(n) = json.get("name").and_then(|n| n.as_str()) {
+                names.push(n.to_string());
+            }
+            for section in [
+                "dependencies",
+                "devDependencies",
+                "peerDependencies",
+                "optionalDependencies",
+            ] {
+                if let Some(o) = json.get(section).and_then(|o| o.as_object()) {
+                    names.extend(o.keys().cloned());
+                }
+            }
+            let dir = f.rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+            Some((dir, names))
+        })
+        .collect()
+}
+
+/// A Vue single-file component with everything outside its `<script>`
+/// blocks blanked: bytes become spaces, line breaks stay, so every line and
+/// column of the script is where the editor shows it.
+fn vue_script_only(src: &str) -> String {
+    let lower = src.to_ascii_lowercase();
+    let mut keep = vec![false; src.len()];
+    let mut at = 0;
+    while let Some(open) = lower[at..].find("<script") {
+        let open = at + open;
+        let after = lower.as_bytes().get(open + 7).copied();
+        if !matches!(after, Some(b'>' | b' ' | b'\n' | b'\t' | b'\r')) {
+            at = open + 7;
+            continue;
+        }
+        let Some(tag_end) = lower[open..].find('>') else {
+            break;
+        };
+        let start = open + tag_end + 1;
+        let Some(close) = lower[start..].find("</script") else {
+            keep[start..].fill(true);
+            break;
+        };
+        keep[start..start + close].fill(true);
+        at = start + close;
+    }
+    src.char_indices()
+        .map(|(i, c)| {
+            if keep[i] || c == '\n' || c == '\r' {
+                c.to_string()
+            } else {
+                " ".repeat(c.len_utf8())
+            }
+        })
+        .collect()
 }
 
 /// The average line length above which a file counts as minified, as
@@ -685,6 +760,17 @@ fn relative(path: &Path, root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vue_components_keep_only_their_script_in_place() {
+        let sfc = "<template>\n  <p>é</p>\n</template>\n<script setup lang=\"ts\">\nconst a = 1;\n</script>\n<style>p { }</style>\n";
+        let out = vue_script_only(sfc);
+        assert_eq!(out.len(), sfc.len());
+        assert_eq!(out.lines().count(), sfc.lines().count());
+        assert_eq!(out.lines().nth(4), Some("const a = 1;"));
+        assert!(out.lines().take(4).all(|l| l.trim().is_empty()));
+        assert!(!out.contains("template") && !out.contains("style"));
+    }
+
     use super::*;
     use crate::measures;
     use crate::model::Metric;
@@ -896,6 +982,46 @@ mod tests {
     }
 
     #[test]
+    fn imports_need_a_declaration_in_package_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (rel, body) in [
+            (
+                "package.json",
+                r#"{"name":"app","dependencies":{"express":"4"},"devDependencies":{"@scope/tool":"1"}}"#,
+            ),
+            (
+                "src/a.js",
+                "import e from 'express';\nimport fs from 'node:fs';\nimport p from 'path';\nimport x from 'lodash/get';\nimport t from '@scope/tool/x';\nimport r from './b';\nconst y = require('left-pad');\n",
+            ),
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let mut cfg = Config::default();
+        cfg.rules.enabled = ["js/dependency-not-declared".to_string()].to_vec();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let opts = ScanOptions {
+            root: root.to_path_buf(),
+            new_code_ref: None,
+            coverage: vec![],
+            isolation: Isolation::InProcess,
+            jobs: None,
+            advisories: None,
+        };
+        let r = scan(&opts, &cfg, &rules).unwrap();
+        let lines: Vec<usize> = r
+            .files
+            .iter()
+            .flat_map(|f| f.issues.iter())
+            .filter(|i| i.rule == "js/dependency-not-declared")
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(lines, [4, 7]);
+    }
+
+    #[test]
     fn java_packages_need_their_package_info() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -1072,7 +1198,7 @@ mod tests {
             .build()
             .unwrap();
         let r = pool
-            .install(|| scan_files(&opts, cfg, &rules, paths, walk_warnings))
+            .install(|| scan_files(&opts, cfg, &rules, paths, walk_warnings, &[]))
             .unwrap();
         assert!(!r.duplication.blocks.is_empty() && r.warnings.len() >= 2);
         let out = outcome(r, cfg);
@@ -1220,7 +1346,7 @@ mod tests {
             jobs: None,
             advisories: None,
         };
-        let r = scan_files(&opts, &cfg, &rules, paths, warnings).unwrap();
+        let r = scan_files(&opts, &cfg, &rules, paths, warnings, &[]).unwrap();
         assert!(r.files.is_empty(), "nothing outside the root was analyzed");
         assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
         assert!(

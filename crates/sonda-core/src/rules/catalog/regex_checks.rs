@@ -195,7 +195,10 @@ pub(super) fn repeats_something_empty(r: &Regex) -> bool {
         matches!(n, Rx::Repeat { inner, max, mode, .. }
                 if *mode != Mode::Possessive
                     && max.is_none_or(|m| m > 1)
-                    && !matches!(**inner, Rx::Assertion(_) | Rx::Look { .. })
+                    && !matches!(
+                        **inner,
+                        Rx::Assertion(_) | Rx::Look { .. } | Rx::BackrefIndex(_) | Rx::BackrefName(_)
+                    )
                     && nullable(inner))
     })
 }
@@ -512,4 +515,9 @@ pub(super) fn has_ascii_letter_class(r: &Regex) -> bool {
         matches!(n, Rx::Class { negated: false, items }
             if items.contains(&ClassItem::Range('a', 'z')) && items.contains(&ClassItem::Range('A', 'Z')))
     })
+}
+
+/// A named group that the pattern itself refers to by number.
+pub(super) fn named_group_used_by_index(r: &Regex) -> bool {
+    !r.names.is_empty() && any_node(r, |n| matches!(n, Rx::BackrefIndex(_)))
 }
