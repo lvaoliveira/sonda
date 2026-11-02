@@ -13,10 +13,12 @@ pub mod components;
 pub mod config;
 pub mod coverage;
 pub mod db;
+pub mod decorations;
 pub mod deleted_projects;
 pub mod dependencies;
 pub mod drill;
 pub mod gates;
+pub mod github;
 mod health;
 pub mod http;
 pub mod ingest;
@@ -97,11 +99,25 @@ pub async fn run(config: Config) -> Result<()> {
     if reads_require_auth {
         tracing::info!("reads require the token or a session (not listening on loopback only)");
     }
+    let github = config.github.map(std::sync::Arc::new);
+    if let Some(app) = &github {
+        tracing::info!(app = ?app, "decorating pull requests on GitHub");
+        let (pool, app, public_url) = (pool.clone(), app.clone(), config.public_url.clone());
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = decorations::post_due(&pool, &app, public_url.as_deref()).await {
+                    tracing::warn!(error = %e, "posting pull request decorations failed; retrying later");
+                }
+                tokio::time::sleep(decorations::INTERVAL).await;
+            }
+        });
+    }
     let state = http::State {
         pool: pool.clone(),
         token: config.token.map(std::sync::Arc::new),
         reads_require_auth,
         metrics: metrics.clone(),
+        github,
     };
     let app = http::router(state, config.web_dir.as_deref());
     let listener = TcpListener::bind(config.listen)

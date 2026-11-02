@@ -79,6 +79,9 @@ pub struct AnalysisDetail {
     pub main_branch: String,
     /// The pull request it belongs to (ADR-0021).
     pub pull_request: Option<PullRequestRef>,
+    /// Its decoration on GitHub, for a pull request's; null when none was
+    /// queued (no GitHub App on the server).
+    pub decoration: Option<crate::decorations::State>,
     pub sha: String,
     /// The commit's subject line, when the upload had one.
     pub message: Option<String>,
@@ -330,6 +333,7 @@ pub async fn get_analysis(
     .bind(id)
     .fetch_one(pool)
     .await?;
+    let decoration = crate::decorations::state(pool, id).await?;
 
     let files: Vec<(String, String)> =
         sqlx::query_as("SELECT path, language FROM analysis_files WHERE analysis_id = $1")
@@ -382,6 +386,7 @@ pub async fn get_analysis(
         branch,
         main_branch,
         pull_request: pull_request.map(|p| p.0),
+        decoration,
         sha,
         message,
         duration: duration.map(duration_text),

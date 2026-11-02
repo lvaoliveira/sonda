@@ -65,6 +65,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
     branch: row.branch,
     mainBranch: 'main',
     pullRequest: row.pullRequest,
+    decoration: row.pullRequest ? { state: 'posted', attempts: 1, lastError: null, postedAt: row.analyzedAt } : null,
     sha: row.sha,
     message: row.message,
     duration: row.duration,
