@@ -582,10 +582,48 @@ fn waits_on_a_condition(call: Node, src: &[u8]) -> bool {
     })
 }
 
+/// Whether some class in the file declares a static method with this name.
+/// Collected once per file: it lets the call check skip the type lookup for
+/// every call to a method that is not static anywhere in the file.
+fn file_declares_static_method(root: Node, name: &[u8], src: &[u8]) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    thread_local! {
+        static CACHE: RefCell<Option<((usize, usize), HashSet<Vec<u8>>)>> = const { RefCell::new(None) };
+    }
+    let key = (src.as_ptr() as usize, src.len());
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut names = HashSet::new();
+            let mut cursor = root.walk();
+            'walk: loop {
+                let n = cursor.node();
+                if n.kind() == "method_declaration" && has_modifier(n, "static") {
+                    names.insert(name_text(n, src).to_vec());
+                }
+                if cursor.goto_first_child() {
+                    continue;
+                }
+                while !cursor.goto_next_sibling() {
+                    if !cursor.goto_parent() {
+                        break 'walk;
+                    }
+                }
+            }
+            *c = Some((key, names));
+        }
+        c.as_ref().is_some_and(|(_, names)| names.contains(name))
+    })
+}
+
 fn calls_a_static_method_on_an_instance(call: Node, src: &[u8]) -> bool {
     let Some(object) = call.child_by_field_name("object") else {
         return false;
     };
+    if !file_declares_static_method(root_of(call), method_name(call, src), src) {
+        return false;
+    }
     let t = base_type(type_text(declared_type(call, text(object, src), src), src));
     if t.is_empty() {
         return false;

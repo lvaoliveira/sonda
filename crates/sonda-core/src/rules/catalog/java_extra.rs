@@ -1841,14 +1841,21 @@ fn static_field_names<'s>(class: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
         .collect()
 }
 
-fn writes_static<'t>(body: Node<'t>, names: &[&[u8]], src: &[u8]) -> Option<Node<'t>> {
+fn writes_static<'t>(body: Node<'t>, class: Node, src: &[u8]) -> Option<Node<'t>> {
+    // Collected on the first write to a plain name: most methods have none.
+    let names = std::cell::OnceCell::new();
     find_node(body, |n| {
         let target = match n.kind() {
             "assignment_expression" => n.child_by_field_name("left"),
             "update_expression" => n.named_child(0),
             _ => None,
         };
-        target.is_some_and(|t| t.kind() == "identifier" && names.contains(&text(t, src)))
+        target.is_some_and(|t| {
+            t.kind() == "identifier"
+                && names
+                    .get_or_init(|| static_field_names(class, src))
+                    .contains(&text(t, src))
+        })
     })
 }
 
@@ -1856,13 +1863,19 @@ fn instance_method_writes_static<'t>(method: Node<'t>, src: &[u8]) -> Option<Nod
     if has_modifier(method, "static") {
         return None;
     }
-    let names = static_field_names(enclosing_class(method)?, src);
-    writes_static(method.child_by_field_name("body")?, &names, src)
+    writes_static(
+        method.child_by_field_name("body")?,
+        enclosing_class(method)?,
+        src,
+    )
 }
 
 fn constructor_writes_static<'t>(ctor: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let names = static_field_names(enclosing_class(ctor)?, src);
-    writes_static(ctor.child_by_field_name("body")?, &names, src)
+    writes_static(
+        ctor.child_by_field_name("body")?,
+        enclosing_class(ctor)?,
+        src,
+    )
 }
 
 fn accessor_sync_mismatch<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
