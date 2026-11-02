@@ -7,8 +7,10 @@
 # Settings are saved in .env, so later runs need no options:
 #   --port PORT              publish on 127.0.0.1:PORT instead of 9000
 #   --github-app ID KEY.pem  decorate pull requests with this GitHub App
-#   --https IP[:PORT]        also serve HTTPS on this LAN address, port
-#                            9443 by default, with Caddy's own certificate
+#   --https [IP][:PORT]      also serve HTTPS on this LAN address (by
+#                            default the one this machine's default route
+#                            uses), port 9443 by default, with Caddy's own
+#                            certificate
 #   --public-url URL         the server's address in those decorations
 #                            (default the HTTPS address, else
 #                            http://localhost:PORT)
@@ -16,7 +18,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/setup-server.sh [--port PORT] [--github-app ID KEY.pem] [--https IP[:PORT]] [--public-url URL]" >&2
+  echo "usage: scripts/setup-server.sh [--port PORT] [--github-app ID KEY.pem] [--https [IP][:PORT]] [--public-url URL]" >&2
   exit 2
 }
 die() {
@@ -27,12 +29,17 @@ is_number() {
   case $1 in '' | *[!0-9]*) return 1 ;; esac
 }
 
-port='' app_id='' app_key='' https='' public_url=''
+port='' app_id='' app_key='' https=false https_address='' public_url=''
 while [ $# -gt 0 ]; do
   case $1 in
     --port) [ $# -ge 2 ] || usage; port=$2; shift 2 ;;
     --github-app) [ $# -ge 3 ] || usage; app_id=$2; app_key=$3; shift 3 ;;
-    --https) [ $# -ge 2 ] || usage; https=$2; shift 2 ;;
+    --https)
+      https=true
+      shift
+      # Its address is optional: the next argument, unless it's an option.
+      case ${1:-} in '' | -*) ;; *) https_address=$1; shift ;; esac
+      ;;
     --public-url) [ $# -ge 2 ] || usage; public_url=$2; shift 2 ;;
     *) usage ;;
   esac
@@ -42,10 +49,24 @@ if [ -n "$port" ]; then
     die "--port must be a port number"
   fi
 fi
-https_host=${https%%:*}
+# The address of the interface this machine's default route uses: its LAN
+# address on a typical home server. Nothing is sent to find it.
+lan_address() {
+  if command -v ip >/dev/null; then
+    ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p'
+  else
+    ipconfig getifaddr "$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')" 2>/dev/null
+  fi
+}
+https_host=${https_address%%:*}
 https_port=9443
-case $https in *:*) https_port=${https#*:} ;; esac
-if [ -n "$https" ]; then
+case $https_address in *:*) https_port=${https_address#*:} ;; esac
+if [ "$https" = true ]; then
+  if [ -z "$https_host" ]; then
+    https_host=$(lan_address || true)
+    [ -n "$https_host" ] || die "found no LAN address for --https: name it, as --https 192.168.1.10"
+    echo "HTTPS on $https_host, this machine's LAN address (--https IP picks another)."
+  fi
   is_ipv4() {
     case $1 in *[!0-9.]* | *..* | .* | *.) return 1 ;; esac
     [ "$(echo "$1" | tr -cd . | wc -c)" -eq 3 ]
@@ -89,7 +110,7 @@ chmod 644 secrets/*
 
 [ -z "$port" ] || set_ SONDA_PORT "$port"
 [ -z "$public_url" ] || set_ SONDA_PUBLIC_URL "$public_url"
-if [ -n "$https" ]; then
+if [ "$https" = true ]; then
   set_ SONDA_HTTPS_HOST "$https_host"
   set_ SONDA_HTTPS_PORT "$https_port"
 fi

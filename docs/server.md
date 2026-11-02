@@ -27,7 +27,7 @@ later runs need none:
 |---|---|
 | `--port PORT` | Publish on `127.0.0.1:PORT` instead of 9000, when 9000 is taken. |
 | `--github-app ID KEY.pem` | Decorate pull requests with this GitHub App (see [Decorating pull requests on GitHub](#decorating-pull-requests-on-github)). |
-| `--https IP[:PORT]` | Also serve HTTPS on this LAN address, port 9443 by default (see [HTTPS on a LAN address](#https-on-a-lan-address)). |
+| `--https [IP][:PORT]` | Also serve HTTPS on this machine's LAN address, port 9443 by default (see [HTTPS on a LAN address](#https-on-a-lan-address)). |
 | `--public-url URL` | The server's address in those decorations. Default the HTTPS address, else `http://localhost:PORT`. |
 
 To do it by hand instead:
@@ -930,12 +930,13 @@ the page would load but sign-in would fail.
 For a server on a home or office network, with no domain name:
 
 ```sh
-scripts/setup-server.sh --https 192.168.1.10        # this machine's address
+scripts/setup-server.sh --https
 ```
 
-It adds Caddy (`compose.https.yaml`), serving `https://192.168.1.10:9443`
-(`--https 192.168.1.10:8443` picks the port) and published on that address
-only. No public authority certifies a private address, so the certificate
+It adds Caddy (`compose.https.yaml`) on this machine's LAN address, the one
+its default route uses, such as `https://192.168.1.10:9443`, published on
+that address only. `--https 192.168.1.20` names another address, and
+`--https :8443` or `--https 192.168.1.20:8443` another port. No public authority certifies a private address, so the certificate
 comes from Caddy's own local authority. The script copies its root
 certificate to `caddy-root.crt`; install it once on each device that opens
 the server:
