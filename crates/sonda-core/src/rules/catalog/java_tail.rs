@@ -474,9 +474,6 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
     let updates: Vec<Node> = for_statement
         .children_by_field_name("update", &mut cursor)
         .collect();
-    if updates.is_empty() {
-        return None;
-    }
     // method calls in the condition (list.size()) are not plain variables
     // only operands of a comparison are bounds; a bare flag is a different idiom
     let mut compared: Vec<Vec<u8>> = Vec::new();
@@ -501,7 +498,20 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
     }
     // The counter itself (compared and updated by the loop header) is also
     // off limits inside the body.
-    let bound: Vec<Vec<u8>> = compared;
+    let mut bound: Vec<Vec<u8>> = compared;
+    if updates.is_empty() {
+        // Without an update clause only a counter declared in the header counts.
+        let mut declared: Vec<Vec<u8>> = Vec::new();
+        let mut c = for_statement.walk();
+        for init in for_statement.children_by_field_name("init", &mut c) {
+            for d in children_of_kind(init, "variable_declarator") {
+                if let Some(n) = d.child_by_field_name("name") {
+                    declared.push(text(n, src).to_vec());
+                }
+            }
+        }
+        bound.retain(|b| declared.contains(b));
+    }
     let body = for_statement.child_by_field_name("body")?;
     find_node(body, |n| {
         let target = match n.kind() {

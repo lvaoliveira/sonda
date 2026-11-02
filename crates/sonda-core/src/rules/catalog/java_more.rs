@@ -1745,9 +1745,15 @@ fn private_method_has_unused_parameter(method: Node, src: &[u8]) -> bool {
     {
         return false;
     }
-    if !(has_modifier(method, "private") || has_modifier(method, "static"))
-        || has_annotation(method, b"Override", src)
-    {
+    // Only methods nothing can override: callers and the body are all in view.
+    let sealed = has_modifier(method, "private")
+        || has_modifier(method, "static")
+        || has_modifier(method, "final")
+        || enclosing_class(method).is_some_and(|c| {
+            has_modifier(c, "final")
+                || matches!(c.kind(), "enum_declaration" | "record_declaration")
+        });
+    if !sealed || has_annotation(method, b"Override", src) {
         return false;
     }
     let (Some(params), Some(body)) = (

@@ -174,7 +174,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(class_declaration) @match"#,
-            filter: Some(Keep(utility_class_is_instantiable)),
+            filter: Some(Find(utility_class_constructor_or_class)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1056,8 +1056,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1845")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_body) @match"#,
-            filter: Some(Find(name_differs_by_case_only)),
+            query: r#"[(field_declaration) (constant_declaration) (method_declaration)] @match"#,
+            filter: Some(Keep(name_differs_by_case_only)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2569,12 +2569,6 @@ fn class_name_not_pascal(node: Node, src: &[u8]) -> bool {
 }
 
 fn method_name_not_camel_case(method: Node, src: &[u8]) -> bool {
-    if ["Test", "ParameterizedTest", "RepeatedTest", "TestFactory"]
-        .iter()
-        .any(|a| has_annotation(method, a.as_bytes(), src))
-    {
-        return false;
-    }
     let Some(name) = method.child_by_field_name("name") else {
         return false;
     };
@@ -2693,6 +2687,19 @@ fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
     }
     has_member
         && (constructors.is_empty() || constructors.iter().any(|c| !has_modifier(*c, "private")))
+}
+
+/// SonarQube reports a visible constructor where there is one, and the class
+/// itself when the implicit constructor is the problem.
+fn utility_class_constructor_or_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !utility_class_is_instantiable(class, src) {
+        return None;
+    }
+    let body = class.child_by_field_name("body")?;
+    let constructor = members(body)
+        .into_iter()
+        .find(|m| m.kind() == "constructor_declaration" && !has_modifier(*m, "private"));
+    Some(constructor.unwrap_or(class))
 }
 
 fn assigns_inside_an_expression(assign: Node, _: &[u8]) -> bool {
@@ -3266,26 +3273,33 @@ fn field_named_like_its_class(field: Node, src: &[u8]) -> bool {
     declarator_names(field, src).contains(&text(class_name, src))
 }
 
-fn name_differs_by_case_only<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut seen: Vec<(Vec<u8>, &[u8])> = Vec::new();
-    for member in members(body) {
-        let names: Vec<&[u8]> = match member.kind() {
-            "field_declaration" => declarator_names(member, src),
-            "method_declaration" => member
+/// A member whose name matches an earlier one in the class except for case.
+fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
+    let Some(body) = member
+        .parent()
+        .filter(|p| matches!(p.kind(), "class_body" | "interface_body" | "enum_body"))
+    else {
+        return false;
+    };
+    let names_of = |m: Node| -> Vec<&[u8]> {
+        match m.kind() {
+            "field_declaration" | "constant_declaration" => declarator_names(m, src),
+            "method_declaration" => m
                 .child_by_field_name("name")
                 .map(|n| vec![text(n, src)])
                 .unwrap_or_default(),
-            _ => continue,
-        };
-        for name in names {
-            let lower = name.to_ascii_lowercase();
-            if seen.iter().any(|(l, exact)| *l == lower && *exact != name) {
-                return Some(member);
-            }
-            seen.push((lower, name));
+            _ => Vec::new(),
         }
-    }
-    None
+    };
+    let mine = names_of(member);
+    members(body)
+        .into_iter()
+        .take_while(|m| m.start_byte() < member.start_byte())
+        .flat_map(names_of)
+        .any(|other| {
+            mine.iter()
+                .any(|n| n.eq_ignore_ascii_case(other) && *n != other)
+        })
 }
 
 fn negates_a_comparison(unary: Node, src: &[u8]) -> bool {
@@ -3310,9 +3324,11 @@ fn class_is_empty(class: Node, _: &[u8]) -> bool {
             !m.children(&mut c)
                 .any(|k| matches!(k.kind(), "marker_annotation" | "annotation"))
         })
-        && class
-            .child_by_field_name("body")
-            .is_some_and(|b| b.named_child_count() == 0)
+        && class.child_by_field_name("body").is_some_and(|b| {
+            let mut c = b.walk();
+            !b.named_children(&mut c)
+                .any(|k| !matches!(k.kind(), "line_comment" | "block_comment"))
+        })
 }
 
 fn creates_a_plain_object(call: Node, _: &[u8]) -> bool {
@@ -3539,7 +3555,11 @@ fn contains_a_nested_ternary(ternary: Node, _: &[u8]) -> bool {
 }
 
 fn private_method_returns_a_literal(method: Node, src: &[u8]) -> bool {
-    if !has_modifier(method, "private") || has_annotation(method, b"Override", src) {
+    let sealed = has_modifier(method, "private")
+        || has_modifier(method, "static")
+        || has_modifier(method, "final")
+        || enclosing_class(method).is_some_and(|c| has_modifier(c, "final"));
+    if !sealed || has_annotation(method, b"Override", src) {
         return false;
     }
     let Some(body) = method.child_by_field_name("body") else {
@@ -3978,7 +3998,7 @@ fn local_is_never_used(declaration: Node, src: &[u8]) -> bool {
 }
 
 /// Whether this is the first of three or more equal literals in the file,
-/// as SonarQube counts them: ten characters or more, outside annotations.
+/// as SonarQube counts them: five characters or more (quotes included in Sonar's seven), outside annotations.
 fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -4001,7 +4021,7 @@ fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
             return None;
         }
         string_value(n, src)
-            .filter(|v| v.len() >= 10)
+            .filter(|v| v.len() >= 5)
             .map(<[u8]>::to_vec)
     };
     let Some(mine) = eligible(string) else {
@@ -4153,7 +4173,7 @@ mod tests {
         assert_eq!(flagged("java/interface-name", src), [10]);
         assert_eq!(flagged("java/constant-name", src), [2]);
         assert_eq!(flagged("java/field-name", src), [5]);
-        assert_eq!(flagged("java/method-name", src), [7]);
+        assert_eq!(flagged("java/method-name", src), [7, 8]);
         assert_eq!(flagged("java/local-variable-name", src), [7, 7]);
         assert_eq!(flagged("java/type-parameter-name", src), [11]);
     }
