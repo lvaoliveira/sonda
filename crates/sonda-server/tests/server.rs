@@ -44,6 +44,7 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "project_changes",
             "project_rule_settings",
             "projects",
+            "quality_gates",
             "rule_profile_rules",
             "rule_profiles",
             "sessions",
@@ -101,6 +102,25 @@ async fn every_response_carries_a_request_id() {
         let id = response.headers()["x-request-id"].to_str().unwrap();
         assert_eq!(id.len(), 32, "{path}: {id}");
     }
+}
+
+#[tokio::test]
+async fn metrics_are_served_on_their_own_router_only() {
+    let state = state(unreachable_pool());
+    let metrics = state.metrics.clone();
+    let api = http::router(state, None);
+    get(api.clone(), "/api/no-such-route").await;
+    for path in ["/metrics", "/api/metrics"] {
+        let (status, _) = get(api.clone(), path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    let (status, body) = get(http::metrics_router(metrics), "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"sonda_http_requests_total{method="GET",route="-",status="404"} 3"#),
+        "{body}"
+    );
+    assert!(body.ends_with("# EOF\n"), "{body}");
 }
 
 #[tokio::test]

@@ -6,8 +6,8 @@ use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
     analyses, api, components, coverage, db, deleted_projects, dependencies, drill, gates, ingest,
-    issues, new_code, observability, overview, profiles, project_settings, projects, review,
-    rule_settings, rules, security, session, throttle, tokens,
+    issues, new_code, observability, overview, profiles, project_settings, projects, quality_gates,
+    review, rule_settings, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -31,9 +31,13 @@ pub struct State {
     pub token: Option<Arc<Token>>,
     /// True unless the server listens on loopback only (see `api::require_read`).
     pub reads_require_auth: bool,
+    /// Request counts and durations (ADR-0019), served on the metrics
+    /// listener, never on this router.
+    pub metrics: Arc<observability::Metrics>,
 }
 
 pub fn router(state: State, web_dir: Option<&Path>) -> Router {
+    let metrics = state.metrics.clone();
     let writes = Router::new()
         .route("/analyses", post(ingest::create))
         .layer(DefaultBodyLimit::max(ingest::MAX_BODY_BYTES))
@@ -108,6 +112,11 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/projects/{key}/settings", patch(project_settings::patch))
         .route("/projects/{key}", delete(deleted_projects::delete))
         .route("/deleted-projects", get(deleted_projects::list))
+        .route("/quality-gates", post(quality_gates::post))
+        .route(
+            "/quality-gates/{id}",
+            put(quality_gates::put).delete(quality_gates::delete),
+        )
         .route(
             "/deleted-projects/{id}/allow",
             post(deleted_projects::allow),
@@ -167,7 +176,38 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         Duration::from_secs(30),
     ))
     // Outermost, so timeouts are logged and the duration includes them.
-    .layer(middleware::from_fn(observability::log_request))
+    .layer(middleware::from_fn_with_state(
+        metrics,
+        observability::log_request,
+    ))
+}
+
+/// The metrics listener's routes (`SONDA_METRICS_LISTEN`): `GET /metrics`
+/// and nothing else. Unauthenticated, so it must not share the API's
+/// address; whoever can reach it is up to the operator (ADR-0019).
+pub fn metrics_router(metrics: Arc<observability::Metrics>) -> Router {
+    Router::new()
+        .route(
+            "/metrics",
+            get(
+                |axum::extract::State(metrics): axum::extract::State<
+                    Arc<observability::Metrics>,
+                >| async move {
+                    match metrics.encode() {
+                        Ok(text) => (
+                            [(
+                                header::CONTENT_TYPE,
+                                "application/openmetrics-text; version=1.0.0; charset=utf-8",
+                            )],
+                            text,
+                        )
+                            .into_response(),
+                        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                    }
+                },
+            ),
+        )
+        .with_state(metrics)
 }
 
 /// For load balancers and `docker compose`: 200 when the database answers.

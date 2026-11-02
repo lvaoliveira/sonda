@@ -1,5 +1,6 @@
-//! A project's settings (ADR-0017): its display name and main branch, with
-//! who changed them. Members read them; admins change them.
+//! A project's settings (ADR-0017): its display name, main branch and
+//! quality gate, with who changed them. Members read them; admins change
+//! them.
 
 use crate::api::{ApiError, Caller};
 use crate::health::{ago, rfc3339};
@@ -18,10 +19,18 @@ pub struct Settings {
     pub key: String,
     pub name: Option<String>,
     pub main_branch: String,
+    /// The server gate it's judged by; null for the gate in its sonda.toml.
+    pub quality_gate: Option<GateRef>,
     /// Every branch with analyses, the main one first, then by name.
     pub branches: Vec<Branch>,
     /// Newest first.
     pub changes: Vec<Change>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct GateRef {
+    pub id: i64,
+    pub name: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -36,7 +45,8 @@ pub struct Branch {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
-    /// `name` or `main_branch`.
+    /// `name`, `main_branch` or `quality_gate` (by name; null for the gate
+    /// in sonda.toml).
     pub setting: String,
     pub old: Option<String>,
     pub new: Option<String>,
@@ -55,8 +65,20 @@ async fn project(pool: &PgPool, key: &str) -> Result<(i64, Option<String>, Strin
         .ok_or(ApiError::NotFound)
 }
 
+/// The project's server gate, if it has one.
+async fn gate_of(pool: &PgPool, project: i64) -> sqlx::Result<Option<GateRef>> {
+    sqlx::query_as(
+        "SELECT g.id, g.name FROM projects p JOIN quality_gates g ON g.id = p.quality_gate_id
+         WHERE p.id = $1",
+    )
+    .bind(project)
+    .fetch_optional(pool)
+    .await
+}
+
 async fn load(pool: &PgPool, key: String) -> Result<Settings, ApiError> {
     let (id, name, main_branch) = project(pool, &key).await?;
+    let quality_gate = gate_of(pool, id).await?;
     let now: f64 = sqlx::query_scalar("SELECT extract(epoch FROM now())::float8")
         .fetch_one(pool)
         .await?;
@@ -89,6 +111,7 @@ async fn load(pool: &PgPool, key: String) -> Result<Settings, ApiError> {
         key,
         name,
         main_branch,
+        quality_gate,
         branches,
         changes: changes
             .into_iter()
@@ -118,17 +141,24 @@ pub struct Patch {
     #[serde(default, deserialize_with = "present")]
     name: Option<Option<String>>,
     main_branch: Option<String>,
+    /// A server gate's id, or null for the gate in sonda.toml; absent
+    /// leaves it.
+    #[serde(default, deserialize_with = "present")]
+    quality_gate: Option<Option<i64>>,
 }
 
 /// Tells an explicit null (`Some(None)`) from an absent field (`None`).
-fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
-    Option::<String>::deserialize(d).map(Some)
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 /// `PATCH /api/projects/{key}/settings`, admins only. Changing the main
 /// branch changes what every screen counts at once, and starts the new
 /// code period over on it (ADR-0011): from its first analysis, or its
 /// version's, since a start an admin set was an analysis of the old one.
+/// Choosing a gate judges the project's latest analyses by it at once.
 pub async fn patch(
     axum::extract::State(state): axum::extract::State<State>,
     Extension(caller): Extension<Caller>,
@@ -148,6 +178,18 @@ pub async fn patch(
             }
             n
         }
+    };
+    let old_gate = gate_of(pool, id).await?;
+    let gate = match patch.quality_gate {
+        None => old_gate.clone(),
+        Some(None) => None,
+        Some(Some(g)) => Some(
+            sqlx::query_as("SELECT id, name FROM quality_gates WHERE id = $1")
+                .bind(g)
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| ApiError::Unprocessable(format!("no quality gate {g}")))?,
+        ),
     };
     let main = patch.main_branch.unwrap_or_else(|| old_main.clone());
     if main != old_main {
@@ -169,6 +211,11 @@ pub async fn patch(
     for (setting, old, new) in [
         ("name", old_name.clone(), name.clone()),
         ("main_branch", Some(old_main.clone()), Some(main.clone())),
+        (
+            "quality_gate",
+            old_gate.as_ref().map(|g| g.name.clone()),
+            gate.as_ref().map(|g| g.name.clone()),
+        ),
     ] {
         if old != new {
             sqlx::query(
@@ -184,9 +231,10 @@ pub async fn patch(
             .await?;
         }
     }
-    sqlx::query("UPDATE projects SET name = $2 WHERE id = $1")
+    sqlx::query("UPDATE projects SET name = $2, quality_gate_id = $3 WHERE id = $1")
         .bind(id)
         .bind(&name)
+        .bind(gate.as_ref().map(|g| g.id))
         .execute(&mut *tx)
         .await?;
     if main != old_main {
@@ -199,6 +247,10 @@ pub async fn patch(
     tx.commit().await?;
     if main != old_main {
         crate::new_code::refresh(pool, id).await?;
+    }
+    if gate != old_gate {
+        crate::quality_gates::rejudge(pool, &[id]).await?;
+    } else if main != old_main {
         crate::dependencies::refresh_gates(pool, crate::dependencies::GateScope::Project(id))
             .await?;
     }

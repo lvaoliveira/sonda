@@ -241,7 +241,7 @@ describe('Projects', () => {
         ...p.gate.conditions.map((c) => (c.metric === 'new_coverage' ? { ...c, status: 'ignored' as const, reason: 'fewer than 20 new lines' } : { ...c, status: 'ok' as const })),
         { label: 'New severe vulnerable dependencies > 0', metric: 'new_severe_vulnerable_dependencies', actual: null, status: 'ignored' as const, reason: 'no advisory data' },
       ]
-      return { ...p, gate: { state: 'passed', conditions } }
+      return { ...p, gate: { ...p.gate, state: 'passed', conditions } }
     }
     renderAt('/projects/payments-platform', { ...api, project })
     expect(await screen.findByText('0 of 5 conditions failing · 2 ignored')).toBeInTheDocument()
@@ -568,6 +568,56 @@ describe('Quality gates', () => {
     const evaluations = screen.getByRole('list', { name: 'Evaluations, newest first' })
     expect(within(evaluations).getAllByRole('link')).toHaveLength(40)
     expect(screen.getByText('New vulnerabilities > 0', { selector: 'span' })).toBeInTheDocument()
+  })
+
+  it('lets admins create a server gate, choose it for a project, edit it, and refuses deleting it while used', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi(0)
+    renderAt('/gates', api)
+    await user.click(await screen.findByRole('button', { name: 'New gate' }))
+    const editor = screen.getByRole('region', { name: 'New gate' })
+    // It starts from the selected gate's conditions.
+    expect(within(within(editor).getByRole('list', { name: 'Conditions' })).getAllByRole('listitem')).toHaveLength(4)
+    await user.selectOptions(within(editor).getByRole('combobox', { name: 'Start from' }), '')
+    await user.type(within(editor).getByRole('textbox', { name: 'Gate name' }), 'Strict')
+    await user.selectOptions(within(editor).getByRole('combobox', { name: 'Metric 1' }), 'coverage')
+    await user.selectOptions(within(editor).getByRole('combobox', { name: 'Operator 1' }), 'lt')
+    await user.clear(within(editor).getByRole('spinbutton', { name: 'Threshold 1' }))
+    await user.type(within(editor).getByRole('spinbutton', { name: 'Threshold 1' }), '90')
+    await user.click(within(editor).getByRole('button', { name: 'Create' }))
+    const strict = await screen.findByRole('region', { name: 'Strict' })
+    expect(strict).toHaveTextContent('On the server · changed by mara')
+    expect(strict).toHaveTextContent('Coverage < 90%')
+    expect(screen.getByRole('region', { name: 'Assigned to' })).toHaveTextContent('No project uses it yet')
+
+    // A project chooses it in its settings; its page says which gate judged it.
+    const { unmount } = renderAt('/projects/payments-platform/settings', api)
+    const section = await screen.findByRole('region', { name: 'Quality gate' })
+    await waitFor(() => expect(within(section).getAllByRole('option')).toHaveLength(2))
+    await user.selectOptions(within(section).getByRole('combobox', { name: 'Quality gate' }), 'Strict · 1 condition')
+    await user.click(within(section).getByRole('button', { name: 'Use this gate' }))
+    await waitFor(() => expect(screen.getByRole('list', { name: 'Setting changes' })).toHaveTextContent('Quality gate sonda.toml’s → Strict'))
+    unmount()
+    const project = await api.project('payments-platform')
+    expect(project.gate.serverGate).toEqual({ id: 1, name: 'Strict' })
+    const list = await api.gates()
+    expect(list.gates.find((g) => g.name === 'Strict')?.projects.map((p) => p.project)).toEqual(['payments-platform'])
+    expect(list.gates.find((g) => g.name === 'Custom gate 1')?.projects.map((p) => p.project)).toEqual(['billing-service'])
+
+    // In use, it can't be deleted; it can be edited.
+    await expect(api.deleteQualityGate(1)).rejects.toThrow('projects use this gate: payments-platform')
+    await expect(api.createQualityGate('Strict', [{ metric: 'new_bugs', op: 'gt', threshold: 0 }])).rejects.toThrow('already exists')
+    expect(await api.updateQualityGate(1, 'Stricter', [{ metric: 'coverage', op: 'lt', threshold: 95 }])).toEqual({ id: 1, name: 'Stricter', projects: ['payments-platform'] })
+  })
+
+  it('shows server gates read-only to members', async () => {
+    const api = createMockApi(0)
+    await api.createQualityGate('Strict', [{ metric: 'new_bugs', op: 'gt', threshold: 0 }])
+    const shell = api.shell
+    renderAt('/gates#server-1', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
+    const strict = await screen.findByRole('region', { name: 'Strict' })
+    expect(within(strict).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New gate' })).not.toBeInTheDocument()
   })
 
   it('says so for an unknown address', async () => {

@@ -1,14 +1,16 @@
-//! `GET /api/gates`: the quality gates projects use, read-only. A gate is
-//! defined in each repository's sonda.toml and stored with every analysis,
-//! so projects whose latest main-branch analysis used the same conditions
-//! share a gate. The one equal to sonda's built-in default is "Default".
+//! `GET /api/gates`: the quality gates projects use. A gate is defined in
+//! each repository's sonda.toml and stored with every analysis, so projects
+//! whose latest main-branch analysis used the same conditions share a gate;
+//! the one equal to sonda's built-in default is "Default". Gates held on the
+//! server (ADR-0017, `quality_gates.rs`) are listed by name, with the
+//! projects they judge, even before any project uses one.
 
 use crate::api::ApiError;
-use crate::health::{condition_label, gate_state, rfc3339};
+use crate::health::{condition_label, gate_state, is_percent, metric_name, rfc3339};
 use crate::http::State;
 use axum::Json;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sonda_core::config::GateConfig;
 use std::collections::{BTreeMap, HashMap};
 
@@ -17,8 +19,30 @@ const EVALUATIONS: usize = 40;
 
 #[derive(Serialize)]
 pub struct Gates {
-    /// The default gate first, then by how many projects use each.
+    /// The default gate first, then server gates, then other sonda.toml
+    /// ones by how many projects use each.
     pub gates: Vec<Gate>,
+    /// What a condition can test, as in sonda.toml.
+    pub metrics: Vec<MetricOption>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricOption {
+    pub id: &'static str,
+    pub name: String,
+    pub percent: bool,
+}
+
+fn metrics() -> Vec<MetricOption> {
+    sonda_core::model::Metric::ALL
+        .iter()
+        .map(|m| MetricOption {
+            id: m.as_str(),
+            name: metric_name(m.as_str()),
+            percent: is_percent(m.as_str()),
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -28,6 +52,9 @@ pub struct Gate {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    /// A gate held on the server (ADR-0017), which admins edit; null for
+    /// one projects' sonda.toml files define.
+    pub server: Option<ServerGate>,
     pub conditions: Vec<GateCondition>,
     pub projects: Vec<GateProject>,
     /// The latest evaluations of this gate on its projects' main branches,
@@ -37,6 +64,14 @@ pub struct Gate {
     pub pass_rate: Option<u32>,
     /// The condition that failed most often in `evaluations`.
     pub most_common_failure: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerGate {
+    pub id: i64,
+    pub changed_by: String,
+    pub changed_at: String,
 }
 
 #[derive(Serialize)]
@@ -131,6 +166,24 @@ fn gate_id(s: &Signature) -> String {
 /// A main-branch analysis: id, project, when, gate, passed.
 type Row = (i64, String, f64, Value, bool);
 
+/// A server gate (ADR-0017): id, name, conditions, who changed it, when.
+type ServerRow = (i64, String, Value, String, f64);
+
+/// What groups projects into a gate: the server gate that judged them, or
+/// the conditions their sonda.toml brought.
+#[derive(PartialEq, Eq, Hash)]
+enum Key {
+    Server(i64),
+    Toml(Signature),
+}
+
+fn key(gate: &Value) -> Key {
+    match gate["server_gate"]["id"].as_i64() {
+        Some(id) => Key::Server(id),
+        None => Key::Toml(signature(gate)),
+    }
+}
+
 pub async fn list_gates(
     axum::extract::State(state): axum::extract::State<State>,
 ) -> Result<Json<Gates>, ApiError> {
@@ -141,26 +194,43 @@ pub async fn list_gates(
     )
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(build(&rows)))
+    let servers: Vec<ServerRow> = sqlx::query_as(
+        "SELECT id, name, conditions, changed_by, extract(epoch FROM changed_at)::float8
+         FROM quality_gates ORDER BY name",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(build(&rows, &servers)))
 }
 
-fn build(rows: &[Row]) -> Gates {
+fn build(rows: &[Row], servers: &[ServerRow]) -> Gates {
     // `rows` is newest first, so a project's first row is its latest.
     let mut latest: BTreeMap<&str, &Row> = BTreeMap::new();
     for r in rows {
         latest.entry(r.1.as_str()).or_insert(r);
     }
-    let mut groups: HashMap<Signature, Vec<&Row>> = HashMap::new();
-    for r in latest.values() {
-        groups.entry(signature(&r.3)).or_default().push(r);
+    let mut groups: HashMap<Key, Vec<&Row>> = HashMap::new();
+    // Server gates show even before a project uses them.
+    for g in servers {
+        groups.entry(Key::Server(g.0)).or_default();
     }
-    let default = default_signature();
+    for r in latest.values() {
+        groups.entry(key(&r.3)).or_default().push(r);
+    }
+    let default = Key::Toml(default_signature());
     let mut custom = 0;
-    let mut gates: Vec<(bool, usize, Gate)> = groups
+    let mut gates: Vec<(u8, usize, Gate)> = groups
         .into_iter()
-        .map(|(sig, current)| {
-            let is_default = sig == default;
-            let template = &current[0].3;
+        .filter_map(|(k, current)| {
+            let server = match &k {
+                Key::Server(id) => Some(servers.iter().find(|g| g.0 == *id)?),
+                Key::Toml(_) => None,
+            };
+            let is_default = k == default;
+            let template = match server {
+                Some(g) => json!({ "conditions": g.2 }),
+                None => current[0].3.clone(),
+            };
             let conditions = template["conditions"]
                 .as_array()
                 .into_iter()
@@ -200,7 +270,7 @@ fn build(rows: &[Row]) -> Gates {
             let members: Vec<&str> = current.iter().map(|r| r.1.as_str()).collect();
             let history: Vec<&Row> = rows
                 .iter()
-                .filter(|r| members.contains(&r.1.as_str()) && signature(&r.3) == sig)
+                .filter(|r| members.contains(&r.1.as_str()) && key(&r.3) == k)
                 .take(EVALUATIONS)
                 .collect();
             let passed = history.iter().filter(|r| r.4).count();
@@ -217,9 +287,17 @@ fn build(rows: &[Row]) -> Gates {
                 .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
                 .map(|(label, _)| label);
             let gate = Gate {
-                id: gate_id(&sig),
-                name: String::new(),
+                id: match &k {
+                    Key::Server(id) => format!("server-{id}"),
+                    Key::Toml(sig) => gate_id(sig),
+                },
+                name: server.map(|g| g.1.clone()).unwrap_or_default(),
                 is_default,
+                server: server.map(|g| ServerGate {
+                    id: g.0,
+                    changed_by: g.3.clone(),
+                    changed_at: rfc3339(g.4),
+                }),
                 conditions,
                 projects,
                 pass_rate: (!history.is_empty()).then(|| (passed * 100 / history.len()) as u32),
@@ -234,27 +312,41 @@ fn build(rows: &[Row]) -> Gates {
                     .collect(),
                 most_common_failure,
             };
-            (is_default, current.len(), gate)
+            // The default first, then server gates, then other sonda.toml ones.
+            let rank = if is_default {
+                0
+            } else if server.is_some() {
+                1
+            } else {
+                2
+            };
+            Some((rank, current.len(), gate))
         })
         .collect();
     gates.sort_by(|a, b| {
-        b.0.cmp(&a.0)
+        a.0.cmp(&b.0)
             .then(b.1.cmp(&a.1))
+            .then_with(|| a.2.name.cmp(&b.2.name))
             .then_with(|| a.2.id.cmp(&b.2.id))
     });
     let gates = gates
         .into_iter()
-        .map(|(is_default, _, mut g)| {
-            g.name = if is_default {
-                "Default".into()
-            } else {
-                custom += 1;
-                format!("Custom gate {custom}")
-            };
+        .map(|(rank, _, mut g)| {
+            match rank {
+                0 => g.name = "Default".into(),
+                2 => {
+                    custom += 1;
+                    g.name = format!("Custom gate {custom}");
+                }
+                _ => {}
+            }
             g
         })
         .collect();
-    Gates { gates }
+    Gates {
+        gates,
+        metrics: metrics(),
+    }
 }
 
 #[cfg(test)]
@@ -289,7 +381,7 @@ mod tests {
             // b used the default before switching: not part of its history now.
             (1, "b".into(), 10.0, default_gate("ok"), true),
         ];
-        let g = build(&rows).gates;
+        let g = build(&rows, &[]).gates;
         assert_eq!(g.len(), 2);
         assert_eq!((g[0].name.as_str(), g[0].is_default), ("Default", true));
         assert_eq!(
@@ -335,5 +427,62 @@ mod tests {
         ]);
         assert_eq!(signature(&a), signature(&b));
         assert_eq!(signature(&default_gate("ok")), default_signature());
+    }
+
+    #[test]
+    fn server_gates_group_their_projects_and_show_unused() {
+        let mut judged = gate(&[("new_bugs", "gt", 0.0, "error")]);
+        judged["server_gate"] = json!({ "id": 7, "name": "Strict" });
+        let rows: Vec<Row> = vec![
+            (3, "a".into(), 30.0, judged, false),
+            // Same conditions, but from b's sonda.toml: another gate.
+            (
+                2,
+                "b".into(),
+                20.0,
+                gate(&[("new_bugs", "gt", 0.0, "ok")]),
+                true,
+            ),
+            (1, "c".into(), 10.0, default_gate("ok"), true),
+        ];
+        let servers: Vec<ServerRow> = vec![
+            (
+                7,
+                "Strict".into(),
+                json!([{"metric": "new_bugs", "op": "gt", "threshold": 0.0}]),
+                "ada".into(),
+                5.0,
+            ),
+            (
+                8,
+                "Unused".into(),
+                json!([{"metric": "new_coverage", "op": "lt", "threshold": 90.0}]),
+                "ada".into(),
+                6.0,
+            ),
+        ];
+        let g = build(&rows, &servers).gates;
+        let names: Vec<(&str, Option<i64>, usize)> = g
+            .iter()
+            .map(|g| {
+                (
+                    g.name.as_str(),
+                    g.server.as_ref().map(|s| s.id),
+                    g.projects.len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Default", None, 1),
+                ("Strict", Some(7), 1),
+                ("Unused", Some(8), 0),
+                ("Custom gate 1", None, 1)
+            ]
+        );
+        assert_eq!(g[1].conditions[0].failing, 1);
+        assert_eq!(g[2].conditions[0].label, "Coverage on new code < 90%");
+        assert_eq!(g[2].pass_rate, None);
     }
 }

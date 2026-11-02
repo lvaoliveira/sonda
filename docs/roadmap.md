@@ -192,7 +192,9 @@ SBOM), then match that list against published vulnerabilities.
 
 ## Pull request decoration: GitHub, GitLab and Bitbucket
 
-**Status:** planned (2026-11-01), nothing built. As SonarQube does, the
+**Status:** designed for GitHub in
+[ADR-0021](adr/0021-pull-request-decoration.md) (proposed, 2026-11-02);
+nothing built. As SonarQube does, the
 result of analyzing a pull request (or GitLab merge request) shows on the
 pull request itself: a summary comment, inline comments on new issues, and
 a status check that can block merging when the gate fails. Today only
@@ -373,5 +375,5 @@ never merges anything itself.
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules, and for C# ([ADR-0008](adr/0008-semantic-layer.md), [ADR-0015](adr/0015-csharp.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
 | **Last C# rules** | Three SonarQube C# rules have no sonda counterpart ([ADR-0015](adr/0015-csharp.md)): invalid casts (S1944) and calls resolving to a `params` overload (S3220) need type checking, and lambdas in Blazor loops (S6802) check `.razor` markup, which sonda doesn't parse. | S1944 and S3220 with semantic phase S4 (types, its own ADR). S6802 with a Razor grammar, reviewed like the C# one. |
 | **Page flicker while navigating** | Every page loads through `useAsync` (`web/src/api/hooks.ts`), which has no cache and shows a skeleton whenever its inputs change, so moving between pages or changing a filter flashes a placeholder before the content. | A small response cache in `useAsync`: show the last data for a request while it reloads, keep the previous page's data when only a filter changes, and show skeletons only after a short delay. |
-| **Observability** | Started ([ADR-0019](adr/0019-observability.md)): request ids, request logs and `SONDA_LOG_FORMAT=json` are built, and `GET /api/health` already pings PostgreSQL. There are still no metrics, so a slow upload or a failing advisory sync is hard to see from outside. OpenTelemetry traces are left out for now (see the ADR). | A Prometheus `/metrics` endpoint on its own listener (`SONDA_METRICS_LISTEN`): request counts and latencies by route template first, then upload durations, the database pool and advisory sync results. |
+| **Observability** | Started ([ADR-0019](adr/0019-observability.md)): request ids, request logs, `SONDA_LOG_FORMAT=json`, and request counts and latencies on a metrics listener (`SONDA_METRICS_LISTEN`) are built, and `GET /api/health` already pings PostgreSQL. Uploads, the database pool and the advisory sync have no metrics yet, so a slow upload or a failing sync is still hard to see from outside. OpenTelemetry traces are left out for now (see the ADR). | Increment 3 of the ADR: `sonda_uploads_total{result}` and `sonda_upload_duration_seconds`; the pool's idle, in-use and maximum connections, read at scrape time; the advisory sync's runs, last success and imported advisories. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |

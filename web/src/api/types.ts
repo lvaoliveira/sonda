@@ -562,7 +562,7 @@ export interface ProjectDetail {
   branches: { name: string; gate: GateState; ago: string }[]
   languages: { id: string; ncloc: number }[]
   analysis: { id: number; sha: string; analyzedAt: string; toolVersion: string; newCodeReference: string | null; version: string | null }
-  gate: { state: GateState; conditions: GateCondition[] }
+  gate: { state: GateState; conditions: GateCondition[]; serverGate: ServerGateRef }
   score: number
   ratings: { reliability: Level; security: Level; maintainability: Level; coverage: Level | null }
   measures: { overall: MeasureSet; newCode: MeasureSet }
@@ -793,10 +793,12 @@ export interface ComponentDetail {
  * share one. Read-only on the server.
  */
 export interface QualityGate {
-  /** Stable for the same conditions. */
+  /** Stable for the same conditions; `server-<id>` for a server gate. */
   id: string
   name: string
   isDefault: boolean
+  /** A gate held on the server (ADR-0017), which admins edit; null for one sonda.toml files define. */
+  server: { id: number; changedBy: string; changedAt: string } | null
   conditions: { label: string; metric: string; op: 'gt' | 'lt'; threshold: number; failing: number; noData: number }[]
   projects: { project: string; state: GateState; analyzedAt: string }[]
   /** The latest evaluations on its projects' main branches, newest first (up to 40). */
@@ -805,6 +807,28 @@ export interface QualityGate {
   passRate: number | null
   mostCommonFailure: string | null
 }
+
+export interface GateList {
+  gates: QualityGate[]
+  /** What a condition can test, as in sonda.toml. */
+  metrics: GateMetric[]
+}
+
+export interface GateMetric {
+  id: string
+  name: string
+  percent: boolean
+}
+
+/** A condition as sonda.toml writes it: the gate fails when `metric op threshold` holds. */
+export interface GateConditionInput {
+  metric: string
+  op: 'gt' | 'lt'
+  threshold: number
+}
+
+/** The server gate that judged a result; null when it was the scan's own, from sonda.toml. */
+export type ServerGateRef = { id: number; name: string } | null
 
 // ---------------------------------------------------------------- security
 
@@ -972,7 +996,7 @@ export interface AnalysisDetail {
   analyzedAt: string
   toolVersion: string
   newCodeReference: string | null
-  gate: { state: GateState; conditions: GateCondition[] }
+  gate: { state: GateState; conditions: GateCondition[]; serverGate: ServerGateRef }
   measures: { overall: MeasureSet; newCode: MeasureSet }
   files: number
   languages: { id: string; files: number }[]
@@ -1057,7 +1081,13 @@ export interface SondaApi {
   /** The project on `branch`, or on its main branch. */
   project(key: string, branch?: string): Promise<ProjectDetail>
   /** The default gate first, then by how many projects use each. */
-  gates(): Promise<QualityGate[]>
+  gates(): Promise<GateList>
+  /** Admins: a gate on the server. */
+  createQualityGate(name: string, conditions: GateConditionInput[]): Promise<SavedGate>
+  /** Admins: its name and conditions; its projects are judged again at once. */
+  updateQualityGate(id: number, name: string, conditions: GateConditionInput[]): Promise<SavedGate>
+  /** Admins: a gate no project uses. */
+  deleteQualityGate(id: number): Promise<void>
   security(): Promise<Security>
   securityReview(query: ReviewQuery): Promise<SecurityReview>
   /** Every project's components, or one project's. */
@@ -1122,6 +1152,8 @@ export interface ProjectSettings {
   key: string
   name: string | null
   mainBranch: string
+  /** The server gate it's judged by; null for the gate in its sonda.toml. */
+  qualityGate: ServerGateRef
   /** Every branch with analyses, the main one first. */
   branches: { name: string; analyses: number; analyzedAt: string; ago: string }[]
   /** Who changed a setting, newest first. */
@@ -1129,7 +1161,8 @@ export interface ProjectSettings {
 }
 
 export interface ProjectSettingChange {
-  setting: 'name' | 'main_branch'
+  /** For `quality_gate`, gate names; null is the gate in sonda.toml. */
+  setting: 'name' | 'main_branch' | 'quality_gate'
   old: string | null
   new: string | null
   by: string
@@ -1139,6 +1172,15 @@ export interface ProjectSettingChange {
 export interface ProjectSettingsPatch {
   name?: string | null
   mainBranch?: string
+  /** A server gate's id, or null for the gate in sonda.toml. */
+  qualityGate?: number | null
+}
+
+export interface SavedGate {
+  id: number
+  name: string
+  /** The projects judged again. */
+  projects: string[]
 }
 
 /** A deleted project's key (ADR-0017): refused for uploads until an admin allows it again. */

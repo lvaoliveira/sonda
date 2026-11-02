@@ -411,11 +411,13 @@ them, and each change is recorded with who made it, from what to what.
   version's, and a start an admin set on the old branch no longer applies.
   The old branch keeps its numbers until its next analysis, which judges
   its new code by its scan again, as on any other branch.
+- **Quality gate:** `sonda.toml`'s, or a server gate an admin chooses (see
+  [Quality gates](#quality-gates)).
 
 | Endpoint | |
 |---|---|
-| `GET /api/projects/{key}/settings` | `name`, `mainBranch`, the `branches` with analyses (how many, and the latest's time), and the last 50 `changes`, newest first. |
-| `PATCH /api/projects/{key}/settings` `{"name": "Payments", "mainBranch": "develop"}` | Admins: either or both; `"name": null` removes the name. A name over 100 characters, or a branch without analyses, is a `422`. |
+| `GET /api/projects/{key}/settings` | `name`, `mainBranch`, `qualityGate` (a server gate's `id` and `name`, or null for `sonda.toml`'s), the `branches` with analyses (how many, and the latest's time), and the last 50 `changes`, newest first. |
+| `PATCH /api/projects/{key}/settings` `{"name": "Payments", "mainBranch": "develop", "qualityGate": 3}` | Admins: any of them; `"name": null` removes the name, `"qualityGate": null` goes back to `sonda.toml`'s gate. A name over 100 characters, a branch without analyses, or an unknown gate is a `422`. |
 
 #### Deleting a project
 
@@ -442,15 +444,43 @@ next upload then starts a new project.
 
 ## Quality gates
 
-`GET /api/gates` lists the quality gates projects use, read-only. A gate is
-defined in each repository's `sonda.toml` and stored with every analysis.
-Projects whose latest main-branch analysis used the same conditions share
-a gate, whatever their order in the file. The one equal to sonda's
-built-in default is named "Default"; others are "Custom gate 1", "2", and
-so on. The default comes first, then the rest by how many projects use them.
+A project's gate comes from one of two places
+([ADR-0017](adr/0017-project-settings.md)):
+
+- **Its repository's `sonda.toml`** (the default): the gate is stored with
+  every analysis. Projects whose latest main-branch analysis used the same
+  conditions share a gate, whatever their order in the file. The one equal
+  to sonda's built-in default is named "Default"; others are "Custom gate
+  1", "2", and so on.
+- **A server gate**, which admins create, edit and delete on the Quality
+  gates page, with the same metrics and operators as
+  `[[gate.conditions]]`, and which a project uses once an admin chooses it
+  in its Settings. It wins over `sonda.toml`'s: the server judges the
+  project's latest analysis on every branch by it at once, and every
+  upload after. The upload's answer carries its result, so
+  `sonda scan --upload` passes or fails on it (ADR-0014). A scan without an
+  upload still uses `sonda.toml`'s. Editing a server gate judges its
+  projects again at once; choosing `sonda.toml`'s again brings back each
+  analysis's own conditions. A gate a project uses can't be deleted.
+
+The project and analysis pages say which gate judged a result
+(`gate.serverGate`: its `id` and `name`, or null for `sonda.toml`'s).
+
+`GET /api/gates` lists them all: the default first, then server gates
+(even those no project uses yet), then the rest by how many projects use
+them. It also lists the `metrics` a condition can test.
+
+| Endpoint | |
+|---|---|
+| `POST /api/quality-gates` `{"name": "Strict", "conditions": [{"metric": "new_coverage", "op": "lt", "threshold": 90}]}` | Admins: a server gate. Names are unique, 1 to 100 characters, with 1 to 50 conditions; an unknown metric or operator is a `422`. |
+| `PUT /api/quality-gates/{id}` (the same body) | Admins: its name and conditions; answers the projects judged again. |
+| `DELETE /api/quality-gates/{id}` | Admins: a `422` naming the projects that use it, if any. |
+| `PATCH /api/projects/{key}/settings` `{"qualityGate": 3}` | Admins: the project's server gate, or `null` for `sonda.toml`'s (see [Project settings](#project-settings)). |
 
 Each gate has:
-- an `id`: a short hash of its conditions, stable while they don't change;
+- an `id`: a short hash of its conditions, stable while they don't change,
+  or `server-<id>` for a server gate, which also has `server` (its `id`,
+  and who changed it last and when);
 - its conditions, each with how many of the gate's projects fail it now
   and how many lack data;
 - its projects with their current gate state;
@@ -815,6 +845,7 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_ADVISORY_SYNC` | `true` syncs advisories from OSV daily (see [Known vulnerabilities](#known-vulnerabilities)). Off by default: the server makes no outbound connections. |
 | `SONDA_ADVISORY_SYNC_URL` | A mirror of OSV's exports to sync from instead: `https://`, or `http://` to localhost only. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
+| `SONDA_METRICS_LISTEN` (`--metrics-listen`) | Address to serve Prometheus metrics on, at `/metrics`. Unset by default, so no metrics are served. Unauthenticated: never the public address. See [Metrics](#metrics). |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
 | `RUST_LOG` | Log filter. Default `sonda=info,sqlx=warn`. |
 | `SONDA_LOG_FORMAT` | `text` (the default) or `json`, one object per line for log collectors. See [Logs](#logs). |
@@ -850,6 +881,37 @@ request's are under `span`:
 ```json
 {"timestamp":"...","level":"INFO","message":"request","status":200,"duration_ms":12.4,"target":"sonda_server::observability","span":{"id":"4f0c...","method":"GET","route":"/api/projects/{key}","name":"request"}}
 ```
+
+## Metrics
+
+With `SONDA_METRICS_LISTEN` set, the server opens a second listener that
+serves `GET /metrics`, in the OpenMetrics text format Prometheus reads,
+and nothing else. The API's port never serves them.
+
+The endpoint needs no authentication, so who can reach it is up to where
+it listens: `127.0.0.1:9090` for a Prometheus on the same machine, or, in
+Docker Compose, `0.0.0.0:9090` without publishing the port, so only
+containers on the compose network reach it:
+
+```yaml
+services:
+  sonda:
+    environment:
+      SONDA_METRICS_LISTEN: 0.0.0.0:9090   # no `ports:` entry for it
+```
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `sonda_http_requests_total` | `method`, `route`, `status` | Requests completed. |
+| `sonda_http_request_duration_seconds` | `method`, `route` | Time to answer, as a histogram from 5 ms to the 30 s request timeout. |
+
+Labels are bounded, so the number of series is too:
+- `route` is the route's template (`/api/projects/{key}`), or `-` for
+  paths that match none, including the web app's files;
+- `method` is one of the standard methods, or `other`;
+- project keys, branches and users never become labels.
+
+Counters start at zero when the server starts, as Prometheus expects.
 
 ## Running without Docker
 

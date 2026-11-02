@@ -1,10 +1,10 @@
-import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type ProjectSettingChange, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
 import { analysisDetail, queryAnalyses } from './analyses'
 import { componentDetail, listComponents } from './components'
-import { GATES } from './gates'
+import { conditionLabel, GATES, METRICS } from './gates'
 import { SECURITY } from './security'
 import { coverageList, fileCoverage } from './coverage'
 import { dependencyList, reviewDependency } from './dependencies'
@@ -53,11 +53,30 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     if (d) throw new Error(`project "${key}" was deleted by ${d.deletedBy} on ${d.deletedAt.slice(0, 10)}; an admin can allow its key again on the Admin page`)
   }
   // Each project's settings and their changes (ADR-0017), newest first.
-  const settings = new Map<string, MockProjectSettings & { changes: ProjectSettingChange[] }>()
+  const settings = new Map<string, MockProjectSettings & { qualityGate: number | null; changes: ProjectSettingChange[] }>()
+  // Gates held on the server (ADR-0017).
+  const serverGates: { id: number; name: string; conditions: GateConditionInput[]; changedBy: string; changedAt: string }[] = []
+  let nextGate = 1
+  const gateRef = (id: number | null) => {
+    const g = serverGates.find((x) => x.id === id)
+    return g ? { id: g.id, name: g.name } : null
+  }
+  /** As the server checks a gate: a unique name, 1-50 conditions on known metrics. */
+  const checkGate = (name: string, conditions: GateConditionInput[], id?: number) => {
+    const trimmed = name.trim()
+    if (!trimmed || trimmed.length > 100) throw new Error("a gate's name has 1-100 characters")
+    if (conditions.length === 0 || conditions.length > 50) throw new Error('a gate has 1-50 conditions')
+    const unknown = conditions.find((c) => !METRICS.some((m) => m.id === c.metric))
+    if (unknown) throw new Error(`unknown metric "${unknown.metric}"`)
+    if (conditions.some((c) => !Number.isFinite(c.threshold))) throw new Error('a threshold must be a number')
+    if (serverGates.some((g) => g.name === trimmed && g.id !== id)) throw new Error(`a gate named "${trimmed}" already exists`)
+    return trimmed
+  }
+  const usingGate = (id: number) => [...settings].filter(([, s]) => s.qualityGate === id).map(([key]) => key)
   const settingsOf = (key: string) => {
     if (!projectKeys.includes(key)) throw new Error('not found')
     let s = settings.get(key)
-    if (!s) settings.set(key, (s = { name: null, mainBranch: 'main', changes: [] }))
+    if (!s) settings.set(key, (s = { name: null, mainBranch: 'main', qualityGate: null, changes: [] }))
     return s
   }
   /** What the project list shows of them. */
@@ -71,6 +90,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       key,
       name: s.name,
       mainBranch: s.mainBranch,
+      qualityGate: gateRef(s.qualityGate),
       branches: [...BRANCHES].sort((a, b) => Number(b.name === s.mainBranch) - Number(a.name === s.mainBranch)),
       changes: s.changes,
     }
@@ -222,7 +242,44 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     drill: (metric: DrillMetric) => wait<Drill>(DRILLS[metric]),
     gates: async () => {
       guard()
-      return wait(GATES)
+      // Projects judged by a server gate leave their sonda.toml gate.
+      const judged = new Set([...settings].filter(([, s]) => s.qualityGate !== null).map(([key]) => key))
+      const toml = GATES.map((g) => ({ ...g, projects: g.projects.filter((p) => !judged.has(p.project)) }))
+      const project = (key: string) => PROJECT_LIST.projects.find((p) => p.key === key)!
+      const server: QualityGate[] = serverGates.map((g) => ({
+        id: `server-${g.id}`,
+        name: g.name,
+        isDefault: false,
+        server: { id: g.id, changedBy: g.changedBy, changedAt: g.changedAt },
+        conditions: g.conditions.map((c) => ({ ...c, label: conditionLabel(c), failing: 0, noData: 0 })),
+        projects: usingGate(g.id).map((key) => ({ project: key, state: 'passed', analyzedAt: project(key).analyzedAt })),
+        evaluations: [],
+        passRate: null,
+        mostCommonFailure: null,
+      }))
+      return wait({ gates: [toml[0], ...server, ...toml.slice(1)], metrics: METRICS })
+    },
+    createQualityGate: async (name, conditions) => {
+      requireAdmin()
+      const g = { id: nextGate++, name: checkGate(name, conditions), conditions, changedBy: session.user!.username, changedAt: new Date().toISOString() }
+      serverGates.push(g)
+      return wait({ id: g.id, name: g.name, projects: [] })
+    },
+    updateQualityGate: async (id, name, conditions) => {
+      requireAdmin()
+      const g = serverGates.find((x) => x.id === id)
+      if (!g) throw new Error('not found')
+      Object.assign(g, { name: checkGate(name, conditions, id), conditions, changedBy: session.user!.username, changedAt: new Date().toISOString() })
+      return wait({ id, name: g.name, projects: usingGate(id) })
+    },
+    deleteQualityGate: async (id) => {
+      requireAdmin()
+      const using = usingGate(id)
+      if (using.length > 0) throw new Error(`projects use this gate: ${using.join(', ')}; choose another for them first`)
+      const at = serverGates.findIndex((x) => x.id === id)
+      if (at < 0) throw new Error('not found')
+      serverGates.splice(at, 1)
+      await wait(null)
     },
     security: async () => {
       guard()
@@ -274,6 +331,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       // As the server does: a trimmed name, null when empty, and a main branch with analyses.
       const name = patch.name === undefined ? s.name : patch.name?.trim() || null
       if (name && name.length > 100) throw new Error('a project name is at most 100 characters')
+      const quality = patch.qualityGate === undefined ? s.qualityGate : patch.qualityGate
+      if (quality !== null && !gateRef(quality)) throw new Error(`no quality gate ${quality}`)
       const main = patch.mainBranch ?? s.mainBranch
       if (!BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
       const by = session.user!.username
@@ -283,7 +342,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
         s.changes.unshift({ setting: 'main_branch', old: s.mainBranch, new: main, by, at })
         clearNewCodePeriod(project)
       }
-      Object.assign(s, { name, mainBranch: main })
+      if (quality !== s.qualityGate) s.changes.unshift({ setting: 'quality_gate', old: gateRef(s.qualityGate)?.name ?? null, new: gateRef(quality)?.name ?? null, by, at })
+      Object.assign(s, { name, mainBranch: main, qualityGate: quality })
       return wait(settingsView(project))
     },
     deleteProject: async (project, confirm) => {
@@ -342,6 +402,15 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       if (!projectKeys.includes(key)) throw new Error('not found')
       const detail = projectDetail(key, branch, settings.get(key))
       if (!detail) throw new Error('not found')
+      // As the server judges it: by its server gate's conditions, when it has one.
+      const gate = serverGates.find((g) => g.id === settings.get(key)?.qualityGate)
+      if (gate) {
+        detail.gate = {
+          state: 'passed',
+          conditions: gate.conditions.map((c) => ({ label: conditionLabel(c), metric: c.metric, actual: null, status: 'no_data' })),
+          serverGate: { id: gate.id, name: gate.name },
+        }
+      }
       return wait(detail)
     },
     issues: async (query) => {
