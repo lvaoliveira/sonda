@@ -8,7 +8,7 @@
 use crate::api::ApiError;
 use crate::components::{ComponentRow, LanguageShare, components, language_shares};
 use crate::health::{
-    GateDetail, Measures, ago, conditions, coverage_level, debt_level, gate_state, measure_set,
+    GateDetail, Measures, ago, coverage_level, debt_level, gate_detail, gate_state, measure_set,
     project_score, rfc3339, severity_level,
 };
 use crate::http::State;
@@ -351,10 +351,7 @@ pub async fn get_project(
             new_code_reference,
             version,
         },
-        gate: GateDetail {
-            state: gate_state(passed, &gate),
-            conditions: conditions(&gate),
-        },
+        gate: gate_detail(passed, &gate),
         score,
         ratings,
         measures: Measures {

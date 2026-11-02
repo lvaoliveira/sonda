@@ -7,7 +7,8 @@
 
 use crate::api::ApiError;
 use crate::health::{
-    GateDetail, Measures, component_of, conditions, duration_text, gate_state, measure_set, rfc3339,
+    GateDetail, Measures, component_of, conditions, duration_text, gate_detail, gate_state,
+    measure_set, rfc3339,
 };
 use crate::http::State;
 use axum::Json;
@@ -370,10 +371,7 @@ pub async fn get_analysis(
         analyzed_at: rfc3339(at),
         tool_version,
         new_code_reference,
-        gate: GateDetail {
-            state: gate_state(passed, &gate),
-            conditions: conditions(&gate),
-        },
+        gate: gate_detail(passed, &gate),
         measures: Measures {
             overall: measure_set(&measures, ""),
             new_code: measure_set(&measures, "new_"),

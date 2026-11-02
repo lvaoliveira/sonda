@@ -174,16 +174,18 @@ type CountedIssue = (String, String, i32, bool);
 /// main branch (see `refresh`), the scan's elsewhere.
 pub async fn recount(pool: &PgPool, project: i64, branch: &str) -> Result<(), sqlx::Error> {
     let latest: Option<(i64, Value, Value)> = sqlx::query_as(
-        "SELECT id, measures, gate FROM analyses
+        "SELECT id, measures, coalesce(scan_gate, gate) FROM analyses
          WHERE project_id = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
     )
     .bind(project)
     .bind(branch)
     .fetch_optional(pool)
     .await?;
-    let Some((latest, mut measures, mut gate)) = latest else {
+    let Some((latest, mut measures, scan_gate)) = latest else {
         return Ok(());
     };
+    // The project's server gate, if it has one, else the scan's (ADR-0017).
+    let mut gate = crate::quality_gates::gate_for(pool, project, scan_gate).await?;
     let issues: Vec<CountedIssue> = sqlx::query_as(
         "SELECT category, severity, effort_minutes, is_new FROM issues
          WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL

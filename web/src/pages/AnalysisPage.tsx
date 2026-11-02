@@ -4,7 +4,7 @@ import { useApi, useAsync } from '@/api/hooks'
 import type { AnalysisChanges, AnalysisDetail, MeasureSet, Severity } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Segmented } from '@/components/sonda/controls'
-import { GateConditions } from '@/components/sonda/gate'
+import { GateConditions, GateSource } from '@/components/sonda/gate'
 import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { GateStatus, SeverityGlyph } from '@/components/sonda/status'
 import { formatDebt, formatNumber } from '@/lib/format'
@@ -124,6 +124,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
           id="result"
           title={<GateStatus state={a.gate.state} className="text-base" />}
           subtitle={`${a.gate.conditions.filter((c) => c.status === 'error').length} of ${a.gate.conditions.length} conditions failing`}
+          aside={<GateSource serverGate={a.gate.serverGate} />}
         >
           <GateConditions conditions={a.gate.conditions} />
         </Card>
