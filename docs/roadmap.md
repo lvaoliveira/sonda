@@ -4,6 +4,9 @@ Work that is planned but deliberately not done yet. Each item says why it
 waits and where it plugs in, so it can be picked up without re-deriving the
 context. Significant ones get an ADR when they start.
 
+What 1.0 needs, and which of these come before or after it, is in
+[release-1.0.md](release-1.0.md).
+
 ## Single sign-on (OpenID Connect)
 
 **Status:** deferred (2026-10-30). Users sign in with username and password
