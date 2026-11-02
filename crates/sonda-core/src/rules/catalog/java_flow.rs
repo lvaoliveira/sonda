@@ -530,8 +530,9 @@ fn declared_type_names(
     has: impl FnOnce(&HashSet<Vec<u8>>) -> bool,
 ) -> bool {
     use std::cell::RefCell;
+    type Names = Option<((usize, usize), HashSet<Vec<u8>>)>;
     thread_local! {
-        static CACHE: RefCell<Option<((usize, usize), HashSet<Vec<u8>>)>> = const { RefCell::new(None) };
+        static CACHE: RefCell<Names> = const { RefCell::new(None) };
     }
     let key = (src.as_ptr() as usize, src.len());
     CACHE.with(|c| {

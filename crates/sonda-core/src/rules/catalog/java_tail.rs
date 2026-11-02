@@ -588,8 +588,9 @@ fn waits_on_a_condition(call: Node, src: &[u8]) -> bool {
 fn file_declares_static_method(root: Node, name: &[u8], src: &[u8]) -> bool {
     use std::cell::RefCell;
     use std::collections::HashSet;
+    type Names = Option<((usize, usize), HashSet<Vec<u8>>)>;
     thread_local! {
-        static CACHE: RefCell<Option<((usize, usize), HashSet<Vec<u8>>)>> = const { RefCell::new(None) };
+        static CACHE: RefCell<Names> = const { RefCell::new(None) };
     }
     let key = (src.as_ptr() as usize, src.len());
     CACHE.with(|c| {
