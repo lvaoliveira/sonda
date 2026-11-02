@@ -662,8 +662,9 @@ posted. The analysis page says whether it was posted, and if not, why.
 
 1. Create a GitHub App (Settings → Developer settings → GitHub Apps) with
    these repository permissions: Checks (read and write), Pull requests
-   (read and write), Metadata (read). It needs no webhook. Generate a
-   private key.
+   (read and write), Metadata (read). It needs no webhook: uncheck its
+   Active box. Note the App ID, then create a private key under
+   Credentials → Key pairs → New key, which downloads it.
 2. Install it on the repositories to decorate.
 3. Give the server the App: `scripts/setup-server.sh --github-app ID
    KEY.pem`, with the App's id and the downloaded key. It copies the key
