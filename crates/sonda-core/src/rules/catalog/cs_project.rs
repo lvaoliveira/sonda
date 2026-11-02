@@ -86,6 +86,134 @@ pub(crate) fn run<'f>(
         .collect()
 }
 
+/// Lines an assembly-level `[SuppressMessage]` silences, for each of
+/// `targets` given as (scope, target): (its position in `targets`, the file
+/// in the scanner's list, first line, last line). Targets are documentation
+/// IDs, `~M:Ns.Type.Method(System.Int32)`; a type covers all its parts, a
+/// member all overloads with its name and number of parameters, and
+/// "module" without a target the whole project. "namespace" scope only
+/// silences the namespace declaration itself, which rules don't report on.
+pub(crate) fn targeted_regions<'f>(
+    facts: impl Iterator<Item = &'f [(String, String)]>,
+    targets: &[(&str, &str)],
+) -> Vec<(usize, usize, usize, usize)> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    let all: Vec<&[(String, String)]> = facts.collect();
+    let parsed: Vec<(usize, FileIndex)> = all
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            let (_, json) = f.iter().find(|(k, _)| k == FACT)?;
+            serde_json::from_str(json).ok().map(|x| (i, x))
+        })
+        .collect();
+    let index = ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
+    let mut out = Vec::new();
+    for (n, (scope, target)) in targets.iter().enumerate() {
+        let target = target.trim().trim_start_matches('~');
+        let (prefix, name) = target.split_once(':').unwrap_or(("", target));
+        if target.is_empty() {
+            if *scope == "module" {
+                out.extend((0..all.len()).map(|file| (n, file, 1, usize::MAX)));
+            }
+            continue;
+        }
+        match (prefix, *scope) {
+            ("T", _) | ("", "type") => {
+                if let Some(id) = index.type_named(&doc_type_name(name)) {
+                    for (file, t) in index.parts(id) {
+                        out.push((n, parsed[*file].0, t.lines.0, t.lines.1));
+                    }
+                }
+            }
+            ("N", "namespaceanddescendants") | ("", "namespaceanddescendants") => {
+                for id in 0..index.len() {
+                    for (file, t) in index.parts(id) {
+                        let ns = &t.namespace;
+                        let inside =
+                            ns == name || ns.strip_prefix(name).is_some_and(|r| r.starts_with('.'));
+                        if inside && t.outer.is_empty() {
+                            out.push((n, parsed[*file].0, t.lines.0, t.lines.1));
+                        }
+                    }
+                }
+            }
+            ("M" | "P" | "F" | "E", _) | ("", "member") => {
+                // Parameters, then the return type of a conversion operator.
+                let (path, params) = match name.split_once('(') {
+                    Some((path, rest)) => (path, Some(rest.split(')').next().unwrap_or(""))),
+                    None => (name, None),
+                };
+                let path = path.split('~').next().unwrap_or(path);
+                let Some((owner, member)) = path.rsplit_once('.') else {
+                    continue;
+                };
+                // Explicit implementations: `Ns#IStore#Save`.
+                let member = member.rsplit('#').next().unwrap_or(member);
+                let member = member.split('`').next().unwrap_or(member);
+                let arity = params.map(doc_param_count);
+                let Some(id) = index.type_named(&doc_type_name(owner)) else {
+                    continue;
+                };
+                for (file, t) in index.parts(id) {
+                    for m in &t.members {
+                        let named = match path.rsplit('.').next() {
+                            Some("#ctor") => m.kind == "constructor" && !m.has("static"),
+                            Some("#cctor") => m.kind == "constructor" && m.has("static"),
+                            Some("Finalize") if m.kind == "destructor" => true,
+                            _ => m.name == member,
+                        };
+                        let fits = prefix != "M" || arity.unwrap_or(0) == m.params.len();
+                        if named && fits {
+                            out.push((n, parsed[*file].0, m.lines.0, m.lines.1));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A documentation ID's type name as `TypeDecl::full_name` writes it:
+/// enclosing types without their arity, the type with it.
+fn doc_type_name(name: &str) -> String {
+    let segments: Vec<&str> = name.split('.').collect();
+    let mut parts: Vec<String> = segments[..segments.len() - 1]
+        .iter()
+        .map(|s| s.split('`').next().unwrap_or(s).to_string())
+        .collect();
+    let last = segments[segments.len() - 1];
+    parts.push(if last.contains('`') {
+        last.to_string()
+    } else {
+        format!("{last}`0")
+    });
+    parts.join(".")
+}
+
+/// The number of parameters in a documentation ID's parameter list, whose
+/// generic arguments are in braces: `System.Collections.Generic.List{System.Int32},System.String`.
+fn doc_param_count(params: &str) -> usize {
+    if params.trim().is_empty() {
+        return 0;
+    }
+    let mut depth = 0i32;
+    let mut count = 1;
+    for c in params.chars() {
+        match c {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            ',' if depth == 0 => count += 1,
+            _ => {}
+        }
+    }
+    count
+}
+
 fn looks_like_interface(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next() == Some('I') && chars.next().is_some_and(char::is_uppercase)
@@ -656,6 +784,41 @@ mod tests {
             .collect();
         hits.sort();
         hits
+    }
+
+    #[test]
+    fn assembly_level_suppressions_target_other_files() {
+        let files = [
+            (
+                "GlobalSuppressions.cs",
+                "using System.Diagnostics.CodeAnalysis;\n[assembly: SuppressMessage(\"Bug\", \"S1244\", Scope = \"member\", Target = \"~M:Shop.Cart.Total(System.Double)~System.Boolean\")]\n[assembly: SuppressMessage(\"Bug\", \"S1244:Float equality\", Scope = \"type\", Target = \"~T:Shop.Box`1.Inner\")]\n[assembly: SuppressMessage(\"Bug\", \"S1244\", Scope = \"namespaceanddescendants\", Target = \"~N:Shop.Legacy\")]\n",
+            ),
+            (
+                "Cart.cs",
+                "namespace Shop;\npublic class Cart {\n  bool Total(double x) { return x == 0.1; }\n  bool Total(double x, double y) { return x == y; }\n  bool Other(double x) { return x == 0.3; }\n}\npublic class Box<T> {\n  class Inner {\n    bool F(double x) => x == 0.4;\n  }\n}\n",
+            ),
+            (
+                "Old.cs",
+                "namespace Shop.Legacy.Parts {\n  class Gear {\n    bool F(double x) => x == 0.5;\n  }\n}\nnamespace Shop.LegacyNot {\n  class Gear {\n    bool F(double x) => x == 0.6;\n  }\n}\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/float-equality", &files),
+            [
+                ("Cart.cs".to_string(), 4),
+                ("Cart.cs".to_string(), 5),
+                ("Old.cs".to_string(), 8)
+            ]
+        );
+        // Module scope without a target silences the key everywhere.
+        let module = [
+            (
+                "GlobalSuppressions.cs",
+                "[assembly: System.Diagnostics.CodeAnalysis.SuppressMessage(\"Bug\", \"S1244\", Scope = \"module\")]\n",
+            ),
+            files[1],
+        ];
+        assert_eq!(project("cs/float-equality", &module), []);
     }
 
     #[test]

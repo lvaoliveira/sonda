@@ -62,6 +62,10 @@ pub(crate) struct MemberDecl {
     /// A method with type parameters of its own.
     #[serde(default)]
     pub(crate) generic: bool,
+    /// The first and last line of the whole declaration, attributes
+    /// included.
+    #[serde(default)]
+    pub(crate) lines: (usize, usize),
 }
 
 impl MemberDecl {
@@ -91,6 +95,9 @@ pub(crate) struct TypeDecl {
     pub(crate) bases: Vec<TypeRef>,
     pub(crate) members: Vec<MemberDecl>,
     pub(crate) span: Span,
+    /// The first and last line of the whole declaration.
+    #[serde(default)]
+    pub(crate) lines: (usize, usize),
 }
 
 impl TypeDecl {
@@ -403,6 +410,7 @@ impl Extractor<'_> {
                     attributes: attributes.clone(),
                     accessors: Vec::new(),
                     generic: false,
+                    lines: lines(n),
                 })
                 .collect();
         }
@@ -422,6 +430,7 @@ impl Extractor<'_> {
             generic: n
                 .named_children(&mut n.walk())
                 .any(|c| c.kind() == "type_parameter_list"),
+            lines: lines(n),
         }]
     }
 }
@@ -486,6 +495,10 @@ impl Extractor<'_> {
             span,
         }
     }
+}
+
+fn lines(n: Node) -> (usize, usize) {
+    (n.start_position().row + 1, n.end_position().row + 1)
 }
 
 fn unparenthesized(mut n: Node) -> Node {
@@ -778,6 +791,7 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: std::time::Instant) -> F
                         bases,
                         members,
                         span: x.span(name),
+                        lines: lines(node),
                     });
                     outer.push((depth, x.text(name), arity));
                 }

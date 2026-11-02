@@ -64,7 +64,23 @@ team's existing suppressions keep working: a region silences every sonda
 rule that references the key, exactly or not, and a bare `disable`
 silences every rule. Files report their regions as a fact, so the
 project-level rules ([ADR-0020](0020-cross-file-declarations.md)) honor
-them too. `[SuppressMessage]` attributes aren't read yet.
+them too.
+
+`[SuppressMessage("category", "S2190:...")]` and
+`[UnconditionalSuppressMessage]` on a declaration silence their key over
+the whole declaration, attributes included; the check id is the second
+positional argument or `checkId:`, cut at the colon. Assembly-level ones
+(`[assembly: SuppressMessage(..., Scope = "member", Target =
+"~M:Ns.Type.Method(System.Int32)")]`, usually in a
+`GlobalSuppressions.cs`) are a fact each file reports, and the project
+pass resolves their documentation-ID targets against the index: a type
+target covers every part of a partial type, a member target every
+overload with its name and number of parameters (not their types),
+`namespaceanddescendants` the types in that namespace and those under it,
+and `module` without a target the whole project. `namespace` scope only
+silences the namespace declaration itself, on which no rule reports, so
+it silences nothing. A target the project doesn't declare silences
+nothing either.
 
 ### Preprocessor directives
 
