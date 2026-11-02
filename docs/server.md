@@ -161,7 +161,7 @@ Users and roles are described in [ADR-0006](adr/0006-users.md).
 
 | Endpoint | |
 |---|---|
-| `GET /api/session` | `{"user": {...} or null, "authenticated": false, "readsRequireAuth": true}` |
+| `GET /api/session` | `{"user": {...} or null, "authenticated": false, "readsRequireAuth": true, "version": "0.1.0" or null}`; `version` is null until the caller can read |
 | `POST /api/session` `{"username": "...", "password": "..."}` | `204` and the cookie, or `401` "invalid username or password" |
 | `DELETE /api/session` | `204`. Ends the session and clears the cookie. |
 | `PUT /api/me/password` `{"current": "...", "new": "..."}` | `204`. Your other sessions end. |

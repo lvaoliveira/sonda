@@ -147,7 +147,11 @@ pub async fn run(config: Config) -> Result<()> {
             }
         });
     }
-    tracing::info!(address = %config.listen, "listening");
+    tracing::info!(
+        address = %config.listen,
+        version = env!("CARGO_PKG_VERSION"),
+        "listening"
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await

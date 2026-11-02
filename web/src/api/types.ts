@@ -47,6 +47,8 @@ export interface Shell {
   counts: NavCounts
   /** The username "Assign to me" uses; null when browsing read-only. */
   me: string | null
+  /** The server's version, shown beside the wordmark. */
+  version: string | null
 }
 
 // ---------------------------------------------------------------- overview
@@ -467,6 +469,8 @@ export interface Session {
   authenticated: boolean
   /** Whether anything can be read before signing in. */
   readsRequireAuth: boolean
+  /** The server's version; null to whoever can't read yet. */
+  version: string | null
 }
 
 /** Passwords need at least this many characters (ADR-0006). */

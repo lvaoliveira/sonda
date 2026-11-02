@@ -58,6 +58,25 @@ async fn migrated() -> Option<TestDb> {
 }
 
 #[tokio::test]
+async fn the_version_is_shown_to_whoever_can_read() {
+    let Some(db) = migrated().await else { return };
+    create_user(&db, "ann", "member").await;
+    let version = |app: axum::Router, session: Option<String>| async move {
+        let request = request("GET", "/api/session", session.as_deref(), None);
+        send(&app, request).await.2["version"].clone()
+    };
+    let protected = http::router(state_with(db.pool.clone(), true), None);
+    assert_eq!(version(protected.clone(), None).await, Value::Null);
+    let session = sign_in(&protected, "ann", PASSWORD).await.unwrap();
+    assert_eq!(
+        version(protected, Some(session)).await,
+        env!("CARGO_PKG_VERSION")
+    );
+    let open = http::router(state_with(db.pool.clone(), false), None);
+    assert_eq!(version(open, None).await, env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
 async fn a_user_signs_in_reads_and_signs_out() {
     let Some(db) = migrated().await else { return };
     create_user(&db, "ann", "member").await;
@@ -66,7 +85,7 @@ async fn a_user_signs_in_reads_and_signs_out() {
     let (_, _, status) = send(&app, request("GET", "/api/session", None, None)).await;
     assert_eq!(
         status,
-        json!({ "user": null, "authenticated": false, "readsRequireAuth": true })
+        json!({ "user": null, "authenticated": false, "readsRequireAuth": true, "version": null })
     );
     assert_eq!(
         send(&app, request("GET", "/api/rules", None, None)).await.0,

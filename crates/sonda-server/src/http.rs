@@ -244,6 +244,9 @@ struct SessionStatus {
     authenticated: bool,
     /// Whether the web app must sign in before it can read anything.
     reads_require_auth: bool,
+    /// The server's version, for whoever can read; null otherwise, so a
+    /// server that requires sign-in doesn't tell strangers what it runs.
+    version: Option<&'static str>,
 }
 
 async fn session_status(
@@ -251,13 +254,15 @@ async fn session_status(
     headers: HeaderMap,
 ) -> Result<Json<SessionStatus>, ApiError> {
     let caller = api::caller(&state, &headers).await?;
+    let authenticated = !matches!(caller, Caller::Anonymous);
     Ok(Json(SessionStatus {
-        authenticated: !matches!(caller, Caller::Anonymous),
+        authenticated,
         user: match caller {
             Caller::User(u) | Caller::UserToken(u, _) => Some(u),
             _ => None,
         },
         reads_require_auth: state.reads_require_auth,
+        version: (authenticated || !state.reads_require_auth).then_some(env!("CARGO_PKG_VERSION")),
     }))
 }
 
