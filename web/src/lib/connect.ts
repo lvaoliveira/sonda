@@ -18,6 +18,21 @@ export function isRepository(r: string): boolean {
   return /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(r)
 }
 
+/**
+ * The `owner/name` a pasted repository names: its URL as the browser shows
+ * it (`https://github.com/acme/shop`, any page under it, `.git` or not), its
+ * SSH address (`git@github.com:acme/shop.git`), or `owner/name` itself.
+ * Null for anything else, another host's included.
+ */
+export function parseRepository(input: string): string | null {
+  const text = input.trim()
+  const path = text.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/(.+)$/i)?.[1] ?? text.match(/^git@github\.com:(.+)$/i)?.[1] ?? (text.includes(':') ? null : text)
+  if (path === null) return null
+  const [owner = '', name = ''] = path.replace(/[?#].*$/, '').split('/')
+  const repository = `${owner}/${name.replace(/\.git$/, '')}`
+  return isRepository(repository) ? repository : null
+}
+
 /** A project key from a repository's name, as the server allows keys. */
 export function projectKeyFor(repository: string): string {
   const name = repository.split('/').pop() ?? ''

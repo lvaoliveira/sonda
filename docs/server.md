@@ -405,8 +405,10 @@ On a new server, the empty Overview offers admins **Connect a repository**
 (also on Projects), which sets a GitHub repository up in one form
 ([ADR-0023](adr/0023-connecting-a-repository.md)):
 
-1. Enter `owner/name`. sonda creates the project (keyed by the
-   repository's name, editable), links the repository for pull request
+1. Paste the repository's GitHub URL, such as
+   `https://github.com/acme/shop` (its SSH address or `owner/name` work
+   too). sonda creates the project (keyed by the repository's name,
+   editable), links the repository for pull request
    decoration, and generates a project analysis token.
 2. Add the token as the repository's `SONDA_TOKEN` secret, on GitHub's page
    it opens.
