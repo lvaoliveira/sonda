@@ -27,6 +27,9 @@ pub struct Config {
     /// Where to sync advisories from daily, when SONDA_ADVISORY_SYNC=true
     /// (ADR-0009); `None` keeps the server from connecting out.
     pub advisory_sync: Option<String>,
+    /// Where to serve `GET /metrics` (ADR-0019); `None`, the default, serves
+    /// no metrics. Never the API's address: metrics are unauthenticated.
+    pub metrics_listen: Option<SocketAddr>,
 }
 
 /// The API token, kept only as a hash.
@@ -88,6 +91,7 @@ impl Config {
             web_dir,
             admin,
             advisory_sync: advisory_sync(env)?,
+            metrics_listen: None,
         })
     }
 }

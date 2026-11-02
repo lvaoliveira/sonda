@@ -815,6 +815,7 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_ADVISORY_SYNC` | `true` syncs advisories from OSV daily (see [Known vulnerabilities](#known-vulnerabilities)). Off by default: the server makes no outbound connections. |
 | `SONDA_ADVISORY_SYNC_URL` | A mirror of OSV's exports to sync from instead: `https://`, or `http://` to localhost only. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
+| `SONDA_METRICS_LISTEN` (`--metrics-listen`) | Address to serve Prometheus metrics on, at `/metrics`. Unset by default, so no metrics are served. Unauthenticated: never the public address. See [Metrics](#metrics). |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
 | `RUST_LOG` | Log filter. Default `sonda=info,sqlx=warn`. |
 | `SONDA_LOG_FORMAT` | `text` (the default) or `json`, one object per line for log collectors. See [Logs](#logs). |
@@ -850,6 +851,37 @@ request's are under `span`:
 ```json
 {"timestamp":"...","level":"INFO","message":"request","status":200,"duration_ms":12.4,"target":"sonda_server::observability","span":{"id":"4f0c...","method":"GET","route":"/api/projects/{key}","name":"request"}}
 ```
+
+## Metrics
+
+With `SONDA_METRICS_LISTEN` set, the server opens a second listener that
+serves `GET /metrics`, in the OpenMetrics text format Prometheus reads,
+and nothing else. The API's port never serves them.
+
+The endpoint needs no authentication, so who can reach it is up to where
+it listens: `127.0.0.1:9090` for a Prometheus on the same machine, or, in
+Docker Compose, `0.0.0.0:9090` without publishing the port, so only
+containers on the compose network reach it:
+
+```yaml
+services:
+  sonda:
+    environment:
+      SONDA_METRICS_LISTEN: 0.0.0.0:9090   # no `ports:` entry for it
+```
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `sonda_http_requests_total` | `method`, `route`, `status` | Requests completed. |
+| `sonda_http_request_duration_seconds` | `method`, `route` | Time to answer, as a histogram from 5 ms to the 30 s request timeout. |
+
+Labels are bounded, so the number of series is too:
+- `route` is the route's template (`/api/projects/{key}`), or `-` for
+  paths that match none, including the web app's files;
+- `method` is one of the standard methods, or `other`;
+- project keys, branches and users never become labels.
+
+Counters start at zero when the server starts, as Prometheus expects.
 
 ## Running without Docker
 
