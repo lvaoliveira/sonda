@@ -38,7 +38,7 @@ phases, each unlocking a set of rules:
 | **S1: scopes and symbols** | Declarations, references and resolution per scope. Each grammar's binding rules come from tree-sitter "locals" queries where a grammar ships them, plus small per-language Rust where it doesn't. | unused variables, imports and parameters; shadowing; undeclared and redeclared names |
 | **S2: control flow** | A control-flow graph per function: branches, loops, `try`/`catch`/`finally`, early returns. | unreachable code; identical branches; inconsistent returns; empty or infinite loops |
 | **S3: data flow** | Analyses over the graph: reaching definitions, constant propagation, and nullness. Each is a bounded fixed-point computation, never path enumeration. | dead stores; always-true or always-false conditions; null dereferences; values used before assignment |
-| **S4: types** | **Open; needs its own ADR.** | type-dependent rules |
+| **S4: types** | Light inference plus the platform's declarations, bundled as data ([ADR-0022](0022-platform-types.md), proposed). | type-dependent rules |
 
 For S4, there are two options:
 - **(a) Light inference:** literals, declared types (TypeScript, Java,
@@ -49,7 +49,8 @@ For S4, there are two options:
   toolchain and configuration, which collides with sonda's rule never to
   execute anything from the analyzed repository (ADR-0002, ADR-0003).
 
-Type-dependent rules wait for that ADR.
+[ADR-0022](0022-platform-types.md) proposes (a), extended with the
+platform's own declarations shipped as data, for C# first.
 
 ### Rules on top
 
