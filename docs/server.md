@@ -14,6 +14,24 @@ as `admin`.
 From the repository root:
 
 ```sh
+scripts/setup-server.sh
+open http://127.0.0.1:9000     # sign in as admin, password in secrets/admin_password
+```
+
+It creates the secrets below once, then builds this checkout and starts it,
+waiting until it's healthy. It's safe to rerun, so upgrading is
+`git pull && scripts/setup-server.sh`. Its options are kept in `.env`, so
+later runs need none:
+
+| Option | |
+|---|---|
+| `--port PORT` | Publish on `127.0.0.1:PORT` instead of 9000, when 9000 is taken. |
+| `--github-app ID KEY.pem` | Decorate pull requests with this GitHub App (see [Decorating pull requests on GitHub](#decorating-pull-requests-on-github)). |
+| `--public-url URL` | The server's address in those decorations. Default `http://localhost:PORT`. |
+
+To do it by hand instead:
+
+```sh
 mkdir -m 700 secrets
 openssl rand -hex 32 > secrets/db_password
 openssl rand -hex 32 > secrets/sonda_token
@@ -22,7 +40,6 @@ chmod 644 secrets/*        # the containers read them as non-root users
 
 docker compose up -d --wait
 curl http://127.0.0.1:9000/api/health     # {"status":"ok"}
-open http://127.0.0.1:9000                # sign in as admin, password in secrets/admin_password
 ```
 
 `secrets/` is git-ignored, and the directory's `700` mode keeps other users
@@ -218,7 +235,8 @@ analysis token (for a `ci` service user, as above), put it in the pipeline's sec
 and check the analyses list shows it as the uploader. Once no recent
 analysis shows `api-token`, turn the shared token off. With Docker
 Compose, add a `compose.override.yaml` (git-ignored, merged automatically)
-and restart with `docker compose up -d`:
+and restart with `docker compose up -d`, or rerun `scripts/setup-server.sh`
+if it started the server (its `.env` lists the compose files to merge):
 
 ```yaml
 services:
@@ -644,12 +662,15 @@ posted. The analysis page says whether it was posted, and if not, why.
 
 1. Create a GitHub App (Settings → Developer settings → GitHub Apps) with
    these repository permissions: Checks (read and write), Pull requests
-   (read and write), Metadata (read). It needs no webhook. Generate a
-   private key.
+   (read and write), Metadata (read). It needs no webhook: uncheck its
+   Active box. Note the App ID, then create a private key under
+   Credentials → Key pairs → New key, which downloads it.
 2. Install it on the repositories to decorate.
-3. Give the server `SONDA_GITHUB_APP_ID` and the key
-   (`SONDA_GITHUB_APP_PRIVATE_KEY_FILE`), and `SONDA_PUBLIC_URL` for links
-   back to the server (see [Configuration](#configuration)).
+3. Give the server the App: `scripts/setup-server.sh --github-app ID
+   KEY.pem`, with the App's id and the downloaded key. It copies the key
+   into `secrets/` and adds `compose.github.yaml`. Without the script, set
+   `SONDA_GITHUB_APP_ID`, `SONDA_GITHUB_APP_PRIVATE_KEY_FILE` and
+   `SONDA_PUBLIC_URL` (see [Configuration](#configuration)).
 4. In each project's Settings, an admin links its repository
    (`owner/name`). Uploads from any other repository post nothing, so a
    project can't decorate someone else's pull requests.
@@ -896,7 +917,8 @@ turns on but `sonda.toml` leaves off never ran: the view marks it
 
 The port is published on `127.0.0.1` only. To reach the server from other
 machines, put a reverse proxy that terminates TLS (Caddy, nginx, a cloud
-load balancer) in front of `127.0.0.1:9000`. `sonda upload` refuses plain
+load balancer) in front of `127.0.0.1:9000`, or reach it through an SSH
+tunnel (`ssh -L 9000:127.0.0.1:9000 host`). `sonda upload` refuses plain
 HTTP to anything but localhost, so the token never crosses the network
 unencrypted.
 

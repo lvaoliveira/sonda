@@ -4,3 +4,5 @@
 /secrets
 # Local Docker Compose settings, such as turning the shared token off.
 compose.override.yaml
+# scripts/setup-server.sh's settings: the port, the GitHub App's id.
+/.env

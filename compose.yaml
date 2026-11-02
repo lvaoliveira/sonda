@@ -1,5 +1,6 @@
-# sonda server + PostgreSQL (ADR-0005). See docs/server.md. Before the first
-# `docker compose up`, create the two secrets:
+# sonda server + PostgreSQL (ADR-0005). See docs/server.md. Start it with
+# scripts/setup-server.sh, which creates the secrets below first, or by
+# hand before the first `docker compose up`:
 #
 #   mkdir -m 700 secrets
 #   openssl rand -hex 32 > secrets/db_password
@@ -13,8 +14,8 @@ services:
     build: .
     image: sonda-server:local
     # Published on this machine only; put a TLS reverse proxy in front to
-    # expose it.
-    ports: ["127.0.0.1:9000:9000"]
+    # expose it. SONDA_PORT (in .env) moves it off 9000.
+    ports: ["127.0.0.1:${SONDA_PORT:-9000}:9000"]
     environment:
       DATABASE_URL: postgres://sonda@db:5432/sonda
       DATABASE_PASSWORD_FILE: /run/secrets/db_password

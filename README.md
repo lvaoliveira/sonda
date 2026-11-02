@@ -44,6 +44,9 @@ Quality gate: FAILED
 cargo install --path crates/sonda
 ```
 
+Without Rust, on Linux, `scripts/install-cli.sh` builds a static binary in
+Docker and installs it to `~/.local/bin`.
+
 ## Usage
 
 ```sh

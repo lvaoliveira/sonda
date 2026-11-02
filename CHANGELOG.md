@@ -261,6 +261,13 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- `scripts/setup-server.sh` starts the server in one command: it creates
+  the secrets, builds this checkout and starts it with Docker Compose, and
+  reruns safely to upgrade. `--port` moves it off 9000 (or `SONDA_PORT`),
+  and `--github-app ID KEY.pem` sets up pull request decoration. Settings
+  are kept in `.env`.
+- `scripts/install-cli.sh` installs the CLI on a Linux host without Rust:
+  it builds a static binary in Docker (the image's new `cli` target).
 - Pull request decoration on GitHub (ADR-0021): with a GitHub App
   configured (`SONDA_GITHUB_APP_ID` and its private key) and a project
   linked to its repository in Settings, each pull request gets a `sonda`

@@ -1,0 +1,17 @@
+# The GitHub App that decorates pull requests (ADR-0021). Added by
+# `scripts/setup-server.sh --github-app ID KEY.pem`, which keeps the App's id
+# in .env and lists this file in .env's COMPOSE_FILE; a separate file because
+# compose.yaml can't name a secret file that may not exist.
+services:
+  sonda:
+    environment:
+      SONDA_GITHUB_APP_ID: ${SONDA_GITHUB_APP_ID:?run scripts/setup-server.sh --github-app ID KEY.pem}
+      SONDA_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_key
+      # Where the pull request's links point: this machine, unless a reverse
+      # proxy serves it elsewhere (setup-server.sh --public-url).
+      SONDA_PUBLIC_URL: ${SONDA_PUBLIC_URL:-http://localhost:${SONDA_PORT:-9000}}
+    secrets: [github_app_key]
+
+secrets:
+  github_app_key:
+    file: ./secrets/github_app_key.pem
