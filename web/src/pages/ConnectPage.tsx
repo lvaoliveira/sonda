@@ -1,12 +1,18 @@
 import { ExternalLink } from 'lucide-react'
-import { type FormEvent, type ReactNode, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { ProjectSettings, WaitingProject } from '@/api/types'
+import type { AnalysisRow, ProjectSettings, WaitingProject } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
+import { GateStatus } from '@/components/sonda/status'
 import { isRepository, localServer, newFileUrl, newSecretUrl, projectKeyFor, type Runner, SECRET_NAME, serverProblem, WORKFLOW_PATH, workflowYaml } from '@/lib/connect'
+
+import { branchLabel } from '@/lib/format'
+
+/** How often Done checks for the first analysis. */
+export const FIRST_ANALYSIS_POLL_MS = 5000
 
 const CRUMBS = [
   { label: 'Projects', to: '/projects' },
@@ -152,6 +158,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
 
 function Steps({ done }: { done: Connected }) {
   const { settings, token, runner, server } = done
+  const [finished, setFinished] = useState(false)
   const repository = settings.githubRepository!
   const yaml = workflowYaml({ project: settings.key, mainBranch: settings.mainBranch, server, runner })
   return (
@@ -191,16 +198,89 @@ function Steps({ done }: { done: Connected }) {
           <Copyable label="Command" value="scripts/install-cli.sh" />
         </Step>
       )}
-      <p className="m-0 text-[13px] text-fg-muted">
-        The project shows once its main branch is analyzed; until then it's listed on <Link to="/projects">Projects</Link> as waiting.
-      </p>
+      {finished ? (
+        <FirstAnalysis project={settings.key} n={runner === 'self-hosted' ? 4 : 3} />
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button primary onClick={() => setFinished(true)}>
+            Done
+          </Button>
+          <span className="text-[13px] text-fg-muted">sonda then waits for the workflow's first analysis, to confirm it's connected.</span>
+        </div>
+      )}
     </>
+  )
+}
+
+/**
+ * Checks every few seconds until the project's first analysis arrives,
+ * which proves the secret, the workflow and the runner all work.
+ */
+function FirstAnalysis({ project, n }: { project: string; n: number }) {
+  const api = useApi()
+  const [first, setFirst] = useState<AnalysisRow | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (first) return
+    let stopped = false
+    const check = async () => {
+      try {
+        const page = await api.analyses({ project, offset: 0, limit: 1 })
+        if (stopped) return
+        setError(null)
+        if (page.items[0]) setFirst(page.items[0])
+      } catch (err) {
+        if (!stopped) setError((err as Error).message)
+      }
+    }
+    void check()
+    const timer = setInterval(() => void check(), FIRST_ANALYSIS_POLL_MS)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [api, project, first])
+
+  if (first)
+    return (
+      <Card id="connected" title="Connected">
+        <div role="status" className="flex max-w-[720px] flex-col gap-3">
+          <p className="m-0 flex flex-wrap items-center gap-2 text-[13px]">
+            The first analysis arrived, from <Mono className="text-xs text-fg">{branchLabel(first)}</Mono>: <GateStatus state={first.gate} />
+          </p>
+          <p className="m-0 text-[13px] text-fg-muted">
+            {first.pullRequest
+              ? 'Its page says whether the check and the comment were posted on the pull request.'
+              : 'The project shows on Projects once its main branch is analyzed.'}
+          </p>
+          <Link
+            to={`/analyses/${first.id}`}
+            className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-[13px] text-[13px] font-semibold text-brand-ink no-underline"
+          >
+            View the analysis
+          </Link>
+        </div>
+      </Card>
+    )
+  return (
+    <Step n={n} title="Waiting for the first analysis">
+      <div role="status" className="flex flex-col gap-2.5">
+        <div className="h-[3px] w-40 overflow-hidden rounded-sm bg-hover">
+          <div className="h-full w-[58%] bg-brand motion-safe:animate-pulse" />
+        </div>
+        <p className="m-0 text-[13px] text-fg-muted">
+          Once the pull request with the workflow runs its CI, its analysis shows here. Checking every {FIRST_ANALYSIS_POLL_MS / 1000} seconds; you can leave this page, and the
+          project stays listed on <Link to="/projects">Projects</Link> as waiting.
+        </p>
+        {error && <p className="m-0 text-[13px] text-crit">Could not check: {error}</p>}
+      </div>
+    </Step>
   )
 }
 
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <Card title={`${n}. ${title}`}>
+    <Card id={`step-${n}`} title={`${n}. ${title}`}>
       <div className="flex max-w-[720px] min-w-0 flex-col gap-3">{children}</div>
     </Card>
   )
@@ -233,7 +313,7 @@ function CopyButton({ value, children }: { value: string; children: ReactNode })
 
 function ExternalButton({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <a href={href} target="_blank" rel="noreferrer" className="inline-flex h-8 w-fit items-center gap-1.5 rounded-lg bg-brand px-[13px] text-[13px] font-semibold text-brand-ink no-underline">
+    <a href={href} target="_blank" rel="noreferrer" className="inline-flex min-h-8 w-fit items-center gap-1.5 rounded-lg bg-brand px-[13px] py-1.5 text-[13px] font-semibold text-brand-ink no-underline">
       {children}
       <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
     </a>

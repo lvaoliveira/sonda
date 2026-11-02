@@ -1243,6 +1243,10 @@ describe('Connecting a repository', () => {
     expect(workflow).toContain('--server http://localhost')
     expect(screen.getByLabelText('Command')).toHaveTextContent('scripts/install-cli.sh')
 
+    // Done waits for the workflow's first analysis.
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    expect(await screen.findByRole('region', { name: '4. Waiting for the first analysis' })).toHaveTextContent('Checking every 5 seconds')
+
     // It waits for its first analysis, with its steps again for admins.
     await user.click(within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Projects/ }))
     const waiting = await screen.findByRole('region', { name: 'Waiting for a first analysis' })
@@ -1264,6 +1268,27 @@ describe('Connecting a repository', () => {
     await user.type(server, 'https://sonda.example.com')
     await user.click(screen.getByRole('button', { name: 'Connect' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('project "payments-platform" already exists')
+  })
+
+  it("confirms it's connected when the first analysis arrives", async () => {
+    const user = userEvent.setup()
+    const api = emptyApi()
+    const { analyses } = api
+    // The workflow's first run: a pull request's analysis of the new project.
+    renderAt('/connect', {
+      ...api,
+      analyses: async (q) => {
+        if (q.project !== 'shop') return analyses(q)
+        const row = (await analyses({ offset: 0, limit: 1 })).items[0]
+        return { total: 1, offset: 0, limit: 1, items: [{ ...row, id: 4242, project: 'shop', branch: 'pr:7', pullRequest: { number: 7, base: 'main', head: 'add-sonda' } }] }
+      },
+    })
+    await user.type(await screen.findByRole('textbox', { name: 'GitHub repository' }), 'acme/shop')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+    await user.click(await screen.findByRole('button', { name: 'Done' }))
+    const connected = await screen.findByRole('region', { name: 'Connected' })
+    expect(connected).toHaveTextContent('The first analysis arrived, from #7 add-sonda → main')
+    expect(within(connected).getByRole('link', { name: 'View the analysis' })).toHaveAttribute('href', '/analyses/4242')
   })
 
   it('is for admins only', async () => {
