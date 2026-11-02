@@ -52,6 +52,7 @@ mod js_vue;
 mod py;
 mod py_cdk;
 mod py_extra;
+mod py_final;
 mod py_last;
 mod py_more;
 mod py_quality;
@@ -96,6 +97,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (py_cdk::RULES, &[]),
     (py_regex::RULES, &[]),
     (py_last::RULES, py_last::OFF_BY_DEFAULT),
+    (py_final::RULES, py_final::OFF_BY_DEFAULT),
     (java::RULES, &[]),
     (java_security::RULES, &[]),
     (java_bugs::RULES, &[]),
