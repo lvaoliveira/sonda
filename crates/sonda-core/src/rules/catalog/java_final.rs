@@ -789,7 +789,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2184")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(local_variable_declaration type: (_) @t declarator: (variable_declarator value: (binary_expression operator: ["*" "<<"]) @match))"#,
+            query: r#"(local_variable_declaration type: (_) @t declarator: (variable_declarator value: (binary_expression operator: ["*" "<<" "+" "-"]) @match))
+(assignment_expression left: (identifier) @t right: (binary_expression operator: ["*" "<<" "+" "-"]) @match)"#,
             filter: Some(Keep(widens_after_int_arithmetic)),
         },
         example: Some(Example {
@@ -1781,13 +1782,18 @@ fn equality_between_different_literals(binary: Node, _: &[u8]) -> bool {
 }
 
 fn widens_after_int_arithmetic(binary: Node, src: &[u8]) -> bool {
-    let Some(decl) = binary.parent().and_then(|d| d.parent()) else {
+    let Some(parent) = binary.parent() else {
         return false;
     };
-    if !matches!(
-        type_text(decl.child_by_field_name("type"), src),
-        b"long" | b"double" | b"float"
-    ) {
+    let target = if parent.kind() == "assignment_expression" {
+        parent
+            .child_by_field_name("left")
+            .filter(|l| l.kind() == "identifier")
+            .and_then(|l| declared_type(binary, text(l, src), src))
+    } else {
+        parent.parent().and_then(|d| d.child_by_field_name("type"))
+    };
+    if !matches!(type_text(target, src), b"long" | b"double" | b"float") {
         return false;
     }
     let int_operand = |n: Option<Node>| {
@@ -1799,6 +1805,15 @@ fn widens_after_int_arithmetic(binary: Node, src: &[u8]) -> bool {
                 type_text(declared_type(binary, text(n, src), src), src),
                 b"int" | b"short" | b"byte" | b"char"
             ),
+            "method_invocation" => {
+                n.child_by_field_name("arguments")
+                    .is_some_and(|a| a.named_child_count() == 0)
+                    && matches!(
+                        n.child_by_field_name("name").map(|m| text(m, src)),
+                        Some(b"size" | b"length" | b"ordinal")
+                    )
+            }
+            "field_access" => text(n, src).ends_with(b".length"),
             _ => false,
         })
     };
@@ -1808,8 +1823,8 @@ fn widens_after_int_arithmetic(binary: Node, src: &[u8]) -> bool {
     );
     int_operand(l)
         && int_operand(r)
-        && (l.is_some_and(|n| n.kind() == "identifier")
-            || r.is_some_and(|n| n.kind() == "identifier"))
+        && (l.is_some_and(|n| n.kind() != "decimal_integer_literal")
+            || r.is_some_and(|n| n.kind() != "decimal_integer_literal"))
 }
 
 fn shifts_a_byte_variable(binary: Node, src: &[u8]) -> bool {

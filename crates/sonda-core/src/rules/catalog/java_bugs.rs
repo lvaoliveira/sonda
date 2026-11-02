@@ -1401,14 +1401,14 @@ fn operands_are_identical(binary: Node, src: &[u8]) -> bool {
     if matches!(op, b"==" | b"!=") && matches!(left.kind(), "identifier" | "field_access") {
         return false;
     }
+    // `false ^ false` and `true && true` are as redundant as any other pair.
+    let boolean_operation = matches!(op, b"^" | b"&" | b"|" | b"&&" | b"||");
     let literal = matches!(
         left.kind(),
-        "true"
-            | "false"
-            | "decimal_integer_literal"
-            | "string_literal"
-            | "character_literal"
-            | "null_literal"
+        "true" | "false" if !boolean_operation
+    ) || matches!(
+        left.kind(),
+        "decimal_integer_literal" | "string_literal" | "character_literal" | "null_literal"
     );
     !literal
         && text(left, src) == text(right, src)
@@ -2344,7 +2344,7 @@ mod tests {
     fn false_positives_found_in_real_code() {
         let src = "class T {\nvoid testEquals() { assertEquals(a, a); }\nvoid testIt() { assertEquals(a, a); }\nvoid g() { boolean r = false ^ false; }\nString toString(Object o) { return null; }\nvoid h() { bf.setBoolean(0, true); stmt.setBoolean(0, true); }\nvoid i() { outer: for (int k = 0; k < n; k++) { for (int j = 0; j < m; j++) { continue outer; } break; } }\n}\nclass U {\npublic boolean equals(U o) { return true; }\npublic boolean equals(Object o) { return true; }\npublic int hashCode() { return 1; }\n}";
         assert_eq!(flagged("java/assertion-compares-same-object", src), [3]);
-        assert!(flagged("java/identical-operands", src).is_empty());
+        assert_eq!(flagged("java/identical-operands", src), [4]);
         assert!(flagged("java/null-returned-by-object-method", src).is_empty());
         assert_eq!(flagged("java/prepared-statement-index", src), [6]);
         assert!(flagged("java/single-iteration-loop", src).is_empty());

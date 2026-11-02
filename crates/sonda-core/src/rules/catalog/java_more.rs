@@ -607,7 +607,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1172")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
+            query: r#"[(method_declaration) (constructor_declaration)] @match"#,
             filter: Some(Keep(private_method_has_unused_parameter)),
         },
         example: Some(Example {
@@ -1746,7 +1746,8 @@ fn private_method_has_unused_parameter(method: Node, src: &[u8]) -> bool {
         return false;
     }
     // Only methods nothing can override: callers and the body are all in view.
-    let sealed = has_modifier(method, "private")
+    let sealed = method.kind() == "constructor_declaration"
+        || has_modifier(method, "private")
         || has_modifier(method, "static")
         || has_modifier(method, "final")
         || enclosing_class(method).is_some_and(|c| {

@@ -574,7 +574,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1186")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
+            query: r#"[(method_declaration) (constructor_declaration)] @match"#,
             filter: Some(Keep(method_is_empty)),
         },
         example: Some(Example {
@@ -2119,7 +2119,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S112")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match"#,
+            query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match
+(throws (type_identifier) @match (#any-of? @match "Throwable" "RuntimeException" "Error"))"#,
             filter: None,
         },
         example: Some(Example {
@@ -2992,11 +2993,25 @@ fn override_only_calls_super(method: Node, src: &[u8]) -> bool {
         && args == params
 }
 
+/// An empty constructor is only redundant when it stands alone: next to
+/// others it is the no-argument variant callers can pick.
+fn is_the_only_public_constructor(ctor: Node) -> bool {
+    has_modifier(ctor, "public")
+        && ctor.parent().is_some_and(|body| {
+            members(body)
+                .into_iter()
+                .filter(|m| m.kind() == "constructor_declaration")
+                .count()
+                == 1
+        })
+}
+
 fn method_is_empty(method: Node, src: &[u8]) -> bool {
     method
         .child_by_field_name("body")
         .is_some_and(|b| b.named_child_count() == 0)
         && !has_annotation(method, b"Override", src)
+        && (method.kind() != "constructor_declaration" || is_the_only_public_constructor(method))
 }
 
 fn imports_from_sun(import: Node, src: &[u8]) -> bool {
@@ -3295,6 +3310,7 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     members(body)
         .into_iter()
         .take_while(|m| m.start_byte() < member.start_byte())
+        .filter(|m| !has_modifier(*m, "private"))
         .flat_map(names_of)
         .any(|other| {
             mine.iter()
