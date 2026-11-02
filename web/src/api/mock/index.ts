@@ -46,6 +46,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const ruleSettings = mockRuleSettings()
   // The projects not deleted (ADR-0017).
   const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
+  // Projects created ahead of their first upload, which never comes here.
+  const waitingKeys: string[] = []
   const deleted: DeletedProject[] = []
   /** As the server refuses a deleted key until an admin allows it again. */
   const refuseDeleted = (key?: string) => {
@@ -74,7 +76,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   }
   const usingGate = (id: number) => [...settings].filter(([, s]) => s.qualityGate === id).map(([key]) => key)
   const settingsOf = (key: string) => {
-    if (!projectKeys.includes(key)) throw new Error('not found')
+    if (!projectKeys.includes(key) && !waitingKeys.includes(key)) throw new Error('not found')
     let s = settings.get(key)
     if (!s) settings.set(key, (s = { name: null, mainBranch: 'main', qualityGate: null, githubRepository: null, changes: [] }))
     return s
@@ -339,7 +341,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       const repository = patch.githubRepository === undefined ? s.githubRepository : patch.githubRepository?.trim() || null
       if (repository && !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repository)) throw new Error(`"${repository}" is not a GitHub repository: use owner/name`)
       const main = patch.mainBranch ?? s.mainBranch
-      if (!BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
+      if (main !== s.mainBranch && !BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
       const by = session.user!.username
       const at = new Date().toISOString()
       if (name !== s.name) s.changes.unshift({ setting: 'name', old: s.name, new: name, by, at })
@@ -401,7 +403,22 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     projects: async () => {
       guard()
-      return wait({ ...PROJECT_LIST, projects: PROJECT_LIST.projects.filter((p) => projectKeys.includes(p.key)).map((p) => ({ ...p, ...shown(p.key) })) })
+      return wait({
+        ...PROJECT_LIST,
+        projects: PROJECT_LIST.projects.filter((p) => projectKeys.includes(p.key)).map((p) => ({ ...p, ...shown(p.key) })),
+        waiting: waitingKeys.map((key) => ({ key, name: settings.get(key)?.name ?? null, githubRepository: settings.get(key)?.githubRepository ?? null })),
+      })
+    },
+    createProject: async (key, mainBranch) => {
+      requireAdmin()
+      // As the server checks them.
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(key)) throw new Error(`invalid project key "${key}": use letters, digits, '.', '_' or '-'`)
+      if (!mainBranch.trim() || /^pr:\d+$/.test(mainBranch)) throw new Error(`"${mainBranch}" can't be a main branch`)
+      refuseDeleted(key)
+      if (projectKeys.includes(key) || waitingKeys.includes(key)) throw new Error(`project "${key}" already exists`)
+      waitingKeys.push(key)
+      settings.set(key, { name: null, mainBranch: mainBranch.trim(), qualityGate: null, githubRepository: null, changes: [] })
+      return wait({ key })
     },
     project: async (key, branch) => {
       guard()

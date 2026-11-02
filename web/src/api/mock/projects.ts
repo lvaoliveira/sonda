@@ -42,6 +42,7 @@ const projects: ProjectRow[] = ROWS.map(([key, languages, gate, [reliability, se
 export const PROJECT_LIST: ProjectList = {
   projects,
   languages: ['python', 'java', 'go', 'typescript', 'rust', 'javascript'],
+  waiting: [],
 }
 
 /** The mock projects' branches, as analyzed. */

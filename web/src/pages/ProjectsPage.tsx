@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { GateState, ProjectList, ProjectRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
+import { ConnectLink, WaitingProjects } from '@/components/sonda/connect'
 import { Chip, Segmented } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
 import { CoverageRing, PipMeter } from '@/components/sonda/meters'
@@ -13,12 +14,12 @@ import { languageLabel, scoreColor } from '@/lib/visual'
 
 export function ProjectsPage() {
   const api = useApi()
-  const list = useAsync(() => api.projects(), [api])
+  const list = useAsync(() => Promise.all([api.projects(), api.shell()]), [api])
   return (
     <AppShell crumbs={[{ label: 'Projects', to: '/projects' }]}>
       {list.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
       {list.state === 'error' && <p role="alert">Could not load projects: {list.error.message}</p>}
-      {list.state === 'ready' && <Projects list={list.data} />}
+      {list.state === 'ready' && <Projects list={list.data[0]} isAdmin={list.data[1].isAdmin} />}
     </AppShell>
   )
 }
@@ -40,7 +41,7 @@ function matchesGate(gate: GateState, filter: GateFilter): boolean {
   return filter === 'all' || (filter === 'failed' ? gate === 'failed' : gate !== 'failed')
 }
 
-function Projects({ list }: { list: ProjectList }) {
+function Projects({ list, isAdmin }: { list: ProjectList; isAdmin: boolean }) {
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
   const gate = (params.get('gate') ?? 'all') as GateFilter
@@ -79,17 +80,22 @@ function Projects({ list }: { list: ProjectList }) {
           </>
         }
       >
-        <label className="flex h-9 w-[300px] max-w-full items-center gap-2 rounded-lg bg-canvas px-3 edge">
-          <Search size={14} strokeWidth={2} aria-hidden="true" className="text-fg-faint" />
-          <input
-            aria-label="Search projects"
-            placeholder="Search by name"
-            value={q}
-            onChange={(e) => set('q', e.target.value, '')}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] outline-none placeholder:text-fg-faint"
-          />
-        </label>
+        <div className="flex max-w-full flex-wrap items-center gap-2.5">
+          {isAdmin && <ConnectLink />}
+          <label className="flex h-9 w-[300px] max-w-full items-center gap-2 rounded-lg bg-canvas px-3 edge">
+            <Search size={14} strokeWidth={2} aria-hidden="true" className="text-fg-faint" />
+            <input
+              aria-label="Search projects"
+              placeholder="Search by name"
+              value={q}
+              onChange={(e) => set('q', e.target.value, '')}
+              className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] outline-none placeholder:text-fg-faint"
+            />
+          </label>
+        </div>
       </PageHeader>
+
+      <WaitingProjects waiting={list.waiting} isAdmin={isAdmin} />
 
       <div className="flex flex-wrap items-center gap-4">
         <Segmented

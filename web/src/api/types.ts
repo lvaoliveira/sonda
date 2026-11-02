@@ -500,6 +500,14 @@ export interface ProjectList {
   projects: ProjectRow[]
   /** Every language in any project, most code first. */
   languages: string[]
+  /** Projects with no analysis of their main branch yet, such as one just connected. */
+  waiting: WaitingProject[]
+}
+
+export interface WaitingProject {
+  key: string
+  name: string | null
+  githubRepository: string | null
 }
 
 /** `ignored`: coverage or duplication of new code, with fewer than 20 new lines. */
@@ -1086,6 +1094,8 @@ export interface SondaApi {
   overview?(scope: Scope, range: Range): Promise<Overview>
   drill?(metric: DrillMetric, scope: Scope): Promise<Drill>
   projects(): Promise<ProjectList>
+  /** Admins: an empty project, to link its repository and generate its token before the first upload. */
+  createProject(key: string, mainBranch: string): Promise<{ key: string }>
   /** The project on `branch`, or on its main branch. */
   project(key: string, branch?: string): Promise<ProjectDetail>
   /** The default gate first, then by how many projects use each. */

@@ -212,7 +212,7 @@ pub fn validate_meta(meta: &Meta) -> Result<(), Error> {
     Ok(())
 }
 
-fn check_branch(b: &str) -> Result<(), Error> {
+pub fn check_branch(b: &str) -> Result<(), Error> {
     if b.is_empty() || b.len() > 255 || b.chars().any(char::is_control) {
         return Err(Error::InvalidArgument(format!(
             "invalid branch {b:?}: use 1-255 characters, no control characters"
