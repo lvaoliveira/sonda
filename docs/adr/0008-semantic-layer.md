@@ -5,6 +5,8 @@
   S1 is built for JavaScript/TypeScript (`semantic/`), with twelve rules,
   and for C# ([ADR-0015](0015-csharp.md)), whose declarations also keep
   their written types; the rest of S1 is on the [roadmap](../roadmap.md).
+  S2 and S3 are built for C# (`semantic/cs_cfg.rs`): a control-flow graph
+  per function and liveness over it, with four rules.
 - Date: 2026-10-30
 
 ## Context

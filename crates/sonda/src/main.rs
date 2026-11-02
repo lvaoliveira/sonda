@@ -115,6 +115,23 @@ struct ScanArgs {
     /// The project's version, such as 2.3.0.
     #[arg(long, help_heading = "Upload", requires = "upload")]
     project_version: Option<String>,
+    /// The pull request the analysis belongs to, outside GitHub Actions
+    /// (where it's read from the event); --branch is its head branch.
+    #[arg(
+        long,
+        value_name = "NUMBER",
+        help_heading = "Upload",
+        requires_all = ["upload", "pull_request_base"]
+    )]
+    pull_request: Option<u64>,
+    /// The branch the pull request merges into.
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        help_heading = "Upload",
+        requires = "pull_request"
+    )]
+    pull_request_base: Option<String>,
     /// File holding the API token (default: SONDA_TOKEN_FILE, else the
     /// SONDA_TOKEN variable).
     #[arg(
@@ -289,20 +306,20 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
                 .and_then(|v| v.into_string().ok())
                 .context("--upload needs --server or SONDA_SERVER")?,
         };
-        Some(
-            upload::Target {
-                server,
-                project: args.project.clone().unwrap_or_default(),
-                branch: args.branch.clone().unwrap_or_default(),
-                commit: args.commit.clone().unwrap_or_default(),
-                project_version: args.project_version.clone(),
-                token_file: args
-                    .token_file
-                    .clone()
-                    .or_else(|| env("SONDA_TOKEN_FILE").map(PathBuf::from)),
-            }
-            .check()?,
-        )
+        upload::Target {
+            server,
+            project: args.project.clone().unwrap_or_default(),
+            branch: args.branch.clone().unwrap_or_default(),
+            commit: args.commit.clone().unwrap_or_default(),
+            project_version: args.project_version.clone(),
+            token_file: args
+                .token_file
+                .clone()
+                .or_else(|| env("SONDA_TOKEN_FILE").map(PathBuf::from)),
+            pull_request: args.pull_request,
+            pull_request_base: args.pull_request_base.clone(),
+        }
+        .check()?
     } else {
         None
     };

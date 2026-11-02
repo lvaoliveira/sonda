@@ -7,10 +7,12 @@ use axum::response::Response;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::registry::{Registry, Unit};
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::AtomicU64;
+use std::time::{Instant, SystemTime};
 use tracing::Instrument;
 
 /// The header that carries a request's id, both in and out.
@@ -23,13 +25,24 @@ const DURATION_BUCKETS: [f64; 12] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
+/// Upload durations, in seconds: an upload also refreshes new code and
+/// gates, and has the same 30-second timeout.
+const UPLOAD_BUCKETS: [f64; 10] = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0];
+
 /// What the server counts, served by `GET /metrics` on the metrics listener.
-/// Labels are bounded: route templates, a fixed set of methods and status
-/// codes, never project keys, branches or users.
+/// Labels are bounded: route templates, a fixed set of methods, status
+/// codes and results, never project keys, branches or users.
 pub struct Metrics {
     registry: Registry,
     requests: Family<RequestLabels, Counter>,
     durations: Family<RouteLabels, Histogram>,
+    uploads: Family<ResultLabels, Counter>,
+    upload_durations: Histogram,
+    pool_connections: Family<PoolLabels, Gauge>,
+    pool_max_connections: Gauge,
+    advisory_syncs: Family<ResultLabels, Counter>,
+    advisory_sync_last_success: Gauge<f64, AtomicU64>,
+    advisories_imported: Counter,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -45,6 +58,67 @@ struct RouteLabels {
     route: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct ResultLabels {
+    result: &'static str,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct PoolLabels {
+    state: &'static str,
+}
+
+/// How an upload ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadResult {
+    Stored,
+    /// Refused as sent: invalid, too large, a token for another project.
+    Rejected,
+    /// An internal error.
+    Failed,
+}
+
+impl UploadResult {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stored => "stored",
+            Self::Rejected => "rejected",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+const UPLOAD_RESULTS: [&str; 4] = ["stored", "rejected", "failed", "cancelled"];
+const SYNC_RESULTS: [&str; 3] = ["ok", "record_errors", "failed"];
+
+/// An upload being handled. Dropped without `finish`, it counts as
+/// `cancelled`: the request timed out, or the client went away.
+pub struct Upload {
+    metrics: Arc<Metrics>,
+    started: Instant,
+    finished: bool,
+}
+
+impl Upload {
+    pub fn finish(mut self, result: UploadResult) {
+        self.finished = true;
+        self.metrics.count(&self.metrics.uploads, result.label());
+        if result == UploadResult::Stored {
+            self.metrics
+                .upload_durations
+                .observe(self.started.elapsed().as_secs_f64());
+        }
+    }
+}
+
+impl Drop for Upload {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.metrics.count(&self.metrics.uploads, "cancelled");
+        }
+    }
+}
+
 impl Default for Metrics {
     fn default() -> Self {
         let mut registry = Registry::with_prefix("sonda");
@@ -52,6 +126,21 @@ impl Default for Metrics {
         let durations = Family::<RouteLabels, Histogram>::new_with_constructor(
             (|| Histogram::new(DURATION_BUCKETS)) as fn() -> Histogram,
         );
+        let uploads = Family::<ResultLabels, Counter>::default();
+        let upload_durations = Histogram::new(UPLOAD_BUCKETS);
+        let pool_connections = Family::<PoolLabels, Gauge>::default();
+        let pool_max_connections = Gauge::default();
+        let advisory_syncs = Family::<ResultLabels, Counter>::default();
+        let advisory_sync_last_success = Gauge::<f64, AtomicU64>::default();
+        let advisories_imported = Counter::default();
+        // Every result from the start, at zero, so rate() and alerts on a
+        // result work before it first happens.
+        for result in UPLOAD_RESULTS {
+            drop(uploads.get_or_create(&ResultLabels { result }));
+        }
+        for result in SYNC_RESULTS {
+            drop(advisory_syncs.get_or_create(&ResultLabels { result }));
+        }
         registry.register(
             "http_requests",
             "HTTP requests completed, by method, route template and status",
@@ -63,10 +152,53 @@ impl Default for Metrics {
             Unit::Seconds,
             durations.clone(),
         );
+        registry.register(
+            "uploads",
+            "Analyses uploaded, by result: stored, rejected, failed, or cancelled (timed out or the client went away)",
+            uploads.clone(),
+        );
+        registry.register_with_unit(
+            "upload_duration",
+            "Time to store an analysis, for uploads stored",
+            Unit::Seconds,
+            upload_durations.clone(),
+        );
+        registry.register(
+            "db_pool_connections",
+            "Database connections open, idle or in use",
+            pool_connections.clone(),
+        );
+        registry.register(
+            "db_pool_max_connections",
+            "The most database connections the pool opens",
+            pool_max_connections.clone(),
+        );
+        registry.register(
+            "advisory_sync_runs",
+            "Daily advisory syncs, by result: ok, record_errors (some records failed), or failed",
+            advisory_syncs.clone(),
+        );
+        registry.register(
+            "advisory_sync_last_success_timestamp_seconds",
+            "When an advisory sync last completed, as a Unix time; 0 before the first",
+            advisory_sync_last_success.clone(),
+        );
+        registry.register(
+            "advisory_sync_advisories_imported",
+            "Advisories new or updated by the daily sync",
+            advisories_imported.clone(),
+        );
         Self {
             registry,
             requests,
             durations,
+            uploads,
+            upload_durations,
+            pool_connections,
+            pool_max_connections,
+            advisory_syncs,
+            advisory_sync_last_success,
+            advisories_imported,
         }
     }
 }
@@ -88,6 +220,52 @@ impl Metrics {
                 status,
             })
             .inc();
+    }
+
+    fn count(&self, family: &Family<ResultLabels, Counter>, result: &'static str) {
+        family.get_or_create(&ResultLabels { result }).inc();
+    }
+
+    /// Starts timing an upload; see `Upload`.
+    pub fn start_upload(self: &Arc<Self>) -> Upload {
+        Upload {
+            metrics: self.clone(),
+            started: Instant::now(),
+            finished: false,
+        }
+    }
+
+    /// The database pool as it is now; read when metrics are scraped.
+    pub fn observe_pool(&self, open: u32, idle: usize, max: u32) {
+        let idle = i64::try_from(idle).unwrap_or(i64::MAX);
+        let in_use = (i64::from(open) - idle).max(0);
+        self.pool_connections
+            .get_or_create(&PoolLabels { state: "idle" })
+            .set(idle);
+        self.pool_connections
+            .get_or_create(&PoolLabels { state: "in_use" })
+            .set(in_use);
+        self.pool_max_connections.set(i64::from(max));
+    }
+
+    /// One run of the server's daily advisory sync: its summary, or `None`
+    /// when it failed.
+    pub fn record_advisory_sync(&self, summary: Option<&crate::advisories::ImportSummary>) {
+        let Some(summary) = summary else {
+            self.count(&self.advisory_syncs, "failed");
+            return;
+        };
+        let result = if summary.errors == 0 {
+            "ok"
+        } else {
+            "record_errors"
+        };
+        self.count(&self.advisory_syncs, result);
+        self.advisories_imported.inc_by(summary.imported as u64);
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        self.advisory_sync_last_success.set(now);
     }
 
     /// The OpenMetrics text format, which Prometheus reads.
@@ -372,5 +550,92 @@ mod tests {
         for leaked in ["payments", "billing", "BREW", "/no/such/page"] {
             assert!(!text.contains(leaked), "{leaked} in\n{text}");
         }
+    }
+
+    fn lines(metrics: &Metrics) -> String {
+        metrics.encode().unwrap()
+    }
+
+    #[test]
+    fn every_upload_and_sync_result_starts_at_zero() {
+        let text = lines(&Metrics::default());
+        for result in UPLOAD_RESULTS {
+            let line = format!("sonda_uploads_total{{result=\"{result}\"}} 0");
+            assert!(text.contains(&line), "{line} not in\n{text}");
+        }
+        for result in SYNC_RESULTS {
+            let line = format!("sonda_advisory_sync_runs_total{{result=\"{result}\"}} 0");
+            assert!(text.contains(&line), "{line} not in\n{text}");
+        }
+        assert!(
+            text.contains("sonda_advisory_sync_last_success_timestamp_seconds 0.0"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_upload_dropped_before_it_finishes_counts_as_cancelled() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.start_upload().finish(UploadResult::Stored);
+        metrics.start_upload().finish(UploadResult::Rejected);
+        metrics.start_upload().finish(UploadResult::Failed);
+        drop(metrics.start_upload());
+        let text = lines(&metrics);
+        for result in UPLOAD_RESULTS {
+            let line = format!("sonda_uploads_total{{result=\"{result}\"}} 1");
+            assert!(text.contains(&line), "{line} not in\n{text}");
+        }
+        // Only stored uploads are timed.
+        assert!(
+            text.contains("sonda_upload_duration_seconds_count 1"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_pool_is_split_into_idle_and_in_use() {
+        let metrics = Metrics::default();
+        metrics.observe_pool(7, 3, 10);
+        let text = lines(&metrics);
+        for line in [
+            r#"sonda_db_pool_connections{state="idle"} 3"#,
+            r#"sonda_db_pool_connections{state="in_use"} 4"#,
+            "sonda_db_pool_max_connections 10",
+        ] {
+            assert!(text.contains(line), "{line} not in\n{text}");
+        }
+        // The pool's counts are read one after the other, so idle can
+        // briefly exceed open; in use never goes negative.
+        metrics.observe_pool(2, 3, 10);
+        assert!(lines(&metrics).contains(r#"sonda_db_pool_connections{state="in_use"} 0"#));
+    }
+
+    #[test]
+    fn advisory_syncs_are_counted_by_result() {
+        use crate::advisories::ImportSummary;
+        let metrics = Metrics::default();
+        metrics.record_advisory_sync(Some(&ImportSummary {
+            imported: 5,
+            ..ImportSummary::default()
+        }));
+        metrics.record_advisory_sync(Some(&ImportSummary {
+            imported: 2,
+            errors: 1,
+            ..ImportSummary::default()
+        }));
+        metrics.record_advisory_sync(None);
+        let text = lines(&metrics);
+        for line in [
+            r#"sonda_advisory_sync_runs_total{result="ok"} 1"#,
+            r#"sonda_advisory_sync_runs_total{result="record_errors"} 1"#,
+            r#"sonda_advisory_sync_runs_total{result="failed"} 1"#,
+            "sonda_advisory_sync_advisories_imported_total 7",
+        ] {
+            assert!(text.contains(line), "{line} not in\n{text}");
+        }
+        assert!(
+            !text.contains("sonda_advisory_sync_last_success_timestamp_seconds 0.0"),
+            "{text}"
+        );
     }
 }

@@ -595,6 +595,32 @@ include all.
 
 An unknown project or file is `404`; a branch without analyses is `400`.
 
+### Pull requests
+
+An upload can belong to a pull request
+([ADR-0021](adr/0021-pull-request-decoration.md)): `pull_request` carries
+its `number`, `base` and `head` branches, and from GitHub Actions its
+`head_sha` and `repository` (`owner/name`). `sonda` sends it in a GitHub
+Actions `pull_request` job, or with `--pull-request` and
+`--pull-request-base`.
+
+- **Stored apart from branches**, under the branch key `pr:<number>`
+  (which no git branch can have, since git refuses `:` in branch names;
+  uploads with such a `branch` are a `422`). Issue tracking, new code, the
+  gate (a server gate too) and triage work as on any branch.
+- **Not a branch:** pull requests aren't in a project's `branches`, its
+  main-branch choices, or anything counted on the main branch (Overview,
+  Projects, Security, Rules). `GET /api/projects/{key}` lists them as
+  `pullRequests` (number, branches, latest analysis, gate, new issues),
+  and analyses carry `pullRequest` (`number`, `base`, `head`), null on a
+  branch's. `GET /api/issues?branch=pr:12` lists a pull request's issues.
+- **A project first seen through a pull request** gets its base as the
+  main branch.
+- **Removed 30 days** after a pull request's last analysis, with its issues
+  and the file contents nothing else has. The server checks hourly.
+
+Decorating the pull request on GitHub is the next part of ADR-0021.
+
 ## New code on the main branch
 
 Branches are judged on the change their scan compared with: a pull request,
@@ -904,6 +930,13 @@ services:
 |---|---|---|
 | `sonda_http_requests_total` | `method`, `route`, `status` | Requests completed. |
 | `sonda_http_request_duration_seconds` | `method`, `route` | Time to answer, as a histogram from 5 ms to the 30 s request timeout. |
+| `sonda_uploads_total` | `result` | Uploads that reached the handler: `stored`; `rejected` (invalid, unsupported encoding, a token for another project); `failed` (an internal error); `cancelled` (the request timed out or the client went away). Unauthenticated and oversized uploads are refused before that, and show only in the request metrics. |
+| `sonda_upload_duration_seconds` | | Time to store an analysis, for stored uploads only: decoding, storing, and refreshing new code and gates. |
+| `sonda_db_pool_connections` | `state` | Database connections open, `idle` or `in_use`, read at each scrape. |
+| `sonda_db_pool_max_connections` | | The most connections the pool opens (10). |
+| `sonda_advisory_sync_runs_total` | `result` | Runs of the daily sync (`SONDA_ADVISORY_SYNC=true`): `ok`, `record_errors` (completed, some records not imported), or `failed`. `sonda-server advisories sync` from cron runs in its own process and isn't counted. |
+| `sonda_advisory_sync_last_success_timestamp_seconds` | | When a sync last completed, as a Unix time; 0 until one has. |
+| `sonda_advisory_sync_advisories_imported_total` | | Advisories the daily sync added or updated. |
 
 Labels are bounded, so the number of series is too:
 - `route` is the route's template (`/api/projects/{key}`), or `-` for
@@ -911,7 +944,20 @@ Labels are bounded, so the number of series is too:
 - `method` is one of the standard methods, or `other`;
 - project keys, branches and users never become labels.
 
-Counters start at zero when the server starts, as Prometheus expects.
+Counters start at zero when the server starts, as Prometheus expects, and
+every `result` is listed from the start, so `rate()` and alerts work
+before the first one happens. Alerts worth having:
+
+```yaml
+- alert: SondaUploadsFailing
+  expr: increase(sonda_uploads_total{result=~"failed|cancelled"}[1h]) > 0
+- alert: SondaDatabasePoolFull
+  expr: sonda_db_pool_connections{state="in_use"} >= sonda_db_pool_max_connections
+  for: 5m
+# Only with SONDA_ADVISORY_SYNC=true: two missed daily syncs.
+- alert: SondaAdvisorySyncStale
+  expr: time() - sonda_advisory_sync_last_success_timestamp_seconds > 2 * 86400
+```
 
 ## Running without Docker
 

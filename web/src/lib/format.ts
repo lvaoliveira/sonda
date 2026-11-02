@@ -41,3 +41,8 @@ export function formatAge(iso: string, now = Date.now()): string {
   if (days < 365) return `${Math.floor(days / 30)}mo`
   return `${Math.floor(days / 365)}y`
 }
+
+/** A branch as people read it, or a pull request: `#12 fix/login → main` (ADR-0021). */
+export function branchLabel(a: { branch: string; pullRequest: { number: number; base: string; head: string } | null }): string {
+  return a.pullRequest ? `#${a.pullRequest.number} ${a.pullRequest.head} → ${a.pullRequest.base}` : a.branch
+}

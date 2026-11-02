@@ -11,10 +11,12 @@ use crate::health::{
     measure_set, rfc3339,
 };
 use crate::http::State;
+use crate::pull_requests::{PULL_REQUEST_COLUMN, PullRequestRef};
 use axum::Json;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::types::Json as SqlJson;
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_LIMIT: i64 = 100;
@@ -46,6 +48,9 @@ pub struct AnalysisRow {
     pub id: i64,
     pub project: String,
     pub branch: String,
+    /// The pull request it belongs to (ADR-0021); its `branch` is then the
+    /// internal `pr:<number>`.
+    pub pull_request: Option<PullRequestRef>,
     pub sha: String,
     /// The commit's subject line, when the upload had one.
     pub message: Option<String>,
@@ -72,6 +77,8 @@ pub struct AnalysisDetail {
     pub project: String,
     pub branch: String,
     pub main_branch: String,
+    /// The pull request it belongs to (ADR-0021).
+    pub pull_request: Option<PullRequestRef>,
     pub sha: String,
     /// The commit's subject line, when the upload had one.
     pub message: Option<String>,
@@ -155,6 +162,7 @@ type ListRow = (
     Option<String>,
     Option<i64>,
     String,
+    Option<SqlJson<PullRequestRef>>,
 );
 
 pub async fn list_analyses(
@@ -197,7 +205,7 @@ pub async fn list_analyses(
     let rows: Vec<ListRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, p.key, a.branch, a.commit_sha, extract(epoch FROM a.received_at)::float8,
                 a.tool_version, a.measures, a.gate, a.gate_passed, a.warnings, a.commit_message,
-                a.scan_duration_ms, {UPLOADED_BY}
+                a.scan_duration_ms, {UPLOADED_BY}, {PULL_REQUEST_COLUMN}
          {FILTER} ORDER BY a.received_at DESC, a.id DESC OFFSET $4 LIMIT $5"
     )))
     .bind(&q.project)
@@ -224,11 +232,13 @@ pub async fn list_analyses(
                 message,
                 duration,
                 uploaded_by,
+                pull_request,
             )| {
                 AnalysisRow {
                     id,
                     project,
                     branch,
+                    pull_request: pull_request.map(|p| p.0),
                     sha,
                     message,
                     duration: duration.map(duration_text),
@@ -313,6 +323,13 @@ pub async fn get_analysis(
         duration,
         uploaded_by,
     ) = row;
+    // Apart: the row above is as wide as sqlx's tuples go.
+    let pull_request: Option<SqlJson<PullRequestRef>> = sqlx::query_scalar(sqlx::AssertSqlSafe(
+        format!("SELECT {PULL_REQUEST_COLUMN} FROM analyses a WHERE a.id = $1"),
+    ))
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
 
     let files: Vec<(String, String)> =
         sqlx::query_as("SELECT path, language FROM analysis_files WHERE analysis_id = $1")
@@ -364,6 +381,7 @@ pub async fn get_analysis(
         project,
         branch,
         main_branch,
+        pull_request: pull_request.map(|p| p.0),
         sha,
         message,
         duration: duration.map(duration_text),

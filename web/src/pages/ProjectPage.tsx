@@ -94,6 +94,7 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
         <Gate p={p} />
       </div>
       <History history={p.history} branch={p.branch} />
+      {p.pullRequests.length > 0 && <PullRequests p={p} />}
       <Components p={p} />
       <Dependencies p={p} />
       <RulesSummary project={p.key} />
@@ -380,6 +381,35 @@ function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCode
         </span>
       )}
     </div>
+  )
+}
+
+/** The project's pull requests, apart from its branches (ADR-0021). */
+function PullRequests({ p }: { p: ProjectDetail }) {
+  return (
+    <Card id="pull-requests" title="Pull requests" subtitle={`${p.pullRequests.length} analyzed in the last 30 days, most recent first`}>
+      <ul aria-label="Pull requests" className="m-0 flex list-none flex-col p-0">
+        {p.pullRequests.map((pr) => (
+          <li key={pr.number} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line py-2.5 text-[13.5px] first:border-t-0">
+            <Link to={`/analyses/${pr.analysis}`} className="font-semibold text-fg">
+              #{pr.number}
+            </Link>
+            <Mono className="min-w-0 text-[12px] break-all text-fg-muted">
+              {pr.head} → {pr.base}
+            </Mono>
+            <span className="ml-auto flex items-center gap-3">
+              {pr.newIssues != null && (
+                <span className="text-xs text-fg-muted">
+                  {formatNumber(pr.newIssues)} new {pr.newIssues === 1 ? 'issue' : 'issues'}
+                </span>
+              )}
+              <GateStatus state={pr.gate} className="text-[12.5px]" />
+              <Mono className="w-8 text-right text-[11px] text-fg-faint">{pr.ago}</Mono>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   )
 }
 

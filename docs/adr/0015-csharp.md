@@ -55,6 +55,17 @@ The first batch reviewed its findings on five open-source projects
 (Newtonsoft.Json, Polly, AutoMapper, Serilog and MediatR, 2,646 files); the
 scan took under a second per project.
 
+### Suppressions
+
+Code that SonarQube analyzed carries its suppressions: `#pragma warning
+disable S2190` and `restore`, which Roslyn applies to SonarQube's rules
+since they are Roslyn diagnostics. sonda honors them the same way, so a
+team's existing suppressions keep working: a region silences every sonda
+rule that references the key, exactly or not, and a bare `disable`
+silences every rule. Files report their regions as a fact, so the
+project-level rules ([ADR-0020](0020-cross-file-declarations.md)) honor
+them too. `[SuppressMessage]` attributes aren't read yet.
+
 ### Preprocessor directives
 
 tree-sitter doesn't run the preprocessor. `#if`/`#else` blocks that split a
@@ -95,6 +106,14 @@ were re-audited against this bar; those it could make exact moved to
 Rules that compare a declaration with its base classes, interfaces or the
 other half of a partial method see the whole project: they run on an index
 of every file's declarations ([ADR-0020](0020-cross-file-declarations.md)).
+
+Rules about values and paths use ADR-0008's phases S2 and S3
+(`semantic/cs_cfg.rs`): a control-flow graph per function, with exception
+edges from every block of a `try`, and liveness over it. Writes that may
+not happen (`a && Try(out x)`, a `?:` branch, `??=`) don't end an earlier
+value's life. A function with preprocessor directives or parse errors gets
+no graph: its `#if` branches hold several configurations, so rules treat
+what it reads as unknown.
 
 Rules that need declared types are `Check::Semantic`. Walking up from a
 node to find its scope costs that node's depth for every `parent()`, which

@@ -7,12 +7,11 @@
 //! report what straight-line code proves. Partial methods and the neutral
 //! resources language need the whole project and live in `common.rs`.
 
-use super::cs::{cs_statements, simple_name, unparenthesized};
+use super::cs::simple_name;
 use super::cs_bugs::cs_call_arguments;
 use super::cs_types::{expression_type, walk_tree};
-use super::java_bugs::{find_in_scope, operator_text};
+use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
-use super::java_smells::count_word;
 use super::*;
 use crate::semantic::{DeclKind, Model};
 
@@ -71,26 +70,6 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     // ---- Code smells ----
-    Rule {
-        id: "cs/dead-store",
-        name: "Values assigned to locals should be used",
-        description: "A value overwritten or dropped before anything reads it was computed for nothing, or the \
-                      code that should read it is missing.",
-        message: "Remove this assignment: the value is never read.",
-        category: CodeSmell,
-        severity: Major,
-        effort_minutes: 5,
-        sonar: &[related("S1854")],
-        check: Check::Semantic {
-            langs: CSHARP,
-            find: dead_stores,
-        },
-        example: Some(Example {
-            lang: Lang::CSharp,
-            bad: "class A { int F(int y) { int x = Compute(); x = 200; return x + y; } }",
-            good: "class A { int F(int y) { int x = 200; return x + y; } }",
-        }),
-    },
     Rule {
         id: "cs/string-builder-never-read",
         name: "StringBuilder contents should be used",
@@ -235,126 +214,6 @@ pub(super) static RULES: &[Rule] = &[
 ];
 
 // ---------------------------------------------------- dead stores
-
-/// Values whose assignment is a way of saying "nothing yet".
-fn is_default_value(value: Node, src: &[u8]) -> bool {
-    let value = unparenthesized(value);
-    matches!(
-        value.kind(),
-        "null_literal" | "boolean_literal" | "default_expression"
-    ) || matches!(
-        text(value, src),
-        b"0" | b"1" | b"-1" | b"\"\"" | b"string.Empty" | b"String.Empty" | b"0L" | b"0.0"
-    )
-}
-
-/// `x = value;` as a whole statement, value not mentioning x.
-fn plain_write<'t>(statement: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
-    if statement.kind() != "expression_statement" {
-        return None;
-    }
-    let assignment = statement
-        .named_child(0)
-        .filter(|a| a.kind() == "assignment_expression")?;
-    let left = assignment.child_by_field_name("left")?;
-    let right = assignment.child_by_field_name("right")?;
-    (operator_text(assignment, src) == b"="
-        && left.kind() == "identifier"
-        && text(left, src) == name
-        && count_word(text(right, src), name) == 0)
-        .then_some(assignment)
-}
-
-fn captures(statement: Node) -> bool {
-    find_in_scope(statement, &[], |n| {
-        matches!(
-            n.kind(),
-            "lambda_expression" | "anonymous_method_expression" | "local_function_statement"
-        )
-    })
-    .is_some()
-}
-
-fn dead_stores<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    walk_tree(m, |block, _| {
-        if !matches!(block.kind(), "block" | "switch_section") {
-            return;
-        }
-        let statements = cs_statements(block);
-        if statements.len() > 500 || statements.iter().any(|s| s.kind() == "labeled_statement") {
-            return;
-        }
-        for (start, declaration) in statements.iter().enumerate() {
-            if declaration.kind() != "local_declaration_statement"
-                || text(*declaration, src).starts_with(b"using")
-            {
-                continue;
-            }
-            let Some(variables) = declaration
-                .named_child(0)
-                .filter(|v| v.kind() == "variable_declaration")
-            else {
-                continue;
-            };
-            // `ref int r = ref a[0]` writes through r.
-            if variables
-                .child_by_field_name("type")
-                .is_some_and(|t| t.kind() == "ref_type")
-            {
-                continue;
-            }
-            let mut cursor = variables.walk();
-            let declarators: Vec<Node<'t>> = variables
-                .named_children(&mut cursor)
-                .filter(|d| d.kind() == "variable_declarator")
-                .collect();
-            for declarator in declarators {
-                let Some(name) = declarator.child_by_field_name("name").map(|n| text(n, src))
-                else {
-                    continue;
-                };
-                if name == b"_" {
-                    continue;
-                }
-                let mentions: Vec<Node<'t>> = statements[start + 1..]
-                    .iter()
-                    .copied()
-                    .filter(|s| count_word(text(*s, src), name) > 0)
-                    .collect();
-                // A lambda may read it later, whenever it runs.
-                if mentions.iter().any(|s| captures(*s)) {
-                    continue;
-                }
-                // The pending write, and whether it may be reported.
-                let initial = (declarator.named_child_count() > 1)
-                    .then(|| declarator.named_child(declarator.named_child_count() as u32 - 1))
-                    .flatten()
-                    .map(|v| (declarator, !is_default_value(v, src)));
-                let mut pending = initial;
-                for statement in mentions {
-                    match plain_write(statement, name, src) {
-                        Some(write) => {
-                            if let Some((node, true)) = pending {
-                                found.push(node);
-                            }
-                            let value = write.child_by_field_name("right");
-                            pending =
-                                Some((write, value.is_some_and(|v| !is_default_value(v, src))));
-                        }
-                        None => pending = None,
-                    }
-                }
-                if let Some((node, true)) = pending
-                    && node.kind() == "assignment_expression"
-                {
-                    found.push(node);
-                }
-            }
-        }
-    });
-    found
-}
 
 // ---------------------------------------------------- disposables
 
@@ -838,14 +697,6 @@ mod tests {
 
     fn class(body: &str) -> String {
         format!("namespace N;\nclass A {{\n{body}\n}}\n")
-    }
-
-    #[test]
-    fn dead_stores() {
-        let src = class(
-            "int F(int y, bool c) {\nint x = Compute();\nx = 200;\nint z = 0;\nz = 5;\nint w = Compute();\nif (c) { w = 1; }\nint v = Load();\nv = v + 1;\nint u = Read();\nu = 3;\nUse(u);\nint t = Calc();\nt = 9;\nint s = Get();\nAction a = () => Use(s);\ns = 2;\na();\nreturn x + y + z + w + v;\n}",
-        );
-        assert_eq!(flagged("cs/dead-store", &src), [4, 12, 15, 16]);
     }
 
     #[test]

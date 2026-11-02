@@ -84,7 +84,7 @@ async fn load(pool: &PgPool, key: String) -> Result<Settings, ApiError> {
         .await?;
     let rows: Vec<(String, i64, f64)> = sqlx::query_as(
         "SELECT branch, count(*), extract(epoch FROM max(received_at))::float8
-         FROM analyses WHERE project_id = $1 GROUP BY branch",
+         FROM analyses WHERE project_id = $1 AND pull_request IS NULL GROUP BY branch",
     )
     .bind(id)
     .fetch_all(pool)
@@ -194,7 +194,8 @@ pub async fn patch(
     let main = patch.main_branch.unwrap_or_else(|| old_main.clone());
     if main != old_main {
         let analyzed: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM analyses WHERE project_id = $1 AND branch = $2)",
+            "SELECT EXISTS (SELECT 1 FROM analyses
+                            WHERE project_id = $1 AND branch = $2 AND pull_request IS NULL)",
         )
         .bind(id)
         .bind(&main)

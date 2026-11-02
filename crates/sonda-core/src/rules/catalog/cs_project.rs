@@ -870,4 +870,19 @@ mod tests {
             [("Models/OrderModel.cs".into(), 3)]
         );
     }
+
+    #[test]
+    fn pragmas_silence_project_findings() {
+        let files = [
+            (
+                "IAccount.cs",
+                "namespace Bank;\npublic interface IAccount {\n  void Add(int money);\n}\n",
+            ),
+            (
+                "Account.cs",
+                "namespace Bank;\npublic class Account : IAccount {\n#pragma warning disable S927 // the interface's name reads worse here\n  public void Add(int amount) { }\n#pragma warning restore S927\n}\n",
+            ),
+        ];
+        assert_eq!(project("cs/parameter-name-mismatch", &files), []);
+    }
 }

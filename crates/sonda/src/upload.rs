@@ -9,7 +9,7 @@ use flate2::write::GzEncoder;
 use sonda_core::config::RulesConfig;
 use sonda_core::model::Severity;
 use sonda_core::report::AppliedProfile;
-use sonda_core::upload::{self, Meta};
+use sonda_core::upload::{self, CiPullRequest, Meta, PullRequest};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -54,21 +54,33 @@ pub struct UploadArgs {
     /// other users and in CI logs.
     #[arg(long, value_name = "FILE", env = "SONDA_TOKEN_FILE")]
     token_file: Option<PathBuf>,
+    /// The pull request the analysis belongs to, outside GitHub Actions
+    /// (where it's read from the event); --branch is its head branch.
+    #[arg(long, value_name = "NUMBER", requires = "pull_request_base")]
+    pull_request: Option<u64>,
+    /// The branch the pull request merges into.
+    #[arg(long, value_name = "BRANCH", requires = "pull_request")]
+    pull_request_base: Option<String>,
     /// Always exit 0, even when the server's quality gate fails.
     #[arg(long)]
     no_gate: bool,
 }
 
 pub fn run(args: UploadArgs) -> Result<ExitCode> {
-    let target = Target {
+    let Some(target) = Target {
         server: args.server,
         project: args.project,
         branch: args.branch,
         commit: args.commit,
         project_version: args.project_version,
         token_file: args.token_file,
+        pull_request: args.pull_request,
+        pull_request_base: args.pull_request_base,
     }
-    .check()?;
+    .check()?
+    else {
+        return Ok(ExitCode::SUCCESS);
+    };
     let report = read_capped(&args.report, MAX_REPORT_BYTES)?;
     // As SonarQube's sonar.qualitygate.wait: the server's gate decides.
     Ok(match target.send(&report, &args.root, None)? {
@@ -86,6 +98,10 @@ pub struct Target {
     pub commit: String,
     pub project_version: Option<String>,
     pub token_file: Option<PathBuf>,
+    /// `--pull-request` and `--pull-request-base`, which clap requires
+    /// together.
+    pub pull_request: Option<u64>,
+    pub pull_request_base: Option<String>,
 }
 
 /// A target whose URL, token and metadata passed the local checks.
@@ -206,8 +222,30 @@ fn agent(timeout: Duration) -> ureq::Agent {
 
 impl Target {
     /// Everything that can fail locally fails here, before anything is
-    /// scanned, read or sent.
-    pub fn check(self) -> Result<Checked> {
+    /// scanned, read or sent. `None` for a pull request from a fork, which
+    /// isn't uploaded (ADR-0021): its CI usually has no secrets, so this
+    /// says so and the scan goes on without the server.
+    pub fn check(self) -> Result<Option<Checked>> {
+        let pull_request = match (self.pull_request, self.pull_request_base) {
+            (Some(number), Some(base)) => Some(PullRequest {
+                number,
+                base,
+                head: self.branch.clone(),
+                head_sha: None,
+                repository: None,
+            }),
+            _ => match upload::github_pull_request(&|v| std::env::var(v).ok()) {
+                CiPullRequest::PullRequest(pr) => Some(pr),
+                CiPullRequest::Fork(number) => {
+                    eprintln!(
+                        "sonda: pull request #{number} comes from a fork, whose CI has no \
+                         secrets to upload with; scanning without uploading"
+                    );
+                    return Ok(None);
+                }
+                CiPullRequest::None => None,
+            },
+        };
         let url = endpoint(&self.server)?;
         let token = token(self.token_file.as_deref())?;
         let meta = Meta {
@@ -215,14 +253,15 @@ impl Target {
             branch: self.branch,
             commit: self.commit,
             version: self.project_version,
+            pull_request,
         };
         upload::validate_meta(&meta)?;
-        Ok(Checked {
+        Ok(Some(Checked {
             url,
             token,
             server: self.server,
             meta,
-        })
+        }))
     }
 }
 
@@ -292,18 +331,18 @@ impl Checked {
         upload.scan_duration_ms =
             scan_duration.map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let files = upload.sources.len();
-        let body = gzip(&serde_json::to_vec(&upload)?)?;
-        tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
-
-        let mut response = agent(Duration::from_secs(300))
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .header("Content-Encoding", "gzip")
-            .send(&body[..])
-            .with_context(|| format!("sending to {url}"))?;
-        let status = response.status();
-        if !status.is_success() {
+        let post = |upload: &upload::Upload| -> Result<ureq::http::Response<ureq::Body>> {
+            let body = gzip(&serde_json::to_vec(upload)?)?;
+            tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
+            agent(Duration::from_secs(300))
+                .post(&url)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .header("Content-Encoding", "gzip")
+                .send(&body[..])
+                .with_context(|| format!("sending to {url}"))
+        };
+        let error_text = |response: &mut ureq::http::Response<ureq::Body>| {
             let mut text = String::new();
             // Best effort: the status alone already says what went wrong.
             let _ = response
@@ -311,7 +350,31 @@ impl Checked {
                 .as_reader()
                 .take(MAX_ERROR_BYTES)
                 .read_to_string(&mut text);
-            bail!("the server answered {status}: {}", text.trim());
+            text.trim().to_string()
+        };
+
+        let mut response = post(&upload)?;
+        let mut status = response.status();
+        // A server older than pull requests (ADR-0021) refuses the field:
+        // upload it as the branch it is, as before.
+        if status == 400 && upload.pull_request.is_some() {
+            let text = error_text(&mut response);
+            if !text.contains("pull_request") {
+                bail!("the server answered {status}: {text}");
+            }
+            eprintln!(
+                "sonda: {server} doesn't know pull requests yet; uploading to branch {} instead",
+                sonda_core::report::terminal_safe(&upload.branch)
+            );
+            upload.pull_request = None;
+            response = post(&upload)?;
+            status = response.status();
+        }
+        if !status.is_success() {
+            bail!(
+                "the server answered {status}: {}",
+                error_text(&mut response)
+            );
         }
         let mut answer = String::new();
         // Best effort: the upload already succeeded; the summary is a bonus.
@@ -320,11 +383,15 @@ impl Checked {
             .as_reader()
             .take(MAX_ANSWER_BYTES)
             .read_to_string(&mut answer);
+        let what = match &upload.pull_request {
+            Some(pr) => format!("pull request #{}", pr.number),
+            None => upload.branch.clone(),
+        };
         eprintln!(
             "sonda: uploaded {} files for {}/{} to {}{}",
             files,
             upload.project,
-            upload.branch,
+            what,
             server,
             summary(&answer)
         );

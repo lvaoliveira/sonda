@@ -4,7 +4,7 @@ import type { AnalysisPage, AnalysisQuery } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
-import { formatAge, formatNumber } from '@/lib/format'
+import { branchLabel, formatAge, formatNumber } from '@/lib/format'
 import { GATE } from '@/lib/visual'
 
 const PAGE_SIZE = 50
@@ -107,7 +107,7 @@ function AnalysisList({ page, onOffset }: { page: AnalysisPage; onOffset: (offse
                   {a.project}
                 </Link>
                 <Mono className="text-[10.5px] text-fg-faint">
-                  {a.branch} · {a.sha.slice(0, 7)}
+                  {branchLabel(a)} · {a.sha.slice(0, 7)}
                 </Mono>
                 {a.message && <span className="overflow-hidden text-xs text-ellipsis whitespace-nowrap text-fg-muted">{a.message}</span>}
               </span>

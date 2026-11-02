@@ -24,6 +24,38 @@ async fn uploads_need_the_token() {
 }
 
 #[tokio::test]
+async fn uploads_are_counted_by_result() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let state = state(db.pool.clone());
+    let metrics = state.metrics.clone();
+    let app = http::router(state, None);
+    let dir = tempfile::tempdir().unwrap();
+    let body = upload_json(dir.path(), &[("a.js", "var x = 1;\n")], "main");
+    let body = gzip(&serde_json::to_vec(&body).unwrap());
+    let (status, json) = post(app.clone(), Some(TOKEN), body.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{json}");
+    let (status, _) = post(app.clone(), Some(TOKEN), b"not gzip".to_vec()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Refused before the handler: a request, not an upload.
+    let (status, _) = post(app, None, body).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let text = metrics.encode().unwrap();
+    for line in [
+        r#"sonda_uploads_total{result="stored"} 1"#,
+        r#"sonda_uploads_total{result="rejected"} 1"#,
+        r#"sonda_uploads_total{result="failed"} 0"#,
+        r#"sonda_uploads_total{result="cancelled"} 0"#,
+        "sonda_upload_duration_seconds_count 1",
+        r#"sonda_http_requests_total{method="POST",route="/api/analyses",status="401"} 1"#,
+    ] {
+        assert!(text.contains(line), "{line} not in\n{text}");
+    }
+}
+
+#[tokio::test]
 async fn malformed_bodies_are_rejected() {
     let app = || http::router(state(unreachable_pool()), None);
     let (status, _) = post(app(), Some(TOKEN), b"not gzip".to_vec()).await;
