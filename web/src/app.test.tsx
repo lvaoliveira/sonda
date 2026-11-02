@@ -1205,3 +1205,69 @@ describe('Shell', () => {
     expect(localStorage.getItem('sonda-theme')).toBe('light')
   })
 })
+
+describe('Connecting a repository', () => {
+  /** The mock with no projects analyzed yet, as on a new server. */
+  function emptyApi(admin = true): SondaApi {
+    const api = createMockApi(0)
+    const { overview, shell } = api
+    return {
+      ...api,
+      overview: async (scope, range) => {
+        const data = await overview!(scope, range)
+        return { ...data, summary: { ...data.summary, projects: 0 } }
+      },
+      shell: async () => ({ ...(await shell()), isAdmin: admin }),
+    }
+  }
+
+  it('creates the project, its token and the workflow from the empty Overview', async () => {
+    const user = userEvent.setup()
+    renderAt('/', emptyApi())
+    await screen.findByText('No soundings yet')
+    await user.click(await screen.findByRole('link', { name: 'Connect a repository' }))
+    const repository = await screen.findByRole('textbox', { name: 'GitHub repository' })
+    await user.type(repository, 'acme')
+    expect(screen.getByText('Use owner/name, such as acme/shop.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled()
+    await user.type(repository, '/shop')
+    expect(screen.getByRole('textbox', { name: 'Project key' })).toHaveValue('shop')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+
+    expect(await screen.findByLabelText('Secret')).toHaveTextContent(/^sonda_p_/)
+    expect(screen.getByLabelText('Name')).toHaveTextContent('SONDA_TOKEN')
+    expect(screen.getByRole('link', { name: 'Open the secrets page on GitHub' })).toHaveAttribute('href', 'https://github.com/acme/shop/settings/secrets/actions/new')
+    const create = screen.getByRole('link', { name: 'Create .github/workflows/sonda.yml on GitHub' })
+    const workflow = new URL(create.getAttribute('href')!).searchParams.get('value')!
+    expect(workflow).toContain('--project shop')
+    expect(workflow).toContain('--server http://localhost')
+    expect(screen.getByLabelText('Command')).toHaveTextContent('scripts/install-cli.sh')
+
+    // It waits for its first analysis, with its steps again for admins.
+    await user.click(within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Projects/ }))
+    const waiting = await screen.findByRole('region', { name: 'Waiting for a first analysis' })
+    expect(waiting).toHaveTextContent('shopacme/shop')
+    await user.click(within(waiting).getByRole('link', { name: 'Show the steps again' }))
+    expect(await screen.findByRole('textbox', { name: 'GitHub repository' })).toHaveValue('acme/shop')
+    expect(screen.getByRole('textbox', { name: 'Project key' })).toBeDisabled()
+  })
+
+  it("refuses a server GitHub's runners can't reach, and a key that exists", async () => {
+    const user = userEvent.setup()
+    renderAt('/connect', emptyApi())
+    await user.type(await screen.findByRole('textbox', { name: 'GitHub repository' }), 'acme/payments-platform')
+    await user.click(screen.getByRole('button', { name: 'GitHub-hosted' }))
+    const server = screen.getByRole('textbox', { name: 'Server address the runner uploads to' })
+    await user.type(server, 'http://localhost:9000')
+    expect(screen.getByText(/GitHub's runners can't reach this machine/)).toBeInTheDocument()
+    await user.clear(server)
+    await user.type(server, 'https://sonda.example.com')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('project "payments-platform" already exists')
+  })
+
+  it('is for admins only', async () => {
+    renderAt('/connect', emptyApi(false))
+    expect(await screen.findByText('Ask an admin to connect a repository.')).toBeInTheDocument()
+  })
+})

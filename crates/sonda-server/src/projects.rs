@@ -1,11 +1,13 @@
 //! `GET /api/projects`: every project as of its main branch's latest
-//! analysis. `GET /api/projects/{key}`: one project on one branch, with its
-//! gate, measures, history and components.
+//! analysis, and those still waiting for one. `GET /api/projects/{key}`: one
+//! project on one branch, with its gate, measures, history and components.
+//! `POST /api/projects`: an admin creates one ahead of its first upload, to
+//! link its repository first.
 //!
 //! Ratings follow ADR-0005 and are computed as the Overview computes them
 //! (see `health`), from the issue tracker: accepted issues don't count.
 
-use crate::api::ApiError;
+use crate::api::{ApiError, Caller};
 use crate::components::{ComponentRow, LanguageShare, components, language_shares};
 use crate::health::{
     GateDetail, Measures, ago, coverage_level, debt_level, gate_detail, gate_state, measure_set,
@@ -13,7 +15,8 @@ use crate::health::{
 };
 use crate::http::State;
 use axum::Json;
-use axum::extract::{Path, Query};
+use axum::extract::{Extension, Path, Query};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -27,6 +30,16 @@ pub struct ProjectList {
     pub projects: Vec<ProjectRow>,
     /// Every language in any project, most code first, for the filters.
     pub languages: Vec<String>,
+    /// Projects with no analysis of their main branch yet, by key.
+    pub waiting: Vec<WaitingProject>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitingProject {
+    pub key: String,
+    pub name: Option<String>,
+    pub github_repository: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -203,10 +216,80 @@ pub async fn list_projects(
         .collect();
     let mut languages: Vec<(String, i64)> = totals.into_iter().collect();
     languages.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let waiting: Vec<WaitingProject> = sqlx::query_as(
+        "SELECT p.key, p.name, p.github_repository FROM projects p
+         WHERE NOT EXISTS (SELECT 1 FROM analyses a
+                           WHERE a.project_id = p.id AND a.branch = p.main_branch)
+         ORDER BY p.key",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(Json(ProjectList {
         projects,
         languages: languages.into_iter().map(|(l, _)| l).collect(),
+        waiting,
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NewProject {
+    key: String,
+    /// `main` unless given: settings only move it to an analyzed branch.
+    #[serde(default)]
+    main_branch: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CreatedProject {
+    key: String,
+}
+
+/// `POST /api/projects`: an empty project, so an admin can link its
+/// repository and generate its token before the first upload, which then
+/// fills it. Its main branch is set now, since no upload has set it.
+pub async fn create_project(
+    axum::extract::State(state): axum::extract::State<State>,
+    Extension(caller): Extension<Caller>,
+    Json(new): Json<NewProject>,
+) -> Result<(StatusCode, Json<CreatedProject>), ApiError> {
+    let key = new.key.trim();
+    sonda_core::upload::check_project_key(key)
+        .map_err(|e| ApiError::Unprocessable(e.to_string()))?;
+    let main = new.main_branch.as_deref().map_or("main", str::trim);
+    sonda_core::upload::check_branch(main).map_err(|e| ApiError::Unprocessable(e.to_string()))?;
+    if sonda_core::upload::is_pull_request_branch(main) {
+        return Err(ApiError::Unprocessable(format!(
+            "{main:?} is kept for pull requests, not a main branch"
+        )));
+    }
+    let mut tx = state.pool.begin().await?;
+    // Under the key's lock, as uploads and deletions take it (ADR-0017).
+    crate::deleted_projects::lock_key(&mut tx, key).await?;
+    if let Some(why) = crate::deleted_projects::refused(&mut *tx, key).await? {
+        return Err(ApiError::Unprocessable(why));
+    }
+    let created: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO projects (key, main_branch) VALUES ($1, $2)
+         ON CONFLICT (key) DO NOTHING RETURNING id",
+    )
+    .bind(key)
+    .bind(main)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if created.is_none() {
+        return Err(ApiError::Unprocessable(format!(
+            "project {key:?} already exists"
+        )));
+    }
+    tx.commit().await?;
+    tracing::info!(project = key, by = %caller.name(), "project created");
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedProject {
+            key: key.to_string(),
+        }),
+    ))
 }
 
 type AnalysisRow = (

@@ -395,7 +395,36 @@ analysis:
 - coverage, duplication, open issues, lines of code and languages;
 - when it was analyzed.
 
-The response also lists every language in any project, for filters.
+The response also lists every language in any project, for filters, and
+as `waiting` the projects whose main branch has no analysis yet: their key,
+name and GitHub repository.
+
+### Connecting a repository
+
+On a new server, the empty Overview offers admins **Connect a repository**
+(also on Projects), which sets a GitHub repository up in one form
+([ADR-0023](adr/0023-connecting-a-repository.md)):
+
+1. Enter `owner/name`. sonda creates the project (keyed by the
+   repository's name, editable), links the repository for pull request
+   decoration, and generates a project analysis token.
+2. Add the token as the repository's `SONDA_TOKEN` secret, on GitHub's page
+   it opens.
+3. Commit the workflow it writes, in GitHub's editor it opens filled in, on
+   a new branch with a pull request: that pull request is the first one
+   decorated.
+
+Choose where CI runs. On a self-hosted runner on the server's machine, the
+workflow uploads to `http://localhost:PORT` with the CLI from
+`scripts/install-cli.sh`. On GitHub's runners, it builds the CLI and needs
+the server's public `https://` address. sonda never writes to the
+repository: the GitHub App keeps its permissions. Until its main branch is
+analyzed, the project is listed as waiting, where an admin can show its
+steps again with a new token.
+
+| Endpoint | |
+|---|---|
+| `POST /api/projects` `{"key": "shop", "mainBranch": "main"}` | Admins: an empty project, `201`. `mainBranch` defaults to `main`. An existing key, a deleted one, or an invalid key or branch is a `422`. |
 
 `GET /api/projects/{key}?branch=` is one project on one branch (its main
 branch by default). It returns:

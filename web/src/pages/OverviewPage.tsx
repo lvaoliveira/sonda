@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { Drill, DrillMetric, FlowBucket, Overview, ProjectHealth, Range, Scope, SondaApi } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
+import { ConnectLink, WaitingProjects } from '@/components/sonda/connect'
 import { DrillDrawer } from '@/components/sonda/DrillDrawer'
 import { Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
@@ -124,18 +125,30 @@ function Loading() {
 }
 
 function Empty() {
+  const api = useApi()
+  // Who may connect a repository, and what's already connected.
+  const extra = useAsync(() => Promise.all([api.shell(), api.projects()]), [api])
+  const isAdmin = extra.state === 'ready' && extra.data[0].isAdmin
   return (
-    <div className="grid max-w-[920px] grid-cols-[repeat(auto-fit,minmax(320px,1fr))] overflow-hidden rounded-xl bg-panel-2 edge">
-      <div className="flex flex-col gap-3 p-8">
-        <span className="font-mono text-[10.5px] tracking-[.08em] text-brand uppercase">No soundings yet</span>
-        <h2 className="m-0 text-2xl font-semibold tracking-[-0.03em]">Point Sonda at a repository to map what's beneath it.</h2>
-        <p className="m-0 text-fg-muted">Runs locally or in CI and reports bugs, vulnerabilities, code smells, coverage and duplication.</p>
+    <div className="flex max-w-[920px] flex-col gap-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))] overflow-hidden rounded-xl bg-panel-2 edge">
+        <div className="flex flex-col gap-3 p-8">
+          <span className="font-mono text-[10.5px] tracking-[.08em] text-brand uppercase">No soundings yet</span>
+          <h2 className="m-0 text-2xl font-semibold tracking-[-0.03em]">Point Sonda at a repository to map what's beneath it.</h2>
+          <p className="m-0 text-fg-muted">Runs locally or in CI and reports bugs, vulnerabilities, code smells, coverage and duplication.</p>
+          {isAdmin && (
+            <div className="pt-1">
+              <ConnectLink primary />
+            </div>
+          )}
+        </div>
+        <pre className="m-0 overflow-auto bg-canvas p-8 font-mono text-[11.5px] leading-loose text-fg">
+          <span className="text-fg-faint">$</span> cargo install --path .{'\n'}
+          <span className="text-fg-faint">$</span> sonda scan . --new-code origin/main{'\n'}
+          <span className="text-fg-faint">$</span> sonda scan . --format sarif -o sonda.sarif
+        </pre>
       </div>
-      <pre className="m-0 overflow-auto bg-canvas p-8 font-mono text-[11.5px] leading-loose text-fg">
-        <span className="text-fg-faint">$</span> cargo install --path .{'\n'}
-        <span className="text-fg-faint">$</span> sonda scan . --new-code origin/main{'\n'}
-        <span className="text-fg-faint">$</span> sonda scan . --format sarif -o sonda.sarif
-      </pre>
+      {extra.state === 'ready' && <WaitingProjects waiting={extra.data[1].waiting} isAdmin={isAdmin} />}
     </div>
   )
 }

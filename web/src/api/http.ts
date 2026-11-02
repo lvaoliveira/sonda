@@ -112,6 +112,7 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     },
     analysis: (id) => call<AnalysisDetail>('GET', `/analyses/${id}`),
     projects: () => call<ProjectList>('GET', '/projects'),
+    createProject: (key, mainBranch) => call<{ key: string }>('POST', '/projects', { key, mainBranch }),
     project: (key, branch) => call<ProjectDetail>('GET', `/projects/${encodeURIComponent(key)}${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
     issues: (query) => call<IssuePage>('GET', `/issues?${issueSearchParams(query)}`),
     issue: (id) => call<IssueDetail>('GET', `/issues/${id}`),

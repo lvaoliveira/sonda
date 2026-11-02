@@ -114,6 +114,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/users", get(users::list_users).post(users::create_user))
         .route("/projects/{key}/new-code", put(new_code::put_period))
         .route("/projects/{key}/settings", patch(project_settings::patch))
+        .route("/projects", post(projects::create_project))
         .route("/projects/{key}", delete(deleted_projects::delete))
         .route("/deleted-projects", get(deleted_projects::list))
         .route("/quality-gates", post(quality_gates::post))

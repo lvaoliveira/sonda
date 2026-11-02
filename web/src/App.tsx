@@ -19,6 +19,7 @@ import { ProjectRulesPage } from '@/pages/ProjectRulesPage'
 import { ProjectSettingsPage } from '@/pages/ProjectSettingsPage'
 import { QualityProfilesPage } from '@/pages/QualityProfilesPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
+import { ConnectPage } from '@/pages/ConnectPage'
 import { RulesPage } from '@/pages/RulesPage'
 import { SecurityPage } from '@/pages/SecurityPage'
 
@@ -42,6 +43,7 @@ export function AppRoutes() {
           <Route path="/analyses" element={<AnalysesPage />} />
           <Route path="/analyses/:id" element={<AnalysisPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/connect" element={<ConnectPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
           <Route path="/projects/:key/rules" element={<ProjectRulesPage />} />
           <Route path="/projects/:key/settings" element={<ProjectSettingsPage />} />

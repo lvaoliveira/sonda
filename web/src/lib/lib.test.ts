@@ -3,6 +3,7 @@ import issuesData from '@/api/mock/issues.json'
 import { queryIssues } from '@/api/mock/query'
 import type { IssueDetail } from '@/api/types'
 import { areaPoints, linePoints, ringDash, waffleCells } from './charts'
+import { isRepository, localServer, newFileUrl, newSecretUrl, projectKeyFor, serverProblem, workflowYaml } from './connect'
 import { compactCount, formatAge, formatEffort } from './format'
 import { initials } from './identity'
 import { DEFAULT_FILTER, filterFromParams, issueSearchParams, toQuery } from './issues'
@@ -170,5 +171,46 @@ describe('labels', () => {
     expect(languageLabel('kotlin')).toBe('kotlin')
     expect(initials('Ann Marie Lee')).toBe('AM')
     expect(initials('')).toBe('··')
+  })
+})
+
+describe('connecting a repository', () => {
+  it('checks repositories and derives a project key from one', () => {
+    expect(isRepository('acme/shop')).toBe(true)
+    for (const bad of ['acme', 'acme/shop/x', 'acme/ shop', '/shop']) expect(isRepository(bad), bad).toBe(false)
+    expect(projectKeyFor('acme/shop.web')).toBe('shop.web')
+    expect(projectKeyFor('acme/.dotfiles')).toBe('dotfiles')
+  })
+
+  it('accepts only servers the CLI will send a token to', () => {
+    expect(serverProblem('http://localhost:9300', 'self-hosted')).toBeNull()
+    expect(serverProblem('https://sonda.example.com', 'github')).toBeNull()
+    expect(serverProblem('http://192.168.1.10:9300', 'self-hosted')).toContain('only to localhost')
+    expect(serverProblem('http://localhost:9300', 'github')).toContain("GitHub's runners can't reach this machine")
+    expect(serverProblem('nope', 'self-hosted')).toContain('Enter the address')
+    expect(localServer({ protocol: 'http:', port: '9300' })).toBe('http://localhost:9300')
+    expect(localServer({ protocol: 'https:', port: '' })).toBe('http://localhost:443')
+  })
+
+  it('writes a workflow for each kind of runner', () => {
+    const local = workflowYaml({ project: 'shop', mainBranch: 'trunk', server: 'http://localhost:9300', runner: 'self-hosted' })
+    expect(local).toContain('branches: ["trunk"]')
+    expect(local).toContain('runs-on: self-hosted')
+    expect(local).toContain('"$HOME/.local/bin/sonda" scan . --upload')
+    expect(local).toContain('--server http://localhost:9300 --project shop')
+    expect(local).toContain('SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}')
+    expect(local).not.toContain('cargo install')
+    const hosted = workflowYaml({ project: 'shop', mainBranch: 'main', server: 'https://sonda.example.com', runner: 'github' })
+    expect(hosted).toContain('runs-on: ubuntu-latest')
+    expect(hosted).toContain('cargo install --locked --git https://github.com/lvaoliveira/sonda sonda')
+    expect(hosted).toContain('          sonda scan . --upload')
+  })
+
+  it("links to GitHub's own pages, prefilled", () => {
+    expect(newSecretUrl('acme/shop')).toBe('https://github.com/acme/shop/settings/secrets/actions/new')
+    const url = new URL(newFileUrl('acme/shop', 'release/2.x', '.github/workflows/sonda.yml', 'name: sonda\n'))
+    expect(url.pathname).toBe('/acme/shop/new/release/2.x')
+    expect(url.searchParams.get('filename')).toBe('.github/workflows/sonda.yml')
+    expect(url.searchParams.get('value')).toBe('name: sonda\n')
   })
 })

@@ -261,6 +261,13 @@ file, the report formats and the public library API.
   shows the repository's `sonda.toml` settings and when they changed. The
   catalog's **Rules** page says where each rule is off and which profiles
   set it, and admins turn a rule off in the default profile, or back on.
+- **Connect a repository** (ADR-0023): from the empty Overview or
+  Projects, an admin enters a GitHub repository and sonda creates the
+  project, links it for pull request decoration and generates its upload
+  token, then opens GitHub's new-secret page and its new-file editor with
+  the workflow filled in. sonda gets no access to the repository.
+  `POST /api/projects` creates a project ahead of its first upload, and
+  `GET /api/projects` lists such projects as `waiting`.
 - `scripts/setup-server.sh` starts the server in one command: it creates
   the secrets, builds this checkout and starts it with Docker Compose, and
   reruns safely to upgrade. `--port` moves it off 9000 (or `SONDA_PORT`),
