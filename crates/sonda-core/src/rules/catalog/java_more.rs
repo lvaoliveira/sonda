@@ -669,8 +669,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2065")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Find(transient_field_of_plain_class)),
+            query: r#"(field_declaration) @match"#,
+            filter: Some(Keep(transient_field_of_plain_class)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1814,7 +1814,13 @@ fn update_ignores_tested_variables(for_loop: Node, src: &[u8]) -> bool {
     !written.iter().any(|w| tested.contains(w))
 }
 
-fn transient_field_of_plain_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+fn transient_field_of_plain_class(field: Node, src: &[u8]) -> bool {
+    if !has_modifier(field, "transient") {
+        return false;
+    }
+    let Some(class) = enclosing_class(field) else {
+        return false;
+    };
     // A parent declared in this file that is itself plain is no excuse.
     let plain_parent = superclass_name(class, src)
         .and_then(|n| find_declared_type(root_of(class), n, src))
@@ -1828,12 +1834,9 @@ fn transient_field_of_plain_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Nod
         || implements(class, src, b"Externalizable")
         || class.child_by_field_name("interfaces").is_some()
     {
-        return None;
+        return false;
     }
-    let body = class.child_by_field_name("body")?;
-    members(body)
-        .into_iter()
-        .find(|m| m.kind() == "field_declaration" && has_modifier(*m, "transient"))
+    true
 }
 
 fn closes_in_finally(try_: Node, src: &[u8]) -> bool {

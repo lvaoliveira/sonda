@@ -1136,7 +1136,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2129")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(object_creation_expression type: (type_identifier) @t (#any-of? @t "String" "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character")) @match"#,
+            query: r#"(object_creation_expression type: (type_identifier) @t (#any-of? @t "String" "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character" "BigInteger" "BigDecimal")) @match"#,
             filter: Some(Keep(has_arguments)),
         },
         example: Some(Example {
@@ -2669,7 +2669,11 @@ fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
     if modifiers_of(class).is_some_and(|m| {
         let mut c = m.walk();
         m.children(&mut c).any(|k| {
-            k.kind() == "abstract" || matches!(k.kind(), "marker_annotation" | "annotation")
+            k.kind() == "abstract"
+                || (matches!(k.kind(), "marker_annotation" | "annotation")
+                    && !k.child_by_field_name("name").is_some_and(|n| {
+                        matches!(text(n, src), b"Deprecated" | b"SuppressWarnings")
+                    }))
         })
     }) {
         return false;
@@ -3051,7 +3055,6 @@ fn method_is_empty(method: Node, src: &[u8]) -> bool {
     method
         .child_by_field_name("body")
         .is_some_and(|b| b.named_child_count() == 0)
-        && !has_annotation(method, b"Override", src)
         && (method.kind() != "constructor_declaration" || is_the_only_public_constructor(method))
 }
 
@@ -3329,7 +3332,9 @@ fn field_named_like_its_class(field: Node, src: &[u8]) -> bool {
     declarator_names(field, src).contains(&text(class_name, src))
 }
 
-/// A member whose name matches an earlier one in the class except for case.
+/// A member whose name matches an earlier one in the class: the same name
+/// for a field and a method, or names differing only by case. Private fields
+/// only clash with other fields.
 fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     let Some(body) = member
         .parent()
@@ -3337,6 +3342,7 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
+    let is_method = |m: Node| m.kind() == "method_declaration";
     let names_of = |m: Node| -> Vec<&[u8]> {
         match m.kind() {
             "field_declaration" | "constant_declaration" => declarator_names(m, src),
@@ -3350,12 +3356,24 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     let mine = names_of(member);
     members(body)
         .into_iter()
-        .take_while(|m| m.start_byte() < member.start_byte())
-        .filter(|m| !has_modifier(*m, "private"))
-        .flat_map(names_of)
-        .any(|other| {
-            mine.iter()
-                .any(|n| n.eq_ignore_ascii_case(other) && *n != other)
+        .filter(|m| m.id() != member.id())
+        .filter(|m| {
+            // a method and a private field do not clash
+            is_method(*m) == is_method(member)
+                || !(has_modifier(*m, "private") && !is_method(*m)
+                    || has_modifier(member, "private") && !is_method(member))
+        })
+        .flat_map(|m| {
+            let earlier = m.start_byte() < member.start_byte();
+            let method_vs_field = is_method(m) != is_method(member);
+            names_of(m)
+                .into_iter()
+                .map(move |n| (n, earlier, method_vs_field))
+        })
+        .any(|(other, earlier, method_vs_field)| {
+            mine.iter().any(|n| {
+                earlier && n.eq_ignore_ascii_case(other) && (method_vs_field || *n != other)
+            })
         })
 }
 

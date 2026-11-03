@@ -499,18 +499,24 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
     // The counter itself (compared and updated by the loop header) is also
     // off limits inside the body.
     let mut bound: Vec<Vec<u8>> = compared;
-    if updates.is_empty() {
-        // Without an update clause only a counter declared in the header counts.
-        let mut declared: Vec<Vec<u8>> = Vec::new();
-        let mut c = for_statement.walk();
-        for init in for_statement.children_by_field_name("init", &mut c) {
-            for d in children_of_kind(init, "variable_declarator") {
-                if let Some(n) = d.child_by_field_name("name") {
-                    declared.push(text(n, src).to_vec());
-                }
+    // Every variable the header declares is off limits in the body, and a
+    // loop with no update clause only guards what it declares.
+    let mut declared: Vec<Vec<u8>> = Vec::new();
+    let mut c = for_statement.walk();
+    for init in for_statement.children_by_field_name("init", &mut c) {
+        for d in children_of_kind(init, "variable_declarator") {
+            if let Some(n) = d.child_by_field_name("name") {
+                declared.push(text(n, src).to_vec());
             }
         }
+    }
+    if updates.is_empty() {
         bound.retain(|b| declared.contains(b));
+    }
+    for d in declared {
+        if !bound.contains(&d) {
+            bound.push(d);
+        }
     }
     let body = for_statement.child_by_field_name("body")?;
     find_node(body, |n| {
