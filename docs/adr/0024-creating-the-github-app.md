@@ -1,8 +1,10 @@
 # ADR-0024: Creating the GitHub App from the web app
 
-- Status: **accepted; built** (2026-11-03): the encrypted store,
+- Status: **accepted; built; done** (2026-11-03): the encrypted store,
   `SONDA_SECRET_KEY`, the endpoints, Administration → GitHub and the page
-  GitHub returns to. Next: the end-to-end check on a real server.
+  GitHub returns to. Checked end to end on a self-hosted server, on its LAN
+  address and its tailnet one: an App created from Administration,
+  installed, decorated a real pull request.
 - Date: 2026-11-03
 - Builds on ADR-0021 (pull request decoration), which left this under "Not
   now", and ADR-0023 (connecting a repository)
