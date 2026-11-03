@@ -43,7 +43,7 @@ Quality gate: FAILED
 On Linux, download the CLI from the [latest release](https://github.com/lvaoliveira/sonda/releases/latest), a static binary for x86_64 or arm64, and check it against the release's `SHA256SUMS`:
 
 ```sh
-v=0.1.0 arch=x86_64   # or aarch64
+v=0.2.0 arch=x86_64   # or aarch64
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/sonda-$v-$arch-linux
 curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | sha256sum -c --ignore-missing
 install -m 755 sonda-$v-$arch-linux ~/.local/bin/sonda
