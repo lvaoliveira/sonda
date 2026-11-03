@@ -31,6 +31,7 @@ pub mod project_settings;
 pub mod projects;
 pub mod pull_requests;
 pub mod quality_gates;
+pub mod retention;
 pub mod review;
 pub mod rule_settings;
 pub mod rules;
@@ -92,6 +93,25 @@ pub async fn run(config: Config) -> Result<()> {
                     }
                 }
                 tokio::time::sleep(pull_requests::CLEANUP_INTERVAL).await;
+            }
+        });
+    }
+    if let Some(days) = config.thin_analyses_after_days {
+        tracing::info!(
+            days,
+            "thinning branch analyses older than that to one a day"
+        );
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                match retention::thin(&pool, days).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(analyses = n, "thinned old analyses"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "thinning old analyses failed; retrying later")
+                    }
+                }
+                tokio::time::sleep(retention::INTERVAL).await;
             }
         });
     }

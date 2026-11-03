@@ -1042,6 +1042,7 @@ command-line flags. Setting both a variable and its `_FILE` form is an error.
 | `SONDA_GITHUB_API_URL` | A GitHub Enterprise Server's API, such as `https://github.example.com/api/v3`. Default `https://api.github.com`. |
 | `SONDA_PUBLIC_URL` | The server's address as people reach it, such as `https://sonda.example.com`, for links in pull request decorations; `http://` only to localhost, or anywhere with `SONDA_PLAIN_HTTP`. Without it, they have no link. |
 | `SONDA_PLAIN_HTTP` | `true` lets browsers sign in over plain HTTP anywhere, not only on `localhost`: the session cookie is `sonda_session`, without `Secure`. For a trusted network only (see [On a home network](#on-a-home-network)). Off by default. |
+| `SONDA_THIN_ANALYSES_AFTER_DAYS` | Branch analyses older than this many days are thinned to one a day (see [Retention](#retention-and-storage)). Default `90`; `0` keeps every analysis. |
 | `SONDA_LISTEN` (`--listen`) | Address to listen on. Default `127.0.0.1:9000`; the image sets `0.0.0.0:9000`. |
 | `SONDA_METRICS_LISTEN` (`--metrics-listen`) | Address to serve Prometheus metrics on, at `/metrics`. Unset by default, so no metrics are served. Unauthenticated: never the public address. See [Metrics](#metrics). |
 | `SONDA_WEB_DIR` (`--web-dir`) | The built web app to serve. The image sets it. |
@@ -1146,6 +1147,47 @@ Everything durable is in PostgreSQL:
 ```sh
 docker compose exec -T db pg_dump -U sonda -Fc sonda > sonda.dump
 ```
+
+## Retention and storage
+
+Every upload is stored in full, so a server that analyzes every commit grows
+with the number of analyses. Two things keep that in check:
+
+- **Pull requests** are removed 30 days after their last analysis.
+- **Branch analyses** older than `SONDA_THIN_ANALYSES_AFTER_DAYS` (90 by
+  default; `0` turns it off) are thinned to one a day, checked hourly. Kept
+  whatever their age: each branch's first analysis (the baseline its issues
+  are measured from) and its latest, the last analysis of each day (UTC), the
+  analysis the new code period starts from (the one an admin chose, or the
+  first of the project's current version), and those a reset of the period
+  names.
+
+Thinning removes an analysis's per-file data, dependencies and gate, and the
+file contents no other analysis shares. **Issues are never deleted with
+them**: their status, assignee and history stay. An issue records the
+analyses that first and last saw it and the one that found it fixed; when
+one of those goes, the record moves to the nearest analysis that stays, so
+an issue may show as first seen in a later analysis than the one that really
+found it, never earlier. What the server shows for an analysis that was
+thinned away is simply that it's no longer listed.
+
+**How much a day costs**, measured on this repository (71 analyzed files,
+about 590 dependency rows, 570 issues tracked over three analyses), with
+indexes:
+
+| Stored | About |
+|---|---|
+| Each analysis | 20 kB, plus 0.7 kB per analyzed file and 0.3 kB per dependency row |
+| Each tracked issue | 1.7 kB, once, however many analyses see it |
+| Each file's content | its size, once for every distinct version (unchanged files are shared) |
+
+So an analysis of a project like this one adds about 250 kB, and changing a
+file adds that file's new content. A year of one analysis a day is roughly
+90 MB. Within the last 90 days every analysis is kept, so a busy CI's recent
+history costs more; older history never grows past one a day. Your project's numbers scale with its files and dependencies;
+`SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM
+pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC` shows where
+a database's size is.
 
 ## Upgrading
 
