@@ -1850,7 +1850,7 @@ pub(super) fn default_values_passed<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'
                     .map(|(_, a)| *a)
                     .collect();
                 let same = infer
-                    .resolve_with(call, &rest)
+                    .resolve_instead(call, &rest)
                     .is_some_and(|r| same_method(&r.method, &b.method));
                 if same {
                     found.push(args[i].node);
@@ -2028,6 +2028,286 @@ pub(super) fn string_comparison_overloads<'t>(m: &Model<'t>, src: &[u8]) -> Vec<
             && overload_with_one_more(infer, &b, |t| t.is("System.StringComparison"))
         {
             found.push(call);
+        }
+    });
+    found
+}
+
+// ---------------------------------------------------- S1128
+
+/// Using directives that import nothing the file uses
+/// (`Infer::unnecessary_usings`).
+pub(super) fn unnecessary_usings<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    Infer::new(m, src).map_or_else(Vec::new, |infer| infer.unnecessary_usings())
+}
+
+// ---------------------------------------------------- S2201
+
+/// C#'s built-in types, whose every method SonarQube counts as free of
+/// side effects; DateTime too, its documented example.
+const SIDE_EFFECT_FREE_TYPES: &[&str] = &[
+    "System.Boolean",
+    "System.Byte",
+    "System.SByte",
+    "System.Char",
+    "System.Decimal",
+    "System.Double",
+    "System.Single",
+    "System.Int32",
+    "System.UInt32",
+    "System.IntPtr",
+    "System.UIntPtr",
+    "System.Int64",
+    "System.UInt64",
+    "System.Int16",
+    "System.UInt16",
+    "System.Object",
+    STRING,
+    "System.DateTime",
+];
+
+const LINQ: &[&str] = &[
+    "System.Linq.Enumerable",
+    "System.Linq.Queryable",
+    "System.Linq.ParallelEnumerable",
+];
+
+/// Whether a method is one SonarQube documents as free of side effects:
+/// LINQ, `[Pure]`, a built-in type's, an immutable collection's (not a
+/// builder's).
+fn side_effect_free(found: &Found, src: &[u8]) -> bool {
+    let pure = |n: Node| {
+        attribute_names(n, src)
+            .iter()
+            .any(|(_, a)| matches!(*a, b"Pure" | b"PureAttribute"))
+    };
+    match found {
+        Found::Platform {
+            declaring, member, ..
+        } => {
+            let key = declaring.name.as_str();
+            let immutable = key
+                .strip_prefix("System.Collections.Immutable.")
+                .is_some_and(|rest| !rest.contains('.'));
+            LINQ.contains(&key)
+                || SIDE_EFFECT_FREE_TYPES.contains(&key)
+                || immutable
+                || member.has("Pure")
+                || declaring.has("Pure")
+        }
+        Found::Local(d) => d.declarator.is_some_and(|method| {
+            pure(method)
+                || std::iter::successors(method.parent(), |n| n.parent())
+                    .find(|n| n.kind().ends_with("_declaration"))
+                    .is_some_and(pure)
+        }),
+    }
+}
+
+/// The names of the platform's methods `side_effect_free` accepts: a call
+/// by another name, to no `[Pure]` method of the file's, isn't one.
+fn side_effect_free_names() -> &'static HashSet<&'static str> {
+    static NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        dotnet::platform()
+            .types()
+            .filter(|t| {
+                let key = t.name.as_str();
+                LINQ.contains(&key)
+                    || SIDE_EFFECT_FREE_TYPES.contains(&key)
+                    || key
+                        .strip_prefix("System.Collections.Immutable.")
+                        .is_some_and(|rest| !rest.contains('.'))
+            })
+            .flat_map(|t| t.members.iter())
+            .filter(|m| m.kind == "method")
+            .map(|m| m.name.as_str())
+            .collect()
+    })
+}
+
+/// Calls whose value is dropped, of methods documented as free of side
+/// effects, `string.Intern` among them. Calls with `out` or `ref` arguments
+/// are left alone, as documented, and so is test code, as SonarQube checks
+/// this key on main code only.
+pub(super) fn ignored_results<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    let names = side_effect_free_names();
+    // `[Pure]` methods of the file's.
+    let pure = src.windows(4).any(|w| w == b"Pure");
+    let local = method_names(m);
+    let mut found = Vec::new();
+    walk_tree(m, |call, ancestors| {
+        if call.kind() != "invocation_expression"
+            || ancestors
+                .last()
+                .is_none_or(|p| p.kind() != "expression_statement")
+            || in_test(ancestors, src)
+        {
+            return;
+        }
+        let named = call_name(call, src)
+            .and_then(|n| std::str::from_utf8(n).ok())
+            .is_some_and(|n| names.contains(n) || pure && local.contains(n));
+        if !named {
+            return;
+        }
+        let args = arguments(call);
+        if args
+            .iter()
+            .any(|a| matches!(a.modifier, Some("ref" | "out")))
+        {
+            return;
+        }
+        let Some(b) = infer.resolve_with(call, &args) else {
+            return;
+        };
+        let returns_value = match &b.method {
+            Found::Platform { member, .. } => member.ty != "System.Void",
+            Found::Local(d) => d
+                .declarator
+                .and_then(|m| m.child_by_field_name("returns"))
+                .is_some_and(|t| text(t, src) != b"void"),
+        };
+        if returns_value && side_effect_free(&b.method, src) {
+            found.push(call);
+        }
+    });
+    found
+}
+
+// ---------------------------------------------------- S4055
+
+/// Whether a parameter or property name says it holds text to show.
+fn names_text(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["text", "message", "caption"]
+        .iter()
+        .any(|w| lower.contains(w))
+}
+
+/// Whether a declaration of the file's has `[Localizable(true)]`.
+fn localizable(declaration: Node, src: &[u8]) -> bool {
+    attribute_names(declaration, src).iter().any(|(a, name)| {
+        matches!(*name, b"Localizable" | b"LocalizableAttribute")
+            && count_word(text(*a, src), b"true") > 0
+    })
+}
+
+fn is_string_literal(n: Node) -> bool {
+    matches!(
+        n.kind(),
+        "string_literal" | "verbatim_string_literal" | "raw_string_literal"
+    )
+}
+
+/// String literals passed to a parameter, or assigned to a property, that
+/// is `[Localizable(true)]` or whose name contains "Text", "Message" or
+/// "Caption", and those passed as `Console.Write`'s or `WriteLine`'s
+/// `value` or `format`. Test code isn't checked, as SonarQube checks this
+/// key on main code only.
+pub(super) fn localizable_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    walk_tree(m, |node, ancestors| {
+        match node.kind() {
+            "invocation_expression" | "object_creation_expression" => {
+                let args = arguments(node);
+                if !args.iter().any(|a| is_string_literal(a.value)) || in_test(ancestors, src) {
+                    return;
+                }
+                let Some(b) = infer.resolve_with(node, &args) else {
+                    return;
+                };
+                let console = matches!(&b.method, Found::Platform { declaring, member, .. }
+                    if declaring.name == "System.Console" && matches!(member.name.as_str(), "Write" | "WriteLine"));
+                let marked = |i: usize| match &b.method {
+                    Found::Platform { member, .. } => member
+                        .params
+                        .get(i)
+                        .is_some_and(|p| p.tags.iter().any(|t| t == "Localizable")),
+                    Found::Local(d) => d
+                        .declarator
+                        .and_then(|m| m.child_by_field_name("parameters"))
+                        .and_then(|l| {
+                            l.named_children(&mut l.walk())
+                                .filter(|p| p.kind() == "parameter")
+                                .nth(i)
+                        })
+                        .is_some_and(|p| localizable(p, src)),
+                };
+                for (a, &t) in args.iter().zip(&b.targets) {
+                    let p = &b.params[t];
+                    let shown = names_text(p.name)
+                        || marked(t)
+                        || console && matches!(p.name, "value" | "format");
+                    if is_string_literal(a.value) && shown {
+                        found.push(a.value);
+                    }
+                }
+            }
+            "assignment_expression" => {
+                let (Some(left), Some(right)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) else {
+                    return;
+                };
+                if !is_string_literal(right) || in_test(ancestors, src) {
+                    return;
+                }
+                // `x.Text = ...`, `Text = ...` in a member or an initializer.
+                let (owner, name) = match left.kind() {
+                    "member_access_expression" => {
+                        let Some(name) = left.child_by_field_name("name") else {
+                            return;
+                        };
+                        let receiver = left
+                            .child_by_field_name("expression")
+                            .and_then(|e| infer.type_of(e));
+                        (receiver, name)
+                    }
+                    "identifier" => {
+                        let owner = match node.parent() {
+                            Some(p) if p.kind() == "initializer_expression" => p
+                                .parent()
+                                .filter(|c| c.kind() == "object_creation_expression")
+                                .and_then(|c| infer.type_of(c)),
+                            _ => infer.enclosing_type(node),
+                        };
+                        (owner, left)
+                    }
+                    _ => return,
+                };
+                let Some(owner) = owner else {
+                    return;
+                };
+                let property = infer
+                    .members(
+                        &owner,
+                        std::str::from_utf8(text(name, src)).unwrap_or(""),
+                        None,
+                    )
+                    .into_iter()
+                    .find_map(|f| match f {
+                        Found::Platform { member, .. } if member.kind == "property" => {
+                            Some(names_text(&member.name) || member.has("Localizable"))
+                        }
+                        Found::Local(d) if d.kind == DeclKind::Property => Some(
+                            names_text(&d.name)
+                                || d.declarator.is_some_and(|p| localizable(p, src)),
+                        ),
+                        _ => None,
+                    });
+                if property == Some(true) {
+                    found.push(right);
+                }
+            }
+            _ => {}
         }
     });
     found
@@ -2351,6 +2631,11 @@ mod tests {
             flagged("cs/default-argument-passed", src),
             [7, 8, 14, 16, 17]
         );
+        // Without the named one, the next would go to its parameter: that
+        // call may not compile, so it says nothing.
+        let shifted = "using System.Threading;\nclass A { void Acq(object r, int permitCount = 1, CancellationToken ct = default) { }\n\
+            void F(Unknown u) { Acq(u, permitCount: 1, u.Token); } }";
+        assert!(flagged("cs/default-argument-passed", shifted).is_empty());
     }
 
     #[test]
@@ -2401,5 +2686,80 @@ mod tests {
             return name1.EndsWith(name2, StringComparison.Ordinal);\n\
             } } }";
         assert_eq!(flagged("cs/string-comparison-overload", src), [3, 5, 6, 7]);
+    }
+
+    #[test]
+    fn unnecessary_usings_as_documented() {
+        // The documentation's example: three directives import nothing.
+        let src = "using System.IO;\nusing System.Linq;\nusing System.Collections.Generic;\nusing MyApp.Helpers;\nusing MyCustomNamespace;\n\
+            namespace MyApp.Helpers { public class FileHelper {\n\
+            public static string ReadFirstLine(string filePath) => File.ReadAllLines(filePath).First(); } }";
+        assert_eq!(flagged("cs/unnecessary-using", src), [3, 4, 5]);
+        // A name that doesn't resolve may come through any of them.
+        let open = "using System.IO;\nusing Vendor.Drawing;\nclass A { Bitmap F() => null; }";
+        assert!(flagged("cs/unnecessary-using", open).is_empty());
+        let used = "using System;\nusing System.Text;\nusing static System.Math;\nusing static System.IO.Path;\nusing Y = System.Text.StringBuilder;\nusing Z = System.Uri;\n\
+            /// <see cref=\"StringBuilder\"/>\n\
+            [Serializable] class A { double F(object o) => Abs(1.0); string G(Y y) => y.ToString(); }";
+        assert_eq!(flagged("cs/unnecessary-using", used), [4, 6]);
+        let repeated =
+            "using System;\nusing System;\nclass A { void F() { Console.WriteLine(); } }";
+        assert_eq!(flagged("cs/unnecessary-using", repeated), [2]);
+        // Global usings are left alone, as documented.
+        assert!(
+            flagged(
+                "cs/unnecessary-using",
+                "global using System.Net.Sockets;\nclass A { }"
+            )
+            .is_empty()
+        );
+        // An extension method, a query, an attribute.
+        let ext = "using System.Linq;\nusing System.Collections.Generic;\nclass A { int F(List<int> xs) => xs.Count(); }";
+        assert!(flagged("cs/unnecessary-using", ext).is_empty());
+        let query = "using System.Linq;\nclass A { object F(int[] xs) => from x in xs select x; }";
+        assert!(flagged("cs/unnecessary-using", query).is_empty());
+        // A type of the file's declared in another namespace.
+        let other = "using B;\nnamespace A { class C { D d; } }\nnamespace B { class D { } }";
+        assert!(flagged("cs/unnecessary-using", other).is_empty());
+    }
+
+    #[test]
+    fn ignored_results_as_documented() {
+        let src = "using System;\nusing System.Linq;\nusing System.Collections.Generic;\nusing System.Collections.Immutable;\nusing System.Diagnostics.Contracts;\n\
+            class A { [Pure] int Twice(int x) => x * 2; int Side() => 1; void Log() { }\n\
+            void F(List<int> data, string s, ImmutableList<int> il, ImmutableList<int>.Builder b, DateTime d, int n) {\n\
+            data.Where(x => x > 5).Select(x => x * x);\n\
+            \"this string\".Equals(\"other string\");\n\
+            data.All(x => { return true; });\n\
+            var res = data.Where(x => x > 5);\n\
+            s.Trim(); il.Add(1); b.Remove(1); d.AddYears(1);\n\
+            int.TryParse(s, out n);\n\
+            string.Intern(s);\n\
+            Twice(2); Side(); Log(); data.Add(1);\n\
+            } }";
+        assert_eq!(
+            flagged("cs/ignored-pure-result", src),
+            [8, 9, 10, 12, 12, 12, 14, 15]
+        );
+        // SonarQube checks this key on main code only.
+        let test =
+            "using NUnit.Framework;\nclass T { [Test] public void F(string s) { s.Trim(); } }";
+        assert!(flagged("cs/ignored-pure-result", test).is_empty());
+    }
+
+    #[test]
+    fn localizable_literals_as_documented() {
+        let src = "using System;\nusing System.ComponentModel;\n\
+            class Label { public string Text { get; set; } public string Name { get; set; } }\n\
+            class A { void Show(string text) { } void Note([Localizable(true)] string note) { } void Key(string key) { }\n\
+            void F(Label label, int hour) {\n\
+            if (hour < 0) { Show(\"The valid range is 0 - 23.\"); }\n\
+            label.Text = \"Hello\";\n\
+            label.Name = \"Hello\";\n\
+            Console.WriteLine(\"Done\");\n\
+            Note(\"x\"); Key(\"x\");\n\
+            throw new ArgumentException(\"Bad value\", nameof(hour));\n\
+            } }";
+        assert_eq!(flagged("cs/localizable-literal", src), [6, 7, 9, 10, 11]);
     }
 }

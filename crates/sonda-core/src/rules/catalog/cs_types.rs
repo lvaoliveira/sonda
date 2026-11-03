@@ -330,20 +330,6 @@ fn declared_kind<'t>(m: &Model<'t>, name: &[u8]) -> Option<Node<'t>> {
     found
 }
 
-/// Whether `ty` is an array or a well-known collection or sequence type.
-pub(super) fn is_collection(ty: Node, src: &[u8]) -> bool {
-    element_type(ty, src).is_some()
-        || matches!(
-            simple_name(ty, src),
-            b"Dictionary"
-                | b"IDictionary"
-                | b"IReadOnlyDictionary"
-                | b"SortedDictionary"
-                | b"ConcurrentDictionary"
-                | b"ImmutableDictionary"
-        )
-}
-
 const VALUE_TYPES: &[&[u8]] = &[
     b"int",
     b"long",
@@ -398,47 +384,6 @@ pub(super) fn is_delegate_type(m: &Model, ty: &[u8]) -> bool {
         .iter()
         .any(|s| base.ends_with(s))
         || declared_kind(m, base).is_some_and(|d| d.kind() == "delegate_declaration")
-}
-
-const COLLECTIONS: &[&[u8]] = &[
-    b"List",
-    b"IList",
-    b"IEnumerable",
-    b"ICollection",
-    b"IReadOnlyList",
-    b"IReadOnlyCollection",
-    b"HashSet",
-    b"ISet",
-    b"IReadOnlySet",
-    b"Collection",
-    b"ReadOnlyCollection",
-    b"ObservableCollection",
-    b"Queue",
-    b"Stack",
-    b"LinkedList",
-    b"SortedSet",
-    b"ImmutableArray",
-    b"ImmutableList",
-    b"ImmutableHashSet",
-    b"IQueryable",
-    b"IAsyncEnumerable",
-];
-
-/// The element type of an array or a well-known generic collection type.
-pub(super) fn element_type<'t>(ty: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    match ty.kind() {
-        "array_type" => ty.child_by_field_name("type"),
-        "generic_name" if COLLECTIONS.contains(&simple_name(ty, src)) => {
-            let args = ty.named_child(1)?;
-            (args.named_child_count() == 1)
-                .then(|| args.named_child(0))
-                .flatten()
-        }
-        "qualified_name" => ty
-            .child_by_field_name("name")
-            .and_then(|n| element_type(n, src)),
-        _ => None,
-    }
 }
 
 /// Whether `ty` is the generic type `name` (`List<T>` for "List").

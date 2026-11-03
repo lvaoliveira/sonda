@@ -72,22 +72,21 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/unnecessary-using",
         name: "Unnecessary using directives should be removed",
-        description: "A repeated using directive, or one for the namespace the code is already in, imports \
-                      nothing.",
+        description: "A using directive nothing in the file comes through, a repeated one, or one for the \
+                      namespace the code is already in imports nothing.",
         message: "Remove this unnecessary using directive.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S1128")],
-        check: Check::Query {
+        sonar: &[exact("S1128")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(using_directive) @match",
-            filter: Some(Keep(is_unnecessary_using)),
+            find: super::cs_inferred::unnecessary_usings,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "using System;\nusing System;\nclass A { }",
-            good: "using System;\nclass A { }",
+            bad: "using System.IO;\nusing System.Linq;\nusing System.Collections.Generic;\nnamespace MyApp.Helpers { public class FileHelper { public static string ReadFirstLine(string filePath) => File.ReadAllLines(filePath).First(); } }",
+            good: "using System.IO;\nusing System.Linq;\nnamespace MyApp.Helpers { public class FileHelper { public static string ReadFirstLine(string filePath) => File.ReadAllLines(filePath).First(); } }",
         }),
     },
     Rule {
@@ -590,55 +589,6 @@ fn disposed_receiver<'s>(call: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     }
 }
 
-fn file_namespaces<'s>(using: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
-    // Block namespaces around the directive, and a file-scoped one.
-    let mut names = Vec::new();
-    let mut current = using.parent();
-    while let Some(n) = current {
-        if n.kind() == "namespace_declaration"
-            && let Some(name) = n.child_by_field_name("name")
-        {
-            names.push(text(name, src));
-        }
-        if n.kind() == "compilation_unit" {
-            let mut cursor = n.walk();
-            names.extend(
-                n.named_children(&mut cursor)
-                    .filter(|c| c.kind() == "file_scoped_namespace_declaration")
-                    .filter_map(|c| c.child_by_field_name("name"))
-                    .map(|c| text(c, src)),
-            );
-        }
-        current = n.parent();
-    }
-    names
-}
-
-fn is_unnecessary_using(using: Node, src: &[u8]) -> bool {
-    let t = text(using, src);
-    // Aliases, static and global usings do more than import a namespace.
-    if using.child_by_field_name("name").is_some()
-        || t.starts_with(b"global")
-        || count_word(t, b"static") > 0
-    {
-        return false;
-    }
-    let Some(imported) = using.named_child(0).map(|n| text(n, src)) else {
-        return false;
-    };
-    let mut previous = using.prev_named_sibling();
-    while let Some(p) = previous.filter(|p| p.kind() == "using_directive") {
-        if squeezed(p, src) == squeezed(using, src) {
-            return true;
-        }
-        previous = p.prev_named_sibling();
-    }
-    // The current namespace and its parents are already in scope.
-    file_namespaces(using, src).iter().any(|ns| {
-        *ns == imported || (ns.starts_with(imported) && ns.get(imported.len()) == Some(&b'.'))
-    })
-}
-
 const TRIVIAL_TYPES: &[&[u8]] = &[
     b"String",
     b"Object",
@@ -1110,9 +1060,10 @@ mod tests {
     #[test]
     fn usings() {
         let src = "using System;\nusing System;\nusing static System.Math;\nusing N.M;\nusing N;\nusing Other;\nnamespace N.M;\nclass A { }";
-        assert_eq!(flagged("cs/unnecessary-using", src), [2, 4, 5]);
+        // The class uses nothing: every directive is unnecessary.
+        assert_eq!(flagged("cs/unnecessary-using", src), [1, 2, 3, 4, 5, 6]);
         let block = "namespace N { using System; using N; class A { } }";
-        assert_eq!(flagged("cs/unnecessary-using", block), [1]);
+        assert_eq!(flagged("cs/unnecessary-using", block), [1, 1]);
     }
 
     #[test]
