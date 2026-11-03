@@ -9,6 +9,10 @@ file, the report formats and the public library API.
 
 ### Added
 
+- The server image is published to `ghcr.io/lvaoliveira/sonda` with each
+  release, for linux/amd64 and linux/arm64, and the release notes give its
+  digest. `scripts/setup-server.sh --image ghcr.io/...@sha256:...` runs it
+  instead of building the checkout (`--build` goes back).
 - Retention: branch analyses older than 90 days are thinned to one a day
   (`SONDA_THIN_ANALYSES_AFTER_DAYS`, `0` keeps every analysis), always
   keeping each branch's first and latest, the analysis the new code period

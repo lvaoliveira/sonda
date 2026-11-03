@@ -19,7 +19,20 @@ scripts/setup-server.sh
 open http://127.0.0.1:9000     # sign in as admin, password in secrets/admin_password
 ```
 
-It creates the secrets below once, then builds this checkout and starts it,
+To run the published image instead of building the checkout, give it the
+digest from the release's notes (each release lists one, for linux/amd64 and
+linux/arm64):
+
+```sh
+scripts/setup-server.sh --image ghcr.io/lvaoliveira/sonda@sha256:<digest>
+```
+
+It's kept in `.env`, so an upgrade is the same command with the next
+release's digest; `--build` goes back to building the checkout. Pin the
+digest, not a tag: a digest is what you tested.
+
+It creates the secrets below once, then builds this checkout (or pulls the
+image) and starts it,
 waiting until it's healthy. It's safe to rerun, so upgrading is
 `git fetch --tags && git checkout v<next> && scripts/setup-server.sh` (back up
 first: there's no downgrade). Its options are kept in `.env`, so
