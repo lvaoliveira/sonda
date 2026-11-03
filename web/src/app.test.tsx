@@ -1,9 +1,9 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ApiProvider } from '@/api/ApiProvider'
-import { createMockApi, MOCK_PASSWORD } from '@/api/mock'
+import { createMockApi, MOCK_MANIFEST_STATE, MOCK_PASSWORD } from '@/api/mock'
 import type { SondaApi } from '@/api/types'
 import { AppRoutes } from '@/App'
 import { SessionGate } from '@/components/shell/SessionGate'
@@ -1209,6 +1209,54 @@ describe('Shell', () => {
     await user.click(await screen.findByRole('button', { name: 'Switch to light theme' }))
     expect(document.documentElement.dataset.theme).toBe('light')
     expect(localStorage.getItem('sonda-theme')).toBe('light')
+  })
+})
+
+describe('GitHub App', () => {
+  const card = async () => screen.findByRole('region', { name: 'GitHub' })
+
+  it("posts the App's manifest to GitHub's own page, from Administration", async () => {
+    const user = userEvent.setup()
+    const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
+    renderAt('/admin', createMockApi(0, { githubApp: false }))
+    const github = await card()
+    await user.click(await within(github).findByRole('button', { name: 'An organization' }))
+    await user.type(within(github).getByRole('textbox', { name: 'Organization' }), 'acme')
+    const name = within(github).getByRole('textbox', { name: 'App name' })
+    await user.clear(name)
+    await user.type(name, 'sonda-n100')
+    await user.click(within(github).getByRole('button', { name: 'Create GitHub App' }))
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    const form = submit.mock.contexts[0] as HTMLFormElement
+    expect(form.method).toBe('post')
+    expect(form.action).toBe(`https://github.com/organizations/acme/settings/apps/new?state=${MOCK_MANIFEST_STATE}`)
+    expect(JSON.parse((form.elements.namedItem('manifest') as HTMLInputElement).value)).toMatchObject({ name: 'sonda-n100' })
+    submit.mockRestore()
+  })
+
+  it('connects the App GitHub sends back, then offers to install it', async () => {
+    const api = createMockApi(0, { githubApp: false })
+    await api.githubAppManifest(null, 'sonda-n100')
+    renderAt(`/admin/github/created?code=good&state=${MOCK_MANIFEST_STATE}`, api)
+    const connected = await screen.findByRole('region', { name: 'Connected' })
+    expect(within(connected).getByRole('link', { name: /Install it on repositories/ })).toHaveAttribute('href', 'https://github.com/apps/sonda-acme/installations/new')
+    expect((await api.githubApp()).source).toBe('stored')
+  })
+
+  it("refuses a state it didn't start, and says to start again", async () => {
+    renderAt('/admin/github/created?code=good&state=forged', createMockApi(0, { githubApp: false }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/wasn't started here by you/)
+    expect(screen.getByRole('link', { name: 'Start again from Administration' })).toHaveAttribute('href', '/admin#github')
+  })
+
+  it('disconnects a stored App after confirming', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin')
+    const github = await card()
+    expect(await within(github).findByText('sonda-acme')).toBeInTheDocument()
+    await user.click(within(github).getByRole('button', { name: 'Disconnect…' }))
+    await user.click(within(github).getByRole('button', { name: 'Disconnect' }))
+    expect(await within(github).findByRole('button', { name: 'Create GitHub App' })).toBeInTheDocument()
   })
 })
 

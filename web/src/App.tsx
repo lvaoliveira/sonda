@@ -11,6 +11,7 @@ import { DependenciesPage } from '@/pages/DependenciesPage'
 import { ComponentsPage } from '@/pages/ComponentsPage'
 import { GatesPage } from '@/pages/GatesPage'
 import { AdminPage } from '@/pages/AdminPage'
+import { GitHubAppCreatedPage } from '@/pages/GitHubAppCreatedPage'
 import { IssuesPage } from '@/pages/IssuesPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { OverviewPage } from '@/pages/OverviewPage'
@@ -58,6 +59,7 @@ export function AppRoutes() {
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/quality-profiles" element={<QualityProfilesPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="/admin/github/created" element={<GitHubAppCreatedPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

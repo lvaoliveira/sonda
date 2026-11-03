@@ -146,7 +146,7 @@ pub async fn get(
     axum::extract::State(state): axum::extract::State<State>,
     Path(key): Path<String>,
 ) -> Result<Json<Settings>, ApiError> {
-    load(&state.pool, key, state.github.is_some())
+    load(&state.pool, key, state.github.app().is_some())
         .await
         .map(Json)
 }
@@ -294,5 +294,7 @@ pub async fn patch(
         crate::dependencies::refresh_gates(pool, crate::dependencies::GateScope::Project(id))
             .await?;
     }
-    load(pool, key, state.github.is_some()).await.map(Json)
+    load(pool, key, state.github.app().is_some())
+        .await
+        .map(Json)
 }

@@ -5,9 +5,9 @@ use crate::api::{ApiError, Caller};
 use crate::config::Token;
 use crate::users::{self, User};
 use crate::{
-    analyses, api, components, coverage, db, deleted_projects, dependencies, drill, gates, ingest,
-    issues, new_code, observability, overview, profiles, project_settings, projects, quality_gates,
-    review, rule_settings, rules, security, session, throttle, tokens,
+    analyses, api, components, coverage, db, deleted_projects, dependencies, drill, gates,
+    github_app, ingest, issues, new_code, observability, overview, profiles, project_settings,
+    projects, quality_gates, review, rule_settings, rules, security, session, throttle, tokens,
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -34,8 +34,9 @@ pub struct State {
     /// Request counts and durations (ADR-0019), served on the metrics
     /// listener, never on this router.
     pub metrics: Arc<observability::Metrics>,
-    /// The GitHub App that decorates pull requests (ADR-0021), if any.
-    pub github: Option<Arc<crate::github::App>>,
+    /// The GitHub App that decorates pull requests (ADR-0021), if any:
+    /// configured, or created from the web app (ADR-0024).
+    pub github: Arc<crate::github_app::Connection>,
     /// The session cookie: `Secure` unless SONDA_PLAIN_HTTP.
     pub cookie: session::Cookie,
 }
@@ -141,6 +142,13 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/users/{id}", patch(users::update_user))
         .route("/tokens", get(tokens::list_all).post(tokens::create_for))
         .route("/tokens/{id}", delete(tokens::revoke_any))
+        .route(
+            "/github/app",
+            get(github_app::get)
+                .post(github_app::create)
+                .delete(github_app::disconnect),
+        )
+        .route("/github/app/manifest", post(github_app::manifest))
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

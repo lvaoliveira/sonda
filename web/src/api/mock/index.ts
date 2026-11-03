@@ -1,4 +1,4 @@
-import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type GitHubApp, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
@@ -19,7 +19,26 @@ export interface MockOptions {
   /** Start signed out, to exercise the sign-in page. */
   signedIn?: boolean
   readsRequireAuth?: boolean
+  /** Start without a GitHub App, to exercise creating one. */
+  githubApp?: boolean
 }
+
+/** The mock's GitHub App, created here (ADR-0024). */
+const MOCK_GITHUB_APP: GitHubApp = {
+  source: 'stored',
+  id: '5579422',
+  slug: 'sonda-acme',
+  htmlUrl: 'https://github.com/apps/sonda-acme',
+  installUrl: 'https://github.com/apps/sonda-acme/installations/new',
+  createdBy: 'ann',
+  createdAt: '2026-11-03T09:00:00Z',
+  secretKey: true,
+}
+
+const NO_GITHUB_APP: GitHubApp = { source: null, id: null, slug: null, htmlUrl: null, installUrl: null, createdBy: null, createdAt: null, secretKey: true }
+
+/** The `state` the mock's manifest carries, and accepts back once. */
+export const MOCK_MANIFEST_STATE = 'mock-state'
 
 /** As the server: admins have to be able to sign in. */
 const NO_PASSWORD_ADMIN = "a user without a password can't sign in, so it can't be an admin; set a password first"
@@ -43,6 +62,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const catalog = structuredClone(rulesData) as RuleCatalog
   const users = structuredClone(MOCK_USERS)
   const tokens = mockTokens()
+  let github = structuredClone(options.githubApp === false ? NO_GITHUB_APP : MOCK_GITHUB_APP)
+  let manifestState: string | null = null
   const ruleSettings = mockRuleSettings()
   // The projects not deleted (ADR-0017).
   const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
@@ -94,8 +115,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       mainBranch: s.mainBranch,
       qualityGate: gateRef(s.qualityGate),
       githubRepository: s.githubRepository,
-      // The mock server has a GitHub App.
-      githubApp: true,
+      githubApp: github.source === 'stored' || github.source === 'config',
       branches: [...BRANCHES].sort((a, b) => Number(b.name === s.mainBranch) - Number(a.name === s.mainBranch)),
       changes: s.changes,
     }
@@ -387,6 +407,33 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       if (!d) throw new Error('not found')
       if (!d.allowedAt) Object.assign(d, { allowedBy: session.user!.username, allowedAt: new Date().toISOString() })
       return wait(d)
+    },
+    githubApp: async () => {
+      requireAdmin()
+      return wait(github)
+    },
+    githubAppManifest: async (owner, name) => {
+      requireAdmin()
+      if (github.source) throw new Error('a GitHub App is already connected; disconnect it first')
+      manifestState = MOCK_MANIFEST_STATE
+      const page = owner ? `https://github.com/organizations/${owner}/settings/apps/new` : 'https://github.com/settings/apps/new'
+      const manifest = { name, url: location.origin, redirect_url: `${location.origin}/admin/github/created`, public: false }
+      return wait({ action: `${page}?state=${manifestState}`, manifest: JSON.stringify(manifest) })
+    },
+    createGithubApp: async (code, state) => {
+      requireAdmin()
+      const started = manifestState === state
+      manifestState = null
+      if (!started) throw new Error('this App wasn\'t started here by you, or it took over an hour: start again')
+      if (code !== 'good') throw new Error("GitHub didn't accept the code, which works once and within the hour: start again")
+      github = { ...MOCK_GITHUB_APP, createdBy: session.user!.username, createdAt: new Date().toISOString() }
+      return wait(github)
+    },
+    disconnectGithubApp: async () => {
+      requireAdmin()
+      if (github.source === 'config') throw new Error('this App is configured by the server\'s configuration (SONDA_GITHUB_APP_ID); remove it there')
+      github = structuredClone(NO_GITHUB_APP)
+      return wait(github)
     },
     reviewDependency: async (_project, patch) => {
       guard()

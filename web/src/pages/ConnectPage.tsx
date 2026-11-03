@@ -1,9 +1,10 @@
-import { Check, ExternalLink } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { AnalysisRow, ProjectSettings, WaitingProject } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
+import { ExternalButton } from '@/components/sonda/connect'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { GateStatus } from '@/components/sonda/status'
@@ -227,9 +228,12 @@ function Steps({ done }: { done: Connected }) {
           </>
         }
       />
-      {!settings.githubApp && (
+      {settings.githubApp ? (
+        <InstallApp repository={repository} />
+      ) : (
         <p role="status" className="m-0 max-w-[720px] rounded-lg bg-panel-2 px-4 py-3 text-[13px] text-warn edge">
-          This server has no GitHub App, so results won't be posted on pull requests; analyses still upload. Setting one up is in docs/server.md.
+          This server has no GitHub App, so results won't be posted on pull requests; analyses still upload.{' '}
+          <Link to="/admin#github">Create one under Administration</Link>.
         </p>
       )}
       {steps.map((step, i) => {
@@ -379,11 +383,19 @@ function CopyButton({ value, children }: { value: string; children: ReactNode })
   return <Button onClick={() => void copy()}>{state === 'copied' ? 'Copied' : state === 'failed' ? 'Select it to copy' : children}</Button>
 }
 
-function ExternalButton({ href, children }: { href: string; children: ReactNode }) {
+/** Pull requests are decorated only where the App is installed (ADR-0024). */
+function InstallApp({ repository }: { repository: string }) {
+  const api = useApi()
+  const app = useAsync(() => api.githubApp(), [api])
+  const installUrl = app.state === 'ready' ? app.data.installUrl : null
+  if (!installUrl) return null
   return (
-    <a href={href} target="_blank" rel="noreferrer" className="inline-flex min-h-8 w-fit items-center gap-1.5 rounded-lg bg-brand px-[13px] py-1.5 text-[13px] font-semibold text-brand-ink no-underline">
-      {children}
-      <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
-    </a>
+    <p className="m-0 max-w-[720px] text-[13px] text-fg-muted">
+      Pull requests are decorated where the GitHub App is installed. If it isn't on <Mono className="text-xs text-fg">{repository}</Mono> yet,{' '}
+      <a href={installUrl} target="_blank" rel="noreferrer">
+        install it there
+      </a>
+      .
+    </p>
   )
 }
