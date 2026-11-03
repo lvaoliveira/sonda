@@ -60,16 +60,16 @@ machine runs the server and the CLI from it by following the docs.
 
 ## M1: the stability promise
 
-- [ ] `docs/stability.md`: what 1.0 promises and what it doesn't (from the
+- [x] `docs/stability.md`: what 1.0 promises and what it doesn't (from the
       decisions above): CLI options and exit codes, `sonda.toml`, the JSON
       and SARIF reports, the upload protocol, the `sonda-core` API; not the
       server's HTTP API, the web app or rule results (rules get better).
-- [ ] The compatibility window enforced in CI: the previous release's CLI
+- [x] The compatibility window enforced in CI: the previous release's CLI
       uploads to the new server (and the new CLI to the previous server, if
       promised), on every pull request.
-- [ ] What changes a rule's results is said in the changelog, under its own
+- [x] What changes a rule's results is said in the changelog, under its own
       heading, since a new finding can fail a gate.
-- [ ] Deprecation rule: a promised thing is deprecated with a warning for
+- [x] Deprecation rule: a promised thing is deprecated with a warning for
       at least one minor release before it goes.
 
 **Done when** the document is merged and the compatibility job is required
