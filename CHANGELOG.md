@@ -9,6 +9,12 @@ file, the report formats and the public library API.
 
 ### Added
 
+- [docs/stability.md](docs/stability.md): what 1.0 promises (the CLI, its
+  exit codes, `sonda.toml`, the reports, the upload protocol, the
+  `sonda-core` library) and what it doesn't, the compatibility window, and
+  the deprecation rule. A `compat` CI job uploads with the last release's
+  CLI to the server built from each pull request.
+
 - The web app shows the server's version beside the wordmark, and the
   server logs it at startup. `GET /api/session` reports it to whoever can
   read.

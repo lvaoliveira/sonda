@@ -207,7 +207,11 @@ fix it on `main`, delete the draft and the tag, and tag again.
 
 - Keep each change small and focused, with a message that explains *why*.
 - Mention breaking changes (CLI flags, config keys, report formats, the
-  public library API) in the PR and in `CHANGELOG.md`.
+  public library API) in the PR and in `CHANGELOG.md`; what
+  [docs/stability.md](docs/stability.md) promises needs a deprecation first.
+- A change that makes a rule report something new or stop reporting
+  something goes in `CHANGELOG.md` under its own `### Changed rule results`
+  heading, naming the rule, since a new finding can fail someone's gate.
 - Contributions are licensed under MIT OR Apache-2.0, the project's license.
 
 ### Cleaning up after merges
