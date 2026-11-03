@@ -3065,17 +3065,26 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
         return false;
     };
     // Nested functions are callbacks with a signature somebody else chose.
-    let owner = function.parent().and_then(|p| {
-        if p.kind() == "decorated_definition" {
-            p.parent()
-        } else {
-            Some(p)
+    // A def under an `if`/`try` at module or class level is still top level.
+    let mut owner = function.parent();
+    while let Some(o) = owner {
+        match o.kind() {
+            "decorated_definition"
+            | "block"
+            | "if_statement"
+            | "elif_clause"
+            | "else_clause"
+            | "try_statement"
+            | "except_clause"
+            | "finally_clause"
+            | "with_statement" => {
+                owner = o.parent();
+            }
+            "module" | "class_definition" => break,
+            _ => return false,
         }
-    });
-    if !owner.is_some_and(|o| {
-        o.kind() == "module"
-            || o.kind() == "block" && o.parent().is_some_and(|c| c.kind() == "class_definition")
-    }) {
+    }
+    if owner.is_none() {
         return false;
     }
     // A public method of a class that extends the standard library is most
