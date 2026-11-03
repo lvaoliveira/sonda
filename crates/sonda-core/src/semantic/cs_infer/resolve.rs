@@ -139,8 +139,9 @@ type Candidates<'m, 't> = (Vec<Candidate<'m, 't>>, bool, Option<Ty>);
 /// Whether a candidate applies to the arguments.
 enum Fit {
     No,
-    /// An argument's type or a parameter's leaves it open.
-    Unknown,
+    /// An argument's type or a parameter's leaves it open; the parameter
+    /// each argument would go to.
+    Unknown(Vec<usize>),
     Yes {
         targets: Vec<usize>,
         /// The type each argument converts to.
@@ -369,18 +370,52 @@ impl<'m, 't> Infer<'m, 't> {
         candidates.into_iter().map(|c| c.params).collect()
     }
 
-    /// The method an invocation or object creation binds to with `args`
-    /// for arguments: its own (`arguments`), or them without one, say.
+    /// The method an invocation or object creation binds to with its own
+    /// arguments (`arguments`).
     pub(crate) fn resolve_with<'n>(
         &self,
         call: Node<'n>,
         args: &[Arg<'n>],
     ) -> Option<Bound<'m, 't>> {
+        self.resolve_args(call, args, true)
+    }
+
+    /// The method a call would bind to with `args` for arguments, them
+    /// without one, say: since such a call may not compile, a candidate an
+    /// argument's type leaves open never counts as the one.
+    pub(crate) fn resolve_instead<'n>(
+        &self,
+        call: Node<'n>,
+        args: &[Arg<'n>],
+    ) -> Option<Bound<'m, 't>> {
+        self.resolve_args(call, args, false)
+    }
+
+    /// `resolve_with`, assuming the call compiles when `compiles`.
+    fn resolve_args<'n>(
+        &self,
+        call: Node<'n>,
+        args: &[Arg<'n>],
+        compiles: bool,
+    ) -> Option<Bound<'m, 't>> {
         let n = args.len();
         let (candidates, complete, receiver) = self.candidates(call, n)?;
         let fits: Vec<Fit> = candidates.iter().map(|c| self.fit(c, args)).collect();
-        if fits.iter().any(|f| matches!(f, Fit::Unknown)) {
-            return None;
+        if fits.iter().any(|f| matches!(f, Fit::Unknown(_))) {
+            // Should it not apply, an extension method may.
+            let extensions = match (&receiver, call.child_by_field_name("function")) {
+                (Some(r), Some(f)) => {
+                    f.child_by_field_name("name")
+                        .and_then(simple)
+                        .is_some_and(|name| {
+                            !self
+                                .extension_candidates(r, self.text(name), n, call.start_byte())
+                                .is_empty()
+                        })
+                }
+                _ => false,
+            };
+            return self.only_one(candidates, fits, compiles && complete && !extensions);
         }
         let mut applicable: Vec<(Candidate, Fit)> = candidates
             .into_iter()
@@ -394,8 +429,8 @@ impl<'m, 't> Infer<'m, 't> {
             let name = self.text(simple(function.child_by_field_name("name")?)?);
             let extensions = self.extension_candidates(&receiver, name, n, call.start_byte());
             let fits: Vec<Fit> = extensions.iter().map(|c| self.fit(c, args)).collect();
-            if fits.iter().any(|f| matches!(f, Fit::Unknown)) {
-                return None;
+            if fits.iter().any(|f| matches!(f, Fit::Unknown(_))) {
+                return self.only_one(extensions, fits, compiles && complete);
             }
             applicable = extensions
                 .into_iter()
@@ -418,6 +453,30 @@ impl<'m, 't> Infer<'m, 't> {
             return None;
         };
         Some(Bound {
+            extension: c.skip == 1,
+            method: c.found,
+            params: c.params,
+            targets,
+        })
+    }
+
+    /// The one candidate an argument's type leaves open when every other is
+    /// ruled out: a call that compiles binds to it. None when a base type
+    /// that doesn't resolve may declare others.
+    fn only_one(
+        &self,
+        candidates: Vec<Candidate<'m, 't>>,
+        fits: Vec<Fit>,
+        complete: bool,
+    ) -> Option<Bound<'m, 't>> {
+        let mut open = candidates
+            .into_iter()
+            .zip(fits)
+            .filter(|(_, f)| !matches!(f, Fit::No));
+        let (c, Fit::Unknown(targets)) = open.next()? else {
+            return None;
+        };
+        (complete && open.next().is_none()).then_some(Bound {
             extension: c.skip == 1,
             method: c.found,
             params: c.params,
@@ -662,11 +721,12 @@ impl<'m, 't> Infer<'m, 't> {
                 None => open = true,
             }
         }
+        let targets: Vec<usize> = targets.into_iter().map(|j| j + c.skip).collect();
         if open {
-            return Fit::Unknown;
+            return Fit::Unknown(targets);
         }
         Fit::Yes {
-            targets: targets.into_iter().map(|j| j + c.skip).collect(),
+            targets,
             types,
             expanded,
             all,
@@ -698,6 +758,16 @@ impl<'m, 't> Infer<'m, 't> {
                 return settled(&from).then(|| from == *to);
             }
             _ => return Some(false),
+        }
+        // A lambda needs a delegate taking as many parameters, whatever its
+        // type arguments.
+        if matches!(
+            value.kind(),
+            "lambda_expression" | "anonymous_method_expression"
+        ) && let (Some(n), Some(m)) = (lambda_arity(value), self.invoke_arity(to))
+            && n != m
+        {
+            return Some(false);
         }
         if !settled(to) {
             return None;
@@ -761,6 +831,40 @@ impl<'m, 't> Infer<'m, 't> {
             Some(from) => self.implicitly(&from, to),
             // Any value converts to object, whatever its type.
             None => to.is("System.Object").then_some(true),
+        }
+    }
+
+    /// How many parameters a delegate type's Invoke takes, or an
+    /// `Expression<D>`'s D.
+    fn invoke_arity(&self, ty: &Ty) -> Option<usize> {
+        if ty.is("System.Linq.Expressions.Expression`1") {
+            return self.invoke_arity(ty.args().first()?);
+        }
+        match ty {
+            Ty::Named {
+                key, local: false, ..
+            } => {
+                let p = self.platform.get(key).filter(|p| p.kind == "delegate")?;
+                p.members
+                    .iter()
+                    .find(|m| m.kind == "method" && m.name == "Invoke")
+                    .map(|m| m.params.len())
+            }
+            Ty::Named {
+                key, local: true, ..
+            } => {
+                let l = self.locals.get(key).copied().flatten()?;
+                let list = l
+                    .node
+                    .child_by_field_name("parameters")
+                    .filter(|_| l.node.kind() == "delegate_declaration")?;
+                Some(
+                    list.named_children(&mut list.walk())
+                        .filter(|p| p.kind() == "parameter")
+                        .count(),
+                )
+            }
+            _ => None,
         }
     }
 
@@ -1074,6 +1178,23 @@ impl<'m, 't> Infer<'m, 't> {
     }
 }
 
+/// How many parameters a lambda or anonymous method declares; None for
+/// `delegate { }`, which fits any.
+fn lambda_arity(lambda: Node) -> Option<usize> {
+    let params = lambda.child_by_field_name("parameters").or_else(|| {
+        lambda
+            .named_children(&mut lambda.walk())
+            .find(|c| c.kind() == "parameter_list")
+    })?;
+    Some(match params.kind() {
+        "implicit_parameter" | "identifier" => 1,
+        _ => params
+            .named_children(&mut params.walk())
+            .filter(|p| matches!(p.kind(), "parameter" | "implicit_parameter"))
+            .count(),
+    })
+}
+
 /// Whether a method takes `n` arguments, as many as its parameters but
 /// optional ones and a `params` array.
 fn fits_count(params: &[Param], n: usize) -> bool {
@@ -1227,16 +1348,24 @@ mod tests {
     #[test]
     fn extensions_constructors_and_what_stays_open() {
         let src = "using System;\nusing System.IO;\nusing System.Linq;\nusing System.Collections.Generic;\n\
+            using System.Threading.Tasks;\n\
             class A { void F(List<string> names, Unknown u, string path) {\n\
-            names.First(); new StreamReader(path); names.Select(n => n); u.Go(1); Go(names); } }";
+            names.First(); new StreamReader(path); names.Select(n => n); u.Go(1); Go(names); Task.Run(() => 1); } }";
         assert_eq!(
             bound(src),
             vec![
                 Some("First(Collections.Generic.IEnumerable`1<String>)".to_string()),
                 Some(".ctor(String)".to_string()),
-                // Two overloads take a lambda: which one takes types.
+                // The lambda's one parameter rules out the overload taking an
+                // index too; what it returns stays open.
+                Some(
+                    "Select(Collections.Generic.IEnumerable`1<String>,Func`2<String,Unknown>)"
+                        .to_string()
+                ),
                 None,
                 None,
+                // Overloads taking lambdas without parameters: which one takes
+                // what the lambda returns.
                 None,
             ]
         );

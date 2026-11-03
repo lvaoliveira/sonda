@@ -39062,25 +39062,27 @@ class Holder : IDisposable { FileStream fs; public void Dispose() { fs.Dispose()
 
 ## cs/unnecessary-using
 
-**Unnecessary using directives should be removed.** A repeated using directive, or one for the namespace the code is already in, imports nothing.
+**Unnecessary using directives should be removed.** A using directive nothing in the file comes through, a repeated one, or one for the namespace the code is already in imports nothing.
 
 Off by default: add `"cs/unnecessary-using"` to `rules.enabled` to run it.
 
-SonarQube: S1128 (related)
+SonarQube: S1128
 
 Noncompliant:
 
 ```csharp
-using System;
-using System;
-class A { }
+using System.IO;
+using System.Linq;
+using System.Collections.Generic;
+namespace MyApp.Helpers { public class FileHelper { public static string ReadFirstLine(string filePath) => File.ReadAllLines(filePath).First(); } }
 ```
 
 Compliant:
 
 ```csharp
-using System;
-class A { }
+using System.IO;
+using System.Linq;
+namespace MyApp.Helpers { public class FileHelper { public static string ReadFirstLine(string filePath) => File.ReadAllLines(filePath).First(); } }
 ```
 
 ## cs/class-coupling
@@ -39621,9 +39623,9 @@ class A { Action F(Action all, Action a, Action b) { return all - a - b; } }
 
 ## cs/ignored-pure-result
 
-**Results of methods without side effects should be used.** Strings, dates, immutable collections and LINQ return a new value instead of changing the receiver, so calling them without using the result does nothing.
+**Methods without side effects should not have their return values ignored.** LINQ, [Pure] methods, the methods of C#'s built-in types and of immutable collections return a new value instead of changing anything, so a call whose result is ignored does nothing.
 
-SonarQube: S2201 (related)
+SonarQube: S2201
 
 Noncompliant:
 
@@ -40439,17 +40441,19 @@ class Foo { void FetchResource(string uriString) { } void FetchResource(Uri uri)
 
 Off by default: add `"cs/localizable-literal"` to `rules.enabled` to run it.
 
-SonarQube: S4055 (related)
+SonarQube: S4055
 
 Noncompliant:
 
 ```csharp
+class Label { public string Text { get; set; } }
 class A { void F(Label label) { label.Text = "Hello"; } }
 ```
 
 Compliant:
 
 ```csharp
+class Label { public string Text { get; set; } }
 class A { void F(Label label) { label.Text = Resources.Hello; } }
 ```
 

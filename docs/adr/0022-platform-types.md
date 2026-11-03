@@ -1,8 +1,8 @@
 # ADR-0022: Types from the platform's declarations
 
-- Status: **accepted; steps 1 and 2 built, step 3 in part.** The summary,
-  its loader, framework base types in the project index, expression
-  typing and overload resolution, with twenty-six rules (below).
+- Status: **accepted; built.** The summary, its loader, framework base
+  types in the project index, expression typing and overload resolution,
+  with twenty-nine rules (below).
 - Date: 2026-11-02
 
 ## Context
@@ -267,10 +267,14 @@ declarations and light inference, not the project's own checker.
    optional, `params` expanded or not), whether each converts implicitly
    (a constant to a narrower integer, `null`, `default`), the method's own
    type parameters bound from the arguments, and the better conversion
-   between candidates. A lambda for a delegate parameter, an argument of
-   unknown type for anything but `object`, a partial type, or a base type
-   that doesn't resolve leaves the call unresolved. Constants evaluate too:
-   literals, `default`, constant fields and enum members.
+   between candidates. A lambda rules out a delegate taking another number
+   of parameters; when one candidate is all an argument's type leaves open,
+   a call that compiles binds to it, but not a call a rule imagines without
+   an argument, which may not compile. Otherwise a lambda for a delegate
+   parameter, an argument of unknown type for anything but `object`, a
+   partial type, or a base type that doesn't resolve leaves the call
+   unresolved. Constants evaluate too: literals, `default`, constant fields
+   and enum members.
 
    **3a, built.** Exact now:
    - S2234: two variables passed positionally, named after parameters of
@@ -313,7 +317,44 @@ declarations and light inference, not the project's own checker.
    at most 0.15 s to the largest project, since a call is resolved only
    when its name or arguments could matter.
 
-   **3b:** S1128; S2201 and S4055 with their documented lists.
+   **3b, built.** Exact now:
+   - S1128 (`semantic/cs_infer/usings.rs`): a using directive for a
+     namespace nothing in the file comes through, while every name that
+     could come from one (a type, a member access's receiver, an extension
+     method called) resolves without it; packages add types to the
+     platform's namespaces (`System.Drawing.Bitmap`), so one unresolved
+     name keeps every namespace directive. Also a repeated directive, one
+     for the namespace all its code is in or inside, an alias never
+     written, and `using static` of a platform type none of whose static
+     members or nested types is named. Global usings and directives inside
+     `#if` are left alone, as documented.
+   - S2201: a call used as a statement, of LINQ, a `[Pure]` method of the
+     file's, any method of a C# built-in type, `string.Intern` among them,
+     or of an immutable collection (not a builder), as the documentation
+     lists, and `DateTime`, its own example; calls with `out` or `ref`
+     arguments are left alone, as documented. Reference assemblies apply
+     `[Pure]` nowhere, so the platform's count only through the list.
+   - S4055: a string literal passed to a parameter, or assigned to a
+     property, that is `[Localizable(true)]` or whose name contains "Text",
+     "Message" or "Caption" in any case (the documented example's
+     parameter is `text`), or passed to `Console.Write` or `WriteLine` as
+     `value` or `format`. Its documented example, Windows Forms'
+     `MessageBox`, isn't in the summary, so it costs recall.
+
+   S2201 and S4055 check main code only, as SonarQube does. Re-auditing
+   changed two beyond types: S2201 no longer reports `DateTimeOffset`,
+   `TimeSpan` or `DateOnly`, which the documentation doesn't list; S4055
+   reports any literal, exception and log messages among them, where it
+   reported only words.
+
+   On the corpus: S1128 went from 0 findings to 57, S4055 from 156 to 312
+   (exception and log messages), all true positives under the
+   documentation; S2201 finds nothing in main code, as before. S4055 no
+   longer reports 135: object initializers and receivers of types other
+   files declare, local variables named like messages, which the
+   documentation leaves out, and test methods. Lambdas telling overloads
+   apart added 5 findings to S4056, of the shape already reviewed. Scan time
+   with the default rules didn't change.
 
 Each step re-audits its rules against the corpus, as ADR-0007 requires,
 before marking them `exact`.
@@ -337,6 +378,6 @@ before marking them `exact`.
 - A development tool with its own metadata-reading dependency, outside the
   shipped crates and their dependency policy.
 - About 30 C# rules can become `exact` without giving up the
-  no-false-positive bar, and third-party types stay unknown. Steps 1 to 3a
-  made 26 exact.
+  no-false-positive bar, and third-party types stay unknown. The three
+  steps made 29 exact.
 - ADR-0008's S4 row points here.

@@ -17,6 +17,7 @@
 //! could shadow a platform type of the same name in the same namespace.
 
 mod resolve;
+mod usings;
 
 pub(crate) use resolve::{Arg, Bound, Constant, Param, arguments};
 
@@ -1501,6 +1502,14 @@ impl<'m, 't> Infer<'m, 't> {
                 self.agreed(&self.members(&receiver, self.text(simple(name)?), None))
             }
             "invocation_expression" => {
+                // `nameof(x)`, unless a method of that name is declared.
+                if let Some(f) = expr.child_by_field_name("function")
+                    && f.kind() == "identifier"
+                    && self.text(f) == "nameof"
+                    && self.m.decl_of(f).is_none()
+                {
+                    return string();
+                }
                 let Some(call) = self.call_at(expr, d) else {
                     return self.object_method(expr);
                 };

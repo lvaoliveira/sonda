@@ -8,8 +8,6 @@
 //! resources language need the whole project and live in `common.rs`.
 
 use super::cs::simple_name;
-use super::cs_bugs::cs_call_arguments;
-use super::cs_types::walk_tree;
 use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::*;
@@ -202,15 +200,15 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[related("S4055")],
+        sonar: &[exact("S4055")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: localizable_literals,
+            find: super::cs_inferred::localizable_literals,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { void F(Label label) { label.Text = \"Hello\"; } }",
-            good: "class A { void F(Label label) { label.Text = Resources.Hello; } }",
+            bad: "class Label { public string Text { get; set; } }\nclass A { void F(Label label) { label.Text = \"Hello\"; } }",
+            good: "class Label { public string Text { get; set; } }\nclass A { void F(Label label) { label.Text = Resources.Hello; } }",
         }),
     },
 ];
@@ -482,67 +480,6 @@ fn missing_com_visible<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 // ---------------------------------------------------- opt-in API rules
 
-const LOCALIZED_NAMES: &[&[u8]] = &[b"text", b"message", b"caption"];
-
-fn localizable_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    walk_tree(m, |literal, ancestors| {
-        if !matches!(literal.kind(), "string_literal" | "verbatim_string_literal") {
-            return;
-        }
-        // Words, not keys, codes or separators: two letters or more, and a
-        // space or a capital first letter.
-        let value = text(literal, src).trim_ascii_start();
-        let value = value
-            .strip_prefix(b"@")
-            .unwrap_or(value)
-            .strip_prefix(b"\"")
-            .unwrap_or(value);
-        let letters = value.iter().filter(|b| b.is_ascii_alphabetic()).count();
-        if letters < 2
-            || !(value.contains(&b' ') || value.first().is_some_and(u8::is_ascii_uppercase))
-        {
-            return;
-        }
-        let Some(parent) = ancestors.last() else {
-            return;
-        };
-        let named_like = |name: &[u8]| {
-            LOCALIZED_NAMES
-                .iter()
-                .any(|w| contains_ignoring_case(name, w))
-        };
-        let localized = match parent.kind() {
-            // F(text: "...")
-            "argument" => {
-                parent
-                    .child_by_field_name("name")
-                    .is_some_and(|n| named_like(text(n, src)))
-                    || ancestors.len() >= 3 && {
-                        let call = ancestors[ancestors.len() - 3];
-                        call.kind() == "invocation_expression"
-                            && call.child_by_field_name("function").is_some_and(|f| {
-                                matches!(text(f, src), b"Console.Write" | b"Console.WriteLine")
-                            })
-                            && cs_call_arguments(call).first() == Some(&literal)
-                    }
-            }
-            // label.Text = "...", or Text = "..." in an initializer.
-            "assignment_expression" => {
-                parent.child_by_field_name("right") == Some(literal)
-                    && parent
-                        .child_by_field_name("left")
-                        .is_some_and(|l| named_like(simple_name(l, src)))
-            }
-            _ => false,
-        };
-        if localized {
-            found.push(literal);
-        }
-    });
-    found
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -579,6 +516,8 @@ mod tests {
         // Add and Count are ICollection<int>'s, and Sum IEnumerable<int>'s.
         assert_eq!(flagged("cs/parameter-could-be-enumerable", &src), [3, 4, 5]);
         assert_eq!(flagged("cs/string-uri-argument", &src), [9, 10]);
-        assert_eq!(flagged("cs/localizable-literal", &src), [11, 13, 14]);
+        // Label and Show aren't declared; one letter is text too, as the
+        // documentation leaves out none.
+        assert_eq!(flagged("cs/localizable-literal", &src), [14, 15]);
     }
 }

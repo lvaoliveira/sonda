@@ -8,8 +8,8 @@ use super::cs::{simple_name, unparenthesized};
 use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
 use super::cs_more::members;
 use super::cs_types::{
-    enumerable_calls, expression_type, initial_value, is_collection, is_one_of, is_value_type,
-    normalized_type, numeric_range, numeric_value, shift_width, type_of_name, walk_tree,
+    enumerable_calls, expression_type, initial_value, is_one_of, is_value_type, normalized_type,
+    numeric_range, numeric_value, shift_width, walk_tree,
 };
 use super::java_bugs::operator_text;
 use super::java_security::{contains_ignoring_case, text};
@@ -147,17 +147,18 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/ignored-pure-result",
-        name: "Results of methods without side effects should be used",
-        description: "Strings, dates, immutable collections and LINQ return a new value instead of changing \
-                      the receiver, so calling them without using the result does nothing.",
+        name: "Methods without side effects should not have their return values ignored",
+        description: "LINQ, [Pure] methods, the methods of C#'s built-in types and of immutable collections \
+                      return a new value instead of changing anything, so a call whose result is ignored does \
+                      nothing.",
         message: "Use this call's result, or remove the call.",
         category: Bug,
         severity: Major,
         effort_minutes: 2,
-        sonar: &[related("S2201")],
+        sonar: &[exact("S2201")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: ignores_pure_result,
+            find: super::cs_inferred::ignored_results,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -627,149 +628,6 @@ fn route_parameter_type_mismatch<'t>(class: Node<'t>, src: &[u8]) -> Option<Node
         })
 }
 
-const STRING_PURE: &[&[u8]] = &[
-    b"Trim",
-    b"TrimStart",
-    b"TrimEnd",
-    b"ToUpper",
-    b"ToLower",
-    b"ToUpperInvariant",
-    b"ToLowerInvariant",
-    b"Replace",
-    b"Substring",
-    b"Insert",
-    b"Remove",
-    b"PadLeft",
-    b"PadRight",
-    b"Normalize",
-    b"Split",
-    b"Contains",
-    b"StartsWith",
-    b"EndsWith",
-    b"IndexOf",
-    b"LastIndexOf",
-    b"Equals",
-    b"CompareTo",
-];
-
-const DATE_PURE: &[&[u8]] = &[
-    b"Add",
-    b"AddDays",
-    b"AddHours",
-    b"AddMinutes",
-    b"AddSeconds",
-    b"AddMilliseconds",
-    b"AddMonths",
-    b"AddYears",
-    b"AddTicks",
-    b"Subtract",
-    b"ToUniversalTime",
-    b"ToLocalTime",
-    b"Negate",
-    b"Duration",
-];
-
-const LINQ_PURE: &[&[u8]] = &[
-    b"Where",
-    b"Select",
-    b"SelectMany",
-    b"OrderBy",
-    b"OrderByDescending",
-    b"ThenBy",
-    b"ThenByDescending",
-    b"GroupBy",
-    b"Distinct",
-    b"Skip",
-    b"Take",
-    b"SkipWhile",
-    b"TakeWhile",
-    b"Zip",
-    b"Union",
-    b"Intersect",
-    b"Except",
-    b"Cast",
-    b"OfType",
-    b"Any",
-    b"All",
-    b"Count",
-    b"LongCount",
-    b"FirstOrDefault",
-    b"LastOrDefault",
-    b"SingleOrDefault",
-    b"ElementAtOrDefault",
-    b"Sum",
-    b"Average",
-    b"ToList",
-    b"ToArray",
-    b"ToDictionary",
-    b"ToHashSet",
-    b"ToLookup",
-    b"AsEnumerable",
-    b"DefaultIfEmpty",
-    b"SequenceEqual",
-];
-
-const IMMUTABLE_PURE: &[&[u8]] = &[
-    b"Add",
-    b"AddRange",
-    b"Remove",
-    b"RemoveAt",
-    b"RemoveAll",
-    b"Insert",
-    b"SetItem",
-    b"Clear",
-];
-
-fn ignores_pure_result<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    matching(m, &["invocation_expression"], |call, ancestors| {
-        if ancestors
-            .last()
-            .is_none_or(|p| p.kind() != "expression_statement")
-        {
-            return false;
-        }
-        let Some(subject) = receiver(call) else {
-            return false;
-        };
-        let method = method_name(call, src);
-        let receiver_type = || expression_type(m, subject, src);
-        if STRING_PURE.contains(&method) {
-            return receiver_type().as_deref() == Some(&b"string"[..])
-                || subject.kind() == "string_literal";
-        }
-        if DATE_PURE.contains(&method)
-            && receiver_type().is_some_and(|t| {
-                matches!(
-                    t.as_slice(),
-                    b"DateTime" | b"DateTimeOffset" | b"TimeSpan" | b"DateOnly"
-                )
-            })
-        {
-            return true;
-        }
-        if IMMUTABLE_PURE.contains(&method)
-            && receiver_type().is_some_and(|t| t.starts_with(b"Immutable"))
-        {
-            return true;
-        }
-        if !LINQ_PURE.contains(&method) {
-            return false;
-        }
-        // Other types have methods named like LINQ's, with side effects:
-        // JsonReader.Skip(), a specification builder's Where(). Only a chain
-        // that starts at a name declared as a collection is LINQ for sure.
-        let mut root = subject;
-        while let Some(inner) = match root.kind() {
-            "invocation_expression" => receiver(root),
-            "parenthesized_expression" => root.named_child(0),
-            _ => None,
-        } {
-            root = inner;
-        }
-        type_of_name(m, root).is_some_and(|t| is_collection(t, src))
-    })
-}
-
 fn ignores_read_count<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     matching(m, &["invocation_expression"], |call, ancestors| {
         // `s.Read(...);` or `await s.ReadAsync(...);`
@@ -937,7 +795,8 @@ mod tests {
             "void F(Action all, Action a, Action b, int x, int y, string s, DateTime d, ImmutableList<int> il, List<int> l) {\nall = all - (a + b);\nall -= a + b;\nvar z = x - (y + 1);\nall -= a;\ns.Trim();\ns = s.Trim();\nd.AddDays(1);\nil.Add(1);\nl.Add(1);\nl.Where(v => v > 0);\nl.Remove(1);\nAssert.All(l, v => { });\nl.Should().Contain(1);\nl.ToList();\n}",
         );
         assert_eq!(flagged("cs/delegate-chain-subtraction", &src), [4, 5]);
-        assert_eq!(flagged("cs/ignored-pure-result", &src), [8, 10, 11, 13, 17]);
+        // ImmutableList isn't imported here, so it doesn't resolve.
+        assert_eq!(flagged("cs/ignored-pure-result", &src), [8, 10, 13, 17]);
     }
 
     #[test]

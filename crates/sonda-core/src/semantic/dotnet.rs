@@ -108,6 +108,18 @@ pub(crate) struct Platform {
     extensions: HashMap<String, Vec<(String, usize)>>,
     /// See `equality_interfaces`, computed on first use.
     equality: OnceLock<std::collections::HashSet<String>>,
+    /// See `declared_in`, computed on first use.
+    by_namespace: OnceLock<HashMap<String, Declared>>,
+}
+
+/// What a namespace declares, by simple name.
+#[derive(Default)]
+pub(crate) struct Declared {
+    /// Its types, without arity; a type's nested types are under the
+    /// type's key, as if it were a namespace.
+    pub(crate) types: std::collections::HashSet<String>,
+    /// The extension methods of its static classes.
+    pub(crate) extensions: std::collections::HashSet<String>,
 }
 
 /// The platform, decoded on first use. Empty if the embedded data can't be
@@ -120,6 +132,7 @@ pub(crate) fn platform() -> &'static Platform {
             namespaces: std::collections::HashSet::new(),
             extensions: HashMap::new(),
             equality: OnceLock::new(),
+            by_namespace: OnceLock::new(),
         })
     })
 }
@@ -153,6 +166,7 @@ impl Platform {
         Some(Platform {
             extensions,
             equality: OnceLock::new(),
+            by_namespace: OnceLock::new(),
             types: summary
                 .types
                 .into_iter()
@@ -215,6 +229,28 @@ impl Platform {
             }
             out
         })
+    }
+
+    /// The type and extension method names a namespace declares.
+    pub(crate) fn declared_in(&self, namespace: &str) -> Option<&Declared> {
+        self.by_namespace
+            .get_or_init(|| {
+                let mut out: HashMap<String, Declared> = HashMap::new();
+                for t in self.types.values() {
+                    let (ns, simple) = t.name.rsplit_once('.').unwrap_or(("", &t.name));
+                    let entry = out.entry(ns.to_string()).or_default();
+                    entry
+                        .types
+                        .insert(simple.split('`').next().unwrap_or(simple).to_string());
+                    if t.has("Extension") {
+                        for m in t.members.iter().filter(|m| m.has("Extension")) {
+                            entry.extensions.insert(m.name.clone());
+                        }
+                    }
+                }
+                out
+            })
+            .get(namespace)
     }
 
     /// Every type, in no order.
