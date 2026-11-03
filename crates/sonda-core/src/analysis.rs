@@ -1321,6 +1321,123 @@ fn is_pragma_comment(comment: &str) -> bool {
     .any(|p| body.starts_with(p))
 }
 
+/// Whether a Python comment, read as source, is a statement: it parses
+/// without errors and is an assignment, call, assert, jump, import or block
+/// header rather than a bare word, string or number.
+fn python_comment_is_code(comment: &str, alone: bool) -> bool {
+    use std::cell::RefCell;
+    thread_local! {
+        static PARSER: RefCell<Option<tree_sitter::Parser>> = const { RefCell::new(None) };
+    }
+    let text = comment.trim_start_matches('#').trim();
+    if text.chars().count() < 4
+        || text.contains("http")
+        || text.starts_with(['!', '-'])
+        || text.contains("coding")
+        || text.starts_with("noqa")
+        || text.starts_with("type:")
+        || text.starts_with("pragma")
+    {
+        return false;
+    }
+    // `if x:   # note` keeps its colon; a header needs a body to parse.
+    let code = text.split(" #").next().unwrap_or(text).trim_end();
+    let source = if code.ends_with(':') {
+        format!("{code}\n    pass\n")
+    } else {
+        format!("{code}\n")
+    };
+    PARSER.with(|p| {
+        let mut p = p.borrow_mut();
+        let parser = p.get_or_insert_with(|| {
+            let mut parser = tree_sitter::Parser::new();
+            let _ = parser.set_language(&Lang::Python.grammar());
+            parser
+        });
+        let Some(tree) = parser.parse(&source, None) else {
+            return false;
+        };
+        let root = tree.root_node();
+        if root.has_error() {
+            return false;
+        }
+        let mut cursor = root.walk();
+        let statements: Vec<Node> = root
+            .named_children(&mut cursor)
+            .filter(|n| n.kind() != "comment")
+            .collect();
+        !statements.is_empty()
+            && statements.iter().all(|s| match s.kind() {
+                "assert_statement"
+                | "return_statement"
+                | "raise_statement"
+                | "delete_statement"
+                | "import_statement"
+                | "import_from_statement"
+                | "print_statement"
+                | "if_statement"
+                | "for_statement"
+                | "while_statement"
+                | "try_statement"
+                | "with_statement"
+                | "function_definition"
+                | "class_definition"
+                | "augmented_assignment" => true,
+                "expression_statement" => s.named_child(0).is_some_and(|e| match e.kind() {
+                    "augmented_assignment" => true,
+                    // `Atlantic (used in Canada)` is prose: a call hugs its name.
+                    "call" => e
+                        .child_by_field_name("function")
+                        .is_some_and(|f| source.as_bytes().get(f.end_byte()) == Some(&b'(')),
+                    // `x is y` reads as prose; `a == b` does not. After code it
+                    // is usually a remark about it.
+                    "comparison_operator" => {
+                        alone
+                            && ["==", "!=", ">=", "<="]
+                                .iter()
+                                .any(|op| source[e.byte_range()].contains(op))
+                    }
+                    "assignment" => e
+                        .child_by_field_name("right")
+                        .is_some_and(|r| python_value_looks_like_code(r)),
+                    _ => false,
+                }),
+                _ => false,
+            })
+    })
+}
+
+/// A right-hand side that is more than a bare name or number: a call,
+/// attribute, subscript, string or collection, alone or inside an operator.
+fn python_value_looks_like_code(value: Node) -> bool {
+    if matches!(
+        value.kind(),
+        "call"
+            | "attribute"
+            | "subscript"
+            | "string"
+            | "concatenated_string"
+            | "list"
+            | "dictionary"
+            | "tuple"
+            | "true"
+            | "false"
+            | "none"
+    ) {
+        return true;
+    }
+    if matches!(
+        value.kind(),
+        "binary_operator" | "boolean_operator" | "not_operator" | "conditional_expression"
+    ) {
+        let mut cursor = value.walk();
+        return value
+            .named_children(&mut cursor)
+            .any(|c| python_value_looks_like_code(c));
+    }
+    false
+}
+
 fn comment_is_commented_out_code(comment: &str) -> bool {
     // Doc comments are prose with examples in them.
     if comment.starts_with("/**") || comment.starts_with("///") || comment.starts_with("//!") {
@@ -1537,6 +1654,10 @@ fn scan_tokens(
     let mark = |flags: &mut Vec<bool>, node: Node| {
         flags[node.start_position().row..=last_row(node)].fill(true);
     };
+    let python = std::ptr::eq(syn, Lang::Python.syntax());
+    // The row of the last commented-out-code issue: a block of commented
+    // lines is one finding, reported at its first line.
+    let mut last_code_comment_row: Option<usize> = None;
 
     walk(root, |node| {
         let kind = node.kind();
@@ -1562,11 +1683,20 @@ fn scan_tokens(
                 issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
             }
             if let Some(rule) = code_rule
-                && alone
-                && comment_is_commented_out_code(ctx.text(node))
+                && if python {
+                    python_comment_is_code(ctx.text(node), alone)
+                        || (alone && comment_is_commented_out_code(ctx.text(node)))
+                } else {
+                    alone && comment_is_commented_out_code(ctx.text(node))
+                }
             {
-                let msg = "Remove this commented-out code.".to_string();
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+                let row = node.start_position().row;
+                let continues_block = last_code_comment_row.is_some_and(|r| r + 1 == row);
+                last_code_comment_row = Some(last_row(node));
+                if !continues_block {
+                    let msg = "Remove this commented-out code.".to_string();
+                    issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+                }
             }
             if let Some(rule) = todo_rule
                 && let Some(tag) = todo_tag(ctx.text(node))
@@ -2657,7 +2787,7 @@ pub(crate) mod tests {
             .filter(|i| i.rule == rules::COMMENTED_OUT_CODE)
             .map(|i| i.line)
             .collect();
-        assert_eq!(lines, [2, 3]);
+        assert_eq!(lines, [2]); // consecutive lines are one finding
         let js = run(
             Lang::JavaScript,
             "// Returns the sum;\n// foo(1);\n/** @return {x}; */\n",
