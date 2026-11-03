@@ -9,6 +9,11 @@ file, the report formats and the public library API.
 
 ### Added
 
+- An `upgrade` CI job: the last release's server fills a database, the
+  server built from each pull request takes it over, and what was stored is
+  still served.
+- A test that a failing migration leaves the database as it was, and the
+  upgrade steps in [docs/server.md](docs/server.md#upgrading).
 - [docs/stability.md](docs/stability.md): what 1.0 promises (the CLI, its
   exit codes, `sonda.toml`, the reports, the upload protocol, the
   `sonda-core` library) and what it doesn't, the compatibility window, and
