@@ -155,21 +155,22 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/parameter-could-be-enumerable",
         name: "Parameters should be declared with the most general type they need",
-        description: "A List<T> or array parameter that is only enumerated could be an IEnumerable<T>, which \
-                      accepts more callers.",
-        message: "Declare this parameter as IEnumerable<T>: it's only enumerated.",
+        description: "A parameter whose uses only need members a base class or interface of its type declares, \
+                      such as a FileStream that's only read like any Stream, could be declared with that type, \
+                      which accepts more callers.",
+        message: "Declare this parameter with a base type: only that type's members are used.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S3242")],
+        sonar: &[exact("S3242")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: parameters_only_enumerated,
+            find: super::cs_inferred::parameters_with_base_types,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { int Sum(List<int> xs) { var s = 0; foreach (var x in xs) { s += x; } return s; } }",
-            good: "class A { int Sum(IEnumerable<int> xs) { var s = 0; foreach (var x in xs) { s += x; } return s; } }",
+            bad: "using System.IO;\nclass Foo { public void ReadStream(FileStream stream) { int a; while ((a = stream.ReadByte()) != -1) { } } }",
+            good: "using System.IO;\nclass Foo { public void ReadStream(Stream stream) { int a; while ((a = stream.ReadByte()) != -1) { } } }",
         }),
     },
     Rule {
@@ -480,92 +481,6 @@ fn missing_com_visible<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 // ---------------------------------------------------- opt-in API rules
 
-const ENUMERATING: &[&[u8]] = &[
-    b"Where",
-    b"Select",
-    b"SelectMany",
-    b"Any",
-    b"All",
-    b"Count",
-    b"First",
-    b"FirstOrDefault",
-    b"Last",
-    b"LastOrDefault",
-    b"Single",
-    b"SingleOrDefault",
-    b"Sum",
-    b"Min",
-    b"Max",
-    b"Average",
-    b"OrderBy",
-    b"OrderByDescending",
-    b"GroupBy",
-    b"ToList",
-    b"ToArray",
-    b"ToDictionary",
-    b"Distinct",
-    b"Skip",
-    b"Take",
-    b"Contains",
-    b"Aggregate",
-];
-
-fn parameters_only_enumerated<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut uses: Vec<Vec<Node<'t>>> = vec![Vec::new(); m.decls.len()];
-    for r in &m.refs {
-        if let Some(d) = r.decl {
-            uses[d].push(r.node);
-        }
-    }
-    m.decls
-        .iter()
-        .enumerate()
-        .filter(|(i, d)| {
-            let Some(ty) = d.ty.filter(|_| d.kind == DeclKind::Param) else {
-                return false;
-            };
-            let concrete = ty.kind() == "array_type"
-                || (ty.kind() == "generic_name"
-                    && matches!(
-                        simple_name(ty, src),
-                        b"List" | b"IList" | b"ICollection" | b"Collection" | b"HashSet"
-                    ));
-            // Overrides and implementations can't change their signature.
-            let method = d
-                .declarator
-                .and_then(|p| p.parent())
-                .and_then(|l| l.parent());
-            let free = method.is_some_and(|m| {
-                m.kind() == "method_declaration"
-                    && !["override", "public", "protected"]
-                        .iter()
-                        .any(|w| super::cs::cs_has_modifier(m, w, src))
-            });
-            concrete
-                && free
-                && !uses[*i].is_empty()
-                && uses[*i].iter().all(|u| {
-                    let Some(parent) = u.parent() else {
-                        return false;
-                    };
-                    match parent.kind() {
-                        "foreach_statement" => parent.child_by_field_name("right") == Some(*u),
-                        "member_access_expression" => {
-                            parent
-                                .child_by_field_name("name")
-                                .is_some_and(|n| ENUMERATING.contains(&text(n, src)))
-                                && parent
-                                    .parent()
-                                    .is_some_and(|c| c.kind() == "invocation_expression")
-                        }
-                        _ => false,
-                    }
-                })
-        })
-        .filter_map(|(_, d)| d.ty)
-        .collect()
-}
-
 fn names_uri(name: &[u8]) -> bool {
     let lower = name.to_ascii_lowercase();
     [&b"uri"[..], b"url", b"urn"]
@@ -724,7 +639,8 @@ mod tests {
         let src = class(
             "int Sum(List<int> xs) { var s = 0; foreach (var x in xs) { s += x; } return s; }\nint Count(List<int> xs) { xs.Add(1); return xs.Count; }\npublic int Pub(List<int> xs) => xs.Sum();\nvoid Fetch(string url) { }\nvoid Fetch(Uri url) { }\nvoid G(Label label, string u) {\nFetch(\"https://a.example\");\nFetch(u);\nlabel.Text = \"Hello there\";\nlabel.Name = \"Hello there\";\nShow(message: \"Saved your file\");\nConsole.WriteLine(\"Done with it\");\nConsole.WriteLine(\"k\");\n}",
         );
-        assert_eq!(flagged("cs/parameter-could-be-enumerable", &src), [3]);
+        // Add and Count are ICollection<int>'s, and Sum IEnumerable<int>'s.
+        assert_eq!(flagged("cs/parameter-could-be-enumerable", &src), [3, 4, 5]);
         assert_eq!(flagged("cs/string-uri-argument", &src), [9, 10]);
         assert_eq!(flagged("cs/localizable-literal", &src), [11, 13, 14]);
     }

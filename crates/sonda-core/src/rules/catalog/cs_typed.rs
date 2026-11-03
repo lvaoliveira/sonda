@@ -8,15 +8,14 @@ use super::cs::{simple_name, unparenthesized};
 use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
 use super::cs_more::members;
 use super::cs_types::{
-    derives_from, element_type, enumerable_calls, expression_type, initial_value, is_collection,
-    is_delegate_type, is_one_of, is_value_type, normalized_type, numeric_range, numeric_value,
-    shift_width, type_of_name, walk_tree,
+    enumerable_calls, expression_type, initial_value, is_collection, is_one_of, is_value_type,
+    normalized_type, numeric_range, numeric_value, shift_width, type_of_name, walk_tree,
 };
 use super::java_bugs::operator_text;
 use super::java_security::{contains_ignoring_case, text};
 use super::*;
+use crate::semantic::Model;
 use crate::semantic::cs_infer::Infer;
-use crate::semantic::{DeclKind, Model};
 
 /// Rules that are off unless `rules.enabled` lists them: none, every rule
 /// here is in SonarQube's default profile.
@@ -135,10 +134,10 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[related("S3172")],
+        sonar: &[exact("S3172")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: subtracts_delegate_chain,
+            find: super::cs_inferred::subtracted_delegate_chains,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -238,15 +237,15 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S3217")],
+        sonar: &[exact("S3217")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: foreach_downcasts,
+            find: super::cs_inferred::foreach_explicit_conversions,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { void F(List<object> items) { foreach (string s in items) { G(s); } } }",
-            good: "class A { void F(List<object> items) { foreach (var s in items.OfType<string>()) { G(s); } } }",
+            bad: "class Fruit { }\nclass Orange : Fruit { }\nclass A { void F(List<Fruit> basket) { foreach (Orange o in basket) { G(o); } } }",
+            good: "class Fruit { }\nclass Orange : Fruit { }\nclass A { void F(List<Fruit> basket) { foreach (Orange o in basket.OfType<Orange>()) { G(o); } } }",
         }),
     },
     Rule {
@@ -325,10 +324,10 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S5034")],
+        sonar: &[exact("S5034")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: value_task_consumed_twice,
+            find: super::cs_inferred::value_task_misuse,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -344,10 +343,10 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S1905")],
+        sonar: &[exact("S1905")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: casts_to_own_type,
+            find: super::cs_inferred::redundant_casts,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -628,42 +627,6 @@ fn route_parameter_type_mismatch<'t>(class: Node<'t>, src: &[u8]) -> Option<Node
         })
 }
 
-fn is_delegate_value(m: &Model, expr: Node, src: &[u8]) -> bool {
-    matches!(
-        expr.kind(),
-        "lambda_expression" | "anonymous_method_expression"
-    ) || expression_type(m, expr, src).is_some_and(|t| is_delegate_type(m, &t))
-}
-
-fn subtracts_delegate_chain<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    matching(
-        m,
-        &["binary_expression", "assignment_expression"],
-        |node, _| {
-            if !matches!(operator_text(node, src), b"-" | b"-=") {
-                return false;
-            }
-            let (Some(left), Some(right)) = (
-                node.child_by_field_name("left"),
-                node.child_by_field_name("right"),
-            ) else {
-                return false;
-            };
-            let chain = unparenthesized(right);
-            // Only `+` of two plain operands: a long arithmetic chain is no
-            // delegate chain, and evaluating it would only cost time.
-            chain.kind() == "binary_expression"
-                && operator_text(chain, src) == b"+"
-                && ["left", "right"].iter().all(|f| {
-                    chain.child_by_field_name(f).is_some_and(|o| {
-                        o.kind() != "binary_expression" && is_delegate_value(m, o, src)
-                    })
-                })
-                && is_delegate_value(m, left, src)
-        },
-    )
-}
-
 const STRING_PURE: &[&[u8]] = &[
     b"Trim",
     b"TrimStart",
@@ -880,41 +843,6 @@ fn compares_out_of_range<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     })
 }
 
-fn looks_like_interface(name: &[u8]) -> bool {
-    name.len() > 1 && name[0] == b'I' && name[1].is_ascii_uppercase()
-}
-
-fn foreach_downcasts<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    matching(m, &["foreach_statement"], |foreach, _| {
-        let (Some(ty), Some(collection)) = (
-            foreach.child_by_field_name("type"),
-            foreach.child_by_field_name("right"),
-        ) else {
-            return false;
-        };
-        if ty.kind() == "implicit_type" {
-            return false;
-        }
-        let target = normalized_type(text(ty, src));
-        let Some(element) =
-            type_of_name(m, unparenthesized(collection)).and_then(|t| element_type(t, src))
-        else {
-            return false;
-        };
-        let element = normalized_type(text(element, src));
-        if element == target || target == b"object" {
-            return false;
-        }
-        // Downcasts only: from object, from an interface to a class, or from
-        // a base class to one of its subclasses declared here.
-        element == b"object"
-            || (looks_like_interface(&element)
-                && !looks_like_interface(&target)
-                && !is_value_type(m, &target))
-            || derives_from(m, &target, &element, src)
-    })
-}
-
 fn converts_time_zone_id<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let converted =
         |n: Node| n.kind() == "invocation_expression" && text(n, src).starts_with(b"TZConvert.");
@@ -925,102 +853,6 @@ fn converts_time_zone_id<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
                     || (a.kind() == "identifier" && initial_value(m, *a).is_some_and(converted))
             })
     })
-}
-
-fn value_task_consumed_twice<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    // Per ValueTask local: (times consumed, read blocking, checked completion).
-    let tasks: Vec<usize> = m
-        .decls
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| {
-            d.kind == DeclKind::Let && d.ty.is_some_and(|t| simple_name(t, src) == b"ValueTask")
-        })
-        .map(|(i, _)| i)
-        .collect();
-    if tasks.is_empty() {
-        return Vec::new();
-    }
-    let mut uses = vec![(0u32, false, false); m.decls.len()];
-    walk_tree(m, |node, ancestors| {
-        if node.kind() != "identifier" {
-            return;
-        }
-        let Some(d) = m.decl_of(node).and_then(|d| {
-            tasks
-                .iter()
-                .copied()
-                .find(|i| std::ptr::eq(&m.decls[*i], d))
-        }) else {
-            return;
-        };
-        let parent = ancestors.last();
-        let u = &mut uses[d];
-        match parent.map(|p| p.kind()) {
-            Some("await_expression") => u.0 += 1,
-            Some("member_access_expression") => {
-                let member = parent
-                    .and_then(|p| p.child_by_field_name("name"))
-                    .map_or(&b""[..], |n| text(n, src));
-                match member {
-                    b"IsCompleted" | b"IsCompletedSuccessfully" => u.2 = true,
-                    b"Result" | b"GetAwaiter" => {
-                        u.0 += 1;
-                        u.1 = true;
-                    }
-                    b"AsTask" | b"Preserve" | b"ConfigureAwait" => u.0 += 1,
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    });
-    tasks
-        .into_iter()
-        .filter(|i| {
-            let (consumed, blocks, checks) = uses[*i];
-            consumed > 1 || (blocks && !checks)
-        })
-        .map(|i| m.decls[i].node)
-        .collect()
-}
-
-fn casts_to_own_type<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    matching(
-        m,
-        &["cast_expression", "invocation_expression"],
-        |node, _| {
-            if node.kind() == "cast_expression" {
-                let (Some(ty), Some(value)) = (
-                    node.child_by_field_name("type"),
-                    node.child_by_field_name("value"),
-                ) else {
-                    return false;
-                };
-                let target = normalized_type(text(ty, src));
-                return target != b"dynamic"
-                    && expression_type(m, value, src).is_some_and(|t| t == target);
-            }
-            // xs.Cast<T>() or xs.OfType<T>() where xs already holds T.
-            if !matches!(method_name(node, src), b"Cast" | b"OfType") {
-                return false;
-            }
-            let target = node
-                .child_by_field_name("function")
-                .and_then(|f| f.child_by_field_name("name"))
-                .filter(|g| g.kind() == "generic_name")
-                .and_then(|g| g.named_child(1))
-                .filter(|args| args.named_child_count() == 1)
-                .and_then(|args| args.named_child(0))
-                .map(|t| normalized_type(text(t, src)));
-            let element = receiver(node)
-                .and_then(|r| type_of_name(m, r))
-                .and_then(|t| element_type(t, src))
-                .map(|t| normalized_type(text(t, src)));
-            // OfType also drops nulls, which matters for nullable elements.
-            target.is_some() && target == element && !element.is_some_and(|e| e.ends_with(b"?"))
-        },
-    )
 }
 
 /// `First()`, `Last()` and `ElementAt(i)` on a type with an indexer:
@@ -1114,13 +946,15 @@ mod tests {
             "async Task F(Stream stream, byte[] b, TextReader reader) {\nstream.Read(b, 0, b.Length);\nvar n = stream.Read(b, 0, b.Length);\nawait stream.ReadAsync(b, 0, 10);\nreader.Read(b, 0, 1);\nstream.ReadExactly(b, 0, 2);\nValueTask<int> vt = GetAsync();\nvar x = await vt;\nvar y = await vt;\nValueTask<int> once = GetAsync();\nvar z = await once;\nValueTask<int> blocked = GetAsync();\nvar w = blocked.Result;\nValueTask<int> checkedFirst = GetAsync();\nif (checkedFirst.IsCompletedSuccessfully) { var v = checkedFirst.Result; }\n}",
         );
         assert_eq!(flagged("cs/unchecked-stream-read", &src), [4, 6]);
-        assert_eq!(flagged("cs/value-task-misuse", &src), [9, 14]);
+        assert_eq!(flagged("cs/value-task-misuse", &src), [11, 15]);
     }
 
     #[test]
     fn foreach_and_casts() {
         let src = "namespace N;\nclass Fruit { }\nclass Orange : Fruit { }\nclass A {\nvoid F(List<object> objs, List<Fruit> fruits, IEnumerable<IShape> shapes, List<int> ints, int[] arr, int i, long l) {\nforeach (string s in objs) { }\nforeach (Orange o in fruits) { }\nforeach (Circle c in shapes) { }\nforeach (Fruit f in fruits) { }\nforeach (object x in fruits) { }\nforeach (var v in objs) { }\nforeach (long n in ints) { }\nvar a = (int)i;\nvar b = (long)i;\nvar c2 = (int)(i + 42);\nvar d = (int?)i;\nvar e = ints.OfType<int>();\nvar g = ints.Cast<long>();\n}\n}";
-        assert_eq!(flagged("cs/foreach-explicit-conversion", src), [6, 7, 8]);
+        // Collections of objects are left alone, as documented, and so are
+        // types nothing declares.
+        assert_eq!(flagged("cs/foreach-explicit-conversion", src), [7]);
         assert_eq!(flagged("cs/redundant-cast", src), [13, 15, 17]);
     }
 

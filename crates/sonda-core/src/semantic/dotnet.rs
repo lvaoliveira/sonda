@@ -98,6 +98,8 @@ pub(crate) struct Platform {
     /// Extension methods by name: (declaring type's key, its index among
     /// that type's members).
     extensions: HashMap<String, Vec<(String, usize)>>,
+    /// See `equality_interfaces`, computed on first use.
+    equality: OnceLock<std::collections::HashSet<String>>,
 }
 
 /// The platform, decoded on first use. Empty if the embedded data can't be
@@ -109,6 +111,7 @@ pub(crate) fn platform() -> &'static Platform {
             types: HashMap::new(),
             namespaces: std::collections::HashSet::new(),
             extensions: HashMap::new(),
+            equality: OnceLock::new(),
         })
     })
 }
@@ -141,6 +144,7 @@ impl Platform {
         }
         Some(Platform {
             extensions,
+            equality: OnceLock::new(),
             types: summary
                 .types
                 .into_iter()
@@ -161,6 +165,48 @@ impl Platform {
                 Some((t, t.members.get(*i)?))
             })
             .collect()
+    }
+
+    /// The interfaces, by key, that some class or struct overriding
+    /// `Equals(object)`, or deriving from one that does, implements.
+    pub(crate) fn equality_interfaces(&self) -> &std::collections::HashSet<String> {
+        self.equality.get_or_init(|| {
+            let overrides = |t: &PlatformType| {
+                t.name != "System.Object"
+                    && t.members.iter().any(|m| {
+                        m.kind == "method"
+                            && m.name == "Equals"
+                            && !m.has("static")
+                            && m.params.len() == 1
+                            && m.params[0].ty == "System.Object"
+                    })
+            };
+            let mut out = std::collections::HashSet::new();
+            for t in self.types.values() {
+                if !matches!(t.kind.as_str(), "class" | "struct")
+                    || !self.base_chain(&t.name).into_iter().any(overrides)
+                {
+                    continue;
+                }
+                let mut todo: Vec<&str> = vec![&t.name];
+                let mut seen: Vec<&str> = Vec::new();
+                while let Some(k) = todo.pop() {
+                    let k = definition(k);
+                    if seen.contains(&k) || seen.len() > 256 {
+                        continue;
+                    }
+                    seen.push(k);
+                    if let Some(x) = self.get(k) {
+                        if x.kind == "interface" {
+                            out.insert(x.name.clone());
+                        }
+                        todo.extend(x.base.as_deref());
+                        todo.extend(x.interfaces.iter().map(String::as_str));
+                    }
+                }
+            }
+            out
+        })
     }
 
     /// Whether the platform declares types in this namespace.
@@ -261,5 +307,7 @@ mod tests {
         );
         assert!(p.has_namespace("System.Collections.Generic"));
         assert!(p.get("System.Environment.SpecialFolder").is_some());
+        // String overrides Equals and implements IComparable.
+        assert!(p.equality_interfaces().contains("System.IComparable"));
     }
 }

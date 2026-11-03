@@ -9,7 +9,7 @@ use super::cs::{
 };
 use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_extra::is_pascal_case;
-use super::cs_more::{declarators, declared_type, enclosing_type, is_test_method, members};
+use super::cs_more::{declarators, enclosing_type, is_test_method, members};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::text;
 use super::java_smells::count_word;
@@ -390,16 +390,15 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[related("S1312")],
-        check: Check::Query {
+        sonar: &[exact("S1312")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(field_declaration (variable_declaration type: [(identifier) (generic_name) (qualified_name)])) @match",
-            filter: Some(Find(loose_logger_field)),
+            find: super::cs_inferred::loose_logger_fields,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { public ILog Log = LogManager.GetLogger(typeof(A)); }",
-            good: "class A { private static readonly ILog Log = LogManager.GetLogger(typeof(A)); }",
+            bad: "using log4net;\nclass A { public ILog Log = LogManager.GetLogger(typeof(A)); }",
+            good: "using log4net;\nclass A { private static readonly ILog Log = LogManager.GetLogger(typeof(A)); }",
         }),
     },
     Rule {
@@ -1262,26 +1261,6 @@ fn suppresses_warnings(node: Node, src: &[u8]) -> bool {
     })
 }
 
-fn is_logger_type(ty: Node, src: &[u8]) -> bool {
-    matches!(simple_name(ty, src), b"ILog" | b"ILogger" | b"Logger")
-}
-
-fn loose_logger_field<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let ty = declared_type(field)?;
-    if !is_logger_type(ty, src) {
-        return None;
-    }
-    // Injected ILogger<T> instances are instance fields by design; this is
-    // about loggers created by the type itself.
-    let created_here = declarators(field).iter().any(|d| d.named_child_count() > 1);
-    let tidy = cs_has_modifier(field, "static", src)
-        && cs_has_modifier(field, "readonly", src)
-        && !["public", "protected", "internal"]
-            .iter()
-            .any(|m| cs_has_modifier(field, m, src));
-    (created_here && !tidy).then(|| declarators(field).into_iter().next())?
-}
-
 fn inner_switch<'t>(switch: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     let body = switch.child_by_field_name("body")?;
     find_in_scope(body, CS_SCOPE_STOPS, |n| n.kind() == "switch_statement")
@@ -1728,9 +1707,10 @@ mod tests {
 
     #[test]
     fn fields_and_parameters() {
-        let src = "namespace N;\npublic class A {\nprotected int count;\ninternal readonly int ok;\npublic ILog Log = LogManager.GetLogger(typeof(A));\nprivate static readonly ILog L2 = LogManager.GetLogger(typeof(B));\nprivate readonly ILogger<A> injected;\npublic void Save(string p, bool force = false) { }\npublic void Split(string s, out string a) { a = s; }\npublic bool TryParse(string s, out int v) { v = 0; return true; }\nint[,] grid;\nint[][] jagged;\n}";
+        let src = "namespace N;\npublic class A {\nprotected int count;\ninternal readonly int ok;\npublic ILog Log = LogManager.GetLogger(typeof(A));\nprivate static readonly ILog L2 = LogManager.GetLogger(typeof(B));\nprivate readonly Logger<A> injected;\npublic void Save(string p, bool force = false) { }\npublic void Split(string s, out string a) { a = s; }\npublic bool TryParse(string s, out int v) { v = 0; return true; }\nint[,] grid;\nint[][] jagged;\n}";
         assert_eq!(flagged("cs/non-private-field", src), [3]);
-        assert_eq!(flagged("cs/logger-not-static-readonly", src), [5]);
+        // Without a using, ILog isn't known to be log4net's.
+        assert!(flagged("cs/logger-not-static-readonly", src).is_empty());
         assert_eq!(flagged("cs/logger-for-other-type", src), [6]);
         assert_eq!(flagged("cs/optional-parameter", src), [8]);
         assert_eq!(flagged("cs/out-ref-parameter", src), [9]);
