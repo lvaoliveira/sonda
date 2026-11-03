@@ -38377,22 +38377,22 @@ class A { string F(string a) { return a ?? ""; } }
 
 ## cs/default-argument-passed
 
-**Default parameter values should not be passed explicitly.** Passing the default value says nothing the declaration doesn't, and stops following a change of the default.
+**Default parameter values should not be passed as arguments.** Passing a parameter's default value says nothing the declaration doesn't, and stops following the default if it changes.
 
 Off by default: add `"cs/default-argument-passed"` to `rules.enabled` to run it.
 
-SonarQube: S3254 (related)
+SonarQube: S3254
 
 Noncompliant:
 
 ```csharp
-class A { void Save(string p, bool force = false) { } void F() { Save("x", false); } }
+class A { public void M(int x, int y = 5, int z = 7) { } void F() { M(1, 5); } }
 ```
 
 Compliant:
 
 ```csharp
-class A { void Save(string p, bool force = false) { } void F() { Save("x"); } }
+class A { public void M(int x, int y = 5, int z = 7) { } void F() { M(1); } }
 ```
 
 ## cs/explicit-delegate-creation
@@ -38777,22 +38777,24 @@ public class A { string name; public string Name => name; }
 
 ## cs/string-comparison-overload
 
-**String comparisons should state how they compare.** Without a StringComparison, Compare, StartsWith, EndsWith and IndexOf(string) depend on the current culture.
+**Overloads with a StringComparison parameter should be used.** Compare, Equals and other string operations with a StringComparison overload say how they compare when given one.
 
 Off by default: add `"cs/string-comparison-overload"` to `rules.enabled` to run it.
 
-SonarQube: S4058 (related)
+SonarQube: S4058
 
 Noncompliant:
 
 ```csharp
-class A { bool F(string s) { return s.StartsWith("abc"); } }
+using System;
+class Foo { bool HaveSameNames(string name1, string name2) { return string.Compare(name1, name2) == 0; } }
 ```
 
 Compliant:
 
 ```csharp
-class A { bool F(string s) { return s.StartsWith("abc", StringComparison.Ordinal); } }
+using System;
+class Foo { bool HaveSameNames(string name1, string name2) { return string.Compare(name1, name2, StringComparison.OrdinalIgnoreCase) == 0; } }
 ```
 
 ## cs/property-and-get-method
@@ -39348,22 +39350,25 @@ public class Store : IStore { void IStore.Save() => Save(); protected void Save(
 
 ## cs/culture-overload
 
-**Formatting should state its culture.** string.Format and ToString(format) without an IFormatProvider use the current culture, so the output changes from machine to machine.
+**Overloads with a CultureInfo or an IFormatProvider parameter should be used.** Without a provider, formatting and parsing use the current culture, which changes from machine to machine.
 
 Off by default: add `"cs/culture-overload"` to `rules.enabled` to run it.
 
-SonarQube: S4056 (related)
+SonarQube: S4056
 
 Noncompliant:
 
 ```csharp
-class A { string F(decimal d) { return string.Format("{0:N2}", d); } }
+using System;
+class Foo { string Bar(string string3) { return string3.ToLower(); } }
 ```
 
 Compliant:
 
 ```csharp
-class A { string F(decimal d) { return string.Format(CultureInfo.InvariantCulture, "{0:N2}", d); } }
+using System;
+using System.Globalization;
+class Foo { string Bar(string string3) { return string3.ToLower(CultureInfo.CurrentCulture); } }
 ```
 
 ## cs/data-table-locale
@@ -39968,9 +39973,9 @@ class Base { public virtual void Run(int distance = 42) { } } class Derived : Ba
 
 ## cs/argument-order
 
-**Arguments should be passed in the order of the parameters they're named after.** `Divide(dividend, divisor)` to a method declared `Divide(divisor, dividend)` is almost certainly swapped.
+**Arguments should be passed in the same order as the method parameters.** Variables named after a method's parameters but passed in another order, such as `Divide(dividend, divisor)` to `Divide(int divisor, int dividend)`, are likely swapped.
 
-SonarQube: S2234 (related)
+SonarQube: S2234
 
 Noncompliant:
 
@@ -40408,22 +40413,24 @@ class Foo { public void ReadStream(Stream stream) { int a; while ((a = stream.Re
 
 ## cs/string-uri-argument
 
-**System.Uri overloads should be called instead of string ones.** When a method has string and Uri overloads, the Uri one parses and validates the address.
+**System.Uri arguments should be used instead of strings.** When a method's string parameter named for a URI has an overload taking a System.Uri there, the Uri one avoids parsing and encoding errors.
 
 Off by default: add `"cs/string-uri-argument"` to `rules.enabled` to run it.
 
-SonarQube: S4005 (related)
+SonarQube: S4005
 
 Noncompliant:
 
 ```csharp
-class A { void Fetch(string url) { } void Fetch(Uri url) { } void F() { Fetch("https://a.example"); } }
+using System;
+class Foo { void FetchResource(string uriString) { } void FetchResource(Uri uri) { } void Main() { FetchResource("http://www.mysite.com"); } }
 ```
 
 Compliant:
 
 ```csharp
-class A { void Fetch(string url) { } void Fetch(Uri url) { } void F() { Fetch(new Uri("https://a.example")); } }
+using System;
+class Foo { void FetchResource(string uriString) { } void FetchResource(Uri uri) { } void Main() { FetchResource(new Uri("http://www.mysite.com")); } }
 ```
 
 ## cs/localizable-literal

@@ -1,8 +1,8 @@
-//! C# rule checks on inferred types (ADR-0022, step 2): what a receiver or
-//! an argument evaluates to, through the platform's declarations
-//! (`semantic/cs_infer.rs`). The rules are declared with the others; this
-//! module holds their checks. A call whose types don't resolve gives no
-//! finding.
+//! C# rule checks on inferred types (ADR-0022, steps 2 and 3): what a
+//! receiver or an argument evaluates to, and the overload a call binds to,
+//! through the platform's declarations (`semantic/cs_infer.rs`). The rules
+//! are declared with the others; this module holds their checks. A call
+//! whose types don't resolve gives no finding.
 
 use super::cs::{cs_has_modifier, unparenthesized};
 use super::cs_bugs::{attribute_names, cs_call_arguments};
@@ -10,8 +10,12 @@ use super::cs_more::{declarators, is_test_method};
 use super::cs_types::{enumerable_calls, walk_tree};
 use super::java_security::text;
 use super::java_smells::count_word;
-use crate::semantic::cs_infer::{Conversion, Found, Infer, Ty};
-use crate::semantic::{DeclKind, Model};
+use crate::semantic::cs_infer::{
+    Arg, Bound, Constant, Conversion, Found, Infer, Param, Ty, arguments,
+};
+use crate::semantic::{DeclKind, Model, dotnet};
+use std::collections::HashSet;
+use std::sync::OnceLock;
 use tree_sitter::Node;
 
 const STRING: &str = "System.String";
@@ -1574,6 +1578,461 @@ pub(super) fn parameters_with_base_types<'t>(m: &Model<'t>, src: &[u8]) -> Vec<N
     found
 }
 
+// ---------------------------------------------------- overloads (step 3)
+
+/// Whether two found methods are the same declaration.
+fn same_method(a: &Found, b: &Found) -> bool {
+    match (a, b) {
+        (Found::Platform { member: x, .. }, Found::Platform { member: y, .. }) => {
+            std::ptr::eq(*x, *y)
+        }
+        (Found::Local(x), Found::Local(y)) => std::ptr::eq(*x, *y),
+        _ => false,
+    }
+}
+
+/// Whether every target framework has a platform method: .NET Standard 2.0
+/// declares it, so a call binds to it the same everywhere, and recommending
+/// it is safe (ADR-0022). Methods of the file's own always qualify.
+fn on_every_target(found: &Found) -> bool {
+    match found {
+        Found::Platform { member, .. } => member.has("ns20"),
+        Found::Local(_) => true,
+    }
+}
+
+/// An overload of the method a call binds to that takes the same
+/// parameters plus one whose type `extra` accepts: the documented
+/// `StringComparison` and `IFormatProvider` overloads. One every target has
+/// and that isn't obsolete.
+fn overload_with_one_more<'m, 't>(
+    infer: &Infer<'m, 't>,
+    b: &Bound<'m, 't>,
+    extra: impl Fn(&Ty) -> bool,
+) -> bool {
+    let key = |p: &Param| (p.ty.clone(), p.modifier.map(str::to_string));
+    let mine: Vec<_> = b.params.iter().map(key).collect();
+    infer.overloads(&b.method).iter().any(|o| {
+        let obsolete = matches!(o, Found::Platform { member, .. } if member.has("Obsolete"));
+        if same_method(o, &b.method)
+            || obsolete
+            || !on_every_target(o)
+            || infer.is_static(o) != infer.is_static(&b.method)
+        {
+            return false;
+        }
+        let Some(params) = infer.params(o) else {
+            return false;
+        };
+        params.len() == mine.len() + 1
+            && (0..params.len()).any(|k| {
+                params[k].ty.as_ref().is_some_and(&extra)
+                    && params
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| *i != k)
+                        .map(|(_, p)| key(p))
+                        .eq(mine.iter().cloned())
+            })
+    })
+}
+
+/// The name a call goes by: the method's, or the type's for `new`.
+fn call_name<'s>(call: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let name = match call.kind() {
+        "object_creation_expression" => {
+            let ty = call.child_by_field_name("type")?;
+            match ty.kind() {
+                "qualified_name" => ty.child_by_field_name("name")?,
+                _ => ty,
+            }
+        }
+        _ => {
+            let f = call.child_by_field_name("function")?;
+            match f.kind() {
+                "member_access_expression" => f.child_by_field_name("name")?,
+                _ => f,
+            }
+        }
+    };
+    let name = if name.kind() == "generic_name" {
+        name.named_child(0)?
+    } else {
+        name
+    };
+    Some(text(name, src))
+}
+
+/// The names of the platform's methods with an overload taking a parameter
+/// of one of these types, and of types whose constructors have one: a call
+/// by another name, to no method of the file's, can't have such an
+/// overload.
+fn overload_names(
+    types: &[&str],
+    cell: &'static OnceLock<HashSet<&'static str>>,
+) -> &'static HashSet<&'static str> {
+    cell.get_or_init(|| {
+        let mut out = HashSet::new();
+        for t in dotnet::platform().types() {
+            for m in &t.members {
+                let takes = m.params.iter().any(|p| types.contains(&p.ty.as_str()));
+                match m.kind.as_str() {
+                    "method" if takes => {
+                        out.insert(m.name.as_str());
+                    }
+                    "constructor" if takes => {
+                        let simple = t.name.rsplit('.').next().unwrap_or(&t.name);
+                        out.insert(simple.split('`').next().unwrap_or(simple));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    })
+}
+
+/// Whether a call may bind to a method with an overload taking one of
+/// some types: its name is in `names` (`overload_names`), or one of the
+/// file's methods' (`method_names`).
+fn may_have_overload(
+    call: Node,
+    src: &[u8],
+    names: &HashSet<&'static str>,
+    local: &HashSet<&str>,
+) -> bool {
+    call_name(call, src)
+        .and_then(|n| std::str::from_utf8(n).ok())
+        .is_some_and(|name| names.contains(name) || local.contains(name))
+}
+
+/// The names of the methods a file declares.
+fn method_names<'a>(m: &'a Model) -> HashSet<&'a str> {
+    m.decls
+        .iter()
+        .filter(|d| d.kind == DeclKind::Method)
+        .map(|d| d.name.as_str())
+        .collect()
+}
+
+/// The calls of a file that `wanted` keeps, with what they bind to:
+/// invocations, and object creations when `creations`.
+fn resolved_calls<'t>(
+    m: &Model<'t>,
+    src: &[u8],
+    creations: bool,
+    wanted: impl for<'m> Fn(&Infer<'m, 't>, Node<'t>, &[Arg<'t>]) -> bool,
+    mut f: impl for<'m> FnMut(&Infer<'m, 't>, Node<'t>, Vec<Arg<'t>>, Bound<'m, 't>),
+) {
+    let Some(infer) = Infer::new(m, src) else {
+        return;
+    };
+    walk_tree(m, |call, _| {
+        let kind = call.kind();
+        if kind != "invocation_expression" && !(creations && kind == "object_creation_expression") {
+            return;
+        }
+        let args = arguments(call);
+        if !wanted(&infer, call, &args) {
+            return;
+        }
+        if let Some(b) = infer.resolve_with(call, &args) {
+            f(&infer, call, args, b);
+        }
+    });
+}
+
+// ---------------------------------------------------- S2234
+
+/// Calls passing variables named after the method's parameters in another
+/// order than those parameters': two such arguments, each after one whose
+/// namesake comes later.
+pub(super) fn arguments_out_of_order<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let variables = |args: &[Arg]| {
+        args.iter()
+            .filter(|a| a.name.is_none() && a.value.kind() == "identifier")
+            .count()
+    };
+    let mut found = Vec::new();
+    resolved_calls(
+        m,
+        src,
+        false,
+        |infer, call, args| {
+            variables(args) >= 2
+                && infer
+                    .candidate_params(call, args.len())
+                    .iter()
+                    .any(|params| out_of_order(args, params, src))
+        },
+        |_, call, args, b| {
+            if out_of_order(&args, &b.params[usize::from(b.extension)..], src) {
+                found.push(call);
+            }
+        },
+    );
+    found
+}
+
+/// Whether two positional variables are named after parameters in the
+/// other order.
+fn out_of_order(args: &[Arg], params: &[Param], src: &[u8]) -> bool {
+    let namesakes: Vec<usize> = args
+        .iter()
+        .filter(|a| a.name.is_none() && a.value.kind() == "identifier")
+        .filter_map(|a| {
+            let name = text(a.value, src);
+            params.iter().position(|p| p.name.as_bytes() == name)
+        })
+        .collect();
+    namesakes
+        .iter()
+        .enumerate()
+        .any(|(i, k)| namesakes[i + 1..].iter().any(|later| later < k))
+}
+
+// ---------------------------------------------------- S3254
+
+/// Arguments equal to their parameter's default, that the call can leave
+/// out and still bind to the same method: named ones, and positional ones
+/// with only such arguments, or named ones, after them. Parameters whose
+/// value an attribute may supply (`[CallerMemberName]`) are left alone.
+pub(super) fn default_values_passed<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    let defaults = |params: &[Param]| params.iter().any(|p| p.default.is_some() && !p.attributed);
+    let constant = |infer: &Infer, a: &Arg| {
+        a.value.kind() == "default_expression" || infer.constant(a.value, None).is_some()
+    };
+    resolved_calls(
+        m,
+        src,
+        false,
+        |infer, call, args| {
+            args.iter().any(|a| constant(infer, a))
+                && infer
+                    .candidate_params(call, args.len())
+                    .iter()
+                    .any(|p| defaults(p))
+        },
+        |infer, call, args, b| {
+            let redundant: Vec<bool> = args
+                .iter()
+                .zip(&b.targets)
+                .map(|(a, &t)| {
+                    let p = &b.params[t];
+                    a.modifier.is_none()
+                        && p.optional
+                        && !p.attributed
+                        && p.default.as_ref().is_some_and(|d| {
+                            infer
+                                .constant(a.value, p.ty.as_ref())
+                                .is_some_and(|c| c.same(d))
+                        })
+                })
+                .collect();
+            // Positional arguments go from the end: each with those after it.
+            let mut trailing = true;
+            for i in (0..args.len()).rev() {
+                if !redundant[i] {
+                    trailing &= args[i].name.is_some();
+                    continue;
+                }
+                if args[i].name.is_none() && !trailing {
+                    continue;
+                }
+                let rest: Vec<Arg> = args
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, a)| {
+                        let with_it = args[i].name.is_none() && a.name.is_none() && *j > i;
+                        *j != i && !(with_it && redundant[*j])
+                    })
+                    .map(|(_, a)| *a)
+                    .collect();
+                let same = infer
+                    .resolve_with(call, &rest)
+                    .is_some_and(|r| same_method(&r.method, &b.method));
+                if same {
+                    found.push(args[i].node);
+                }
+            }
+        },
+    );
+    found.sort_by_key(|n| n.start_byte());
+    found
+}
+
+// ---------------------------------------------------- S4005
+
+/// What SonarQube documents as a URI parameter's name.
+fn names_uri(name: &str) -> bool {
+    ["uri", "Uri", "urn", "Urn", "url", "Url"]
+        .iter()
+        .any(|w| name.contains(w))
+}
+
+/// Calls passing a string to a parameter named for a URI, when the type
+/// declaring the method has the same overload with a `System.Uri` there.
+pub(super) fn string_uri_arguments<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    static NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    let local = method_names(m);
+    let names = overload_names(&["System.Uri"], &NAMES);
+    let mut found = Vec::new();
+    let wanted = |_: &Infer, call: Node, _: &[Arg]| may_have_overload(call, src, names, &local);
+    resolved_calls(m, src, false, wanted, |infer, call, _, b| {
+        if !on_every_target(&b.method) {
+            return;
+        }
+        let uri_at = |k: usize| {
+            let p = &b.params[k];
+            p.ty.as_ref().is_some_and(|t| t.is(STRING)) && names_uri(p.name)
+        };
+        let key = |p: &Param| (p.ty.clone(), p.modifier.map(str::to_string));
+        let replaced = b.targets.iter().copied().filter(|&k| uri_at(k)).any(|k| {
+            infer.overloads(&b.method).iter().any(|o| {
+                let obsolete =
+                    matches!(o, Found::Platform { member, .. } if member.has("Obsolete"));
+                if same_method(o, &b.method)
+                    || obsolete
+                    || !on_every_target(o)
+                    || infer.is_static(o) != infer.is_static(&b.method)
+                {
+                    return false;
+                }
+                infer.params(o).is_some_and(|ps| {
+                    ps.len() == b.params.len()
+                        && ps.iter().zip(&b.params).enumerate().all(|(i, (x, y))| {
+                            if i == k {
+                                x.ty.as_ref().is_some_and(|t| t.is("System.Uri"))
+                                    && x.modifier == y.modifier
+                            } else {
+                                key(x) == key(y)
+                            }
+                        })
+                })
+            })
+        });
+        if replaced {
+            found.push(call);
+        }
+    });
+    found
+}
+
+// ---------------------------------------------------- S4056
+
+/// Members SonarQube leaves out by name, and those whose documentation
+/// says the provider is reserved or ignored, by declaring type, name and
+/// parameter types.
+const PROVIDER_IGNORED: &[(&str, &str, &[&str])] = &[
+    ("System.Activator", "CreateInstance", &[]),
+    ("System.Resources.ResourceManager", "GetObject", &[]),
+    ("System.Resources.ResourceManager", "GetString", &[]),
+    ("System.Boolean", "ToString", &[]),
+    ("System.Char", "ToString", &[]),
+    ("System.String", "ToString", &[]),
+    ("System.Guid", "ToString", &["System.String"]),
+    ("System.Convert", "ToString", &["System.Boolean"]),
+    ("System.Convert", "ToString", &["System.Char"]),
+    ("System.Convert", "ToString", &["System.String"]),
+    ("System.Convert", "ToBoolean", &["System.String"]),
+    ("System.Convert", "ToChar", &["System.String"]),
+    // The base types ignore it, values of other types may not.
+    ("System.Convert", "ToBoolean", &["System.Object"]),
+    ("System.Convert", "ToChar", &["System.Object"]),
+];
+
+/// Calls of a member that has an overload taking the same parameters plus
+/// an `IFormatProvider` or `CultureInfo`, made without one. Constructors
+/// too, as the documentation says members.
+pub(super) fn format_provider_overloads<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    const PROVIDERS: &[&str] = &["System.IFormatProvider", "System.Globalization.CultureInfo"];
+    static NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    let local = method_names(m);
+    let names = overload_names(PROVIDERS, &NAMES);
+    let mut found = Vec::new();
+    let wanted = |_: &Infer, call: Node, _: &[Arg]| may_have_overload(call, src, names, &local);
+    resolved_calls(m, src, true, wanted, |infer, call, args, b| {
+        if !on_every_target(&b.method)
+            || b.params.iter().any(|p| {
+                p.ty.as_ref()
+                    .is_some_and(|t| PROVIDERS.iter().any(|k| t.is(k)))
+            })
+        {
+            return;
+        }
+        if let Found::Platform {
+            declaring, member, ..
+        } = &b.method
+        {
+            let types: Vec<&str> = member.params.iter().map(|p| p.ty.as_str()).collect();
+            let ignored = PROVIDER_IGNORED.iter().any(|(t, n, ps)| {
+                declaring.name == *t && member.name == *n && (ps.is_empty() || types == *ps)
+            });
+            if ignored {
+                return;
+            }
+            let arg_type = || args.first().and_then(|a| infer.type_of(a.value));
+            match (
+                declaring.name.as_str(),
+                member.name.as_str(),
+                types.as_slice(),
+            ) {
+                // Used only when the value is IConvertible or IFormattable.
+                ("System.Convert", "ToString", ["System.Object"]) => {
+                    let formats = arg_type().is_some_and(|t| {
+                        infer
+                            .supertypes(&t)
+                            .iter()
+                            .any(|s| s.is("System.IConvertible") || s.is("System.IFormattable"))
+                    });
+                    if !formats {
+                        return;
+                    }
+                }
+                // Ignored for custom formats: report standard ones only.
+                ("System.TimeSpan", "ToString", ["System.String"]) => {
+                    let standard = args
+                        .first()
+                        .and_then(|a| infer.constant(a.value, None))
+                        .is_some_and(|c| matches!(c, Constant::Str(f) if f.chars().count() == 1));
+                    if !standard {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if overload_with_one_more(infer, &b, |t| PROVIDERS.iter().any(|k| t.is(k))) {
+            found.push(call);
+        }
+    });
+    found
+}
+
+// ---------------------------------------------------- S4058
+
+/// Calls of a string method that has an overload taking the same
+/// parameters plus a `StringComparison`, made without one.
+pub(super) fn string_comparison_overloads<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    static NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    let local = method_names(m);
+    let names = overload_names(&["System.StringComparison"], &NAMES);
+    let mut found = Vec::new();
+    let wanted = |_: &Infer, call: Node, _: &[Arg]| may_have_overload(call, src, names, &local);
+    resolved_calls(m, src, false, wanted, |infer, call, _, b| {
+        let on_string =
+            matches!(&b.method, Found::Platform { declaring, .. } if declaring.name == STRING);
+        if on_string
+            && on_every_target(&b.method)
+            && overload_with_one_more(infer, &b, |t| t.is("System.StringComparison"))
+        {
+            found.push(call);
+        }
+    });
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -1856,5 +2315,91 @@ mod tests {
             void Annotated([NotNull] List<int> xs) { foreach (var x in xs) { } }\n\
             }";
         assert_eq!(flagged("cs/parameter-could-be-enumerable", src), [5, 9, 14]);
+    }
+    #[test]
+    fn argument_order_as_documented() {
+        let src = "using System.IO;\nclass A { public double Divide(int divisor, int dividend) { return divisor / dividend; }\n\
+            void F(string path1, string path2) { int divisor = 15; int dividend = 5;\n\
+            _ = Divide(dividend, divisor);\n\
+            _ = Divide(divisor, dividend);\n\
+            _ = Divide(dividend, 5);\n\
+            _ = Divide(divisor: dividend, dividend: divisor);\n\
+            _ = Path.Combine(path2, path1);\n\
+            _ = Path.Combine(path1, path2);\n\
+            } }";
+        assert_eq!(flagged("cs/argument-order", src), [4, 8]);
+    }
+
+    #[test]
+    fn default_values_as_documented() {
+        let src = "using System;\nusing System.Runtime.CompilerServices;\nclass A { public void M(int x, int y = 5, int z = 7) { }\n\
+            void Log(string m, [CallerMemberName] string caller = \"\") { }\n\
+            void P(int a, bool b = false) { } void P(int a) { }\n\
+            void F(string s, object o) {\n\
+            M(1, 5);\n\
+            M(1, z: 7);\n\
+            M(1);\n\
+            M(1, 5, 8);\n\
+            M(1, y: 6);\n\
+            Log(\"x\", \"\");\n\
+            P(1, false);\n\
+            _ = s.Split(',', StringSplitOptions.None);\n\
+            ArgumentNullException.ThrowIfNull(o, null);\n\
+            M(1, 5,\n7);\n\
+            } }";
+        assert_eq!(
+            flagged("cs/default-argument-passed", src),
+            [7, 8, 14, 16, 17]
+        );
+    }
+
+    #[test]
+    fn uri_overloads_as_documented() {
+        let src = "using System;\nusing System.Net.Http;\nnamespace MyLibrary { public class Foo {\n\
+            public void FetchResource(string uriString) { } public void FetchResource(Uri uri) { }\n\
+            public string ReadResource(string uriString, string name, bool isLocal) { return name; } public string ReadResource(Uri uri, string name, bool isLocal) { return name; }\n\
+            public void Named(string name) { } public void Named(Uri name) { }\n\
+            public void Main(HttpClient client) {\n\
+            FetchResource(\"http://www.mysite.com\");\n\
+            ReadResource(\"http://www.mysite.com\", \"foo-resource\", true);\n\
+            FetchResource(new Uri(\"http://www.mysite.com\"));\n\
+            Named(\"x\");\n\
+            client.GetAsync(\"http://www.mysite.com\");\n\
+            } } }";
+        assert_eq!(flagged("cs/string-uri-argument", src), [8, 9, 12]);
+    }
+
+    #[test]
+    fn format_providers_as_documented() {
+        let src = "using System;\nusing System.Globalization;\nusing System.IO;\nusing System.Resources;\nusing System.Text;\n\
+            class Foo { void Bar(string string1, string string2, string string3, bool b, Guid g, TimeSpan t, object o, ResourceManager rm, StringBuilder sb) {\n\
+            if (string.Compare(string1, string2, false) == 0) { Console.WriteLine(string3.ToLower()); }\n\
+            _ = string.Compare(string1, string2, false, CultureInfo.InvariantCulture); _ = string3.ToLower(CultureInfo.CurrentCulture);\n\
+            _ = int.Parse(string1);\n\
+            _ = b.ToString(); _ = g.ToString(\"N\"); _ = Convert.ToString(true); _ = rm.GetString(\"x\");\n\
+            _ = Convert.ToString(5);\n\
+            _ = t.ToString(\"c\");\n\
+            _ = t.ToString(\"hh\\\\:mm\"); _ = Convert.ToString(o);\n\
+            _ = new StringWriter();\n\
+            sb.AppendFormat(\"{0}\", 1);\n\
+            } }";
+        assert_eq!(
+            flagged("cs/culture-overload", src),
+            [7, 7, 9, 11, 12, 14, 15]
+        );
+    }
+
+    #[test]
+    fn string_comparisons_as_documented() {
+        let src = "using System;\nnamespace MyLibrary { public class Foo { public bool HaveSameNames(string name1, string name2) {\n\
+            _ = string.Compare(name1, name2) == 0;\n\
+            _ = string.Compare(name1, name2, StringComparison.OrdinalIgnoreCase) == 0;\n\
+            _ = name1.Equals(name2);\n\
+            _ = string.Equals(name1, name2);\n\
+            _ = name1.StartsWith(\"x\");\n\
+            _ = name1.StartsWith('x'); _ = name1.Contains(\"x\"); _ = name1.IndexOf('c'); _ = name1.CompareTo(name2);\n\
+            return name1.EndsWith(name2, StringComparison.Ordinal);\n\
+            } } }";
+        assert_eq!(flagged("cs/string-comparison-overload", src), [3, 5, 6, 7]);
     }
 }

@@ -4,7 +4,7 @@
 //! `rules.enabled` lists it. Queries stay cheap on deep trees: see the notes
 //! in `js_modern.rs`.
 
-use super::cs::{cs_has_modifier, cs_statements, cs_string_value, simple_name, squeezed};
+use super::cs::{cs_has_modifier, cs_statements, simple_name, squeezed};
 use super::cs_bugs::cs_call_arguments;
 use super::cs_final::is_azure_function;
 use super::cs_more::{declarators, declared_type, members};
@@ -356,24 +356,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/culture-overload",
-        name: "Formatting should state its culture",
-        description: "string.Format and ToString(format) without an IFormatProvider use the current culture, so \
-                      the output changes from machine to machine.",
-        message: "Pass a CultureInfo or IFormatProvider.",
+        name: "Overloads with a CultureInfo or an IFormatProvider parameter should be used",
+        description: "Without a provider, formatting and parsing use the current culture, which changes from \
+                      machine to machine.",
+        message: "Call the overload that takes an IFormatProvider or a CultureInfo.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[related("S4056")],
-        check: Check::Query {
+        sonar: &[exact("S4056")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression function: (member_access_expression name: (identifier) @n)
-                        (#any-of? @n "Format" "ToString")) @match"#,
-            filter: Some(Keep(formats_without_culture)),
+            find: super::cs_inferred::format_provider_overloads,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string F(decimal d) { return string.Format(\"{0:N2}\", d); } }",
-            good: "class A { string F(decimal d) { return string.Format(CultureInfo.InvariantCulture, \"{0:N2}\", d); } }",
+            bad: "using System;\nclass Foo { string Bar(string string3) { return string3.ToLower(); } }",
+            good: "using System;\nusing System.Globalization;\nclass Foo { string Bar(string string3) { return string3.ToLower(CultureInfo.CurrentCulture); } }",
         }),
     },
     Rule {
@@ -963,67 +961,6 @@ fn hidden_explicit_implementation<'t>(class: Node<'t>, src: &[u8]) -> Option<Nod
     })
 }
 
-fn formats_without_culture(call: Node, src: &[u8]) -> bool {
-    let Some(function) = call.child_by_field_name("function") else {
-        return false;
-    };
-    let method = function
-        .child_by_field_name("name")
-        .map_or(&b""[..], |n| text(n, src));
-    let args = cs_call_arguments(call);
-    let mentions_culture = |a: &Node| {
-        let t = text(*a, src);
-        contains_ignoring_case(t, b"Culture")
-            || contains_ignoring_case(t, b"Provider")
-            || contains_ignoring_case(t, b"FormatInfo")
-    };
-    if args.iter().any(mentions_culture) {
-        return false;
-    }
-    let literal = |a: &Node| a.kind() == "string_literal" || a.kind() == "verbatim_string_literal";
-    match method {
-        // string.Format("{0:N2}", x): the template comes first, so no provider.
-        b"Format" => {
-            function
-                .child_by_field_name("expression")
-                .is_some_and(|r| matches!(text(r, src), b"string" | b"String"))
-                && args.first().is_some_and(literal)
-                && args
-                    .first()
-                    .and_then(|a| cs_string_value(*a, src))
-                    .is_some_and(|t| t.contains(&b'{'))
-        }
-        // x.ToString("N2"): a culture-dependent format; "D", "X" and the
-        // round-trip formats read the same everywhere.
-        _ => {
-            args.len() == 1
-                && args.first().is_some_and(literal)
-                && args
-                    .first()
-                    .and_then(|a| cs_string_value(*a, src))
-                    .is_some_and(|f| {
-                        !f.is_empty()
-                            && !matches!(
-                                f,
-                                b"o" | b"O"
-                                    | b"r"
-                                    | b"R"
-                                    | b"s"
-                                    | b"u"
-                                    | b"x"
-                                    | b"X"
-                                    | b"D"
-                                    | b"d"
-                                    | b"g"
-                                    | b"G"
-                            )
-                            && !f.starts_with(b"X")
-                            && !f.starts_with(b"x")
-                    })
-        }
-    }
-}
-
 fn locale_not_set(creation: Node, src: &[u8]) -> bool {
     // `new DataTable { Locale = ... }`
     let mut cursor = creation.walk();
@@ -1233,7 +1170,8 @@ mod tests {
     #[test]
     fn culture_and_data() {
         let src = "class A {\nstring F(decimal d, int n) {\nvar a = string.Format(\"{0:N2}\", d);\nvar b = string.Format(CultureInfo.InvariantCulture, \"{0:N2}\", d);\nvar c = d.ToString(\"N2\");\nvar e = n.ToString(\"X4\");\nvar f = d.ToString(\"N2\", CultureInfo.InvariantCulture);\nreturn a;\n}\nDataTable T() { var t = new DataTable(\"x\"); return t; }\nDataTable U() { var t = new DataTable(\"x\"); t.Locale = CultureInfo.InvariantCulture; return t; }\nDataSet V() => new DataSet();\nDataSet W() => new DataSet { Locale = CultureInfo.InvariantCulture };\n}";
-        assert_eq!(flagged("cs/culture-overload", src), [3, 5]);
+        // "X4" too: the documentation leaves out no format.
+        assert_eq!(flagged("cs/culture-overload", src), [3, 5, 6]);
         assert_eq!(flagged("cs/data-table-locale", src), [10, 12]);
     }
 

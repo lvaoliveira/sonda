@@ -16,6 +16,10 @@
 //! What it doesn't see: types declared in other files of the project, which
 //! could shadow a platform type of the same name in the same namespace.
 
+mod resolve;
+
+pub(crate) use resolve::{Arg, Bound, Constant, Param, arguments};
+
 use super::dotnet::{self, Platform, PlatformMember, PlatformType};
 use super::{DeclKind, Model, ScopeId};
 use std::collections::{HashMap, HashSet};
@@ -846,8 +850,10 @@ impl<'m, 't> Infer<'m, 't> {
             return Some(Conversion::Implicit);
         }
         // `IEnumerable<string>` to `IEnumerable<object>`: variance, which
-        // the declarations here don't record.
-        if up.iter().any(|s| s.key().is_some() && s.key() == to.key()) {
+        // the declarations here don't record, of interfaces and delegates.
+        if up.iter().any(|s| s.key().is_some() && s.key() == to.key())
+            && (self.interface(to) != Some(false) || self.delegate(to))
+        {
             return None;
         }
         if let (Ty::Array(a), Ty::Array(b)) = (from, to) {
@@ -880,7 +886,7 @@ impl<'m, 't> Infer<'m, 't> {
             return Some(Conversion::Explicit);
         }
         // C# allows no conversion operator between types related otherwise.
-        self.user_conversion(from, to)
+        self.user_conversion(from, to, false)
             .then_some(Conversion::UserDefined)
     }
 
@@ -932,22 +938,48 @@ impl<'m, 't> Infer<'m, 't> {
     }
 
     /// Whether `from` or `to`, or a base class of either, declares a
-    /// conversion operator from one to the other.
-    fn user_conversion(&self, from: &Ty, to: &Ty) -> bool {
+    /// conversion operator from one to the other; an implicit one only, if
+    /// `implicit`.
+    fn user_conversion(&self, from: &Ty, to: &Ty, implicit: bool) -> bool {
+        let names: &[&str] = if implicit {
+            &["op_Implicit"]
+        } else {
+            &["op_Implicit", "op_Explicit"]
+        };
+        // Through a standard implicit conversion on either side.
+        let standard = |a: &Ty, b: &Ty| {
+            a == b
+                || self.supertypes(a).contains(b)
+                || a.key()
+                    .and_then(widens_to)
+                    .is_some_and(|w| b.key().is_some_and(|k| w.contains(&k)))
+        };
+        // Types not fully known compare by their definitions.
+        let converts = |a: &Ty, b: &Ty| {
+            if settled(a) && settled(b) {
+                standard(a, b)
+            } else {
+                a.key().is_some() && a.key() == b.key()
+            }
+        };
         let fits = |ret: Option<Ty>, param: Option<Ty>| {
-            ret.is_some_and(|r| r.key() == to.key() && r.key().is_some() || &r == to)
-                && param.is_some_and(|p| p.key() == from.key() && p.key().is_some() || &p == from)
+            ret.is_some_and(|r| converts(&r, to)) && param.is_some_and(|p| converts(from, &p))
         };
         [from, to].iter().any(|t| {
             self.supertypes(t).iter().any(|s| match s {
                 Ty::Named {
-                    key, local: false, ..
+                    key,
+                    args,
+                    local: false,
                 } => self.platform.get(key).is_some_and(|p| {
                     p.members.iter().any(|m| {
-                        matches!(m.name.as_str(), "op_Implicit" | "op_Explicit")
+                        names.contains(&m.name.as_str())
                             && fits(
-                                Ty::parse(&m.ty),
-                                m.params.first().and_then(|p| Ty::parse(&p.ty)),
+                                Ty::parse(&m.ty).map(|t| t.substitute(args, &[])),
+                                m.params
+                                    .first()
+                                    .and_then(|p| Ty::parse(&p.ty))
+                                    .map(|t| t.substitute(args, &[])),
                             )
                     })
                 }),
@@ -959,6 +991,9 @@ impl<'m, 't> Infer<'m, 't> {
                     };
                     body.named_children(&mut body.walk())
                         .filter(|c| c.kind() == "conversion_operator_declaration")
+                        .filter(|c| {
+                            !implicit || c.children(&mut c.walk()).any(|k| k.kind() == "implicit")
+                        })
                         .any(|c| {
                             let param = c
                                 .child_by_field_name("parameters")
@@ -1876,7 +1911,7 @@ mod tests {
     use super::*;
     use crate::lang::Lang;
 
-    fn with_infer(src: &str, f: impl FnOnce(&Infer, Node)) {
+    pub(super) fn with_infer(src: &str, f: impl FnOnce(&Infer, Node)) {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&Lang::CSharp.grammar()).unwrap();
         let tree = parser.parse(src, None).unwrap();
@@ -1915,7 +1950,7 @@ mod tests {
         out
     }
 
-    fn render(t: &Ty) -> String {
+    pub(super) fn render(t: &Ty) -> String {
         match t {
             Ty::Named { key, args, .. } if args.is_empty() => key.clone(),
             Ty::Named { key, args, .. } => {

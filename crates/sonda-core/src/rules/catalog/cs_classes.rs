@@ -8,7 +8,7 @@
 //! Queries stay cheap on deep trees: see the notes in `js_modern.rs`.
 
 use super::cs::{cs_has_modifier, simple_name};
-use super::cs_bugs::{attribute_names, cs_call_arguments};
+use super::cs_bugs::attribute_names;
 use super::cs_more::members;
 use super::cs_types::walk_tree;
 use super::java_bugs::find_in_scope;
@@ -136,17 +136,17 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/argument-order",
-        name: "Arguments should be passed in the order of the parameters they're named after",
-        description: "`Divide(dividend, divisor)` to a method declared `Divide(divisor, dividend)` is almost \
-                      certainly swapped.",
+        name: "Arguments should be passed in the same order as the method parameters",
+        description: "Variables named after a method's parameters but passed in another order, such as \
+                      `Divide(dividend, divisor)` to `Divide(int divisor, int dividend)`, are likely swapped.",
         message: "Check the order of these arguments: they match parameter names in another order.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[related("S2234")],
+        sonar: &[exact("S2234")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: arguments_swapped,
+            find: super::cs_inferred::arguments_out_of_order,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -583,50 +583,6 @@ fn refs_by_decl(m: &Model) -> Vec<Vec<usize>> {
         }
     }
     by
-}
-
-fn arguments_swapped<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    walk_tree(m, |call, _| {
-        if call.kind() != "invocation_expression" {
-            return;
-        }
-        let Some(function) = call
-            .child_by_field_name("function")
-            .filter(|f| f.kind() == "identifier")
-        else {
-            return;
-        };
-        // A method of this type, not overloaded.
-        let Some(target) = m
-            .decl_of(function)
-            .filter(|d| d.kind == DeclKind::Method && m.decls_named(d.scope, &d.name).len() == 1)
-        else {
-            return;
-        };
-        let Some(method) = target.declarator else {
-            return;
-        };
-        let names: Vec<&[u8]> = params(method, src)
-            .iter()
-            .map(|p| text(p.name, src))
-            .collect();
-        let args = cs_call_arguments(call);
-        if args.len() != names.len() || args.iter().any(|a| a.kind() != "identifier") {
-            return;
-        }
-        let args: Vec<&[u8]> = args.iter().map(|a| text(*a, src)).collect();
-        // An argument named after another position's parameter, whose own
-        // parameter's name is among the arguments too: a swap.
-        let swapped = args
-            .iter()
-            .enumerate()
-            .any(|(i, a)| *a != names[i] && names.contains(a) && args.contains(&names[i]));
-        if swapped {
-            found.push(call);
-        }
-    });
-    found
 }
 
 fn assigns_through_readonly_generic<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {

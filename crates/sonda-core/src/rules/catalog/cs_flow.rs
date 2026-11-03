@@ -9,7 +9,7 @@
 
 use super::cs::simple_name;
 use super::cs_bugs::cs_call_arguments;
-use super::cs_types::{expression_type, walk_tree};
+use super::cs_types::walk_tree;
 use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::*;
@@ -175,21 +175,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/string-uri-argument",
-        name: "System.Uri overloads should be called instead of string ones",
-        description: "When a method has string and Uri overloads, the Uri one parses and validates the address.",
+        name: "System.Uri arguments should be used instead of strings",
+        description: "When a method's string parameter named for a URI has an overload taking a System.Uri \
+                      there, the Uri one avoids parsing and encoding errors.",
         message: "Pass a System.Uri to call the Uri overload.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
-        sonar: &[related("S4005")],
+        sonar: &[exact("S4005")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: string_passed_to_uri_overload,
+            find: super::cs_inferred::string_uri_arguments,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { void Fetch(string url) { } void Fetch(Uri url) { } void F() { Fetch(\"https://a.example\"); } }",
-            good: "class A { void Fetch(string url) { } void Fetch(Uri url) { } void F() { Fetch(new Uri(\"https://a.example\")); } }",
+            bad: "using System;\nclass Foo { void FetchResource(string uriString) { } void FetchResource(Uri uri) { } void Main() { FetchResource(\"http://www.mysite.com\"); } }",
+            good: "using System;\nclass Foo { void FetchResource(string uriString) { } void FetchResource(Uri uri) { } void Main() { FetchResource(new Uri(\"http://www.mysite.com\")); } }",
         }),
     },
     Rule {
@@ -480,70 +481,6 @@ fn missing_com_visible<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 // ---------------------------------------------------- opt-in API rules
-
-fn names_uri(name: &[u8]) -> bool {
-    let lower = name.to_ascii_lowercase();
-    [&b"uri"[..], b"url", b"urn"]
-        .iter()
-        .any(|w| lower.windows(w.len()).any(|x| x == *w))
-}
-
-fn string_passed_to_uri_overload<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut found = Vec::new();
-    walk_tree(m, |call, _| {
-        if call.kind() != "invocation_expression" {
-            return;
-        }
-        let Some(function) = call
-            .child_by_field_name("function")
-            .filter(|f| f.kind() == "identifier")
-        else {
-            return;
-        };
-        let Some(target) = m.decl_of(function).filter(|d| d.kind == DeclKind::Method) else {
-            return;
-        };
-        let args = cs_call_arguments(call);
-        // Each overload's parameters: (type, name).
-        let overloads: Vec<Vec<(Vec<u8>, Vec<u8>)>> = m
-            .decls_named(target.scope, &target.name)
-            .iter()
-            .filter_map(|d| m.decls[*d].declarator)
-            .map(|method| {
-                let list = method.child_by_field_name("parameters");
-                let mut out = Vec::new();
-                if let Some(list) = list {
-                    let mut c = list.walk();
-                    for p in list
-                        .named_children(&mut c)
-                        .filter(|p| p.kind() == "parameter")
-                    {
-                        let ty = p
-                            .child_by_field_name("type")
-                            .map_or(Vec::new(), |t| simple_name(t, src).to_vec());
-                        let name = p
-                            .child_by_field_name("name")
-                            .map_or(Vec::new(), |n| text(n, src).to_vec());
-                        out.push((ty, name));
-                    }
-                }
-                out
-            })
-            .filter(|ps| ps.len() == args.len())
-            .collect();
-        for (i, arg) in args.iter().enumerate() {
-            let string_overload = overloads
-                .iter()
-                .any(|ps| ps[i].0 == b"string" && names_uri(&ps[i].1));
-            let uri_overload = overloads.iter().any(|ps| ps[i].0 == b"Uri");
-            let is_string = expression_type(m, *arg, src).as_deref() == Some(&b"string"[..]);
-            if string_overload && uri_overload && is_string {
-                found.push(*arg);
-            }
-        }
-    });
-    found
-}
 
 const LOCALIZED_NAMES: &[&[u8]] = &[b"text", b"message", b"caption"];
 

@@ -63,6 +63,10 @@ pub(crate) struct PlatformMember {
     /// .NET Standard 2.0 has it too, so every target framework does.
     #[serde(rename = "a", default)]
     pub(crate) tags: Vec<String>,
+    /// A constant field's value: "true", an integer, a float, `'c`, `"text`
+    /// or "null".
+    #[serde(rename = "v", default)]
+    pub(crate) value: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -70,12 +74,16 @@ pub(crate) struct PlatformParam {
     #[serde(rename = "t")]
     pub(crate) ty: String,
     #[serde(rename = "n", default)]
-    #[expect(dead_code, reason = "read by argument-order checks, ADR-0022 step 3")]
     pub(crate) name: String,
-    /// "ref", "out", "in", "params", "optional", and `StringSyntax` values
-    /// such as "syntax:Regex".
+    /// "ref", "out", "in", "params", "optional", "caller" (a
+    /// caller-information attribute), and `StringSyntax` values such as
+    /// "syntax:Regex".
     #[serde(rename = "a", default)]
     pub(crate) tags: Vec<String>,
+    /// An optional parameter's default value, written as a field's `value`
+    /// is; absent when .NET Standard 2.0 declares the member without it.
+    #[serde(rename = "d", default)]
+    pub(crate) default: Option<String>,
 }
 
 impl PlatformType {
@@ -207,6 +215,11 @@ impl Platform {
             }
             out
         })
+    }
+
+    /// Every type, in no order.
+    pub(crate) fn types(&self) -> impl Iterator<Item = &PlatformType> {
+        self.types.values()
     }
 
     /// Whether the platform declares types in this namespace.

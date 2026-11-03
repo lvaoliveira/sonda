@@ -8,7 +8,8 @@ reference packs, for C# type inference ([ADR-0022](../../../docs/adr/0022-platfo
 
 `NETStandard.Library` 2.0.3 adds no types: members it declares with the
 same signature are tagged `ns20`, so rules can tell what every target
-framework has.
+framework has, and a parameter default it doesn't declare for such a member
+is left out.
 
 Reference packs hold signatures only, no code. All three are MIT-licensed by
 the .NET Foundation; the license is in `dotnet-8.0.LICENSE.txt`.
