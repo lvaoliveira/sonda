@@ -136,7 +136,8 @@ server.
 - Webhooks: noticing a pull request merged or closed to remove its
   analyses earlier, or re-posting when someone edits sonda's comment.
 - Connecting GitHub from the web app (the App manifest flow), instead of
-  configuration.
+  configuration: proposed in
+  [ADR-0024](0024-creating-the-github-app.md).
 
 ## Done when
 

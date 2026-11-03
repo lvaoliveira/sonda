@@ -198,7 +198,9 @@ SBOM), then match that list against published vulnerabilities.
 **Status:** designed for GitHub in
 [ADR-0021](adr/0021-pull-request-decoration.md) (accepted, 2026-11-02);
 pull request analyses and their decoration on GitHub are built;
-updating it when an issue is triaged is next. As SonarQube does, the
+updating it when an issue is triaged is next. Creating the GitHub App
+from the web app, rather than by hand, is proposed in
+[ADR-0024](adr/0024-creating-the-github-app.md). As SonarQube does, the
 result of analyzing a pull request (or GitLab merge request) shows on the
 pull request itself: a summary comment, inline comments on new issues, and
 a status check that can block merging when the gate fails. Today only
