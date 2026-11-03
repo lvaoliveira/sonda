@@ -805,7 +805,7 @@ pub(super) static RULES: &[Rule] = &[
             langs: PYTHON,
             query: r#"(for_statement alternative: (else_clause)) @match
 (while_statement alternative: (else_clause)) @match"#,
-            filter: Some(Keep(loop_has_no_break)),
+            filter: Some(Find(loop_else_without_break)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -945,7 +945,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1940")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(not_operator argument: (comparison_operator)) @match"#,
+            query: r#"(not_operator argument: (comparison_operator)) @match
+(not_operator argument: (parenthesized_expression (comparison_operator))) @match"#,
             filter: Some(Keep(negates_a_simple_comparison)),
         },
         example: Some(Example {
@@ -2636,6 +2637,13 @@ fn pass_with_other_statements<'t>(block: Node<'t>, _: &[u8]) -> Option<Node<'t>>
     items.into_iter().find(|s| s.kind() == "pass_statement")
 }
 
+/// The `else` of a loop that never breaks, where SonarQube reports it.
+fn loop_else_without_break<'t>(loop_: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    loop_has_no_break(loop_, src)
+        .then(|| loop_.child_by_field_name("alternative"))
+        .flatten()
+}
+
 fn loop_has_no_break(loop_: Node, _: &[u8]) -> bool {
     loop_.child_by_field_name("body").is_some_and(|b| {
         find_in_scope(
@@ -2803,6 +2811,13 @@ fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
 
 fn negates_a_simple_comparison(not: Node, src: &[u8]) -> bool {
     not.child_by_field_name("argument")
+        .map(|c| {
+            if c.kind() == "parenthesized_expression" {
+                c.named_child(0).unwrap_or(c)
+            } else {
+                c
+            }
+        })
         .and_then(|c| two_operands(c, src))
         .is_some_and(|(_, op, _)| {
             matches!(
@@ -2889,7 +2904,9 @@ fn compares_a_slice_with_a_literal(cmp: Node, src: &[u8]) -> bool {
     let is_end_slice = |n: Node| {
         n.kind() == "subscript"
             && n.child_by_field_name("subscript").is_some_and(|s| {
-                let t = text(s, src);
+                let spaced = text(s, src);
+                let compact: Vec<u8> = spaced.iter().copied().filter(|b| *b != b' ').collect();
+                let t = compact.as_slice();
                 s.kind() == "slice"
                     && ((t.starts_with(b":")
                         && t.len() > 1

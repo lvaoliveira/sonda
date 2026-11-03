@@ -772,6 +772,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(assignment left: (attribute object: (identifier) @o attribute: (identifier) @match (#eq? @o "self")))
+(assignment left: (pattern_list (attribute object: (identifier) @o2 attribute: (identifier) @match (#eq? @o2 "self"))))
 (class_definition body: (block (expression_statement (assignment left: (identifier) @match))))"#,
             filter: Some(Keep(name_is_not_snake_case)),
         },
@@ -2569,7 +2570,7 @@ fn branch_repeats_a_body<'t>(if_statement: Node<'t>, src: &[u8]) -> Option<Node<
     let mut repeated = None;
     for b in &blocks {
         let t = text(*b, src);
-        if statements(*b).len() < 2 {
+        if statements(*b).is_empty() {
             continue;
         }
         if distinct.contains(&t) {
@@ -3016,11 +3017,13 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
     }
     // Assigned alone, unpacked from a tuple, or taking the values of a loop.
     let kind = name.parent().map_or("", |p| p.kind());
-    let unpacked = kind == "pattern_list"
-        && name
-            .parent()
-            .and_then(|p| p.parent())
-            .is_some_and(|g| matches!(g.kind(), "assignment" | "for_statement"));
+    let unpacked = matches!(kind, "pattern_list" | "tuple_pattern") && {
+        let mut up = name.parent();
+        while up.is_some_and(|p| matches!(p.kind(), "pattern_list" | "tuple_pattern")) {
+            up = up.and_then(|p| p.parent());
+        }
+        up.is_some_and(|g| matches!(g.kind(), "assignment" | "for_statement"))
+    };
     let loop_variable = kind == "for_statement";
     if n.starts_with(b"_") || !(kind == "assignment" || unpacked || loop_variable) {
         return false;
@@ -3029,10 +3032,43 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
         return false;
     };
     let whole = text(function, src);
-    count_word(whole, n) == 1
-        && !contains_ignoring_case(whole, b"locals()")
-        && !contains_ignoring_case(whole, b"eval(")
-        && !contains_ignoring_case(whole, b"exec(")
+    if contains_ignoring_case(whole, b"locals()")
+        || contains_ignoring_case(whole, b"eval(")
+        || contains_ignoring_case(whole, b"exec(")
+    {
+        return false;
+    }
+    if count_word(whole, n) == 1 {
+        return true;
+    }
+    // `nil, netloc, nil = f()`: every mention is an unpacking target.
+    unpacked && only_unpacking_targets(function, n, src)
+}
+
+/// Whether every identifier of this name in `scope` is a target of a tuple
+/// unpacking, so the name is only ever written.
+fn only_unpacking_targets(scope: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut cursor = scope.walk();
+    'walk: loop {
+        let n = cursor.node();
+        if n.kind() == "identifier" && text(n, src) == name {
+            let target = n
+                .parent()
+                .is_some_and(|p| matches!(p.kind(), "pattern_list" | "tuple_pattern"));
+            if !target {
+                return false;
+            }
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() || cursor.node().id() == scope.id() {
+                break 'walk;
+            }
+        }
+    }
+    true
 }
 
 fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
