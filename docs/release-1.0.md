@@ -46,14 +46,14 @@ below holds, with the [exit criteria](#exit-criteria) at the end.
 
 The first release anyone can download. Today everyone builds from `main`.
 
-- [ ] A release workflow: on a `v*` tag, build the CLI's static Linux
+- [x] A release workflow: on a `v*` tag, build the CLI's static Linux
       binaries (x86_64, arm64) from the image's `cli` target, with
       SHA-256 checksums, and attach them to a GitHub Release.
-- [ ] `scripts/install-cli.sh` and `setup-server.sh` documented against a
+- [x] `scripts/install-cli.sh` and `setup-server.sh` documented against a
       release tag, not `main`.
-- [ ] CHANGELOG: `Unreleased` becomes `[0.1.0]`, with a short summary of
+- [x] CHANGELOG: `Unreleased` becomes `[0.1.0]`, with a short summary of
       what sonda is at the top.
-- [ ] The `v0.1.0` tag, pushed by the maintainer.
+- [x] The `v0.1.0` tag, pushed by the maintainer.
 
 **Done when** a release page has the binaries and checksums, and a fresh
 machine runs the server and the CLI from it by following the docs.
