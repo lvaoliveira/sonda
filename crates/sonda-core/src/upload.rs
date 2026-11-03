@@ -378,8 +378,9 @@ fn read_source(
             "{path} changed since the scan; scan again before uploading"
         )));
     }
-    // Cannot fail in practice: the scanner only hashes UTF-8 files.
-    String::from_utf8(bytes).map_err(|_| Error::Upload(format!("{path}: not valid UTF-8")))
+    // Cannot fail in practice: the scanner only hashes files it could decode.
+    crate::scanner::decode_source(path, bytes)
+        .ok_or_else(|| Error::Upload(format!("{path}: not valid UTF-8")))
 }
 
 /// Opens `root/path` for reading, refusing a symlink anywhere on the way
