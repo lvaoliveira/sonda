@@ -130,6 +130,7 @@ first_start=false
 [ -s secrets/db_password ] || openssl rand -hex 32 > secrets/db_password
 [ -s secrets/sonda_token ] || openssl rand -hex 32 > secrets/sonda_token
 [ -s secrets/admin_password ] || openssl rand -base64 18 > secrets/admin_password
+[ -s secrets/secret_key ] || openssl rand -base64 32 > secrets/secret_key
 if [ -n "$app_id" ]; then
   cp "$app_key" secrets/github_app_key.pem
   set_ SONDA_GITHUB_APP_ID "$app_id"
@@ -194,4 +195,6 @@ if [ "$first_start" = true ]; then
 fi
 if [ -n "$(get SONDA_GITHUB_APP_ID)" ]; then
   echo "GitHub App $(get SONDA_GITHUB_APP_ID): link each project to its repository in its Settings."
+else
+  echo "To decorate pull requests, create a GitHub App under Administration, GitHub."
 fi

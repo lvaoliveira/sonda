@@ -39,6 +39,8 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
             "deleted_projects",
             "dependency_review_events",
             "dependency_reviews",
+            "encrypted_secrets",
+            "github_app",
             "issue_events",
             "issues",
             "new_code_resets",

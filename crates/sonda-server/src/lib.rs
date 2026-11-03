@@ -19,6 +19,7 @@ pub mod dependencies;
 pub mod drill;
 pub mod gates;
 pub mod github;
+pub mod github_app;
 mod health;
 pub mod http;
 pub mod ingest;
@@ -38,6 +39,7 @@ pub mod rules;
 pub mod security;
 pub mod session;
 pub mod store;
+pub mod stored_secrets;
 pub mod throttle;
 pub mod tokens;
 pub mod users;
@@ -119,13 +121,24 @@ pub async fn run(config: Config) -> Result<()> {
     if reads_require_auth {
         tracing::info!("reads require the token or a session (not listening on loopback only)");
     }
-    let github = config.github.map(std::sync::Arc::new);
-    if let Some(app) = &github {
+    let github = std::sync::Arc::new(github_app::Connection::new(
+        config.github.map(std::sync::Arc::new),
+        config.secret_key,
+        config.github_api,
+        config.public_url.clone(),
+    ));
+    github.load(&pool).await?;
+    if let Some(app) = github.app() {
         tracing::info!(app = ?app, "decorating pull requests on GitHub");
-        let (pool, app, public_url) = (pool.clone(), app.clone(), config.public_url.clone());
+    }
+    {
+        // Always running: an App created from the web app starts it posting.
+        let (pool, github, public_url) = (pool.clone(), github.clone(), config.public_url.clone());
         tokio::spawn(async move {
             loop {
-                if let Err(e) = decorations::post_due(&pool, &app, public_url.as_deref()).await {
+                if let Some(app) = github.app()
+                    && let Err(e) = decorations::post_due(&pool, &app, public_url.as_deref()).await
+                {
                     tracing::warn!(error = %e, "posting pull request decorations failed; retrying later");
                 }
                 tokio::time::sleep(decorations::INTERVAL).await;
