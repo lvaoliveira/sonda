@@ -1289,7 +1289,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4968")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(type_parameter (type_bound (type_identifier) @match (#any-of? @match "String" "Integer" "Long" "Double" "Boolean" "Character")))"#,
+            query: r#"(type_parameter (type_bound (type_identifier) @match (#any-of? @match "String" "Integer" "Long" "Double" "Boolean" "Character")))
+(wildcard "extends" (type_identifier) @match (#any-of? @match "String" "Integer" "Long" "Double" "Boolean" "Character"))"#,
             filter: None,
         },
         example: Some(Example {

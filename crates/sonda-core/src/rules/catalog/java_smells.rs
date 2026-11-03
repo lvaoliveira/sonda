@@ -5,6 +5,7 @@ use super::java_bugs::{
     SCOPE_STOPS, find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments,
     operator_text, owning_declaration, parameter_types, statements,
 };
+use super::java_extra::{declared_type, type_text};
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, is_all_literals, method_name, string_value,
     text,
@@ -995,8 +996,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1643")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(assignment_expression operator: "+=" right: (string_literal)) @match"#,
-            filter: Some(Keep(inside_a_loop)),
+            query: r#"(assignment_expression left: (identifier) operator: "+=") @match"#,
+            filter: Some(Keep(concatenates_a_string_in_a_loop)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -3051,7 +3052,17 @@ fn deprecated_declaration_name<'t>(declaration: Node<'t>, src: &[u8]) -> Option<
     declaration.child_by_field_name("name")
 }
 
-fn method_is_empty(method: Node, src: &[u8]) -> bool {
+fn concatenates_a_string_in_a_loop(assign: Node, src: &[u8]) -> bool {
+    let is_text = assign
+        .child_by_field_name("right")
+        .is_some_and(|r| r.kind() == "string_literal")
+        || assign
+            .child_by_field_name("left")
+            .is_some_and(|l| type_text(declared_type(assign, text(l, src), src), src) == b"String");
+    is_text && inside_a_loop(assign, src)
+}
+
+fn method_is_empty(method: Node, _: &[u8]) -> bool {
     method
         .child_by_field_name("body")
         .is_some_and(|b| b.named_child_count() == 0)
