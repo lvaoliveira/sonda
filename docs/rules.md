@@ -22682,7 +22682,7 @@ class A { Boolean f() { return false; } }
 
 ## java/control-character-in-literal
 
-**Whitespace and control characters in literals should be explicit.** A literal tab is invisible and easy to lose in an editor.
+**Whitespace and control characters in literals should be explicit.** A literal tab or other invisible character is easy to lose in an editor.
 
 SonarQube: S2479
 

@@ -3,7 +3,7 @@
 
 use super::java_bugs::{
     SCOPE_STOPS, find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments,
-    operator_text, owning_declaration, parameter_types, returns_null, statements,
+    operator_text, owning_declaration, parameter_types, statements,
 };
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, is_all_literals, method_name, string_value,
@@ -92,7 +92,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S115")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(field_declaration) @match"#,
+            query: r#"[(field_declaration) (constant_declaration) (enum_constant)] @match"#,
             filter: Some(Keep(constant_name_not_upper_snake)),
         },
         example: Some(Example {
@@ -174,7 +174,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(class_declaration) @match"#,
-            filter: Some(Keep(utility_class_is_instantiable)),
+            filter: Some(Find(utility_class_constructor_or_class)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -574,7 +574,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1186")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
+            query: r#"[(method_declaration) (constructor_declaration)] @match"#,
             filter: Some(Keep(method_is_empty)),
         },
         example: Some(Example {
@@ -1056,8 +1056,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1845")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_body) @match"#,
-            filter: Some(Find(name_differs_by_case_only)),
+            query: r#"[(field_declaration) (constant_declaration) (method_declaration)] @match"#,
+            filter: Some(Keep(name_differs_by_case_only)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1157,7 +1157,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_invocation object: (object_creation_expression) name: (identifier) @n (#eq? @n "getClass")) @match"#,
-            filter: Some(Keep(creates_a_plain_object)),
+            filter: None,
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1338,7 +1338,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_declaration type: (type_identifier) @t (#eq? @t "Boolean")) @match"#,
-            filter: Some(Find(returns_null)),
+            filter: Some(Find(returns_null_from_any_method)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1349,7 +1349,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/control-character-in-literal",
         name: "Whitespace and control characters in literals should be explicit",
-        description: "A literal tab is invisible and easy to lose in an editor.",
+        description: "A literal tab or other invisible character is easy to lose in an editor.",
         message: "Use \\t.",
         category: CodeSmell,
         severity: Major,
@@ -2119,7 +2119,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S112")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match"#,
+            query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match
+(throws (type_identifier) @match (#any-of? @match "Throwable" "RuntimeException" "Error"))"#,
             filter: None,
         },
         example: Some(Example {
@@ -2160,7 +2161,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(if_statement) @match"#,
-            filter: Some(Keep(if_only_wraps_another_if)),
+            filter: Some(Find(if_only_wraps_another_if)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2404,8 +2405,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1192")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(program) @match"#,
-            filter: Some(Find(string_repeated_often)),
+            query: r#"(string_literal) @match"#,
+            filter: Some(Keep(is_first_of_a_repeated_string)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2569,12 +2570,6 @@ fn class_name_not_pascal(node: Node, src: &[u8]) -> bool {
 }
 
 fn method_name_not_camel_case(method: Node, src: &[u8]) -> bool {
-    if ["Test", "ParameterizedTest", "RepeatedTest", "TestFactory"]
-        .iter()
-        .any(|a| has_annotation(method, a.as_bytes(), src))
-    {
-        return false;
-    }
     let Some(name) = method.child_by_field_name("name") else {
         return false;
     };
@@ -2593,13 +2588,42 @@ fn is_valid_constant(name: &[u8]) -> bool {
 }
 
 fn constant_name_not_upper_snake(field: Node, src: &[u8]) -> bool {
-    if !(has_modifier(field, "static") && has_modifier(field, "final")) {
+    if field.kind() == "enum_constant" {
+        return field
+            .child_by_field_name("name")
+            .is_some_and(|n| !is_valid_constant(text(n, src)));
+    }
+    // Interface constants are static and final without saying so.
+    if field.kind() != "constant_declaration"
+        && !(has_modifier(field, "static") && has_modifier(field, "final"))
+    {
         return false;
     }
-    let is_logger = field
-        .child_by_field_name("type")
-        .is_some_and(|t| text(t, src).ends_with(b"Logger") || text(t, src).ends_with(b"Log"));
-    !is_logger
+    // Only plain values read as constants; a `static final` map or set is
+    // an ordinary object reference and SonarQube leaves its name alone.
+    let is_plain_value = field.child_by_field_name("type").is_some_and(|t| {
+        matches!(
+            text(t, src),
+            b"int"
+                | b"long"
+                | b"short"
+                | b"byte"
+                | b"char"
+                | b"boolean"
+                | b"float"
+                | b"double"
+                | b"String"
+                | b"Integer"
+                | b"Long"
+                | b"Short"
+                | b"Byte"
+                | b"Character"
+                | b"Boolean"
+                | b"Float"
+                | b"Double"
+        )
+    });
+    is_plain_value
         && declarator_names(field, src)
             .iter()
             .any(|n| *n != b"serialVersionUID" && !is_valid_constant(n))
@@ -2693,6 +2717,19 @@ fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
     }
     has_member
         && (constructors.is_empty() || constructors.iter().any(|c| !has_modifier(*c, "private")))
+}
+
+/// SonarQube reports a visible constructor where there is one, and the class
+/// itself when the implicit constructor is the problem.
+fn utility_class_constructor_or_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !utility_class_is_instantiable(class, src) {
+        return None;
+    }
+    let body = class.child_by_field_name("body")?;
+    let constructor = members(body)
+        .into_iter()
+        .find(|m| m.kind() == "constructor_declaration" && !has_modifier(*m, "private"));
+    Some(constructor.unwrap_or(class))
 }
 
 fn assigns_inside_an_expression(assign: Node, _: &[u8]) -> bool {
@@ -2903,9 +2940,16 @@ fn returns_null_for_collection<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<
     })
 }
 
+fn returns_null_from_any_method<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let body = method.child_by_field_name("body")?;
+    find_in_scope(body, SCOPE_STOPS, |n| {
+        n.kind() == "return_statement"
+            && n.named_child(0).is_some_and(|v| v.kind() == "null_literal")
+    })
+}
+
 fn final_literal_field_is_not_static(field: Node, _: &[u8]) -> bool {
     field.parent().is_some_and(|p| p.kind() == "class_body")
-        && has_modifier(field, "public")
         && has_modifier(field, "final")
         && !has_modifier(field, "static")
         && children_of_kind(field, "variable_declarator")
@@ -2978,11 +3022,25 @@ fn override_only_calls_super(method: Node, src: &[u8]) -> bool {
         && args == params
 }
 
+/// An empty constructor is only redundant when it stands alone: next to
+/// others it is the no-argument variant callers can pick.
+fn is_the_only_public_constructor(ctor: Node) -> bool {
+    has_modifier(ctor, "public")
+        && ctor.parent().is_some_and(|body| {
+            members(body)
+                .into_iter()
+                .filter(|m| m.kind() == "constructor_declaration")
+                .count()
+                == 1
+        })
+}
+
 fn method_is_empty(method: Node, src: &[u8]) -> bool {
     method
         .child_by_field_name("body")
         .is_some_and(|b| b.named_child_count() == 0)
         && !has_annotation(method, b"Override", src)
+        && (method.kind() != "constructor_declaration" || is_the_only_public_constructor(method))
 }
 
 fn imports_from_sun(import: Node, src: &[u8]) -> bool {
@@ -3259,26 +3317,34 @@ fn field_named_like_its_class(field: Node, src: &[u8]) -> bool {
     declarator_names(field, src).contains(&text(class_name, src))
 }
 
-fn name_differs_by_case_only<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut seen: Vec<(Vec<u8>, &[u8])> = Vec::new();
-    for member in members(body) {
-        let names: Vec<&[u8]> = match member.kind() {
-            "field_declaration" => declarator_names(member, src),
-            "method_declaration" => member
+/// A member whose name matches an earlier one in the class except for case.
+fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
+    let Some(body) = member
+        .parent()
+        .filter(|p| matches!(p.kind(), "class_body" | "interface_body" | "enum_body"))
+    else {
+        return false;
+    };
+    let names_of = |m: Node| -> Vec<&[u8]> {
+        match m.kind() {
+            "field_declaration" | "constant_declaration" => declarator_names(m, src),
+            "method_declaration" => m
                 .child_by_field_name("name")
                 .map(|n| vec![text(n, src)])
                 .unwrap_or_default(),
-            _ => continue,
-        };
-        for name in names {
-            let lower = name.to_ascii_lowercase();
-            if seen.iter().any(|(l, exact)| *l == lower && *exact != name) {
-                return Some(member);
-            }
-            seen.push((lower, name));
+            _ => Vec::new(),
         }
-    }
-    None
+    };
+    let mine = names_of(member);
+    members(body)
+        .into_iter()
+        .take_while(|m| m.start_byte() < member.start_byte())
+        .filter(|m| !has_modifier(*m, "private"))
+        .flat_map(names_of)
+        .any(|other| {
+            mine.iter()
+                .any(|n| n.eq_ignore_ascii_case(other) && *n != other)
+        })
 }
 
 fn negates_a_comparison(unary: Node, src: &[u8]) -> bool {
@@ -3297,23 +3363,16 @@ fn negates_a_comparison(unary: Node, src: &[u8]) -> bool {
 fn class_is_empty(class: Node, _: &[u8]) -> bool {
     class.child_by_field_name("superclass").is_none()
         && class.child_by_field_name("interfaces").is_none()
-        && class.child_by_field_name("type_parameters").is_none()
         && modifiers_of(class).is_none_or(|m| {
             let mut c = m.walk();
             !m.children(&mut c)
                 .any(|k| matches!(k.kind(), "marker_annotation" | "annotation"))
         })
-        && class
-            .child_by_field_name("body")
-            .is_some_and(|b| b.named_child_count() == 0)
-}
-
-fn creates_a_plain_object(call: Node, _: &[u8]) -> bool {
-    // `new Object() {...}.getClass()` is how an anonymous class is obtained.
-    call.child_by_field_name("object").is_some_and(|c| {
-        let mut cursor = c.walk();
-        !c.children(&mut cursor).any(|k| k.kind() == "class_body")
-    })
+        && class.child_by_field_name("body").is_some_and(|b| {
+            let mut c = b.walk();
+            !b.named_children(&mut c)
+                .any(|k| !matches!(k.kind(), "line_comment" | "block_comment"))
+        })
 }
 
 fn has_arguments(creation: Node, _: &[u8]) -> bool {
@@ -3423,7 +3482,16 @@ fn public_static_holds_mutable_state(field: Node, src: &[u8]) -> bool {
 }
 
 fn contains_a_tab_character(string: Node, src: &[u8]) -> bool {
-    text(string, src).contains(&b'\t')
+    // A raw tab, other control characters or an invisible Unicode separator.
+    std::str::from_utf8(text(string, src)).is_ok_and(|t| {
+        t.chars().any(|c| {
+            (c.is_control() && !matches!(c, '\n' | '\r'))
+                || matches!(
+                    c,
+                    '\u{200B}'..='\u{200F}' | '\u{2028}' | '\u{2029}' | '\u{2060}' | '\u{FEFF}'
+                )
+        })
+    })
 }
 
 fn concatenates_text(arg: Node, src: &[u8]) -> bool {
@@ -3532,7 +3600,11 @@ fn contains_a_nested_ternary(ternary: Node, _: &[u8]) -> bool {
 }
 
 fn private_method_returns_a_literal(method: Node, src: &[u8]) -> bool {
-    if !has_modifier(method, "private") || has_annotation(method, b"Override", src) {
+    let sealed = has_modifier(method, "private")
+        || has_modifier(method, "static")
+        || has_modifier(method, "final")
+        || enclosing_class(method).is_some_and(|c| has_modifier(c, "final"));
+    if !sealed || has_annotation(method, b"Override", src) {
         return false;
     }
     let Some(body) = method.child_by_field_name("body") else {
@@ -3783,22 +3855,23 @@ fn label_is_unused(labeled: Node, src: &[u8]) -> bool {
     .is_none()
 }
 
-fn if_only_wraps_another_if(statement: Node, _: &[u8]) -> bool {
-    if statement.child_by_field_name("alternative").is_some() {
-        return false;
-    }
-    let Some(body) = statement.child_by_field_name("consequence") else {
-        return false;
-    };
+/// The inner `if`, where SonarQube reports the merge.
+fn if_only_wraps_another_if<'t>(statement: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    statement
+        .child_by_field_name("alternative")
+        .is_none()
+        .then_some(())?;
+    let body = statement.child_by_field_name("consequence")?;
     let inner = if body.kind() == "block" {
         match statements(body).as_slice() {
             [only] => *only,
-            _ => return false,
+            _ => return None,
         }
     } else {
         body
     };
-    inner.kind() == "if_statement" && inner.child_by_field_name("alternative").is_none()
+    (inner.kind() == "if_statement" && inner.child_by_field_name("alternative").is_none())
+        .then_some(inner)
 }
 
 fn parentheses_fit_on_one_line(paren: Node, _: &[u8]) -> bool {
@@ -3928,9 +4001,110 @@ fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
     }) {
         return false;
     }
-    declarator_names(field, src)
-        .iter()
-        .any(|n| *n != b"serialVersionUID" && count_word(src, n) == 1)
+    // Another class in the file using the same name does not use this field;
+    // only an access through an object (`x.name`) from outside could.
+    let class = enclosing_class(field);
+    declarator_names(field, src).iter().any(|n| {
+        if *n == b"serialVersionUID" {
+            return false;
+        }
+        match class {
+            Some(c) => {
+                !file_accesses_member(src, n)
+                    && (count_word(text(c, src), n) == 1 || field_is_only_written(c, n, src))
+            }
+            None => count_word(src, n) == 1,
+        }
+    })
+}
+
+/// Whether every use of the field inside the class is an assignment to it,
+/// so nothing ever reads the value.
+fn field_is_only_written(class: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut cursor = class.walk();
+    let (mut writes, mut reads) = (0, 0);
+    'walk: loop {
+        let n = cursor.node();
+        if n.kind() == "identifier" && text(n, src) == name {
+            let parent = n.parent();
+            let is_this_field = parent.is_some_and(|p| {
+                p.kind() == "field_access"
+                    && p.child_by_field_name("field")
+                        .is_some_and(|f| f.id() == n.id())
+            });
+            let target = if is_this_field { parent } else { Some(n) };
+            let assigned = target
+                .and_then(|t| t.parent().map(|p| (t, p)))
+                .is_some_and(|(t, p)| {
+                    p.kind() == "assignment_expression"
+                        && operator_text(p, src) == b"="
+                        && p.child_by_field_name("left")
+                            .is_some_and(|l| l.id() == t.id())
+                });
+            let declarator = parent.is_some_and(|p| p.kind() == "variable_declarator");
+            if declarator {
+                // the field itself, or a local of the same name
+            } else if assigned {
+                writes += 1;
+            } else if is_this_field || !name_is_shadowed(n, name, src) {
+                reads += 1;
+            }
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    writes > 0 && reads == 0
+}
+
+/// Whether a parameter or local of this name is in scope at `use_site`.
+fn name_is_shadowed(use_site: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut p = use_site.parent();
+    while let Some(n) = p {
+        if matches!(n.kind(), "method_declaration" | "constructor_declaration") {
+            let param = n.child_by_field_name("parameters").is_some_and(|ps| {
+                let mut c = ps.walk();
+                ps.named_children(&mut c).any(|fp| {
+                    fp.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name)
+                })
+            });
+            return param || count_word(text(n, src), name) > 0 && local_declares(n, name, src);
+        }
+        p = n.parent();
+    }
+    false
+}
+
+fn local_declares(scope: Node, name: &[u8], src: &[u8]) -> bool {
+    find_node(scope, |x| {
+        x.kind() == "local_variable_declaration" && declarator_names(x, src).contains(&name)
+    })
+    .is_some()
+}
+
+/// Whether `.name` appears anywhere in the file as a member access.
+fn file_accesses_member(src: &[u8], name: &[u8]) -> bool {
+    let mut dotted = Vec::with_capacity(name.len() + 1);
+    dotted.push(b'.');
+    dotted.extend_from_slice(name);
+    let mut from = 0;
+    while let Some(i) = src[from..].windows(dotted.len()).position(|w| w == dotted) {
+        let end = from + i + dotted.len();
+        let whole_word = !src
+            .get(end)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        if whole_word && !src[..from + i].ends_with(b"this") {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 fn private_class_is_never_used(class: Node, src: &[u8]) -> bool {
@@ -3970,17 +4144,18 @@ fn local_is_never_used(declaration: Node, src: &[u8]) -> bool {
         .any(|n| *n != b"_" && count_word(text(scope, src), n) == 1)
 }
 
-fn string_repeated_often<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut counts: std::collections::HashMap<&[u8], (usize, Node<'t>)> =
-        std::collections::HashMap::new();
-    let mut cursor = program.walk();
-    if !cursor.goto_first_child() {
-        return None;
+/// Whether this is the first of three or more equal literals in the file,
+/// as SonarQube counts them: five characters or more (quotes included in Sonar's seven), outside annotations.
+fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    type Counts = HashMap<Vec<u8>, (usize, usize)>;
+    thread_local! {
+        static CACHE: RefCell<Option<((usize, usize), Counts)>> = const { RefCell::new(None) };
     }
-    loop {
-        let n = cursor.node();
-        if n.kind() == "string_literal"
-            && !n.parent().is_some_and(|p| {
+    let eligible = |n: Node| -> Option<Vec<u8>> {
+        if n.kind() != "string_literal"
+            || n.parent().is_some_and(|p| {
                 matches!(
                     p.kind(),
                     "element_value_pair"
@@ -3989,26 +4164,48 @@ fn string_repeated_often<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
                         | "marker_annotation"
                 )
             })
-            && let Some(value) = string_value(n, src).filter(|v| v.len() >= 10)
         {
-            counts
-                .entry(value)
-                .and_modify(|e| e.0 += 1)
-                .or_insert((1, n));
+            return None;
         }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return counts
-                    .values()
-                    .filter(|(count, _)| *count >= 3)
-                    .map(|(_, node)| *node)
-                    .min_by_key(|n| n.start_byte());
+        string_value(n, src)
+            .filter(|v| v.len() >= 5)
+            .map(<[u8]>::to_vec)
+    };
+    let Some(mine) = eligible(string) else {
+        return false;
+    };
+    let key = (src.as_ptr() as usize, src.len());
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut counts: Counts = HashMap::new();
+            let mut root = string;
+            while let Some(p) = root.parent() {
+                root = p;
             }
+            let mut cursor = root.walk();
+            if cursor.goto_first_child() {
+                'walk: loop {
+                    let n = cursor.node();
+                    if let Some(v) = eligible(n) {
+                        counts.entry(v).or_insert((0, n.start_byte())).0 += 1;
+                    }
+                    if cursor.goto_first_child() {
+                        continue;
+                    }
+                    while !cursor.goto_next_sibling() {
+                        if !cursor.goto_parent() {
+                            break 'walk;
+                        }
+                    }
+                }
+            }
+            *c = Some((key, counts));
         }
-    }
+        c.as_ref()
+            .and_then(|(_, counts)| counts.get(&mine))
+            .is_some_and(|(count, first)| *count >= 3 && *first == string.start_byte())
+    })
 }
 
 fn casts_after_instanceof(statement: Node, src: &[u8]) -> bool {
@@ -4123,7 +4320,7 @@ mod tests {
         assert_eq!(flagged("java/interface-name", src), [10]);
         assert_eq!(flagged("java/constant-name", src), [2]);
         assert_eq!(flagged("java/field-name", src), [5]);
-        assert_eq!(flagged("java/method-name", src), [7]);
+        assert_eq!(flagged("java/method-name", src), [7, 8]);
         assert_eq!(flagged("java/local-variable-name", src), [7, 7]);
         assert_eq!(flagged("java/type-parameter-name", src), [11]);
     }
@@ -4270,7 +4467,7 @@ mod tests {
         assert!(flagged("java/identical-methods", src).is_empty());
         assert_eq!(flagged("java/mutable-public-static", src), [12]);
         assert_eq!(flagged("java/unused-local-variable", src), [13]);
-        assert_eq!(flagged("java/object-for-get-class", src), [15]);
+        assert_eq!(flagged("java/object-for-get-class", src), [14, 15]);
         assert_eq!(flagged("java/junit-assert-simplifiable", src), [16]);
     }
 
@@ -4285,5 +4482,17 @@ mod tests {
         assert_eq!(flagged("java/instance-initializer", src), [9]);
         assert_eq!(flagged("java/key-set-iteration", src), [10]);
         assert!(flagged("java/default-package", src).is_empty());
+    }
+
+    #[test]
+    fn write_only_private_fields_are_unused() {
+        let src = "class A {\nprivate final Object written;\nprivate final Object read;\nA(Object written, Object read) { this.written = written; this.read = read; }\nObject get() { return read; }\n}";
+        assert_eq!(flagged("java/unused-private-field", src), [2]);
+    }
+
+    #[test]
+    fn string_names_compared_by_reference() {
+        let src = "class A {\nboolean f(String a, String b, int n, int m) { return a == b; }\nboolean g(int n, int m) { return n == m; }\nboolean h(Integer a, String b) { return a == b; }\n}";
+        assert_eq!(flagged("java/string-reference-equality", src), [2, 4]);
     }
 }
