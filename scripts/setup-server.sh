@@ -5,6 +5,10 @@
 # upgrades it.
 #
 # Settings are saved in .env, so later runs need no options:
+#   --image REF              run this published server image, such as the
+#                            ghcr.io/...@sha256:... digest a release's notes
+#                            give, instead of building this checkout
+#   --build                  go back to building this checkout
 #   --port PORT              publish on 127.0.0.1:PORT instead of 9000
 #   --github-app ID KEY.pem  decorate pull requests with this GitHub App
 #   --lan [IP]               also serve plain HTTP on this LAN address (by
@@ -20,7 +24,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/setup-server.sh [--port PORT] [--github-app ID KEY.pem] [--lan [IP]] [--https [IP][:PORT]] [--public-url URL]" >&2
+  echo "usage: scripts/setup-server.sh [--image REF | --build] [--port PORT] [--github-app ID KEY.pem] [--lan [IP]] [--https [IP][:PORT]] [--public-url URL]" >&2
   exit 2
 }
 die() {
@@ -44,9 +48,11 @@ lan_address() {
   fi
 }
 
-port='' app_id='' app_key='' lan=false lan_host='' https=false https_address='' public_url=''
+image='' build=false port='' app_id='' app_key='' lan=false lan_host='' https=false https_address='' public_url=''
 while [ $# -gt 0 ]; do
   case $1 in
+    --image) [ $# -ge 2 ] || usage; image=$2; shift 2 ;;
+    --build) build=true; shift ;;
     --port) [ $# -ge 2 ] || usage; port=$2; shift 2 ;;
     --github-app) [ $# -ge 3 ] || usage; app_id=$2; app_key=$3; shift 3 ;;
     --lan)
@@ -65,6 +71,12 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
+[ -z "$image" ] || [ "$build" = false ] || die "--image and --build are opposites: use one"
+case $image in
+  '' | */*@sha256:????????????????????????????????????????????????????????????????) ;;
+  */*) echo "Note: $image isn't pinned by digest (name@sha256:...), so a later pull may get a different image." ;;
+  *) die "--image takes a registry path, such as ghcr.io/lvaoliveira/sonda@sha256:..." ;;
+esac
 if [ -n "$port" ]; then
   if ! is_number "$port" || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
     die "--port must be a port number"
@@ -124,6 +136,11 @@ if [ -n "$app_id" ]; then
 fi
 chmod 644 secrets/*
 
+[ -z "$image" ] || set_ SONDA_IMAGE "$image"
+if [ "$build" = true ]; then
+  grep -v '^SONDA_IMAGE=' .env > .env.new || true
+  mv .env.new .env
+fi
 [ -z "$port" ] || set_ SONDA_PORT "$port"
 [ -z "$public_url" ] || set_ SONDA_PUBLIC_URL "$public_url"
 [ "$lan" = false ] || set_ SONDA_LAN_ADDRESS "$lan_host"
@@ -146,7 +163,12 @@ fi
 [ ! -f compose.override.yaml ] || files=$files:compose.override.yaml
 set_ COMPOSE_FILE "$files"
 
-docker compose up -d --build --wait
+if [ -n "$(get SONDA_IMAGE)" ]; then
+  docker compose pull sonda
+  docker compose up -d --wait
+else
+  docker compose up -d --build --wait
+fi
 
 port=$(get SONDA_PORT | grep . || echo 9000)
 echo

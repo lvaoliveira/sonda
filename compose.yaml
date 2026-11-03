@@ -12,7 +12,9 @@ name: sonda
 services:
   sonda:
     build: .
-    image: sonda-server:local
+    # `scripts/setup-server.sh --image ghcr.io/...@sha256:...` runs a published
+    # release instead of building this checkout.
+    image: ${SONDA_IMAGE:-sonda-server:local}
     # Published on this machine only; put a TLS reverse proxy in front to
     # expose it. SONDA_PORT (in .env) moves it off 9000.
     ports: ["127.0.0.1:${SONDA_PORT:-9000}:9000"]
