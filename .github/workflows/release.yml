@@ -50,17 +50,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${GITHUB_REF_NAME#v}
-          if ! grep -qx "version = \"$version\"" Cargo.toml; then
-            echo "::error::the tag is $GITHUB_REF_NAME, but Cargo.toml's version isn't $version"
+          # A release candidate, v0.2.0-rc.1, is 0.2.0's, from the same
+          # commit and notes, published as a pre-release: everything a
+          # release does, run for real, while CI's "last release" (compat,
+          # upgrade) stays the last one, since GitHub's latest skips
+          # pre-releases.
+          base=${version%-rc.*}
+          extra=()
+          [ "$base" = "$version" ] || extra+=(--prerelease)
+          if ! grep -qx "version = \"$base\"" Cargo.toml; then
+            echo "::error::the tag is $GITHUB_REF_NAME, but Cargo.toml's version isn't $base"
             exit 1
           fi
-          awk -v v="$version" '/^## \[/ { p = index($0, "## [" v "]") == 1; next } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          awk -v v="$base" '/^## \[/ { p = index($0, "## [" v "]") == 1; next } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
-            echo "::error::CHANGELOG.md has no section for $version"
+            echo "::error::CHANGELOG.md has no section for $base"
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-            --title "sonda $version" --notes-file "$RUNNER_TEMP/notes.md"
+            --title "sonda $version" --notes-file "$RUNNER_TEMP/notes.md" "${extra[@]}"
 
   cli:
     needs: draft
@@ -204,7 +212,9 @@ jobs:
 
   # One tag for both architectures, and its digest in the release notes.
   image-tag:
-    needs: image
+    # The CLI too: the image's SBOM is made with the x86_64 binary the cli
+    # job attaches to the draft.
+    needs: [image, cli]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

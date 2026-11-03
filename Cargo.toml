@@ -4,7 +4,7 @@ resolver = "3"
 
 # Shared by every crate, so versions and metadata cannot drift apart.
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
@@ -15,7 +15,7 @@ repository = "https://github.com/lvaoliveira/sonda"
 # through rustls and its PEM handling.
 base64 = "0.22.1"
 ring = "0.17.14"
-sonda-core = { path = "crates/sonda-core", version = "0.1.0" }
+sonda-core = { path = "crates/sonda-core", version = "0.2.0" }
 anyhow = "1.0.104"
 argon2 = "0.6.0"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "query", "tokio", "tracing"] }

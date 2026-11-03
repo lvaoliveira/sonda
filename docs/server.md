@@ -14,7 +14,7 @@ as `admin`.
 From a checkout of a release (or of `main`, for what's next):
 
 ```sh
-git clone --branch v0.1.0 https://github.com/lvaoliveira/sonda.git && cd sonda
+git clone --branch v0.2.0 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 open http://127.0.0.1:9000     # sign in as admin, password in secrets/admin_password
 ```

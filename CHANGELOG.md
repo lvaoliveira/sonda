@@ -7,6 +7,17 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-03
+
+Connecting GitHub no longer takes a hand-made App: Administration creates
+it with GitHub's App manifest flow, its key stored encrypted under the new
+`SONDA_SECRET_KEY`. Releases now publish the server image to
+`ghcr.io/lvaoliveira/sonda`, with build provenance and an SBOM for every
+artifact. Old branch analyses are thinned, CI holds each server to the last
+release's CLI and data, and [docs/stability.md](docs/stability.md) says
+what 1.0 will promise. **Upgrading:** rerun `scripts/setup-server.sh`, which
+creates `secrets/secret_key`.
+
 ### Added
 
 - Releases attest where each binary and the server image were built (build
@@ -25,6 +36,9 @@ file, the report formats and the public library API.
   `scripts/setup-server.sh` creates as `secrets/secret_key`. **Upgrading
   with `docker compose` alone needs that file first**: rerun the script,
   or create it (docs/server.md). A configured App still works, and wins.
+  Administration shows where the App is installed, asked of GitHub, and
+  GitHub sends the admin back to the address they started from, so a
+  server reached on a LAN and a tailnet works from either.
 - Retention: branch analyses older than 90 days are thinned to one a day
   (`SONDA_THIN_ANALYSES_AFTER_DAYS`, `0` keeps every analysis), always
   keeping each branch's first and latest, the analysis the new code period
@@ -45,6 +59,22 @@ file, the report formats and the public library API.
 - The web app shows the server's version beside the wordmark, and the
   server logs it at startup. `GET /api/session` reports it to whoever can
   read.
+
+### Changed
+
+- C#: rules see types from the platform's declarations: conversions and
+  overload resolution ([ADR-0022](docs/adr/0022-platform-types.md)), so
+  more rules match SonarQube exactly, among them unnecessary usings,
+  ignored results and localizable literals.
+- Java: many rules aligned with SonarQube on real code (commons-lang among
+  it): constructors, interfaces and enum constants covered where SonarQube
+  covers them, and write-only private fields and unused type parameters
+  found. Three rules no longer rescan the file on each call, which timed
+  out on large test files.
+- Python: rule fixes from real code (branches, unpacking targets, slices,
+  TLS contexts, `dict()` literals); commented-out code is found by parsing
+  the comment, once per block; and a file declaring a Latin-1 coding is
+  analyzed instead of skipped.
 
 ## [0.1.0] - 2026-11-02
 
