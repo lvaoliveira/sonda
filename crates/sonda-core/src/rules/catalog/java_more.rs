@@ -128,7 +128,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2201")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "toLowerCase" "toUpperCase" "trim" "strip" "substring" "repeat" "toCharArray" "equals" "equalsIgnoreCase" "isEmpty" "startsWith" "endsWith"))) @match"#,
+            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "toLowerCase" "toUpperCase" "trim" "strip" "substring" "repeat" "toCharArray" "equals" "equalsIgnoreCase" "isEmpty" "startsWith" "endsWith" "hashCode" "toString" "parseInt" "parseLong" "parseDouble" "parseFloat" "parseBoolean" "length" "charAt" "concat" "compareTo" "isBlank" "matches"))) @match"#,
             filter: None,
         },
         example: Some(Example {
