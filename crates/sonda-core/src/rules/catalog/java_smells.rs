@@ -1781,8 +1781,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4144")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_body) @match"#,
-            filter: Some(Find(method_duplicates_another)),
+            query: r#"(method_declaration) @match"#,
+            filter: Some(Keep(method_duplicates_another)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -3742,26 +3742,27 @@ fn if_on_line_where_previous_ended<'t>(block: Node<'t>, _: &[u8]) -> Option<Node
     })
 }
 
-fn method_duplicates_another<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Overloads differ in their parameter types and cannot be merged.
-    let mut seen: Vec<(Vec<&[u8]>, &[u8])> = Vec::new();
-    for m in members(body) {
-        if m.kind() != "method_declaration" {
-            continue;
-        }
-        let Some(b) = m.child_by_field_name("body") else {
-            continue;
-        };
-        if b.named_child_count() < 2 || b.end_position().row - b.start_position().row < 2 {
-            continue;
-        }
-        let key = (parameter_types(m, src), text(b, src));
-        if seen.contains(&key) {
-            return Some(m);
-        }
-        seen.push(key);
+/// A method whose body repeats an earlier method's with the same parameter
+/// types. Overloads that differ in their parameter types cannot be merged.
+fn method_duplicates_another(method: Node, src: &[u8]) -> bool {
+    let (Some(body), Some(class_body)) = (method.child_by_field_name("body"), method.parent())
+    else {
+        return false;
+    };
+    let substantial =
+        |b: Node| b.named_child_count() >= 2 && b.end_position().row - b.start_position().row >= 2;
+    if !substantial(body) {
+        return false;
     }
-    None
+    let key = (parameter_types(method, src), text(body, src));
+    members(class_body)
+        .into_iter()
+        .take_while(|m| m.start_byte() < method.start_byte())
+        .filter(|m| m.kind() == "method_declaration")
+        .any(|m| {
+            m.child_by_field_name("body")
+                .is_some_and(|b| (parameter_types(m, src), text(b, src)) == key)
+        })
 }
 
 fn null_check_before_instanceof(binary: Node, src: &[u8]) -> bool {
@@ -4030,7 +4031,7 @@ fn private_method_is_never_used(method: Node, src: &[u8]) -> bool {
     !matches!(
         n,
         b"readObject" | b"writeObject" | b"readResolve" | b"writeReplace" | b"readObjectNoData"
-    ) && count_word(src, n) == 1
+    ) && identifier_uses(super::java_final::root_of(method), n, src) == 1
 }
 
 fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
@@ -4064,7 +4065,7 @@ fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
         match class {
             Some(c) => {
                 !file_accesses_member(src, n)
-                    && (count_word(text(c, src), n) == 1 || field_is_only_written(c, n, src))
+                    && (identifier_uses(c, n, src) == 1 || field_is_only_written(c, n, src))
             }
             None => count_word(src, n) == 1,
         }
@@ -4194,7 +4195,29 @@ fn local_is_never_used(declaration: Node, src: &[u8]) -> bool {
     };
     declarator_names(declaration, src)
         .iter()
-        .any(|n| *n != b"_" && count_word(text(scope, src), n) == 1)
+        .any(|n| *n != b"_" && identifier_uses(scope, n, src) == 1)
+}
+
+/// How many identifiers in `scope` carry this name; comments and string
+/// contents that happen to contain it do not count as uses.
+fn identifier_uses(scope: Node, name: &[u8], src: &[u8]) -> usize {
+    let mut count = 0;
+    let mut cursor = scope.walk();
+    'walk: loop {
+        let n = cursor.node();
+        if n.kind() == "identifier" && text(n, src) == name {
+            count += 1;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() || cursor.node().id() == scope.id() {
+                break 'walk;
+            }
+        }
+    }
+    count
 }
 
 /// Whether this is the first of three or more equal literals in the file,
