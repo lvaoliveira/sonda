@@ -1248,11 +1248,39 @@ fn calls_a_deprecated_method_in_the_file(call: Node, src: &[u8]) -> bool {
     deprecated_target(call, src).is_some()
 }
 
+/// JDK methods deprecated for removal that need no declaration in the file.
+fn is_a_jdk_method_marked_for_removal(call: Node, src: &[u8]) -> bool {
+    let name = method_name(call, src);
+    let Some(object) = call.child_by_field_name("object") else {
+        return false;
+    };
+    let object_type: &[u8] = if object.kind() == "identifier" {
+        let declared = type_text(declared_type(call, text(object, src), src), src);
+        if declared.is_empty() {
+            text(object, src)
+        } else {
+            declared
+        }
+    } else {
+        return false;
+    };
+    match base_type(object_type) {
+        b"ThreadGroup" => matches!(
+            name,
+            b"destroy" | b"isDestroyed" | b"setDaemon" | b"isDaemon"
+        ),
+        b"Thread" => matches!(name, b"stop" | b"suspend" | b"resume" | b"countStackFrames"),
+        b"System" | b"Runtime" => name == b"runFinalization",
+        _ => false,
+    }
+}
+
 fn calls_a_method_marked_for_removal(call: Node, src: &[u8]) -> bool {
-    deprecated_target(call, src).is_some_and(|m| {
-        let t = text(m.child(0).unwrap_or(m), src);
-        count_word(t, b"forRemoval") > 0 && count_word(t, b"true") > 0
-    })
+    is_a_jdk_method_marked_for_removal(call, src)
+        || deprecated_target(call, src).is_some_and(|m| {
+            let t = text(m.child(0).unwrap_or(m), src);
+            count_word(t, b"forRemoval") > 0 && count_word(t, b"true") > 0
+        })
 }
 
 #[cfg(test)]

@@ -203,8 +203,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1948")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_declaration (super_interfaces) @i) @match"#,
-            filter: Some(Find(non_serializable_field)),
+            query: r#"(field_declaration) @match"#,
+            filter: Some(Keep(non_serializable_field)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -717,38 +717,48 @@ fn casts_to_its_own_type(cast: Node, src: &[u8]) -> bool {
     }
 }
 
-fn non_serializable_field<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if !implements(class, src, b"Serializable") {
-        return None;
+fn non_serializable_field(field: Node, src: &[u8]) -> bool {
+    let Some(class) = enclosing_class(field) else {
+        return false;
+    };
+    if !implements(class, src, b"Serializable")
+        || has_modifier(field, "static")
+        || has_modifier(field, "transient")
+        || field.parent().and_then(|b| b.parent()) != Some(class)
+    {
+        return false;
     }
-    let body = class.child_by_field_name("body")?;
-    members(body).into_iter().find(|m| {
-        if m.kind() != "field_declaration"
-            || has_modifier(*m, "static")
-            || has_modifier(*m, "transient")
-        {
-            return false;
-        }
-        m.child_by_field_name("type").is_some_and(|t| {
-            let head = text(t, src)
-                .split(|&b| b == b'<')
-                .next()
-                .unwrap_or(&b""[..]);
-            matches!(
-                head,
-                b"List"
-                    | b"Map"
-                    | b"Set"
-                    | b"Collection"
-                    | b"Queue"
-                    | b"Deque"
-                    | b"Optional"
-                    | b"Iterator"
-                    | b"Stream"
-                    | b"Thread"
-            )
-        })
-    })
+    let Some(ty) = field.child_by_field_name("type") else {
+        return false;
+    };
+    let head = text(ty, src)
+        .split(|&b| b == b'<')
+        .next()
+        .unwrap_or(&b""[..]);
+    // a bare type parameter of the class may be bound to anything
+    let is_type_parameter = ty.kind() == "type_identifier"
+        && class
+            .child_by_field_name("type_parameters")
+            .is_some_and(|tp| {
+                children_of_kind(tp, "type_parameter")
+                    .iter()
+                    .any(|p| p.named_child(0).is_some_and(|n| text(n, src) == head))
+            });
+    is_type_parameter
+        || matches!(
+            head,
+            b"List"
+                | b"Map"
+                | b"Set"
+                | b"Collection"
+                | b"Queue"
+                | b"Deque"
+                | b"Optional"
+                | b"Iterator"
+                | b"Stream"
+                | b"Thread"
+                | b"Comparator"
+        )
 }
 
 fn private_in_extensible_class(method: Node, src: &[u8]) -> bool {
