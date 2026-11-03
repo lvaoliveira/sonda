@@ -385,19 +385,24 @@ async fn a_configured_app_or_a_missing_secret_key_leaves_nothing_to_create() {
         "{e}"
     );
 
-    // SONDA_PUBLIC_URL, when set, is the address GitHub sends back to.
-    let public = server_with(Connection::new(
-        None,
-        Some(secret_key(1)),
-        "https://api.github.com".into(),
-        Some("https://sonda.example.com".into()),
-    ));
+    // GitHub sends the browser back to the address it's on, from its
+    // Origin: a server reached on a LAN and a tailnet brings the admin back
+    // to the one they started from. SONDA_PUBLIC_URL is the App's homepage,
+    // and the way back only without an Origin.
+    let public_url = || {
+        server_with(Connection::new(
+            None,
+            Some(secret_key(1)),
+            "https://api.github.com".into(),
+            Some("https://sonda.example.com".into()),
+        ))
+    };
     let (_, form) = send(
-        &public,
+        &public_url(),
         "POST",
         "/api/github/app/manifest",
         &ada,
-        Some(new_app),
+        Some(new_app.clone()),
     )
     .await;
     assert!(
@@ -409,6 +414,43 @@ async fn a_configured_app_or_a_missing_secret_key_leaves_nothing_to_create() {
     let manifest: Value = serde_json::from_str(form["manifest"].as_str().unwrap()).unwrap();
     assert_eq!(
         manifest["redirect_url"],
+        format!("{ORIGIN}/admin/github/created")
+    );
+    assert_eq!(manifest["url"], "https://sonda.example.com");
+    let without_origin = |server: axum::Router| {
+        let (ada, new_app) = (ada.clone(), new_app.clone());
+        async move {
+            let request = Request::post("/api/github/app/manifest")
+                .header(header::COOKIE, ada)
+                .header("sonda-csrf", "1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(new_app.to_string()))
+                .unwrap();
+            let response = server.oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+    let (status, form) = without_origin(public_url()).await;
+    assert_eq!(status, StatusCode::OK, "{form}");
+    let manifest: Value = serde_json::from_str(form["manifest"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        manifest["redirect_url"],
         "https://sonda.example.com/admin/github/created"
+    );
+    let nowhere = server_with(Connection::new(
+        None,
+        Some(secret_key(1)),
+        "https://api.github.com".into(),
+        None,
+    ));
+    let (status, e) = without_origin(nowhere).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        e["error"].as_str().unwrap().contains("SONDA_PUBLIC_URL"),
+        "{e}"
     );
 }

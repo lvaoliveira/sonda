@@ -217,12 +217,12 @@ fn is_login(s: &str) -> bool {
         && !s.starts_with('-')
 }
 
-/// The server's address as the admin's browser reaches it: SONDA_PUBLIC_URL,
-/// else the request's `Origin`, which a browser sends on every POST.
-fn base_url(state: &State, headers: &HeaderMap) -> Result<String, ApiError> {
-    if let Some(url) = &state.github.public_url {
-        return Ok(url.clone());
-    }
+/// Where GitHub sends the admin's browser back: the address the browser is
+/// on, from the request's `Origin`, which a browser sends on every POST. A
+/// server reached at several addresses (a LAN, a tailnet) brings the admin
+/// back to the one they started from, which SONDA_PUBLIC_URL might not be
+/// reachable from. That only without an `Origin`.
+fn return_url(state: &State, headers: &HeaderMap) -> Result<String, ApiError> {
     headers
         .get(header::ORIGIN)
         .and_then(|o| o.to_str().ok())
@@ -233,6 +233,7 @@ fn base_url(state: &State, headers: &HeaderMap) -> Result<String, ApiError> {
             rest.is_some_and(|r| !r.is_empty() && !r.contains('/'))
         })
         .map(str::to_string)
+        .or_else(|| state.github.public_url.clone())
         .ok_or_else(|| {
             ApiError::BadRequest(
                 "set SONDA_PUBLIC_URL, the server's address, so GitHub can send you back".into(),
@@ -281,7 +282,7 @@ pub async fn manifest(
             "that isn't an organization's name on GitHub".into(),
         ));
     }
-    let base = base_url(&state, &headers)?;
+    let back = return_url(&state, &headers)?;
     let mut bytes = [0u8; 16];
     SystemRandom::new()
         .fill(&mut bytes)
@@ -294,9 +295,11 @@ pub async fn manifest(
     }
     let manifest = json!({
         "name": name,
-        "url": base,
+        // The App's homepage, on its GitHub page: the server's address for
+        // everyone, when it has one.
+        "url": state.github.public_url.as_deref().unwrap_or(&back),
         "description": "Decorates pull requests with sonda's analyses.",
-        "redirect_url": format!("{base}{CREATED_PATH}"),
+        "redirect_url": format!("{back}{CREATED_PATH}"),
         "public": false,
         // As ADR-0021; no webhook, so no hook_attributes or events.
         "default_permissions": {
