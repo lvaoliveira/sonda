@@ -584,6 +584,42 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<Found, Error> {
     })
 }
 
+/// A source file's text: UTF-8, or for Python the Latin-1 family a PEP 263
+/// coding declaration on one of the first two lines names. `None` for any
+/// other byte sequence that is not UTF-8.
+pub(crate) fn decode_source(rel: &str, bytes: Vec<u8>) -> Option<String> {
+    match String::from_utf8(bytes) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            let bytes = e.into_bytes();
+            (rel.ends_with(".py") && declares_latin1(&bytes))
+                .then(|| bytes.iter().map(|&b| char::from(b)).collect())
+        }
+    }
+}
+
+/// Whether line one or two is a `coding[:=] latin-1` style declaration.
+fn declares_latin1(bytes: &[u8]) -> bool {
+    bytes.split(|&b| b == b'\n').take(2).any(|line| {
+        let line = String::from_utf8_lossy(line).to_ascii_lowercase();
+        let Some(rest) = line.trim_start().strip_prefix('#') else {
+            return false;
+        };
+        let Some(at) = rest.find("coding") else {
+            return false;
+        };
+        let name: String = rest[at + "coding".len()..]
+            .trim_start_matches([':', '=', ' ', '\t'])
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            .collect();
+        matches!(
+            name.replace('_', "-").as_str(),
+            "latin-1" | "latin1" | "iso-8859-1" | "iso8859-1" | "l1" | "cp819" | "8859"
+        )
+    })
+}
+
 /// A candidate's source text, or the warning explaining why it is skipped.
 fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<String, String> {
     let rel = &c.rel;
@@ -591,7 +627,8 @@ fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<Strin
     let bytes = read_capped(c, max_bytes)
         .map_err(|e| format!("{rel}: {e}"))?
         .ok_or_else(|| format!("{rel}: skipped, larger than {max_kb} KB"))?;
-    let src = String::from_utf8(bytes).map_err(|_| format!("{rel}: skipped, not valid UTF-8"))?;
+    let src =
+        decode_source(rel, bytes).ok_or_else(|| format!("{rel}: skipped, not valid UTF-8"))?;
     let src = if rel.ends_with(".vue") {
         vue_script_only(&src)
     } else {
@@ -812,6 +849,20 @@ fn relative(path: &Path, root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn latin1_python_is_decoded_when_declared() {
+        let declared = b"# -*- coding: iso-8859-1 -*-\nx = '\xe9'\n".to_vec();
+        assert_eq!(
+            crate::scanner::decode_source("a.py", declared).as_deref(),
+            Some("# -*- coding: iso-8859-1 -*-\nx = '\u{e9}'\n")
+        );
+        let undeclared = b"x = '\xe9'\n".to_vec();
+        assert!(crate::scanner::decode_source("a.py", undeclared.clone()).is_none());
+        assert!(crate::scanner::decode_source("a.js", undeclared).is_none());
+        let utf8 = "x = 'é'\n".as_bytes().to_vec();
+        assert!(crate::scanner::decode_source("a.py", utf8).is_some());
+    }
+
     #[test]
     fn vue_components_keep_only_their_script_in_place() {
         let sfc = "<template>\n  <p>é</p>\n</template>\n<script setup lang=\"ts\">\nconst a = 1;\n</script>\n<style>p { }</style>\n";

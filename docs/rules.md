@@ -15122,7 +15122,7 @@ SonarQube: S101
 Noncompliant:
 
 ```python
-class my_class:
+class My_class:
     pass
 ```
 

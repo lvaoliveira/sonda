@@ -78,7 +78,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(keyword_argument name: (identifier) @n (#eq? @n "verify") value: (false)) @match
-(attribute object: (identifier) @o attribute: (identifier) @a (#eq? @o "ssl") (#any-of? @a "CERT_NONE" "_create_unverified_context")) @match"#,
+(attribute object: (identifier) @o attribute: (identifier) @a (#eq? @o "ssl") (#any-of? @a "CERT_NONE" "_create_unverified_context" "_create_stdlib_context")) @match"#,
             filter: Some(Keep(is_not_jwt_decode)),
         },
         example: Some(Example {
@@ -98,7 +98,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5527")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(assignment left: (attribute attribute: (identifier) @a (#eq? @a "check_hostname")) right: (false)) @match"#,
+            query: r#"(assignment left: (attribute attribute: (identifier) @a (#eq? @a "check_hostname")) right: (false)) @match
+(attribute object: (identifier) @o attribute: (identifier) @a2 (#eq? @o "ssl") (#any-of? @a2 "_create_unverified_context" "_create_stdlib_context")) @match"#,
             filter: None,
         },
         example: Some(Example {
@@ -705,6 +706,10 @@ fn is_public_cleartext_url(string: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
+    // A bare scheme is a URL assembled by concatenation.
+    if rest.is_empty() {
+        return true;
+    }
     let end = rest
         .iter()
         .position(|&b| matches!(b, b'/' | b':' | b'?' | b'#' | b'\\'))

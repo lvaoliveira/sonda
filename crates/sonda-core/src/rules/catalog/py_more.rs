@@ -716,7 +716,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "class my_class:\n    pass\n",
+            bad: "class My_class:\n    pass\n",
             good: "class MyClass:\n    pass\n",
         }),
     },
@@ -793,6 +793,10 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(assignment left: (identifier) @match)
+(for_statement left: (identifier) @match)
+(for_in_clause left: (identifier) @match)
+(pattern_list (identifier) @match)
+(tuple_pattern (identifier) @match)
 (parameters (identifier) @match)
 (default_parameter name: (identifier) @match)
 (typed_parameter (identifier) @match)
@@ -899,6 +903,8 @@ pub(super) static RULES: &[Rule] = &[
             langs: PYTHON,
             query: r#"(assignment left: (identifier) @match)
 (assignment left: (pattern_list (identifier) @match))
+(assignment left: (tuple_pattern (identifier) @match))
+(assignment left: (pattern_list (tuple_pattern (identifier) @match)))
 (for_statement left: (identifier) @match)
 (for_statement left: (pattern_list (identifier) @match))
 (except_clause (as_pattern alias: (as_pattern_target (identifier) @match)))"#,
@@ -2629,17 +2635,20 @@ pub(super) fn is_dunder(name: &[u8]) -> bool {
 }
 
 fn class_name_is_not_pascal_case(name: Node, src: &[u8]) -> bool {
+    // SonarQube's `^_?([A-Z_][a-zA-Z0-9]*|[a-z_][a-z0-9_]*)$`.
     let n = text(name, src);
-    let t = n.trim_ascii_start();
-    let t = t.strip_prefix(b"_").unwrap_or(t);
-    let t = t.strip_prefix(b"_").unwrap_or(t);
-    let all_caps = t
-        .iter()
-        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_');
-    !t.is_empty()
-        && !is_dunder(n)
-        && !all_caps
-        && !(t[0].is_ascii_uppercase() && !t.contains(&b'_'))
+    let t = n.strip_prefix(b"_").unwrap_or(n);
+    let camel = t
+        .first()
+        .is_some_and(|b| b.is_ascii_uppercase() || *b == b'_')
+        && t[1..].iter().all(u8::is_ascii_alphanumeric);
+    let snake = t
+        .first()
+        .is_some_and(|b| b.is_ascii_lowercase() || *b == b'_')
+        && t[1..]
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_');
+    !t.is_empty() && !is_dunder(n) && !(camel || snake)
 }
 
 const FRAMEWORK_METHODS: &[&[u8]] = &[
@@ -2888,7 +2897,9 @@ fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
     }
     match name.parent().map(|p| p.kind()) {
         // module and class level names are constants, not locals
-        Some("assignment") => nearest_function(name, 20).is_some(),
+        Some(
+            "assignment" | "for_statement" | "for_in_clause" | "pattern_list" | "tuple_pattern",
+        ) => nearest_function(name, 20).is_some(),
         Some(_) => true,
         None => false,
     }
@@ -3477,8 +3488,16 @@ fn async_function_takes_timeout<'t>(function: Node<'t>, src: &[u8]) -> Option<No
         .map(|(p, _)| p)
 }
 
-fn async_function_never_awaits(function: Node, _: &[u8]) -> bool {
-    if !has_token(function, "async") || in_class(function) || is_decorated(function) {
+fn async_function_never_awaits(function: Node, src: &[u8]) -> bool {
+    if !has_token(function, "async") || is_decorated(function) {
+        return false;
+    }
+    // `__aenter__` and friends are protocol methods; the rest of a class
+    // may await nothing without being wrong, but SonarQube still says so.
+    if function
+        .child_by_field_name("name")
+        .is_some_and(|n| text(n, src).starts_with(b"__"))
+    {
         return false;
     }
     let Some(body) = body_of(function) else {
@@ -3839,7 +3858,7 @@ mod tests {
 
     #[test]
     fn naming() {
-        let src = "class my_class:\n    def doThing(self):\n        self.myField = 1\n    def __init__(self):\n        pass\n    def setUp(self):\n        pass\ndef fooBar(ArgOne, ok_arg):\n    LocalVar = 1\n    good = 2\nMODULE_CONST = 3\n";
+        let src = "class My_class:\n    def doThing(self):\n        self.myField = 1\n    def __init__(self):\n        pass\n    def setUp(self):\n        pass\ndef fooBar(ArgOne, ok_arg):\n    LocalVar = 1\n    good = 2\nMODULE_CONST = 3\n";
         assert_eq!(flagged("py/class-name", src), [1]);
         assert_eq!(flagged("py/method-name", src), [2]);
         assert_eq!(flagged("py/function-name", src), [8]);
