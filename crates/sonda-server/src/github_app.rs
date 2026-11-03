@@ -389,6 +389,26 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(connection.status())))
 }
 
+/// `GET /api/github/app/installations`, admins only: where the App is
+/// installed, asked of GitHub each time.
+pub async fn installations(
+    axum::extract::State(state): axum::extract::State<State>,
+) -> Result<Json<Vec<github::Installation>>, ApiError> {
+    let app = state
+        .github
+        .app()
+        .ok_or_else(|| ApiError::Unprocessable("no GitHub App is connected".into()))?;
+    tokio::task::spawn_blocking(move || app.installations())
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("the GitHub task failed: {e}")))?
+        .map(Json)
+        .map_err(|e| {
+            ApiError::Unprocessable(format!(
+                "GitHub didn't say where the App is installed: {e:#}"
+            ))
+        })
+}
+
 /// `DELETE /api/github/app`, admins only: forgets a stored App. It stays on
 /// GitHub, which only its owner can delete.
 pub async fn disconnect(

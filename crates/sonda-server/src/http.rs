@@ -149,6 +149,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
                 .delete(github_app::disconnect),
         )
         .route("/github/app/manifest", post(github_app::manifest))
+        .route("/github/app/installations", get(github_app::installations))
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

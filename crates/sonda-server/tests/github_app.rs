@@ -7,8 +7,9 @@ mod common;
 use axum::Json;
 use axum::body::Body;
 use axum::extract::Path as UrlPath;
+use axum::http::HeaderMap;
 use axum::http::{Request, StatusCode, header};
-use axum::routing::post;
+use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use common::{PASSWORD, TestDb, create_user, sign_in, state_with};
@@ -58,10 +59,46 @@ async fn fake_github(pem: String) -> String {
             )
         }),
     );
+    // Installed on some of one account's repositories, and all of another's.
+    let router = router
+        .route(
+            "/app/installations",
+            get(|headers: HeaderMap| async move {
+                assert!(bearer(&headers).starts_with("ey"), "the App's JWT");
+                Json(json!([
+                    {"id": 1, "account": {"login": "lvaoliveira"}, "repository_selection": "selected",
+                     "html_url": "https://github.com/settings/installations/1"},
+                    {"id": 2, "account": {"login": "acme"}, "repository_selection": "all",
+                     "html_url": "https://github.com/organizations/acme/settings/installations/2"},
+                ]))
+            }),
+        )
+        .route(
+            "/app/installations/1/access_tokens",
+            post(|Json(body): Json<Value>| async move {
+                assert_eq!(body, json!({"permissions": {"metadata": "read"}}));
+                (StatusCode::CREATED, Json(json!({"token": "ghs_1"})))
+            }),
+        )
+        .route(
+            "/installation/repositories",
+            get(|headers: HeaderMap| async move {
+                assert_eq!(bearer(&headers), "ghs_1");
+                Json(json!({"total_count": 1, "repositories": [{"full_name": "lvaoliveira/arandu"}]}))
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let api = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(axum::serve(listener, router).into_future());
     api
+}
+
+fn bearer(headers: &HeaderMap) -> String {
+    headers[header::AUTHORIZATION]
+        .to_str()
+        .unwrap()
+        .trim_start_matches("Bearer ")
+        .to_string()
 }
 
 async fn send(
@@ -239,6 +276,8 @@ async fn an_admin_creates_the_app_from_the_web_app() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "a state works once");
     assert!(connection.app().is_none());
+    let (status, _) = send(&server, "GET", "/api/github/app/installations", &ada, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "no App yet");
 
     // Created: decorating with it at once, its key stored encrypted.
     let (_, form) = send(
@@ -267,6 +306,18 @@ async fn an_admin_creates_the_app_from_the_web_app() {
     );
     assert_eq!(s["createdBy"], "ada");
     assert_eq!(connection.app().unwrap().id(), "77");
+    let (status, installed) =
+        send(&server, "GET", "/api/github/app/installations", &ada, None).await;
+    assert_eq!(status, StatusCode::OK, "{installed}");
+    assert_eq!(
+        installed,
+        json!([
+            {"account": "lvaoliveira", "settingsUrl": "https://github.com/settings/installations/1",
+             "repositories": ["lvaoliveira/arandu"]},
+            {"account": "acme", "settingsUrl": "https://github.com/organizations/acme/settings/installations/2",
+             "repositories": null},
+        ])
+    );
     let ciphertext: Vec<u8> = sqlx::query_scalar("SELECT ciphertext FROM encrypted_secrets")
         .fetch_one(&db.pool)
         .await

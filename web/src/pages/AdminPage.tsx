@@ -192,10 +192,13 @@ function GitHubAppState({ app, onDisconnect }: { app: GitHubApp; onDisconnect: (
   switch (app.source) {
     case 'config':
       return (
-        <p className="m-0 text-[13px] text-fg-muted">
-          App <Mono className="text-[12.5px] text-fg">{app.id}</Mono> is set in the server's configuration (<Mono className="text-[12px]">SONDA_GITHUB_APP_ID</Mono>), so it's changed
-          there, not here.
-        </p>
+        <>
+          <p className="m-0 text-[13px] text-fg-muted">
+            App <Mono className="text-[12.5px] text-fg">{app.id}</Mono> is set in the server's configuration (<Mono className="text-[12px]">SONDA_GITHUB_APP_ID</Mono>), so it's changed
+            there, not here.
+          </p>
+          <Installations installUrl={null} />
+        </>
       )
     case 'stored':
       return (
@@ -204,12 +207,10 @@ function GitHubAppState({ app, onDisconnect }: { app: GitHubApp; onDisconnect: (
             <a href={app.htmlUrl!} target="_blank" rel="noreferrer">
               <Mono className="text-[12.5px]">{app.slug}</Mono>
             </a>{' '}
-            is connected, created by {app.createdBy} on {shortDate(app.createdAt!)}. Install it on each repository whose pull requests it should decorate.
+            is connected, created by {app.createdBy} on {shortDate(app.createdAt!)}.
           </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <ExternalButton href={app.installUrl!}>Install it on repositories</ExternalButton>
-            {disconnect}
-          </div>
+          <Installations installUrl={app.installUrl} />
+          <div>{disconnect}</div>
         </>
       )
     case 'unreadable':
@@ -232,6 +233,62 @@ function GitHubAppState({ app, onDisconnect }: { app: GitHubApp; onDisconnect: (
         </p>
       )
   }
+}
+
+/** Where the App is installed, asked of GitHub: sonda has no webhook to be told. */
+function Installations({ installUrl }: { installUrl: string | null }) {
+  const api = useApi()
+  const installed = useAsync(() => api.githubAppInstallations(), [api])
+  if (installed.state === 'loading') return <p className="m-0 text-[13px] text-fg-faint">Asking GitHub where it's installed…</p>
+  if (installed.state === 'error')
+    return (
+      <p role="alert" className="m-0 text-[13px] text-crit">
+        {installed.error.message}
+      </p>
+    )
+  if (installed.data.length === 0)
+    return (
+      <>
+        <p className="m-0 text-[13px] text-fg-muted">It isn't installed on any repository yet, so it decorates nothing. Install it on each repository whose pull requests it should decorate.</p>
+        {installUrl && (
+          <div>
+            <ExternalButton href={installUrl}>Install it on repositories</ExternalButton>
+          </div>
+        )}
+      </>
+    )
+  return (
+    <>
+      <ul aria-label="Installed on" className="m-0 flex list-none flex-col p-0">
+        {installed.data.map((i) => (
+          <li key={i.account} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-line py-2.5 text-[13px] first:border-t-0">
+            <span className="font-semibold">{i.account}</span>
+            <span className="min-w-0 flex-1 text-fg-muted">
+              {i.repositories === null ? (
+                'all repositories'
+              ) : i.repositories.length === 0 ? (
+                'no repositories'
+              ) : (
+                <Mono className="text-[12.5px]">{i.repositories.map((r) => r.slice(r.indexOf('/') + 1)).join(', ')}</Mono>
+              )}
+            </span>
+            <a href={i.settingsUrl} target="_blank" rel="noreferrer">
+              Change repositories
+            </a>
+          </li>
+        ))}
+      </ul>
+      {installUrl && (
+        <p className="m-0 text-xs text-fg-faint">
+          Pull requests are decorated only in these repositories.{' '}
+          <a href={installUrl} target="_blank" rel="noreferrer">
+            Install it on another account
+          </a>
+          .
+        </p>
+      )}
+    </>
+  )
 }
 
 function CreateGitHubApp() {
