@@ -1211,7 +1211,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7504")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(for_statement right: (call function: (identifier) @f (#eq? @f "list"))) @match"#,
+            query: r#"(for_statement right: (call function: (identifier) @f (#eq? @f "list"))) @match
+(for_in_clause right: (call function: (identifier) @f2 (#eq? @f2 "list"))) @match"#,
             filter: Some(Keep(list_copy_is_not_needed)),
         },
         example: Some(Example {
@@ -2744,7 +2745,7 @@ fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
         {
             return None;
         }
-        let v = string_value(n, src).filter(|v| v.len() >= 10)?;
+        let v = string_value(n, src).filter(|v| v.len() >= 5)?;
         let identifier_like = v.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
         (!identifier_like).then(|| v.to_vec())
     };
@@ -2922,17 +2923,21 @@ fn copies_its_iterable(comprehension: Node, src: &[u8]) -> bool {
 }
 
 fn list_copy_is_not_needed(for_: Node, src: &[u8]) -> bool {
-    let (Some(call), Some(body)) = (
-        for_.child_by_field_name("right"),
-        for_.child_by_field_name("body"),
-    ) else {
+    let Some(call) = for_.child_by_field_name("right") else {
         return false;
     };
     let args = call_arguments(call);
     let [arg] = args.as_slice() else {
         return false;
     };
-    if arg.kind() != "identifier" {
+    // A comprehension cannot change what it iterates.
+    if for_.kind() == "for_in_clause" {
+        return matches!(arg.kind(), "identifier" | "attribute" | "call");
+    }
+    let Some(body) = for_.child_by_field_name("body") else {
+        return false;
+    };
+    if !matches!(arg.kind(), "identifier" | "attribute") {
         return false;
     }
     let name = text(*arg, src);

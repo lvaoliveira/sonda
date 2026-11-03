@@ -705,6 +705,10 @@ fn is_public_cleartext_url(string: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
+    // A bare scheme is a URL assembled by concatenation.
+    if rest.is_empty() {
+        return true;
+    }
     let end = rest
         .iter()
         .position(|&b| matches!(b, b'/' | b':' | b'?' | b'#' | b'\\'))

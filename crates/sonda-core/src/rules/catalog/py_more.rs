@@ -793,6 +793,10 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(assignment left: (identifier) @match)
+(for_statement left: (identifier) @match)
+(for_in_clause left: (identifier) @match)
+(pattern_list (identifier) @match)
+(tuple_pattern (identifier) @match)
 (parameters (identifier) @match)
 (default_parameter name: (identifier) @match)
 (typed_parameter (identifier) @match)
@@ -899,6 +903,8 @@ pub(super) static RULES: &[Rule] = &[
             langs: PYTHON,
             query: r#"(assignment left: (identifier) @match)
 (assignment left: (pattern_list (identifier) @match))
+(assignment left: (tuple_pattern (identifier) @match))
+(assignment left: (pattern_list (tuple_pattern (identifier) @match)))
 (for_statement left: (identifier) @match)
 (for_statement left: (pattern_list (identifier) @match))
 (except_clause (as_pattern alias: (as_pattern_target (identifier) @match)))"#,
@@ -2888,7 +2894,9 @@ fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
     }
     match name.parent().map(|p| p.kind()) {
         // module and class level names are constants, not locals
-        Some("assignment") => nearest_function(name, 20).is_some(),
+        Some(
+            "assignment" | "for_statement" | "for_in_clause" | "pattern_list" | "tuple_pattern",
+        ) => nearest_function(name, 20).is_some(),
         Some(_) => true,
         None => false,
     }
