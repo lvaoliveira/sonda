@@ -1,6 +1,8 @@
 # ADR-0024: Creating the GitHub App from the web app
 
-- Status: **proposed**
+- Status: **accepted; built** (2026-11-03): the encrypted store,
+  `SONDA_SECRET_KEY`, the endpoints, Administration → GitHub and the page
+  GitHub returns to. Next: the end-to-end check on a real server.
 - Date: 2026-11-03
 - Builds on ADR-0021 (pull request decoration), which left this under "Not
   now", and ADR-0023 (connecting a repository)
@@ -53,14 +55,15 @@ avoided storing credentials, so that's the decision here.
   - no `hook_attributes` and no `default_events`: no webhook, as today.
 - **Then installing it.** Once created, the section links to the App's
   "Install" page on GitHub, where the admin picks repositories. The
-  Connect page (ADR-0023) links there too when a repository isn't
-  installed yet.
+  Connect page (ADR-0023) links there too, since sonda can't tell which
+  repositories it's installed on.
 
 ### The return trip, and why it's a page
 
-- **`state` binds the flow to the admin's session.** The server makes a
-  random `state`, keeps it with the session for an hour, and accepts it
-  once.
+- **`state` binds the flow to the admin who started it.** The server
+  makes a random `state`, keeps it in memory with that admin's username
+  for an hour, and accepts it once, from that admin only. A restart in
+  between loses it, and the admin starts again.
 - **GitHub sends the browser to a web app page, not an API route.** The
   session cookie is `SameSite=Strict`, so a navigation from github.com
   arrives without it. The page then posts `{code, state}` to
@@ -70,6 +73,8 @@ avoided storing credentials, so that's the decision here.
   `POST /app-manifests/{code}/conversions`. It keeps the App's ID, slug,
   page URL and private key. It discards the client secret and webhook
   secret, which nothing uses (GitHub can make new ones later).
+- **The address GitHub sends back to** is `SONDA_PUBLIC_URL`, else the
+  `Origin` of the admin's request, the address the browser used.
 - **The return works on a LAN.** It's the admin's browser that comes
   back, not GitHub's servers, so `http://192.168.1.254:9300` works, the
   same way the Connect page's links to GitHub do.
@@ -121,10 +126,10 @@ Considered and rejected:
 
 | Endpoint | |
 |---|---|
-| `GET /api/github/app` | Admins only. `{"source": "config" \| "stored" \| "unreadable" \| null, "id", "slug", "htmlUrl", "installUrl", "createdAt"}`. Never the key. |
-| `POST /api/github/app/manifest` `{"owner": null \| "<org>", "name"}` | Admins only. `{"action": "<GitHub's URL with state>", "manifest": "<JSON>"}`, for the page to post as a form. Refused while an App is connected or without `SONDA_SECRET_KEY`. |
-| `POST /api/github/app` `{"code", "state"}` | Admins only. Exchanges the code and stores the App; `201` with the `GET` body. `state` that's unknown, used or expired gets `400`, as does a code GitHub refuses. |
-| `DELETE /api/github/app` | Admins only. Disconnects a stored App; `409` for a configured one. |
+| `GET /api/github/app` | Admins only. `{"source": "config" \| "stored" \| "unreadable" \| null, "id", "slug", "htmlUrl", "installUrl", "createdBy", "createdAt", "secretKey"}`. Never the key. |
+| `POST /api/github/app/manifest` `{"owner": null \| "<org>", "name"}` | Admins only. `{"action": "<GitHub's URL with state>", "manifest": "<JSON>"}`, for the page to post as a form. `422` while an App is connected or without `SONDA_SECRET_KEY`. |
+| `POST /api/github/app` `{"code", "state"}` | Admins only. Exchanges the code and stores the App; `201` with the `GET` body. `state` that's unknown, used, expired or another admin's gets `400`, as does a code GitHub refuses. |
+| `DELETE /api/github/app` | Admins only. Disconnects a stored or unreadable App, and answers with the `GET` body; `422` for a configured one. |
 
 ## Consequences
 
@@ -158,7 +163,7 @@ Considered and rejected:
 - A dump of the database doesn't contain the private key.
 - The key is never in an API response or a log line (tested as ADR-0021's
   are).
-- A `state` that's unknown, reused, expired or from another session is
+- A `state` that's unknown, reused, expired or another admin's is
   refused, and so is a non-admin.
 - With `SONDA_GITHUB_APP_ID` set, the section is read-only.
 - With `SONDA_SECRET_KEY` changed, the server starts, says the App's key
