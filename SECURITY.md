@@ -9,6 +9,28 @@ the problem.
 
 Only the latest release receives fixes while sonda is at 0.x.
 
+## Verifying a release
+
+Each release's binaries and server image carry a signed build provenance
+attestation, saying which commit and workflow built them, and an SBOM
+(CycloneDX), attested too. With the [GitHub CLI](https://cli.github.com/):
+
+```sh
+# A binary, downloaded from the release page
+gh attestation verify sonda-<version>-x86_64-linux --repo lvaoliveira/sonda
+# Its SBOM
+gh attestation verify sonda-<version>-x86_64-linux --repo lvaoliveira/sonda \
+  --predicate-type https://cyclonedx.org/bom
+# The server image, by the digest the release notes give
+gh attestation verify oci://ghcr.io/lvaoliveira/sonda@sha256:<digest> --repo lvaoliveira/sonda
+```
+
+The checksums in the release's `SHA256SUMS` only say the download is intact;
+the attestation says who built it. The SBOMs are also attached to the
+release: `sonda-<version>-<arch>-linux.cdx.json` for each binary (its locked
+crates) and `sonda-<version>-image.cdx.json` for the image (the server's
+crates and the web app's packages).
+
 ## Threat model
 
 sonda is built to analyze code you don't trust, such as a pull request from
