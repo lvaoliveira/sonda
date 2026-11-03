@@ -192,7 +192,12 @@ other processes, and say why in a comment.
 1. In a pull request: set `version` in `Cargo.toml` (the workspace's, which
    every crate shares) and move `CHANGELOG.md`'s `Unreleased` entries under
    `## [x.y.z] - date`, with a short summary first. Merge it.
-2. Tag the merge commit and push the tag: `git tag vx.y.z && git push origin
+2. Optionally, try it first: tag the merge commit `vx.y.z-rc.1` and push
+   that. It runs everything a release does, for real, and publishes a
+   pre-release, with the image tagged `x.y.z-rc.1`: try those on a server.
+   CI's "last release" (the `compat` and `upgrade` jobs) skips pre-releases.
+   Another candidate is `-rc.2`, and so on.
+3. Tag the merge commit and push the tag: `git tag vx.y.z && git push origin
    vx.y.z`.
 
 The tag runs `.github/workflows/release.yml`: it checks the tag matches
