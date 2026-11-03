@@ -64,6 +64,120 @@ fn parse_key(pem: &str) -> Result<RsaKeyPair> {
     key.map_err(|e| anyhow::anyhow!("the GitHub App's private key is not an RSA key: {e}"))
 }
 
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(60)))
+        // A redirect would carry the token somewhere else.
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .user_agent(concat!("sonda-server/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into()
+}
+
+/// A request to the API, answered as JSON; an error says what GitHub
+/// answered, never the credentials sent.
+fn call(
+    agent: &ureq::Agent,
+    api: &str,
+    method: &str,
+    path: &str,
+    auth: Option<&str>,
+    body: Option<&Value>,
+) -> Result<Value> {
+    let url = format!("{api}{path}");
+    let mut request = ureq::http::Request::builder()
+        .method(method)
+        .uri(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(auth) = auth {
+        request = request.header("Authorization", auth);
+    }
+    let mut response = match body {
+        Some(b) => agent.run(
+            request
+                .header("Content-Type", "application/json")
+                .body(b.to_string())?,
+        ),
+        None => agent.run(request.body(())?),
+    }
+    .with_context(|| format!("{method} {url}"))?;
+    let status = response.status();
+    let mut text = String::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(MAX_ANSWER_BYTES)
+        .read_to_string(&mut text)
+        .with_context(|| format!("reading {method} {url}"))?;
+    if !status.is_success() {
+        let message = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v["message"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        bail!("GitHub answered {status} to {method} {path}: {message}");
+    }
+    Ok(if text.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(&text).with_context(|| format!("{method} {url}: not JSON"))?
+    })
+}
+
+/// An App GitHub created from a manifest (ADR-0024).
+pub struct Created {
+    pub id: u64,
+    pub slug: String,
+    pub html_url: String,
+    pub pem: String,
+}
+
+impl std::fmt::Debug for Created {
+    // Never the key.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Created")
+            .field("id", &self.id)
+            .field("slug", &self.slug)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Exchanges the code GitHub sends back after creating an App from a
+/// manifest for the App and its key: once, within the hour. Needs no
+/// credentials; the code is one.
+pub fn convert_manifest(api: &str, code: &str) -> Result<Created> {
+    if code.is_empty() || code.len() > 100 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        bail!("that isn't a code GitHub sends back");
+    }
+    let api = api.trim_end_matches('/');
+    let path = format!("/app-manifests/{code}/conversions");
+    let app = call(&agent(), api, "POST", &path, None, None)?;
+    let text = |field: &str| {
+        app[field]
+            .as_str()
+            .map(str::to_string)
+            .with_context(|| format!("GitHub's answer has no {field}"))
+    };
+    Ok(Created {
+        id: app["id"].as_u64().context("GitHub's answer has no id")?,
+        slug: text("slug")?,
+        html_url: text("html_url")?,
+        pem: text("pem")?,
+    })
+}
+
+/// GitHub's web pages, for its API: `github.com` for `api.github.com`,
+/// and `https://HOST` for an Enterprise Server's `https://HOST/api/v3`.
+pub fn web_url(api: &str) -> String {
+    let api = api.trim_end_matches('/');
+    if let Some(host) = api.strip_prefix("https://api.") {
+        return format!("https://{host}");
+    }
+    api.strip_suffix("/api/v3").unwrap_or(api).to_string()
+}
+
 impl App {
     pub fn new(id: String, private_key_pem: &str, api: String) -> Result<Self> {
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
@@ -73,15 +187,7 @@ impl App {
             id,
             key: parse_key(private_key_pem)?,
             api: api.trim_end_matches('/').to_string(),
-            agent: ureq::Agent::config_builder()
-                .timeout_connect(Some(Duration::from_secs(10)))
-                .timeout_global(Some(Duration::from_secs(60)))
-                // A redirect would carry the token somewhere else.
-                .max_redirects(0)
-                .http_status_as_error(false)
-                .user_agent(concat!("sonda-server/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .into(),
+            agent: agent(),
             tokens: Mutex::new(HashMap::new()),
         })
     }
@@ -105,50 +211,23 @@ impl App {
         Ok(format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature)))
     }
 
+    /// The App's numeric id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The API it calls.
+    pub fn api(&self) -> &str {
+        &self.api
+    }
+
     /// The App's public key, DER, to check its JWTs in tests.
     pub fn public_key(&self) -> Vec<u8> {
         self.key.public().as_ref().to_vec()
     }
 
-    /// A request to the API, answered as JSON; an error says what GitHub
-    /// answered, never the credentials sent.
     fn call(&self, method: &str, path: &str, auth: &str, body: Option<&Value>) -> Result<Value> {
-        let url = format!("{}{path}", self.api);
-        let request = ureq::http::Request::builder()
-            .method(method)
-            .uri(&url)
-            .header("Authorization", auth)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
-        let mut response = match body {
-            Some(b) => self.agent.run(
-                request
-                    .header("Content-Type", "application/json")
-                    .body(b.to_string())?,
-            ),
-            None => self.agent.run(request.body(())?),
-        }
-        .with_context(|| format!("{method} {url}"))?;
-        let status = response.status();
-        let mut text = String::new();
-        response
-            .body_mut()
-            .as_reader()
-            .take(MAX_ANSWER_BYTES)
-            .read_to_string(&mut text)
-            .with_context(|| format!("reading {method} {url}"))?;
-        if !status.is_success() {
-            let message = serde_json::from_str::<Value>(&text)
-                .ok()
-                .and_then(|v| v["message"].as_str().map(str::to_string))
-                .unwrap_or_default();
-            bail!("GitHub answered {status} to {method} {path}: {message}");
-        }
-        Ok(if text.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_str(&text).with_context(|| format!("{method} {url}: not JSON"))?
-        })
+        call(&self.agent, &self.api, method, path, Some(auth), body)
     }
 
     /// A token for the App's installation on `repository` (`owner/name`),
@@ -249,5 +328,29 @@ impl App {
             )?,
         };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_pages_are_found_from_its_api() {
+        assert_eq!(web_url("https://api.github.com"), "https://github.com");
+        assert_eq!(web_url("https://api.github.com/"), "https://github.com");
+        assert_eq!(
+            web_url("https://ghe.example.com/api/v3"),
+            "https://ghe.example.com"
+        );
+        assert_eq!(web_url("http://127.0.0.1:4000"), "http://127.0.0.1:4000");
+    }
+
+    #[test]
+    fn only_a_code_is_sent_to_be_converted() {
+        for bad in ["", "../app", "a/b", "a?b=c", &"a".repeat(101)] {
+            let e = convert_manifest("http://127.0.0.1:9", bad).unwrap_err();
+            assert!(e.to_string().contains("isn't a code"), "{bad:?}: {e}");
+        }
     }
 }

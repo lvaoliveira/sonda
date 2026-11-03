@@ -289,7 +289,7 @@ async fn store_upload(
     )
     .await?;
     // A pull request's, after its gate is judged (ADR-0021).
-    if state.github.is_some() {
+    if state.github.app().is_some() {
         crate::decorations::enqueue(&state.pool, summary.analysis_id).await?;
     }
     tracing::info!(

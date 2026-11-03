@@ -30,9 +30,15 @@ pub struct Config {
     /// Where to serve `GET /metrics` (ADR-0019); `None`, the default, serves
     /// no metrics. Never the API's address: metrics are unauthenticated.
     pub metrics_listen: Option<SocketAddr>,
-    /// The GitHub App that decorates pull requests (ADR-0021); `None` keeps
-    /// the server from calling GitHub.
+    /// The GitHub App that decorates pull requests (ADR-0021), when
+    /// configured; one created from the web app is stored instead
+    /// (ADR-0024). With neither, the server doesn't call GitHub.
     pub github: Option<crate::github::App>,
+    /// GitHub's API (SONDA_GITHUB_API_URL), for either kind of App.
+    pub github_api: String,
+    /// SONDA_SECRET_KEY, which encrypts the secrets the server stores
+    /// (ADR-0024); without it, it stores none.
+    pub secret_key: Option<crate::stored_secrets::SecretKey>,
     /// The server's address as people reach it (SONDA_PUBLIC_URL), for
     /// links in pull request decorations; `None` leaves them out.
     pub public_url: Option<String>,
@@ -106,6 +112,11 @@ impl Config {
             advisory_sync: advisory_sync(env)?,
             metrics_listen: None,
             github: github(env)?,
+            github_api: github_api(env)?,
+            secret_key: secret(env, "SONDA_SECRET_KEY")?
+                .as_deref()
+                .map(crate::stored_secrets::SecretKey::new)
+                .transpose()?,
             public_url: public_url(env, plain_http)?,
             plain_http,
             thin_analyses_after_days: thin_analyses_after_days(env)?,
@@ -160,13 +171,17 @@ pub fn github(env: &dyn Env) -> Result<Option<crate::github::App>> {
             "set both SONDA_GITHUB_APP_ID and SONDA_GITHUB_APP_PRIVATE_KEY (or _FILE), or neither"
         ),
     };
+    crate::github::App::new(id, &key, github_api(env)?).map(Some)
+}
+
+/// SONDA_GITHUB_API_URL, for an Enterprise Server; GitHub's otherwise.
+pub fn github_api(env: &dyn Env) -> Result<String> {
     let api = env
         .var("SONDA_GITHUB_API_URL")
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| crate::github::DEFAULT_API_URL.into());
-    let api = crate::advisory_sync::check_base_url(&api)
-        .map_err(|e| anyhow::anyhow!("SONDA_GITHUB_API_URL: {e}"))?;
-    crate::github::App::new(id, &key, api).map(Some)
+    crate::advisory_sync::check_base_url(&api)
+        .map_err(|e| anyhow::anyhow!("SONDA_GITHUB_API_URL: {e}"))
 }
 
 /// SONDA_PUBLIC_URL, such as `https://sonda.example.com`; `http://` to
@@ -335,6 +350,20 @@ mod tests {
                 .is_none()
         );
         assert!(load(&[url, ("SONDA_TOKEN", "")]).unwrap().token.is_none());
+    }
+
+    #[test]
+    fn the_secret_key_is_optional_but_must_be_one() {
+        let url = ("DATABASE_URL", "postgres://sonda@db/sonda");
+        assert!(load(&[url]).unwrap().secret_key.is_none());
+        let key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+        assert!(
+            load(&[url, ("SONDA_SECRET_KEY", key)])
+                .unwrap()
+                .secret_key
+                .is_some()
+        );
+        assert!(load(&[url, ("SONDA_SECRET_KEY", "short")]).is_err());
     }
 
     #[test]

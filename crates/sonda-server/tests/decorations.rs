@@ -13,7 +13,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::{PASSWORD, TestDb, create_user, sign_in, state_with, upload_json_for};
 use serde_json::{Value, json};
-use sonda_server::{db, decorations, github::App, http};
+use sonda_server::{db, decorations, github::App, github_app::Connection, http};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
@@ -195,11 +195,11 @@ async fn pull_requests_get_a_check_and_one_comment_on_github() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let api = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(axum::serve(listener, fake_github(github.clone())).into_future());
-    let app_client = Arc::new(App::new("123".into(), &key, api).unwrap());
+    let app_client = Arc::new(App::new("123".into(), &key, api.clone()).unwrap());
     github.lock().unwrap().public_key = app_client.public_key();
 
     let mut state = state_with(db.pool.clone(), true);
-    state.github = Some(app_client.clone());
+    state.github = Arc::new(Connection::new(Some(app_client.clone()), None, api, None));
     let server = http::router(state, None);
     create_user(&db, "ada", "admin").await;
     let ada = sign_in(&server, "ada", PASSWORD).await.unwrap();
