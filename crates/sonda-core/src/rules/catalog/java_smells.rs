@@ -2,8 +2,8 @@
 //! common idioms. Queries stay cheap on deep trees: see `js_modern.rs`.
 
 use super::java_bugs::{
-    SCOPE_STOPS, find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments,
-    operator_text, owning_declaration, parameter_types, statements,
+    find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments, operator_text,
+    owning_declaration, parameter_types, statements,
 };
 use super::java_extra::{declared_type, type_text};
 use super::java_security::{
@@ -134,7 +134,9 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(variable_declarator name: (identifier) @n) @match
-(formal_parameter name: (identifier) @n2) @match"#,
+(formal_parameter name: (identifier) @n2) @match
+(inferred_parameters (identifier) @match)
+(lambda_expression parameters: (identifier) @match)"#,
             filter: Some(Keep(local_name_not_camel_case)),
         },
         example: Some(Example {
@@ -475,8 +477,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1168")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
-            filter: Some(Find(returns_null_for_collection)),
+            query: r#"(return_statement (null_literal)) @match"#,
+            filter: Some(Keep(returns_null_for_collection)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -816,7 +818,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1319")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"((type_identifier) @match (#any-of? @match "ArrayList" "LinkedList" "HashMap" "LinkedHashMap" "TreeMap" "HashSet" "LinkedHashSet" "TreeSet" "Vector" "Hashtable"))"#,
+            query: r#"((type_identifier) @match (#any-of? @match "ArrayList" "LinkedList" "HashMap" "LinkedHashMap" "TreeMap" "HashSet" "LinkedHashSet" "TreeSet" "Vector" "Hashtable" "EnumSet" "EnumMap" "IdentityHashMap"))"#,
             filter: Some(Keep(is_a_declared_type)),
         },
         example: Some(Example {
@@ -1338,8 +1340,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2447")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration type: (type_identifier) @t (#eq? @t "Boolean")) @match"#,
-            filter: Some(Find(returns_null_from_any_method)),
+            query: r#"(return_statement (null_literal)) @match"#,
+            filter: Some(Keep(returns_null_from_boolean_method)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2643,6 +2645,10 @@ fn field_name_not_camel_case(field: Node, src: &[u8]) -> bool {
 }
 
 fn local_name_not_camel_case(node: Node, src: &[u8]) -> bool {
+    if node.kind() == "identifier" {
+        let t = text(node, src);
+        return t != b"_" && !is_camel_case(t);
+    }
     if node.kind() == "variable_declarator"
         && !node
             .parent()
@@ -2914,13 +2920,29 @@ fn non_final_instance_field<'t>(class: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-fn returns_null_for_collection<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let ty = method.child_by_field_name("type")?;
+/// The method a `return` belongs to, unless a lambda or inner class intervenes.
+fn method_returned_from(statement: Node) -> Option<Node> {
+    let mut p = statement.parent();
+    while let Some(n) = p {
+        match n.kind() {
+            "method_declaration" => return Some(n),
+            "lambda_expression" | "class_body" | "constructor_declaration" => return None,
+            _ => p = n.parent(),
+        }
+    }
+    None
+}
+
+fn returns_null_for_collection(statement: Node, src: &[u8]) -> bool {
+    let Some(ty) = method_returned_from(statement).and_then(|m| m.child_by_field_name("type"))
+    else {
+        return false;
+    };
     let head = text(ty, src)
         .split(|&b| b == b'<')
         .next()
         .unwrap_or(&b""[..]);
-    let collection = ty.kind() == "array_type"
+    ty.kind() == "array_type"
         || matches!(
             head,
             b"List"
@@ -2933,23 +2955,13 @@ fn returns_null_for_collection<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<
                 | b"Iterable"
                 | b"SortedSet"
                 | b"SortedMap"
-        );
-    if !collection {
-        return None;
-    }
-    let body = method.child_by_field_name("body")?;
-    find_in_scope(body, SCOPE_STOPS, |n| {
-        n.kind() == "return_statement"
-            && n.named_child(0).is_some_and(|v| v.kind() == "null_literal")
-    })
+        )
 }
 
-fn returns_null_from_any_method<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
-    let body = method.child_by_field_name("body")?;
-    find_in_scope(body, SCOPE_STOPS, |n| {
-        n.kind() == "return_statement"
-            && n.named_child(0).is_some_and(|v| v.kind() == "null_literal")
-    })
+fn returns_null_from_boolean_method(statement: Node, src: &[u8]) -> bool {
+    method_returned_from(statement)
+        .and_then(|m| m.child_by_field_name("type"))
+        .is_some_and(|t| text(t, src) == b"Boolean")
 }
 
 fn final_literal_field_is_not_static(field: Node, _: &[u8]) -> bool {

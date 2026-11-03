@@ -1882,26 +1882,40 @@ fn volatile_holds_mutable_state(field: Node, src: &[u8]) -> bool {
     if ty.kind() == "array_type" {
         return true;
     }
+    if ty.kind() != "type_identifier" && ty.kind() != "generic_type" {
+        return false; // primitives
+    }
     let head = text(ty, src)
         .split(|&b| b == b'<')
         .next()
         .unwrap_or(&b""[..]);
-    matches!(
+    // Immutable values and types that are safe to share are fine.
+    let safe_prefix = [&b"Atomic"[..], b"Concurrent", b"CopyOnWrite", b"Blocking"]
+        .iter()
+        .any(|p| head.starts_with(p));
+    let immutable = matches!(
         head,
-        b"List"
-            | b"ArrayList"
-            | b"LinkedList"
-            | b"Map"
-            | b"HashMap"
-            | b"TreeMap"
-            | b"Set"
-            | b"HashSet"
-            | b"TreeSet"
-            | b"Collection"
-            | b"Date"
-            | b"StringBuilder"
-            | b"StringBuffer"
-    )
+        b"String"
+            | b"Integer"
+            | b"Long"
+            | b"Short"
+            | b"Byte"
+            | b"Character"
+            | b"Boolean"
+            | b"Double"
+            | b"Float"
+            | b"Class"
+            | b"Optional"
+            | b"BigInteger"
+            | b"BigDecimal"
+            | b"Instant"
+            | b"Duration"
+            | b"LocalDate"
+            | b"LocalDateTime"
+            | b"UUID"
+            | b"Pattern"
+    );
+    !safe_prefix && !immutable
 }
 
 fn assert_has_side_effects(assertion: Node, src: &[u8]) -> bool {

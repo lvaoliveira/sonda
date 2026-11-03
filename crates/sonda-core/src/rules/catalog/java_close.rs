@@ -975,11 +975,15 @@ fn passes_null_to_a_nonnull_parameter(call: Node, src: &[u8]) -> bool {
 
 fn passes_a_bare_null_to_varargs(call: Node, src: &[u8]) -> bool {
     let args = call_arguments(call);
-    matches!(args.as_slice(), [a] if a.kind() == "null_literal")
+    args.last().is_some_and(|a| a.kind() == "null_literal")
         && same_class_target(call, src).iter().any(|m| {
             m.child_by_field_name("parameters").is_some_and(|ps| {
-                ps.named_children(&mut ps.walk())
-                    .any(|p| p.kind() == "spread_parameter")
+                let params: Vec<Node> = ps.named_children(&mut ps.walk()).collect();
+                // the null lands exactly on the variable-arity parameter
+                params.len() == args.len()
+                    && params
+                        .last()
+                        .is_some_and(|p| p.kind() == "spread_parameter")
             })
         })
 }
