@@ -37696,17 +37696,19 @@ class A { void F() { } }
 
 Off by default: add `"cs/logger-not-static-readonly"` to `rules.enabled` to run it.
 
-SonarQube: S1312 (related)
+SonarQube: S1312
 
 Noncompliant:
 
 ```csharp
+using log4net;
 class A { public ILog Log = LogManager.GetLogger(typeof(A)); }
 ```
 
 Compliant:
 
 ```csharp
+using log4net;
 class A { private static readonly ILog Log = LogManager.GetLogger(typeof(A)); }
 ```
 
@@ -39598,7 +39600,7 @@ Compliant:
 
 **Delegate chains should not be subtracted.** Subtracting `a + b` only removes a and b when they appear in that order, next to each other; otherwise nothing is removed.
 
-SonarQube: S3172 (related)
+SonarQube: S3172
 
 Noncompliant:
 
@@ -39690,18 +39692,22 @@ class A { bool F(byte b) { return b > 200; } }
 
 **foreach should not cast elements of generic collections.** foreach silently casts each element to the loop variable's type, so a narrower type throws InvalidCastException at run time.
 
-SonarQube: S3217 (related)
+SonarQube: S3217
 
 Noncompliant:
 
 ```csharp
-class A { void F(List<object> items) { foreach (string s in items) { G(s); } } }
+class Fruit { }
+class Orange : Fruit { }
+class A { void F(List<Fruit> basket) { foreach (Orange o in basket) { G(o); } } }
 ```
 
 Compliant:
 
 ```csharp
-class A { void F(List<object> items) { foreach (var s in items.OfType<string>()) { G(s); } } }
+class Fruit { }
+class Orange : Fruit { }
+class A { void F(List<Fruit> basket) { foreach (Orange o in basket.OfType<Orange>()) { G(o); } } }
 ```
 
 ## cs/timezone-converter
@@ -39762,7 +39768,7 @@ class A { void F() { Trace.TraceError("failed"); } }
 
 **ValueTasks should be consumed once.** A ValueTask may reuse its backing object once it completes, so awaiting it twice, or reading its result before it's known to be done, gives wrong results.
 
-SonarQube: S5034 (related)
+SonarQube: S5034
 
 Noncompliant:
 
@@ -39780,7 +39786,7 @@ class A { async Task F() { ValueTask<int> vt = GetAsync(); var a = await vt; } }
 
 **Redundant casts should not be used.** Casting a value to the type it already has does nothing but add noise.
 
-SonarQube: S1905 (related)
+SonarQube: S1905
 
 Noncompliant:
 
@@ -39980,9 +39986,9 @@ class A { double Divide(int divisor, int dividend) => divisor / dividend; void F
 
 ## cs/could-be-static
 
-**Private methods and properties that don't use instance data should be static.** Making them static shows they don't depend on the object's state, and saves the hidden `this` argument.
+**Methods and properties that don't use instance data should be static.** Making them static shows they don't depend on the object's state, and saves the hidden `this` argument.
 
-SonarQube: S2325 (related)
+SonarQube: S2325
 
 Noncompliant:
 
@@ -40240,7 +40246,7 @@ public class OrdersController : ControllerBase { [HttpPost] public IActionResult
 
 Off by default: add `"cs/equality-on-equals-type"` to `rules.enabled` to run it.
 
-SonarQube: S1698 (related)
+SonarQube: S1698
 
 Noncompliant:
 
@@ -40380,22 +40386,24 @@ namespace Lib { }
 
 ## cs/parameter-could-be-enumerable
 
-**Parameters should be declared with the most general type they need.** A List<T> or array parameter that is only enumerated could be an IEnumerable<T>, which accepts more callers.
+**Parameters should be declared with the most general type they need.** A parameter whose uses only need members a base class or interface of its type declares, such as a FileStream that's only read like any Stream, could be declared with that type, which accepts more callers.
 
 Off by default: add `"cs/parameter-could-be-enumerable"` to `rules.enabled` to run it.
 
-SonarQube: S3242 (related)
+SonarQube: S3242
 
 Noncompliant:
 
 ```csharp
-class A { int Sum(List<int> xs) { var s = 0; foreach (var x in xs) { s += x; } return s; } }
+using System.IO;
+class Foo { public void ReadStream(FileStream stream) { int a; while ((a = stream.ReadByte()) != -1) { } } }
 ```
 
 Compliant:
 
 ```csharp
-class A { int Sum(IEnumerable<int> xs) { var s = 0; foreach (var x in xs) { s += x; } return s; } }
+using System.IO;
+class Foo { public void ReadStream(Stream stream) { int a; while ((a = stream.ReadByte()) != -1) { } } }
 ```
 
 ## cs/string-uri-argument

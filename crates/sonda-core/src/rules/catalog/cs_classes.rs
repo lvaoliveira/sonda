@@ -10,8 +10,8 @@
 use super::cs::{cs_has_modifier, simple_name};
 use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_more::members;
-use super::cs_types::{type_of_name, walk_tree};
-use super::java_bugs::{find_in_scope, operator_text};
+use super::cs_types::walk_tree;
+use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
 use super::*;
@@ -156,17 +156,17 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/could-be-static",
-        name: "Private methods and properties that don't use instance data should be static",
+        name: "Methods and properties that don't use instance data should be static",
         description: "Making them static shows they don't depend on the object's state, and saves the hidden \
                       `this` argument.",
         message: "Make this member static.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[related("S2325")],
+        sonar: &[exact("S2325")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: members_could_be_static,
+            find: super::cs_inferred::could_be_static,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -418,10 +418,10 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[related("S1698")],
+        sonar: &[exact("S1698")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: reference_equality_on_value_class,
+            find: super::cs_inferred::reference_equality_where_equals_overridden,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -459,14 +459,6 @@ fn base_entries(declaration: Node) -> Vec<Node> {
 
 fn looks_like_interface(name: &[u8]) -> bool {
     name.len() > 1 && name[0] == b'I' && name[1].is_ascii_uppercase()
-}
-
-/// Whether a type's bases could include a class (declared anywhere): its
-/// first base type doesn't look like an interface.
-fn may_have_base_class(declaration: Node, src: &[u8]) -> bool {
-    base_entries(declaration)
-        .first()
-        .is_some_and(|b| !looks_like_interface(simple_name(*b, src)))
 }
 
 /// A declaration's `<T, U>`: a field on some declarations, a plain child
@@ -634,74 +626,6 @@ fn arguments_swapped<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             found.push(call);
         }
     });
-    found
-}
-
-fn members_could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    // Per member scope: whether it uses instance data.
-    let mut uses_instance: HashMap<ScopeId, bool> = HashMap::new();
-    for r in &m.refs {
-        let Some(member) = member_scope(m, r.scope) else {
-            continue;
-        };
-        let instance = r.decl.is_some_and(|d| {
-            let d = &m.decls[d];
-            matches!(
-                d.kind,
-                DeclKind::Field | DeclKind::Property | DeclKind::Method
-            ) && !d.is_static
-                && m.scopes[d.scope].kind == ScopeKind::Type
-        });
-        *uses_instance.entry(member).or_default() |= instance;
-    }
-    let mut found = Vec::new();
-    for f in &m.functions {
-        let node = f.node;
-        let (declaration, name) = match node.kind() {
-            "method_declaration" => (node, node.child_by_field_name("name")),
-            _ => continue,
-        };
-        let Some(class) = declaration.parent().and_then(|l| l.parent()) else {
-            continue;
-        };
-        let eligible = matches!(
-            class.kind(),
-            "class_declaration" | "struct_declaration" | "record_declaration"
-        ) && !may_have_base_class(class, src)
-            && is_private(declaration, src)
-            && ![
-                "static", "virtual", "abstract", "override", "extern", "partial", "new",
-            ]
-            .iter()
-            .any(|w| cs_has_modifier(declaration, w, src))
-            && attribute_names(declaration, src).is_empty()
-            && declaration.child_by_field_name("body").is_some()
-            && !declaration
-                .named_children(&mut declaration.walk())
-                .any(|c| c.kind() == "explicit_interface_specifier");
-        if !eligible || uses_instance.get(&f.scope).copied().unwrap_or(false) {
-            continue;
-        }
-        let body = text(
-            declaration
-                .child_by_field_name("body")
-                .unwrap_or(declaration),
-            src,
-        );
-        if count_word(body, b"this") > 0 || count_word(body, b"base") > 0 {
-            continue;
-        }
-        // Partial types may use instance members declared in another file.
-        if types
-            .get(std::str::from_utf8(name_of(class, src)).unwrap_or_default())
-            .is_some_and(|p| p.len() > 1)
-            || cs_has_modifier(class, "partial", src)
-        {
-            continue;
-        }
-        found.extend(name);
-    }
     found
 }
 
@@ -1261,50 +1185,6 @@ fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             found.extend(class.child_by_field_name("name"));
         }
     }
-    found
-}
-
-fn reference_equality_on_value_class<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let value_classes: Vec<&[u8]> = classes(&types)
-        .into_iter()
-        .filter(|c| c.kind() == "class_declaration")
-        .filter(|c| {
-            let ms = members(*c);
-            ms.iter().any(|x| {
-                x.kind() == "method_declaration"
-                    && name_of(*x, src) == b"Equals"
-                    && cs_has_modifier(*x, "override", src)
-            }) && !ms.iter().any(|x| {
-                x.kind() == "operator_declaration"
-                    && count_word(text(*x, src), b"operator") > 0
-                    && text(*x, src).windows(2).any(|w| w == b"==")
-            })
-        })
-        .map(|c| name_of(c, src))
-        .collect();
-    if value_classes.is_empty() {
-        return Vec::new();
-    }
-    let mut found = Vec::new();
-    walk_tree(m, |node, _| {
-        if node.kind() != "binary_expression" || !matches!(operator_text(node, src), b"==" | b"!=")
-        {
-            return;
-        }
-        let side_type = |f: &str| {
-            node.child_by_field_name(f)
-                .filter(|s| matches!(s.kind(), "identifier" | "member_access_expression"))
-                .and_then(|s| type_of_name(m, s))
-                .map(|t| text(t, src))
-        };
-        if let (Some(a), Some(b)) = (side_type("left"), side_type("right"))
-            && a == b
-            && value_classes.contains(&a)
-        {
-            found.push(node);
-        }
-    });
     found
 }
 

@@ -8,8 +8,10 @@
 //! nothing imported could declare the name instead, the SDK's implicit
 //! usings. Members are found through base classes and interfaces, with
 //! generic arguments substituted; extension methods through the namespaces
-//! the file imports. When any step can't tell, the answer is None: rules
-//! then report nothing, which costs recall only.
+//! the file imports. Conversions between types are classified as C# does
+//! (identity, implicit, explicit, through a conversion operator), and
+//! arithmetic follows its numeric promotion. When any step can't tell, the
+//! answer is None: rules then report nothing, which costs recall only.
 //!
 //! What it doesn't see: types declared in other files of the project, which
 //! could shadow a platform type of the same name in the same namespace.
@@ -184,6 +186,144 @@ fn keyword_type(word: &str) -> Option<&'static str> {
     })
 }
 
+/// The numeric types, by key, that a value of this numeric type converts to
+/// implicitly; None for a type that isn't numeric.
+fn widens_to(key: &str) -> Option<&'static [&'static str]> {
+    const DECIMAL: &str = "System.Decimal";
+    const DOUBLE: &str = "System.Double";
+    const SINGLE: &str = "System.Single";
+    const INT64: &str = "System.Int64";
+    const UINT64: &str = "System.UInt64";
+    const INT32: &str = "System.Int32";
+    const UINT32: &str = "System.UInt32";
+    const NINT: &str = "System.IntPtr";
+    const NUINT: &str = "System.UIntPtr";
+    Some(match key {
+        "System.SByte" => &["System.Int16", INT32, INT64, SINGLE, DOUBLE, DECIMAL, NINT],
+        "System.Byte" => &[
+            "System.Int16",
+            "System.UInt16",
+            INT32,
+            UINT32,
+            INT64,
+            UINT64,
+            SINGLE,
+            DOUBLE,
+            DECIMAL,
+            NINT,
+            NUINT,
+        ],
+        "System.Int16" => &[INT32, INT64, SINGLE, DOUBLE, DECIMAL, NINT],
+        "System.UInt16" | "System.Char" => &[
+            "System.UInt16",
+            INT32,
+            UINT32,
+            INT64,
+            UINT64,
+            SINGLE,
+            DOUBLE,
+            DECIMAL,
+            NINT,
+            NUINT,
+        ],
+        INT32 => &[INT64, SINGLE, DOUBLE, DECIMAL, NINT],
+        UINT32 => &[INT64, UINT64, SINGLE, DOUBLE, DECIMAL, NUINT],
+        INT64 | UINT64 => &[SINGLE, DOUBLE, DECIMAL],
+        NINT => &[INT64, SINGLE, DOUBLE, DECIMAL],
+        NUINT => &[UINT64, SINGLE, DOUBLE, DECIMAL],
+        SINGLE => &[DOUBLE],
+        DOUBLE | DECIMAL => &[],
+        _ => return None,
+    })
+}
+
+/// The type both operands of an arithmetic operator are promoted to, as
+/// C#'s binary numeric promotion does; None when it's an error or not
+/// numeric.
+fn promoted(a: &str, b: &str) -> Option<&'static str> {
+    const SIGNED: &[&str] = &[
+        "System.SByte",
+        "System.Int16",
+        "System.Int32",
+        "System.Int64",
+    ];
+    const INTEGRAL: &[&str] = &[
+        "System.SByte",
+        "System.Byte",
+        "System.Int16",
+        "System.UInt16",
+        "System.Char",
+        "System.Int32",
+        "System.UInt32",
+        "System.Int64",
+        "System.UInt64",
+    ];
+    let floating = |k: &str| matches!(k, "System.Single" | "System.Double");
+    let numeric = |k: &str| INTEGRAL.contains(&k) || floating(k) || k == "System.Decimal";
+    if !numeric(a) || !numeric(b) {
+        return None;
+    }
+    let either = |k: &str| a == k || b == k;
+    Some(if either("System.Decimal") {
+        if floating(a) || floating(b) {
+            return None;
+        }
+        "System.Decimal"
+    } else if either("System.Double") {
+        "System.Double"
+    } else if either("System.Single") {
+        "System.Single"
+    } else if either("System.UInt64") {
+        if SIGNED.contains(&a) || SIGNED.contains(&b) {
+            return None;
+        }
+        "System.UInt64"
+    } else if either("System.Int64") {
+        "System.Int64"
+    } else if either("System.UInt32") {
+        if ["System.SByte", "System.Int16", "System.Int32"]
+            .iter()
+            .any(|s| either(s))
+        {
+            "System.Int64"
+        } else {
+            "System.UInt32"
+        }
+    } else {
+        "System.Int32"
+    })
+}
+
+/// The type an operand of a unary operator or a shift is promoted to:
+/// integral types narrower than int become int.
+fn unary_promoted(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "System.SByte" | "System.Byte" | "System.Int16" | "System.UInt16" | "System.Char"
+        | "System.Int32" => "System.Int32",
+        "System.UInt32" => "System.UInt32",
+        "System.Int64" => "System.Int64",
+        "System.UInt64" => "System.UInt64",
+        "System.Single" => "System.Single",
+        "System.Double" => "System.Double",
+        "System.Decimal" => "System.Decimal",
+        _ => return None,
+    })
+}
+
+/// How a value of one type converts to another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Conversion {
+    Identity,
+    /// To a base class or an implemented interface, boxing, a numeric
+    /// widening, or to a nullable: what C# does without a cast.
+    Implicit,
+    /// What only a cast does, built into the language: a downcast,
+    /// unboxing, a numeric narrowing.
+    Explicit,
+    /// Through a conversion operator one of the types declares.
+    UserDefined,
+}
+
 /// The SDK's implicit usings (`<ImplicitUsings>`), Microsoft.NET.Sdk's.
 const IMPLICIT_USINGS: &[&str] = &[
     "System",
@@ -226,10 +366,9 @@ pub(crate) struct Call<'m, 't> {
     pub(crate) extension: bool,
 }
 
-pub(crate) struct Infer<'m, 't> {
-    m: &'m Model<'t>,
-    src: &'m [u8],
-    platform: &'static Platform,
+/// What a file declares and imports, read once per file and kept with
+/// its semantic model.
+pub(crate) struct Context<'t> {
     usings: Vec<String>,
     /// Whether the SDK's implicit usings may resolve a name.
     implicit: bool,
@@ -240,8 +379,38 @@ pub(crate) struct Infer<'m, 't> {
     type_params: HashSet<String>,
 }
 
+pub(crate) struct Infer<'m, 't> {
+    m: &'m Model<'t>,
+    src: &'m [u8],
+    platform: &'static Platform,
+    cx: &'m Context<'t>,
+}
+
+impl<'t> std::ops::Deref for Infer<'_, 't> {
+    type Target = Context<'t>;
+
+    fn deref(&self) -> &Context<'t> {
+        self.cx
+    }
+}
+
 impl<'m, 't> Infer<'m, 't> {
     pub(crate) fn new(m: &'m Model<'t>, src: &'m [u8]) -> Option<Infer<'m, 't>> {
+        let cx = m
+            .cs_context
+            .get_or_init(|| Context::read(m, src))
+            .as_ref()?;
+        Some(Infer {
+            m,
+            src,
+            platform: dotnet::platform(),
+            cx,
+        })
+    }
+}
+
+impl<'t> Context<'t> {
+    fn read(m: &Model<'t>, src: &[u8]) -> Option<Context<'t>> {
         let root = m.root?;
         let platform = dotnet::platform();
         let text = |n: Node| n.utf8_text(src).unwrap_or_default().to_string();
@@ -321,10 +490,7 @@ impl<'m, 't> Infer<'m, 't> {
         let implicit = usings.iter().all(|u| {
             platform.has_namespace(u) || u.split('.').next().is_some_and(|r| roots.contains(r))
         }) || !usings.iter().any(|u| IMPLICIT_USINGS.contains(&u.as_str()));
-        Some(Infer {
-            m,
-            src,
-            platform,
+        Some(Context {
             usings,
             implicit,
             namespaces,
@@ -332,9 +498,31 @@ impl<'m, 't> Infer<'m, 't> {
             type_params,
         })
     }
+}
 
+impl<'m, 't> Infer<'m, 't> {
     fn text(&self, n: Node) -> &'m str {
         n.utf8_text(self.src).unwrap_or_default()
+    }
+
+    /// Whether a namespace's types are in scope by their simple names at
+    /// `byte`: imported with a `using` directive, or enclosing it.
+    pub(crate) fn in_scope(&self, namespace: &str, byte: usize) -> bool {
+        self.usings.iter().any(|u| u == namespace)
+            || self.namespaces.iter().any(|(s, e, ns)| {
+                *s <= byte
+                    && byte < *e
+                    && (ns == namespace || ns.starts_with(&format!("{namespace}.")))
+            })
+    }
+
+    /// Whether the file declares a type, or a type parameter, named `name`.
+    pub(crate) fn declares(&self, name: &str) -> bool {
+        self.type_params.contains(name)
+            || self
+                .locals
+                .keys()
+                .any(|k| k.split('`').next() == Some(name))
     }
 
     // ------------------------------------------------ written types
@@ -527,6 +715,440 @@ impl<'m, 't> Infer<'m, 't> {
         }
     }
 
+    /// Whether a type is an interface, as far as declarations tell.
+    pub(crate) fn interface(&self, ty: &Ty) -> Option<bool> {
+        match ty {
+            Ty::Array(_) => Some(false),
+            Ty::Named {
+                key, local: false, ..
+            } => self.platform.get(key).map(|t| t.kind == "interface"),
+            Ty::Named {
+                key, local: true, ..
+            } => self
+                .locals
+                .get(key)
+                .copied()
+                .flatten()
+                .map(|l| l.node.kind() == "interface_declaration"),
+            _ => None,
+        }
+    }
+
+    /// Whether every base a type lists, and theirs, resolves: what its
+    /// supertypes leave out otherwise is unknown, not absent.
+    pub(crate) fn complete(&self, ty: &Ty) -> bool {
+        self.supertypes(ty).iter().all(|t| match t {
+            Ty::Named {
+                key, local: true, ..
+            } => {
+                let Some(local) = self.locals.get(key).copied().flatten() else {
+                    return false;
+                };
+                local
+                    .node
+                    .named_children(&mut local.node.walk())
+                    .filter(|c| c.kind() == "base_list")
+                    .all(|bases| {
+                        bases.named_children(&mut bases.walk()).all(|b| {
+                            let b = if b.kind() == "primary_constructor_base_type" {
+                                b.named_child(0)
+                            } else {
+                                Some(b)
+                            };
+                            b.and_then(|b| self.written(b)).is_some()
+                        })
+                    })
+            }
+            Ty::Named { local: false, .. } | Ty::Array(_) => true,
+            _ => false,
+        })
+    }
+
+    /// Whether a type's base classes all resolve. Only the first type a
+    /// base list names can be a class; the others are interfaces, whose
+    /// members a class's own code can't name without a receiver.
+    pub(crate) fn base_classes_known(&self, ty: &Ty) -> bool {
+        self.supertypes(ty).iter().all(|t| match t {
+            Ty::Named {
+                key, local: true, ..
+            } => {
+                let Some(local) = self.locals.get(key).copied().flatten() else {
+                    return false;
+                };
+                if local.node.kind() == "interface_declaration" {
+                    return true;
+                }
+                let first = local
+                    .node
+                    .named_children(&mut local.node.walk())
+                    .find(|c| c.kind() == "base_list")
+                    .and_then(|b| b.named_child(0));
+                first.is_none_or(|b| {
+                    let b = if b.kind() == "primary_constructor_base_type" {
+                        b.named_child(0)
+                    } else {
+                        Some(b)
+                    };
+                    b.and_then(|b| self.written(b)).is_some()
+                })
+            }
+            Ty::Named { local: false, .. } | Ty::Array(_) => true,
+            _ => false,
+        })
+    }
+
+    /// How a value of type `from` converts to `to`; None when declarations
+    /// don't tell, or when C# wouldn't allow it.
+    pub(crate) fn conversion(&self, from: &Ty, to: &Ty) -> Option<Conversion> {
+        if !settled(from) || !settled(to) {
+            return None;
+        }
+        if from == to {
+            return Some(Conversion::Identity);
+        }
+        if let (Some(f), Some(t)) = (from.key(), to.key())
+            && let Some(wider) = widens_to(f)
+            && widens_to(t).is_some()
+        {
+            return Some(if wider.contains(&t) {
+                Conversion::Implicit
+            } else {
+                Conversion::Explicit
+            });
+        }
+        const NULLABLE: &str = "System.Nullable`1";
+        match (from.is(NULLABLE), to.is(NULLABLE)) {
+            (false, true) => {
+                return match self.conversion(from, to.args().first()?)? {
+                    Conversion::Identity | Conversion::Implicit => Some(Conversion::Implicit),
+                    other => Some(other),
+                };
+            }
+            (true, true) => {
+                return match self.conversion(from.args().first()?, to.args().first()?)? {
+                    Conversion::Identity => Some(Conversion::Identity),
+                    other => Some(other),
+                };
+            }
+            (true, false) if from.args().first() == Some(to) => {
+                return Some(Conversion::Explicit);
+            }
+            _ => {}
+        }
+        if to.is("System.Object") {
+            return Some(Conversion::Implicit);
+        }
+        if !self.complete(from) || !self.complete(to) {
+            return None;
+        }
+        let up = self.supertypes(from);
+        if up.contains(to) {
+            return Some(Conversion::Implicit);
+        }
+        // `IEnumerable<string>` to `IEnumerable<object>`: variance, which
+        // the declarations here don't record.
+        if up.iter().any(|s| s.key().is_some() && s.key() == to.key()) {
+            return None;
+        }
+        if let (Ty::Array(a), Ty::Array(b)) = (from, to) {
+            return match self.conversion(a, b)? {
+                Conversion::Implicit if self.value_type(a) == Some(false) => {
+                    Some(Conversion::Implicit)
+                }
+                Conversion::Implicit | Conversion::Explicit
+                    if self.value_type(a) == Some(false) && self.value_type(b) == Some(false) =>
+                {
+                    Some(Conversion::Explicit)
+                }
+                _ => None,
+            };
+        }
+        let down = self.supertypes(to).contains(from);
+        let enum_number =
+            |a: &Ty, b: &Ty| self.kind(a) == Some("enum") && b.key().and_then(widens_to).is_some();
+        let interface_class = |a: &Ty, b: &Ty| {
+            self.interface(a) == Some(true)
+                && (self.interface(b) == Some(true)
+                    || (self.value_type(b) == Some(false) && !self.sealed(b)))
+        };
+        if down
+            || enum_number(from, to)
+            || enum_number(to, from)
+            || interface_class(from, to)
+            || interface_class(to, from)
+        {
+            return Some(Conversion::Explicit);
+        }
+        // C# allows no conversion operator between types related otherwise.
+        self.user_conversion(from, to)
+            .then_some(Conversion::UserDefined)
+    }
+
+    /// A platform type's kind, or a local one's: "class", "struct",
+    /// "interface", "enum" or "delegate".
+    fn kind(&self, ty: &Ty) -> Option<&str> {
+        match ty {
+            Ty::Named {
+                key, local: false, ..
+            } => self.platform.get(key).map(|t| t.kind.as_str()),
+            Ty::Named {
+                key, local: true, ..
+            } => {
+                let l = self.locals.get(key).copied().flatten()?;
+                Some(match l.node.kind() {
+                    "struct_declaration" | "record_struct_declaration" => "struct",
+                    "interface_declaration" => "interface",
+                    "enum_declaration" => "enum",
+                    "delegate_declaration" => "delegate",
+                    _ => "class",
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a type is a delegate type.
+    pub(crate) fn delegate(&self, ty: &Ty) -> bool {
+        self.kind(ty) == Some("delegate")
+    }
+
+    fn sealed(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Named {
+                key, local: false, ..
+            } => self
+                .platform
+                .get(key)
+                .is_some_and(|t| t.has("sealed") || t.has("static")),
+            Ty::Named {
+                key, local: true, ..
+            } => self.locals.get(key).copied().flatten().is_some_and(|l| {
+                l.node
+                    .children(&mut l.node.walk())
+                    .any(|c| c.kind() == "modifier" && matches!(self.text(c), "sealed" | "static"))
+            }),
+            _ => false,
+        }
+    }
+
+    /// Whether `from` or `to`, or a base class of either, declares a
+    /// conversion operator from one to the other.
+    fn user_conversion(&self, from: &Ty, to: &Ty) -> bool {
+        let fits = |ret: Option<Ty>, param: Option<Ty>| {
+            ret.is_some_and(|r| r.key() == to.key() && r.key().is_some() || &r == to)
+                && param.is_some_and(|p| p.key() == from.key() && p.key().is_some() || &p == from)
+        };
+        [from, to].iter().any(|t| {
+            self.supertypes(t).iter().any(|s| match s {
+                Ty::Named {
+                    key, local: false, ..
+                } => self.platform.get(key).is_some_and(|p| {
+                    p.members.iter().any(|m| {
+                        matches!(m.name.as_str(), "op_Implicit" | "op_Explicit")
+                            && fits(
+                                Ty::parse(&m.ty),
+                                m.params.first().and_then(|p| Ty::parse(&p.ty)),
+                            )
+                    })
+                }),
+                Ty::Named {
+                    key, local: true, ..
+                } => self.locals.get(key).copied().flatten().is_some_and(|l| {
+                    let Some(body) = l.node.child_by_field_name("body") else {
+                        return false;
+                    };
+                    body.named_children(&mut body.walk())
+                        .filter(|c| c.kind() == "conversion_operator_declaration")
+                        .any(|c| {
+                            let param = c
+                                .child_by_field_name("parameters")
+                                .and_then(|p| p.named_child(0))
+                                .and_then(|p| p.child_by_field_name("type"));
+                            fits(
+                                c.child_by_field_name("type").and_then(|t| self.written(t)),
+                                param.and_then(|p| self.written(p)),
+                            )
+                        })
+                }),
+                _ => false,
+            })
+        })
+    }
+
+    /// Whether a class, or one of its base classes but Object, overrides
+    /// `Equals(object)`: None when its bases don't all resolve.
+    pub(crate) fn overrides_equals(&self, ty: &Ty) -> Option<bool> {
+        if !self.complete(ty) {
+            return None;
+        }
+        Some(self.supertypes(ty).iter().any(|s| {
+            match s {
+                Ty::Named {
+                    key, local: false, ..
+                } => {
+                    key != "System.Object"
+                        && self.platform.get(key).is_some_and(|p| {
+                            p.kind != "interface"
+                                && p.members.iter().any(|m| {
+                                    m.kind == "method"
+                                        && m.name == "Equals"
+                                        && !m.has("static")
+                                        && m.params.len() == 1
+                                        && m.params[0].ty == "System.Object"
+                                })
+                        })
+                }
+                Ty::Named {
+                    key, local: true, ..
+                } => self
+                    .locals
+                    .get(key)
+                    .copied()
+                    .flatten()
+                    .and_then(|l| l.members)
+                    .is_some_and(|scope| {
+                        self.m.decls_named(scope, "Equals").iter().any(|&d| {
+                            let d = &self.m.decls[d];
+                            d.kind == DeclKind::Method
+                                && d.declarator.is_some_and(|m| {
+                                    m.child_by_field_name("parameters")
+                                        .is_some_and(|p| p.named_child_count() == 1)
+                                        && self.text(m).contains("override")
+                                })
+                        })
+                    }),
+                _ => false,
+            }
+        }))
+    }
+
+    /// Whether a type, or a base class, declares `operator ==`, or is a
+    /// record, whose compiler-made one compares values.
+    pub(crate) fn has_equality_operator(&self, ty: &Ty) -> bool {
+        self.supertypes(ty).iter().any(|s| match s {
+            Ty::Named {
+                key, local: false, ..
+            } => self
+                .platform
+                .get(key)
+                .is_some_and(|p| p.members.iter().any(|m| m.name == "op_Equality")),
+            Ty::Named {
+                key, local: true, ..
+            } => self.locals.get(key).copied().flatten().is_some_and(|l| {
+                matches!(
+                    l.node.kind(),
+                    "record_declaration" | "record_struct_declaration"
+                ) || l.node.child_by_field_name("body").is_some_and(|b| {
+                    b.named_children(&mut b.walk()).any(|c| {
+                        c.kind() == "operator_declaration"
+                            && c.child_by_field_name("operator")
+                                .is_some_and(|o| self.text(o) == "==")
+                    })
+                })
+            }),
+            _ => false,
+        })
+    }
+
+    /// Whether some class or struct implementing this interface overrides
+    /// `Equals`: one of the platform's, or one this file declares.
+    pub(crate) fn implemented_with_equals(&self, interface: &Ty) -> bool {
+        if interface
+            .key()
+            .is_some_and(|k| self.platform.equality_interfaces().contains(k))
+        {
+            return true;
+        }
+        let Some(key) = (match interface {
+            Ty::Named { key, .. } => Some(key),
+            _ => None,
+        }) else {
+            return false;
+        };
+        self.locals.iter().any(|(name, local)| {
+            let Some(l) = local else {
+                return false;
+            };
+            if !matches!(l.node.kind(), "class_declaration" | "struct_declaration") {
+                return false;
+            }
+            let ty = Ty::Named {
+                key: name.clone(),
+                args: Vec::new(),
+                local: true,
+            };
+            self.supertypes(&ty)
+                .iter()
+                .any(|s| matches!(s, Ty::Named { key: k, .. } if k == key))
+                && self.overrides_equals(&ty) == Some(true)
+        })
+    }
+
+    /// Whether a name used in a member of type `ty` is an instance member it
+    /// inherits from a base class: None when its base classes don't all
+    /// resolve.
+    pub(crate) fn inherited_instance_member(&self, ty: &Ty, name: &str) -> Option<bool> {
+        if !self.base_classes_known(ty) {
+            return None;
+        }
+        Some(self.supertypes(ty).iter().skip(1).any(|s| {
+            match s {
+                Ty::Named {
+                    key, local: false, ..
+                } => self.platform.get(key).is_some_and(|p| {
+                    p.kind != "interface"
+                        && p.members
+                            .iter()
+                            .any(|m| m.name == name && !m.has("static") && !m.has("const"))
+                }),
+                Ty::Named {
+                    key, local: true, ..
+                } => self
+                    .locals
+                    .get(key)
+                    .copied()
+                    .flatten()
+                    .and_then(|l| l.members)
+                    .is_some_and(|scope| {
+                        self.m
+                            .decls_named(scope, name)
+                            .iter()
+                            .any(|&d| !self.m.decls[d].is_static)
+                    }),
+                _ => false,
+            }
+        }))
+    }
+
+    /// Whether an interface `ty` implements, through its bases, declares a
+    /// member named `name`: None when its bases don't all resolve.
+    pub(crate) fn interface_declares(&self, ty: &Ty, name: &str) -> Option<bool> {
+        if !self.complete(ty) {
+            return None;
+        }
+        Some(self.supertypes(ty).iter().any(|s| {
+            self.interface(s) == Some(true)
+                && match s {
+                    Ty::Named {
+                        key, local: false, ..
+                    } => self
+                        .platform
+                        .get(key)
+                        .is_some_and(|p| p.members.iter().any(|m| m.name == name)),
+                    Ty::Named {
+                        key, local: true, ..
+                    } => self
+                        .locals
+                        .get(key)
+                        .copied()
+                        .flatten()
+                        .and_then(|l| l.members)
+                        .is_some_and(|scope| !self.m.decls_named(scope, name).is_empty()),
+                    _ => false,
+                }
+        }))
+    }
+
     // ------------------------------------------------ supertypes and members
 
     /// A type, its base classes and the interfaces it implements, with
@@ -697,6 +1319,57 @@ impl<'m, 't> Infer<'m, 't> {
                     .and_then(|t| self.written(t))
             }
         }
+    }
+
+    /// A member's parameter types and its type, with the declaring type's
+    /// arguments substituted: what a call or access through another type
+    /// must find the same to mean the same.
+    pub(crate) fn signature(&self, found: &Found) -> Option<(Vec<Ty>, Ty)> {
+        match found {
+            Found::Platform { member, vars, .. } => {
+                let params = member
+                    .params
+                    .iter()
+                    .map(|p| Ty::parse(&p.ty).map(|t| t.substitute(vars, &[])))
+                    .collect::<Option<Vec<_>>>()?;
+                let ty = Ty::parse(&member.ty).map_or(Ty::Unknown, |t| t.substitute(vars, &[]));
+                Some((params, ty))
+            }
+            Found::Local(d) => {
+                let declarator = d.declarator?;
+                let params = match declarator.child_by_field_name("parameters") {
+                    Some(list) => list
+                        .named_children(&mut list.walk())
+                        .filter(|p| p.kind() == "parameter")
+                        .map(|p| p.child_by_field_name("type").and_then(|t| self.written(t)))
+                        .collect::<Option<Vec<_>>>()?,
+                    None => Vec::new(),
+                };
+                let ty = declarator
+                    .child_by_field_name("returns")
+                    .or(d.ty)
+                    .and_then(|t| self.written(t))?;
+                Some((params, ty))
+            }
+        }
+    }
+
+    /// The extension methods a call `receiver.name(...)` with `arguments`
+    /// arguments, at `byte`, may bind to.
+    pub(crate) fn extension_methods(
+        &self,
+        receiver: &Ty,
+        name: &str,
+        arguments: usize,
+        byte: usize,
+    ) -> Vec<&'static PlatformMember> {
+        self.extensions(receiver, name, arguments, byte)
+            .into_iter()
+            .filter_map(|(f, _)| match f {
+                Found::Platform { member, .. } => Some(member),
+                Found::Local(_) => None,
+            })
+            .collect()
     }
 
     /// The type all of `found` agree on.
@@ -886,8 +1559,61 @@ impl<'m, 't> Infer<'m, 't> {
                     {
                         string()
                     }
+                    "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" => {
+                        let (a, b) = (self.typed(l, d)?, self.typed(r, d)?);
+                        let bool_key = "System.Boolean";
+                        if matches!(op, "&" | "|" | "^") && a.is(bool_key) && b.is(bool_key) {
+                            return Some(a);
+                        }
+                        let key = promoted(a.key()?, b.key()?)?;
+                        let floating = ["System.Single", "System.Double", "System.Decimal"];
+                        if matches!(op, "&" | "|" | "^") && floating.contains(&key) {
+                            return None;
+                        }
+                        Some(Ty::platform(key, Vec::new()))
+                    }
+                    "<<" | ">>" | ">>>" => {
+                        let a = self.typed(l, d)?;
+                        let key = unary_promoted(a.key()?)?;
+                        matches!(
+                            key,
+                            "System.Int32" | "System.UInt32" | "System.Int64" | "System.UInt64"
+                        )
+                        .then(|| Ty::platform(key, Vec::new()))
+                    }
                     _ => None,
                 }
+            }
+            "prefix_unary_expression" => {
+                let operand = expr.named_child(0)?;
+                let op = self.text(expr).trim_start();
+                if op.starts_with('!') {
+                    return Some(Ty::platform("System.Boolean", Vec::new()));
+                }
+                let t = self.typed(operand, d)?;
+                let key = t.key()?;
+                if op.starts_with("++") || op.starts_with("--") {
+                    return widens_to(key).map(|_| t.clone());
+                }
+                if op.starts_with('-') {
+                    // -uint is a long, -ulong an error.
+                    return match key {
+                        "System.UInt32" => Some(Ty::platform("System.Int64", Vec::new())),
+                        "System.UInt64" => None,
+                        _ => unary_promoted(key).map(|k| Ty::platform(k, Vec::new())),
+                    };
+                }
+                if op.starts_with('+') {
+                    return unary_promoted(key).map(|k| Ty::platform(k, Vec::new()));
+                }
+                if op.starts_with('~') {
+                    return unary_promoted(key)
+                        .filter(|k| {
+                            !matches!(*k, "System.Single" | "System.Double" | "System.Decimal")
+                        })
+                        .map(|k| Ty::platform(k, Vec::new()));
+                }
+                None
             }
             "conditional_expression" => {
                 let a = self.typed(expr.child_by_field_name("consequence")?, d)?;
@@ -1135,6 +1861,16 @@ fn contains_unbound(t: &Ty) -> bool {
     matches!(t, Ty::Var(_) | Ty::MVar(_) | Ty::Unknown)
 }
 
+/// Whether a type is fully known: no type parameter or unknown argument
+/// anywhere in it.
+fn settled(t: &Ty) -> bool {
+    match t {
+        Ty::Named { args, .. } => args.iter().all(settled),
+        Ty::Array(e) => settled(e),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,5 +2010,66 @@ mod tests {
                 Some("A`0".into())
             ]
         );
+    }
+
+    #[test]
+    fn numeric_promotion() {
+        let src = "class A { void F(int i, long l, uint u, ulong ul, byte b, float f, double d, decimal m) {\n\
+            _ = i + 42;\n_ = l * i;\n_ = -u;\n_ = b << 2;\n_ = f + d;\n_ = m + d;\n_ = ul + i;\n_ = u + i;\n_ = b + b;\n} }\n";
+        assert_eq!(
+            discards(src),
+            [
+                Some("System.Int32".into()),
+                Some("System.Int64".into()),
+                Some("System.Int64".into()),
+                Some("System.Int32".into()),
+                Some("System.Double".into()),
+                // decimal and double don't mix, nor ulong and int.
+                None,
+                None,
+                Some("System.Int64".into()),
+                Some("System.Int32".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn conversions() {
+        let src = "using System;\nusing System.Collections.Generic;\nclass Fruit { }\nclass Orange : Fruit { }\nstruct Money { public static explicit operator Money(int v) => default; }\n\
+            class A { void F(int i, long l, object o, string s, IComparable c, List<string> ls, IEnumerable<string> es, IEnumerable<object> eo, Fruit f, Orange g, Money m, int? n, DayOfWeek day, IDisposable dis) { } }\n";
+        with_infer(src, |infer, root| {
+            let mut types = HashMap::new();
+            let mut stack = vec![root];
+            while let Some(n) = stack.pop() {
+                if n.kind() == "parameter" {
+                    let name = n.child_by_field_name("name").unwrap();
+                    let ty = n.child_by_field_name("type").unwrap();
+                    types.insert(
+                        name.utf8_text(src.as_bytes()).unwrap().to_string(),
+                        infer.written(ty).unwrap(),
+                    );
+                }
+                stack.extend(n.named_children(&mut n.walk()));
+            }
+            let c = |a: &str, b: &str| infer.conversion(&types[a], &types[b]);
+            use Conversion::*;
+            assert_eq!(c("i", "i"), Some(Identity));
+            assert_eq!(c("i", "l"), Some(Implicit));
+            assert_eq!(c("l", "i"), Some(Explicit));
+            assert_eq!(c("i", "n"), Some(Implicit));
+            assert_eq!(c("n", "i"), Some(Explicit));
+            assert_eq!(c("i", "o"), Some(Implicit));
+            assert_eq!(c("o", "s"), Some(Explicit));
+            assert_eq!(c("s", "c"), Some(Implicit));
+            assert_eq!(c("c", "s"), Some(Explicit));
+            assert_eq!(c("ls", "es"), Some(Implicit));
+            assert_eq!(c("g", "f"), Some(Implicit));
+            assert_eq!(c("f", "g"), Some(Explicit));
+            assert_eq!(c("i", "m"), Some(UserDefined));
+            assert_eq!(c("day", "i"), Some(Explicit));
+            assert_eq!(c("dis", "f"), Some(Explicit));
+            // Variance isn't recorded: unknown, not explicit.
+            assert_eq!(c("es", "eo"), None);
+        });
     }
 }

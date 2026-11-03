@@ -35,6 +35,10 @@ pub(super) fn enumerable_calls<'t>(
             .child_by_field_name("function")
             .filter(|f| f.kind() == "member_access_expression")
             .and_then(|f| f.child_by_field_name("name"))
+            .and_then(|n| match n.kind() {
+                "generic_name" => n.named_child(0),
+                _ => Some(n),
+            })
         else {
             return;
         };
@@ -394,32 +398,6 @@ pub(super) fn is_delegate_type(m: &Model, ty: &[u8]) -> bool {
         .iter()
         .any(|s| base.ends_with(s))
         || declared_kind(m, base).is_some_and(|d| d.kind() == "delegate_declaration")
-}
-
-/// Whether the class `derived`, declared in this file, inherits from `base`
-/// through classes declared in this file.
-pub(super) fn derives_from(m: &Model, derived: &[u8], base: &[u8], src: &[u8]) -> bool {
-    let mut current = derived.to_vec();
-    for _ in 0..8 {
-        let Some(class) = declared_kind(m, &current).filter(|c| c.kind() == "class_declaration")
-        else {
-            return false;
-        };
-        let mut cursor = class.walk();
-        let Some(first) = class
-            .named_children(&mut cursor)
-            .find(|c| c.kind() == "base_list")
-            .and_then(|b| b.named_child(0))
-        else {
-            return false;
-        };
-        let parent = simple_name(first, src);
-        if parent == base {
-            return true;
-        }
-        current = parent.to_vec();
-    }
-    false
 }
 
 const COLLECTIONS: &[&[u8]] = &[

@@ -123,6 +123,9 @@ pub(crate) struct Model<'t> {
     pub(crate) type_scopes: Vec<(Node<'t>, ScopeId)>,
     /// Each reference's index in `refs`, by its node's id.
     ref_index: HashMap<usize, usize>,
+    /// C#: what the file declares and imports, for expression types
+    /// (`cs_infer`), read on first use.
+    pub(crate) cs_context: std::cell::OnceCell<Option<cs_infer::Context<'t>>>,
 }
 
 impl<'t> Model<'t> {
@@ -142,6 +145,7 @@ impl<'t> Model<'t> {
             root: None,
             type_scopes: Vec::new(),
             ref_index: HashMap::new(),
+            cs_context: std::cell::OnceCell::new(),
         }
     }
 

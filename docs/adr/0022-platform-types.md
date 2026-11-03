@@ -1,7 +1,8 @@
 # ADR-0022: Types from the platform's declarations
 
-- Status: **accepted; step 1 built.** The summary, its loader and
-  framework base types in the project index, with four rules (below).
+- Status: **accepted; steps 1 and 2 built.** The summary, its loader,
+  framework base types in the project index, and expression typing, with
+  twenty-one rules (below).
 - Date: 2026-11-02
 
 ## Context
@@ -193,8 +194,57 @@ declarations and light inference, not the project's own checker.
    Calls on lambda parameters and on types from other files of the project
    stay unknown.
 
-   **2b.** S1312, S1698, S1905, S2325, S3172, S3217, S3242 and S5034, which
-   need conversions, flow or other files' declarations too.
+   **2b, built.** Conversions between types: identity, implicit (to a base
+   class or an interface, boxing, a wider number, a nullable), explicit,
+   and through a conversion operator one of the types declares; and C#'s
+   numeric promotion, which `i + 42` needs. Exact now:
+   - S1905: casts to the type a value already has, anywhere, but to float
+     or double of a computed value, which the cast rounds; implicit ones
+     where the context asks for that type anyway (a declared variable's
+     initializer, a plain assignment, what a member returns); and
+     `Cast<T>()` on a sequence of T, `OfType<T>()` on one of a value type.
+   - S3217: `foreach` conversions only a cast makes; collections of
+     objects and conversion operators are left alone, as documented.
+   - S3172: also through a variable holding a chain, as the documented
+     example subtracts one.
+   - S5034: a ValueTask consumed twice, by `await`, `AsTask()`, `.Result`
+     or `GetResult()`, reported at the second; `.Result` before
+     `IsCompleted` says it's done, also on a call's result. Uses in a loop
+     and in exclusive branches aren't counted.
+   - S1312: fields of the documented frameworks' logger types, however
+     they're created, as the documentation says; a name resolves through
+     usings and enclosing namespaces, and one two frameworks in scope
+     declare is left alone, as C# leaves it ambiguous.
+   - S1698: `==` on an interface that a class overriding Equals implements,
+     the platform's or the file's, or on a class overriding Equals without
+     `==`; the documented exceptions are kept.
+   - S2325: methods and properties of any accessibility, as documented,
+     inherited instance members counted through base classes that
+     resolve. Left out, besides the documented ASP.NET events: what can't
+     be static (overrides, interface implementations, and the public
+     methods of controllers, pages, components and hubs, which ASP.NET
+     calls on an instance, by the documentation's own reason for its
+     exceptions), members with attributes, and types whose base class
+     doesn't resolve, which may be Windows Forms' or WPF's.
+   - S3242: any base class or interface declaring every member a
+     parameter's uses reach, with the same signatures, extension methods
+     binding alike; not only `IEnumerable<T>`. Parameters used otherwise,
+     `params` arrays, attributed ones, and those of methods that can't
+     change their signature are left alone.
+
+   Re-auditing changed four beyond types: S1312 now reports injected
+   loggers, which the documentation's own example is; S3217 no longer
+   reports collections of objects, a documented exception; S2325 reports
+   public members and properties; S3242 suggests any base type.
+
+   On the corpus: S1312 went from 7 findings to 30, S1698 from 0 to 1,
+   S1905 from 39 to 50, S2325 from 72 to 132 and S3242 from 13 to 34, all
+   true positives under the documentation; S3172, S3217 and S5034 find
+   nothing there, as before. S2325 no longer reports 15 members of classes
+   whose first base type is declared in another file, which may be a base
+   class; S3242 no longer reports 4 parameters whose element type is.
+   Scan time didn't change; the file's declarations are read once and
+   shared by every rule that types expressions.
 3. Overloads and parameters: S2234, S3254, S4005, S4056, S4058, then S1128;
    S2201 and S4055 with their documented lists.
 
@@ -220,5 +270,6 @@ before marking them `exact`.
 - A development tool with its own metadata-reading dependency, outside the
   shipped crates and their dependency policy.
 - About 30 C# rules can become `exact` without giving up the
-  no-false-positive bar, and third-party types stay unknown.
+  no-false-positive bar, and third-party types stay unknown. Steps 1 and
+  2 made 21 exact.
 - ADR-0008's S4 row points here.
