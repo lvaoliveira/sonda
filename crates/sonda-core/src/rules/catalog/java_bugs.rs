@@ -1397,6 +1397,27 @@ fn operands_are_identical(binary: Node, src: &[u8]) -> bool {
     ) {
         return false;
     }
+    // `false ^ true ^ false`: a boolean literal repeated along the chain.
+    if matches!(op, b"^" | b"&" | b"|" | b"&&" | b"||")
+        && binary
+            .parent()
+            .is_none_or(|p| !(p.kind() == "binary_expression" && operator_text(p, src) == op))
+    {
+        let mut operands = Vec::new();
+        let mut stack = vec![binary];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "binary_expression" && operator_text(n, src) == op {
+                stack.extend(n.child_by_field_name("left"));
+                stack.extend(n.child_by_field_name("right"));
+            } else if matches!(n.kind(), "true" | "false") {
+                operands.push(text(n, src));
+            }
+        }
+        operands.sort_unstable();
+        if operands.windows(2).any(|w| w[0] == w[1]) {
+            return true;
+        }
+    }
     // `x != x` is how NaN is tested for.
     if matches!(op, b"==" | b"!=") && matches!(left.kind(), "identifier" | "field_access") {
         return false;
