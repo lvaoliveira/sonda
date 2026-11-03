@@ -474,22 +474,6 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
     let updates: Vec<Node> = for_statement
         .children_by_field_name("update", &mut cursor)
         .collect();
-    if updates.is_empty() {
-        return None;
-    }
-    let idents = |n: Node| -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        let mut stack = vec![n];
-        while let Some(x) = stack.pop() {
-            if x.kind() == "identifier" {
-                out.push(text(x, src).to_vec());
-            }
-            let mut c = x.walk();
-            stack.extend(x.named_children(&mut c));
-        }
-        out
-    };
-    let updated: Vec<Vec<u8>> = updates.iter().flat_map(|u| idents(*u)).collect();
     // method calls in the condition (list.size()) are not plain variables
     // only operands of a comparison are bounds; a bare flag is a different idiom
     let mut compared: Vec<Vec<u8>> = Vec::new();
@@ -512,10 +496,22 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
         let mut c = x.walk();
         stack.extend(x.named_children(&mut c));
     }
-    let bound: Vec<Vec<u8>> = compared
-        .into_iter()
-        .filter(|i| !updated.contains(i))
-        .collect();
+    // The counter itself (compared and updated by the loop header) is also
+    // off limits inside the body.
+    let mut bound: Vec<Vec<u8>> = compared;
+    if updates.is_empty() {
+        // Without an update clause only a counter declared in the header counts.
+        let mut declared: Vec<Vec<u8>> = Vec::new();
+        let mut c = for_statement.walk();
+        for init in for_statement.children_by_field_name("init", &mut c) {
+            for d in children_of_kind(init, "variable_declarator") {
+                if let Some(n) = d.child_by_field_name("name") {
+                    declared.push(text(n, src).to_vec());
+                }
+            }
+        }
+        bound.retain(|b| declared.contains(b));
+    }
     let body = for_statement.child_by_field_name("body")?;
     find_node(body, |n| {
         let target = match n.kind() {
@@ -586,10 +582,49 @@ fn waits_on_a_condition(call: Node, src: &[u8]) -> bool {
     })
 }
 
+/// Whether some class in the file declares a static method with this name.
+/// Collected once per file: it lets the call check skip the type lookup for
+/// every call to a method that is not static anywhere in the file.
+fn file_declares_static_method(root: Node, name: &[u8], src: &[u8]) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    type Names = Option<((usize, usize), HashSet<Vec<u8>>)>;
+    thread_local! {
+        static CACHE: RefCell<Names> = const { RefCell::new(None) };
+    }
+    let key = (src.as_ptr() as usize, src.len());
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut names = HashSet::new();
+            let mut cursor = root.walk();
+            'walk: loop {
+                let n = cursor.node();
+                if n.kind() == "method_declaration" && has_modifier(n, "static") {
+                    names.insert(name_text(n, src).to_vec());
+                }
+                if cursor.goto_first_child() {
+                    continue;
+                }
+                while !cursor.goto_next_sibling() {
+                    if !cursor.goto_parent() {
+                        break 'walk;
+                    }
+                }
+            }
+            *c = Some((key, names));
+        }
+        c.as_ref().is_some_and(|(_, names)| names.contains(name))
+    })
+}
+
 fn calls_a_static_method_on_an_instance(call: Node, src: &[u8]) -> bool {
     let Some(object) = call.child_by_field_name("object") else {
         return false;
     };
+    if !file_declares_static_method(root_of(call), method_name(call, src), src) {
+        return false;
+    }
     let t = base_type(type_text(declared_type(call, text(object, src), src), src));
     if t.is_empty() {
         return false;

@@ -4,6 +4,8 @@
 //! in the same file. These are sound within their scope and stay silent
 //! when the answer depends on code they can't see.
 
+use std::collections::HashSet;
+
 use super::java_bugs::{has_annotation, has_modifier, statements};
 use super::java_extra::{class_members, declared_type, name_text, type_text};
 use super::java_final::{base_type, root_of};
@@ -520,7 +522,54 @@ pub(super) fn enclosing_method(node: Node) -> Option<Node> {
     None
 }
 
+/// Names of the types declared in this file, collected once per file so a
+/// lookup of an imported name does not walk the whole tree again.
+fn declared_type_names(
+    root: Node,
+    src: &[u8],
+    has: impl FnOnce(&HashSet<Vec<u8>>) -> bool,
+) -> bool {
+    use std::cell::RefCell;
+    type Names = Option<((usize, usize), HashSet<Vec<u8>>)>;
+    thread_local! {
+        static CACHE: RefCell<Names> = const { RefCell::new(None) };
+    }
+    let key = (src.as_ptr() as usize, src.len());
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().is_none_or(|(k, _)| *k != key) {
+            let mut names = HashSet::new();
+            let mut cursor = root.walk();
+            'walk: loop {
+                let n = cursor.node();
+                if matches!(
+                    n.kind(),
+                    "class_declaration"
+                        | "interface_declaration"
+                        | "record_declaration"
+                        | "enum_declaration"
+                ) {
+                    names.insert(name_text(n, src).to_vec());
+                }
+                if cursor.goto_first_child() {
+                    continue;
+                }
+                while !cursor.goto_next_sibling() {
+                    if !cursor.goto_parent() {
+                        break 'walk;
+                    }
+                }
+            }
+            *c = Some((key, names));
+        }
+        c.as_ref().is_some_and(|(_, names)| has(names))
+    })
+}
+
 pub(super) fn find_declared_type<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    if !declared_type_names(root, src, |names| names.contains(name)) {
+        return None;
+    }
     find_node(root, |n| {
         matches!(
             n.kind(),
