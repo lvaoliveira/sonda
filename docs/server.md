@@ -1147,6 +1147,29 @@ Everything durable is in PostgreSQL:
 docker compose exec -T db pg_dump -U sonda -Fc sonda > sonda.dump
 ```
 
+## Upgrading
+
+1. **Back up** (see Backups above). There's no downgrade: a new version
+   changes the database's layout, and an older server refuses a database a
+   newer one has migrated.
+2. Read the release's section in the [changelog](../CHANGELOG.md). It says
+   when an upgrade needs anything more than the steps here.
+3. Upgrade: `git fetch --tags && git checkout v<next> && scripts/setup-server.sh`,
+   or, without Docker, build the new `sonda-server` and restart it. The
+   server migrates its database as it starts, then serves.
+4. Upgrade the CLI in your pipelines when you like: a server accepts the
+   previous minor version's CLI and the current one
+   ([stability.md](stability.md#compatibility-window)). Upgrade the server
+   first.
+
+Each migration runs in a transaction, so one that fails leaves the database
+as it was. The server then stops, with the migration's number and the
+database's error in its log (`docker compose logs sonda`), instead of
+serving on a half-migrated schema. Check out the version you came from and
+run `scripts/setup-server.sh` again to get back to a working server, and
+report the failure. If something else went wrong after a migration succeeded,
+restore the backup into an empty database; that's what it's for.
+
 ## Development
 
 The database tests run against a throwaway database on any PostgreSQL

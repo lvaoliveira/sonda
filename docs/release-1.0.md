@@ -80,12 +80,12 @@ in CI.
 - [ ] A CI job that runs the previous release's server on a database it
       filled (users, projects, analyses, triage, gates, profiles), upgrades
       to the new one, and checks everything is still there and served.
-- [ ] Upgrade docs: back up first (there's no downgrade), then
+- [x] Upgrade docs: back up first (there's no downgrade), then
       `git pull && scripts/setup-server.sh` or the new image; each release
       says if it needs more.
 - [ ] Retention, as decided above, and storage growth measured and
       documented (per analysis, per file, deduplicated sources).
-- [ ] A migration that fails leaves the database as it was (each runs in a
+- [x] A migration that fails leaves the database as it was (each runs in a
       transaction) and the server says so instead of half-starting; tested.
 
 **Done when** the upgrade job is required in CI and the docs are merged.
