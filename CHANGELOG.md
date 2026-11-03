@@ -17,6 +17,14 @@ file, the report formats and the public library API.
   release, for linux/amd64 and linux/arm64, and the release notes give its
   digest. `scripts/setup-server.sh --image ghcr.io/...@sha256:...` runs it
   instead of building the checkout (`--build` goes back).
+- Creating the GitHub App from Administration, with GitHub's App manifest
+  flow, instead of by hand: GitHub's own page opens filled in, sends the
+  browser back, and the App decorates pull requests without a restart
+  ([ADR-0024](docs/adr/0024-creating-the-github-app.md)). Its private key
+  is stored encrypted under the new `SONDA_SECRET_KEY`, which
+  `scripts/setup-server.sh` creates as `secrets/secret_key`. **Upgrading
+  with `docker compose` alone needs that file first**: rerun the script,
+  or create it (docs/server.md). A configured App still works, and wins.
 - Retention: branch analyses older than 90 days are thinned to one a day
   (`SONDA_THIN_ANALYSES_AFTER_DAYS`, `0` keeps every analysis), always
   keeping each branch's first and latest, the analysis the new code period
