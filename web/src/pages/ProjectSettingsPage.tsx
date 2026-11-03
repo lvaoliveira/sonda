@@ -200,8 +200,7 @@ function GithubSetting({ settings, isAdmin, save }: SettingProps) {
       </p>
       {!settings.githubApp && (
         <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
-          This server has no GitHub App, so nothing is posted yet. An admin sets <Mono className="text-[12px]">SONDA_GITHUB_APP_ID</Mono> and its private key
-          (see the server docs).
+          This server has no GitHub App, so nothing is posted yet. An admin creates one under <Link to="/admin#github">Administration</Link>.
         </p>
       )}
       {isAdmin ? (

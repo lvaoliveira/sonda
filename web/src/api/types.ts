@@ -1132,6 +1132,14 @@ export interface SondaApi {
   deletedProjects(): Promise<DeletedProject[]>
   /** Admins: uploads to the deleted key work again, starting a new project. */
   allowDeletedProject(id: number): Promise<DeletedProject>
+  /** Admins: the GitHub App, if any (ADR-0024). */
+  githubApp(): Promise<GitHubApp>
+  /** Admins: the manifest for GitHub's "Create GitHub App" page, for `owner` (an organization; null for the admin's own account). */
+  githubAppManifest(owner: string | null, name: string): Promise<GitHubAppManifest>
+  /** Admins: the code GitHub sent back, exchanged for the App and its key. */
+  createGithubApp(code: string, state: string): Promise<GitHubApp>
+  /** Admins: forgets an App created here; it stays on GitHub. */
+  disconnectGithubApp(): Promise<GitHubApp>
   /** Triages one known vulnerability in one of the project's packages. */
   reviewDependency(project: string, patch: DependencyReviewPatch): Promise<DependencyReview>
   analyses(query: AnalysisQuery): Promise<AnalysisPage>
@@ -1222,6 +1230,28 @@ export interface DeletedProject {
   deletedAt: string
   allowedBy: string | null
   allowedAt: string | null
+}
+
+/** The GitHub App that decorates pull requests (ADR-0024), as admins see it. Never its key. */
+export interface GitHubApp {
+  /** `config`: SONDA_GITHUB_APP_ID. `stored`: created here. `unreadable`: created here, but SONDA_SECRET_KEY doesn't open its key. */
+  source: 'config' | 'stored' | 'unreadable' | null
+  id: string | null
+  /** For an App created here only. */
+  slug: string | null
+  htmlUrl: string | null
+  /** Where to install it on repositories. */
+  installUrl: string | null
+  createdBy: string | null
+  createdAt: string | null
+  /** Whether SONDA_SECRET_KEY is set: creating an App needs it. */
+  secretKey: boolean
+}
+
+/** What to post to GitHub, as a form, to create the App from its manifest. */
+export interface GitHubAppManifest {
+  action: string
+  manifest: string
 }
 
 /** The pull request an analysis belongs to (ADR-0021); null for a branch's. */

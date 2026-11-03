@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type ProjectSettings, type DeletedProject, type RuleProfileDetail, type RuleProfileSummary, type GateList, type SavedGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type ProjectSettings, type DeletedProject, type GitHubApp, type GitHubAppManifest, type RuleProfileDetail, type RuleProfileSummary, type GateList, type SavedGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -95,6 +95,10 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     deleteProject: (project, confirm) => call<DeletedProject>('DELETE', `/projects/${encodeURIComponent(project)}`, { confirm }),
     deletedProjects: () => call<DeletedProject[]>('GET', '/deleted-projects'),
     allowDeletedProject: (id) => call<DeletedProject>('POST', `/deleted-projects/${id}/allow`, {}),
+    githubApp: () => call<GitHubApp>('GET', '/github/app'),
+    githubAppManifest: (owner, name) => call<GitHubAppManifest>('POST', '/github/app/manifest', { owner, name }),
+    createGithubApp: (code, state) => call<GitHubApp>('POST', '/github/app', { code, state }),
+    disconnectGithubApp: () => call<GitHubApp>('DELETE', '/github/app'),
     coverage: (project, branch) =>
       call<CoverageList>('GET', `/projects/${encodeURIComponent(project)}/coverage${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
     fileCoverage: (project, path, branch) =>

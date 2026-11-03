@@ -1,3 +1,5 @@
+import { ExternalLink } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import type { WaitingProject } from '@/api/types'
 import { Mono } from '@/components/sonda/layout'
@@ -30,5 +32,15 @@ export function WaitingProjects({ waiting, isAdmin }: { waiting: WaitingProject[
         ))}
       </ul>
     </section>
+  )
+}
+
+/** A link to GitHub's own page, in a new tab, styled as a primary button. */
+export function ExternalButton({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="inline-flex min-h-8 w-fit items-center gap-1.5 rounded-lg bg-brand px-[13px] py-1.5 text-[13px] font-semibold text-brand-ink no-underline">
+      {children}
+      <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
+    </a>
   )
 }
