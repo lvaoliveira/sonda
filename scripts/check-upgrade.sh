@@ -96,7 +96,9 @@ upload 1123456789abcdef0123456789abcdef01234567
 
 call GET '/api/issues?project=payments'
 id=$(jq -r '[.issues[]? // .items[]? // .[]?][0].id' "$work/body")
-[ -n "$id" ] && [ "$id" != null ] || { echo "check-upgrade: no issue to triage: $(cat "$work/body")" >&2; exit 1; }
+case $id in
+  "" | null) echo "check-upgrade: no issue to triage: $(cat "$work/body")" >&2; exit 1 ;;
+esac
 body='{"status":"accepted","reason":"known","assignee":"alice"}' call PATCH "/api/issues/$id"
 
 snapshot before
