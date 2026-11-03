@@ -53,6 +53,6 @@ SONDA_TOKEN=$token env -u GITHUB_ACTIONS -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PA
   --project compat --branch main --commit 0123456789abcdef0123456789abcdef01234567
 
 # It was stored and is served, with its issues.
-curl -fsS --fail-with-body "$url/api/analyses/1" > "$work/analysis.json"
-curl -fsS --fail-with-body "$url/api/projects/compat" > /dev/null
+curl -sS --fail-with-body "$url/api/analyses/1" > "$work/analysis.json"
+curl -sS --fail-with-body "$url/api/projects/compat" > /dev/null
 echo "check-compat: the previous release's upload was accepted and is served"
