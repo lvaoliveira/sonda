@@ -203,7 +203,9 @@ release with the binaries, their checksums and the changelog section as
 notes. It also publishes the server image to
 `ghcr.io/<owner>/sonda:<version>` (built on an amd64 and an arm64 runner,
 each checked to report the version, then merged into one tag) and adds its
-digest to the notes. The first push creates the package private: make it
+digest to the notes. Each binary and the image get a build provenance
+attestation and an SBOM (CycloneDX, from `sonda sbom` on the lockfiles they
+were built from), attested and attached to the release. The first push creates the package private: make it
 public once, under the repository's Packages settings. Until every binary is attached it stays a draft; if a job fails,
 fix it on `main`, delete the draft and the tag, and tag again.
 

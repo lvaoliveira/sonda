@@ -12,6 +12,11 @@ name: Release
 # both run (`--version`), and its digest is added to the release notes: that
 # is what the docs tell people to pin.
 #
+# Every binary and the image get a build provenance attestation and an SBOM
+# (CycloneDX, written by the binary just built, from the lockfiles the
+# artifact was built from), attested too and attached to the release. SECURITY.md
+# says how to verify them.
+#
 # A pull request that changes what a release is made of runs the same
 # builds and checks, without creating or publishing anything.
 on:
@@ -71,6 +76,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,18 +92,47 @@ jobs:
             echo "::error::the binary doesn't report version $version"
             exit 1
           fi
-      - name: Attach it, with its checksum
+      # What the binary was built from: the workspace's locked crates. Also on
+      # a pull request, so a change that breaks it is seen before a tag.
+      - name: It writes its SBOM
+        run: |
+          mkdir "$RUNNER_TEMP/locks"
+          cp Cargo.lock "$RUNNER_TEMP/locks/"
+          "$RUNNER_TEMP/bin/sonda" sbom "$RUNNER_TEMP/locks" --output "$RUNNER_TEMP/sbom.cdx.json"
+          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 100' "$RUNNER_TEMP/sbom.cdx.json" > /dev/null
+      - name: Name it
         if: github.event_name == 'push'
+        id: files
         env:
-          GH_TOKEN: ${{ github.token }}
           ARCH: ${{ matrix.arch }}
         run: |
           version=${GITHUB_REF_NAME#v}
           name="sonda-$version-$ARCH-linux"
+          cp "$RUNNER_TEMP/bin/sonda" "$RUNNER_TEMP/$name"
+          mv "$RUNNER_TEMP/sbom.cdx.json" "$RUNNER_TEMP/$name.cdx.json"
+          echo "path=$RUNNER_TEMP/$name" >> "$GITHUB_OUTPUT"
+      - name: Attest where it was built
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.files.outputs.path }}
+      - name: Attest its SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ steps.files.outputs.path }}
+          sbom-path: ${{ steps.files.outputs.path }}.cdx.json
+      - name: Attach it, with its checksums
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.files.outputs.path }}
+        run: |
           cd "$RUNNER_TEMP"
-          cp bin/sonda "$name"
+          name=$(basename "$NAME")
           sha256sum "$name" > "$name.sha256"
-          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" --repo "$GITHUB_REPOSITORY"
+          sha256sum "$name.cdx.json" > "$name.cdx.json.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" "$name.cdx.json" "$name.cdx.json.sha256" --repo "$GITHUB_REPOSITORY"
 
   image:
     needs: draft
@@ -174,7 +210,12 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
+      attestations: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: digest-*
@@ -187,6 +228,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Tag both, say so in the notes
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -205,6 +247,37 @@ jobs:
             printf '```\n%s@%s\n```\n' "$image" "$digest"
           } >> "$RUNNER_TEMP/notes.md"
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "name=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: The image's SBOM, from the lockfiles it was built from
+        id: sbom
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "sonda-$version-x86_64-linux" --dir "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/sonda-$version-x86_64-linux"
+          # The server's crates and the web app's packages.
+          mkdir -p "$RUNNER_TEMP/locks/web"
+          cp Cargo.lock "$RUNNER_TEMP/locks/"
+          cp web/pnpm-lock.yaml web/package.json "$RUNNER_TEMP/locks/web/"
+          "$RUNNER_TEMP/sonda-$version-x86_64-linux" sbom "$RUNNER_TEMP/locks" --output "sonda-$version-image.cdx.json"
+          echo "path=sonda-$version-image.cdx.json" >> "$GITHUB_OUTPUT"
+          sha256sum "sonda-$version-image.cdx.json" > "sonda-$version-image.cdx.json.sha256"
+          gh release upload "$GITHUB_REF_NAME" "sonda-$version-image.cdx.json" "sonda-$version-image.cdx.json.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Attest where it was built
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.tag.outputs.name }}
+          subject-digest: ${{ steps.tag.outputs.digest }}
+          push-to-registry: true
+      - name: Attest its SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ steps.tag.outputs.name }}
+          subject-digest: ${{ steps.tag.outputs.digest }}
+          sbom-path: ${{ steps.sbom.outputs.path }}
+          push-to-registry: true
 
   publish:
     needs: [cli, image-tag]

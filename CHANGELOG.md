@@ -9,6 +9,10 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Releases attest where each binary and the server image were built (build
+  provenance) and carry an SBOM for each, attested too and attached to the
+  release. [SECURITY.md](SECURITY.md#verifying-a-release) says how to verify
+  them.
 - The server image is published to `ghcr.io/lvaoliveira/sonda` with each
   release, for linux/amd64 and linux/arm64, and the release notes give its
   digest. `scripts/setup-server.sh --image ghcr.io/...@sha256:...` runs it
