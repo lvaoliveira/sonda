@@ -83,7 +83,7 @@ in CI.
 - [x] Upgrade docs: back up first (there's no downgrade), then
       `git pull && scripts/setup-server.sh` or the new image; each release
       says if it needs more.
-- [ ] Retention, as decided above, and storage growth measured and
+- [x] Retention, as decided above, and storage growth measured and
       documented (per analysis, per file, deduplicated sources).
 - [x] A migration that fails leaves the database as it was (each runs in a
       transaction) and the server says so instead of half-starting; tested.

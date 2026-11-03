@@ -39,6 +39,9 @@ pub struct Config {
     /// SONDA_PLAIN_HTTP: sign-in over plain HTTP on a trusted network, with
     /// a session cookie that isn't `Secure`. Off by default.
     pub plain_http: bool,
+    /// SONDA_THIN_ANALYSES_AFTER_DAYS: branch analyses older than this are
+    /// thinned to one a day (see `retention`); `None` keeps them all.
+    pub thin_analyses_after_days: Option<i32>,
 }
 
 /// The API token, kept only as a hash.
@@ -105,8 +108,26 @@ impl Config {
             github: github(env)?,
             public_url: public_url(env, plain_http)?,
             plain_http,
+            thin_analyses_after_days: thin_analyses_after_days(env)?,
         })
     }
+}
+
+/// How long branch analyses are kept in full: 90 days unless
+/// SONDA_THIN_ANALYSES_AFTER_DAYS says otherwise; `0` keeps them all.
+pub fn thin_analyses_after_days(env: &dyn Env) -> Result<Option<i32>> {
+    let Some(value) = env
+        .var("SONDA_THIN_ANALYSES_AFTER_DAYS")
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(Some(90));
+    };
+    let days: i32 = value.parse().ok().filter(|d| *d >= 0).ok_or_else(|| {
+        anyhow::anyhow!(
+            "SONDA_THIN_ANALYSES_AFTER_DAYS must be a number of days, or 0 to keep every analysis, not {value:?}"
+        )
+    })?;
+    Ok((days > 0).then_some(days))
 }
 
 /// The advisory sync's base URL: off unless SONDA_ADVISORY_SYNC is `true`;
@@ -247,6 +268,34 @@ mod tests {
     fn load(vars: &[(&'static str, &str)]) -> Result<Config> {
         let env = FakeEnv(vars.iter().map(|(k, v)| (*k, v.to_string())).collect());
         Config::load("127.0.0.1:9000".parse().unwrap(), None, &env)
+    }
+
+    #[test]
+    fn old_analyses_are_thinned_after_90_days_unless_told_otherwise() {
+        let days = |v: &[(&'static str, &str)]| {
+            let mut vars = vec![("DATABASE_URL", "postgres://sonda@db/sonda")];
+            vars.extend_from_slice(v);
+            load(&vars).map(|c| c.thin_analyses_after_days)
+        };
+        assert_eq!(days(&[]).unwrap(), Some(90));
+        assert_eq!(
+            days(&[("SONDA_THIN_ANALYSES_AFTER_DAYS", "30")]).unwrap(),
+            Some(30)
+        );
+        assert_eq!(
+            days(&[("SONDA_THIN_ANALYSES_AFTER_DAYS", "0")]).unwrap(),
+            None
+        );
+        assert_eq!(
+            days(&[("SONDA_THIN_ANALYSES_AFTER_DAYS", "")]).unwrap(),
+            Some(90)
+        );
+        for bad in ["-1", "soon", "1.5"] {
+            assert!(
+                days(&[("SONDA_THIN_ANALYSES_AFTER_DAYS", bad)]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

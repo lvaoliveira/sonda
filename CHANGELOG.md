@@ -9,6 +9,12 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Retention: branch analyses older than 90 days are thinned to one a day
+  (`SONDA_THIN_ANALYSES_AFTER_DAYS`, `0` keeps every analysis), always
+  keeping each branch's first and latest, the analysis the new code period
+  starts from, and every issue with its triage. See
+  [Retention and storage](docs/server.md#retention-and-storage), which also
+  says how much an analysis costs.
 - An `upgrade` CI job: the last release's server fills a database, the
   server built from each pull request takes it over, and what was stored is
   still served.
