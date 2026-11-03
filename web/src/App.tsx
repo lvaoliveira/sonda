@@ -12,7 +12,7 @@ import { ComponentsPage } from '@/pages/ComponentsPage'
 import { GatesPage } from '@/pages/GatesPage'
 import { AdminPage } from '@/pages/AdminPage'
 import { GitHubAppCreatedPage } from '@/pages/GitHubAppCreatedPage'
-import { IssuesPage } from '@/pages/IssuesPage'
+import { IssuesPage, ProjectIssuesPage } from '@/pages/IssuesPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { ProjectPage } from '@/pages/ProjectPage'
@@ -46,6 +46,7 @@ export function AppRoutes() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/connect" element={<ConnectPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
+          <Route path="/projects/:key/issues" element={<ProjectIssuesPage />} />
           <Route path="/projects/:key/rules" element={<ProjectRulesPage />} />
           <Route path="/projects/:key/settings" element={<ProjectSettingsPage />} />
           <Route path="/projects/:key/components/:component" element={<ComponentPage />} />

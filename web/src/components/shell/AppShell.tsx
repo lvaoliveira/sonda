@@ -9,14 +9,15 @@ import {
   LogOut,
   type LucideIcon,
   Menu,
+  Moon,
   Package,
-  Search,
   Shield,
   SlidersHorizontal,
+  Sun,
   X,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
-import { Link, NavLink } from 'react-router'
+import { Link, NavLink, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import { useSessionActions } from '@/api/session'
 import type { NavCounts } from '@/api/types'
@@ -65,7 +66,39 @@ export interface Crumb {
   mono?: boolean
 }
 
-export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: ReactNode }) {
+/** A project's own pages: shown as tabs on each of them, so moving between them never leaves the project. */
+function ProjectTabs({ project }: { project: string }) {
+  const base = `/projects/${encodeURIComponent(project)}`
+  // A branch's pages stay on that branch; rules and settings are the project's.
+  const branch = useSearchParams()[0].get('branch')
+  const on = branch ? `?branch=${encodeURIComponent(branch)}` : ''
+  const tabs = [
+    { to: `${base}${on}`, label: 'Overview', end: true },
+    { to: `${base}/issues${on}`, label: 'Issues' },
+    { to: `${base}/coverage${on}`, label: 'Coverage' },
+    { to: `${base}/dependencies${on}`, label: 'Dependencies' },
+    { to: `${base}/rules`, label: 'Rules' },
+    { to: `${base}/settings`, label: 'Settings' },
+  ]
+  return (
+    <nav aria-label="Project" className="-mt-1 flex gap-1 overflow-x-auto border-b border-line">
+      {tabs.map((t) => (
+        <NavLink
+          key={t.to}
+          to={t.to}
+          end={t.end}
+          className={({ isActive }) =>
+            `-mb-px flex-none border-b-2 px-3 py-2 text-[13.5px] whitespace-nowrap no-underline hover:text-fg ${isActive ? 'border-brand font-semibold text-fg' : 'border-transparent text-fg-muted'}`
+          }
+        >
+          {t.label}
+        </NavLink>
+      ))}
+    </nav>
+  )
+}
+
+export function AppShell({ crumbs, project, children }: { crumbs: Crumb[]; /** The project whose pages these are: shows its tabs. */ project?: string; children: ReactNode }) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
   const { signOut } = useSessionActions()
@@ -187,7 +220,7 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
               {trail.map((c, i) => {
                 const last = i === trail.length - 1
                 return (
-                  <span key={i} className="flex items-center gap-2" style={{ minWidth: last ? 0 : '4.5em', flex: last ? '0 1 auto' : '0 4 auto' }}>
+                  <span key={i} className="flex min-w-0 items-center gap-2" style={{ flex: last ? '0 1 auto' : '0 4 auto' }}>
                     {i > 0 && (
                       <span aria-hidden="true" className="text-line-strong">
                         /
@@ -207,26 +240,18 @@ export function AppShell({ crumbs, children }: { crumbs: Crumb[]; children: Reac
             </nav>
             <button
               type="button"
-              disabled
-              title="Search is not built yet"
-              className="flex h-[34px] min-w-[120px] flex-[0_1_300px] cursor-not-allowed items-center max-[640px]:hidden gap-2 rounded-lg border-0 bg-canvas px-3 text-[13px] text-fg-faint edge"
-            >
-              <Search size={14} strokeWidth={2} aria-hidden="true" className="flex-none" />
-              <span className="flex-1 overflow-hidden text-left whitespace-nowrap">Search or run a command</span>
-              <span className="rounded px-1.5 py-0.5 font-mono text-[10px] text-fg-muted" style={{ background: 'var(--sd-hover)' }}>
-                ⌘K
-              </span>
-            </button>
-            <button
-              type="button"
               onClick={toggleTheme}
               aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-              className="h-[34px] cursor-pointer rounded-lg border-0 bg-transparent px-3 font-mono text-[10.5px] text-fg-muted edge hover:text-fg"
+              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              className="grid size-[34px] flex-none cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-fg-muted edge hover:text-fg"
             >
-              {theme}
+              {theme === 'dark' ? <Sun size={16} strokeWidth={1.8} aria-hidden="true" /> : <Moon size={16} strokeWidth={1.8} aria-hidden="true" />}
             </button>
           </header>
-          <main className="box-border flex w-full max-w-[1560px] min-w-0 flex-1 flex-col gap-5 px-4 pt-5 pb-8 min-[900px]:px-6 min-[900px]:pt-7">{children}</main>
+          <main className="box-border flex w-full max-w-[1560px] min-w-0 flex-1 flex-col gap-5 px-4 pt-5 pb-8 min-[900px]:px-6 min-[900px]:pt-7">
+            {project && <ProjectTabs project={project} />}
+            {children}
+          </main>
         </div>
       </div>
     </div>

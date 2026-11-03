@@ -18,6 +18,7 @@ export function ProjectSettingsPage() {
   const settings = saved?.key === key ? saved : data.state === 'ready' ? data.data[0] : null
   return (
     <AppShell
+      project={key}
       crumbs={[
         { label: 'Projects', to: '/projects' },
         { label: settings?.name ?? key, to: projectUrl },

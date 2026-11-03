@@ -21,6 +21,7 @@ export function DependenciesPage() {
   const list = useAsync(() => api.dependencies(key, branch), [api, key, branch])
   return (
     <AppShell
+      project={key}
       crumbs={[
         { label: 'Projects', to: '/projects' },
         { label: key, to: projectUrl(key, branch) },

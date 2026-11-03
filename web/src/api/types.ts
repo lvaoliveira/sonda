@@ -260,8 +260,8 @@ export interface IssuePage {
   offset: number
   limit: number
   items: IssueSummary[]
-  /** Count per value, each facet ignoring its own selection. */
-  facets: Record<FacetKey, Record<string, number>>
+  /** Count per value, each facet ignoring its own selection: `project` counts every project's. */
+  facets: Record<FacetKey | 'project', Record<string, number>>
 }
 
 export interface IssueEvent {

@@ -9,6 +9,7 @@ import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { GateStatus, SeverityGlyph } from '@/components/sonda/status'
 import { branchLabel, formatDebt, formatNumber } from '@/lib/format'
 import { CATEGORY_LABEL, SEVERITY, SEVERITY_ORDER, coverageColor, languageLabel } from '@/lib/visual'
+import { issuesUrl } from '@/lib/issues'
 
 export function AnalysisPage() {
   const api = useApi()
@@ -224,7 +225,7 @@ function ChangeList({
   empty: string
 }) {
   const fileIssues = (path: string) =>
-    `/issues?project=${encodeURIComponent(a.project)}&branch=${encodeURIComponent(a.branch)}&file=${encodeURIComponent(path)}`
+    issuesUrl(a.project, { branch: a.branch, file: path })
   return (
     <Card
       id={id}

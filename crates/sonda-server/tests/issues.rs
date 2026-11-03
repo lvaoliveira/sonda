@@ -93,6 +93,12 @@ async fn the_list_filters_paginates_and_counts_facets() {
         json!({ "critical": 2, "minor": 1 })
     );
 
+    assert_eq!(all["facets"]["project"], json!({ "payments": 3 }));
+    // So does the project: another project's page still lists them all.
+    let (_, other) = get(&app, "/api/issues?project=nope").await;
+    assert_eq!(other["total"], 0);
+    assert_eq!(other["facets"]["project"], all["facets"]["project"]);
+
     // A facet's own selection does not zero out its other values.
     let (_, critical) = get(&app, "/api/issues?severity=critical").await;
     assert_eq!(critical["total"], 2);
