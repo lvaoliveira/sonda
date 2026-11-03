@@ -2241,9 +2241,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1133")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(marker_annotation name: (identifier) @n (#eq? @n "Deprecated")) @match
-(annotation name: (identifier) @n2 (#eq? @n2 "Deprecated")) @match"#,
-            filter: None,
+            query: r#"[(method_declaration) (constructor_declaration) (class_declaration) (interface_declaration) (enum_declaration) (record_declaration) (field_declaration)] @match"#,
+            filter: Some(Find(deprecated_declaration_name)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -3033,6 +3032,19 @@ fn is_the_only_public_constructor(ctor: Node) -> bool {
                 .count()
                 == 1
         })
+}
+
+/// The name of a declaration marked `@Deprecated`, where SonarQube reports it.
+fn deprecated_declaration_name<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !has_annotation(declaration, b"Deprecated", src) {
+        return None;
+    }
+    if declaration.kind() == "field_declaration" {
+        return children_of_kind(declaration, "variable_declarator")
+            .first()
+            .and_then(|d| d.child_by_field_name("name"));
+    }
+    declaration.child_by_field_name("name")
 }
 
 fn method_is_empty(method: Node, src: &[u8]) -> bool {
