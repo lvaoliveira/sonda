@@ -1152,7 +1152,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(call function: (identifier) @f (#any-of? @f "list" "dict" "tuple") arguments: (argument_list)) @match"#,
-            filter: Some(Keep(no_arguments)),
+            filter: Some(Keep(constructor_call_has_a_literal_form)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -2654,22 +2654,36 @@ fn loop_has_no_break(loop_: Node, _: &[u8]) -> bool {
 }
 
 fn jump_is_redundant(jump: Node, _: &[u8]) -> bool {
-    let Some(block) = jump.parent().filter(|p| p.kind() == "block") else {
-        return false;
-    };
-    if statements(block).last() != Some(&jump) {
+    if jump.kind() == "return_statement" && jump.named_child_count() != 0 {
         return false;
     }
-    let Some(owner) = block.parent() else {
-        return false;
-    };
-    if jump.kind() == "return_statement" {
-        jump.named_child_count() == 0
-            && owner.kind() == "function_definition"
-            && owner.child_by_field_name("body") == Some(block)
-    } else {
-        matches!(owner.kind(), "for_statement" | "while_statement")
-            && owner.child_by_field_name("body") == Some(block)
+    // Climb through the `if`/`else` branches the jump ends until the function
+    // or loop body it would leave anyway.
+    let mut current = jump;
+    loop {
+        let Some(block) = current.parent().filter(|p| p.kind() == "block") else {
+            return false;
+        };
+        if statements(block).last() != Some(&current) {
+            return false;
+        }
+        let Some(owner) = block.parent() else {
+            return false;
+        };
+        match owner.kind() {
+            "function_definition" if jump.kind() == "return_statement" => {
+                return owner.child_by_field_name("body") == Some(block);
+            }
+            "for_statement" | "while_statement" if jump.kind() != "return_statement" => {
+                return owner.child_by_field_name("body") == Some(block);
+            }
+            "if_statement" => current = owner,
+            "elif_clause" | "else_clause" => match owner.parent() {
+                Some(chain) if chain.kind() == "if_statement" => current = chain,
+                _ => return false,
+            },
+            _ => return false,
+        }
     }
 }
 
@@ -2899,10 +2913,6 @@ fn compares_type_directly(cmp: Node, src: &[u8]) -> bool {
     matches!(op, b"==" | b"!=" | b"is" | b"is not") && (is_type_call(l) || is_type_call(r))
 }
 
-fn no_arguments(call: Node, _: &[u8]) -> bool {
-    call_arguments(call).is_empty()
-}
-
 fn one_argument(call: Node, _: &[u8]) -> bool {
     call_arguments(call).len() == 1
 }
@@ -2963,6 +2973,16 @@ fn list_copy_is_not_needed(for_: Node, src: &[u8]) -> bool {
         body_text.windows(del.len()).any(|w| w == del.as_slice())
     };
     !mutates
+}
+
+/// `list()`, `tuple()`, `dict()` and `dict(key=value)` all have a literal form.
+fn constructor_call_has_a_literal_form(call: Node, src: &[u8]) -> bool {
+    let args = call_arguments(call);
+    args.is_empty()
+        || (call
+            .child_by_field_name("function")
+            .is_some_and(|f| text(f, src) == b"dict")
+            && args.iter().all(|a| a.kind() == "keyword_argument"))
 }
 
 fn collection_call_is_redundant(outer: Node, src: &[u8]) -> bool {
