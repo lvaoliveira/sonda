@@ -77,7 +77,7 @@ in CI.
 
 ## M2: safe upgrades
 
-- [ ] A CI job that runs the previous release's server on a database it
+- [x] A CI job that runs the previous release's server on a database it
       filled (users, projects, analyses, triage, gates, profiles), upgrades
       to the new one, and checks everything is still there and served.
 - [x] Upgrade docs: back up first (there's no downgrade), then

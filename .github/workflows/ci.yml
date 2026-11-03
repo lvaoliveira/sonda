@@ -171,6 +171,56 @@ jobs:
           DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
         run: scripts/check-compat.sh "$RUNNER_TEMP"/old/sonda-*-x86_64-linux target/debug/sonda-server
 
+  # Safe upgrades (docs/release-1.0.md, M2): the last release's server fills a
+  # database, the server built from this change takes it over, and
+  # everything is still there and served. The release publishes the CLI only
+  # (the server image comes with M3), so the old server is built from its tag.
+  upgrade:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The last release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" >> "$GITHUB_OUTPUT"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'sonda-*-x86_64-linux' --pattern SHA256SUMS --dir "$RUNNER_TEMP/old"
+          cd "$RUNNER_TEMP/old"
+          sha256sum -c --ignore-missing SHA256SUMS
+          chmod +x sonda-*-x86_64-linux
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          path: old
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: v1-rust
+          workspaces: |
+            . -> target
+            old -> target
+      - run: cargo build -p sonda-server --locked
+      - run: cargo build -p sonda-server --locked --manifest-path old/Cargo.toml
+      - name: The old server's database upgrades
+        env:
+          DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+        run: scripts/check-upgrade.sh old/target/debug/sonda-server target/debug/sonda-server "$RUNNER_TEMP"/old/sonda-*-x86_64-linux
+
   # ADR-0005's acceptance check: the documented one command on a clean
   # machine gives a working server.
   docker:
