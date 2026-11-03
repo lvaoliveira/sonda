@@ -47,10 +47,12 @@ done
 
 echo "check-compat: uploading with $("$old" --version)"
 # --no-gate: only the upload is under test, not the gate's verdict.
-SONDA_TOKEN=$token "$old" scan "$work/project" --no-gate --upload --server "$url" \
+# Not as a GitHub Actions pull request, which the CLI would otherwise detect
+# from the environment and upload as one.
+SONDA_TOKEN=$token env -u GITHUB_ACTIONS -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u GITHUB_REF "$old" scan "$work/project" --no-gate --upload --server "$url" \
   --project compat --branch main --commit 0123456789abcdef0123456789abcdef01234567
 
 # It was stored and is served, with its issues.
-curl -fsS "$url/api/analyses/1" > "$work/analysis.json"
-curl -fsS "$url/api/projects/compat" > /dev/null
+curl -fsS --fail-with-body "$url/api/analyses/1" > "$work/analysis.json"
+curl -fsS --fail-with-body "$url/api/projects/compat" > /dev/null
 echo "check-compat: the previous release's upload was accepted and is served"
