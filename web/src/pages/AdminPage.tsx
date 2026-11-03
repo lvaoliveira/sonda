@@ -1,8 +1,9 @@
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { useApi, useAsync } from '@/api/hooks'
-import { type DeletedProject, MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type UserRow } from '@/api/types'
+import { type DeletedProject, type GitHubApp, type GitHubAppManifest, MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type UserRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
-import { Button } from '@/components/sonda/controls'
+import { ExternalButton } from '@/components/sonda/connect'
+import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { TokenGenerator, TokenTable } from '@/components/sonda/tokens'
 import { shortDate } from '@/lib/format'
@@ -92,6 +93,7 @@ function Users({ me }: { me: string | null }) {
         onError={setError}
       />
       <AllTokens owners={list.filter((u) => !u.disabled).map((u) => u.username)} />
+      <GitHubAppCard />
       <DeletedProjects />
       <p className="m-0 text-[12.5px] text-fg-faint">Single sign-on (OpenID Connect) is planned; see ADR-0006.</p>
     </>
@@ -132,6 +134,177 @@ function AllTokens({ owners }: { owners: string[] }) {
       {tokens.state === 'ready' && <TokenTable tokens={tokens.data} showOwner onRevoke={(t) => void revoke(t.id)} />}
       {tokens.state === 'error' && <p role="alert">Could not load tokens: {tokens.error.message}</p>}
     </Card>
+  )
+}
+
+/** A name GitHub will take for a new App: at most 34 characters. */
+function proposedAppName(host: string): string {
+  return `sonda-${host.replace(/[^A-Za-z0-9-]+/g, '-')}`.slice(0, 34).replace(/-+$/, '')
+}
+
+/**
+ * The GitHub App that decorates pull requests (ADR-0024): one configured on
+ * the server, or one created here with GitHub's App manifest flow. GitHub
+ * opens its own page filled in, then sends the browser back to
+ * /admin/github/created.
+ */
+function GitHubAppCard() {
+  const api = useApi()
+  const app = useAsync(() => api.githubApp(), [api])
+  const [error, setError] = useState('')
+  // Linked to as /admin#github: the router doesn't scroll to it.
+  useEffect(() => {
+    if (app.state === 'ready' && location.hash === '#github') document.getElementById('github')?.scrollIntoView()
+  }, [app.state])
+  const disconnect = async () => {
+    setError('')
+    try {
+      await api.disconnectGithubApp()
+      if (app.state === 'ready') app.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+  return (
+    <Card id="github" title="GitHub" subtitle="The GitHub App posts a sonda check and a summary comment on pull requests, where it's installed.">
+      {error && (
+        <p role="alert" className="m-0 text-[13px] text-crit">
+          {error}
+        </p>
+      )}
+      {app.state === 'error' && <p role="alert">Could not load the GitHub App: {app.error.message}</p>}
+      {app.state === 'ready' && <GitHubAppState app={app.data} onDisconnect={() => void disconnect()} />}
+    </Card>
+  )
+}
+
+function GitHubAppState({ app, onDisconnect }: { app: GitHubApp; onDisconnect: () => void }) {
+  const [confirming, setConfirming] = useState(false)
+  const disconnect = confirming ? (
+    <span className="flex flex-wrap items-center gap-2 text-[13px]">
+      Decorating stops. The App stays on GitHub, where its owner can delete it.
+      <Button onClick={onDisconnect}>Disconnect</Button>
+      <Button onClick={() => setConfirming(false)}>Cancel</Button>
+    </span>
+  ) : (
+    <Button onClick={() => setConfirming(true)}>Disconnect…</Button>
+  )
+  switch (app.source) {
+    case 'config':
+      return (
+        <p className="m-0 text-[13px] text-fg-muted">
+          App <Mono className="text-[12.5px] text-fg">{app.id}</Mono> is set in the server's configuration (<Mono className="text-[12px]">SONDA_GITHUB_APP_ID</Mono>), so it's changed
+          there, not here.
+        </p>
+      )
+    case 'stored':
+      return (
+        <>
+          <p className="m-0 text-[13px] text-fg-muted">
+            <a href={app.htmlUrl!} target="_blank" rel="noreferrer">
+              <Mono className="text-[12.5px]">{app.slug}</Mono>
+            </a>{' '}
+            is connected, created by {app.createdBy} on {shortDate(app.createdAt!)}. Install it on each repository whose pull requests it should decorate.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <ExternalButton href={app.installUrl!}>Install it on repositories</ExternalButton>
+            {disconnect}
+          </div>
+        </>
+      )
+    case 'unreadable':
+      return (
+        <>
+          <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+            <Mono className="text-[12px]">{app.slug}</Mono>'s private key can't be read: <Mono className="text-[12px]">SONDA_SECRET_KEY</Mono> is missing, or isn't the one it was
+            stored with. Restore that key and restart the server, or disconnect it and create a new App.
+          </p>
+          <div>{disconnect}</div>
+        </>
+      )
+    default:
+      return app.secretKey ? (
+        <CreateGitHubApp />
+      ) : (
+        <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+          No GitHub App yet. Creating one here needs <Mono className="text-[12px]">SONDA_SECRET_KEY</Mono>, which encrypts its private key: rerun{' '}
+          <Mono className="text-[12px]">scripts/setup-server.sh</Mono>, which creates it (see the server docs).
+        </p>
+      )
+  }
+}
+
+function CreateGitHubApp() {
+  const api = useApi()
+  const [owner, setOwner] = useState<'me' | 'org'>('me')
+  const [org, setOrg] = useState('')
+  const [name, setName] = useState(() => proposedAppName(location.hostname))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState<GitHubAppManifest | null>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  // Posted as a form, not fetched: GitHub's page opens in this tab.
+  useEffect(() => {
+    if (form) formRef.current?.submit()
+  }, [form])
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      setForm(await api.githubAppManifest(owner === 'org' ? org.trim() : null, name.trim()))
+    } catch (err) {
+      setError((err as Error).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <form onSubmit={submit} className="flex flex-col gap-3">
+        <p className="m-0 text-[13px] text-fg-muted">
+          No GitHub App yet. sonda can create one: GitHub opens its own page, filled in with the permissions sonda needs (checks and pull requests) and no webhook. Click{' '}
+          <strong className="text-fg">Create GitHub App</strong> there, and GitHub brings you back here.
+        </p>
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1.5 text-[13px]">
+            Owner
+            <Segmented
+              label="Owner"
+              options={[
+                { value: 'me', label: 'My account' },
+                { value: 'org', label: 'An organization' },
+              ]}
+              value={owner}
+              onChange={setOwner}
+            />
+          </div>
+          {owner === 'org' && (
+            <label className="flex flex-col gap-1.5 text-[13px]">
+              Organization
+              <input required autoCapitalize="none" spellCheck={false} pattern="[A-Za-z0-9][A-Za-z0-9\-]{0,38}" value={org} onChange={(e) => setOrg(e.target.value)} className={input} />
+            </label>
+          )}
+          <label className="flex flex-col gap-1.5 text-[13px]">
+            App name
+            <input required maxLength={34} value={name} onChange={(e) => setName(e.target.value)} className={input} />
+          </label>
+          <Button type="submit" primary disabled={busy || !name.trim()}>
+            {busy ? 'Opening GitHub…' : 'Create GitHub App'}
+          </Button>
+        </div>
+        <p className="m-0 text-xs text-fg-faint">Names are unique across GitHub; if it's taken, change it on GitHub's page.</p>
+      </form>
+      {form && (
+        <form ref={formRef} method="post" action={form.action} hidden>
+          <input type="hidden" name="manifest" value={form.manifest} />
+        </form>
+      )}
+    </>
   )
 }
 
