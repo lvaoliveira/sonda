@@ -73,8 +73,11 @@ avoided storing credentials, so that's the decision here.
   `POST /app-manifests/{code}/conversions`. It keeps the App's ID, slug,
   page URL and private key. It discards the client secret and webhook
   secret, which nothing uses (GitHub can make new ones later).
-- **The address GitHub sends back to** is `SONDA_PUBLIC_URL`, else the
-  `Origin` of the admin's request, the address the browser used.
+- **The address GitHub sends back to** is the one the admin's browser is
+  on, from the `Origin` of their request, so a server reached on several
+  addresses (a LAN and a tailnet, say) brings them back to the one they
+  started from. `SONDA_PUBLIC_URL` is the App's homepage, and the way back
+  only without an `Origin`.
 - **The return works on a LAN.** It's the admin's browser that comes
   back, not GitHub's servers, so `http://192.168.1.254:9300` works, the
   same way the Connect page's links to GitHub do.

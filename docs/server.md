@@ -735,7 +735,8 @@ posted. The analysis page says whether it was posted, and if not, why.
 
 It works on a LAN address over plain HTTP too: it's your browser that
 GitHub sends back, not a call from GitHub's servers. GitHub sends it to
-`SONDA_PUBLIC_URL`, else to the address the browser used. Disconnecting
+the address you started from, so a server you reach on several addresses,
+such as a LAN and a tailnet, works from each. Disconnecting
 the App forgets it here; it stays on GitHub, where its owner can delete it.
 It needs `SONDA_SECRET_KEY`, which `scripts/setup-server.sh` creates; a
 server restored without that key says the App's key can't be read, and
