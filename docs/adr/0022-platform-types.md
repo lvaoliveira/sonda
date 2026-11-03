@@ -1,8 +1,8 @@
 # ADR-0022: Types from the platform's declarations
 
-- Status: **accepted; steps 1 and 2 built.** The summary, its loader,
-  framework base types in the project index, and expression typing, with
-  twenty-one rules (below).
+- Status: **accepted; steps 1 and 2 built, step 3 in part.** The summary,
+  its loader, framework base types in the project index, expression
+  typing and overload resolution, with twenty-six rules (below).
 - Date: 2026-11-02
 
 ## Context
@@ -59,8 +59,10 @@ same scan gives the same result everywhere.
   interfaces and a few attributes (`[Flags]`, `[Obsolete]`, abstract,
   sealed, static); each public or protected member's kind, name, static or
   not, return type, generic arity, and parameters (type, name, `ref`/`out`/`in`,
-  optional, `params`, `[StringSyntax]` such as `Regex` or `Uri`), with
-  extension methods marked. Nothing else: no internal members, no
+  optional and its constant default, `params`, caller-information
+  attributes, `[StringSyntax]` such as `Regex` or `Uri`), with extension
+  methods marked; a constant field's value, an enum member's among them.
+  Nothing else: no internal members, no
   documentation. Reference assemblies define `[Pure]` and `[Localizable]`
   but apply them nowhere, so rules that SonarQube documents through them
   (S2201, S4055) can't read them from the summary.
@@ -77,9 +79,9 @@ same scan gives the same result everywhere.
   use, with `flate2`'s pure-Rust backend, already a dependency of the CLI
   and server.
 - **Budget:** at most 2 MB in the binary, decoded in under 50 ms. Measured:
-  .NET 8's two packs give 6,697 types and 63,034 members, 611 KB deflated,
-  decoded in under 40 ms in a release build. Scan time on the seven-project
-  corpus didn't change.
+  .NET 8's two packs give 6,697 types and 63,034 members, 640 KB deflated
+  with defaults and constant values, decoded in under 40 ms in a release
+  build. Scan time on the seven-project corpus didn't change.
 - **Licensing:** the packs' MIT notice ships with the data.
 
 ### Names to platform types
@@ -134,6 +136,18 @@ one that it doesn't stays `related` until sonda reads the project's target
 framework, which is a separate decision. S6966 is such a rule: its own
 example, `File.ReadAllLinesAsync`, and `CancellationTokenSource.CancelAsync`
 came after .NET Standard 2.0, so it recommends only what that has.
+
+Overloads follow the same line. A rule that recommends one (S4005, S4056,
+S4058) recommends it only when .NET Standard 2.0 has both it and the one
+the call binds to, so the call binds the same on every target; their
+documented examples all qualify, so the rules are exact, and a newer
+overload, `Contains(string, StringComparison)`, costs recall only. Leaving
+an argument out (S3254) relies on the parameter's default: the summary
+leaves out a default .NET Standard 2.0 doesn't declare for the same member,
+as it does for `StreamReader`'s constructors, which gained theirs later.
+.NET Standard 2.0 declares no optional parameters at all, so a newer API's
+default is kept: a call to it compiles only on a target that has it, and
+one that gained its default after it came is the remaining risk.
 
 ### Other languages
 
@@ -245,8 +259,61 @@ declarations and light inference, not the project's own checker.
    class; S3242 no longer reports 4 parameters whose element type is.
    Scan time didn't change; the file's declarations are read once and
    shared by every rule that types expressions.
-3. Overloads and parameters: S2234, S3254, S4005, S4056, S4058, then S1128;
-   S2201 and S4055 with their documented lists.
+3. Overloads and parameters (`semantic/cs_infer/resolve.rs`): the method
+   a call binds to, chosen as C# chooses, among the methods its name finds
+   through the type's base classes (an override counted with what it
+   overrides, a derived type's applicable methods hiding a base type's),
+   then extension methods: by the parameter each argument goes to (named,
+   optional, `params` expanded or not), whether each converts implicitly
+   (a constant to a narrower integer, `null`, `default`), the method's own
+   type parameters bound from the arguments, and the better conversion
+   between candidates. A lambda for a delegate parameter, an argument of
+   unknown type for anything but `object`, a partial type, or a base type
+   that doesn't resolve leaves the call unresolved. Constants evaluate too:
+   literals, `default`, constant fields and enum members.
+
+   **3a, built.** Exact now:
+   - S2234: two variables passed positionally, named after parameters of
+     the method the call binds to, in the other order.
+   - S3254: an argument equal to its parameter's default that the call can
+     leave out and still bind to the same method: a named one, or a
+     positional one with only such arguments, or named ones, after it.
+     Parameters an attribute fills (`[CallerMemberName]`) are left alone.
+   - S4005: a string passed to a parameter whose name contains "uri",
+     "urn" or "url" (in either case of their first letter), when the type
+     declaring the method has the same overload with a `System.Uri` there.
+   - S4056: a member called without an `IFormatProvider` or `CultureInfo`
+     when the same overload with one more exists and isn't obsolete.
+     Constructors count, as the documentation says members; its three
+     named methods, and those whose documentation says the provider is
+     reserved or ignored (`bool`, `char` and `string`'s `ToString`,
+     `Guid.ToString(string)`, `Convert` of a bool, char or string), are
+     left alone; `Convert.ToString(object)` is reported only for a value
+     that formats, and `TimeSpan.ToString(string)` only for a standard
+     format, as a custom one ignores the provider.
+   - S4058: a string method called without a `StringComparison` when the
+     same overload with one exists: `Compare` and `Equals`, as documented,
+     and `StartsWith`, `EndsWith`, `IndexOf`, `LastIndexOf`.
+
+   Re-auditing changed three beyond types: S4056 reports any member with
+   such an overload, `int.Parse`, `ToUpper()`, `new StringWriter()`,
+   instead of formatting calls only; S4058 reports `Equals`; S2234 no
+   longer needs every argument to be a variable.
+
+   On the corpus: S4005 went from 0 findings to 32 (`HttpClient` calls
+   with a string address), S3254 from 1 to 2, S4056 from 47 to 447 (238 of
+   them `StringWriter` constructors in tests), S4058 from 68 to 54, all
+   true positives under the documentation; S2234 finds nothing there, as
+   before. Of those no longer reported, 3 were false positives
+   (`Guid.ToString("N")`, Newtonsoft's own `StringReference.StartsWith`);
+   the others have receivers whose type doesn't resolve (lambda
+   parameters, other files' types), a `using static` constant, or a type
+   newer than .NET Standard 2.0 (`DateOnly`). With the default rules, scan
+   time didn't change; each of the five, off by default but S2234, adds
+   at most 0.15 s to the largest project, since a call is resolved only
+   when its name or arguments could matter.
+
+   **3b:** S1128; S2201 and S4055 with their documented lists.
 
 Each step re-audits its rules against the corpus, as ADR-0007 requires,
 before marking them `exact`.
@@ -265,11 +332,11 @@ before marking them `exact`.
 
 ## Consequences
 
-- A generated data file in the repository and 611 KB more in the binary,
+- A generated data file in the repository and 640 KB more in the binary,
   regenerated on each .NET LTS.
 - A development tool with its own metadata-reading dependency, outside the
   shipped crates and their dependency policy.
 - About 30 C# rules can become `exact` without giving up the
-  no-false-positive bar, and third-party types stay unknown. Steps 1 and
-  2 made 21 exact.
+  no-false-positive bar, and third-party types stay unknown. Steps 1 to 3a
+  made 26 exact.
 - ADR-0008's S4 row points here.

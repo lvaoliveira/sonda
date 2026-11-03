@@ -138,23 +138,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/default-argument-passed",
-        name: "Default parameter values should not be passed explicitly",
-        description: "Passing the default value says nothing the declaration doesn't, and stops following a \
-                      change of the default.",
-        message: "Leave this argument out; it's the parameter's default.",
+        name: "Default parameter values should not be passed as arguments",
+        description: "Passing a parameter's default value says nothing the declaration doesn't, and stops \
+                      following the default if it changes.",
+        message: "Leave this argument out; it's the parameter's default value.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S3254")],
-        check: Check::Query {
+        sonar: &[exact("S3254")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(class_declaration body: (declaration_list)) @match",
-            filter: Some(Find(default_passed_explicitly)),
+            find: super::cs_inferred::default_values_passed,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { void Save(string p, bool force = false) { } void F() { Save(\"x\", false); } }",
-            good: "class A { void Save(string p, bool force = false) { } void F() { Save(\"x\"); } }",
+            bad: "class A { public void M(int x, int y = 5, int z = 7) { } void F() { M(1, 5); } }",
+            good: "class A { public void M(int x, int y = 5, int z = 7) { } void F() { M(1); } }",
         }),
     },
     Rule {
@@ -554,24 +553,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/string-comparison-overload",
-        name: "String comparisons should state how they compare",
-        description: "Without a StringComparison, Compare, StartsWith, EndsWith and IndexOf(string) depend on the \
-                      current culture.",
-        message: "Pass a StringComparison, such as StringComparison.Ordinal.",
+        name: "Overloads with a StringComparison parameter should be used",
+        description: "Compare, Equals and other string operations with a StringComparison overload say how \
+                      they compare when given one.",
+        message: "Call the overload that takes a StringComparison.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[related("S4058")],
-        check: Check::Query {
+        sonar: &[exact("S4058")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression function: (member_access_expression name: (identifier) @n)
-                        (#any-of? @n "StartsWith" "EndsWith" "IndexOf" "LastIndexOf" "Compare")) @match"#,
-            filter: Some(Keep(culture_dependent_comparison)),
+            find: super::cs_inferred::string_comparison_overloads,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { bool F(string s) { return s.StartsWith(\"abc\"); } }",
-            good: "class A { bool F(string s) { return s.StartsWith(\"abc\", StringComparison.Ordinal); } }",
+            bad: "using System;\nclass Foo { bool HaveSameNames(string name1, string name2) { return string.Compare(name1, name2) == 0; } }",
+            good: "using System;\nclass Foo { bool HaveSameNames(string name1, string name2) { return string.Compare(name1, name2, StringComparison.OrdinalIgnoreCase) == 0; } }",
         }),
     },
     Rule {
@@ -910,73 +907,6 @@ fn is_null_coalescing_shape(node: Node, src: &[u8]) -> bool {
         "alternative"
     });
     kept.is_some_and(|k| same_code(unparenthesized(k), subject, src))
-}
-
-/// An optional parameter: its position and its default value's text.
-type OptionalParameter<'s> = (usize, &'s [u8]);
-
-fn default_passed_explicitly<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Methods of this class: name, and (position, default text) of their
-    // optional parameters. Overloaded names are skipped: which one a call
-    // picks takes types.
-    let methods: Vec<Node<'t>> = members(class)
-        .into_iter()
-        .filter(|m| m.kind() == "method_declaration")
-        .collect();
-    let defaults: Vec<(&[u8], Vec<OptionalParameter>)> = methods
-        .iter()
-        .filter_map(|m| {
-            let name = text(m.child_by_field_name("name")?, src);
-            if methods
-                .iter()
-                .filter(|o| {
-                    o.child_by_field_name("name")
-                        .is_some_and(|n| text(n, src) == name)
-                })
-                .count()
-                > 1
-            {
-                return None;
-            }
-            let params = m.child_by_field_name("parameters")?;
-            let mut c = params.walk();
-            let list: Vec<(usize, &[u8])> = params
-                .named_children(&mut c)
-                .filter(|p| p.kind() == "parameter")
-                .enumerate()
-                .filter_map(|(i, p)| {
-                    let t = text(p, src);
-                    let eq = t.iter().position(|b| *b == b'=')?;
-                    Some((i, t[eq + 1..].trim_ascii()))
-                })
-                .collect();
-            (!list.is_empty()).then_some((name, list))
-        })
-        .collect();
-    if defaults.is_empty() {
-        return None;
-    }
-    let body = class.child_by_field_name("body")?;
-    find_in_scope(body, &[], |n| {
-        if n.kind() != "invocation_expression" {
-            return false;
-        }
-        let Some(name) = n.child_by_field_name("function").map(|f| text(f, src)) else {
-            return false;
-        };
-        let args = cs_call_arguments(n);
-        defaults.iter().any(|(m, optional)| {
-            *m == name
-                && optional.iter().any(|(i, value)| {
-                    // The last argument passed positionally, equal to its default.
-                    *i + 1 == args.len()
-                        && args.get(*i).is_some_and(|a| text(*a, src) == *value)
-                        && args[*i]
-                            .parent()
-                            .is_some_and(|p| p.child_by_field_name("name").is_none())
-                })
-        })
-    })
 }
 
 fn wraps_method_group(creation: Node, src: &[u8]) -> bool {
@@ -1416,38 +1346,6 @@ fn trivial_getter_method(name: Node, src: &[u8]) -> bool {
         && returns_value
         && method.child_by_field_name("type_parameters").is_none()
         && value.is_some_and(|v| matches!(v.kind(), "identifier" | "member_access_expression"))
-}
-
-fn culture_dependent_comparison(call: Node, src: &[u8]) -> bool {
-    let method = call
-        .child_by_field_name("function")
-        .and_then(|f| f.child_by_field_name("name"))
-        .map_or(&b""[..], |n| text(n, src));
-    let args = cs_call_arguments(call);
-    if args.iter().any(|a| {
-        contains_ignoring_case(text(*a, src), b"StringComparison")
-            || contains_ignoring_case(text(*a, src), b"Culture")
-    }) {
-        return false;
-    }
-    match method {
-        // string.Compare(a, b)
-        b"Compare" => {
-            call.child_by_field_name("function")
-                .and_then(|f| f.child_by_field_name("expression"))
-                .is_some_and(|r| matches!(text(r, src), b"string" | b"String"))
-                && args.len() == 2
-        }
-        // The char overloads are ordinal; only string arguments depend on culture.
-        _ => {
-            args.len() == 1
-                && matches!(
-                    args[0].kind(),
-                    "string_literal" | "interpolated_string_expression" | "verbatim_string_literal"
-                )
-                && cs_string_value(args[0], src).is_none_or(|v| v.len() != 1)
-        }
-    }
 }
 
 fn property_with_get_method<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

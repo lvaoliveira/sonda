@@ -70,6 +70,9 @@ struct Member {
     /// "Pure", "Obsolete", "Extension", "Localizable".
     #[serde(skip_serializing_if = "Vec::is_empty")]
     a: Vec<&'static str>,
+    /// A constant field's value, as `constant` writes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    v: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -77,10 +80,17 @@ struct ParamEntry {
     t: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     n: String,
-    /// "ref", "out", "in", "params", "optional", "Localizable", and
-    /// `StringSyntax` values such as "syntax:Regex".
+    /// "ref", "out", "in", "params", "optional", "Localizable", "caller"
+    /// (a caller-information attribute), and `StringSyntax` values such as
+    /// "syntax:Regex".
     #[serde(skip_serializing_if = "Vec::is_empty")]
     a: Vec<String>,
+    /// An optional parameter's default value, as `constant` writes it. Left
+    /// out when .NET Standard 2.0 declares the member without it, as it does
+    /// the constructors of `StreamReader`: leaving the argument out would
+    /// not compile on older targets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -119,11 +129,25 @@ fn main() -> Res<()> {
         .values()
         .flat_map(|t| t.m.iter().map(move |m| signature(t, m)))
         .collect();
+    let baseline_defaults: std::collections::HashMap<String, Vec<Option<String>>> = baseline
+        .values()
+        .flat_map(|t| {
+            t.m.iter()
+                .map(move |m| (signature(t, m), m.p.iter().map(|p| p.d.clone()).collect()))
+        })
+        .collect();
     for t in types.values_mut() {
-        let tagged: Vec<bool> = t.m.iter().map(|m| common.contains(&signature(t, m))).collect();
-        for (m, in_baseline) in t.m.iter_mut().zip(tagged) {
-            if in_baseline {
+        let signatures: Vec<String> = t.m.iter().map(|m| signature(t, m)).collect();
+        for (m, sig) in t.m.iter_mut().zip(signatures) {
+            if common.contains(&sig) {
                 m.a.push("ns20");
+            }
+            if let Some(older) = baseline_defaults.get(&sig) {
+                for (p, d) in m.p.iter_mut().zip(older) {
+                    if *d != p.d {
+                        p.d = None;
+                    }
+                }
             }
         }
     }
@@ -297,6 +321,10 @@ const ATTRIBUTES: &[(&str, &str)] = &[
     ("System.ParamArrayAttribute", "params"),
     ("System.ComponentModel.LocalizableAttribute", "Localizable"),
     ("System.Diagnostics.CodeAnalysis.StringSyntaxAttribute", "syntax"),
+    ("System.Runtime.CompilerServices.CallerMemberNameAttribute", "caller"),
+    ("System.Runtime.CompilerServices.CallerFilePathAttribute", "caller"),
+    ("System.Runtime.CompilerServices.CallerLineNumberAttribute", "caller"),
+    ("System.Runtime.CompilerServices.CallerArgumentExpressionAttribute", "caller"),
 ];
 
 fn strip_arity(name: &str) -> &str {
@@ -426,6 +454,7 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
         a.extend(r.tags(Token::new(TableId::MethodDef, rid))?);
         out.push(Member {
             k: kind,
+            v: None,
             n: if kind == "constructor" { String::new() } else { name },
             t: if kind == "constructor" {
                 String::new()
@@ -480,11 +509,13 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
                             t: r.type_name(&x.type_)?,
                             n: String::new(),
                             a: Vec::new(),
+                            d: None,
                         })
                     })
                     .collect::<Res<_>>()?,
                 g: 0,
                 a: all,
+                v: None,
             });
         }
     }
@@ -509,6 +540,12 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
             a.push("readonly");
         }
         a.extend(r.tags(Token::new(TableId::Field, rid))?);
+        let v = if f.is_literal() {
+            t.constant_of(Token::new(TableId::Field, rid))?
+                .and_then(|c| constant(r, c))
+        } else {
+            None
+        };
         out.push(Member {
             k: "field",
             n: r.str(f.name),
@@ -516,6 +553,7 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
             p: Vec::new(),
             g: 0,
             a,
+            v,
         });
     }
     if let Some(map) = t.event_map_of(Rid::new(type_rid))? {
@@ -542,6 +580,7 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
                 p: Vec::new(),
                 g: 0,
                 a: method_flags(acc.flags, protected),
+                v: None,
             });
         }
     }
@@ -585,6 +624,7 @@ fn params(r: &Reader, method: u32, sig: &MethodSig) -> Res<Vec<ParamEntry>> {
                 t: r.type_name(&p.type_)?,
                 n: String::new(),
                 a: if p.by_ref { vec!["ref".to_string()] } else { Vec::new() },
+                d: None,
             })
         })
         .collect::<Res<_>>()?;
@@ -604,11 +644,22 @@ fn params(r: &Reader, method: u32, sig: &MethodSig) -> Res<Vec<ParamEntry>> {
         if p.flags & 0x1010 != 0 {
             entry.a.push("optional".to_string());
         }
+        if p.flags & 0x1000 != 0 {
+            entry.d = t
+                .constant_of(Token::new(TableId::Param, rid))?
+                .and_then(|c| constant(r, c));
+        }
         for (name, blob) in r.attributes(Token::new(TableId::Param, rid))? {
             match name.as_str() {
                 "System.ParamArrayAttribute" => entry.a.push("params".to_string()),
                 "System.ComponentModel.LocalizableAttribute" if blob.get(2) == Some(&1) => {
                     entry.a.push("Localizable".to_string())
+                }
+                "System.Runtime.CompilerServices.CallerMemberNameAttribute"
+                | "System.Runtime.CompilerServices.CallerFilePathAttribute"
+                | "System.Runtime.CompilerServices.CallerLineNumberAttribute"
+                | "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" => {
+                    entry.a.push("caller".to_string())
                 }
                 "System.Diagnostics.CodeAnalysis.StringSyntaxAttribute" => {
                     if let Some(s) = ser_string(&blob[2.min(blob.len())..]) {
@@ -620,6 +671,48 @@ fn params(r: &Reader, method: u32, sig: &MethodSig) -> Res<Vec<ParamEntry>> {
         }
     }
     Ok(out)
+}
+
+/// A constant's value (ECMA-335 II.22.9): "true" or "false", an integer,
+/// a float with a decimal point or exponent, `'c` for a char, `"text` for
+/// a string, or "null" (also a struct's `default`). None for an encoding
+/// it can't read.
+fn constant(r: &Reader, c: cildec::tables::ConstantRow) -> Option<String> {
+    let b = r.md.blobs().get(c.value).ok()?;
+    let bytes = |n: usize| -> Option<[u8; 8]> {
+        let mut a = [0u8; 8];
+        a.get_mut(..n)?.copy_from_slice(b.get(..n)?);
+        Some(a)
+    };
+    let i16_at = || Some(i16::from_le_bytes(b.get(..2)?.try_into().ok()?));
+    let u16_at = || Some(u16::from_le_bytes(b.get(..2)?.try_into().ok()?));
+    let i32_at = || Some(i32::from_le_bytes(b.get(..4)?.try_into().ok()?));
+    let u32_at = || Some(u32::from_le_bytes(b.get(..4)?.try_into().ok()?));
+    Some(match c.element_type() {
+        0x02 => (*b.first()? != 0).to_string(),
+        0x03 => format!("'{}", char::from_u32(u32::from(u16_at()?))?),
+        0x04 => (*b.first()? as i8).to_string(),
+        0x05 => b.first()?.to_string(),
+        0x06 => i16_at()?.to_string(),
+        0x07 => u16_at()?.to_string(),
+        0x08 => i32_at()?.to_string(),
+        0x09 => u32_at()?.to_string(),
+        0x0a => i64::from_le_bytes(bytes(8)?).to_string(),
+        0x0b => u64::from_le_bytes(bytes(8)?).to_string(),
+        0x0c => format!("{:?}", f64::from(f32::from_bits(u32_at()?))),
+        0x0d => format!("{:?}", f64::from_le_bytes(bytes(8)?)),
+        0x0e => {
+            let units: Vec<u16> = b
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|u| u16::from_le_bytes(*u))
+                .collect();
+            format!("\"{}", String::from_utf16(&units).ok()?)
+        }
+        0x12 => "null".to_string(),
+        _ => return None,
+    })
 }
 
 /// A custom attribute blob's first string argument (ECMA-335 II.23.3).
