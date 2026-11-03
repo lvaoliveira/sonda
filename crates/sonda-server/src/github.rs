@@ -126,6 +126,18 @@ fn call(
     })
 }
 
+/// Where the App is installed: an account, and which of its repositories.
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Installation {
+    pub account: String,
+    /// The installation's page on GitHub, to change its repositories.
+    pub settings_url: String,
+    /// `None` when it's installed on all of the account's repositories;
+    /// else the first 100, `owner/name`.
+    pub repositories: Option<Vec<String>>,
+}
+
 /// An App GitHub created from a manifest (ADR-0024).
 pub struct Created {
     pub id: u64,
@@ -219,6 +231,58 @@ impl App {
     /// The API it calls.
     pub fn api(&self) -> &str {
         &self.api
+    }
+
+    /// Where it's installed, asked of GitHub: sonda has no webhook to be
+    /// told. Listing an installation's repositories takes a token for it,
+    /// limited to reading metadata and never kept.
+    pub fn installations(&self) -> Result<Vec<Installation>> {
+        let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let jwt = format!("Bearer {}", self.jwt(secs)?);
+        let list = self.call("GET", "/app/installations?per_page=100", &jwt, None)?;
+        let mut installations = Vec::new();
+        for i in list
+            .as_array()
+            .context("GitHub's installations aren't a list")?
+        {
+            let id = i["id"].as_u64().context("an installation has no id")?;
+            let repositories = if i["repository_selection"] == "all" {
+                None
+            } else {
+                let token = self.call(
+                    "POST",
+                    &format!("/app/installations/{id}/access_tokens"),
+                    &jwt,
+                    Some(&json!({"permissions": {"metadata": "read"}})),
+                )?;
+                let token = token["token"]
+                    .as_str()
+                    .context("GitHub's answer has no token")?;
+                let page = self.call(
+                    "GET",
+                    "/installation/repositories?per_page=100",
+                    &format!("Bearer {token}"),
+                    None,
+                )?;
+                Some(
+                    page["repositories"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r["full_name"].as_str().map(str::to_string))
+                        .collect(),
+                )
+            };
+            installations.push(Installation {
+                account: i["account"]["login"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                settings_url: i["html_url"].as_str().unwrap_or_default().to_string(),
+                repositories,
+            });
+        }
+        Ok(installations)
     }
 
     /// The App's public key, DER, to check its JWTs in tests.

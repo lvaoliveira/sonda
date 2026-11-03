@@ -1138,6 +1138,8 @@ export interface SondaApi {
   githubAppManifest(owner: string | null, name: string): Promise<GitHubAppManifest>
   /** Admins: the code GitHub sent back, exchanged for the App and its key. */
   createGithubApp(code: string, state: string): Promise<GitHubApp>
+  /** Admins: where the App is installed, asked of GitHub. */
+  githubAppInstallations(): Promise<GitHubInstallation[]>
   /** Admins: forgets an App created here; it stays on GitHub. */
   disconnectGithubApp(): Promise<GitHubApp>
   /** Triages one known vulnerability in one of the project's packages. */
@@ -1246,6 +1248,15 @@ export interface GitHubApp {
   createdAt: string | null
   /** Whether SONDA_SECRET_KEY is set: creating an App needs it. */
   secretKey: boolean
+}
+
+/** Where the GitHub App is installed: an account, and which of its repositories. */
+export interface GitHubInstallation {
+  account: string
+  /** The installation's page on GitHub, to change its repositories. */
+  settingsUrl: string
+  /** Null when it's on all of the account's repositories; else the first 100, `owner/name`. */
+  repositories: string[] | null
 }
 
 /** What to post to GitHub, as a form, to create the App from its manifest. */

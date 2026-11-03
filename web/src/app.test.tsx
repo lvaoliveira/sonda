@@ -1249,6 +1249,25 @@ describe('GitHub App', () => {
     expect(screen.getByRole('link', { name: 'Start again from Administration' })).toHaveAttribute('href', '/admin#github')
   })
 
+  it("shows where it's installed, without offering to install it again", async () => {
+    renderAt('/admin')
+    const installed = await within(await card()).findByRole('list', { name: 'Installed on' })
+    expect(installed).toHaveTextContent('acme')
+    expect(installed).toHaveTextContent('shop, billing')
+    expect(within(installed).getByRole('link', { name: 'Change repositories' })).toHaveAttribute('href', 'https://github.com/organizations/acme/settings/installations/1')
+    expect(screen.queryByRole('link', { name: /Install it on repositories/ })).not.toBeInTheDocument()
+  })
+
+  it('offers to install a new App, installed nowhere yet', async () => {
+    const api = createMockApi(0, { githubApp: false })
+    await api.githubAppManifest(null, 'sonda-n100')
+    await api.createGithubApp('good', MOCK_MANIFEST_STATE)
+    renderAt('/admin', api)
+    const fresh = await card()
+    expect(await within(fresh).findByText(/isn't installed on any repository yet/)).toBeInTheDocument()
+    expect(within(fresh).getByRole('link', { name: /Install it on repositories/ })).toHaveAttribute('href', 'https://github.com/apps/sonda-acme/installations/new')
+  })
+
   it('disconnects a stored App after confirming', async () => {
     const user = userEvent.setup()
     renderAt('/admin')

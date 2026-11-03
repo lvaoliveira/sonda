@@ -727,7 +727,8 @@ posted. The analysis page says whether it was posted, and if not, why.
    back, and sonda stores the App, its private key encrypted under
    `secrets/secret_key`. It decorates from then on, without a restart.
 3. Click **Install it on repositories**, and pick the repositories to
-   decorate.
+   decorate. The card then shows where it's installed, asked of GitHub
+   each time, with a link to change the repositories.
 4. In each project's Settings, an admin links its repository
    (`owner/name`), or the Connect page does it. Uploads from any other
    repository post nothing, so a project can't decorate someone else's
@@ -772,6 +773,7 @@ code. Without an App, the server makes none of these calls.
 | `GET /api/github/app` | Admins: `source` (`config`, `stored`, `unreadable` or `null`), `id`, `slug`, `htmlUrl`, `installUrl`, `createdBy`, `createdAt`, and `secretKey`, whether `SONDA_SECRET_KEY` is set. Never the key. |
 | `POST /api/github/app/manifest` `{"owner": null, "name": "sonda"}` | Admins: `{"action", "manifest"}`, to post as a form to GitHub's page. `owner` is an organization, or `null` for your account. |
 | `POST /api/github/app` `{"code", "state"}` | Admins: the code GitHub sent back, within the hour, by the admin who started it; `201` and the App. |
+| `GET /api/github/app/installations` | Admins: where the App is installed, asked of GitHub: `[{"account", "settingsUrl", "repositories"}]`, `repositories` `null` for all of the account's. |
 | `DELETE /api/github/app` | Admins: forgets an App created here. `422` for a configured one. |
 
 ## New code on the main branch

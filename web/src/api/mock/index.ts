@@ -1,4 +1,4 @@
-import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type GitHubApp, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type GitHubApp, type GitHubInstallation, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
@@ -64,6 +64,9 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const tokens = mockTokens()
   let github = structuredClone(options.githubApp === false ? NO_GITHUB_APP : MOCK_GITHUB_APP)
   let manifestState: string | null = null
+  // An App created in the mock isn't installed anywhere yet.
+  let installations: GitHubInstallation[] =
+    options.githubApp === false ? [] : [{ account: 'acme', settingsUrl: 'https://github.com/organizations/acme/settings/installations/1', repositories: ['acme/shop', 'acme/billing'] }]
   const ruleSettings = mockRuleSettings()
   // The projects not deleted (ADR-0017).
   const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
@@ -429,10 +432,16 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       github = { ...MOCK_GITHUB_APP, createdBy: session.user!.username, createdAt: new Date().toISOString() }
       return wait(github)
     },
+    githubAppInstallations: async () => {
+      requireAdmin()
+      if (github.source !== 'stored' && github.source !== 'config') throw new Error('no GitHub App is connected')
+      return wait(installations)
+    },
     disconnectGithubApp: async () => {
       requireAdmin()
       if (github.source === 'config') throw new Error('this App is configured by the server\'s configuration (SONDA_GITHUB_APP_ID); remove it there')
       github = structuredClone(NO_GITHUB_APP)
+      installations = []
       return wait(github)
     },
     reviewDependency: async (_project, patch) => {

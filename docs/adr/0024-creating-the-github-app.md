@@ -54,7 +54,10 @@ avoided storing credentials, so that's the decision here.
     read, as ADR-0021;
   - no `hook_attributes` and no `default_events`: no webhook, as today.
 - **Then installing it.** Once created, the section links to the App's
-  "Install" page on GitHub, where the admin picks repositories. The
+  "Install" page on GitHub, where the admin picks repositories. It then
+  shows where the App is installed, asked of GitHub with the App's JWT
+  each time the section loads (there's no webhook to be told), and
+  offers "Install" only while it's installed nowhere. The
   Connect page (ADR-0023) links there too, since sonda can't tell which
   repositories it's installed on.
 
