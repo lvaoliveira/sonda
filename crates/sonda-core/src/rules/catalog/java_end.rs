@@ -1373,24 +1373,6 @@ fn arguments_swap_the_parameters(call: Node, src: &[u8]) -> bool {
     if params.len() != names.len() || params == names {
         return false;
     }
-    // m(a, b) || m(b, a) is a deliberately symmetric use
-    if enclosing_method(call).is_some_and(|m| {
-        nodes_in(m, &[], |n| {
-            n.kind() == "method_invocation"
-                && method_name(n, src) == method_name(call, src)
-                && n != call
-                && n.child_by_field_name("object").is_none()
-        })
-        .iter()
-        .any(|o| {
-            call_arguments(*o)
-                .iter()
-                .map(|a| text(*a, src))
-                .eq(params.iter().copied())
-        })
-    }) {
-        return false;
-    }
     let mut a = names.clone();
     let mut b = params.clone();
     a.sort();

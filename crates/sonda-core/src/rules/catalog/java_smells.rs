@@ -2,9 +2,10 @@
 //! common idioms. Queries stay cheap on deep trees: see `js_modern.rs`.
 
 use super::java_bugs::{
-    SCOPE_STOPS, find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments,
-    operator_text, owning_declaration, parameter_types, statements,
+    find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments, operator_text,
+    owning_declaration, parameter_types, statements,
 };
+use super::java_extra::{declared_type, type_text};
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, is_all_literals, method_name, string_value,
     text,
@@ -133,7 +134,9 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(variable_declarator name: (identifier) @n) @match
-(formal_parameter name: (identifier) @n2) @match"#,
+(formal_parameter name: (identifier) @n2) @match
+(inferred_parameters (identifier) @match)
+(lambda_expression parameters: (identifier) @match)"#,
             filter: Some(Keep(local_name_not_camel_case)),
         },
         example: Some(Example {
@@ -474,8 +477,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1168")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
-            filter: Some(Find(returns_null_for_collection)),
+            query: r#"(return_statement (null_literal)) @match"#,
+            filter: Some(Keep(returns_null_for_collection)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -815,7 +818,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1319")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"((type_identifier) @match (#any-of? @match "ArrayList" "LinkedList" "HashMap" "LinkedHashMap" "TreeMap" "HashSet" "LinkedHashSet" "TreeSet" "Vector" "Hashtable"))"#,
+            query: r#"((type_identifier) @match (#any-of? @match "ArrayList" "LinkedList" "HashMap" "LinkedHashMap" "TreeMap" "HashSet" "LinkedHashSet" "TreeSet" "Vector" "Hashtable" "EnumSet" "EnumMap" "IdentityHashMap"))"#,
             filter: Some(Keep(is_a_declared_type)),
         },
         example: Some(Example {
@@ -995,8 +998,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1643")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(assignment_expression operator: "+=" right: (string_literal)) @match"#,
-            filter: Some(Keep(inside_a_loop)),
+            query: r#"(assignment_expression left: (identifier) operator: "+=") @match"#,
+            filter: Some(Keep(concatenates_a_string_in_a_loop)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1136,7 +1139,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2129")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(object_creation_expression type: (type_identifier) @t (#any-of? @t "String" "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character")) @match"#,
+            query: r#"(object_creation_expression type: (type_identifier) @t (#any-of? @t "String" "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character" "BigInteger" "BigDecimal")) @match"#,
             filter: Some(Keep(has_arguments)),
         },
         example: Some(Example {
@@ -1337,8 +1340,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2447")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration type: (type_identifier) @t (#eq? @t "Boolean")) @match"#,
-            filter: Some(Find(returns_null_from_any_method)),
+            query: r#"(return_statement (null_literal)) @match"#,
+            filter: Some(Keep(returns_null_from_boolean_method)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1778,8 +1781,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4144")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_body) @match"#,
-            filter: Some(Find(method_duplicates_another)),
+            query: r#"(method_declaration) @match"#,
+            filter: Some(Keep(method_duplicates_another)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2241,9 +2244,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1133")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(marker_annotation name: (identifier) @n (#eq? @n "Deprecated")) @match
-(annotation name: (identifier) @n2 (#eq? @n2 "Deprecated")) @match"#,
-            filter: None,
+            query: r#"[(method_declaration) (constructor_declaration) (class_declaration) (interface_declaration) (enum_declaration) (record_declaration) (field_declaration)] @match"#,
+            filter: Some(Find(deprecated_declaration_name)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2643,6 +2645,10 @@ fn field_name_not_camel_case(field: Node, src: &[u8]) -> bool {
 }
 
 fn local_name_not_camel_case(node: Node, src: &[u8]) -> bool {
+    if node.kind() == "identifier" {
+        let t = text(node, src);
+        return t != b"_" && !is_camel_case(t);
+    }
     if node.kind() == "variable_declarator"
         && !node
             .parent()
@@ -2670,7 +2676,11 @@ fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
     if modifiers_of(class).is_some_and(|m| {
         let mut c = m.walk();
         m.children(&mut c).any(|k| {
-            k.kind() == "abstract" || matches!(k.kind(), "marker_annotation" | "annotation")
+            k.kind() == "abstract"
+                || (matches!(k.kind(), "marker_annotation" | "annotation")
+                    && !k.child_by_field_name("name").is_some_and(|n| {
+                        matches!(text(n, src), b"Deprecated" | b"SuppressWarnings")
+                    }))
         })
     }) {
         return false;
@@ -2910,13 +2920,29 @@ fn non_final_instance_field<'t>(class: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-fn returns_null_for_collection<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let ty = method.child_by_field_name("type")?;
+/// The method a `return` belongs to, unless a lambda or inner class intervenes.
+fn method_returned_from(statement: Node) -> Option<Node> {
+    let mut p = statement.parent();
+    while let Some(n) = p {
+        match n.kind() {
+            "method_declaration" => return Some(n),
+            "lambda_expression" | "class_body" | "constructor_declaration" => return None,
+            _ => p = n.parent(),
+        }
+    }
+    None
+}
+
+fn returns_null_for_collection(statement: Node, src: &[u8]) -> bool {
+    let Some(ty) = method_returned_from(statement).and_then(|m| m.child_by_field_name("type"))
+    else {
+        return false;
+    };
     let head = text(ty, src)
         .split(|&b| b == b'<')
         .next()
         .unwrap_or(&b""[..]);
-    let collection = ty.kind() == "array_type"
+    ty.kind() == "array_type"
         || matches!(
             head,
             b"List"
@@ -2929,23 +2955,13 @@ fn returns_null_for_collection<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<
                 | b"Iterable"
                 | b"SortedSet"
                 | b"SortedMap"
-        );
-    if !collection {
-        return None;
-    }
-    let body = method.child_by_field_name("body")?;
-    find_in_scope(body, SCOPE_STOPS, |n| {
-        n.kind() == "return_statement"
-            && n.named_child(0).is_some_and(|v| v.kind() == "null_literal")
-    })
+        )
 }
 
-fn returns_null_from_any_method<'t>(method: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
-    let body = method.child_by_field_name("body")?;
-    find_in_scope(body, SCOPE_STOPS, |n| {
-        n.kind() == "return_statement"
-            && n.named_child(0).is_some_and(|v| v.kind() == "null_literal")
-    })
+fn returns_null_from_boolean_method(statement: Node, src: &[u8]) -> bool {
+    method_returned_from(statement)
+        .and_then(|m| m.child_by_field_name("type"))
+        .is_some_and(|t| text(t, src) == b"Boolean")
 }
 
 fn final_literal_field_is_not_static(field: Node, _: &[u8]) -> bool {
@@ -3035,11 +3051,33 @@ fn is_the_only_public_constructor(ctor: Node) -> bool {
         })
 }
 
-fn method_is_empty(method: Node, src: &[u8]) -> bool {
+/// The name of a declaration marked `@Deprecated`, where SonarQube reports it.
+fn deprecated_declaration_name<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !has_annotation(declaration, b"Deprecated", src) {
+        return None;
+    }
+    if declaration.kind() == "field_declaration" {
+        return children_of_kind(declaration, "variable_declarator")
+            .first()
+            .and_then(|d| d.child_by_field_name("name"));
+    }
+    declaration.child_by_field_name("name")
+}
+
+fn concatenates_a_string_in_a_loop(assign: Node, src: &[u8]) -> bool {
+    let is_text = assign
+        .child_by_field_name("right")
+        .is_some_and(|r| r.kind() == "string_literal")
+        || assign
+            .child_by_field_name("left")
+            .is_some_and(|l| type_text(declared_type(assign, text(l, src), src), src) == b"String");
+    is_text && inside_a_loop(assign, src)
+}
+
+fn method_is_empty(method: Node, _: &[u8]) -> bool {
     method
         .child_by_field_name("body")
         .is_some_and(|b| b.named_child_count() == 0)
-        && !has_annotation(method, b"Override", src)
         && (method.kind() != "constructor_declaration" || is_the_only_public_constructor(method))
 }
 
@@ -3317,7 +3355,9 @@ fn field_named_like_its_class(field: Node, src: &[u8]) -> bool {
     declarator_names(field, src).contains(&text(class_name, src))
 }
 
-/// A member whose name matches an earlier one in the class except for case.
+/// A member whose name matches an earlier one in the class: the same name
+/// for a field and a method, or names differing only by case. Private fields
+/// only clash with other fields.
 fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     let Some(body) = member
         .parent()
@@ -3325,6 +3365,7 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
+    let is_method = |m: Node| m.kind() == "method_declaration";
     let names_of = |m: Node| -> Vec<&[u8]> {
         match m.kind() {
             "field_declaration" | "constant_declaration" => declarator_names(m, src),
@@ -3338,12 +3379,24 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     let mine = names_of(member);
     members(body)
         .into_iter()
-        .take_while(|m| m.start_byte() < member.start_byte())
-        .filter(|m| !has_modifier(*m, "private"))
-        .flat_map(names_of)
-        .any(|other| {
-            mine.iter()
-                .any(|n| n.eq_ignore_ascii_case(other) && *n != other)
+        .filter(|m| m.id() != member.id())
+        .filter(|m| {
+            // a method and a private field do not clash
+            is_method(*m) == is_method(member)
+                || !(has_modifier(*m, "private") && !is_method(*m)
+                    || has_modifier(member, "private") && !is_method(member))
+        })
+        .flat_map(|m| {
+            let earlier = m.start_byte() < member.start_byte();
+            let method_vs_field = is_method(m) != is_method(member);
+            names_of(m)
+                .into_iter()
+                .map(move |n| (n, earlier, method_vs_field))
+        })
+        .any(|(other, earlier, method_vs_field)| {
+            mine.iter().any(|n| {
+                earlier && n.eq_ignore_ascii_case(other) && (method_vs_field || *n != other)
+            })
         })
 }
 
@@ -3689,26 +3742,27 @@ fn if_on_line_where_previous_ended<'t>(block: Node<'t>, _: &[u8]) -> Option<Node
     })
 }
 
-fn method_duplicates_another<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Overloads differ in their parameter types and cannot be merged.
-    let mut seen: Vec<(Vec<&[u8]>, &[u8])> = Vec::new();
-    for m in members(body) {
-        if m.kind() != "method_declaration" {
-            continue;
-        }
-        let Some(b) = m.child_by_field_name("body") else {
-            continue;
-        };
-        if b.named_child_count() < 2 || b.end_position().row - b.start_position().row < 2 {
-            continue;
-        }
-        let key = (parameter_types(m, src), text(b, src));
-        if seen.contains(&key) {
-            return Some(m);
-        }
-        seen.push(key);
+/// A method whose body repeats an earlier method's with the same parameter
+/// types. Overloads that differ in their parameter types cannot be merged.
+fn method_duplicates_another(method: Node, src: &[u8]) -> bool {
+    let (Some(body), Some(class_body)) = (method.child_by_field_name("body"), method.parent())
+    else {
+        return false;
+    };
+    let substantial =
+        |b: Node| b.named_child_count() >= 2 && b.end_position().row - b.start_position().row >= 2;
+    if !substantial(body) {
+        return false;
     }
-    None
+    let key = (parameter_types(method, src), text(body, src));
+    members(class_body)
+        .into_iter()
+        .take_while(|m| m.start_byte() < method.start_byte())
+        .filter(|m| m.kind() == "method_declaration")
+        .any(|m| {
+            m.child_by_field_name("body")
+                .is_some_and(|b| (parameter_types(m, src), text(b, src)) == key)
+        })
 }
 
 fn null_check_before_instanceof(binary: Node, src: &[u8]) -> bool {
@@ -3977,7 +4031,7 @@ fn private_method_is_never_used(method: Node, src: &[u8]) -> bool {
     !matches!(
         n,
         b"readObject" | b"writeObject" | b"readResolve" | b"writeReplace" | b"readObjectNoData"
-    ) && count_word(src, n) == 1
+    ) && identifier_uses(super::java_final::root_of(method), n, src) == 1
 }
 
 fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
@@ -4011,7 +4065,7 @@ fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
         match class {
             Some(c) => {
                 !file_accesses_member(src, n)
-                    && (count_word(text(c, src), n) == 1 || field_is_only_written(c, n, src))
+                    && (identifier_uses(c, n, src) == 1 || field_is_only_written(c, n, src))
             }
             None => count_word(src, n) == 1,
         }
@@ -4141,7 +4195,29 @@ fn local_is_never_used(declaration: Node, src: &[u8]) -> bool {
     };
     declarator_names(declaration, src)
         .iter()
-        .any(|n| *n != b"_" && count_word(text(scope, src), n) == 1)
+        .any(|n| *n != b"_" && identifier_uses(scope, n, src) == 1)
+}
+
+/// How many identifiers in `scope` carry this name; comments and string
+/// contents that happen to contain it do not count as uses.
+fn identifier_uses(scope: Node, name: &[u8], src: &[u8]) -> usize {
+    let mut count = 0;
+    let mut cursor = scope.walk();
+    'walk: loop {
+        let n = cursor.node();
+        if n.kind() == "identifier" && text(n, src) == name {
+            count += 1;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() || cursor.node().id() == scope.id() {
+                break 'walk;
+            }
+        }
+    }
+    count
 }
 
 /// Whether this is the first of three or more equal literals in the file,

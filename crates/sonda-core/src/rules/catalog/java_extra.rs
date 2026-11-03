@@ -1289,7 +1289,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4968")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(type_parameter (type_bound (type_identifier) @match (#any-of? @match "String" "Integer" "Long" "Double" "Boolean" "Character")))"#,
+            query: r#"(type_parameter (type_bound (type_identifier) @match (#any-of? @match "String" "Integer" "Long" "Double" "Boolean" "Character")))
+(wildcard "extends" (type_identifier) @match (#any-of? @match "String" "Integer" "Long" "Double" "Boolean" "Character"))"#,
             filter: None,
         },
         example: Some(Example {
@@ -1878,11 +1879,27 @@ fn writes_static<'t>(body: Node<'t>, class: Node, src: &[u8]) -> Option<Node<'t>
             "update_expression" => n.named_child(0),
             _ => None,
         };
-        target.is_some_and(|t| {
-            t.kind() == "identifier"
-                && names
-                    .get_or_init(|| static_field_names(class, src))
-                    .contains(&text(t, src))
+        target.is_some_and(|t| match t.kind() {
+            "identifier" => names
+                .get_or_init(|| static_field_names(class, src))
+                .contains(&text(t, src)),
+            // `Type.field = x`, where Type is declared in this file.
+            "field_access" => {
+                let (Some(object), Some(field)) = (
+                    t.child_by_field_name("object")
+                        .filter(|o| o.kind() == "identifier"),
+                    t.child_by_field_name("field"),
+                ) else {
+                    return false;
+                };
+                super::java_flow::find_declared_type(
+                    super::java_final::root_of(t),
+                    text(object, src),
+                    src,
+                )
+                .is_some_and(|c| static_field_names(c, src).contains(&text(field, src)))
+            }
+            _ => false,
         })
     })
 }

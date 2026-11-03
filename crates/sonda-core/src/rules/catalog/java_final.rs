@@ -770,7 +770,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2159")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(binary_expression operator: ["==" "!="]) @match"#,
+            query: r#"(binary_expression operator: ["==" "!="]) @match
+(method_invocation name: (identifier) @n (#eq? @n "equals") arguments: (argument_list . (null_literal) .)) @match"#,
             filter: Some(Keep(equality_between_different_literals)),
         },
         example: Some(Example {
@@ -1793,7 +1794,12 @@ fn assigned_then_overwritten<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>
     })
 }
 
-fn equality_between_different_literals(binary: Node, _: &[u8]) -> bool {
+fn equality_between_different_literals(binary: Node, src: &[u8]) -> bool {
+    // `x.equals(null)` is always false
+    binary.kind() == "method_invocation" || equality_between_literals(binary, src)
+}
+
+fn equality_between_literals(binary: Node, _: &[u8]) -> bool {
     let (Some(l), Some(r)) = (
         binary.child_by_field_name("left"),
         binary.child_by_field_name("right"),

@@ -5,8 +5,9 @@
 use super::java_bugs::{has_annotation, has_modifier};
 use super::java_extra::{class_members, declared_type, name_text, type_text};
 use super::java_final::{base_type, root_of};
+use super::java_flow::find_declared_type;
 use super::java_security::{call_arguments, find_node, method_name, text};
-use super::java_smells::{children_of_kind, count_word};
+use super::java_smells::count_word;
 use super::*;
 
 pub(super) static RULES: &[Rule] = &[
@@ -183,8 +184,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2160")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(program) @match"#,
-            filter: Some(Find(subclass_adds_fields_without_equals)),
+            query: r#"(class_declaration superclass: (superclass) ) @match"#,
+            filter: Some(Keep(subclass_adds_fields_without_equals)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -312,26 +313,43 @@ fn ascending_loop_removes_by_index<'t>(for_statement: Node<'t>, src: &[u8]) -> O
     })
 }
 
-fn subclass_adds_fields_without_equals<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let classes = children_of_kind(program, "class_declaration");
+fn subclass_adds_fields_without_equals(child: Node, src: &[u8]) -> bool {
     let defines_equals = |c: Node| {
         class_members(c)
             .iter()
             .any(|m| m.kind() == "method_declaration" && name_text(*m, src) == b"equals")
     };
-    classes.iter().copied().find(|child| {
-        let Some(sup) = child.child_by_field_name("superclass") else {
-            return false;
-        };
-        let parent = classes
+    let Some(sup) = child.child_by_field_name("superclass") else {
+        return false;
+    };
+    let parent_name = sup
+        .named_child(0)
+        .map_or(&b""[..], |t| base_type(text(t, src)));
+    // A parent in this file is checked; a few JDK parents are known to
+    // define equals.
+    let parent_defines_equals = match find_declared_type(root_of(child), parent_name, src) {
+        Some(p) => p.id() != child.id() && defines_equals(p),
+        None => matches!(
+            parent_name,
+            b"ArrayList"
+                | b"LinkedList"
+                | b"HashMap"
+                | b"TreeMap"
+                | b"LinkedHashMap"
+                | b"HashSet"
+                | b"TreeSet"
+                | b"Date"
+                | b"Calendar"
+                | b"GregorianCalendar"
+                | b"AbstractList"
+                | b"AbstractMap"
+        ),
+    };
+    parent_defines_equals
+        && !defines_equals(child)
+        && class_members(child)
             .iter()
-            .find(|c| **c != *child && count_word(text(sup, src), name_text(**c, src)) > 0);
-        parent.is_some_and(|p| defines_equals(*p))
-            && !defines_equals(*child)
-            && class_members(*child)
-                .iter()
-                .any(|m| m.kind() == "field_declaration" && !has_modifier(*m, "static"))
-    })
+            .any(|m| m.kind() == "field_declaration" && !has_modifier(*m, "static"))
 }
 
 #[cfg(test)]

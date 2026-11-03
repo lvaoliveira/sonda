@@ -1397,6 +1397,27 @@ fn operands_are_identical(binary: Node, src: &[u8]) -> bool {
     ) {
         return false;
     }
+    // `false ^ true ^ false`: a boolean literal repeated along the chain.
+    if matches!(op, b"^" | b"&" | b"|" | b"&&" | b"||")
+        && binary
+            .parent()
+            .is_none_or(|p| !(p.kind() == "binary_expression" && operator_text(p, src) == op))
+    {
+        let mut operands = Vec::new();
+        let mut stack = vec![binary];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "binary_expression" && operator_text(n, src) == op {
+                stack.extend(n.child_by_field_name("left"));
+                stack.extend(n.child_by_field_name("right"));
+            } else if matches!(n.kind(), "true" | "false") {
+                operands.push(text(n, src));
+            }
+        }
+        operands.sort_unstable();
+        if operands.windows(2).any(|w| w[0] == w[1]) {
+            return true;
+        }
+    }
     // `x != x` is how NaN is tested for.
     if matches!(op, b"==" | b"!=") && matches!(left.kind(), "identifier" | "field_access") {
         return false;
@@ -1882,26 +1903,40 @@ fn volatile_holds_mutable_state(field: Node, src: &[u8]) -> bool {
     if ty.kind() == "array_type" {
         return true;
     }
+    if ty.kind() != "type_identifier" && ty.kind() != "generic_type" {
+        return false; // primitives
+    }
     let head = text(ty, src)
         .split(|&b| b == b'<')
         .next()
         .unwrap_or(&b""[..]);
-    matches!(
+    // Immutable values and types that are safe to share are fine.
+    let safe_prefix = [&b"Atomic"[..], b"Concurrent", b"CopyOnWrite", b"Blocking"]
+        .iter()
+        .any(|p| head.starts_with(p));
+    let immutable = matches!(
         head,
-        b"List"
-            | b"ArrayList"
-            | b"LinkedList"
-            | b"Map"
-            | b"HashMap"
-            | b"TreeMap"
-            | b"Set"
-            | b"HashSet"
-            | b"TreeSet"
-            | b"Collection"
-            | b"Date"
-            | b"StringBuilder"
-            | b"StringBuffer"
-    )
+        b"String"
+            | b"Integer"
+            | b"Long"
+            | b"Short"
+            | b"Byte"
+            | b"Character"
+            | b"Boolean"
+            | b"Double"
+            | b"Float"
+            | b"Class"
+            | b"Optional"
+            | b"BigInteger"
+            | b"BigDecimal"
+            | b"Instant"
+            | b"Duration"
+            | b"LocalDate"
+            | b"LocalDateTime"
+            | b"UUID"
+            | b"Pattern"
+    );
+    !safe_prefix && !immutable
 }
 
 fn assert_has_side_effects(assertion: Node, src: &[u8]) -> bool {
