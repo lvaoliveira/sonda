@@ -3,7 +3,7 @@ import { ApiProvider } from '@/api/ApiProvider'
 import { SessionGate } from '@/components/shell/SessionGate'
 import type { SondaApi } from '@/api/types'
 import { AccountPage } from '@/pages/AccountPage'
-import { AnalysesPage } from '@/pages/AnalysesPage'
+import { AnalysesPage, ProjectAnalysesPage } from '@/pages/AnalysesPage'
 import { AnalysisPage } from '@/pages/AnalysisPage'
 import { ComponentPage } from '@/pages/ComponentPage'
 import { CoveragePage, FileCoveragePage } from '@/pages/CoveragePage'
@@ -46,6 +46,7 @@ export function AppRoutes() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/connect" element={<ConnectPage />} />
           <Route path="/projects/:key" element={<ProjectPage />} />
+          <Route path="/projects/:key/analyses" element={<ProjectAnalysesPage />} />
           <Route path="/projects/:key/issues" element={<ProjectIssuesPage />} />
           <Route path="/projects/:key/rules" element={<ProjectRulesPage />} />
           <Route path="/projects/:key/settings" element={<ProjectSettingsPage />} />
