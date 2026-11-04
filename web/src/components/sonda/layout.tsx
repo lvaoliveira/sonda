@@ -21,6 +21,7 @@ export function Card({
   const headingId = id ? `${id}-h` : undefined
   return (
     <section
+      id={id}
       aria-labelledby={headingId}
       className={`flex min-w-0 flex-col rounded-xl bg-panel-2 edge ${padded ? 'gap-4 px-5 py-[18px]' : 'overflow-hidden'} ${className}`}
     >
