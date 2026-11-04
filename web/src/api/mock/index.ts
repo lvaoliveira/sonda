@@ -57,6 +57,12 @@ const MOCK_USERS: UserRow[] = [
  * it matters (filtering, paging, facets, triage history), and writes last
  * until the page reloads. `latency` makes loading states visible.
  */
+/** A text setting after a patch: unchanged when the patch leaves it out, else trimmed, and null when empty. */
+function patchedText(value: string | null | undefined, current: string | null): string | null {
+  if (value === undefined) return current
+  return value?.trim() || null
+}
+
 export function createMockApi(latency = 250, options: MockOptions = {}): SondaApi {
   const issues = structuredClone(issuesData) as IssueDetail[]
   const catalog = structuredClone(rulesData) as RuleCatalog
@@ -358,23 +364,26 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       requireAdmin()
       const s = settingsOf(project)
       // As the server does: a trimmed name, null when empty, and a main branch with analyses.
-      const name = patch.name === undefined ? s.name : patch.name?.trim() || null
+      const name = patchedText(patch.name, s.name)
       if (name && name.length > 100) throw new Error('a project name is at most 100 characters')
       const quality = patch.qualityGate === undefined ? s.qualityGate : patch.qualityGate
       if (quality !== null && !gateRef(quality)) throw new Error(`no quality gate ${quality}`)
-      const repository = patch.githubRepository === undefined ? s.githubRepository : patch.githubRepository?.trim() || null
+      const repository = patchedText(patch.githubRepository, s.githubRepository)
       if (repository && !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repository)) throw new Error(`"${repository}" is not a GitHub repository: use owner/name`)
       const main = patch.mainBranch ?? s.mainBranch
       if (main !== s.mainBranch && !BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
+      if (main !== s.mainBranch) clearNewCodePeriod(project)
+      const gateName = (id: number | null) => gateRef(id)?.name ?? null
+      // Each setting, whether it changed, and its old and new values as the log shows them.
+      const changes: [ProjectSettingChange['setting'], boolean, string | null, string | null][] = [
+        ['name', name !== s.name, s.name, name],
+        ['main_branch', main !== s.mainBranch, s.mainBranch, main],
+        ['quality_gate', quality !== s.qualityGate, gateName(s.qualityGate), gateName(quality)],
+        ['github_repository', repository !== s.githubRepository, s.githubRepository, repository],
+      ]
       const by = session.user!.username
       const at = new Date().toISOString()
-      if (name !== s.name) s.changes.unshift({ setting: 'name', old: s.name, new: name, by, at })
-      if (main !== s.mainBranch) {
-        s.changes.unshift({ setting: 'main_branch', old: s.mainBranch, new: main, by, at })
-        clearNewCodePeriod(project)
-      }
-      if (quality !== s.qualityGate) s.changes.unshift({ setting: 'quality_gate', old: gateRef(s.qualityGate)?.name ?? null, new: gateRef(quality)?.name ?? null, by, at })
-      if (repository !== s.githubRepository) s.changes.unshift({ setting: 'github_repository', old: s.githubRepository, new: repository, by, at })
+      for (const [setting, changed, old, value] of changes) if (changed) s.changes.unshift({ setting, old, new: value, by, at })
       Object.assign(s, { name, mainBranch: main, qualityGate: quality, githubRepository: repository })
       return wait(settingsView(project))
     },
@@ -556,7 +565,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     setRuleOff: async (rule, off, note) => {
       requireAdmin()
       findRule(rule)
-      ruleSettings.setGlobal(rule, off, session.user!.username, note)
+      if (off) ruleSettings.turnOff(rule, session.user!.username, note)
+      else ruleSettings.turnBackOn(rule, note)
       await wait(null)
     },
     setProjectRule: async (key, rule, state, note) => {

@@ -1,6 +1,6 @@
 import type { Level } from '@/api/types'
 import { areaPoints, linePoints, ringDash } from '@/lib/charts'
-import { coverageColor, levelColor } from '@/lib/visual'
+import { bandColor, coverageColor, levelColor } from '@/lib/visual'
 
 /** A 5-segment rating meter: bars of rising height, filled up to the level. */
 export function PipMeter({ level, label, width = 4 }: Readonly<{ level: Level; label: string; width?: number }>) {
@@ -86,7 +86,7 @@ export function HealthBar({ score }: Readonly<{ score: number }>) {
           key={i}
           className="h-2.5 flex-1 rounded-[2px]"
           style={{
-            background: i < filled ? (i < 8 ? 'var(--sd-crit)' : i < 14 ? 'var(--sd-warn)' : 'var(--sd-ok)') : 'var(--sd-pip-off)',
+            background: i < filled ? bandColor(i, 14, 8) : 'var(--sd-pip-off)',
           }}
         />
       ))}

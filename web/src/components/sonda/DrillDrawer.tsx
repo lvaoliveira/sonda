@@ -7,6 +7,12 @@ const DEPTH = ['org', 'project', 'component', 'file', 'issue']
  * The floating drill-down panel: 480px, inset 10px, blurred backdrop. Closes
  * on Escape or a backdrop click, and returns focus to whatever opened it.
  */
+/** A drill step's label: the current one stands out, the ones passed less so. */
+function stepColor(step: number, depth: number): string {
+  if (step === depth) return 'var(--sd-accent)'
+  return step < depth ? 'var(--sd-muted)' : 'var(--sd-faint)'
+}
+
 export function DrillDrawer({
   eyebrow,
   title,
@@ -79,7 +85,7 @@ export function DrillDrawer({
                 <span className="h-[3px] rounded-sm" style={{ background: i <= depth ? 'var(--sd-accent)' : 'var(--sd-pip-off)' }} />
                 <span
                   className="font-mono text-[9.5px]"
-                  style={{ color: i === depth ? 'var(--sd-accent)' : i < depth ? 'var(--sd-muted)' : 'var(--sd-faint)', fontWeight: i === depth ? 500 : 400 }}
+                  style={{ color: stepColor(i, depth), fontWeight: i === depth ? 500 : 400 }}
                 >
                   {d}
                 </span>

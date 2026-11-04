@@ -32,6 +32,9 @@ file, the report formats and the public library API.
 - `js/void-operator` leaves `void` on a call alone, as `void save()` marks
   a floating promise as intended. SonarQube knows from the types that it's
   a promise; without them, the call is the sign of one.
+- `js/handler-on-plain-element` and `js/click-without-keyboard` leave
+  alone an `aria-hidden` element (a backdrop that closes a menu) and a
+  table row, whose role is interactive, as SonarQube does.
 
 
 ## [0.2.0] - 2026-11-03

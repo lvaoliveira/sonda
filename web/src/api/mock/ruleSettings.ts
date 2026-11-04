@@ -21,12 +21,40 @@ const TOML_CHANGES: Record<string, ProjectRules['tomlChanges']> = {
 type ProfileRule = { on: boolean; severity: Severity | null; change: RuleSettingChange }
 type MockProfile = { id: number; name: string; builtin: boolean; rules: Map<string, ProfileRule> }
 
+type OwnRule = { on: boolean; change: RuleSettingChange }
+
+/** What a repository's sonda.toml makes of a rule, or its default. */
+function scannerSetting(rule: Rule, toml: SondaTomlRules | null): [boolean, RuleSetBy] {
+  if (toml?.disabled.includes(rule.id)) return [false, 'sonda_toml']
+  if (toml?.enabled.includes(rule.id)) return [true, 'sonda_toml']
+  return [rule.onByDefault, 'default']
+}
+
+/** The server's setting: the project's own, else its profile's. */
+function serverSetting(mine: OwnRule | undefined, inProfile: ProfileRule | undefined) {
+  if (mine) return { on: mine.on, by: 'project' as const, change: mine.change }
+  if (inProfile) return { on: inProfile.on, by: 'profile' as const, change: inProfile.change }
+  return null
+}
+
+/** The severity in force, the profile's over sonda.toml's. */
+function severitySetting(inProfile: Severity | null, inToml: Severity | null): [Severity, 'profile' | 'sonda_toml'] | [null, null] {
+  if (inProfile) return [inProfile, 'profile']
+  if (inToml) return [inToml, 'sonda_toml']
+  return [null, null]
+}
+
+function projectSettingOf(mine: OwnRule | undefined): 'on' | 'off' | null {
+  if (!mine) return null
+  return mine.on ? 'on' : 'off'
+}
+
 /** Rule profiles and settings on the mock server, deciding states as the server does (ADR-0016, ADR-0018). */
 export function mockRuleSettings() {
   const profiles: MockProfile[] = [{ id: 1, name: 'sonda way', builtin: true, rules: new Map() }]
   let defaultId = 1
   const chosen = new Map<string, number>()
-  const own = new Map<string, Map<string, { on: boolean; change: RuleSettingChange }>>()
+  const own = new Map<string, Map<string, OwnRule>>()
   const change = (by: string, note?: string): RuleSettingChange => ({ note: note?.trim() || null, changedBy: by, changedAt: new Date().toISOString() })
   const checkNote = (note?: string) => {
     if (note && note.trim().length > 500) throw new Error('a note has at most 500 characters')
@@ -35,17 +63,13 @@ export function mockRuleSettings() {
 
   function state(rule: Rule, project: string): ProjectRuleState {
     const toml = SONDA_TOML[project] ?? null
-    const [scannerOn, scannerBy]: [boolean, RuleSetBy] = toml?.disabled.includes(rule.id)
-      ? [false, 'sonda_toml']
-      : toml?.enabled.includes(rule.id)
-        ? [true, 'sonda_toml']
-        : [rule.onByDefault, 'default']
+    const [scannerOn, scannerBy] = scannerSetting(rule, toml)
     const mine = own.get(project)?.get(rule.id)
     const inProfile = profileOf(project).rules.get(rule.id)
-    const server = mine ? { on: mine.on, by: 'project' as const, change: mine.change } : inProfile ? { on: inProfile.on, by: 'profile' as const, change: inProfile.change } : null
+    const server = serverSetting(mine, inProfile)
     const tomlSeverity = toml?.severity[rule.id] && toml.severity[rule.id] !== rule.severity ? toml.severity[rule.id] : null
-    const [severity, severityBy] = inProfile?.severity ? [inProfile.severity, 'profile' as const] : tomlSeverity ? [tomlSeverity, 'sonda_toml' as const] : [null, null]
-    const base = { severity, severityBy, projectSetting: mine ? (mine.on ? 'on' : 'off') : null } as const
+    const [severity, severityBy] = severitySetting(inProfile?.severity ?? null, tomlSeverity ?? null)
+    const base = { severity, severityBy, projectSetting: projectSettingOf(mine) }
     // Scans apply the server's settings, except where the repository's are unknown.
     const applied = toml !== null
     if (server?.on && !applied && !scannerOn) return { ...base, on: false, setBy: scannerBy, change: server.change, conflict: true }
@@ -120,11 +144,15 @@ export function mockRuleSettings() {
         .map((p) => ({ id: p.id, name: p.name, builtin: p.builtin, isDefault: p.id === defaultId, rules: p.rules.size, projects: projects.filter((k) => profileOf(k).id === p.id) }))
         .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name))
     },
-    setGlobal(rule: string, isOff: boolean, by: string, note?: string) {
+    /** Turns a rule off in the default profile. */
+    turnOff(rule: string, by: string, note?: string) {
       checkNote(note)
-      const p = editableDefault()
-      if (isOff) p.rules.set(rule, { on: false, severity: null, change: change(by, note) })
-      else p.rules.delete(rule)
+      editableDefault().rules.set(rule, { on: false, severity: null, change: change(by, note) })
+    },
+    /** Takes a rule back to its default in the default profile. */
+    turnBackOn(rule: string, note?: string) {
+      checkNote(note)
+      editableDefault().rules.delete(rule)
     },
     setProject(project: string, rule: string, setting: ProjectRuleSetting, by: string, note?: string) {
       checkNote(note)

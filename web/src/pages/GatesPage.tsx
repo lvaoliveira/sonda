@@ -133,11 +133,7 @@ function GateDetail({ gate, isAdmin, onEdit, onDeleted }: Readonly<{ gate: Quali
       setError(e instanceof Error ? e.message : String(e))
     }
   }
-  const subtitle = gate.server
-    ? `On the server · changed by ${gate.server.changedBy}, ${shortDate(gate.server.changedAt)}`
-    : gate.isDefault
-      ? 'sonda’s default gate: what sonda init writes'
-      : 'Set in these projects’ sonda.toml'
+  const subtitle = gateOrigin(gate)
   return (
     <div className="flex min-w-0 flex-col gap-5">
       <Card
@@ -262,6 +258,12 @@ function GateDetail({ gate, isAdmin, onEdit, onDeleted }: Readonly<{ gate: Quali
 }
 
 /** Creating a server gate, or editing one (ADR-0017): a name and sonda.toml's conditions. */
+/** Where a gate is defined. */
+function gateOrigin(gate: QualityGate): string {
+  if (gate.server) return `On the server · changed by ${gate.server.changedBy}, ${shortDate(gate.server.changedAt)}`
+  return gate.isDefault ? 'sonda’s default gate: what sonda init writes' : 'Set in these projects’ sonda.toml'
+}
+
 const NEW_CONDITION: GateConditionInput = { metric: 'new_bugs', op: 'gt', threshold: 0 }
 
 /** A condition being edited, with a key that stays with it when another is removed. */

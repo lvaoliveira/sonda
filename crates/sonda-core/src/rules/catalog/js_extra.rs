@@ -1595,16 +1595,24 @@ fn click_without_keyboard<'t>(attr: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         b"a" => attribute(opening, "href", src).is_some(),
         _ => false,
     };
-    let aria_hidden = attribute(opening, "aria-hidden", src)
-        .and_then(|a| static_value(a, src))
-        .is_some_and(|v| v == b"true");
     let presentation = attribute(opening, "role", src)
         .and_then(|a| static_value(a, src))
         .is_some_and(|v| matches!(v, b"presentation" | b"none"));
     let keyed = ["onKeyDown", "onKeyUp", "onKeyPress"]
         .iter()
         .any(|k| attribute(opening, k, src).is_some());
-    (!interactive && !aria_hidden && !presentation && !keyed).then_some(opening)
+    (!interactive && !hidden_or_row(opening, tag, src) && !presentation && !keyed)
+        .then_some(opening)
+}
+
+/// What jsx-a11y, as SonarQube runs it, leaves out of its handler rules: an
+/// element screen readers don't see (a backdrop that closes a menu), and a
+/// table row, whose implicit role is interactive.
+fn hidden_or_row(opening: Node, tag: &[u8], src: &[u8]) -> bool {
+    tag == b"tr"
+        || attribute(opening, "aria-hidden", src)
+            .and_then(|a| static_value(a, src))
+            .is_some_and(|v| v == b"true")
 }
 
 fn handler_on_plain_element(attr: Node, src: &[u8]) -> bool {
@@ -1613,6 +1621,7 @@ fn handler_on_plain_element(attr: Node, src: &[u8]) -> bool {
     };
     PLAIN_TAGS.contains(&tag)
         && !has_spread(opening)
+        && !hidden_or_row(opening, tag, src)
         && attribute(opening, "role", src).is_none()
         && attribute(opening, "tabIndex", src).is_none()
 }
@@ -2015,8 +2024,9 @@ mod tests {
 
     #[test]
     fn jsx_roles_and_handlers() {
-        let src = "const a = <div onClick={go}>x</div>;\nconst b = <div onClick={go} role=\"button\" tabIndex={0}>x</div>;\nconst c = <button onClick={go}>x</button>;\nconst d = <h1 role=\"button\">x</h1>;\nconst e = <button role=\"heading\">x</button>;\nconst f = <div role=\"checkbox\" tabIndex={0} />;\nconst g = <div role=\"checkbox\" aria-checked={on} tabIndex={0} />;\nconst h = <label>Name</label>;\nconst i = <label htmlFor=\"n\">Name</label>;\nconst j = <label>Name <input /></label>;";
+        let src = "const a = <div onClick={go}>x</div>;\nconst b = <div onClick={go} role=\"button\" tabIndex={0}>x</div>;\nconst c = <button onClick={go}>x</button>;\nconst d = <h1 role=\"button\">x</h1>;\nconst e = <button role=\"heading\">x</button>;\nconst f = <div role=\"checkbox\" tabIndex={0} />;\nconst g = <div role=\"checkbox\" aria-checked={on} tabIndex={0} />;\nconst h = <label>Name</label>;\nconst i = <label htmlFor=\"n\">Name</label>;\nconst j = <label>Name <input /></label>;\nconst k = <div aria-hidden=\"true\" onClick={close} />;\nconst l = <tr onClick={open}><td>x</td></tr>;";
         assert_eq!(flagged("js/handler-on-plain-element", Lang::Tsx, src), [1]);
+        assert_eq!(flagged("js/click-without-keyboard", Lang::Tsx, src), [1, 2]);
         assert_eq!(
             flagged("js/interactive-role-on-static-element", Lang::Tsx, src),
             [4]

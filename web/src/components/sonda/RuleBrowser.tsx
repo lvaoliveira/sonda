@@ -30,9 +30,9 @@ export function RuleBrowser<T extends RuleInfo>({
   order,
   sortLabel,
   extraFilter,
-  listTags,
-  summary,
-  panel,
+  renderTags,
+  renderSummary,
+  renderPanel,
   search,
 }: Readonly<{
   rules: T[]
@@ -44,9 +44,9 @@ export function RuleBrowser<T extends RuleInfo>({
   order?: (rule: T) => number
   sortLabel: string
   extraFilter?: RuleFilter<T>
-  listTags?: (rule: T) => ReactNode
-  summary: (rule: T) => ReactNode
-  panel?: (rule: T) => ReactNode
+  renderTags?: (rule: T) => ReactNode
+  renderSummary: (rule: T) => ReactNode
+  renderPanel?: (rule: T) => ReactNode
   /** The search box, rendered by the caller in its header. */
   search: { q: string; setQ: (q: string) => void }
 }>) {
@@ -145,13 +145,13 @@ export function RuleBrowser<T extends RuleInfo>({
                   <span>
                     {CATEGORY_LABEL[r.category]} · {r.languages.map(languageLabel).join(', ')}
                   </span>
-                  {listTags?.(r)}
+                  {renderTags?.(r)}
                 </span>
               </div>
             )
           })}
         </div>
-        {rule && <RuleDetail rule={rule} summary={summary(rule)} panel={panel?.(rule)} />}
+        {rule && <RuleDetail rule={rule} summary={renderSummary(rule)} panel={renderPanel?.(rule)} />}
       </div>
     </>
   )

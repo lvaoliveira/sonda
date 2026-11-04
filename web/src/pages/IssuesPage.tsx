@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router'
-import { useApi, useAsync } from '@/api/hooks'
+import { type Async, useApi, useAsync } from '@/api/hooks'
 import { type FacetKey, type IssueDetail, type IssuePage, type IssuePatch, type IssueSummary, PROMPT_LIMIT, type TriageStatus } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { CodeViewer } from '@/components/sonda/CodeViewer'
@@ -90,9 +90,7 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
   const drill = useMemo(() => filterFromParams(params, project), [params, project])
   // What resetting goes back to: on a project's tab, still that project.
   const [base] = useState<IssueFilter>(() => (project ? { ...DEFAULT_FILTER, project, branch: drill?.filter.branch } : DEFAULT_FILTER))
-  const [filter, setFilter] = useState<IssueFilter>(drill?.filter ?? base)
-  const [offset, setOffset] = useState(0)
-  const [selectedId, setSelectedId] = useState<number | null>(drill?.issue ?? null)
+  const { filter, setFilter, offset, setOffset, selectedId, setSelectedId } = useListState(drill, base)
   const [checked, setChecked] = useState<number[]>([])
   const toggleChecked = (id: number) => setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
   const [overrides, setOverrides] = useState<Overrides>({})
@@ -105,26 +103,10 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
   const narrow = !useWide(900)
   const [reading, setReading] = useState(false)
   const listHidden = narrow && reading
-  // Facets follow the window width until toggled; crossing the breakpoint resets them.
-  const [facets, setFacets] = useState({ wide, show: wide })
-  if (facets.wide !== wide) setFacets({ wide, show: wide })
-  const showFacets = facets.show
-  const setShowFacets = (show: boolean) => setFacets({ wide, show })
-  // A new drill-down link (from another screen) replaces the current filter.
-  const [appliedDrill, setAppliedDrill] = useState(drill)
-  if (drill !== appliedDrill) {
-    setAppliedDrill(drill)
-    if (drill) {
-      setFilter(drill.filter)
-      setOffset(0)
-      setSelectedId(drill.issue)
-    }
-  }
+  const [showFacets, setShowFacets] = useFacets(wide)
 
   const loaded = useAsync(() => api.issues(toQuery(filter, me ?? '', offset)), [api, filter, offset, me])
-  // Keep showing the last page while the next one loads, instead of flashing a skeleton.
-  const [page, setPage] = useState<IssuePage | null>(null)
-  if (loaded.state === 'ready' && loaded.data !== page) setPage(loaded.data)
+  const page = useLastLoaded(loaded)
   const items = useMemo(() => (page?.items ?? []).map((i) => ({ ...i, ...overrides[i.id] })), [page, overrides])
   const selected = items.find((i) => i.id === selectedId) ?? items[0]
 
@@ -156,12 +138,7 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
     setToast({
       text: message,
       undo: async () => {
-        const restore = (b: IssueSummary): IssuePatch => ({
-          // "Fixed" is not a triage status: scans set it, and undo leaves it.
-          ...(b.status !== 'fixed' && { status: b.status, ...(b.reason && { reason: b.reason }) }),
-          assignee: b.assignee ?? '',
-        })
-        remember(await Promise.all(before.map((b) => api.updateIssue(b.id, restore(b)))))
+        remember(await Promise.all(before.map((b) => api.updateIssue(b.id, restorePatch(b)))))
       },
     })
     return true
@@ -192,24 +169,16 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
     setToast({ text: `Copied a prompt for ${n} ${n === 1 ? 'issue' : 'issues'}: paste it into your AI assistant` })
   }
 
-  // j/k move, a assigns to me, c confirms (not while typing).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (/INPUT|SELECT|TEXTAREA/.test((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || !selected) return
-      const at = Math.max(0, items.findIndex((i) => i.id === selected.id))
-      if (e.key === 'j') setSelectedId(items[Math.min(items.length - 1, at + 1)].id)
-      if (e.key === 'k') setSelectedId(items[Math.max(0, at - 1)].id)
-      if (e.key === 'a') assignToMe([selected.id])
-      if (e.key === 'c') setStatus([selected.id], 'confirmed')
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+  useTriageKeys(items, selected, {
+    select: setSelectedId,
+    assign: (id) => assignToMe([id]),
+    confirm: (id) => setStatus([id], 'confirmed'),
   })
 
   if (!page) {
     return loaded.state === 'error' ? <p role="alert">Could not load issues: {loaded.error.message}</p> : <IssuesSkeleton />
   }
-  const columns = narrow ? 'minmax(0,1fr)' : showFacets ? (wide ? '240px minmax(0,1fr) minmax(0,1.35fr)' : '220px minmax(0,1fr) minmax(0,1.2fr)') : 'minmax(0,1fr) minmax(0,1.35fr)'
+  const columns = listColumns(narrow, showFacets, wide)
   const last = Math.min(page.offset + page.limit, page.total)
 
   return (
@@ -227,13 +196,13 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
       </PageHeader>
 
       {drill && (
-        <div role="status" className="flex items-center gap-2.5 rounded-[10px] bg-brand-soft px-3.5 py-2.5 text-[13px]">
+        <output className="flex items-center gap-2.5 rounded-[10px] bg-brand-soft px-3.5 py-2.5 text-[13px]">
           <span className="font-mono text-[10px] tracking-[.06em] text-brand uppercase">Drill-down</span>
           <span className="flex-1">{drill.description}</span>
           <button type="button" onClick={() => changeFilter(base)} className="cursor-pointer border-0 bg-transparent p-0 text-[12.5px] text-brand">
             Clear
           </button>
-        </div>
+        </output>
       )}
       {loaded.state === 'error' && <p role="alert">Could not load issues: {loaded.error.message}</p>}
 
@@ -241,103 +210,30 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
         {showFacets && !listHidden && <Facets page={page} filter={filter} base={base} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
 
         <section hidden={listHidden} aria-label="Issue list" aria-busy={loaded.state === 'loading'} className="flex min-w-0 flex-col bg-panel-2">
-          <div className="flex min-h-12 flex-wrap items-center gap-2.5 border-b border-line px-3.5">
-            <span className="font-semibold">
-              {page.total === 0 ? 'No issues' : `${formatNumber(page.offset + 1)}–${formatNumber(last)} of ${formatNumber(page.total)}`}
-            </span>
-            <span className="flex-1" />
-            {page.total > 0 && (
-              <button
-                type="button"
-                onClick={() => void copyPrompt(checked.length > 0 ? checked : undefined)}
-                title={checked.length > 0 ? undefined : `The first ${PROMPT_LIMIT} of these, for an AI assistant such as Claude Code`}
-                className="h-[26px] cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-xs edge-strong"
-              >
-                {checked.length > 0 ? `Copy ${checked.length} as prompt` : 'Copy as prompt'}
-              </button>
-            )}
-            {checked.length > 0 && (
-              <span className="flex items-center gap-1.5 text-[12.5px]">
-                <span className="text-fg-muted">{checked.length} selected</span>
-                {me && (
-                  <button type="button" onClick={() => assignToMe(checked)} className="h-[26px] cursor-pointer rounded-md border-0 bg-brand px-2.5 text-xs font-semibold text-brand-ink">
-                    Assign to me
-                  </button>
-                )}
-                <button type="button" onClick={() => setStatus(checked, 'confirmed')} className="h-[26px] cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-xs edge-strong">
-                  Confirm
-                </button>
-              </span>
-            )}
-          </div>
-          {items.length === 0 && (
-            <div className="flex flex-col gap-1.5 px-[18px] py-10">
-              <span className="text-base font-semibold">Nothing matches</span>
-              <span className="text-[13px] text-fg-muted">Either very good news or a filter that's too narrow.</span>
-              <Button className="mt-2 self-start" onClick={() => changeFilter(base)}>
-                Reset filters
-              </Button>
-            </div>
-          )}
+          <ListBar
+            page={page}
+            last={last}
+            checked={checked}
+            me={me}
+            onCopyPrompt={() => void copyPrompt(checked.length > 0 ? checked : undefined)}
+            onAssign={() => assignToMe(checked)}
+            onConfirm={() => setStatus(checked, 'confirmed')}
+          />
+          {items.length === 0 && <NothingMatches onReset={() => changeFilter(base)} />}
           <div role="listbox" aria-label="Issues" className="flex flex-1 flex-col overflow-auto">
-            {items.map((issue) => {
-              const on = issue.id === selected?.id
-              return (
-                <div
-                  key={issue.id}
-                  role="option"
-                  aria-selected={on}
-                  // The selected issue is the one Tab reaches; Enter or Space opens it.
-                  tabIndex={on ? 0 : -1}
-                  onClick={() => open(issue.id)}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
-                    e.preventDefault()
-                    open(issue.id)
-                  }}
-                  className="grid cursor-pointer grid-cols-[16px_14px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-3 pr-3.5 pl-[11px] hover:bg-hover"
-                  style={{ borderLeft: `3px solid ${on ? 'var(--sd-accent)' : 'transparent'}`, background: on ? 'var(--sd-panel)' : undefined }}
-                >
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${issue.file}:${issue.line}`}
-                    checked={checked.includes(issue.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={() => toggleChecked(issue.id)}
-                    className="m-0 mt-[3px] accent-brand"
-                  />
-                  <SeverityGlyph severity={issue.severity} className="pt-[3px] text-[10px]" />
-                  <span className="flex min-w-0 flex-col gap-1">
-                    <span className="text-[13.5px] leading-[1.35] font-medium">{issue.message}</span>
-                    <Mono className="overflow-hidden text-[10.5px] text-ellipsis whitespace-nowrap text-fg-faint">
-                      {issue.file}:{issue.line}
-                    </Mono>
-                    <span className="flex flex-wrap items-center gap-2 text-xs text-fg-faint">
-                      <span style={{ color: STATUS_COLOR[issue.status] }}>{STATUS_LABEL[issue.status]}</span>
-                      <span>·</span>
-                      <span>{CATEGORY_LABEL[issue.category]}</span>
-                      <span>·</span>
-                      <span>{formatEffort(issue.effortMinutes)}</span>
-                      <span>·</span>
-                      <span>{formatAge(issue.detectedAt)}</span>
-                      {issue.isNew && <Tag accent>NEW</Tag>}
-                      {me && issue.assignee === me && <Tag>YOU</Tag>}
-                    </span>
-                  </span>
-                </div>
-              )
-            })}
+            {items.map((issue) => (
+              <IssueRow
+                key={issue.id}
+                issue={issue}
+                on={issue.id === selected?.id}
+                checked={checked.includes(issue.id)}
+                me={me}
+                onOpen={() => open(issue.id)}
+                onCheck={() => toggleChecked(issue.id)}
+              />
+            ))}
           </div>
-          {page.total > page.limit && (
-            <nav aria-label="Pages" className="flex items-center justify-between gap-2 border-t border-line px-3.5 py-2.5">
-              <Button disabled={page.offset === 0} onClick={() => setOffset(Math.max(0, page.offset - PAGE_SIZE))}>
-                Previous
-              </Button>
-              <Button disabled={last >= page.total} onClick={() => setOffset(page.offset + PAGE_SIZE)}>
-                Next
-              </Button>
-            </nav>
-          )}
+          {page.total > page.limit && <Pager page={page} last={last} onOffset={setOffset} />}
         </section>
 
         {selected && (!narrow || reading) && (
@@ -355,6 +251,193 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
       <Toast toast={toast} onDone={clearToast} />
       {manualPrompt !== null && <CopyByHand text={manualPrompt} onClose={() => setManualPrompt(null)} />}
     </>
+  )
+}
+
+type Drill = ReturnType<typeof filterFromParams>
+
+/** The filter, page and selected issue, which a new drill-down link (from another screen) replaces. */
+function useListState(drill: Drill, base: IssueFilter) {
+  const [filter, setFilter] = useState<IssueFilter>(drill?.filter ?? base)
+  const [offset, setOffset] = useState(0)
+  const [selectedId, setSelectedId] = useState<number | null>(drill?.issue ?? null)
+  const [appliedDrill, setAppliedDrill] = useState(drill)
+  if (drill !== appliedDrill) {
+    setAppliedDrill(drill)
+    if (drill) {
+      setFilter(drill.filter)
+      setOffset(0)
+      setSelectedId(drill.issue)
+    }
+  }
+  return { filter, setFilter, offset, setOffset, selectedId, setSelectedId }
+}
+
+/** The last data loaded, kept while the next loads instead of flashing a skeleton. */
+function useLastLoaded<T>(loaded: Async<T>): T | null {
+  const [last, setLast] = useState<T | null>(null)
+  if (loaded.state === 'ready' && loaded.data !== last) setLast(loaded.data)
+  return last
+}
+
+/** Facets follow the window width until toggled; crossing the breakpoint resets them. */
+function useFacets(wide: boolean): [boolean, (show: boolean) => void] {
+  const [facets, setFacets] = useState({ wide, show: wide })
+  if (facets.wide !== wide) setFacets({ wide, show: wide })
+  return [facets.show, (show) => setFacets({ wide, show })]
+}
+
+function isTyping(e: KeyboardEvent): boolean {
+  return /INPUT|SELECT|TEXTAREA/.test((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey
+}
+
+/** j/k move, a assigns to me, c confirms (not while typing). */
+function useTriageKeys(
+  items: IssueSummary[],
+  selected: IssueSummary | undefined,
+  act: { select: (id: number) => void; assign: (id: number) => void; confirm: (id: number) => void },
+) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTyping(e) || !selected) return
+      const at = Math.max(0, items.findIndex((i) => i.id === selected.id))
+      const keys: Record<string, () => void> = {
+        j: () => act.select(items[Math.min(items.length - 1, at + 1)].id),
+        k: () => act.select(items[Math.max(0, at - 1)].id),
+        a: () => act.assign(selected.id),
+        c: () => act.confirm(selected.id),
+      }
+      keys[e.key]?.()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+}
+
+/** What undoing a change sets back. "Fixed" is not a triage status: scans set it, and undo leaves it. */
+function restorePatch(b: IssueSummary): IssuePatch {
+  const assignee = b.assignee ?? ''
+  if (b.status === 'fixed') return { assignee }
+  return b.reason ? { status: b.status, reason: b.reason, assignee } : { status: b.status, assignee }
+}
+
+/** Above the list: which issues it shows, and what to do with the selected ones. */
+function ListBar({
+  page,
+  last,
+  checked,
+  me,
+  onCopyPrompt,
+  onAssign,
+  onConfirm,
+}: Readonly<{ page: IssuePage; last: number; checked: number[]; me: string | null; onCopyPrompt: () => void; onAssign: () => void; onConfirm: () => void }>) {
+  const n = checked.length
+  return (
+    <div className="flex min-h-12 flex-wrap items-center gap-2.5 border-b border-line px-3.5">
+      <span className="font-semibold">{page.total === 0 ? 'No issues' : `${formatNumber(page.offset + 1)}–${formatNumber(last)} of ${formatNumber(page.total)}`}</span>
+      <span className="flex-1" />
+      {page.total > 0 && (
+        <button
+          type="button"
+          onClick={onCopyPrompt}
+          title={n > 0 ? undefined : `The first ${PROMPT_LIMIT} of these, for an AI assistant such as Claude Code`}
+          className="h-[26px] cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-xs edge-strong"
+        >
+          {n > 0 ? `Copy ${n} as prompt` : 'Copy as prompt'}
+        </button>
+      )}
+      {n > 0 && (
+        <span className="flex items-center gap-1.5 text-[12.5px]">
+          <span className="text-fg-muted">{n} selected</span>
+          {me && (
+            <button type="button" onClick={onAssign} className="h-[26px] cursor-pointer rounded-md border-0 bg-brand px-2.5 text-xs font-semibold text-brand-ink">
+              Assign to me
+            </button>
+          )}
+          <button type="button" onClick={onConfirm} className="h-[26px] cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-xs edge-strong">
+            Confirm
+          </button>
+        </span>
+      )}
+    </div>
+  )
+}
+
+function NothingMatches({ onReset }: Readonly<{ onReset: () => void }>) {
+  return (
+    <div className="flex flex-col gap-1.5 px-[18px] py-10">
+      <span className="text-base font-semibold">Nothing matches</span>
+      <span className="text-[13px] text-fg-muted">Either very good news or a filter that's too narrow.</span>
+      <Button className="mt-2 self-start" onClick={onReset}>
+        Reset filters
+      </Button>
+    </div>
+  )
+}
+
+/** An issue in the list. The selected one is the one Tab reaches; Enter or Space opens it. */
+function IssueRow({
+  issue,
+  on,
+  checked,
+  me,
+  onOpen,
+  onCheck,
+}: Readonly<{ issue: IssueSummary; on: boolean; checked: boolean; me: string | null; onOpen: () => void; onCheck: () => void }>) {
+  return (
+    <div
+      role="option"
+      aria-selected={on}
+      tabIndex={on ? 0 : -1}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+        e.preventDefault()
+        onOpen()
+      }}
+      className="grid cursor-pointer grid-cols-[16px_14px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-3 pr-3.5 pl-[11px] hover:bg-hover"
+      style={{ borderLeft: `3px solid ${on ? 'var(--sd-accent)' : 'transparent'}`, background: on ? 'var(--sd-panel)' : undefined }}
+    >
+      <input
+        type="checkbox"
+        aria-label={`Select ${issue.file}:${issue.line}`}
+        checked={checked}
+        onClick={(e) => e.stopPropagation()}
+        onChange={onCheck}
+        className="m-0 mt-[3px] accent-brand"
+      />
+      <SeverityGlyph severity={issue.severity} className="pt-[3px] text-[10px]" />
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="text-[13.5px] leading-[1.35] font-medium">{issue.message}</span>
+        <Mono className="overflow-hidden text-[10.5px] text-ellipsis whitespace-nowrap text-fg-faint">
+          {issue.file}:{issue.line}
+        </Mono>
+        <span className="flex flex-wrap items-center gap-2 text-xs text-fg-faint">
+          <span style={{ color: STATUS_COLOR[issue.status] }}>{STATUS_LABEL[issue.status]}</span>
+          <span>·</span>
+          <span>{CATEGORY_LABEL[issue.category]}</span>
+          <span>·</span>
+          <span>{formatEffort(issue.effortMinutes)}</span>
+          <span>·</span>
+          <span>{formatAge(issue.detectedAt)}</span>
+          {issue.isNew && <Tag accent>NEW</Tag>}
+          {me && issue.assignee === me && <Tag>YOU</Tag>}
+        </span>
+      </span>
+    </div>
+  )
+}
+
+function Pager({ page, last, onOffset }: Readonly<{ page: IssuePage; last: number; onOffset: (offset: number) => void }>) {
+  return (
+    <nav aria-label="Pages" className="flex items-center justify-between gap-2 border-t border-line px-3.5 py-2.5">
+      <Button disabled={page.offset === 0} onClick={() => onOffset(Math.max(0, page.offset - PAGE_SIZE))}>
+        Previous
+      </Button>
+      <Button disabled={last >= page.total} onClick={() => onOffset(page.offset + PAGE_SIZE)}>
+        Next
+      </Button>
+    </nav>
   )
 }
 
@@ -459,6 +542,18 @@ function Facets({
 }
 
 /** On the all-projects page: each project, opening its own Issues tab with these filters. */
+/** The page's columns: the list alone on a phone, else the facets (if shown), the list and the issue. */
+function listColumns(narrow: boolean, showFacets: boolean, wide: boolean): string {
+  if (narrow) return 'minmax(0,1fr)'
+  if (!showFacets) return 'minmax(0,1fr) minmax(0,1.35fr)'
+  return wide ? '240px minmax(0,1fr) minmax(0,1.35fr)' : '220px minmax(0,1fr) minmax(0,1.2fr)'
+}
+
+function assignLabel(mine: boolean, me: string | null): string {
+  if (mine) return 'Assigned to you'
+  return me ? 'Assign to me' : 'Assign to me (sign in with a name)'
+}
+
 /** Where the listed issues are from. */
 function scopeLabel(filter: IssueFilter): string {
   if (!filter.project) return 'all projects, each on its main branch'
@@ -550,16 +645,7 @@ function IssueView({
       </article>
     )
   }
-  const mine = me !== null && issue.assignee === me
   const decision = deciding?.id === id ? deciding.status : null
-  const meta: { k: string; v: string; mono?: boolean; color?: string }[] = [
-    { k: 'Project', v: `${issue.project} · ${issue.branch}`, mono: true },
-    { k: 'Effort', v: formatEffort(issue.effortMinutes), mono: true },
-    { k: 'Detected', v: shortDate(issue.detectedAt) + (issue.isNew ? ' · new code' : '') },
-    { k: 'Status', v: STATUS_LABEL[issue.status], color: STATUS_COLOR[issue.status] },
-    { k: 'Assignee', v: issue.assignee ?? 'Unassigned', color: issue.assignee ? undefined : 'var(--sd-faint)' },
-  ]
-  const highlighted = Array.from({ length: issue.endLine - issue.line + 1 }, (_, i) => issue.line + i)
   return (
     <article aria-label="Issue detail" className="flex min-w-0 flex-col overflow-auto bg-panel">
       <div className="flex flex-col gap-3 border-b border-line px-5 py-[18px]">
@@ -577,51 +663,8 @@ function IssueView({
           </Link>
         </div>
         <h2 className="m-0 text-[21px] leading-[1.25] font-semibold tracking-[-0.02em]">{issue.message}</h2>
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-px overflow-hidden rounded-[9px] bg-line" style={{ boxShadow: '0 0 0 1px var(--sd-line)' }}>
-          {/* The whole path, on its own row: the file name alone is often ambiguous. */}
-          <div className="col-span-full flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
-            <span className="text-[11px] text-fg-faint">Location</span>
-            <span aria-label="Location" className="font-mono text-[11px] [overflow-wrap:anywhere]" title={issue.file}>
-              {/* Break after a slash before breaking a name. */}
-              {directoriesOf(issue.file).map(({ name, path }) => (
-                <span key={path} className="text-fg-muted">
-                  {name}/<wbr />
-                </span>
-              ))}
-              <span>{issue.file.slice(issue.file.lastIndexOf('/') + 1)}</span>
-              <span className="text-fg-muted">
-                :{issue.line}
-                {issue.endLine > issue.line && `–${issue.endLine}`}
-              </span>
-            </span>
-          </div>
-          {meta.map((m) => (
-            <div key={m.k} className="flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
-              <span className="text-[11px] text-fg-faint">{m.k}</span>
-              <span className={`overflow-hidden text-ellipsis whitespace-nowrap ${m.mono ? 'font-mono text-[11px]' : 'text-[13px]'}`} style={{ color: m.color ?? 'var(--sd-text)' }}>
-                {m.v}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Button primary={!mine && !!me} disabled={mine || !me} onClick={onAssign}>
-            {mine ? 'Assigned to you' : me ? 'Assign to me' : 'Assign to me (sign in with a name)'}
-          </Button>
-          <Button disabled={issue.status === 'confirmed'} onClick={() => onStatus('confirmed')}>
-            Confirm
-          </Button>
-          <Button disabled={issue.status === 'accepted'} onClick={() => setDeciding({ id, status: 'accepted' })}>
-            Accept risk
-          </Button>
-          <Button disabled={issue.status === 'false_positive'} onClick={() => setDeciding({ id, status: 'false_positive' })}>
-            False positive
-          </Button>
-          {issue.status !== 'open' && issue.status !== 'fixed' && <Button onClick={() => onStatus('open')}>Reopen</Button>}
-          <Button className="ml-auto" onClick={onCopyPrompt}>
-            Copy as prompt
-          </Button>
-        </div>
+        <IssueFacts issue={issue} />
+        <TriageActions issue={issue} me={me} onAssign={onAssign} onStatus={onStatus} onDecide={(status) => setDeciding({ id, status })} onCopyPrompt={onCopyPrompt} />
         {decision && (
           <ReasonForm
             key={`${id}-${decision}`}
@@ -640,52 +683,152 @@ function IssueView({
           </p>
         )}
       </div>
-      <div className="flex flex-col border-b border-line">
-        <div className="flex justify-between gap-2 border-b border-line bg-panel-2 px-5 py-[9px] font-mono text-[10.5px]">
-          <span className="overflow-hidden text-ellipsis whitespace-nowrap text-fg-muted">{issue.file}</span>
-          <span className="text-fg-faint">{issue.language ? languageLabel(issue.language) : ''}</span>
-        </div>
-        {issue.code.length > 0 ? (
-          <CodeViewer lines={issue.code} highlighted={highlighted} severity={issue.severity} noteLine={issue.endLine} note={issue.message} />
-        ) : (
-          <p className="m-0 px-5 py-4 text-[13px] text-fg-faint">The source of this file is not available.</p>
-        )}
-      </div>
+      <IssueSource issue={issue} />
       <div className="flex flex-col gap-5 px-5 pt-[18px] pb-7">
-        {issue.ruleDescription && (
-          <section className="flex flex-col gap-1.5">
-            <h3 className="m-0 font-normal micro-label">Why it matters</h3>
-            {issue.ruleName && <p className="m-0 text-sm font-medium">{issue.ruleName}</p>}
-            <p className="m-0 max-w-[68ch] text-sm">{issue.ruleDescription}</p>
-          </section>
-        )}
-        {issue.compliant && (
-          <section className="flex flex-col gap-2">
-            <h3 className="m-0 font-normal micro-label">Compliant example</h3>
-            <pre className="m-0 overflow-auto rounded-lg bg-canvas px-3.5 py-3 font-mono text-[11.5px] leading-[1.8]" style={{ boxShadow: 'inset 3px 0 0 var(--sd-ok), inset 0 0 0 1px var(--sd-line)' }}>
-              {issue.compliant}
-            </pre>
-          </section>
-        )}
-        <section className="flex flex-col gap-0.5">
-          <h3 className="m-0 mb-1.5 font-normal micro-label">History</h3>
-          {issue.history.length === 0 && <span className="text-[13px] text-fg-faint">No triage changes yet.</span>}
-          {issue.history.map((e) => (
-            <div key={`${e.at}|${e.field}`} className="flex flex-wrap items-baseline gap-2 border-t border-line py-2 text-[13px]">
-              <span className="capitalize">{e.field}</span>
-              <span className="text-fg-muted">
-                {e.oldValue ?? 'none'} → {e.newValue ?? 'none'}
-              </span>
-              {e.reason && <span className="basis-full text-fg-muted order-last">“{e.reason}”</span>}
-              <span className="ml-auto text-[12px] text-fg-faint">
-                {e.actor && <>{e.actor === 'api-token' ? 'API token' : `@${e.actor}`} · </>}
-                {shortDate(e.at)}
-              </span>
-            </div>
-          ))}
-        </section>
+        <AboutRule issue={issue} />
+        <IssueHistory history={issue.history} />
       </div>
     </article>
+  )
+}
+
+/** Where the issue is, and its triage state. */
+function IssueFacts({ issue }: Readonly<{ issue: IssueDetail }>) {
+  const meta: { k: string; v: string; mono?: boolean; color?: string }[] = [
+    { k: 'Project', v: `${issue.project} · ${issue.branch}`, mono: true },
+    { k: 'Effort', v: formatEffort(issue.effortMinutes), mono: true },
+    { k: 'Detected', v: shortDate(issue.detectedAt) + (issue.isNew ? ' · new code' : '') },
+    { k: 'Status', v: STATUS_LABEL[issue.status], color: STATUS_COLOR[issue.status] },
+    { k: 'Assignee', v: issue.assignee ?? 'Unassigned', color: issue.assignee ? undefined : 'var(--sd-faint)' },
+  ]
+  return (
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-px overflow-hidden rounded-[9px] bg-line" style={{ boxShadow: '0 0 0 1px var(--sd-line)' }}>
+      {/* The whole path, on its own row: the file name alone is often ambiguous. */}
+      <div className="col-span-full flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
+        <span className="text-[11px] text-fg-faint">Location</span>
+        <span aria-label="Location" className="font-mono text-[11px] [overflow-wrap:anywhere]" title={issue.file}>
+          {/* Break after a slash before breaking a name. */}
+          {directoriesOf(issue.file).map(({ name, path }) => (
+            <span key={path} className="text-fg-muted">
+              {name}/<wbr />
+            </span>
+          ))}
+          <span>{issue.file.slice(issue.file.lastIndexOf('/') + 1)}</span>
+          <span className="text-fg-muted">
+            :{issue.line}
+            {issue.endLine > issue.line && `–${issue.endLine}`}
+          </span>
+        </span>
+      </div>
+      {meta.map((m) => (
+        <div key={m.k} className="flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
+          <span className="text-[11px] text-fg-faint">{m.k}</span>
+          <span className={`overflow-hidden text-ellipsis whitespace-nowrap ${m.mono ? 'font-mono text-[11px]' : 'text-[13px]'}`} style={{ color: m.color ?? 'var(--sd-text)' }}>
+            {m.v}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TriageActions({
+  issue,
+  me,
+  onAssign,
+  onStatus,
+  onDecide,
+  onCopyPrompt,
+}: Readonly<{
+  issue: IssueDetail
+  me: string | null
+  onAssign: () => void
+  onStatus: (s: TriageStatus) => void
+  /** A decision that asks for its reason first. */
+  onDecide: (status: keyof typeof DECISION_PROMPT) => void
+  onCopyPrompt: () => void
+}>) {
+  const mine = me !== null && issue.assignee === me
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <Button primary={!mine && !!me} disabled={mine || !me} onClick={onAssign}>
+        {assignLabel(mine, me)}
+      </Button>
+      <Button disabled={issue.status === 'confirmed'} onClick={() => onStatus('confirmed')}>
+        Confirm
+      </Button>
+      <Button disabled={issue.status === 'accepted'} onClick={() => onDecide('accepted')}>
+        Accept risk
+      </Button>
+      <Button disabled={issue.status === 'false_positive'} onClick={() => onDecide('false_positive')}>
+        False positive
+      </Button>
+      {issue.status !== 'open' && issue.status !== 'fixed' && <Button onClick={() => onStatus('open')}>Reopen</Button>}
+      <Button className="ml-auto" onClick={onCopyPrompt}>
+        Copy as prompt
+      </Button>
+    </div>
+  )
+}
+
+function IssueSource({ issue }: Readonly<{ issue: IssueDetail }>) {
+  const highlighted = Array.from({ length: issue.endLine - issue.line + 1 }, (_, i) => issue.line + i)
+  return (
+    <div className="flex flex-col border-b border-line">
+      <div className="flex justify-between gap-2 border-b border-line bg-panel-2 px-5 py-[9px] font-mono text-[10.5px]">
+        <span className="overflow-hidden text-ellipsis whitespace-nowrap text-fg-muted">{issue.file}</span>
+        <span className="text-fg-faint">{issue.language ? languageLabel(issue.language) : ''}</span>
+      </div>
+      {issue.code.length > 0 ? (
+        <CodeViewer lines={issue.code} highlighted={highlighted} severity={issue.severity} noteLine={issue.endLine} note={issue.message} />
+      ) : (
+        <p className="m-0 px-5 py-4 text-[13px] text-fg-faint">The source of this file is not available.</p>
+      )}
+    </div>
+  )
+}
+
+function AboutRule({ issue }: Readonly<{ issue: IssueDetail }>) {
+  return (
+    <>
+      {issue.ruleDescription && (
+        <section className="flex flex-col gap-1.5">
+          <h3 className="m-0 font-normal micro-label">Why it matters</h3>
+          {issue.ruleName && <p className="m-0 text-sm font-medium">{issue.ruleName}</p>}
+          <p className="m-0 max-w-[68ch] text-sm">{issue.ruleDescription}</p>
+        </section>
+      )}
+      {issue.compliant && (
+        <section className="flex flex-col gap-2">
+          <h3 className="m-0 font-normal micro-label">Compliant example</h3>
+          <pre className="m-0 overflow-auto rounded-lg bg-canvas px-3.5 py-3 font-mono text-[11.5px] leading-[1.8]" style={{ boxShadow: 'inset 3px 0 0 var(--sd-ok), inset 0 0 0 1px var(--sd-line)' }}>
+            {issue.compliant}
+          </pre>
+        </section>
+      )}
+    </>
+  )
+}
+
+function IssueHistory({ history }: Readonly<{ history: IssueDetail['history'] }>) {
+  return (
+    <section className="flex flex-col gap-0.5">
+      <h3 className="m-0 mb-1.5 font-normal micro-label">History</h3>
+      {history.length === 0 && <span className="text-[13px] text-fg-faint">No triage changes yet.</span>}
+      {history.map((e) => (
+        <div key={`${e.at}|${e.field}`} className="flex flex-wrap items-baseline gap-2 border-t border-line py-2 text-[13px]">
+          <span className="capitalize">{e.field}</span>
+          <span className="text-fg-muted">
+            {e.oldValue ?? 'none'} → {e.newValue ?? 'none'}
+          </span>
+          {e.reason && <span className="basis-full text-fg-muted order-last">“{e.reason}”</span>}
+          <span className="ml-auto text-[12px] text-fg-faint">
+            {e.actor && <>{e.actor === 'api-token' ? 'API token' : `@${e.actor}`} · </>}
+            {shortDate(e.at)}
+          </span>
+        </div>
+      ))}
+    </section>
   )
 }
 
