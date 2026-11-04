@@ -607,96 +607,124 @@ impl Parser {
     }
 
     fn group(&mut self) -> Result<Option<Node>, ParseError> {
-        if self.eat('?') {
-            if self.java {
-                return self.java_group();
-            }
-            if self.js {
-                return self.js_group();
-            }
-            if self.eat(':') {
-                return self.group_body(GroupKind::NonCapture, 0).map(Some);
-            }
-            if self.eat('>') {
-                return self.group_body(GroupKind::Atomic, 0).map(Some);
-            }
-            if self.eat('#') {
-                while let Some(c) = self.peek() {
-                    self.pos += 1;
-                    if c == ')' {
-                        return Ok(None);
-                    }
-                }
-                return err("missing ), unterminated comment");
-            }
-            if self.eat('=') || self.eat('!') {
-                let negative = self.chars[self.pos - 1] == '!';
-                return self.look(true, negative).map(Some);
-            }
-            if self.looking_at("<=") || self.looking_at("<!") {
-                self.pos += 1;
-                let negative = self.eat('!');
-                if !negative {
-                    self.pos += 1;
-                }
-                return self.look(false, negative).map(Some);
-            }
-            if self.eat('P') {
-                if self.eat('<') {
-                    let name = self.name('>')?;
-                    if self.names.contains(&name) {
-                        return err("redefinition of group name");
-                    }
-                    self.names.push(name.clone());
-                    self.groups += 1;
-                    let index = self.groups;
-                    return self.group_body(GroupKind::Named(name), index).map(Some);
-                }
-                if self.eat('=') {
-                    let name = self.name(')')?;
-                    if !self.names.contains(&name) {
-                        return err("unknown group name");
-                    }
-                    return Ok(Some(Node::BackrefName(name)));
-                }
-                return err("unknown extension ?P");
-            }
-            if self.eat('(') {
-                let start = self.pos;
-                while self.peek().is_some_and(|c| c != ')') {
-                    self.pos += 1;
-                }
-                if !self.eat(')') {
-                    return err("missing ), unterminated name");
-                }
-                let reference: String = self.chars[start..self.pos - 1].iter().collect();
-                if reference.chars().all(|c| c.is_ascii_digit()) && !reference.is_empty() {
-                    let n: usize = reference.parse().unwrap_or(0);
-                    if n == 0 {
-                        return err("bad group number");
-                    }
-                } else if !self.names.contains(&reference) {
-                    return err("unknown group name");
-                }
-                let yes = self.concatenation()?;
-                let no = if self.eat('|') {
-                    Some(Box::new(self.concatenation()?))
-                } else {
-                    None
-                };
-                if !self.eat(')') {
-                    return err("missing ), unterminated subpattern");
-                }
-                return Ok(Some(Node::Conditional {
-                    yes: Box::new(yes),
-                    no,
-                }));
-            }
-            return self.inline_flags();
+        if !self.eat('?') {
+            self.groups += 1;
+            let index = self.groups;
+            return self.group_body(GroupKind::Capture, index).map(Some);
         }
-        self.groups += 1;
-        let index = self.groups;
-        self.group_body(GroupKind::Capture, index).map(Some)
+        if self.java {
+            return self.java_group();
+        }
+        if self.js {
+            return self.js_group();
+        }
+        self.extension()
+    }
+
+    /// What follows `(?`, in Python's syntax.
+    fn extension(&mut self) -> Result<Option<Node>, ParseError> {
+        if self.eat(':') {
+            return self.group_body(GroupKind::NonCapture, 0).map(Some);
+        }
+        if self.eat('>') {
+            return self.group_body(GroupKind::Atomic, 0).map(Some);
+        }
+        if self.eat('#') {
+            return self.comment();
+        }
+        if self.eat('=') || self.eat('!') {
+            let negative = self.chars[self.pos - 1] == '!';
+            return self.look(true, negative).map(Some);
+        }
+        if self.looking_at("<=") || self.looking_at("<!") {
+            self.pos += 1;
+            let negative = self.eat('!');
+            if !negative {
+                self.pos += 1;
+            }
+            return self.look(false, negative).map(Some);
+        }
+        if self.eat('P') {
+            return self.python_named();
+        }
+        if self.eat('(') {
+            return self.conditional();
+        }
+        self.inline_flags()
+    }
+
+    /// `(?#...)`, after the `#`.
+    fn comment(&mut self) -> Result<Option<Node>, ParseError> {
+        while let Some(c) = self.peek() {
+            self.pos += 1;
+            if c == ')' {
+                return Ok(None);
+            }
+        }
+        err("missing ), unterminated comment")
+    }
+
+    /// `(?P<name>...)` or `(?P=name)`, after the `P`.
+    fn python_named(&mut self) -> Result<Option<Node>, ParseError> {
+        if self.eat('<') {
+            let name = self.name('>')?;
+            if self.names.contains(&name) {
+                return err("redefinition of group name");
+            }
+            self.names.push(name.clone());
+            self.groups += 1;
+            let index = self.groups;
+            return self.group_body(GroupKind::Named(name), index).map(Some);
+        }
+        if self.eat('=') {
+            let name = self.name(')')?;
+            if !self.names.contains(&name) {
+                return err("unknown group name");
+            }
+            return Ok(Some(Node::BackrefName(name)));
+        }
+        err("unknown extension ?P")
+    }
+
+    /// `(?(group)yes|no)`, after the second `(`.
+    fn conditional(&mut self) -> Result<Option<Node>, ParseError> {
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c != ')') {
+            self.pos += 1;
+        }
+        if !self.eat(')') {
+            return err("missing ), unterminated name");
+        }
+        let reference: String = self.chars[start..self.pos - 1].iter().collect();
+        self.check_reference(&reference)?;
+        let yes = self.concatenation()?;
+        let no = if self.eat('|') {
+            Some(Box::new(self.concatenation()?))
+        } else {
+            None
+        };
+        if !self.eat(')') {
+            return err("missing ), unterminated subpattern");
+        }
+        Ok(Some(Node::Conditional {
+            yes: Box::new(yes),
+            no,
+        }))
+    }
+
+    /// A conditional's group: a number other than 0, or a name defined before.
+    fn check_reference(&self, reference: &str) -> Result<(), ParseError> {
+        if !reference.is_empty() && reference.chars().all(|c| c.is_ascii_digit()) {
+            return match reference.parse::<usize>().unwrap_or(0) {
+                0 => err("bad group number"),
+                _ => Ok(()),
+            };
+        }
+        if self.names.iter().any(|n| n == reference) {
+            Ok(())
+        } else {
+            err("unknown group name")
+        }
     }
 
     fn name(&mut self, close: char) -> Result<String, ParseError> {
