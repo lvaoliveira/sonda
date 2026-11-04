@@ -32,6 +32,9 @@ file, the report formats and the public library API.
 - `js/void-operator` leaves `void` on a call alone, as `void save()` marks
   a floating promise as intended. SonarQube knows from the types that it's
   a promise; without them, the call is the sign of one.
+- `js/find-for-existence` no longer takes `key && items.find(...)` for a
+  test of whether something was found: the right of `&&` is its value,
+  tested only when the whole expression is.
 
 
 ## [0.2.0] - 2026-11-03
