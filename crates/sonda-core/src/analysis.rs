@@ -290,14 +290,7 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
     let mut facts = Vec::new();
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
-    let package = children
-        .iter()
-        .find(|n| n.kind() == "package_declaration")
-        .and_then(|d| {
-            d.named_children(&mut d.walk())
-                .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
-        })
-        .map(|n| ctx.text(n).to_string());
+    let package = java_package(ctx, &children);
     if let Some(p) = &package {
         facts.push(("package".to_string(), p.clone()));
     }
@@ -310,33 +303,11 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
         };
         let t = ctx.text(mods);
         if t.contains("@SpringBootApplication") || t.contains("@ComponentScan") {
-            let mut bases: Vec<String> = Vec::new();
-            let mut stack = vec![mods];
-            while let Some(n) = stack.pop() {
-                if n.kind() == "string_literal" {
-                    bases.push(ctx.text(n).trim_matches('"').to_string());
-                }
-                let mut c = n.walk();
-                stack.extend(n.named_children(&mut c));
-            }
-            if bases.is_empty() {
-                bases.extend(package.clone());
-            }
-            for b in bases {
+            for b in spring_scan_bases(ctx, mods, package.as_deref()) {
                 facts.push(("scan".to_string(), b));
             }
         }
-        if [
-            "@Component",
-            "@Service",
-            "@Repository",
-            "@Controller",
-            "@RestController",
-            "@Configuration",
-        ]
-        .iter()
-        .any(|a| t.contains(a))
-        {
+        if COMPONENT_ANNOTATIONS.iter().any(|a| t.contains(a)) {
             facts.push((
                 "component".to_string(),
                 (class.start_position().row + 1).to_string(),
@@ -344,6 +315,46 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
         }
     }
     facts
+}
+
+/// The annotations that make a class a Spring component.
+const COMPONENT_ANNOTATIONS: &[&str] = &[
+    "@Component",
+    "@Service",
+    "@Repository",
+    "@Controller",
+    "@RestController",
+    "@Configuration",
+];
+
+/// The file's package, from its `package` declaration.
+fn java_package(ctx: &Ctx, children: &[Node]) -> Option<String> {
+    children
+        .iter()
+        .find(|n| n.kind() == "package_declaration")
+        .and_then(|d| {
+            d.named_children(&mut d.walk())
+                .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
+        })
+        .map(|n| ctx.text(n).to_string())
+}
+
+/// The packages a Spring scan annotation in `mods` covers: the strings in
+/// it, or the class's own package when it names none.
+fn spring_scan_bases(ctx: &Ctx, mods: Node, package: Option<&str>) -> Vec<String> {
+    let mut bases: Vec<String> = Vec::new();
+    let mut stack = vec![mods];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "string_literal" {
+            bases.push(ctx.text(n).trim_matches('"').to_string());
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    if bases.is_empty() {
+        bases.extend(package.map(str::to_string));
+    }
+    bases
 }
 
 /// AssemblyInfo attributes of a classic project, which sets them by hand
@@ -859,42 +870,60 @@ fn project_issue(rule: &ActiveRule, path: &str, line: usize, message: String) ->
 /// Rules about Java packages, which only the whole project can answer: a
 /// directory of Java files has a package-info.java, or has nothing else.
 pub(crate) fn java_package_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    if let Some(rule) = rules.get(rules::JAVA_COMPONENT_NOT_SCANNED) {
+        unscanned_components(files, rule);
+    }
     let missing = rules.get(rules::JAVA_PACKAGE_INFO_MISSING);
     let only = rules.get(rules::JAVA_PACKAGE_INFO_ONLY);
-    if let Some(rule) = rules.get(rules::JAVA_COMPONENT_NOT_SCANNED) {
-        let fact = |f: &FileAnalysis, kind: &str| -> Vec<String> {
-            f.facts
-                .iter()
-                .filter(|(k, _)| k == kind)
-                .map(|(_, v)| v.clone())
-                .collect()
-        };
-        let bases: Vec<String> = files.iter().flat_map(|f| fact(f, "scan")).collect();
-        if !bases.is_empty() {
-            for f in files.iter_mut() {
-                let Some(package) = fact(f, "package").into_iter().next() else {
-                    continue;
-                };
-                let covered = bases
-                    .iter()
-                    .any(|b| package == *b || package.starts_with(&format!("{b}.")));
-                if covered {
-                    continue;
-                }
-                for line in fact(f, "component") {
-                    let line = line.parse().unwrap_or(1);
-                    let msg = format!(
-                        "Package {package} is outside every @ComponentScan base package, so this bean is not registered."
-                    );
-                    let issue = project_issue(rule, &f.path, line, msg);
-                    f.issues.push(issue);
-                }
-            }
-        }
+    if missing.is_some() || only.is_some() {
+        package_info_rules(files, missing, only);
     }
-    if missing.is_none() && only.is_none() {
+}
+
+/// A file's facts of one kind (`java_facts`).
+fn facts_of(f: &FileAnalysis, kind: &str) -> Vec<String> {
+    f.facts
+        .iter()
+        .filter(|(k, _)| k == kind)
+        .map(|(_, v)| v.clone())
+        .collect()
+}
+
+/// Spring components in a package no `@ComponentScan` base covers, when
+/// the project has a scan at all.
+fn unscanned_components(files: &mut [FileAnalysis], rule: &ActiveRule) {
+    let bases: Vec<String> = files.iter().flat_map(|f| facts_of(f, "scan")).collect();
+    if bases.is_empty() {
         return;
     }
+    for f in files.iter_mut() {
+        let Some(package) = facts_of(f, "package").into_iter().next() else {
+            continue;
+        };
+        let covered = bases
+            .iter()
+            .any(|b| package == *b || package.starts_with(&format!("{b}.")));
+        if covered {
+            continue;
+        }
+        for line in facts_of(f, "component") {
+            let line = line.parse().unwrap_or(1);
+            let msg = format!(
+                "Package {package} is outside every @ComponentScan base package, so this bean is not registered."
+            );
+            let issue = project_issue(rule, &f.path, line, msg);
+            f.issues.push(issue);
+        }
+    }
+}
+
+/// A directory of Java files without a package-info.java, or with nothing
+/// else.
+fn package_info_rules(
+    files: &mut [FileAnalysis],
+    missing: Option<&ActiveRule>,
+    only: Option<&ActiveRule>,
+) {
     let mut dirs: std::collections::BTreeMap<String, Vec<usize>> =
         std::collections::BTreeMap::new();
     for (i, f) in files.iter().enumerate() {
@@ -939,63 +968,86 @@ fn scan_java_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &
         return;
     }
     let path = ctx.path.replace('\\', "/");
-    let in_main = path.starts_with("src/main/") || path.contains("/src/main/");
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
-    if let Some(rule) = rules.get(rules::JAVA_PACKAGE_DIRECTORY)
-        && let Some(decl) = children.iter().find(|n| n.kind() == "package_declaration")
-        && let Some(name) = decl
-            .named_children(&mut decl.walk())
-            .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
-        && let Some((dir, _)) = path.rsplit_once('/')
-    {
-        let expected = ctx.text(name).replace('.', "/");
-        if !(dir == expected || dir.ends_with(&format!("/{expected}"))) {
-            let msg = format!(
-                "Move this file to a directory matching package {}.",
-                ctx.text(name)
-            );
-            issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
-        }
+    if let Some(rule) = rules.get(rules::JAVA_PACKAGE_DIRECTORY) {
+        package_directory(ctx, &path, &children, rule, issues);
     }
-    if in_main {
-        if let Some(rule) = rules.get(rules::JAVA_TEST_IN_MAIN) {
-            let marker = children
-                .iter()
-                .filter(|n| n.kind() == "class_declaration")
-                .find(|c| ctx.text(**c).contains("@Test"));
-            if let Some(class) = marker {
-                let msg = "Move this test class to the test source directory.".to_string();
-                issues.push(ctx.issue(rule, *class, msg, rule.rule.effort_minutes));
-            }
-        }
-        if let Some(rule) = rules.get(rules::JAVA_ASSERTION_IN_MAIN) {
-            for import in children.iter().filter(|n| n.kind() == "import_declaration") {
-                let t = ctx.text(*import);
-                if t.contains("org.junit.")
-                    || t.contains("org.assertj.")
-                    || t.contains("org.testng.")
-                {
-                    let msg = "Remove the test library from production code.".to_string();
-                    issues.push(ctx.issue(rule, *import, msg, rule.rule.effort_minutes));
-                }
-            }
-        }
+    if path.starts_with("src/main/") || path.contains("/src/main/") {
+        tests_in_main(ctx, &children, rules, issues);
     }
     if let Some(rule) = rules.get(rules::JAVA_PARSE_FAILURE)
         && root.has_error()
     {
-        let mut stack = vec![root];
-        while let Some(n) = stack.pop() {
-            if n.is_error() || n.is_missing() {
-                let msg = "The parser could not understand this part of the file.".to_string();
-                issues.push(ctx.issue(rule, n, msg, 0));
-                break;
-            }
-            let mut c = n.walk();
-            let kids: Vec<Node> = n.children(&mut c).collect();
-            stack.extend(kids.into_iter().rev());
+        parse_failure(ctx, root, rule, issues);
+    }
+}
+
+/// The file's package doesn't match its directory.
+fn package_directory(
+    ctx: &Ctx,
+    path: &str,
+    children: &[Node],
+    rule: &ActiveRule,
+    issues: &mut Vec<Issue>,
+) {
+    let Some(decl) = children.iter().find(|n| n.kind() == "package_declaration") else {
+        return;
+    };
+    let Some(name) = decl
+        .named_children(&mut decl.walk())
+        .find(|n| matches!(n.kind(), "scoped_identifier" | "identifier"))
+    else {
+        return;
+    };
+    let Some((dir, _)) = path.rsplit_once('/') else {
+        return;
+    };
+    let expected = ctx.text(name).replace('.', "/");
+    if !(dir == expected || dir.ends_with(&format!("/{expected}"))) {
+        let msg = format!(
+            "Move this file to a directory matching package {}.",
+            ctx.text(name)
+        );
+        issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
+    }
+}
+
+/// Test classes and test libraries in production code (`src/main`).
+fn tests_in_main(ctx: &Ctx, children: &[Node], rules: &RuleSet, issues: &mut Vec<Issue>) {
+    if let Some(rule) = rules.get(rules::JAVA_TEST_IN_MAIN) {
+        let marker = children
+            .iter()
+            .filter(|n| n.kind() == "class_declaration")
+            .find(|c| ctx.text(**c).contains("@Test"));
+        if let Some(class) = marker {
+            let msg = "Move this test class to the test source directory.".to_string();
+            issues.push(ctx.issue(rule, *class, msg, rule.rule.effort_minutes));
         }
+    }
+    if let Some(rule) = rules.get(rules::JAVA_ASSERTION_IN_MAIN) {
+        for import in children.iter().filter(|n| n.kind() == "import_declaration") {
+            let t = ctx.text(*import);
+            if t.contains("org.junit.") || t.contains("org.assertj.") || t.contains("org.testng.") {
+                let msg = "Remove the test library from production code.".to_string();
+                issues.push(ctx.issue(rule, *import, msg, rule.rule.effort_minutes));
+            }
+        }
+    }
+}
+
+/// The first part of the file the parser couldn't read, in source order.
+fn parse_failure(ctx: &Ctx, root: Node, rule: &ActiveRule, issues: &mut Vec<Issue>) {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.is_error() || n.is_missing() {
+            let msg = "The parser could not understand this part of the file.".to_string();
+            issues.push(ctx.issue(rule, n, msg, 0));
+            break;
+        }
+        let mut c = n.walk();
+        let kids: Vec<Node> = n.children(&mut c).collect();
+        stack.extend(kids.into_iter().rev());
     }
 }
 
@@ -1209,46 +1261,66 @@ const FILE_LENGTH_LIMIT: usize = 1000;
 /// ones, which is enough to see the problem.
 const LINE_ISSUE_CAP: usize = 100;
 
-/// Rules about the text of lines, not about the syntax tree.
-fn scan_lines(ctx: &Ctx, rules: &RuleSet, ncloc: usize, issues: &mut Vec<Issue>) {
+/// Trailing whitespace, tabs and long lines: each rule reports at most
+/// `LINE_ISSUE_CAP` lines of a file.
+fn line_text_rules(ctx: &Ctx, rules: &RuleSet, issues: &mut Vec<Issue>) {
     let trailing = rules.get(rules::TRAILING_WHITESPACE);
     let long = rules.get(rules::LINE_LENGTH);
     let tabs = rules.get(rules::TAB_CHARACTER);
-    if trailing.is_some() || long.is_some() || tabs.is_some() {
-        let (mut trailing_count, mut long_count, mut tab_count) = (0, 0, 0);
-        for row in 0..ctx.lines.count() {
-            let line = ctx.lines.text(row);
-            let line = line.strip_suffix('\r').unwrap_or(line);
-            if let Some(rule) = trailing {
-                let kept = line.trim_end_matches([' ', '\t']);
-                if kept.len() < line.len() && trailing_count < LINE_ISSUE_CAP {
-                    trailing_count += 1;
-                    let columns = (kept.chars().count(), line.chars().count());
-                    let msg = "Remove the trailing whitespace from this line.".to_string();
-                    issues.push(ctx.issue_on_line(rule, row, columns, msg));
-                }
-            }
-            if let Some(rule) = tabs
-                && tab_count < LINE_ISSUE_CAP
-                && let Some(at) = line.find('\t')
+    if trailing.is_none() && long.is_none() && tabs.is_none() {
+        return;
+    }
+    let checks: [(Option<&ActiveRule>, LineCheck); 3] = [
+        (trailing, trailing_whitespace),
+        (tabs, tab_character),
+        (long, long_line),
+    ];
+    let mut counts = [0usize; 3];
+    for row in 0..ctx.lines.count() {
+        let line = ctx.lines.text(row);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        for (k, (rule, check)) in checks.iter().enumerate() {
+            if let Some(rule) = rule
+                && counts[k] < LINE_ISSUE_CAP
+                && let Some(issue) = check(ctx, rule, row, line)
             {
-                tab_count += 1;
-                let column = line[..at].chars().count();
-                let msg = "Replace this tab with spaces.".to_string();
-                issues.push(ctx.issue_on_line(rule, row, (column, column + 1), msg));
-            }
-            if let Some(rule) = long {
-                let width = line.chars().count();
-                if width > LINE_LENGTH_LIMIT && long_count < LINE_ISSUE_CAP {
-                    long_count += 1;
-                    let msg = format!(
-                        "Split this {width}-character line: the limit is {LINE_LENGTH_LIMIT}."
-                    );
-                    issues.push(ctx.issue_on_line(rule, row, (LINE_LENGTH_LIMIT, width), msg));
-                }
+                counts[k] += 1;
+                issues.push(issue);
             }
         }
     }
+}
+
+/// One line rule: its issue on line `row`, whose text is `line`, if any.
+type LineCheck = fn(&Ctx, &ActiveRule, usize, &str) -> Option<Issue>;
+
+fn trailing_whitespace(ctx: &Ctx, rule: &ActiveRule, row: usize, line: &str) -> Option<Issue> {
+    let kept = line.trim_end_matches([' ', '\t']);
+    (kept.len() < line.len()).then(|| {
+        let columns = (kept.chars().count(), line.chars().count());
+        let msg = "Remove the trailing whitespace from this line.".to_string();
+        ctx.issue_on_line(rule, row, columns, msg)
+    })
+}
+
+fn tab_character(ctx: &Ctx, rule: &ActiveRule, row: usize, line: &str) -> Option<Issue> {
+    let at = line.find('\t')?;
+    let column = line[..at].chars().count();
+    let msg = "Replace this tab with spaces.".to_string();
+    Some(ctx.issue_on_line(rule, row, (column, column + 1), msg))
+}
+
+fn long_line(ctx: &Ctx, rule: &ActiveRule, row: usize, line: &str) -> Option<Issue> {
+    let width = line.chars().count();
+    (width > LINE_LENGTH_LIMIT).then(|| {
+        let msg = format!("Split this {width}-character line: the limit is {LINE_LENGTH_LIMIT}.");
+        ctx.issue_on_line(rule, row, (LINE_LENGTH_LIMIT, width), msg)
+    })
+}
+
+/// Rules about the text of lines, not about the syntax tree.
+fn scan_lines(ctx: &Ctx, rules: &RuleSet, ncloc: usize, issues: &mut Vec<Issue>) {
+    line_text_rules(ctx, rules, issues);
     if let Some(rule) = rules.get(rules::FILE_LENGTH)
         && ncloc > FILE_LENGTH_LIMIT
     {
@@ -1274,71 +1346,84 @@ fn looks_like_code(line: &str) -> bool {
     if l.chars().count() < 4 || l.contains("http") || l.contains("sonda-ignore") {
         return false;
     }
+    if reads_as_prose(l) {
+        return false;
+    }
     let words = l.split_whitespace().count();
-    // Sentences have several plain lowercase words; code rarely does.
+    matches!(l, "}" | "{" | "});" | "};")
+        || is_statement_line(l, words)
+        || (l.ends_with('{') && starts_with_any(l, BLOCK_KEYWORDS))
+        || is_assignment_line(l, words)
+        || (l.ends_with(':') && starts_with_any(l, PYTHON_BLOCK_KEYWORDS))
+        || is_declaration_line(l, words)
+}
+
+/// Sentences have several plain lowercase words; code rarely does.
+fn reads_as_prose(l: &str) -> bool {
     let prose = l
         .split_whitespace()
         .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_ascii_lowercase()))
         .count();
-    if prose >= 4 {
-        return false;
-    }
-    let starts = |kw: &[&str]| kw.iter().any(|k| l.starts_with(k));
-    if l == "}" || l == "{" || l == "});" || l == "};" {
-        return true;
-    }
-    if l.ends_with(';') && (l.contains('(') || l.contains(" = ") || l.contains('.')) && words <= 12
-    {
-        return true;
-    }
-    if l.ends_with('{')
-        && starts(&[
-            "if ",
-            "if(",
-            "for ",
-            "for(",
-            "while ",
-            "while(",
-            "} else",
-            "else",
-            "function ",
-            "switch",
-            "try",
-            "catch",
-            "class ",
-            "public ",
-            "private ",
-            "static ",
-            "void ",
-        ])
-    {
-        return true;
-    }
+    prose >= 4
+}
+
+fn starts_with_any(l: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|k| l.starts_with(k))
+}
+
+/// What a line ending in `{` starts with when it opens a block.
+const BLOCK_KEYWORDS: &[&str] = &[
+    "if ",
+    "if(",
+    "for ",
+    "for(",
+    "while ",
+    "while(",
+    "} else",
+    "else",
+    "function ",
+    "switch",
+    "try",
+    "catch",
+    "class ",
+    "public ",
+    "private ",
+    "static ",
+    "void ",
+];
+
+/// What a line ending in `:` starts with when it's a Python block header.
+const PYTHON_BLOCK_KEYWORDS: &[&str] = &[
+    "def ", "class ", "if ", "elif ", "else", "for ", "while ", "try", "except", "with ", "finally",
+];
+
+/// A short statement ending in `;` with a call, an assignment or a member.
+fn is_statement_line(l: &str, words: usize) -> bool {
+    l.ends_with(';') && (l.contains('(') || l.contains(" = ") || l.contains('.')) && words <= 12
+}
+
+/// `name = call(...)` or `name = [...]`, short.
+fn is_assignment_line(l: &str, words: usize) -> bool {
     let assigns_to_a_name = l.split_once(" = ").is_some_and(|(left, _)| {
         !left.is_empty()
             && left
                 .chars()
                 .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '[' | ']'))
     });
-    if assigns_to_a_name
+    assigns_to_a_name
         && (l.ends_with(')') || l.ends_with(']'))
         && words <= 8
         && l.starts_with(|c: char| c.is_alphabetic() || c == '_')
-    {
-        return true;
-    }
-    // Python
-    if l.ends_with(':')
-        && starts(&[
-            "def ", "class ", "if ", "elif ", "else", "for ", "while ", "try", "except", "with ",
-            "finally",
-        ])
-    {
-        return true;
-    }
-    starts(&[
-        "import ", "from ", "return ", "print(", "console.", "const ", "let ", "var ",
-    ]) && (l.ends_with(')') || l.ends_with(';') || l.contains(" = ") || l.contains(" import "))
+}
+
+/// An import, a print or a declaration, short.
+fn is_declaration_line(l: &str, words: usize) -> bool {
+    starts_with_any(
+        l,
+        &[
+            "import ", "from ", "return ", "print(", "console.", "const ", "let ", "var ",
+        ],
+    ) && (l.ends_with(')') || l.ends_with(';') || l.contains(" = ") || l.contains(" import "))
         && words <= 12
 }
 
@@ -1382,14 +1467,7 @@ fn python_comment_is_code(comment: &str, alone: bool) -> bool {
         static PARSER: RefCell<Option<tree_sitter::Parser>> = const { RefCell::new(None) };
     }
     let text = comment.trim_start_matches('#').trim();
-    if text.chars().count() < 4
-        || text.contains("http")
-        || text.starts_with(['!', '-'])
-        || text.contains("coding")
-        || text.starts_with("noqa")
-        || text.starts_with("type:")
-        || text.starts_with("pragma")
-    {
+    if is_directive_or_too_short(text) {
         return false;
     }
     // `if x:   # note` keeps its colon; a header needs a body to parse.
@@ -1419,44 +1497,63 @@ fn python_comment_is_code(comment: &str, alone: bool) -> bool {
             .filter(|n| n.kind() != "comment")
             .collect();
         !statements.is_empty()
-            && statements.iter().all(|s| match s.kind() {
-                "assert_statement"
-                | "return_statement"
-                | "raise_statement"
-                | "delete_statement"
-                | "import_statement"
-                | "import_from_statement"
-                | "print_statement"
-                | "if_statement"
-                | "for_statement"
-                | "while_statement"
-                | "try_statement"
-                | "with_statement"
-                | "function_definition"
-                | "class_definition"
-                | "augmented_assignment" => true,
-                "expression_statement" => s.named_child(0).is_some_and(|e| match e.kind() {
-                    "augmented_assignment" => true,
-                    // `Atlantic (used in Canada)` is prose: a call hugs its name.
-                    "call" => e
-                        .child_by_field_name("function")
-                        .is_some_and(|f| source.as_bytes().get(f.end_byte()) == Some(&b'(')),
-                    // `x is y` reads as prose; `a == b` does not. After code it
-                    // is usually a remark about it.
-                    "comparison_operator" => {
-                        alone
-                            && ["==", "!=", ">=", "<="]
-                                .iter()
-                                .any(|op| source[e.byte_range()].contains(op))
-                    }
-                    "assignment" => e
-                        .child_by_field_name("right")
-                        .is_some_and(|r| python_value_looks_like_code(r)),
-                    _ => false,
-                }),
-                _ => false,
-            })
+            && statements
+                .iter()
+                .all(|s| python_statement_is_code(*s, &source, alone))
     })
+}
+
+/// A shebang, a coding line, a tool directive, or too short to be code.
+fn is_directive_or_too_short(text: &str) -> bool {
+    text.chars().count() < 4
+        || text.contains("http")
+        || text.starts_with(['!', '-'])
+        || text.contains("coding")
+        || text.starts_with("noqa")
+        || text.starts_with("type:")
+        || text.starts_with("pragma")
+}
+
+/// Whether one statement of a parsed comment is code: an assignment, call,
+/// assert, jump, import or block header.
+fn python_statement_is_code(s: Node, source: &str, alone: bool) -> bool {
+    match s.kind() {
+        "assert_statement"
+        | "return_statement"
+        | "raise_statement"
+        | "delete_statement"
+        | "import_statement"
+        | "import_from_statement"
+        | "print_statement"
+        | "if_statement"
+        | "for_statement"
+        | "while_statement"
+        | "try_statement"
+        | "with_statement"
+        | "function_definition"
+        | "class_definition"
+        | "augmented_assignment" => true,
+        "expression_statement" => s.named_child(0).is_some_and(|e| match e.kind() {
+            "augmented_assignment" => true,
+            // `Atlantic (used in Canada)` is prose: a call hugs its name.
+            "call" => e
+                .child_by_field_name("function")
+                .is_some_and(|f| source.as_bytes().get(f.end_byte()) == Some(&b'(')),
+            // `x is y` reads as prose; `a == b` does not. After code it
+            // is usually a remark about it.
+            "comparison_operator" => {
+                alone
+                    && ["==", "!=", ">=", "<="]
+                        .iter()
+                        .any(|op| source[e.byte_range()].contains(op))
+            }
+            "assignment" => e
+                .child_by_field_name("right")
+                .is_some_and(|r| python_value_looks_like_code(r)),
+            _ => false,
+        }),
+        _ => false,
+    }
 }
 
 /// A right-hand side that is more than a bare name or number: a call,
@@ -1516,6 +1613,23 @@ fn run_queries(
     run_queries_in(ctx, lang, root, rules, deadline, None)
 }
 
+/// Credentials, weak settings and the like are fixtures in tests, not
+/// vulnerabilities, so vulnerability rules skip test files (as SonarQube
+/// does with test code).
+fn skipped_in_test_file(active: &ActiveRule, test_file: bool) -> bool {
+    test_file && active.rule.category == Category::Vulnerability
+}
+
+/// The node a query rule reports for a capture: the capture itself, if its
+/// filter keeps it, or the node its filter finds.
+fn filtered_node<'t>(filter: Option<Filter>, node: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
+    match filter {
+        None => Some(node),
+        Some(Filter::Keep(keep)) => keep(node, bytes).then_some(node),
+        Some(Filter::Find(find)) => find(node, bytes),
+    }
+}
+
 /// `run_queries`, keeping only what it finds inside `within`'s macro
 /// arguments when given: the second pass over a Rust file's rewritten macros.
 fn run_queries_in(
@@ -1539,30 +1653,24 @@ fn run_queries_in(
     let Some(cq) = rules.queries(lang).map_err(FileError::Rules)? else {
         return Ok(issues);
     };
-    // Credentials, weak settings and the like are fixtures in tests, not
-    // vulnerabilities, so vulnerability rules skip test files (as SonarQube
-    // does with test code).
     let test_file = is_test_file(ctx.path);
     let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
     let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
     while let Some(m) = matches.next() {
         for &(idx, filter) in &cq.patterns[m.pattern_index] {
             let active = &rules.active[idx];
-            if test_file && active.rule.category == Category::Vulnerability {
+            if skipped_in_test_file(active, test_file) {
                 continue;
             }
-            for cap in m.captures().iter().filter(|c| c.index == cq.match_capture) {
-                let node = match filter {
-                    None => Some(cap.node),
-                    Some(Filter::Keep(keep)) => keep(cap.node, bytes).then_some(cap.node),
-                    Some(Filter::Find(find)) => find(cap.node, bytes),
-                };
-                if let Some(node) = node
-                    && within.is_none_or(|w| w.covers(node.start_byte()))
-                {
-                    let msg = active.rule.message.to_string();
-                    issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
-                }
+            let found = m
+                .captures()
+                .iter()
+                .filter(|c| c.index == cq.match_capture)
+                .filter_map(|cap| filtered_node(filter, cap.node, bytes))
+                .filter(|node| within.is_none_or(|w| w.covers(node.start_byte())));
+            for node in found {
+                let msg = active.rule.message.to_string();
+                issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
             }
         }
     }
@@ -1746,6 +1854,72 @@ struct TokenScan {
     tokens: Vec<Token>,
 }
 
+/// The rules about comments `scan_tokens` checks on each one.
+struct CommentRules<'r> {
+    todo: Option<&'r ActiveRule>,
+    code: Option<&'r ActiveRule>,
+    trailing: Option<&'r ActiveRule>,
+    nosonar: Option<&'r ActiveRule>,
+    python: bool,
+    /// The row of the last commented-out-code issue: a block of commented
+    /// lines is one finding, reported at its first line.
+    last_code_comment_row: Option<usize>,
+}
+
+impl CommentRules<'_> {
+    fn check(&mut self, ctx: &Ctx, node: Node, issues: &mut Vec<Issue>) {
+        let text = ctx.text(node);
+        let alone = comment_is_alone(ctx, node);
+        if let Some(rule) = self.nosonar
+            && text.contains("NOSONAR")
+        {
+            let msg = "Review this NOSONAR suppression.".to_string();
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+        }
+        if let Some(rule) = self.trailing
+            && !alone
+            && !is_pragma_comment(text)
+        {
+            let msg = "Move this comment to its own line.".to_string();
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+        }
+        if let Some(rule) = self.code
+            && reads_as_code(text, alone, self.python)
+        {
+            let row = node.start_position().row;
+            let continues_block = self.last_code_comment_row.is_some_and(|r| r + 1 == row);
+            self.last_code_comment_row = Some(last_row(node));
+            if !continues_block {
+                let msg = "Remove this commented-out code.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
+        }
+        if let Some(rule) = self.todo
+            && let Some(tag) = todo_tag(text)
+        {
+            let msg = format!("Complete the task associated with this {tag} comment.");
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+        }
+    }
+}
+
+/// Whether a comment is alone on its line: nothing but space before it.
+fn comment_is_alone(ctx: &Ctx, node: Node) -> bool {
+    let start = node.start_position();
+    let line = ctx.lines.text(start.row);
+    line[..start.column.min(line.len())].trim().is_empty()
+}
+
+/// Whether a comment is commented-out code. In Python, one after code on
+/// its line can be too, when it parses as a statement.
+fn reads_as_code(text: &str, alone: bool, python: bool) -> bool {
+    if python {
+        python_comment_is_code(text, alone) || (alone && comment_is_commented_out_code(text))
+    } else {
+        alone && comment_is_commented_out_code(text)
+    }
+}
+
 /// One pass over every node: code/comment lines, duplication tokens, TODO comments.
 fn scan_tokens(
     ctx: &Ctx,
@@ -1758,63 +1932,23 @@ fn scan_tokens(
     let mut code = vec![false; rows];
     let mut comment = vec![false; rows];
     let mut tokens = Vec::new();
-    let todo_rule = rules.get(rules::TODO_COMMENT);
-    let code_rule = rules.get(rules::COMMENTED_OUT_CODE);
-    let trailing_rule = rules.get(rules::TRAILING_COMMENT);
-    let nosonar_rule = rules.get(rules::NOSONAR_COMMENT);
     let mark = |flags: &mut Vec<bool>, node: Node| {
         flags[node.start_position().row..=last_row(node)].fill(true);
     };
-    let python = std::ptr::eq(syn, Lang::Python.syntax());
-    // The row of the last commented-out-code issue: a block of commented
-    // lines is one finding, reported at its first line.
-    let mut last_code_comment_row: Option<usize> = None;
+    let mut comment_rules = CommentRules {
+        todo: rules.get(rules::TODO_COMMENT),
+        code: rules.get(rules::COMMENTED_OUT_CODE),
+        trailing: rules.get(rules::TRAILING_COMMENT),
+        nosonar: rules.get(rules::NOSONAR_COMMENT),
+        python: std::ptr::eq(syn, Lang::Python.syntax()),
+        last_code_comment_row: None,
+    };
 
     walk(root, |node| {
         let kind = node.kind();
         if syn.comments.contains(&kind) {
             mark(&mut comment, node);
-            let alone = ctx.lines.text(node.start_position().row)[..node
-                .start_position()
-                .column
-                .min(ctx.lines.text(node.start_position().row).len())]
-                .trim()
-                .is_empty();
-            if let Some(rule) = nosonar_rule
-                && ctx.text(node).contains("NOSONAR")
-            {
-                let msg = "Review this NOSONAR suppression.".to_string();
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
-            }
-            if let Some(rule) = trailing_rule
-                && !alone
-                && !is_pragma_comment(ctx.text(node))
-            {
-                let msg = "Move this comment to its own line.".to_string();
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
-            }
-            if let Some(rule) = code_rule
-                && if python {
-                    python_comment_is_code(ctx.text(node), alone)
-                        || (alone && comment_is_commented_out_code(ctx.text(node)))
-                } else {
-                    alone && comment_is_commented_out_code(ctx.text(node))
-                }
-            {
-                let row = node.start_position().row;
-                let continues_block = last_code_comment_row.is_some_and(|r| r + 1 == row);
-                last_code_comment_row = Some(last_row(node));
-                if !continues_block {
-                    let msg = "Remove this commented-out code.".to_string();
-                    issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
-                }
-            }
-            if let Some(rule) = todo_rule
-                && let Some(tag) = todo_tag(ctx.text(node))
-            {
-                let msg = format!("Complete the task associated with this {tag} comment.");
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
-            }
+            comment_rules.check(ctx, node, issues);
             return false;
         }
         if syn.dup_ignore.contains(&kind) {
