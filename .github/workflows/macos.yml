@@ -1,0 +1,61 @@
+name: CI (macOS)
+
+# The tests on macOS, apart from CI (ci.yml): GitHub's hosted macOS runners
+# are often short of capacity, and a job that never gets one is cancelled
+# after 15 minutes without running a step. Here that only fails this
+# workflow, which no check requires, so it never blocks a merge, keeps main
+# red or holds back what runs after CI. It still runs whenever a runner is
+# free.
+# Like CI's `rust` part (scripts/ci-changes.sh), it runs when Rust changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain*"
+      - ".cargo/**"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain*"
+      - ".cargo/**"
+      - ".github/workflows/macos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Bump when Cargo.toml's profiles change: the key hashes the
+          # dependencies, not the profiles, so a stale build would be restored
+          # and rebuilt on every run, never saved again.
+          prefix-key: v1-rust
+      - run: cargo test --workspace --all-targets --all-features --locked
+      # --all-targets skips doctests; the library's examples must compile too.
+      - run: cargo test --workspace --doc --locked

@@ -84,13 +84,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS has its own workflow (macos.yml): its runners are often
+        # short of capacity, and a job that never gets one would fail this
+        # run, keeping main red and holding back what runs after CI.
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # GitHub's hosted macOS runners are often short of capacity: a job that
-    # never gets one is cancelled after 15 minutes without running a step.
-    # It isn't a required check, and it doesn't fail the run; it still runs
-    # whenever a runner is free.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - if: env.NEEDED == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
