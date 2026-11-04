@@ -103,6 +103,11 @@ impl Ty {
         }
     }
 
+    /// With the platform type's parameters (`!n`) replaced by `args`.
+    pub(crate) fn with_type_arguments(&self, args: &[Ty]) -> Ty {
+        self.substitute(args, &[])
+    }
+
     fn known(self) -> Option<Ty> {
         (self != Ty::Unknown).then_some(self)
     }
@@ -508,6 +513,21 @@ impl<'t> Context<'t> {
 impl<'m, 't> Infer<'m, 't> {
     fn text(&self, n: Node) -> &'m str {
         n.utf8_text(self.src).unwrap_or_default()
+    }
+
+    /// A node's text.
+    pub(crate) fn text_of(&self, n: Node) -> &'m str {
+        self.text(n)
+    }
+
+    /// The declaration of a type the file declares.
+    pub(crate) fn local_type_node(&self, ty: &Ty) -> Option<Node<'t>> {
+        match ty {
+            Ty::Named {
+                key, local: true, ..
+            } => self.locals.get(key).copied().flatten().map(|l| l.node),
+            _ => None,
+        }
     }
 
     /// Whether a namespace's types are in scope by their simple names at

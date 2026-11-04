@@ -326,23 +326,23 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/flags-enum-name-plural",
-        name: "[Flags] enum names should be plural",
-        description: "A [Flags] value holds several options at once, so a plural name (`FileAccessRights`) \
-                      says so; a singular one reads like a single choice.",
-        message: "Give this [Flags] enum a plural name.",
+        name: "Enumeration types should comply with a naming convention",
+        description: "Enum names follow Pascal casing, with two-letter abbreviations in capitals, and a \
+                      [Flags] enum's name is plural: `BackColor`, `GetID`, `MyOptions`.",
+        message: "Rename this enum to match the naming convention.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S2342")],
+        sonar: &[exact("S2342")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(enum_declaration (attribute_list) name: (identifier)) @match",
-            filter: Some(Find(singular_flags_name)),
+            query: "(enum_declaration name: (identifier)) @match",
+            filter: Some(Find(super::cs_documented::misnamed_enum)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "[Flags] enum Permission { None = 0, Read = 1, Write = 2 }",
-            good: "[Flags] enum Permissions { None = 0, Read = 1, Write = 2 }",
+            bad: "[Flags] public enum Option { None = 0, Option1 = 1, Option2 = 2 }",
+            good: "[Flags] public enum Options { None = 0, Option1 = 1, Option2 = 2 }",
         }),
     },
     Rule {
@@ -1250,12 +1250,6 @@ fn trivial_property_name<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             (fields.contains(&read) && wrote_field && wrote_value && count_word(whole, read) == 3)
                 .then(|| p.child_by_field_name("name"))?
         })
-}
-
-fn singular_flags_name<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_attribute(declaration, "Flags", src)?;
-    let name = declaration.child_by_field_name("name")?;
-    (!text(name, src).ends_with(b"s")).then_some(name)
 }
 
 fn getter_copies_collection<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
