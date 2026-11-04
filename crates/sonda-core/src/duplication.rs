@@ -38,17 +38,13 @@ const BASE: u64 = 0x0000_0100_0000_01b3;
 pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplication {
     let w = min_tokens.max(1);
     let hashes: Vec<Vec<u64>> = files.iter().map(|t| window_hashes(t, w)).collect();
-
-    // hash -> (file, position) of its first occurrence, and whether it repeats.
-    let mut first: HashMap<u64, ((usize, usize), bool)> = HashMap::new();
-    for (f, hs) in hashes.iter().enumerate() {
-        for (p, &h) in hs.iter().enumerate() {
-            first
-                .entry(h)
-                .and_modify(|e| e.1 = true)
-                .or_insert(((f, p), false));
-        }
-    }
+    let first = first_occurrences(&hashes);
+    let windows = Windows {
+        files,
+        hashes: &hashes,
+        first: &first,
+        w,
+    };
 
     let mut out = Duplication {
         lines: vec![BTreeSet::new(); files.len()],
@@ -56,50 +52,12 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
     };
     // Per file, the token index up to which copies are already reported.
     let mut copied_until = vec![0usize; files.len()];
-    // Indexing `first` cannot panic: it holds every hash in `hashes`.
     for (fb, hs) in hashes.iter().enumerate() {
-        for (pb, &h) in hs.iter().enumerate() {
-            let ((fa, pa), repeated) = first[&h];
-            if !repeated
-                || (fa, pa) == (fb, pb)
-                || overlaps(fa, pa, fb, pb, w)
-                || pb < copied_until[fb]
-            {
+        for pb in 0..hs.len() {
+            let Some((block, end)) = windows.copy_at(fb, pb, copied_until[fb]) else {
                 continue;
-            }
-            // Already covered by a block that started one token earlier.
-            if pa > 0 && pb > 0 {
-                let prev = hashes[fb][pb - 1];
-                if hashes[fa][pa - 1] == prev && first[&prev].0 == (fa, pa - 1) {
-                    continue;
-                }
-            }
-            let (ta, tb) = (files[fa], files[fb]);
-            if ta[pa..pa + w]
-                .iter()
-                .zip(&tb[pb..pb + w])
-                .any(|(x, y)| x.hash != y.hash)
-            {
-                continue; // hash collision
-            }
-            let mut len = w;
-            while pa + len < ta.len()
-                && pb + len < tb.len()
-                && ta[pa + len].hash == tb[pb + len].hash
-                && !(fa == fb && pa + len >= pb)
-            {
-                len += 1;
-            }
-            copied_until[fb] = pb + len;
-            let span = |file: usize, tokens: &[Token], start: usize| Span {
-                file,
-                start_line: tokens[start].line,
-                end_line: tokens[start + len - 1].line,
             };
-            let block = Block {
-                original: span(fa, ta, pa),
-                copy: span(fb, tb, pb),
-            };
+            copied_until[fb] = end;
             if block.copy.end_line - block.copy.start_line + 1 < min_lines {
                 continue;
             }
@@ -110,6 +68,104 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
         }
     }
     out
+}
+
+/// The files' tokens with their window hashes, each `w` tokens long.
+struct Windows<'a> {
+    files: &'a [&'a [Token]],
+    hashes: &'a [Vec<u64>],
+    first: &'a FirstOccurrences,
+    w: usize,
+}
+
+impl Windows<'_> {
+    /// The block whose copy starts at token `pb` of file `fb`, and the token
+    /// its copy ends before; `None` when that window starts no new copy:
+    /// it's the first of its hash, overlaps it, is inside a copy already
+    /// reported (before `copied_until`) or one that started a token earlier,
+    /// or only shares its hash.
+    fn copy_at(&self, fb: usize, pb: usize, copied_until: usize) -> Option<(Block, usize)> {
+        let w = self.w;
+        // Indexing `first` cannot panic: it holds every hash in `hashes`.
+        let ((fa, pa), repeated) = self.first[&self.hashes[fb][pb]];
+        if !repeated || (fa, pa) == (fb, pb) || overlaps(fa, pa, fb, pb, w) || pb < copied_until {
+            return None;
+        }
+        if extends_previous_block(self.hashes, self.first, (fa, pa), (fb, pb)) {
+            return None;
+        }
+        let (ta, tb) = (self.files[fa], self.files[fb]);
+        if !same_tokens(&ta[pa..pa + w], &tb[pb..pb + w]) {
+            return None; // hash collision
+        }
+        let len = match_length(ta, pa, tb, pb, w, fa == fb);
+        let span = |file: usize, tokens: &[Token], start: usize| Span {
+            file,
+            start_line: tokens[start].line,
+            end_line: tokens[start + len - 1].line,
+        };
+        let block = Block {
+            original: span(fa, ta, pa),
+            copy: span(fb, tb, pb),
+        };
+        Some((block, pb + len))
+    }
+}
+
+/// Hash -> (file, position) of its first occurrence, and whether it repeats.
+type FirstOccurrences = HashMap<u64, ((usize, usize), bool)>;
+
+fn first_occurrences(hashes: &[Vec<u64>]) -> FirstOccurrences {
+    let mut first = FirstOccurrences::new();
+    for (f, hs) in hashes.iter().enumerate() {
+        for (p, &h) in hs.iter().enumerate() {
+            first
+                .entry(h)
+                .and_modify(|e| e.1 = true)
+                .or_insert(((f, p), false));
+        }
+    }
+    first
+}
+
+/// Whether the copy at `b` of the window at `a` is covered by a block that
+/// started one token earlier.
+fn extends_previous_block(
+    hashes: &[Vec<u64>],
+    first: &FirstOccurrences,
+    (fa, pa): (usize, usize),
+    (fb, pb): (usize, usize),
+) -> bool {
+    if pa == 0 || pb == 0 {
+        return false;
+    }
+    let prev = hashes[fb][pb - 1];
+    hashes[fa][pa - 1] == prev && first[&prev].0 == (fa, pa - 1)
+}
+
+fn same_tokens(a: &[Token], b: &[Token]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.hash == y.hash)
+}
+
+/// How far the copy at `tb[pb..]` of `ta[pa..]` goes, from its first `w`
+/// tokens on; within one file, the copy never reaches into the original.
+fn match_length(
+    ta: &[Token],
+    pa: usize,
+    tb: &[Token],
+    pb: usize,
+    w: usize,
+    same_file: bool,
+) -> usize {
+    let mut len = w;
+    while pa + len < ta.len()
+        && pb + len < tb.len()
+        && ta[pa + len].hash == tb[pb + len].hash
+        && !(same_file && pa + len >= pb)
+    {
+        len += 1;
+    }
+    len
 }
 
 fn overlaps(fa: usize, pa: usize, fb: usize, pb: usize, w: usize) -> bool {

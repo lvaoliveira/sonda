@@ -34,30 +34,8 @@ pub(super) fn parse(path: &str, text: &str, manifest: Option<&str>) -> Result<Pa
     let mut dependencies = Vec::new();
     let mut entry: Option<(Vec<String>, Option<String>)> = None;
     let mut flush = |entry: Option<(Vec<String>, Option<String>)>| {
-        let Some((specifiers, Some(version))) = entry else {
-            return;
-        };
-        let direct = declared
-            .as_ref()
-            .map(|d| specifiers.iter().any(|s| d.contains(s)));
-        let mut names: Vec<String> = specifiers.iter().filter_map(|s| package_of(s)).collect();
-        names.sort();
-        names.dedup();
-        for name in names {
-            let (namespace, bare) = match name.split_once('/') {
-                Some((scope, bare)) if scope.starts_with('@') => (Some(scope), bare),
-                _ => (None, name.as_str()),
-            };
-            dependencies.push(Dependency {
-                ecosystem: Ecosystem::Npm,
-                purl: purl(Ecosystem::Npm, namespace, bare, &version),
-                name: name.clone(),
-                version: version.clone(),
-                direct,
-                source: path.to_string(),
-                // yarn.lock doesn't record licenses.
-                license: None,
-            });
+        if let Some((specifiers, Some(version))) = entry {
+            dependencies.extend(v1_entry(path, &specifiers, &version, declared.as_ref()));
         }
     };
     for line in text.lines() {
@@ -82,6 +60,56 @@ pub(super) fn parse(path: &str, text: &str, manifest: Option<&str>) -> Result<Pa
     })
 }
 
+/// A Yarn v1 entry's packages: one for each package its specifiers name.
+/// Direct when one of them is one the manifest declares, unknown without a
+/// manifest.
+fn v1_entry(
+    path: &str,
+    specifiers: &[String],
+    version: &str,
+    declared: Option<&HashSet<String>>,
+) -> Vec<Dependency> {
+    let direct = declared.map(|d| specifiers.iter().any(|s| d.contains(s)));
+    let mut names: Vec<String> = specifiers.iter().filter_map(|s| package_of(s)).collect();
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| npm_dependency(path, name, version.to_string(), direct))
+        .collect()
+}
+
+/// An npm package, `@scope/name` or `name`; yarn.lock doesn't record licenses.
+fn npm_dependency(path: &str, name: String, version: String, direct: Option<bool>) -> Dependency {
+    let (namespace, bare) = match name.split_once('/') {
+        Some((scope, bare)) if scope.starts_with('@') => (Some(scope), bare),
+        _ => (None, name.as_str()),
+    };
+    Dependency {
+        ecosystem: Ecosystem::Npm,
+        purl: purl(Ecosystem::Npm, namespace, bare, &version),
+        name,
+        version,
+        direct,
+        source: path.to_string(),
+        license: None,
+    }
+}
+
+/// The `name@range` specifiers a workspace entry declares, with and without
+/// the default protocol, which older lockfiles leave out.
+fn workspace_specifiers(entry: &Node, declared: &mut HashSet<String>) {
+    for field in ["dependencies", "peerDependencies"] {
+        for (name, range) in entry.get(field).map(Node::entries).unwrap_or_default() {
+            let Some(range) = range.str() else { continue };
+            declared.insert(format!("{name}@{range}"));
+            if !range.contains(':') {
+                declared.insert(format!("{name}@npm:{range}"));
+            }
+        }
+    }
+}
+
 /// Yarn 2+: registry packages from each entry's `resolution`, direct when
 /// one of the entry's specifiers is one a workspace declares.
 fn berry(path: &str, text: &str) -> Result<Parsed, String> {
@@ -93,19 +121,10 @@ fn berry(path: &str, text: &str) -> Result<Parsed, String> {
             continue;
         };
         if resolution.contains("@workspace:") {
-            for field in ["dependencies", "peerDependencies"] {
-                for (name, range) in entry.get(field).map(Node::entries).unwrap_or_default() {
-                    let Some(range) = range.str() else { continue };
-                    declared.insert(format!("{name}@{range}"));
-                    // Older lockfiles leave out the default protocol.
-                    if !range.contains(':') {
-                        declared.insert(format!("{name}@npm:{range}"));
-                    }
-                }
-            }
-            continue;
+            workspace_specifiers(entry, &mut declared);
+        } else {
+            packages.push((key, resolution));
         }
-        packages.push((key, resolution));
     }
 
     let mut dependencies = Vec::new();
@@ -115,19 +134,8 @@ fn berry(path: &str, text: &str) -> Result<Parsed, String> {
             skipped += 1;
             continue;
         };
-        let (namespace, bare) = match name.split_once('/') {
-            Some((scope, bare)) if scope.starts_with('@') => (Some(scope), bare),
-            _ => (None, name.as_str()),
-        };
-        dependencies.push(Dependency {
-            ecosystem: Ecosystem::Npm,
-            purl: purl(Ecosystem::Npm, namespace, bare, &version),
-            direct: Some(specifiers(key).iter().any(|s| declared.contains(s))),
-            name,
-            version,
-            source: path.to_string(),
-            license: None,
-        });
+        let direct = specifiers(key).iter().any(|s| declared.contains(s));
+        dependencies.push(npm_dependency(path, name, version, Some(direct)));
     }
     let notes = if skipped > 0 {
         vec![format!(

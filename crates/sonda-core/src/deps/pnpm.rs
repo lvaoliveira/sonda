@@ -38,30 +38,29 @@ fn is_tooling(importer: &Node) -> bool {
         .all(|(k, _)| k == "packageManagerDependencies" || k == "configDependencies")
 }
 
-fn parse_document(path: &str, lock: &Node) -> Result<Parsed, String> {
-    let version = lock
-        .get("lockfileVersion")
-        .and_then(Node::str)
-        .ok_or("no lockfileVersion")?;
-    // "5.4", "6.0", "9.0": version 5 keys packages `/name/1.0.0`, later
-    // ones `/name@1.0.0` (6) or `name@1.0.0` (9).
-    let slash_keys = match version
+/// Whether the lockfile keys packages `/name/1.0.0`. "5.4", "6.0", "9.0":
+/// version 5 does, later ones key them `/name@1.0.0` (6) or `name@1.0.0` (9).
+fn lockfile_slash_keys(version: &str) -> Result<bool, String> {
+    match version
         .split('.')
         .next()
         .and_then(|m| m.parse::<u32>().ok())
     {
-        Some(5) => true,
-        Some(6..=9) => false,
-        _ => return Err(format!("lockfileVersion {version} is not supported")),
-    };
+        Some(5) => Ok(true),
+        Some(6..=9) => Ok(false),
+        _ => Err(format!("lockfileVersion {version} is not supported")),
+    }
+}
 
-    // Single-project lockfiles before version 9 list the project's
-    // dependencies at the top level instead of under `importers`.
+/// The (name, version) of every package a project depends on directly.
+/// Single-project lockfiles before version 9 list the project's
+/// dependencies at the top level instead of under `importers`.
+fn direct_dependencies(lock: &Node, slash_keys: bool) -> HashSet<(String, String)> {
     let importers: Vec<&Node> = match lock.get("importers") {
         Some(i) => i.entries().iter().map(|(_, v)| v).collect(),
         None => vec![lock],
     };
-    let direct: HashSet<(String, String)> = importers
+    importers
         .iter()
         .flat_map(|importer| {
             IMPORTER_DEPENDENCIES
@@ -69,25 +68,37 @@ fn parse_document(path: &str, lock: &Node) -> Result<Parsed, String> {
                 .filter_map(|field| importer.get(field))
                 .flat_map(|deps| deps.entries())
         })
-        .filter_map(|(name, spec)| {
-            // `version: 1.0.0` (6+), or the version itself (5).
-            let version = spec.get("version").and_then(Node::str).or(spec.str())?;
-            // An alias before version 9 is a package key (`/real@1.0.0`).
-            if version.starts_with('/') {
-                return package_key(version, slash_keys).map(|(n, v)| (n.into(), v.into()));
-            }
-            let version = if slash_keys {
-                version.split('_').next().unwrap_or(version)
-            } else {
-                strip_peers(version)
-            };
-            // An alias in version 9 is `real@1.0.0`.
-            match split_at_version(version) {
-                Some((real, v)) if !v.is_empty() => Some((real.to_string(), v.to_string())),
-                _ => Some((name.clone(), version.to_string())),
-            }
-        })
-        .collect();
+        .filter_map(|(name, spec)| importer_dependency(name, spec, slash_keys))
+        .collect()
+}
+
+/// The package an importer's `name: spec` resolves to.
+fn importer_dependency(name: &str, spec: &Node, slash_keys: bool) -> Option<(String, String)> {
+    // `version: 1.0.0` (6+), or the version itself (5).
+    let version = spec.get("version").and_then(Node::str).or(spec.str())?;
+    // An alias before version 9 is a package key (`/real@1.0.0`).
+    if version.starts_with('/') {
+        return package_key(version, slash_keys).map(|(n, v)| (n.into(), v.into()));
+    }
+    let version = if slash_keys {
+        version.split('_').next().unwrap_or(version)
+    } else {
+        strip_peers(version)
+    };
+    // An alias in version 9 is `real@1.0.0`.
+    match split_at_version(version) {
+        Some((real, v)) if !v.is_empty() => Some((real.to_string(), v.to_string())),
+        _ => Some((name.to_string(), version.to_string())),
+    }
+}
+
+fn parse_document(path: &str, lock: &Node) -> Result<Parsed, String> {
+    let version = lock
+        .get("lockfileVersion")
+        .and_then(Node::str)
+        .ok_or("no lockfileVersion")?;
+    let slash_keys = lockfile_slash_keys(version)?;
+    let direct = direct_dependencies(lock, slash_keys);
 
     let mut dependencies = Vec::new();
     let mut skipped = 0;
