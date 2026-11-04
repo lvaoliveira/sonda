@@ -14,7 +14,7 @@ use super::java_security::{
 use super::java_smells::{
     LOOPS, children_of_kind, count_word, declarator_names, enclosing_class, members,
 };
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

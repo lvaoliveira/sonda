@@ -9,7 +9,7 @@ use super::cs_more::{enclosing_type, members};
 use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
-use super::*;
+use super::prelude::*;
 use crate::regex::{Flags, parse_java};
 
 /// Rules that are off unless `rules.enabled` lists them (see

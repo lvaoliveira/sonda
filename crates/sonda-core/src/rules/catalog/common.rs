@@ -1,6 +1,6 @@
 //! Structural rules for every language, implemented in `analysis.rs`.
 
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

@@ -1,12 +1,12 @@
 //! AWS CDK and Lambda Python rules (ADR-0007, batch 15). The CDK checks
 //! mirror `js_security.rs`: the props are keyword arguments here.
 
+use super::prelude::*;
 use super::py_more::{body_of, first_parameter_name, name_of, receiver_text};
 use super::py_quality::{SCOPE_STOPS, find_in_scope, has_token, nearest_function, statements};
 use super::py_security::{
     call_arguments, callee_name, contains_ignoring_case, keyword_value, string_value, text,
 };
-use super::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

@@ -8,7 +8,7 @@ use super::java_final::{base_type, key_type_is_an_enum_in_the_file, named_childr
 use super::java_last::count_nodes;
 use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

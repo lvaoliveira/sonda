@@ -7,7 +7,7 @@ use super::cs::{
 };
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::text;
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

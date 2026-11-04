@@ -7,7 +7,7 @@ use super::java_extra::{class_members, declared_field, declared_type, name_text,
 use super::java_last::{count_nodes, literal_kind};
 use super::java_security::{call_arguments, find_node, method_name, string_value, text};
 use super::java_smells::{children_of_kind, count_word, declarator_names};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

@@ -1,6 +1,6 @@
 //! Python rules.
 
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     // ---- Python ----

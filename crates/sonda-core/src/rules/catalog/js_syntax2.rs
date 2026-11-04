@@ -4,7 +4,7 @@
 use super::js::{has_token, text};
 use super::js_extra::named;
 use super::js_syntax::{is_function_kind, walk};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

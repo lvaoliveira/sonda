@@ -11,7 +11,7 @@ use super::java_bugs::{find_in_scope, operator_text};
 use super::java_more::is_routable_ipv4;
 use super::java_security::text;
 use super::java_smells::count_word;
-use super::*;
+use super::prelude::*;
 
 /// Rules that are off unless `rules.enabled` lists them (see
 /// `catalog::OFF_BY_DEFAULT`).

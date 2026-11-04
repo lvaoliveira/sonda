@@ -8,7 +8,7 @@ use super::java_final::{base_type, root_of};
 use super::java_flow::find_declared_type;
 use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::count_word;
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

@@ -4,7 +4,7 @@
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, method_name, string_value, text,
 };
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

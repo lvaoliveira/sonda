@@ -1,6 +1,6 @@
 //! Java rules.
 
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     // ---- Java ----

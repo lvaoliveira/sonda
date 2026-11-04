@@ -1,10 +1,10 @@
 //! Python bug and code-smell rules (ADR-0007, batch 5). Queries stay cheap on
 //! deep trees: see the notes in `js_modern.rs`.
 
+use super::prelude::*;
 use super::py_security::{
     call_arguments, call_of, callee_name, contains_ignoring_case, keyword_value, string_value, text,
 };
-use super::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

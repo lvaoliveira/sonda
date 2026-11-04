@@ -3,6 +3,7 @@
 //! few library checks.
 
 use super::js_extra::count_word;
+use super::prelude::*;
 use super::py_extra::BUILTIN_NAMES;
 use super::py_more::{
     body_of, imported_names, in_class, is_decorated, literal_family, name_of, receiver_text,
@@ -11,7 +12,6 @@ use super::py_quality::{SCOPE_STOPS, find_in_scope, statements};
 use super::py_security::{
     call_arguments, callee_name, contains_ignoring_case, keyword_value, string_value, text,
 };
-use super::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

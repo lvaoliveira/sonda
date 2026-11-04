@@ -14,7 +14,7 @@
 
 use super::js::{find_below, has_token, string_content, text};
 use super::js_more::{is_provably_array, is_provably_string};
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

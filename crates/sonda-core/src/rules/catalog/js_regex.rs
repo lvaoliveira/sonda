@@ -7,8 +7,8 @@ use super::js::{string_content, text};
 use super::js_extra::named;
 use super::js_more::is_provably_string;
 use super::js_syntax::used_as_a_condition;
+use super::prelude::*;
 use super::regex_checks as checks;
-use super::*;
 use crate::regex::{Flags, Node as Rx, Regex, parse_js, walk as walk_regex};
 
 /// This module's rules that are off unless `rules.enabled` lists them
