@@ -167,7 +167,7 @@ csharpsquid:S2760,code_smell,minor,no,all,syntactic,done,cs/repeated-condition-i
 csharpsquid:S2761,bug,major,yes,all,syntactic,done,cs/double-unary,,
 csharpsquid:S2857,bug,blocker,yes,main,syntactic,done,cs/sql-keyword-spacing,,
 csharpsquid:S2925,code_smell,major,yes,test,syntactic,done,cs/thread-sleep-in-test,,
-csharpsquid:S2930,bug,blocker,yes,all,syntactic,partial,cs/undisposed-local,,
+csharpsquid:S2930,bug,blocker,yes,all,syntactic,done,cs/undisposed-local,,
 csharpsquid:S2931,bug,blocker,no,all,syntactic,done,cs/disposable-fields-without-idisposable,,
 csharpsquid:S2933,code_smell,major,yes,all,syntactic,done,cs/field-could-be-readonly,,
 csharpsquid:S2934,bug,minor,yes,all,syntactic,done,cs/readonly-generic-field-member-assignment,,
