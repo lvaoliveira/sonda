@@ -186,7 +186,7 @@ impl Filters {
                         .map_err(|_| ApiError::BadRequest(format!("issue id {v:?} isn't a number")))
                 })
                 .collect::<Result<_, _>>()?,
-            language: list(q.language, "language", Some(&languages()))?,
+            language: languages(q.language)?,
         })
     }
 
@@ -220,9 +220,14 @@ impl Filters {
     }
 }
 
-/// The languages sonda reads, by the names it stores.
-fn languages() -> Vec<&'static str> {
-    sonda_core::lang::ALL.iter().map(|l| l.name()).collect()
+/// The language filter. Any well-formed name, not only the ones this build
+/// reads: an upload from a newer CLI can store others (see `ingest`).
+fn languages(raw: Option<String>) -> Result<Vec<String>, ApiError> {
+    let values = list(raw, "language", None)?;
+    if let Some(bad) = values.iter().find(|v| !crate::ingest::is_language_name(v)) {
+        return Err(ApiError::BadRequest(format!("invalid language {bad:?}")));
+    }
+    Ok(values)
 }
 
 /// A comma-separated filter. Unknown values are an error, not an empty
@@ -429,14 +434,17 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
             .copied()
             .find(|x: &Lang| x.name() == l)
     });
-    let code = match (source, lang) {
-        (Some(src), Some(lang)) => {
+    let code = match source {
+        Some(src) => {
             let line = issue.line as usize;
             let first = line.saturating_sub(CONTEXT_LINES).max(1);
             let last = (issue.end_line as usize + CONTEXT_LINES).min(first + MAX_CODE_LINES - 1);
-            highlight::highlight(lang, &src, first, last)
+            match lang {
+                Some(lang) => highlight::highlight(lang, &src, first, last),
+                None => highlight::plain(&src, first, last),
+            }
         }
-        _ => Vec::new(),
+        None => Vec::new(),
     };
     let history: Vec<Event> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT to_char(at AT TIME ZONE 'UTC', {ISO_8601}) AS at, actor, field, old_value, new_value,

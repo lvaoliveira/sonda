@@ -125,6 +125,12 @@ matched to the branch's earlier ones by fingerprint:
 Branches are tracked separately. Unchanged files are stored once, however
 many analyses include them.
 
+A file in a language the server doesn't read, from a newer `sonda`, is
+stored with its issues, and its code is shown without highlighting; the
+analysis gets a warning to upgrade the server. An issue from a rule the
+server doesn't know is still refused, with the whole upload: upgrade the
+server before the CLI.
+
 `POST /api/analyses` needs `Authorization: Bearer <token>`. It takes the JSON
 `sonda upload` sends, gzipped or plain, up to 128 MiB as sent and 800 MiB
 uncompressed. It answers `201` with
@@ -287,13 +293,15 @@ each project's main branch. Every filter is optional:
 | `project`, `branch` | One project; a branch other than its main one |
 | `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted`, `false_positive` or `fixed` |
 | `file` | Any part of the path |
-| `language` | Comma-separated: `javascript`, `typescript`, `tsx`, `python`, `java`, `c`, `cpp`, `csharp`, `rust` |
+| `language` | Comma-separated: `javascript`, `typescript`, `tsx`, `python`, `java`, `c`, `cpp`, `csharp`, `rust`, or one only a newer `sonda` reads |
 | `assignee`, `new=true` | Assigned to someone; on new code only |
 | `ids` | Comma-separated issue ids: these only |
 | `offset`, `limit` | Paging; `limit` is 1-200, default 50 |
 
 An unknown value or parameter is a `400`, so a typo never looks like "no
-issues". The answer holds `total`, the page of `items`, and `facets`: for
+issues"; a language is only checked for its form (lowercase letters,
+digits, `-` and `_`), since an upload can bring one the server doesn't
+read. The answer holds `total`, the page of `items`, and `facets`: for
 project, severity, category, status, component and language, the count
 per value. Each facet ignores its own selection, so choosing *critical*
 still shows how many *major* issues there are. A component is a path's

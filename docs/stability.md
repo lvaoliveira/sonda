@@ -56,6 +56,9 @@ served. A change that would break that fails the job; it needs a deprecation
 (below), or waits for a major release.
 
 A new CLI against an older server isn't promised: upgrade the server first.
+From 0.2.0, though, a server stores files in a language it doesn't read,
+with a warning on the analysis; it still refuses an issue from a rule it
+doesn't know.
 
 ## Deprecation
 

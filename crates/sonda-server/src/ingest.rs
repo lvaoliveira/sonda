@@ -316,6 +316,19 @@ async fn store_upload(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
+/// A language id as a report names one (`javascript`, `cpp`, `csharp`):
+/// checked by shape, since a newer CLI may know more of them.
+pub(crate) fn is_language_name(s: &str) -> bool {
+    (1..=32).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// Whether this build reads `name`'s language.
+fn is_known_language(name: &str) -> bool {
+    sonda_core::lang::ALL.iter().any(|l| l.name() == name)
+}
+
 /// A file's coverage, which the new code period reads (ADR-0011):
 /// `{"covered": [..], "uncovered": [..]}`, each strictly ascending lines.
 fn check_coverage(c: &Value) -> Result<(), String> {
@@ -461,16 +474,19 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
 
     let mut files = Vec::with_capacity(r.files.len());
     let mut by_path: HashMap<&str, [u8; 32]> = HashMap::with_capacity(r.files.len());
+    let mut unknown_languages: BTreeMap<&str, usize> = BTreeMap::new();
     for f in &r.files {
         check_relative_path(&f.path).map_err(|e| invalid(e.to_string()))?;
-        if !sonda_core::lang::ALL
-            .iter()
-            .any(|l| serde_json::to_value(l).is_ok_and(|v| v == f.language.as_str()))
-        {
+        // A newer CLI may read a language this server doesn't: stored, with
+        // a warning, rather than refusing the whole analysis.
+        if !is_language_name(&f.language) {
             return Err(invalid(format!(
-                "{}: unknown language {:?}",
+                "{}: invalid language {:?}",
                 f.path, f.language
             )));
+        }
+        if !is_known_language(&f.language) {
+            *unknown_languages.entry(f.language.as_str()).or_insert(0) += 1;
         }
         let sha256 = parse_sha256(&f.sha256)
             .ok_or_else(|| invalid(format!("{}: invalid sha256", f.path)))?
@@ -573,6 +589,19 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     if r.warnings.len() > MAX_FILES || r.warnings.iter().any(|w| w.len() > MAX_TEXT) {
         return Err(invalid("the report's warnings are too large".into()));
     }
+    let mut warnings = r.warnings;
+    for (language, n) in &unknown_languages {
+        tracing::warn!(
+            language,
+            files = n,
+            "upload has a language this server doesn't know"
+        );
+        warnings.push(format!(
+            "{n} {} in {language}, which this sonda server doesn't know: \
+             stored and shown without syntax highlighting. Upgrade the server.",
+            if *n == 1 { "file" } else { "files" }
+        ));
+    }
     let rule_settings = r
         .rule_settings
         .map(validate_rule_settings)
@@ -606,7 +635,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         measures: r.measures,
         gate: r.gate,
         gate_passed,
-        warnings: r.warnings,
+        warnings,
         files,
         sources: sources.into_iter().collect(),
         issues,

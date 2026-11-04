@@ -162,6 +162,10 @@ async fn tampered_uploads_are_rejected_and_store_nothing() {
             Box::new(|b| b["sources"][0]["content"] = "var y;\n".into()),
         ),
         (
+            "invalid language",
+            Box::new(|b| b["report"]["files"][0]["language"] = "Java Script".into()),
+        ),
+        (
             "unknown rule",
             Box::new(|b| b["report"]["issues"][0]["rule"] = "js/evil".into()),
         ),
