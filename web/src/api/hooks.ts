@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { ApiContext } from './apiContext'
-import type { SondaApi } from './types'
+import type { Shell, SondaApi } from './types'
 
 export function useApi(): SondaApi {
   const api = useContext(ApiContext)
@@ -44,4 +44,38 @@ export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
   }, [...deps, attempt])
 
   return result
+}
+
+/** The last shell each API gave (see `useShell`). */
+const lastShell = new WeakMap<SondaApi, Shell>()
+
+/** Forgets the last shell: after signing in or out, it is someone else's. */
+export function forgetShell(api: SondaApi): void {
+  lastShell.delete(api)
+}
+
+/**
+ * The shell: the organization, the viewer, the server's version and the
+ * counts. Every page mounts its own AppShell, so this starts from the last
+ * shell and refreshes it, rather than showing placeholders on each
+ * navigation. Null until the first one arrives.
+ */
+export function useShell(): Shell | null {
+  const api = useApi()
+  const [shell, setShell] = useState<Shell | null>(() => lastShell.get(api) ?? null)
+  useEffect(() => {
+    let current = true
+    api.shell().then(
+      (s) => {
+        lastShell.set(api, s)
+        if (current) setShell(s)
+      },
+      // The shell keeps what it showed; the page reports its own errors.
+      () => {},
+    )
+    return () => {
+      current = false
+    }
+  }, [api])
+  return shell
 }
