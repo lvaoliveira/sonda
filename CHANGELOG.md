@@ -29,6 +29,9 @@ file, the report formats and the public library API.
 - On an analysis, the Introduced, Resolved and Warnings links in the
   summary scrolled nowhere: a section had no id to land on. They land on
   the section now, and outline it briefly.
+- `js/void-operator` leaves `void` on a call alone, as `void save()` marks
+  a floating promise as intended. SonarQube knows from the types that it's
+  a promise; without them, the call is the sign of one.
 
 
 ## [0.2.0] - 2026-11-03
