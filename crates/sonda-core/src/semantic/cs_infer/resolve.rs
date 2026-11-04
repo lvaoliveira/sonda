@@ -139,6 +139,12 @@ struct Candidate<'m, 't> {
 /// A call's candidates, whether they are all, and its receiver.
 type Candidates<'m, 't> = (Vec<Candidate<'m, 't>>, bool, Option<Ty>);
 
+/// A method's parameter types and modifiers, to tell an override.
+type Signature = Vec<(Option<Ty>, Option<String>)>;
+
+/// A method a type declares: whether it's generic, and whether it overrides.
+type FoundMethod<'m, 't> = (Found<'m, 't>, bool, bool);
+
 /// Whether a candidate applies to the arguments.
 enum Fit {
     No,
@@ -516,69 +522,22 @@ impl<'m, 't> Infer<'m, 't> {
             self.base_classes_known(ty)
         };
         let mut out: Vec<Candidate> = Vec::new();
-        let mut signatures: Vec<Vec<(Option<Ty>, Option<String>)>> = Vec::new();
+        let mut signatures: Vec<Signature> = Vec::new();
         for (depth, t) in chain.iter().enumerate() {
-            let mut found: Vec<(Found, bool, bool)> = Vec::new();
-            match t {
+            let found = match t {
                 Ty::Named {
                     key,
                     args,
                     local: false,
-                } => {
-                    let Some(p) = self.platform.get(key) else {
-                        continue;
-                    };
-                    for member in p
-                        .members
-                        .iter()
-                        .filter(|m| m.kind == "method" && m.name == name)
-                    {
-                        if instance.is_some_and(|i| i == member.has("static")) {
-                            continue;
-                        }
-                        let method = Found::Platform {
-                            declaring: p,
-                            member,
-                            vars: args.clone(),
-                        };
-                        found.push((method, member.generic > 0, false));
-                    }
-                }
+                } => self.platform_methods(key, args, name, instance),
                 Ty::Named {
                     key, local: true, ..
-                } => {
-                    let Some(local) = self.locals.get(key).copied().flatten() else {
-                        continue;
-                    };
-                    let modifiers = |n: Node| -> Vec<&str> {
-                        n.children(&mut n.walk())
-                            .filter(|c| c.kind() == "modifier")
-                            .map(|c| self.text(c))
-                            .collect()
-                    };
-                    // Other parts of a partial type may declare more.
-                    if modifiers(local.node).contains(&"partial") {
-                        complete = false;
-                    }
-                    let Some(scope) = local.members else {
-                        continue;
-                    };
-                    for &d in self.m.decls_named(scope, name) {
-                        let d = &self.m.decls[d];
-                        let Some(method) = d.declarator.filter(|_| d.kind == DeclKind::Method)
-                        else {
-                            continue;
-                        };
-                        let mods = modifiers(method);
-                        if instance.is_some_and(|i| i == mods.contains(&"static")) {
-                            continue;
-                        }
-                        let generic = method.child_by_field_name("type_parameters").is_some();
-                        found.push((Found::Local(d), generic, mods.contains(&"override")));
-                    }
-                }
-                _ => continue,
-            }
+                } => self.local_methods(key, name, instance, &mut complete),
+                _ => None,
+            };
+            let Some(found) = found else {
+                continue;
+            };
             for (f, generic, overrides) in found {
                 let Some(params) = self.params(&f) else {
                     complete = false;
@@ -587,7 +546,7 @@ impl<'m, 't> Infer<'m, 't> {
                 if !fits_count(&params, arguments) {
                     continue;
                 }
-                let signature: Vec<(Option<Ty>, Option<String>)> = params
+                let signature: Signature = params
                     .iter()
                     .map(|p| (p.ty.clone(), p.modifier.map(str::to_string)))
                     .collect();
@@ -609,6 +568,71 @@ impl<'m, 't> Infer<'m, 't> {
             }
         }
         (out, complete)
+    }
+
+    /// The methods named `name` the platform type `key` declares, static
+    /// ones only or instance ones only when `instance` says: (method,
+    /// generic, overrides). None when it's not a platform type.
+    fn platform_methods(
+        &self,
+        key: &str,
+        args: &[Ty],
+        name: &str,
+        instance: Option<bool>,
+    ) -> Option<Vec<FoundMethod<'m, 't>>> {
+        let p = self.platform.get(key)?;
+        Some(
+            p.members
+                .iter()
+                .filter(|m| m.kind == "method" && m.name == name)
+                .filter(|member| !instance.is_some_and(|i| i == member.has("static")))
+                .map(|member| {
+                    let method = Found::Platform {
+                        declaring: p,
+                        member,
+                        vars: args.to_vec(),
+                    };
+                    (method, member.generic > 0, false)
+                })
+                .collect(),
+        )
+    }
+
+    /// The methods named `name` the file's type `key` declares, as
+    /// `platform_methods`; a partial type leaves `complete` false, since
+    /// other parts may declare more.
+    fn local_methods(
+        &self,
+        key: &str,
+        name: &str,
+        instance: Option<bool>,
+        complete: &mut bool,
+    ) -> Option<Vec<FoundMethod<'m, 't>>> {
+        let local = self.locals.get(key).copied().flatten()?;
+        let modifiers = |n: Node| -> Vec<&str> {
+            n.children(&mut n.walk())
+                .filter(|c| c.kind() == "modifier")
+                .map(|c| self.text(c))
+                .collect()
+        };
+        if modifiers(local.node).contains(&"partial") {
+            *complete = false;
+        }
+        let scope = local.members?;
+        let mut found = Vec::new();
+        for &d in self.m.decls_named(scope, name) {
+            let d = &self.m.decls[d];
+            let Some(method) = d.declarator.filter(|_| d.kind == DeclKind::Method) else {
+                continue;
+            };
+            let mods = modifiers(method);
+            if instance.is_some_and(|i| i == mods.contains(&"static")) {
+                continue;
+            }
+            let generic = method.child_by_field_name("type_parameters").is_some();
+            found.push((Found::Local(d), generic, mods.contains(&"override")));
+        }
+        Some(found)
     }
 
     /// Extension methods `receiver.name(...)` may call, with the receiver's
@@ -654,82 +678,14 @@ impl<'m, 't> Infer<'m, 't> {
 
     fn fit_form(&self, c: &Candidate, args: &[Arg], expanded: bool) -> Fit {
         let params = &c.params[c.skip..];
-        let last = params.len().wrapping_sub(1);
-        let mut filled = vec![false; params.len()];
-        let mut targets = Vec::new();
-        let mut out_of_position = false;
-        for (position, a) in args.iter().enumerate() {
-            let j = match a.name {
-                Some(name) => {
-                    let name = self.text(name);
-                    let Some(j) = params.iter().position(|p| p.name == name) else {
-                        return Fit::No;
-                    };
-                    if expanded && j == last {
-                        return Fit::No;
-                    }
-                    out_of_position |= j != position;
-                    j
-                }
-                None if out_of_position => return Fit::No,
-                None if expanded && position >= last => last,
-                None => position,
-            };
-            if j >= params.len() || filled[j] && !(expanded && j == last) {
-                return Fit::No;
-            }
-            filled[j] = true;
-            targets.push(j);
-        }
-        let all = filled.iter().all(|f| *f);
-        if params
-            .iter()
-            .zip(&filled)
-            .any(|(p, f)| !f && !p.optional && !(p.params && expanded))
-        {
+        let Some((targets, all)) = self.argument_targets(params, args, expanded) else {
             return Fit::No;
-        }
-        // Bind the method's own type parameters from the arguments.
-        let mut bound: Vec<Ty> = Vec::new();
-        if let Found::Platform { member, .. } = &c.found {
-            bound = vec![Ty::Unknown; member.generic as usize];
-            for (a, &j) in args.iter().zip(&targets) {
-                let (Some(pattern), Some(actual)) = (params[j].ty.as_ref(), self.type_of(a.value))
-                else {
-                    continue;
-                };
-                let pattern = match pattern {
-                    Ty::Array(e) if expanded && j == last => e,
-                    p => p,
-                };
-                let direct = unify(pattern, &actual, &mut bound);
-                if !direct && let Some(key) = pattern.key() {
-                    for s in self.supertypes(&actual) {
-                        if s.key() == Some(key) && unify(pattern, &s, &mut bound) {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        let mut types = Vec::new();
-        let mut open = false;
-        for (a, &j) in args.iter().zip(&targets) {
-            let p = &params[j];
-            let Some(ty) = p.ty.as_ref().map(|t| t.substitute(&[], &bound)) else {
-                open = true;
-                continue;
-            };
-            let ty = match ty {
-                Ty::Array(e) if expanded && j == last => *e,
-                t => t,
-            };
-            match self.converts(a, p.modifier, &ty) {
-                Some(true) => types.push(ty),
-                Some(false) => return Fit::No,
-                None => open = true,
-            }
-        }
+        };
+        let bound = self.bind_method_type_params(c, params, args, &targets, expanded);
+        let Some((types, open)) = self.argument_types(params, args, &targets, &bound, expanded)
+        else {
+            return Fit::No;
+        };
         let targets: Vec<usize> = targets.into_iter().map(|j| j + c.skip).collect();
         if open {
             return Fit::Unknown(targets);
@@ -742,6 +698,134 @@ impl<'m, 't> Infer<'m, 't> {
         }
     }
 
+    /// The parameter each argument goes to, and whether each parameter has
+    /// one; None when the arguments don't fit the parameters: a name none
+    /// has, a positional argument after one out of position, a parameter
+    /// filled twice, or a required one left empty.
+    fn argument_targets(
+        &self,
+        params: &[Param],
+        args: &[Arg],
+        expanded: bool,
+    ) -> Option<(Vec<usize>, bool)> {
+        let last = params.len().wrapping_sub(1);
+        let mut filled = vec![false; params.len()];
+        let mut targets = Vec::new();
+        let mut out_of_position = false;
+        for (position, a) in args.iter().enumerate() {
+            let j = self.argument_target(a, position, params, expanded, &mut out_of_position)?;
+            if j >= params.len() || filled[j] && !(expanded && j == last) {
+                return None;
+            }
+            filled[j] = true;
+            targets.push(j);
+        }
+        let all = filled.iter().all(|f| *f);
+        if params
+            .iter()
+            .zip(&filled)
+            .any(|(p, f)| !f && !p.optional && !(p.params && expanded))
+        {
+            return None;
+        }
+        Some((targets, all))
+    }
+
+    /// The parameter the argument at `position` goes to: the one it names,
+    /// or its position's; a positional argument after a named one out of
+    /// position fits none.
+    fn argument_target(
+        &self,
+        a: &Arg,
+        position: usize,
+        params: &[Param],
+        expanded: bool,
+        out_of_position: &mut bool,
+    ) -> Option<usize> {
+        let last = params.len().wrapping_sub(1);
+        match a.name {
+            Some(name) => {
+                let name = self.text(name);
+                let j = params.iter().position(|p| p.name == name)?;
+                if expanded && j == last {
+                    return None;
+                }
+                *out_of_position |= j != position;
+                Some(j)
+            }
+            None if *out_of_position => None,
+            None if expanded && position >= last => Some(last),
+            None => Some(position),
+        }
+    }
+
+    /// The method's own type parameters, bound from the arguments.
+    fn bind_method_type_params(
+        &self,
+        c: &Candidate,
+        params: &[Param],
+        args: &[Arg],
+        targets: &[usize],
+        expanded: bool,
+    ) -> Vec<Ty> {
+        let Found::Platform { member, .. } = &c.found else {
+            return Vec::new();
+        };
+        let last = params.len().wrapping_sub(1);
+        let mut bound = vec![Ty::Unknown; member.generic as usize];
+        for (a, &j) in args.iter().zip(targets) {
+            let (Some(pattern), Some(actual)) = (params[j].ty.as_ref(), self.type_of(a.value))
+            else {
+                continue;
+            };
+            let pattern = match pattern {
+                Ty::Array(e) if expanded && j == last => e,
+                p => p,
+            };
+            let direct = unify(pattern, &actual, &mut bound);
+            if !direct && let Some(key) = pattern.key() {
+                for s in self.supertypes(&actual) {
+                    if s.key() == Some(key) && unify(pattern, &s, &mut bound) {
+                        break;
+                    }
+                }
+            }
+        }
+        bound
+    }
+
+    /// The type each argument converts to, and whether one stays open; None
+    /// when one doesn't convert.
+    fn argument_types(
+        &self,
+        params: &[Param],
+        args: &[Arg],
+        targets: &[usize],
+        bound: &[Ty],
+        expanded: bool,
+    ) -> Option<(Vec<Ty>, bool)> {
+        let last = params.len().wrapping_sub(1);
+        let mut types = Vec::new();
+        let mut open = false;
+        for (a, &j) in args.iter().zip(targets) {
+            let p = &params[j];
+            let Some(ty) = p.ty.as_ref().map(|t| t.substitute(&[], bound)) else {
+                open = true;
+                continue;
+            };
+            let ty = match ty {
+                Ty::Array(e) if expanded && j == last => *e,
+                t => t,
+            };
+            match self.converts(a, p.modifier, &ty) {
+                Some(true) => types.push(ty),
+                Some(false) => return None,
+                None => open = true,
+            }
+        }
+        Some((types, open))
+    }
+
     /// Whether an argument converts implicitly to a parameter's type; None
     /// when its type or the parameter's leaves it open.
     fn converts(&self, a: &Arg, modifier: Option<&str>, to: &Ty) -> Option<bool> {
@@ -749,23 +833,7 @@ impl<'m, 't> Infer<'m, 't> {
         let modifier = modifier.filter(|m| *m != "this");
         match (a.modifier, modifier) {
             (None, None | Some("in")) => {}
-            (Some(x), Some(y)) if x == y => {
-                // `out var x`, `out _`: any type.
-                if x == "out"
-                    && (value.kind() == "declaration_expression"
-                        && value
-                            .child_by_field_name("type")
-                            .is_some_and(|t| t.kind() == "implicit_type")
-                        || self.text(value) == "_")
-                {
-                    return Some(true);
-                }
-                let from = match value.kind() {
-                    "declaration_expression" => self.written(value.child_by_field_name("type")?),
-                    _ => self.type_of(value),
-                }?;
-                return settled(&from).then(|| from == *to);
-            }
+            (Some(x), Some(y)) if x == y => return self.ref_out_conversion(x, value, to),
             _ => return Some(false),
         }
         // A lambda needs a delegate taking as many parameters, whatever its
@@ -781,13 +849,52 @@ impl<'m, 't> Infer<'m, 't> {
         if !settled(to) {
             return None;
         }
+        if let Some(converts) = self.literal_conversion(value, to) {
+            return converts;
+        }
+        if self.constant_fits(value, to) {
+            return Some(true);
+        }
+        match self.type_of(value) {
+            Some(from) => self.implicitly(&from, to),
+            // Any value converts to object, whatever its type.
+            None => to.is("System.Object").then_some(true),
+        }
+    }
+
+    /// A `ref`, `out` or `in` argument to a parameter with the same
+    /// modifier: the types must be the same; `out var x` and `out _` take
+    /// any type.
+    fn ref_out_conversion(&self, modifier: &str, value: Node, to: &Ty) -> Option<bool> {
+        if modifier == "out"
+            && (value.kind() == "declaration_expression"
+                && value
+                    .child_by_field_name("type")
+                    .is_some_and(|t| t.kind() == "implicit_type")
+                || self.text(value) == "_")
+        {
+            return Some(true);
+        }
+        let from = match value.kind() {
+            "declaration_expression" => self.written(value.child_by_field_name("type")?),
+            _ => self.type_of(value),
+        }?;
+        settled(&from).then(|| from == *to)
+    }
+
+    /// The conversions of values with no type of their own: `null`,
+    /// `default`, a lambda (whose natural type converts to Delegate and
+    /// object) and an interpolated string. None when `value` is none of
+    /// those, or the rule doesn't decide it.
+    fn literal_conversion(&self, value: Node, to: &Ty) -> Option<Option<bool>> {
         match value.kind() {
-            "null_literal" => {
-                return Some(to.is("System.Nullable`1") || self.value_type(to).map(|v| !v)?);
-            }
-            "default_expression" if value.named_child_count() == 0 => return Some(true),
+            "null_literal" => Some(
+                self.value_type(to)
+                    .map(|v| to.is("System.Nullable`1") || !v)
+                    .or_else(|| to.is("System.Nullable`1").then_some(true)),
+            ),
+            "default_expression" if value.named_child_count() == 0 => Some(Some(true)),
             "lambda_expression" | "anonymous_method_expression" => {
-                // A lambda's natural type converts to Delegate and object.
                 let open = self.delegate(to)
                     || [
                         "System.Linq.Expressions.Expression`1",
@@ -797,11 +904,11 @@ impl<'m, 't> Infer<'m, 't> {
                     ]
                     .iter()
                     .any(|k| to.is(k));
-                return if open {
+                Some(if open {
                     None
                 } else {
                     self.kind(to).map(|_| false)
-                };
+                })
             }
             "interpolated_string_expression" => {
                 if to.is(STRING)
@@ -809,38 +916,31 @@ impl<'m, 't> Infer<'m, 't> {
                     || to.is("System.FormattableString")
                     || to.is("System.Object")
                 {
-                    return Some(true);
+                    return Some(Some(true));
                 }
-                if to
-                    .key()
+                to.key()
                     .is_some_and(|k| k.ends_with("InterpolatedStringHandler"))
-                {
-                    return None;
-                }
+                    .then_some(None)
             }
-            _ => {}
+            _ => None,
         }
-        // A constant integer converts to any integral type that holds it,
-        // and 0 to any enum.
-        if let Some(Constant::Int(n)) = self
+    }
+
+    /// A constant integer converts to any integral type that holds it, and
+    /// 0 to any enum.
+    fn constant_fits(&self, value: Node, to: &Ty) -> bool {
+        let Some(Constant::Int(n)) = self
             .type_of(value)
             .filter(|t| t.is("System.Int32"))
             .and_then(|_| self.constant(value, None))
-        {
-            if let Some((_, lo, hi)) = INTEGRAL_RANGES.iter().find(|(k, _, _)| to.is(k))
-                && (*lo..=*hi).contains(&n)
-            {
-                return Some(true);
-            }
-            if n == 0 && self.kind(to) == Some("enum") {
-                return Some(true);
-            }
-        }
-        match self.type_of(value) {
-            Some(from) => self.implicitly(&from, to),
-            // Any value converts to object, whatever its type.
-            None => to.is("System.Object").then_some(true),
-        }
+        else {
+            return false;
+        };
+        INTEGRAL_RANGES
+            .iter()
+            .find(|(k, _, _)| to.is(k))
+            .is_some_and(|(_, lo, hi)| (*lo..=*hi).contains(&n))
+            || (n == 0 && self.kind(to) == Some("enum"))
     }
 
     /// How many parameters a delegate type's Invoke takes, or an

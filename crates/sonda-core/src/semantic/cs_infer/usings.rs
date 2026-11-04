@@ -65,6 +65,14 @@ enum Directive<'t> {
     Static(Node<'t>),
 }
 
+/// A file's using directives, the names it mentions, and where the names
+/// it resolves come from.
+type UsingFacts<'m, 't> = (
+    Vec<(Node<'t>, Directive<'t>)>,
+    HashSet<&'m str>,
+    Vec<Source>,
+);
+
 impl<'m, 't> Infer<'m, 't> {
     /// The file's using directives that import nothing it uses: a
     /// namespace no name comes through, while every other name resolves; a
@@ -76,6 +84,20 @@ impl<'m, 't> Infer<'m, 't> {
         let Some(root) = self.m.root else {
             return Vec::new();
         };
+        let (mut directives, names, sources) = self.using_facts(root);
+        if directives.is_empty() {
+            return Vec::new();
+        }
+        // The first of two repeated directives is the one that counts.
+        directives.sort_by_key(|(n, _)| n.start_byte());
+        let mut out = self.unnecessary_directives(directives, &names, &sources);
+        out.sort_by_key(|n| n.start_byte());
+        out
+    }
+
+    /// The file's using directives, the names it mentions, and where each
+    /// name it resolves comes from.
+    fn using_facts(&self, root: Node<'t>) -> UsingFacts<'m, 't> {
         let mut directives: Vec<(Node<'t>, Directive<'t>)> = Vec::new();
         let mut names: HashSet<&'m str> = HashSet::new();
         let mut sources: Vec<Source> = Vec::new();
@@ -105,11 +127,18 @@ impl<'m, 't> Infer<'m, 't> {
             }
             stack.extend(n.children(&mut n.walk()));
         }
-        if directives.is_empty() {
-            return Vec::new();
-        }
-        // The first of two repeated directives is the one that counts.
-        directives.sort_by_key(|(n, _)| n.start_byte());
+        (directives, names, sources)
+    }
+
+    /// The directives, in source order, that the file doesn't need: a
+    /// repeated one, one for the namespace it's in, one nothing resolves
+    /// through, an unused alias, an unused `using static`.
+    fn unnecessary_directives(
+        &self,
+        directives: Vec<(Node<'t>, Directive<'t>)>,
+        names: &HashSet<&'m str>,
+        sources: &[Source],
+    ) -> Vec<Node<'t>> {
         let unknown = sources.iter().any(|s| matches!(s, Source::Unknown));
         let through = |ns: &str| {
             sources
@@ -127,13 +156,12 @@ impl<'m, 't> Infer<'m, 't> {
                     repeated || self.already_in(node, ns) || (!unknown && !through(ns))
                 }
                 Directive::Alias(alias) => !names.contains(alias.as_str()),
-                Directive::Static(ty) => self.static_unused(*ty, &names),
+                Directive::Static(ty) => self.static_unused(*ty, names),
             };
             if unnecessary {
                 out.push(node);
             }
         }
-        out.sort_by_key(|n| n.start_byte());
         out
     }
 
@@ -160,37 +188,44 @@ impl<'m, 't> Infer<'m, 't> {
         let Some(parent) = directive.parent() else {
             return false;
         };
-        let covered: Vec<String> = if parent.kind() == "compilation_unit" {
-            let mut covered = Vec::new();
-            for c in parent.named_children(&mut parent.walk()) {
-                match c.kind() {
-                    "using_directive" | "comment" | "extern_alias_directive" | "attribute_list" => {
-                    }
-                    k if k.starts_with("preproc") => {}
-                    "namespace_declaration" | "file_scoped_namespace_declaration" => {
-                        covered.push(self.namespace_name(c));
-                    }
-                    // Code outside any namespace.
-                    _ => return false,
-                }
-            }
-            covered
+        let covered = if parent.kind() == "compilation_unit" {
+            self.unit_namespaces(parent)
         } else {
-            let mut n = parent;
-            loop {
-                if n.kind() == "namespace_declaration" {
-                    break vec![self.namespace_name(n)];
-                }
-                match n.parent() {
-                    Some(p) => n = p,
-                    None => return false,
-                }
-            }
+            self.enclosing_namespace(parent).map(|n| vec![n])
         };
-        !covered.is_empty()
-            && covered
-                .iter()
-                .all(|c| c == ns || c.starts_with(&format!("{ns}.")))
+        covered.is_some_and(|covered| {
+            !covered.is_empty()
+                && covered
+                    .iter()
+                    .all(|c| c == ns || c.starts_with(&format!("{ns}.")))
+        })
+    }
+
+    /// The namespaces a file declares at its top level; None when it has
+    /// code outside any namespace.
+    fn unit_namespaces(&self, unit: Node) -> Option<Vec<String>> {
+        let mut covered = Vec::new();
+        for c in unit.named_children(&mut unit.walk()) {
+            match c.kind() {
+                "using_directive" | "comment" | "extern_alias_directive" | "attribute_list" => {}
+                k if k.starts_with("preproc") => {}
+                "namespace_declaration" | "file_scoped_namespace_declaration" => {
+                    covered.push(self.namespace_name(c));
+                }
+                _ => return None,
+            }
+        }
+        Some(covered)
+    }
+
+    /// The name of the namespace declaration around `n`, if any.
+    fn enclosing_namespace(&self, mut n: Node) -> Option<String> {
+        loop {
+            if n.kind() == "namespace_declaration" {
+                return Some(self.namespace_name(n));
+            }
+            n = n.parent()?;
+        }
     }
 
     /// A namespace declaration's full name, with those it's nested in.
