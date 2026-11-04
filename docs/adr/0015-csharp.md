@@ -197,7 +197,8 @@ file, which sonda doesn't read.
 - The parity table has a C# row and `cs.csv`. SonarQube 26.7 has 446 C#
   rules; the first batch covers 51 keys and partly covers 3. Three of its
   rules are outside the default profile, so they are opt-in.
-- Three SonarQube C# rules have no sonda counterpart, on purpose:
+- Two SonarQube C# rules have no sonda counterpart, on purpose. A third,
+  S3220, had none until ADR-0022's overload resolution (below):
   - **S1944, invalid casts.** The compiler already rejects casts the
     declared types make impossible. What's left fails at run time:
     `object o = GetValue(); var i = (int)o;` throws when `GetValue()`
@@ -208,14 +209,14 @@ file, which sonda doesn't read.
     the compiler binds to a `params` overload while another overload also
     applies. Telling which overload a call binds to is C#'s overload
     resolution: argument types, implicit conversions, generics, inherited
-    overloads.
+    overloads. ADR-0022's step 3 resolves calls that way, and S3220 is
+    ported on it.
   - **S6802, lambdas in loops in Blazor markup.** It checks `.razor` files,
     which mix HTML and C#; sonda parses `.cs` only.
 
-  Approximating S1944 and S3220 from declarations would guess, and both are
-  in SonarQube's default profile, so a guess would mean false positives in
-  every project. What would unblock them: type checking (ADR-0008's phase
-  S4, which needs its own ADR; running Roslyn was rejected above because it
-  needs .NET at scan time) for S1944 and S3220, and a Razor grammar, with
-  the same review this ADR gave tree-sitter-c-sharp, for S6802. The parity
-  report lists them as known gaps (`scripts/sonar_parity.py`).
+  Approximating S1944 from declarations would guess, and it is in
+  SonarQube's default profile, so a guess would mean false positives in
+  every project. What would unblock them: the values reaching a cast for
+  S1944 (ADR-0008's later phases), and a Razor grammar, with the same
+  review this ADR gave tree-sitter-c-sharp, for S6802. The parity report
+  lists them as known gaps (`scripts/sonar_parity.py`).
