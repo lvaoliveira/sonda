@@ -12,7 +12,9 @@ const WITH_G: &str = "function f() { return 1; }\nfunction g(a) { return eval(a)
 const WITH_G_AND_H: &str = "function f() { return 1; }\nfunction g(a) { return eval(a); }\nfunction h(b) { return eval(b); }\n";
 
 /// Uploads `source` as the next analysis of `payments`' `branch`, then
-/// moves it to `hours_ago`. Returns its id.
+/// moves it to `hours_ago`, counted from noon today (UTC) rather than now:
+/// thinning keeps one analysis per UTC day, so two a few hours apart stay
+/// on the same day whatever time the test runs. Returns its id.
 async fn analysis(db: &TestDb, branch: &str, source: &str, hours_ago: i64) -> i64 {
     let dir = tempfile::tempdir().unwrap();
     let body = upload_json_for(dir.path(), &[("app.js", source)], "payments", branch);
@@ -20,7 +22,10 @@ async fn analysis(db: &TestDb, branch: &str, source: &str, hours_ago: i64) -> i6
     assert_eq!(status, StatusCode::CREATED, "{answer}");
     let id = answer["analysis_id"].as_i64().unwrap();
     sqlx::query(
-        "UPDATE analyses SET received_at = now() - make_interval(hours => $2::int) WHERE id = $1",
+        "UPDATE analyses
+         SET received_at = (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '12 hours') AT TIME ZONE 'UTC'
+             - make_interval(hours => $2::int)
+         WHERE id = $1",
     )
     .bind(id)
     .bind(hours_ago as i32)
