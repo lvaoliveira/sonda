@@ -4,7 +4,7 @@
 use super::cs::{cs_string_value, simple_name};
 use super::cs_bugs::{attribute_arguments, cs_call_arguments, cs_integer};
 use super::java_bugs::operator_text;
-use super::java_security::{contains_ignoring_case, find_node, is_public_cleartext_url, text};
+use super::java_security::{contains_ignoring_case, find_node, text};
 use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
@@ -182,21 +182,21 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/cleartext-url",
         name: "Clear-text protocols should not be used",
-        description: "Data sent over http, ftp or telnet can be read and changed by anyone on the network path.",
-        message: "Use the encrypted protocol (https, sftp, ssh) instead.",
+        description: "Data sent over http, ftp, telnet or SMTP without SSL can be read and changed by anyone on \
+                      the network path.",
+        message: "Use an encrypted protocol (https, sftp, ssh) or enable encryption.",
         category: Vulnerability,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S5332")],
-        check: Check::Query {
+        sonar: &[exact("S5332")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"((string_literal) @match (#match? @match "^\"(http|ftp|telnet)://"))"#,
-            filter: Some(Keep(is_public_cleartext_cs_url)),
+            find: super::cs_documented::cleartext_protocols,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { const string Api = \"http://api.payments.com/v1\"; }",
-            good: "class A { const string Api = \"https://api.payments.com/v1\"; const string Ns = \"http://tempuri.org/\"; }",
+            bad: "class A { void F() { var urlFtp = \"ftp://anonymous@sonar.com\"; } }",
+            good: "class A { void F() { var urlSftp = \"sftp://anonymous@sonar.com\"; var ns = \"http://tempuri.org/\"; } }",
         }),
     },
     // ---- Batch 2 ----
@@ -765,11 +765,6 @@ fn has_empty_password(node: Node, src: &[u8]) -> bool {
         matches!(kv.next(), Some(v) if v.iter().all(u8::is_ascii_whitespace))
             && matches!(key.as_str(), "password" | "pwd")
     })
-}
-
-fn is_public_cleartext_cs_url(node: Node, src: &[u8]) -> bool {
-    // tempuri.org is the default XML namespace of WCF services, never fetched.
-    !contains_ignoring_case(text(node, src), b"tempuri.org") && is_public_cleartext_url(node, src)
 }
 
 // ---------------------------------------------------- batch 2 filters

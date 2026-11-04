@@ -173,7 +173,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[exact("S2345"), related("S4070")],
+        sonar: &[exact("S2345")],
         check: Check::Query {
             langs: CSHARP,
             query: "(enum_declaration (attribute_list) body: (enum_member_declaration_list)) @match",
@@ -183,6 +183,27 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::CSharp,
             bad: "[Flags] enum Access { None = 0, Read = 1, Write = 2, Execute = 3 }",
             good: "[Flags] enum Access { None = 0, Read = 1, Write = 2, Execute = 4, All = Read | Write | Execute }",
+        }),
+    },
+    Rule {
+        id: "cs/non-flags-enum-marked-flags",
+        name: "Non-flags enums should not be marked with FlagsAttribute",
+        description: "A public [Flags] enum with a member that is neither a power of two nor a combination of \
+                      the others can't be combined bit by bit as callers will expect.",
+        message: "Remove [Flags], or make every member a power of two or a combination of the others.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S4070")],
+        check: Check::Query {
+            langs: CSHARP,
+            query: "(enum_declaration (attribute_list) body: (enum_member_declaration_list)) @match",
+            filter: Some(Find(super::cs_documented::misflagged_enum)),
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using System;\n[Flags]\npublic enum Color { None = 0, Red = 1, Orange = 3, Yellow = 4 }",
+            good: "using System;\n[Flags]\npublic enum Days { None = 0, Monday = 1, Tuesday = 2, Wednesday = 4, All = Monday | Tuesday | Wednesday }",
         }),
     },
     Rule {

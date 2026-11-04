@@ -336,7 +336,7 @@ csharpsquid:S4059,code_smell,major,no,all,syntactic,done,cs/property-and-get-met
 csharpsquid:S4060,code_smell,minor,no,main,syntactic,done,cs/attribute-not-sealed,,
 csharpsquid:S4061,code_smell,minor,yes,all,syntactic,done,cs/arglist,,
 csharpsquid:S4069,code_smell,minor,no,main,syntactic,done,cs/operator-without-named-alternative,,
-csharpsquid:S4070,code_smell,major,yes,all,syntactic,partial,cs/flags-enum-values,,
+csharpsquid:S4070,code_smell,major,yes,all,syntactic,done,cs/non-flags-enum-marked-flags,,
 csharpsquid:S4136,code_smell,minor,yes,all,syntactic,done,cs/overloads-not-adjacent,,
 csharpsquid:S4143,bug,major,yes,all,syntactic,done,cs/overwritten-element,,
 csharpsquid:S4144,code_smell,major,yes,all,syntactic,done,cs/identical-methods,,
@@ -376,7 +376,7 @@ csharpsquid:S4830,vulnerability,critical,yes,main,syntactic,done,cs/certificate-
 csharpsquid:S5034,code_smell,critical,yes,all,syntactic,done,cs/value-task-misuse,,
 csharpsquid:S5042,code_smell,major,no,main,syntactic,deprecated,,,
 csharpsquid:S5122,vulnerability,major,yes,main,syntactic,done,cs/cors-any-origin,346 942,A05 A07
-csharpsquid:S5332,vulnerability,minor,yes,main,syntactic,partial,cs/cleartext-url,200 319,A02
+csharpsquid:S5332,vulnerability,minor,yes,main,syntactic,done,cs/cleartext-url,200 319,A02
 csharpsquid:S5344,vulnerability,critical,yes,main,syntactic,done,cs/weak-password-hashing,256 916,A02 A04
 csharpsquid:S5443,vulnerability,critical,yes,main,syntactic,done,cs/public-tmp,377 379,A01
 csharpsquid:S5445,vulnerability,critical,yes,main,syntactic,done,cs/create-temp-file,377 379,A01
@@ -405,7 +405,7 @@ csharpsquid:S6563,code_smell,major,no,all,syntactic,done,cs/local-time-recorded,
 csharpsquid:S6566,code_smell,major,no,all,syntactic,done,cs/datetime-instead-of-offset,,
 csharpsquid:S6575,code_smell,major,yes,all,syntactic,done,cs/timezone-converter,,
 csharpsquid:S6580,code_smell,major,yes,all,syntactic,done,cs/parse-without-culture,,
-csharpsquid:S6585,code_smell,minor,no,all,syntactic,partial,cs/hardcoded-date-format,,
+csharpsquid:S6585,code_smell,minor,no,all,syntactic,done,cs/hardcoded-date-format,,
 csharpsquid:S6588,code_smell,minor,yes,all,syntactic,done,cs/unix-epoch,,
 csharpsquid:S6602,code_smell,minor,no,all,syntactic,done,cs/use-list-find,,
 csharpsquid:S6603,code_smell,minor,no,all,syntactic,done,cs/use-list-true-for-all,,
@@ -439,7 +439,7 @@ csharpsquid:S6930,bug,major,yes,main,syntactic,done,cs/route-backslash,,
 csharpsquid:S6931,code_smell,major,yes,main,syntactic,done,cs/action-route-leading-slash,,
 csharpsquid:S6932,code_smell,major,yes,main,syntactic,done,cs/raw-request-data-in-controller,,
 csharpsquid:S6934,code_smell,major,yes,main,syntactic,done,cs/controller-route-missing,,
-csharpsquid:S6960,code_smell,major,yes,main,syntactic,partial,cs/controller-mixed-responsibilities,,
+csharpsquid:S6960,code_smell,major,yes,main,syntactic,done,cs/controller-mixed-responsibilities,,
 csharpsquid:S6961,code_smell,major,yes,main,syntactic,done,cs/api-controller-derives-controller,,
 csharpsquid:S6962,code_smell,major,yes,main,syntactic,done,cs/new-httpclient,,
 csharpsquid:S6964,code_smell,major,yes,main,syntactic,done,cs/underposting-value-type,,

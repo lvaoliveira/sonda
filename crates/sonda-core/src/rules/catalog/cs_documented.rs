@@ -1017,6 +1017,269 @@ pub(super) fn unused_private_returns<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
     found
 }
 
+// ---------------------------------------------------- S4070
+
+/// An enum member's value: literals, shifts, `|`, `&`, `^`, `~`, `+`, `-`
+/// and other members of the same enum. None for what it can't evaluate.
+fn enum_value(
+    expr: Node,
+    src: &[u8],
+    members: &[(&[u8], Option<i128>)],
+    depth: u8,
+) -> Option<i128> {
+    if depth > 16 {
+        return None;
+    }
+    let d = depth + 1;
+    match expr.kind() {
+        "integer_literal" => {
+            let t = std::str::from_utf8(text(expr, src))
+                .ok()?
+                .replace('_', "")
+                .to_ascii_lowercase();
+            let t = t.trim_end_matches(['u', 'l']);
+            if let Some(h) = t.strip_prefix("0x") {
+                i128::from_str_radix(h, 16).ok()
+            } else if let Some(b) = t.strip_prefix("0b") {
+                i128::from_str_radix(b, 2).ok()
+            } else {
+                t.parse().ok()
+            }
+        }
+        "parenthesized_expression" | "cast_expression" => {
+            let inner = expr
+                .child_by_field_name("value")
+                .or_else(|| expr.named_children(&mut expr.walk()).last())?;
+            enum_value(inner, src, members, d)
+        }
+        "identifier" | "member_access_expression" => {
+            let name = expr.child_by_field_name("name").unwrap_or(expr);
+            let name = text(name, src);
+            members
+                .iter()
+                .find(|(n, _)| *n == name)
+                .and_then(|(_, v)| *v)
+        }
+        "prefix_unary_expression" => {
+            let v = enum_value(expr.named_child(0)?, src, members, d)?;
+            match text(expr, src).first()? {
+                b'~' => Some(!v),
+                b'-' => Some(-v),
+                b'+' => Some(v),
+                _ => None,
+            }
+        }
+        "binary_expression" => {
+            let l = enum_value(expr.child_by_field_name("left")?, src, members, d)?;
+            let r = enum_value(expr.child_by_field_name("right")?, src, members, d)?;
+            Some(match text(expr.child_by_field_name("operator")?, src) {
+                b"|" => l | r,
+                b"&" => l & r,
+                b"^" => l ^ r,
+                b"+" => l + r,
+                b"-" => l - r,
+                b"<<" => l.checked_shl(u32::try_from(r).ok()?)?,
+                b">>" => l >> u32::try_from(r).ok()?,
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether a declaration is visible outside its assembly: it and every
+/// type around it public, or protected (not `private protected`).
+fn externally_visible(declaration: Node, src: &[u8]) -> bool {
+    std::iter::successors(Some(declaration), |n| n.parent())
+        .filter(|d| d.kind().ends_with("_declaration") && !d.kind().contains("namespace"))
+        .all(|d| {
+            cs_has_modifier(d, "public", src)
+                || cs_has_modifier(d, "protected", src) && !cs_has_modifier(d, "private", src)
+        })
+}
+
+/// Externally visible `[Flags]` enums with a member that is neither 0, a
+/// power of two, nor a combination of the other members. Enums whose
+/// values it can't all evaluate are left alone.
+pub(super) fn misflagged_enum<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let flags = attribute_names(declaration, src)
+        .iter()
+        .any(|(_, a)| *a == b"Flags");
+    if !flags || !externally_visible(declaration, src) {
+        return None;
+    }
+    let body = declaration.child_by_field_name("body")?;
+    let mut members: Vec<(&[u8], Option<i128>)> = Vec::new();
+    let mut next = Some(0i128);
+    for m in body.named_children(&mut body.walk()) {
+        if m.kind() != "enum_member_declaration" {
+            continue;
+        }
+        let name = text(m.child_by_field_name("name")?, src);
+        let value = match m.child_by_field_name("value") {
+            Some(v) => enum_value(v, src, &members, 0),
+            None => next,
+        };
+        members.push((name, value));
+        next = value.map(|v| v + 1);
+    }
+    let values: Vec<i128> = members.iter().map(|(_, v)| *v).collect::<Option<_>>()?;
+    let wrong = values.iter().enumerate().any(|(i, &v)| {
+        if v == 0 || (v > 0 && (v & (v - 1)) == 0) {
+            return false;
+        }
+        // The other members whose bits it holds, together.
+        let covered = values
+            .iter()
+            .enumerate()
+            .filter(|&(j, &w)| j != i && w != 0 && w & !v == 0)
+            .fold(0, |acc, (_, &w)| acc | w);
+        covered != v
+    });
+    wrong
+        .then(|| declaration.child_by_field_name("name"))
+        .flatten()
+}
+
+// ---------------------------------------------------- S5332
+
+/// A URL's host, past any `user:password@`.
+fn url_host(url: &[u8]) -> Option<String> {
+    let rest = &url[url.windows(3).position(|w| w == b"://")? + 3..];
+    let authority_end = rest
+        .iter()
+        .position(|&b| matches!(b, b'/' | b'?' | b'#' | b'\\'))
+        .unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let host = match authority.iter().rposition(|&b| b == b'@') {
+        Some(i) => &authority[i + 1..],
+        None => authority,
+    };
+    let host = &host[..host.iter().position(|&b| b == b':').unwrap_or(host.len())];
+    let host = String::from_utf8_lossy(host).to_ascii_lowercase();
+    (!host.is_empty() && !host.contains(['$', '{', '%', '<', '[', ' '])).then_some(host)
+}
+
+/// Clear-text protocols: an `http`, `ftp` or `telnet` URL to a host the
+/// public internet reaches (not a private, loopback, documentation or XML
+/// namespace one), an `SmtpClient` whose `EnableSsl` isn't set, and a
+/// Telnet client.
+pub(super) fn cleartext_protocols<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    walk_tree(m, |n, ancestors| match n.kind() {
+        "string_literal" | "verbatim_string_literal" => {
+            let Some(value) = super::cs::cs_string_value(n, src) else {
+                return;
+            };
+            let lower = value.to_ascii_lowercase();
+            let scheme = [&b"http://"[..], b"ftp://", b"telnet://"]
+                .iter()
+                .any(|p| lower.starts_with(p));
+            let public = url_host(value).is_some_and(|h| {
+                !super::java_security::is_private_host(&h)
+                    && !super::java_security::is_namespace_host(&h)
+                    && h != "tempuri.org"
+                    && h != "schema.org"
+                    && !h.starts_with("schemas.")
+            });
+            if scheme && public {
+                found.push(n);
+            }
+        }
+        "object_creation_expression" => {
+            let Some(ty) = n.child_by_field_name("type") else {
+                return;
+            };
+            if text(ty, src)
+                .to_ascii_lowercase()
+                .windows(6)
+                .any(|w| w == b"telnet")
+            {
+                found.push(n);
+                return;
+            }
+            let smtp = infer
+                .written(ty)
+                .is_some_and(|t| t.is("System.Net.Mail.SmtpClient"));
+            if !smtp {
+                return;
+            }
+            // `{ EnableSsl = ... }`, or `x.EnableSsl = ...` in the same body.
+            let in_initializer = n
+                .child_by_field_name("initializer")
+                .is_some_and(|i| text(i, src).windows(9).any(|w| w == b"EnableSsl"));
+            let body = ancestors.iter().rev().find(|a| {
+                matches!(
+                    a.kind(),
+                    "block" | "arrow_expression_clause" | "declaration_list" | "compilation_unit"
+                )
+            });
+            let later = body.is_some_and(|b| text(*b, src).windows(10).any(|w| w == b".EnableSsl"));
+            if !in_initializer && !later {
+                found.push(n);
+            }
+        }
+        _ => {}
+    });
+    found
+}
+
+// ---------------------------------------------------- S6585
+
+/// The types whose ToString takes a date or time format.
+const DATE_TYPES: &[&str] = &[
+    "System.DateTime",
+    "System.DateTimeOffset",
+    "System.TimeSpan",
+    "System.DateOnly",
+    "System.TimeOnly",
+];
+
+/// `ToString` of a date, time or time span with a hard-coded custom format:
+/// a constant string other than a one-letter standard format.
+pub(super) fn hardcoded_date_formats<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    walk_tree(m, |call, _| {
+        if call.kind() != "invocation_expression" {
+            return;
+        }
+        let Some(function) = call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "member_access_expression")
+        else {
+            return;
+        };
+        if function.child_by_field_name("name").map(|n| text(n, src)) != Some(b"ToString") {
+            return;
+        }
+        let dated = function
+            .child_by_field_name("expression")
+            .and_then(|e| infer.type_of(e))
+            .is_some_and(|t| DATE_TYPES.iter().any(|k| t.is(k)));
+        let Some(format) = arguments(call)
+            .first()
+            .copied()
+            .filter(|a| a.name.is_none())
+        else {
+            return;
+        };
+        let custom = matches!(
+            infer.constant(format.value, None),
+            Some(crate::semantic::cs_infer::Constant::Str(f)) if f.chars().count() > 1
+        );
+        if dated && custom {
+            found.push(call);
+        }
+    });
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -1137,5 +1400,63 @@ mod tests {
             private int Used() => 1;\nvoid H(SomeClass other) { Used(); var z = other.Used(); }\n\
             }";
         assert_eq!(flagged("cs/unused-private-return", src), [2, 4]);
+    }
+
+    #[test]
+    fn non_flags_enums_as_documented() {
+        let src = "using System;\nnamespace MyLibrary {\n\
+            [Flags] public enum Color { None = 0, Red = 1, Orange = 3, Yellow = 4 }\n\
+            [Flags] public enum Days { None = 0, Monday = 1, Tuesday = 2, Wednesday = 4, All = Monday | Tuesday | Wednesday }\n\
+            [Flags] public enum Implicit { None, One, Two, Three }\n\
+            [Flags] public enum Shifted { A = 1 << 0, B = 1 << 1, Both = A | B }\n\
+            [Flags] public enum Gap { A = 1, B = 2, C = 5 }\n\
+            [Flags] internal enum Hidden { Red = 1, Orange = 3, Yellow = 4 }\n\
+            internal class Box { [Flags] public enum Inner { Red = 1, Orange = 3, Yellow = 4 } }\n\
+            }";
+        assert_eq!(flagged("cs/non-flags-enum-marked-flags", src), [3, 7]);
+    }
+
+    #[test]
+    fn cleartext_protocols_as_documented() {
+        let src = "using System.Net.Mail;\nclass A { void F(int port) {\n\
+            var urlHttp = \"http://sonar.com\";\n\
+            var urlFtp = \"ftp://anonymous@sonar.com\";\n\
+            var urlTelnet = \"telnet://anonymous@sonar.com\";\n\
+            var ok = \"https://sonar.com\" + \"sftp://anonymous@sonar.com\" + \"ssh://anonymous@sonar.com\";\n\
+            var local = \"http://localhost/x\" + \"http://example.com\" + \"http://www.w3.org/2000/svg\" + \"http://10.0.0.1\" + \"http://schemas.microsoft.com/x\";\n\
+            using var smtp = new SmtpClient(\"host\", 25);\n\
+            using var secure = new SmtpClient(\"host\", 25) { EnableSsl = true };\n\
+            using var telnet = new MyTelnet.Client(\"host\", port);\n\
+            } void G() { var later = new SmtpClient(\"h\"); later.EnableSsl = true; } }";
+        assert_eq!(flagged("cs/cleartext-url", src), [3, 4, 5, 8, 10]);
+    }
+
+    #[test]
+    fn date_formats_as_documented() {
+        let src = "using System;\nusing System.Globalization;\nclass A { const string F = \"yyyy\"; void PrintTime(TimeSpan ts, string s) {\n\
+            Console.WriteLine(DateTime.UtcNow.ToString(\"dd/MM/yyyy HH:mm:ss\"));\n\
+            Console.WriteLine(DateTime.UtcNow.ToString(CultureInfo.InvariantCulture));\n\
+            Console.WriteLine(DateTime.UtcNow.ToString(\"o\"));\n\
+            Console.WriteLine(ts.ToString(\"hh\\\\:mm\"));\n\
+            Console.WriteLine(DateTime.UtcNow.ToString(F));\n\
+            Console.WriteLine(s.ToString());\n\
+            } }";
+        assert_eq!(flagged("cs/hardcoded-date-format", src), [4, 7, 8]);
+    }
+
+    #[test]
+    fn controller_responsibilities_as_documented() {
+        let src = "using Microsoft.Extensions.Logging;\n\
+            [ApiController] public class MediaController : ControllerBase { readonly IMovies movies; readonly IPhotos photos; readonly ILogger<MediaController> log;\n\
+            public MediaController(IMovies m, IPhotos p, ILogger<MediaController> l) { movies = m; photos = p; log = l; }\n\
+            public IActionResult Movie() { log.LogInformation(\"m\"); return Ok(movies.Get()); } public IActionResult Photo() { log.LogInformation(\"p\"); return Ok(photos.Get()); } }\n\
+            public class MvcController : Controller { readonly IMovies movies; readonly IPhotos photos; public MvcController(IMovies m, IPhotos p) { movies = m; photos = p; }\n\
+            public IActionResult Movie() => Ok(movies.Get()); public IActionResult Photo() => Ok(photos.Get()); }\n\
+            [ApiController] public class Primary(IMovies movies, IPhotos photos) : ControllerBase { public IActionResult A() => Ok(movies.Get()); public IActionResult B() => Ok(photos.Get()); }\n\
+            [ApiController] public class Shared : ControllerBase { readonly IMovies movies; readonly IPhotos photos; readonly IDb db; public Shared(IMovies m, IPhotos p, IDb d) { movies = m; photos = p; db = d; }\n\
+            public IActionResult A() => Ok(movies.Get(db)); public IActionResult B() => Ok(photos.Get(db)); }";
+        // Not Primary: the semantic model doesn't declare a primary
+        // constructor's parameters yet.
+        assert_eq!(flagged("cs/controller-mixed-responsibilities", src), [2]);
     }
 }
