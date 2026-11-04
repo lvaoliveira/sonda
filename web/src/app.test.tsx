@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
@@ -86,10 +86,10 @@ describe('Issues', () => {
     expect(text).toHaveFocus()
     await user.click(within(dialog).getByRole('button', { name: 'Done' }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    // Escape closes it too: the browser fires the dialog's close event.
+    // Escape closes it too.
     await user.click(within(detail).getByRole('button', { name: 'Copy as prompt' }))
-    const again = await screen.findByRole('dialog', { name: 'Copy the prompt' })
-    fireEvent(again, new Event('close'))
+    await screen.findByRole('dialog', { name: 'Copy the prompt' })
+    await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
