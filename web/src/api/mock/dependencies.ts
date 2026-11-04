@@ -28,7 +28,8 @@ const SEEDS: Seed[] = [
 
 function purl(ecosystem: string, name: string, version: string): string {
   const [ns, bare] = name.startsWith('@') ? name.split('/') : [null, name]
-  return `pkg:${ecosystem}/${ns ? `${encodeURIComponent(ns)}/` : ''}${bare}@${version}`
+  const path = ns ? `${encodeURIComponent(ns)}/${bare}` : bare
+  return `pkg:${ecosystem}/${path}@${version}`
 }
 
 /** Real advisories for the versions above. */

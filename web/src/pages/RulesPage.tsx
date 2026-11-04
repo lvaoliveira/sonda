@@ -23,7 +23,7 @@ export function RulesPage() {
 }
 
 /** The catalog, with where each rule is off; admins turn rules off for every project (ADR-0016). */
-function Rules({ catalog, isAdmin, reload }: { catalog: RuleCatalog; isAdmin: boolean; reload: () => void }) {
+function Rules({ catalog, isAdmin, reload }: Readonly<{ catalog: RuleCatalog; isAdmin: boolean; reload: () => void }>) {
   const [q, setQ] = useState('')
   const count = useCallback((r: Rule) => r.openIssues, [])
   return (
@@ -72,7 +72,7 @@ function Rules({ catalog, isAdmin, reload }: { catalog: RuleCatalog; isAdmin: bo
 }
 
 /** Where the rule is off, and for admins, turning it off in the default profile (ADR-0016, ADR-0018). */
-function WhereOff({ rule, isAdmin, reload }: { rule: Rule; isAdmin: boolean; reload: () => void }) {
+function WhereOff({ rule, isAdmin, reload }: Readonly<{ rule: Rule; isAdmin: boolean; reload: () => void }>) {
   const api = useApi()
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)

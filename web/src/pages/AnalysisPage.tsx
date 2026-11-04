@@ -10,6 +10,7 @@ import { GateStatus, SeverityGlyph } from '@/components/sonda/status'
 import { branchLabel, formatDebt, formatNumber } from '@/lib/format'
 import { CATEGORY_LABEL, SEVERITY, SEVERITY_ORDER, coverageColor, languageLabel } from '@/lib/visual'
 import { issuesUrl } from '@/lib/issues'
+import { projectUrl } from '@/lib/links'
 
 export function AnalysisPage() {
   const api = useApi()
@@ -47,12 +48,10 @@ function severitySummary(c: AnalysisChanges): string {
     .join(' · ')
 }
 
-function Analysis({ a }: { a: AnalysisDetail }) {
+function Analysis({ a }: Readonly<{ a: AnalysisDetail }>) {
   const skipped = a.warnings.filter((w) => w.includes(': skipped')).length
   // A pull request's analyses are listed on the project page, not among its branches.
-  const projectUrl = `/projects/${encodeURIComponent(a.project)}${
-    a.pullRequest ? '#pull-requests' : a.branch === a.mainBranch ? '' : `?branch=${encodeURIComponent(a.branch)}`
-  }`
+  const projectLink = a.pullRequest ? `/projects/${encodeURIComponent(a.project)}#pull-requests` : projectUrl(a.project, a.branch, a.mainBranch)
   const tiles: { label: string; value: string; sub: string; color?: string; href?: string }[] = [
     { label: 'Files analyzed', value: formatNumber(a.files), sub: skipped ? `${skipped} skipped` : a.languages.map((l) => languageLabel(l.id)).join(', ') },
     a.baseline
@@ -65,7 +64,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
           href: '#introduced',
         },
     { label: 'Resolved', value: formatNumber(a.fixed.total), sub: 'since the previous analysis', color: a.fixed.total ? 'var(--sd-ok)' : undefined, href: '#fixed' },
-    { label: 'Components', value: formatNumber(a.components), sub: 'top-level directories', href: projectUrl },
+    { label: 'Components', value: formatNumber(a.components), sub: 'top-level directories', href: projectLink },
     {
       label: 'Warnings',
       value: formatNumber(a.warnings.length),
@@ -82,7 +81,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
         <h1 className="m-0 font-mono text-[26px] leading-[1.15] font-semibold tracking-[-0.02em]">{a.sha.slice(0, 12)}</h1>
         {a.message && <p className="m-0 text-[15px] text-fg">{a.message}</p>}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px] text-fg-muted">
-          <Link to={projectUrl} className="font-mono text-[12.5px]">
+          <Link to={projectLink} className="font-mono text-[12.5px]">
             {a.pullRequest ? `pull request ${branchLabel(a)}` : a.branch}
           </Link>
           <time dateTime={a.analyzedAt}>
@@ -165,7 +164,7 @@ function Analysis({ a }: { a: AnalysisDetail }) {
   )
 }
 
-function Measures({ a }: { a: AnalysisDetail }) {
+function Measures({ a }: Readonly<{ a: AnalysisDetail }>) {
   const [scope, setScope] = useState<'overall' | 'newCode'>('overall')
   const m: MeasureSet = a.measures[scope]
   const count = (v: number | null) => (v == null ? '—' : formatNumber(v))
@@ -216,14 +215,14 @@ function ChangeList({
   changes,
   a,
   empty,
-}: {
+}: Readonly<{
   id: string
   title: string
   subtitle: string
   changes: AnalysisChanges
   a: AnalysisDetail
   empty: string
-}) {
+}>) {
   const fileIssues = (path: string) =>
     issuesUrl(a.project, { branch: a.branch, file: path })
   return (
@@ -276,7 +275,7 @@ const DECORATION: Record<Decoration['state'], string> = {
 }
 
 /** Whether the pull request's decoration reached GitHub, and if not, why (ADR-0021). */
-function DecorationState({ d }: { d: Decoration }) {
+function DecorationState({ d }: Readonly<{ d: Decoration }>) {
   const tone = d.state === 'posted' ? 'text-ok' : d.state === 'pending' || d.state === 'superseded' ? 'text-fg-muted' : 'text-warn'
   return (
     <span className={tone} title={d.lastError ?? undefined}>

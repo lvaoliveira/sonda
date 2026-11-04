@@ -5,7 +5,7 @@ import type { WaitingProject } from '@/api/types'
 import { Mono } from '@/components/sonda/layout'
 
 /** Admins' way to connect a repository (ADR-0023). */
-export function ConnectLink({ primary = false }: { primary?: boolean }) {
+export function ConnectLink({ primary = false }: Readonly<{ primary?: boolean }>) {
   return (
     <Link
       to="/connect"
@@ -17,7 +17,7 @@ export function ConnectLink({ primary = false }: { primary?: boolean }) {
 }
 
 /** Projects created ahead of their first analysis, with their steps again for admins. */
-export function WaitingProjects({ waiting, isAdmin }: { waiting: WaitingProject[]; isAdmin: boolean }) {
+export function WaitingProjects({ waiting, isAdmin }: Readonly<{ waiting: WaitingProject[]; isAdmin: boolean }>) {
   if (waiting.length === 0) return null
   return (
     <section aria-label="Waiting for a first analysis" className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-4 edge">
@@ -36,7 +36,7 @@ export function WaitingProjects({ waiting, isAdmin }: { waiting: WaitingProject[
 }
 
 /** A link to GitHub's own page, in a new tab, styled as a primary button. */
-export function ExternalButton({ href, children }: { href: string; children: ReactNode }) {
+export function ExternalButton({ href, children }: Readonly<{ href: string; children: ReactNode }>) {
   return (
     <a href={href} target="_blank" rel="noreferrer" className="inline-flex min-h-8 w-fit items-center gap-1.5 rounded-lg bg-brand px-[13px] py-1.5 text-[13px] font-semibold text-brand-ink no-underline">
       {children}

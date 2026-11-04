@@ -30,7 +30,7 @@ export function ProjectIssuesPage() {
   return <IssuesScreen project={key} />
 }
 
-function IssuesScreen({ project }: { project?: string }) {
+function IssuesScreen({ project }: Readonly<{ project?: string }>) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
   const crumbs = project
@@ -84,7 +84,7 @@ function useWide(min: number) {
 /** Triage changes made on this page, laid over the server's list until it reloads. */
 type Overrides = Record<number, Pick<IssueSummary, 'status' | 'assignee'>>
 
-function Issues({ me, project }: { me: string | null; project?: string }) {
+function Issues({ me, project }: Readonly<{ me: string | null; project?: string }>) {
   const api = useApi()
   const [params, setParams] = useSearchParams()
   const drill = useMemo(() => filterFromParams(params, project), [params, project])
@@ -94,6 +94,7 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
   const [offset, setOffset] = useState(0)
   const [selectedId, setSelectedId] = useState<number | null>(drill?.issue ?? null)
   const [checked, setChecked] = useState<number[]>([])
+  const toggleChecked = (id: number) => setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
   const [overrides, setOverrides] = useState<Overrides>({})
   const [detailVersion, setDetailVersion] = useState(0)
   const [toast, setToast] = useState<ToastMessage | null>(null)
@@ -215,9 +216,7 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
     <>
       <PageHeader
         title="Issues"
-        summary={`${formatNumber(page.total)} ${page.total === 1 ? 'issue matches' : 'issues match'} · ${
-          filter.project ? `${filter.project} on ${filter.branch ?? 'its main branch'}` : "all projects, each on its main branch"
-        }`}
+        summary={`${formatNumber(page.total)} ${page.total === 1 ? 'issue matches' : 'issues match'} · ${scopeLabel(filter)}`}
       >
         <div className="flex items-center gap-2">
           <Button onClick={() => setShowFacets(!showFacets)}>{showFacets ? 'Hide filters' : 'Filters'}</Button>
@@ -304,7 +303,7 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
                     aria-label={`Select ${issue.file}:${issue.line}`}
                     checked={checked.includes(issue.id)}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={() => setChecked((c) => (c.includes(issue.id) ? c.filter((x) => x !== issue.id) : [...c, issue.id]))}
+                    onChange={() => toggleChecked(issue.id)}
                     className="m-0 mt-[3px] accent-brand"
                   />
                   <SeverityGlyph severity={issue.severity} className="pt-[3px] text-[10px]" />
@@ -372,7 +371,7 @@ function Facets({
   me,
   toggleIn,
   changeFilter,
-}: {
+}: Readonly<{
   page: IssuePage
   filter: IssueFilter
   /** What a saved view starts from. */
@@ -380,7 +379,7 @@ function Facets({
   me: string | null
   toggleIn: (key: FacetKey, value: string) => void
   changeFilter: (patch: Partial<IssueFilter>) => void
-}) {
+}>) {
   // Components come from the data; a selected one stays listed even at zero.
   const components = [...new Set([...Object.keys(page.facets.component), ...filter.component])].sort((a, b) => a.localeCompare(b))
   const groups: { label: string; key: FacetKey; options: { value: string; label: string; mono?: boolean }[] }[] = [
@@ -460,7 +459,19 @@ function Facets({
 }
 
 /** On the all-projects page: each project, opening its own Issues tab with these filters. */
-function ProjectFacet({ page, filter }: { page: IssuePage; filter: IssueFilter }) {
+/** Where the listed issues are from. */
+function scopeLabel(filter: IssueFilter): string {
+  if (!filter.project) return 'all projects, each on its main branch'
+  return `${filter.project} on ${filter.branch ?? 'its main branch'}`
+}
+
+/** A file's directories, outermost first, each with its path. */
+function directoriesOf(file: string): { name: string; path: string }[] {
+  const names = file.split('/').slice(0, -1)
+  return names.map((name, i) => ({ name, path: names.slice(0, i + 1).join('/') }))
+}
+
+function ProjectFacet({ page, filter }: Readonly<{ page: IssuePage; filter: IssueFilter }>) {
   const projects = Object.entries(page.facets.project ?? {}).sort(([a], [b]) => a.localeCompare(b))
   const carried = {
     cat: filter.category.length === 1 ? filter.category[0] : undefined,
@@ -483,7 +494,7 @@ function ProjectFacet({ page, filter }: { page: IssuePage; filter: IssueFilter }
 }
 
 /** The prompt, selected, for when the browser won't copy it (plain HTTP): Ctrl/Cmd+C copies it. */
-function CopyByHand({ text, onClose }: { text: string; onClose: () => void }) {
+function CopyByHand({ text, onClose }: Readonly<{ text: string; onClose: () => void }>) {
   const area = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     area.current?.focus()
@@ -513,7 +524,7 @@ function IssueView({
   onAssign,
   onCopyPrompt,
   onBack,
-}: {
+}: Readonly<{
   /** On a phone, back to the list. */
   onBack?: () => void
   id: number
@@ -523,7 +534,7 @@ function IssueView({
   onAssign: () => void
   /** Copies this issue as a prompt for the developer's AI assistant. */
   onCopyPrompt: () => void
-}) {
+}>) {
   const api = useApi()
   const detail = useAsync(() => api.issue(id), [api, id, version])
   // The decision being explained, while its reason is asked for.
@@ -572,14 +583,11 @@ function IssueView({
             <span className="text-[11px] text-fg-faint">Location</span>
             <span aria-label="Location" className="font-mono text-[11px] [overflow-wrap:anywhere]" title={issue.file}>
               {/* Break after a slash before breaking a name. */}
-              {issue.file
-                .split('/')
-                .slice(0, -1)
-                .map((dir, i) => (
-                  <span key={i} className="text-fg-muted">
-                    {dir}/<wbr />
-                  </span>
-                ))}
+              {directoriesOf(issue.file).map(({ name, path }) => (
+                <span key={path} className="text-fg-muted">
+                  {name}/<wbr />
+                </span>
+              ))}
               <span>{issue.file.slice(issue.file.lastIndexOf('/') + 1)}</span>
               <span className="text-fg-muted">
                 :{issue.line}
@@ -662,8 +670,8 @@ function IssueView({
         <section className="flex flex-col gap-0.5">
           <h3 className="m-0 mb-1.5 font-normal micro-label">History</h3>
           {issue.history.length === 0 && <span className="text-[13px] text-fg-faint">No triage changes yet.</span>}
-          {issue.history.map((e, i) => (
-            <div key={i} className="flex flex-wrap items-baseline gap-2 border-t border-line py-2 text-[13px]">
+          {issue.history.map((e) => (
+            <div key={`${e.at}|${e.field}`} className="flex flex-wrap items-baseline gap-2 border-t border-line py-2 text-[13px]">
               <span className="capitalize">{e.field}</span>
               <span className="text-fg-muted">
                 {e.oldValue ?? 'none'} → {e.newValue ?? 'none'}
@@ -681,11 +689,11 @@ function IssueView({
   )
 }
 
-function Key({ children }: { children: string }) {
+function Key({ children }: Readonly<{ children: string }>) {
   return <span className="rounded bg-hover px-[5px] py-0.5 font-mono text-[10px]">{children}</span>
 }
 
-function Tag({ children, accent = false }: { children: string; accent?: boolean }) {
+function Tag({ children, accent = false }: Readonly<{ children: string; accent?: boolean }>) {
   return (
     <span
       className="rounded-lg px-1.5 py-px font-mono text-[9px] tracking-[.06em]"

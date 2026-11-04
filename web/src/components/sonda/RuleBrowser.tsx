@@ -34,7 +34,7 @@ export function RuleBrowser<T extends RuleInfo>({
   summary,
   panel,
   search,
-}: {
+}: Readonly<{
   rules: T[]
   /** How many there are in all, for "N of M shown". */
   total: number
@@ -49,7 +49,7 @@ export function RuleBrowser<T extends RuleInfo>({
   panel?: (rule: T) => ReactNode
   /** The search box, rendered by the caller in its header. */
   search: { q: string; setQ: (q: string) => void }
-}) {
+}>) {
   const location = useLocation()
   const [lang, setLang] = useState('')
   const [cat, setCat] = useState<Category | ''>('')
@@ -158,7 +158,7 @@ export function RuleBrowser<T extends RuleInfo>({
 }
 
 /** The search box of a RuleBrowser, for the page header. */
-export function RuleSearch({ q, setQ }: { q: string; setQ: (q: string) => void }) {
+export function RuleSearch({ q, setQ }: Readonly<{ q: string; setQ: (q: string) => void }>) {
   return (
     <label className="flex h-9 w-[340px] max-w-full items-center gap-2 rounded-lg bg-canvas px-3 edge">
       <Search size={14} strokeWidth={2} aria-hidden="true" className="text-fg-faint" />
@@ -173,7 +173,7 @@ export function RuleSearch({ q, setQ }: { q: string; setQ: (q: string) => void }
   )
 }
 
-function RuleDetail({ rule, summary, panel }: { rule: RuleInfo; summary: ReactNode; panel: ReactNode }) {
+function RuleDetail({ rule, summary, panel }: Readonly<{ rule: RuleInfo; summary: ReactNode; panel: ReactNode }>) {
   return (
     <article className="flex min-w-0 flex-col gap-5 overflow-auto bg-panel px-[22px] py-5">
       <div className="flex flex-col gap-2.5">
@@ -240,7 +240,7 @@ function RuleDetail({ rule, summary, panel }: { rule: RuleInfo; summary: ReactNo
   )
 }
 
-function CodeSample({ tone, mark, label, code }: { tone: 'crit' | 'ok'; mark: string; label: string; code: string }) {
+function CodeSample({ tone, mark, label, code }: Readonly<{ tone: 'crit' | 'ok'; mark: string; label: string; code: string }>) {
   return (
     <div className="flex flex-col overflow-hidden rounded-[10px] edge">
       <div className="flex items-center gap-2 px-3 py-2 text-[12.5px] font-semibold" style={{ background: `var(--sd-${tone}-soft)`, color: `var(--sd-${tone})` }}>

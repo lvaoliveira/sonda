@@ -27,7 +27,7 @@ export function SecurityPage() {
 
 const VULNS = '/issues?cat=vulnerability'
 
-function SecurityView({ s }: { s: Security }) {
+function SecurityView({ s }: Readonly<{ s: Security }>) {
   const tiles = (['blocker', 'critical', 'major', 'minor'] as const).map((sev) => ({ sev, n: s.openBySeverity[sev] ?? 0 }))
   return (
     <>
@@ -103,7 +103,7 @@ const REVIEW_STATUS: { value: TriageStatus | 'all'; label: string }[] = [
 ]
 
 /** The security review queue (ADR-0014): decide on each open vulnerability in place. */
-function ToReview({ s }: { s: Security }) {
+function ToReview({ s }: Readonly<{ s: Security }>) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
   const me = shell.state === 'ready' ? shell.data.me : null
@@ -181,12 +181,12 @@ function ToReview({ s }: { s: Security }) {
         </select>
         <label className="flex items-center gap-1.5 text-[13px]">
           <input type="checkbox" checked={query.isNew} onChange={(e) => set({ isNew: e.target.checked })} className="accent-brand" />
-          New code
+          <span>New code</span>
         </label>
         {me && (
           <label className="flex items-center gap-1.5 text-[13px]">
             <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} className="accent-brand" />
-            Assigned to me
+            <span>Assigned to me</span>
           </label>
         )}
       </div>
@@ -196,7 +196,7 @@ function ToReview({ s }: { s: Security }) {
         </p>
       )}
       {!review && loaded.state === 'loading' && <div aria-busy="true" className="mx-5 mb-4 h-24 rounded-lg bg-panel-2" />}
-      {review && review.items.length === 0 && (
+      {review?.items.length === 0 && (
         <p className="m-0 border-t border-line px-5 py-4 text-[13px] text-fg-faint">
           {query.status === 'open' ? 'Nothing left to review.' : 'Nothing matches.'}
         </p>
@@ -218,7 +218,7 @@ function ToReview({ s }: { s: Security }) {
   )
 }
 
-function Progress({ label, p, newCode }: { label: string; p: ReviewProgress; newCode: ReviewProgress }) {
+function Progress({ label, p, newCode }: Readonly<{ label: string; p: ReviewProgress; newCode: ReviewProgress }>) {
   const total = p.open + p.confirmed + p.accepted + p.falsePositive
   const parts = [
     { n: p.confirmed, color: STATUS_COLOR.confirmed },
@@ -243,11 +243,11 @@ function ReviewRow({
   f,
   me,
   onTriage,
-}: {
+}: Readonly<{
   f: ReviewFinding
   me: string | null
   onTriage: (patch: IssuePatch, message: string) => Promise<boolean>
-}) {
+}>) {
   const [deciding, setDeciding] = useState<keyof typeof DECISION_PROMPT | null>(null)
   const issueUrl = issuesUrl(f.project, { branch: f.branch, file: f.file, cat: 'vulnerability', issue: f.id })
   return (
@@ -314,7 +314,7 @@ function ReviewRow({
   )
 }
 
-function FixFirst({ s }: { s: Security }) {
+function FixFirst({ s }: Readonly<{ s: Security }>) {
   return (
     <Card id="focus" padded={false} title="Fix these first" subtitle="Most severe first, then longest open">
       {s.focus.length === 0 ? (
@@ -363,10 +363,10 @@ function FixFirst({ s }: { s: Security }) {
   )
 }
 
-function Trend({ s }: { s: Security }) {
+function Trend({ s }: Readonly<{ s: Security }>) {
   const weighted = s.trend.map((t) => t.weighted)
   const first = weighted[0]
-  const last = weighted[weighted.length - 1]
+  const last = weighted.at(-1)!
   const change = first ? Math.round(((last - first) / first) * 100) : 0
   const better = last <= first
   const perWeek = (key: 'introduced' | 'fixed') => (s.trend.reduce((sum, t) => sum + t[key], 0) / s.trend.length).toFixed(1)
@@ -393,7 +393,7 @@ function Trend({ s }: { s: Security }) {
       />
       <div className="flex justify-between font-mono text-[9.5px] text-fg-faint">
         <span>{shortDate(s.trend[0].date)}</span>
-        <span>{shortDate(s.trend[s.trend.length - 1].date)}</span>
+        <span>{shortDate(s.trend.at(-1)!.date)}</span>
       </div>
       <dl className="m-0 grid grid-cols-3 gap-3 border-t border-line pt-3 text-[12.5px]">
         {[
@@ -411,17 +411,17 @@ function Trend({ s }: { s: Security }) {
   )
 }
 
-function Bar({ parts, total }: { parts: { n: number; color: string }[]; total: number }) {
+function Bar({ parts, total }: Readonly<{ parts: { n: number; color: string }[]; total: number }>) {
   return (
     <span aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-sm bg-pip-off">
-      {parts.map((p, i) => (
-        <span key={i} style={{ width: `${total ? (p.n / total) * 100 : 0}%`, background: p.color }} />
+      {parts.map((p) => (
+        <span key={p.color} style={{ width: `${total ? (p.n / total) * 100 : 0}%`, background: p.color }} />
       ))}
     </span>
   )
 }
 
-function Projects({ s }: { s: Security }) {
+function Projects({ s }: Readonly<{ s: Security }>) {
   const max = Math.max(1, ...s.projects.map((p) => p.severe + p.other))
   return (
     <Card id="projects" title="Affected projects" subtitle="Blocker + critical, then the rest">
@@ -451,7 +451,7 @@ function Projects({ s }: { s: Security }) {
   )
 }
 
-function Remediation({ s }: { s: Security }) {
+function Remediation({ s }: Readonly<{ s: Security }>) {
   const rows = [
     { label: 'Open', n: s.status.open, color: 'var(--sd-crit)' },
     { label: 'Confirmed', n: s.status.confirmed, color: 'var(--sd-warn)' },
@@ -483,7 +483,7 @@ function Remediation({ s }: { s: Security }) {
   )
 }
 
-function Components({ s }: { s: Security }) {
+function Components({ s }: Readonly<{ s: Security }>) {
   return (
     <Card id="components" title="High-risk components" subtitle="By weighted open vulnerabilities">
       {s.components.length === 0 && <p className="m-0 text-[13px] text-fg-faint">None.</p>}
@@ -506,7 +506,7 @@ function Components({ s }: { s: Security }) {
   )
 }
 
-function Rules({ s }: { s: Security }) {
+function Rules({ s }: Readonly<{ s: Security }>) {
   return (
     <Card id="rules" title="Most common rules" subtitle="Open vulnerabilities by rule">
       {s.rules.length === 0 && <p className="m-0 text-[13px] text-fg-faint">None.</p>}
@@ -524,7 +524,7 @@ function Rules({ s }: { s: Security }) {
   )
 }
 
-function OwaspTop10({ s }: { s: Security }) {
+function OwaspTop10({ s }: Readonly<{ s: Security }>) {
   const [year, setYear] = useState(() => String(s.owasp[0]?.year ?? ''))
   const edition = s.owasp.find((e) => String(e.year) === year) ?? s.owasp[0]
   if (!edition) return null
@@ -571,7 +571,7 @@ function OwaspTop10({ s }: { s: Security }) {
   )
 }
 
-function VulnerableDependencies({ s }: { s: Security }) {
+function VulnerableDependencies({ s }: Readonly<{ s: Security }>) {
   const d = s.dependencies
   const severities = (['blocker', 'critical', 'major', 'minor'] as const).filter((sev) => d.bySeverity[sev])
   return (

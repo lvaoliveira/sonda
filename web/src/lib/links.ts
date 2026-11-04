@@ -21,8 +21,13 @@ export function coverageUrl(project: string, branch?: string, mainBranch?: strin
   const params = new URLSearchParams()
   if (branch && branch !== mainBranch) params.set('branch', branch)
   if (dir) params.set('dir', dir)
+  return withQuery(`/projects/${encodeURIComponent(project)}/coverage`, params)
+}
+
+/** `path`, with `?` and the parameters when there are any. */
+export function withQuery(path: string, params: URLSearchParams): string {
   const query = params.toString()
-  return `/projects/${encodeURIComponent(project)}/coverage${query ? `?${query}` : ''}`
+  return query ? `${path}?${query}` : path
 }
 
 /** One file's covered and uncovered lines. */

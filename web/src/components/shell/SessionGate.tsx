@@ -1,7 +1,7 @@
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type SubmitEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useApi, useAsync } from '@/api/hooks'
 import { UNAUTHORIZED_EVENT } from '@/api/http'
-import { SessionContext } from '@/api/session'
+import { SessionContext, type SessionActions } from '@/api/session'
 import { AuthError } from '@/api/types'
 import { Button } from '@/components/sonda/controls'
 
@@ -11,18 +11,27 @@ import { Button } from '@/components/sonda/controls'
  * localhost), the viewer may continue read-only; triage still needs a
  * session.
  */
-export function SessionGate({ children }: { children: ReactNode }) {
+export function SessionGate({ children }: Readonly<{ children: ReactNode }>) {
   const api = useApi()
   const [check, setCheck] = useState(0)
   const [readOnly, setReadOnly] = useState(false)
   const session = useAsync(() => api.session(), [api, check])
+  const recheck = useCallback(() => setCheck((n) => n + 1), [])
 
   // A request that finds the session expired sends the viewer back here.
   useEffect(() => {
-    const recheck = () => setCheck((n) => n + 1)
     window.addEventListener(UNAUTHORIZED_EVENT, recheck)
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, recheck)
-  }, [])
+  }, [recheck])
+
+  const authenticated = session.state === 'ready' && session.data.authenticated
+  const signOut = useCallback(() => {
+    void api.signOut().finally(() => {
+      setReadOnly(false)
+      recheck()
+    })
+  }, [api, recheck])
+  const actions = useMemo<SessionActions>(() => ({ signOut: authenticated ? signOut : null }), [authenticated, signOut])
 
   if (session.state === 'loading') return <div aria-busy="true" className="min-h-screen bg-canvas" />
   if (session.state === 'error') {
@@ -35,29 +44,21 @@ export function SessionGate({ children }: { children: ReactNode }) {
       </Centered>
     )
   }
-  const { authenticated, readsRequireAuth } = session.data
+  const { readsRequireAuth } = session.data
   if (!authenticated && (readsRequireAuth || !readOnly)) {
-    return <SignIn canSkip={!readsRequireAuth} onSkip={() => setReadOnly(true)} onSignedIn={() => setCheck((n) => n + 1)} />
+    return <SignIn canSkip={!readsRequireAuth} onSkip={() => setReadOnly(true)} onSignedIn={recheck} />
   }
-  const signOut = authenticated
-    ? () => {
-        void api.signOut().finally(() => {
-          setReadOnly(false)
-          setCheck((n) => n + 1)
-        })
-      }
-    : null
-  return <SessionContext.Provider value={{ signOut }}>{children}</SessionContext.Provider>
+  return <SessionContext.Provider value={actions}>{children}</SessionContext.Provider>
 }
 
-function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () => void; onSignedIn: () => void }) {
+function SignIn({ canSkip, onSkip, onSignedIn }: Readonly<{ canSkip: boolean; onSkip: () => void; onSignedIn: () => void }>) {
   const api = useApi()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const submit = async (e: FormEvent) => {
+  const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     setError('')
@@ -75,7 +76,7 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
       <h1 className="m-0 text-[22px] font-semibold tracking-[-0.02em]">Sign in to sonda</h1>
       <form onSubmit={submit} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Username
+          <span>Username</span>
           <input
             autoComplete="username"
             autoCapitalize="none"
@@ -87,7 +88,7 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
           />
         </label>
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Password
+          <span>Password</span>
           <input
             type="password"
             autoComplete="current-password"
@@ -120,7 +121,7 @@ function SignIn({ canSkip, onSkip, onSignedIn }: { canSkip: boolean; onSkip: () 
   )
 }
 
-function Centered({ children }: { children: ReactNode }) {
+function Centered({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <main className="grid min-h-screen place-items-center bg-canvas px-4">
       <div className="flex w-full max-w-[420px] flex-col gap-4 rounded-[14px] bg-panel p-7 edge">{children}</div>
