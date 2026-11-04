@@ -125,6 +125,7 @@ It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
 exclude = ["**/node_modules/**", "**/dist/**", "**/*.min.js"]
 max_file_size_kb = 1024    # larger files are skipped with a warning
 skip_minified = true       # skip JS/TS that looks minified (average line > 200 chars)
+skip_generated = true      # skip files whose first lines say they're generated
 file_timeout_secs = 10     # per-file parse + rule-matching budget
 git_timeout_secs = 120     # each git process used for new code
 new_code = "auto"          # or "none", or a git ref such as "origin/main" (ADR-0010)
