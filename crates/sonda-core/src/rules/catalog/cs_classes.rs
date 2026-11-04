@@ -375,21 +375,21 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/controller-mixed-responsibilities",
         name: "Controllers should not have mixed responsibilities",
-        description: "When groups of actions use disjoint sets of injected services, the controller holds \
-                      several unrelated responsibilities and can be split.",
+        description: "When groups of a web API controller's actions use disjoint sets of injected services, \
+                      loggers, mappers and the like apart, it holds several unrelated responsibilities.",
         message: "Split this controller: its actions fall into groups that share no dependencies.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 30,
-        sonar: &[related("S6960")],
+        sonar: &[exact("S6960")],
         check: Check::Semantic {
             langs: CSHARP,
             find: controller_responsibilities,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "public class MediaController : ControllerBase { readonly IMovies movies; readonly IPhotos photos; public MediaController(IMovies m, IPhotos p) { movies = m; photos = p; } public IActionResult Movie() => Ok(movies.Get()); public IActionResult Photo() => Ok(photos.Get()); }",
-            good: "public class MovieController : ControllerBase { readonly IMovies movies; public MovieController(IMovies m) { movies = m; } public IActionResult Movie() => Ok(movies.Get()); public IActionResult Trailer() => Ok(movies.Trailer()); }",
+            bad: "[ApiController] public class MediaController : ControllerBase { readonly IMovies movies; readonly IPhotos photos; public MediaController(IMovies m, IPhotos p) { movies = m; photos = p; } public IActionResult Movie() => Ok(movies.Get()); public IActionResult Photo() => Ok(photos.Get()); }",
+            good: "[ApiController] public class MovieController : ControllerBase { readonly IMovies movies; public MovieController(IMovies m) { movies = m; } public IActionResult Movie() => Ok(movies.Get()); public IActionResult Trailer() => Ok(movies.Trailer()); }",
         }),
     },
     Rule {
@@ -873,25 +873,18 @@ fn simple_name_bytes(ty: &[u8]) -> &[u8] {
     ty.rsplit(|b| *b == b'.').next().unwrap_or(ty)
 }
 
-fn is_controller(class: Node, src: &[u8]) -> bool {
-    name_of(class, src).ends_with(b"Controller")
-        && (base_entries(class)
-            .iter()
-            .any(|b| matches!(simple_name(*b, src), b"Controller" | b"ControllerBase"))
-            || attribute_names(class, src)
-                .iter()
-                .any(|(_, n)| *n == b"ApiController"))
-}
-
 fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let types = type_index(m);
     let by_decl = refs_by_decl(m);
     let mut found = Vec::new();
-    for class in classes(&types)
-        .into_iter()
-        .filter(|c| is_controller(*c, src))
-    {
+    // Web API controllers only, as documented.
+    for class in classes(&types).into_iter().filter(|c| {
+        attribute_names(*c, src)
+            .iter()
+            .any(|(_, n)| *n == b"ApiController")
+    }) {
         // Injected services: fields assigned from constructor parameters.
+        // A primary constructor's aren't declarations of the semantic model.
         let ctor_params: Vec<&[u8]> = members(class)
             .into_iter()
             .filter(|x| x.kind() == "constructor_declaration")
@@ -905,6 +898,20 @@ fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
         if ctor_params.is_empty() {
             continue;
         }
+        // Services most controllers need say nothing about responsibilities.
+        let basic = |d: &DeclId| {
+            m.decls[*d].ty.is_some_and(|t| {
+                matches!(
+                    simple_name(t, src),
+                    b"ILogger"
+                        | b"IMediator"
+                        | b"IMapper"
+                        | b"IConfiguration"
+                        | b"IBus"
+                        | b"IMessageBus"
+                )
+            })
+        };
         let deps: Vec<DeclId> = m
             .decls
             .iter()
@@ -933,6 +940,7 @@ fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
                 })
             })
             .map(|(i, _)| i)
+            .filter(|d| !basic(d))
             .collect();
         if deps.len() < 2 {
             continue;
@@ -989,17 +997,6 @@ fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
                 set
             })
             .collect();
-        // Services every action that uses any uses (a logger) say nothing
-        // about groups.
-        sets.retain(|s| !s.is_empty());
-        let shared: Vec<DeclId> = deps
-            .iter()
-            .copied()
-            .filter(|d| sets.iter().all(|s| s.contains(d)))
-            .collect();
-        for s in &mut sets {
-            s.retain(|d| !shared.contains(d));
-        }
         sets.retain(|s| !s.is_empty());
         // Group actions that share a service; more than one group: mixed.
         let mut groups: Vec<Vec<DeclId>> = Vec::new();
@@ -1085,7 +1082,7 @@ mod tests {
 
     #[test]
     fn controllers_and_models() {
-        let src = "namespace N;\npublic class Order { public int Quantity { get; set; } public int? Max { get; set; } public required int Min { get; set; } [JsonRequired] public bool Paid { get; set; } public string Name { get; set; } }\npublic class MediaController : ControllerBase {\nreadonly IMovies movies; readonly IPhotos photos; readonly ILogger log;\npublic MediaController(IMovies m, IPhotos p, ILogger l) { movies = m; photos = p; log = l; }\npublic IActionResult Movie() { log.Info(); return Ok(movies.Get()); }\npublic IActionResult Photo() { log.Info(); return Ok(photos.Get()); }\npublic IActionResult Create(Order order) => Ok();\n}\npublic class MovieController : ControllerBase {\nreadonly IMovies movies; readonly IRatings ratings;\npublic MovieController(IMovies m, IRatings r) { movies = m; ratings = r; }\npublic IActionResult Movie() => Ok(movies.Get());\npublic IActionResult Rate() => Ok(Both());\nprivate object Both() => movies.Get() + ratings.Get();\n}";
+        let src = "namespace N;\npublic class Order { public int Quantity { get; set; } public int? Max { get; set; } public required int Min { get; set; } [JsonRequired] public bool Paid { get; set; } public string Name { get; set; } }\n[ApiController] public class MediaController : ControllerBase {\nreadonly IMovies movies; readonly IPhotos photos; readonly ILogger log;\npublic MediaController(IMovies m, IPhotos p, ILogger l) { movies = m; photos = p; log = l; }\npublic IActionResult Movie() { log.Info(); return Ok(movies.Get()); }\npublic IActionResult Photo() { log.Info(); return Ok(photos.Get()); }\npublic IActionResult Create(Order order) => Ok();\n}\n[ApiController] public class MovieController : ControllerBase {\nreadonly IMovies movies; readonly IRatings ratings;\npublic MovieController(IMovies m, IRatings r) { movies = m; ratings = r; }\npublic IActionResult Movie() => Ok(movies.Get());\npublic IActionResult Rate() => Ok(Both());\nprivate object Both() => movies.Get() + ratings.Get();\n}";
         assert_eq!(flagged("cs/controller-mixed-responsibilities", src), [3]);
         assert_eq!(flagged("cs/underposting-value-type", src), [2]);
     }

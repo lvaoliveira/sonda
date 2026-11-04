@@ -4,8 +4,8 @@
 //! on deep trees: see the notes in `js_modern.rs`.
 
 use super::cs::{
-    CS_SCOPE_STOPS, cs_has_modifier, cs_statements, cs_string_value, operand, same_code,
-    simple_name, unparenthesized,
+    CS_SCOPE_STOPS, cs_has_modifier, cs_statements, operand, same_code, simple_name,
+    unparenthesized,
 };
 use super::cs_bugs::{attribute_arguments, attribute_names};
 use super::cs_more::{enclosing_type, members};
@@ -805,20 +805,17 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/hardcoded-date-format",
-        name: "Date formats should not be hard-coded",
-        description: "A fixed format such as \"MM/dd/yyyy\" reads wrong for users of other cultures; standard \
-                      format specifiers adapt.",
-        message: "Use a standard format (\"d\", \"D\", \"o\") or the culture's patterns.",
+        name: "Don't hardcode the format when turning dates and times to strings",
+        description: "A hard-coded format such as \"dd/MM/yyyy\" is easy to get wrong and reads wrong in other \
+                      cultures; a standard format or a culture's patterns adapt.",
+        message: "Use a standard format (\"d\", \"o\") or a culture's format instead of this one.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S6585")],
-        check: Check::Query {
+        sonar: &[exact("S6585")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: r#"(invocation_expression function: (member_access_expression name: (identifier) @n)
-                        arguments: (argument_list . (argument (string_literal) @match))
-                        (#eq? @n "ToString"))"#,
-            filter: Some(Keep(is_custom_date_format)),
+            find: super::cs_documented::hardcoded_date_formats,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -1430,27 +1427,6 @@ fn unjustified_exclusion(attribute: Node, src: &[u8]) -> bool {
             .any(|(n, _)| n.is_some_and(|n| text(n, src) == b"Justification"))
 }
 
-fn is_custom_date_format(literal: Node, src: &[u8]) -> bool {
-    let Some(value) = cs_string_value(literal, src) else {
-        return false;
-    };
-    // Formatting with the invariant culture writes for machines, not users.
-    let invariant = literal
-        .parent()
-        .and_then(|a| a.parent())
-        .is_some_and(|args| contains_ignoring_case(text(args, src), b"InvariantCulture"));
-    let value: Vec<u8> = value.iter().copied().filter(|b| *b != b'\'').collect();
-    // A custom pattern with day, month and year parts; single-letter standard
-    // specifiers and round-trip formats are fine, and so are ISO 8601 ones.
-    let custom = !invariant
-        && value.len() > 2
-        && value.windows(2).any(|w| w == b"dd")
-        && (value.windows(2).any(|w| w == b"MM") || value.windows(3).any(|w| w == b"MMM"))
-        && value.windows(2).any(|w| w == b"yy");
-    let iso = value.starts_with(b"yyyy-MM-dd");
-    custom && !iso
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -1507,7 +1483,8 @@ mod tests {
         assert_eq!(flagged("cs/untestable-clock", &src), [8, 9]);
         assert_eq!(flagged("cs/local-time-recorded", &src), [8]);
         assert_eq!(flagged("cs/datetime-instead-of-offset", &src), [8, 9]);
-        assert_eq!(flagged("cs/hardcoded-date-format", &src), [10]);
+        // An ISO-like custom format is hard-coded too, as documented.
+        assert_eq!(flagged("cs/hardcoded-date-format", &src), [10, 11]);
     }
 
     #[test]
@@ -1579,7 +1556,6 @@ mod tests {
             "cs/settable-collection-property",
             "cs/string-uri-parameter",
             "cs/property-and-get-method",
-            "cs/hardcoded-date-format",
             "cs/normalize-to-upper",
             "cs/async-argument-validation",
             "cs/blocking-async-call",
