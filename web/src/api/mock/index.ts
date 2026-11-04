@@ -63,16 +63,22 @@ function patchedText(value: string | null | undefined, current: string | null): 
   return value?.trim() || null
 }
 
-export function createMockApi(latency = 250, options: MockOptions = {}): SondaApi {
+/** The mock server's data, and the checks its methods share. */
+function mockState(latency: number, options: MockOptions) {
   const issues = structuredClone(issuesData) as IssueDetail[]
   const catalog = structuredClone(rulesData) as RuleCatalog
   const users = structuredClone(MOCK_USERS)
   const tokens = mockTokens()
-  let github = structuredClone(options.githubApp === false ? NO_GITHUB_APP : MOCK_GITHUB_APP)
-  let manifestState: string | null = null
-  // An App created in the mock isn't installed anywhere yet.
-  let installations: GitHubInstallation[] =
-    options.githubApp === false ? [] : [{ account: 'acme', settingsUrl: 'https://github.com/organizations/acme/settings/installations/1', repositories: ['acme/shop', 'acme/billing'] }]
+  // What the methods replace, where every part of the mock sees it.
+  const live = {
+    github: structuredClone(options.githubApp === false ? NO_GITHUB_APP : MOCK_GITHUB_APP),
+    manifestState: null as string | null,
+    // An App created in the mock isn't installed anywhere yet.
+    installations: (options.githubApp === false
+      ? []
+      : [{ account: 'acme', settingsUrl: 'https://github.com/organizations/acme/settings/installations/1', repositories: ['acme/shop', 'acme/billing'] }]) as GitHubInstallation[],
+    nextGate: 1,
+  }
   const ruleSettings = mockRuleSettings()
   // The projects not deleted (ADR-0017).
   const projectKeys = PROJECT_LIST.projects.map((p) => p.key)
@@ -88,7 +94,6 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
   const settings = new Map<string, MockProjectSettings & { qualityGate: number | null; githubRepository: string | null; changes: ProjectSettingChange[] }>()
   // Gates held on the server (ADR-0017).
   const serverGates: { id: number; name: string; conditions: GateConditionInput[]; changedBy: string; changedAt: string }[] = []
-  let nextGate = 1
   const gateRef = (id: number | null) => {
     const g = serverGates.find((x) => x.id === id)
     return g ? { id: g.id, name: g.name } : null
@@ -124,7 +129,7 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       mainBranch: s.mainBranch,
       qualityGate: gateRef(s.qualityGate),
       githubRepository: s.githubRepository,
-      githubApp: github.source === 'stored' || github.source === 'config',
+      githubApp: live.github.source === 'stored' || live.github.source === 'config',
       branches: [...BRANCHES].sort((a, b) => Number(b.name === s.mainBranch) - Number(a.name === s.mainBranch)),
       changes: s.changes,
     }
@@ -193,389 +198,437 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     return issue
   }
 
+  return { issues, catalog, users, tokens, live, ruleSettings, projectKeys, waitingKeys, deleted, refuseDeleted, settings, serverGates, gateRef, checkGate, usingGate, settingsOf, shown, settingsView, findRule, counted, signedIn, session, asUser, findUser, requireAdmin, checkPassword, wait, guard, shell, findIssue, update }
+}
+
+type MockState = ReturnType<typeof mockState>
+
+export function createMockApi(latency = 250, options: MockOptions = {}): SondaApi {
+  const m = mockState(latency, options)
+  return { ...accountApi(m), ...overviewApi(m), ...projectApi(m), ...githubApi(m), ...issueApi(m), ...ruleApi(m) }
+}
+
+/** Sessions, users and tokens. */
+function accountApi(m: MockState): Pick<SondaApi, 'session' | 'signIn' | 'signOut' | 'changePassword' | 'myTokens' | 'createToken' | 'revokeMyToken' | 'tokens' | 'revokeToken' | 'createTokenFor' | 'users' | 'createUser' | 'updateUser' | 'shell'> {
+  const { users, tokens, refuseDeleted, session, asUser, findUser, requireAdmin, checkPassword, wait, shell } = m
   return {
-    session: () => wait(session),
-    signIn: async (username, password) => {
-      await wait(null)
-      const user = users.find((u) => u.username === username.toLowerCase())
-      if (!user || user.disabled || password !== MOCK_PASSWORD) throw new AuthError('Invalid username or password')
-      session.user = asUser(user)
-      session.authenticated = true
-    },
-    signOut: async () => {
-      await wait(null)
-      session.user = null
-      session.authenticated = false
-    },
-    changePassword: async (current, next) => {
-      await wait(null)
-      if (!session.user) throw new AuthError()
-      if (current !== MOCK_PASSWORD) throw new Error('the current password is wrong')
-      checkPassword(next)
-    },
-    myTokens: async () => {
-      if (!session.user) throw new AuthError()
-      return wait(tokens.list(session.user.username))
-    },
-    createToken: async (t) => {
-      if (!session.user) throw new AuthError()
-      refuseDeleted(t.project)
-      return wait(tokens.create(session.user.username, t))
-    },
-    revokeMyToken: async (id) => {
-      if (!session.user) throw new AuthError()
-      tokens.revoke(id, session.user.username, session.user.username)
-      await wait(null)
-    },
-    tokens: async () => {
-      requireAdmin()
-      return wait(tokens.list())
-    },
-    revokeToken: async (id) => {
-      requireAdmin()
-      tokens.revoke(id, session.user!.username)
-      await wait(null)
-    },
-    createTokenFor: async (username, t) => {
-      requireAdmin()
-      const owner = users.find((u) => u.username === username)
-      if (!owner) throw new Error(`no user named "${username}"`)
-      if (owner.disabled) throw new Error(`${username} is disabled, so its tokens wouldn't work`)
-      refuseDeleted(t.project)
-      return wait(tokens.create(username, t, session.user!.username))
-    },
-    users: async () => {
-      requireAdmin()
-      return wait(users)
-    },
-    createUser: async (input) => {
-      requireAdmin()
-      const { password, ...fields } = input
-      if (password === undefined && input.role === 'admin') throw new Error(NO_PASSWORD_ADMIN)
-      if (password !== undefined) checkPassword(password)
-      if (users.some((u) => u.username === input.username)) throw new Error(`username "${input.username}" is taken`)
-      const user: UserRow = { ...fields, id: users.length + 1, disabled: false, hasPassword: password !== undefined, createdAt: new Date().toISOString(), lastLoginAt: null }
-      users.push(user)
-      return wait(asUser(user))
-    },
-    updateUser: async (id, patch) => {
-      requireAdmin()
-      if (patch.password !== undefined) checkPassword(patch.password)
-      const user = findUser(id)
-      const activeAdmins = users.filter((u) => u.role === 'admin' && !u.disabled)
-      const staysAdmin = (patch.role ?? 'admin') === 'admin' && patch.disabled !== true
-      if (activeAdmins.length === 1 && activeAdmins[0].id === id && !staysAdmin) throw new Error('the last active admin cannot be disabled or made a member')
-      if (patch.role === 'admin' && !user.hasPassword && patch.password === undefined) throw new Error(NO_PASSWORD_ADMIN)
-      if (patch.password !== undefined) user.hasPassword = true
-      if (patch.displayName !== undefined) user.displayName = patch.displayName
-      if (patch.role !== undefined) user.role = patch.role
-      if (patch.disabled !== undefined) user.disabled = patch.disabled
-      return wait(asUser(user))
-    },
-    shell: () => wait(shell()),
-    overview: (scope, range) => wait(overview(scope, range)),
-    drill: (metric: DrillMetric) => wait<Drill>(DRILLS[metric]),
-    gates: async () => {
-      guard()
-      // Projects judged by a server gate leave their sonda.toml gate.
-      const judged = new Set([...settings].filter(([, s]) => s.qualityGate !== null).map(([key]) => key))
-      const toml = GATES.map((g) => ({ ...g, projects: g.projects.filter((p) => !judged.has(p.project)) }))
-      const project = (key: string) => PROJECT_LIST.projects.find((p) => p.key === key)!
-      const server: QualityGate[] = serverGates.map((g) => ({
-        id: `server-${g.id}`,
-        name: g.name,
-        isDefault: false,
-        server: { id: g.id, changedBy: g.changedBy, changedAt: g.changedAt },
-        conditions: g.conditions.map((c) => ({ ...c, label: conditionLabel(c), failing: 0, noData: 0 })),
-        projects: usingGate(g.id).map((key) => ({ project: key, state: 'passed', analyzedAt: project(key).analyzedAt })),
-        evaluations: [],
-        passRate: null,
-        mostCommonFailure: null,
-      }))
-      return wait({ gates: [toml[0], ...server, ...toml.slice(1)], metrics: METRICS })
-    },
-    createQualityGate: async (name, conditions) => {
-      requireAdmin()
-      const g = { id: nextGate++, name: checkGate(name, conditions), conditions, changedBy: session.user!.username, changedAt: new Date().toISOString() }
-      serverGates.push(g)
-      return wait({ id: g.id, name: g.name, projects: [] })
-    },
-    updateQualityGate: async (id, name, conditions) => {
-      requireAdmin()
-      const g = serverGates.find((x) => x.id === id)
-      if (!g) throw new Error('not found')
-      Object.assign(g, { name: checkGate(name, conditions, id), conditions, changedBy: session.user!.username, changedAt: new Date().toISOString() })
-      return wait({ id, name: g.name, projects: usingGate(id) })
-    },
-    deleteQualityGate: async (id) => {
-      requireAdmin()
-      const users = usingGate(id)
-      if (users.length > 0) throw new Error(`projects use this gate: ${users.join(', ')}; choose another for them first`)
-      const at = serverGates.findIndex((x) => x.id === id)
-      if (at < 0) throw new Error('not found')
-      serverGates.splice(at, 1)
-      await wait(null)
-    },
-    security: async () => {
-      guard()
-      return wait(SECURITY)
-    },
-    securityReview: async (query) => {
-      guard()
-      return wait(securityReview(issues, catalog, query))
-    },
-    components: async (project) => {
-      guard()
-      return wait(listComponents(project))
-    },
-    component: async (project, path, branch) => {
-      guard()
-      const detail = componentDetail(project, path, branch)
-      if (!detail) throw new Error('not found')
-      return wait(detail)
-    },
-    dependencies: async (project, branch) => {
-      guard()
-      const detail = projectDetail(project, branch)
-      if (!detail) throw new Error('not found')
-      return wait(dependencyList(detail))
-    },
-    coverage: async (project, branch) => {
-      guard()
-      const detail = projectDetail(project, branch)
-      if (!detail) throw new Error('not found')
-      return wait(coverageList(detail))
-    },
-    fileCoverage: async (project, path, branch) => {
-      guard()
-      const detail = projectDetail(project, branch)
-      if (!detail) throw new Error('not found')
-      return wait(fileCoverage(detail, path))
-    },
-    setNewCodePeriod: async (project, analysis) => {
-      guard()
-      return wait(setNewCodePeriod(project, analysis))
-    },
-    projectSettings: async (project) => {
-      guard()
-      return wait(settingsView(project))
-    },
-    updateProjectSettings: async (project, patch) => {
-      requireAdmin()
-      const s = settingsOf(project)
-      // As the server does: a trimmed name, null when empty, and a main branch with analyses.
-      const name = patchedText(patch.name, s.name)
-      if (name && name.length > 100) throw new Error('a project name is at most 100 characters')
-      const quality = patch.qualityGate === undefined ? s.qualityGate : patch.qualityGate
-      if (quality !== null && !gateRef(quality)) throw new Error(`no quality gate ${quality}`)
-      const repository = patchedText(patch.githubRepository, s.githubRepository)
-      if (repository && !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repository)) throw new Error(`"${repository}" is not a GitHub repository: use owner/name`)
-      const main = patch.mainBranch ?? s.mainBranch
-      if (main !== s.mainBranch && !BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
-      if (main !== s.mainBranch) clearNewCodePeriod(project)
-      const gateName = (id: number | null) => gateRef(id)?.name ?? null
-      // Each setting, whether it changed, and its old and new values as the log shows them.
-      const changes: [ProjectSettingChange['setting'], boolean, string | null, string | null][] = [
-        ['name', name !== s.name, s.name, name],
-        ['main_branch', main !== s.mainBranch, s.mainBranch, main],
-        ['quality_gate', quality !== s.qualityGate, gateName(s.qualityGate), gateName(quality)],
-        ['github_repository', repository !== s.githubRepository, s.githubRepository, repository],
-      ]
-      const by = session.user!.username
-      const at = new Date().toISOString()
-      for (const [setting, changed, old, value] of changes) if (changed) s.changes.unshift({ setting, old, new: value, by, at })
-      Object.assign(s, { name, mainBranch: main, qualityGate: quality, githubRepository: repository })
-      return wait(settingsView(project))
-    },
-    deleteProject: async (project, confirm) => {
-      requireAdmin()
-      if (confirm !== project) throw new Error("type the project's key to confirm deleting it")
-      const at = projectKeys.indexOf(project)
-      if (at < 0) throw new Error('not found')
-      const by = session.user!.username
-      projectKeys.splice(at, 1)
-      for (const t of tokens.list()) if (t.type === 'project_analysis' && t.project === project) tokens.revoke(t.id, by)
-      const d: DeletedProject = {
-        id: deleted.length + 1,
-        key: project,
-        name: settings.get(project)?.name ?? null,
-        analyses: BRANCHES.reduce((n, b) => n + b.analyses, 0),
-        deletedBy: by,
-        deletedAt: new Date().toISOString(),
-        allowedBy: null,
-        allowedAt: null,
+  session: () => wait(session),
+  signIn: async (username, password) => {
+    await wait(null)
+    const user = users.find((u) => u.username === username.toLowerCase())
+    if (!user || user.disabled || password !== MOCK_PASSWORD) throw new AuthError('Invalid username or password')
+    session.user = asUser(user)
+    session.authenticated = true
+  },
+  signOut: async () => {
+    await wait(null)
+    session.user = null
+    session.authenticated = false
+  },
+  changePassword: async (current, next) => {
+    await wait(null)
+    if (!session.user) throw new AuthError()
+    if (current !== MOCK_PASSWORD) throw new Error('the current password is wrong')
+    checkPassword(next)
+  },
+  myTokens: async () => {
+    if (!session.user) throw new AuthError()
+    return wait(tokens.list(session.user.username))
+  },
+  createToken: async (t) => {
+    if (!session.user) throw new AuthError()
+    refuseDeleted(t.project)
+    return wait(tokens.create(session.user.username, t))
+  },
+  revokeMyToken: async (id) => {
+    if (!session.user) throw new AuthError()
+    tokens.revoke(id, session.user.username, session.user.username)
+    await wait(null)
+  },
+  tokens: async () => {
+    requireAdmin()
+    return wait(tokens.list())
+  },
+  revokeToken: async (id) => {
+    requireAdmin()
+    tokens.revoke(id, session.user!.username)
+    await wait(null)
+  },
+  createTokenFor: async (username, t) => {
+    requireAdmin()
+    const owner = users.find((u) => u.username === username)
+    if (!owner) throw new Error(`no user named "${username}"`)
+    if (owner.disabled) throw new Error(`${username} is disabled, so its tokens wouldn't work`)
+    refuseDeleted(t.project)
+    return wait(tokens.create(username, t, session.user!.username))
+  },
+  users: async () => {
+    requireAdmin()
+    return wait(users)
+  },
+  createUser: async (input) => {
+    requireAdmin()
+    const { password, ...fields } = input
+    if (password === undefined && input.role === 'admin') throw new Error(NO_PASSWORD_ADMIN)
+    if (password !== undefined) checkPassword(password)
+    if (users.some((u) => u.username === input.username)) throw new Error(`username "${input.username}" is taken`)
+    const user: UserRow = { ...fields, id: users.length + 1, disabled: false, hasPassword: password !== undefined, createdAt: new Date().toISOString(), lastLoginAt: null }
+    users.push(user)
+    return wait(asUser(user))
+  },
+  updateUser: async (id, patch) => {
+    requireAdmin()
+    if (patch.password !== undefined) checkPassword(patch.password)
+    const user = findUser(id)
+    const activeAdmins = users.filter((u) => u.role === 'admin' && !u.disabled)
+    const staysAdmin = (patch.role ?? 'admin') === 'admin' && patch.disabled !== true
+    if (activeAdmins.length === 1 && activeAdmins[0].id === id && !staysAdmin) throw new Error('the last active admin cannot be disabled or made a member')
+    if (patch.role === 'admin' && !user.hasPassword && patch.password === undefined) throw new Error(NO_PASSWORD_ADMIN)
+    if (patch.password !== undefined) user.hasPassword = true
+    if (patch.displayName !== undefined) user.displayName = patch.displayName
+    if (patch.role !== undefined) user.role = patch.role
+    if (patch.disabled !== undefined) user.disabled = patch.disabled
+    return wait(asUser(user))
+  },
+  shell: () => wait(shell()),
+  }
+}
+
+/** The overview, quality gates and the security screen. */
+function overviewApi(m: MockState): Pick<SondaApi, 'overview' | 'drill' | 'gates' | 'createQualityGate' | 'updateQualityGate' | 'deleteQualityGate' | 'security' | 'securityReview'> {
+  const { issues, catalog, live, settings, serverGates, checkGate, usingGate, session, requireAdmin, wait, guard } = m
+  return {
+  overview: (scope, range) => wait(overview(scope, range)),
+  drill: (metric: DrillMetric) => wait<Drill>(DRILLS[metric]),
+  gates: async () => {
+    guard()
+    // Projects judged by a server gate leave their sonda.toml gate.
+    const judged = new Set([...settings].filter(([, s]) => s.qualityGate !== null).map(([key]) => key))
+    const toml = GATES.map((g) => ({ ...g, projects: g.projects.filter((p) => !judged.has(p.project)) }))
+    const project = (key: string) => PROJECT_LIST.projects.find((p) => p.key === key)!
+    const server: QualityGate[] = serverGates.map((g) => ({
+      id: `server-${g.id}`,
+      name: g.name,
+      isDefault: false,
+      server: { id: g.id, changedBy: g.changedBy, changedAt: g.changedAt },
+      conditions: g.conditions.map((c) => ({ ...c, label: conditionLabel(c), failing: 0, noData: 0 })),
+      projects: usingGate(g.id).map((key) => ({ project: key, state: 'passed', analyzedAt: project(key).analyzedAt })),
+      evaluations: [],
+      passRate: null,
+      mostCommonFailure: null,
+    }))
+    return wait({ gates: [toml[0], ...server, ...toml.slice(1)], metrics: METRICS })
+  },
+  createQualityGate: async (name, conditions) => {
+    requireAdmin()
+    const g = { id: live.nextGate++, name: checkGate(name, conditions), conditions, changedBy: session.user!.username, changedAt: new Date().toISOString() }
+    serverGates.push(g)
+    return wait({ id: g.id, name: g.name, projects: [] })
+  },
+  updateQualityGate: async (id, name, conditions) => {
+    requireAdmin()
+    const g = serverGates.find((x) => x.id === id)
+    if (!g) throw new Error('not found')
+    Object.assign(g, { name: checkGate(name, conditions, id), conditions, changedBy: session.user!.username, changedAt: new Date().toISOString() })
+    return wait({ id, name: g.name, projects: usingGate(id) })
+  },
+  deleteQualityGate: async (id) => {
+    requireAdmin()
+    const inUse = usingGate(id)
+    if (inUse.length > 0) throw new Error(`projects use this gate: ${inUse.join(', ')}; choose another for them first`)
+    const at = serverGates.findIndex((x) => x.id === id)
+    if (at < 0) throw new Error('not found')
+    serverGates.splice(at, 1)
+    await wait(null)
+  },
+  security: async () => {
+    guard()
+    return wait(SECURITY)
+  },
+  securityReview: async (query) => {
+    guard()
+    return wait(securityReview(issues, catalog, query))
+  },
+  }
+}
+
+/** Projects and what's analyzed in them. */
+function projectApi(m: MockState): Pick<SondaApi, 'components' | 'component' | 'dependencies' | 'coverage' | 'fileCoverage' | 'setNewCodePeriod' | 'projectSettings' | 'updateProjectSettings' | 'deleteProject' | 'deletedProjects' | 'allowDeletedProject' | 'reviewDependency' | 'analyses' | 'analysis' | 'projects' | 'createProject' | 'project'> {
+  const { tokens, projectKeys, waitingKeys, deleted, refuseDeleted, settings, serverGates, gateRef, settingsOf, shown, settingsView, session, requireAdmin, wait, guard } = m
+  return {
+  components: async (project) => {
+    guard()
+    return wait(listComponents(project))
+  },
+  component: async (project, path, branch) => {
+    guard()
+    const detail = componentDetail(project, path, branch)
+    if (!detail) throw new Error('not found')
+    return wait(detail)
+  },
+  dependencies: async (project, branch) => {
+    guard()
+    const detail = projectDetail(project, branch)
+    if (!detail) throw new Error('not found')
+    return wait(dependencyList(detail))
+  },
+  coverage: async (project, branch) => {
+    guard()
+    const detail = projectDetail(project, branch)
+    if (!detail) throw new Error('not found')
+    return wait(coverageList(detail))
+  },
+  fileCoverage: async (project, path, branch) => {
+    guard()
+    const detail = projectDetail(project, branch)
+    if (!detail) throw new Error('not found')
+    return wait(fileCoverage(detail, path))
+  },
+  setNewCodePeriod: async (project, analysis) => {
+    guard()
+    return wait(setNewCodePeriod(project, analysis))
+  },
+  projectSettings: async (project) => {
+    guard()
+    return wait(settingsView(project))
+  },
+  updateProjectSettings: async (project, patch) => {
+    requireAdmin()
+    const s = settingsOf(project)
+    // As the server does: a trimmed name, null when empty, and a main branch with analyses.
+    const name = patchedText(patch.name, s.name)
+    if (name && name.length > 100) throw new Error('a project name is at most 100 characters')
+    const quality = patch.qualityGate === undefined ? s.qualityGate : patch.qualityGate
+    if (quality !== null && !gateRef(quality)) throw new Error(`no quality gate ${quality}`)
+    const repository = patchedText(patch.githubRepository, s.githubRepository)
+    if (repository && !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repository)) throw new Error(`"${repository}" is not a GitHub repository: use owner/name`)
+    const main = patch.mainBranch ?? s.mainBranch
+    if (main !== s.mainBranch && !BRANCHES.some((b) => b.name === main)) throw new Error(`branch "${main}" has no analyses; the main branch must be one that does`)
+    if (main !== s.mainBranch) clearNewCodePeriod(project)
+    const gateName = (id: number | null) => gateRef(id)?.name ?? null
+    // Each setting, whether it changed, and its old and new values as the log shows them.
+    const changes: [ProjectSettingChange['setting'], boolean, string | null, string | null][] = [
+      ['name', name !== s.name, s.name, name],
+      ['main_branch', main !== s.mainBranch, s.mainBranch, main],
+      ['quality_gate', quality !== s.qualityGate, gateName(s.qualityGate), gateName(quality)],
+      ['github_repository', repository !== s.githubRepository, s.githubRepository, repository],
+    ]
+    const by = session.user!.username
+    const at = new Date().toISOString()
+    for (const [setting, changed, old, value] of changes) if (changed) s.changes.unshift({ setting, old, new: value, by, at })
+    Object.assign(s, { name, mainBranch: main, qualityGate: quality, githubRepository: repository })
+    return wait(settingsView(project))
+  },
+  deleteProject: async (project, confirm) => {
+    requireAdmin()
+    if (confirm !== project) throw new Error("type the project's key to confirm deleting it")
+    const at = projectKeys.indexOf(project)
+    if (at < 0) throw new Error('not found')
+    const by = session.user!.username
+    projectKeys.splice(at, 1)
+    for (const t of tokens.list()) if (t.type === 'project_analysis' && t.project === project) tokens.revoke(t.id, by)
+    const d: DeletedProject = {
+      id: deleted.length + 1,
+      key: project,
+      name: settings.get(project)?.name ?? null,
+      analyses: BRANCHES.reduce((n, b) => n + b.analyses, 0),
+      deletedBy: by,
+      deletedAt: new Date().toISOString(),
+      allowedBy: null,
+      allowedAt: null,
+    }
+    deleted.unshift(d)
+    settings.delete(project)
+    return wait(d)
+  },
+  deletedProjects: async () => {
+    requireAdmin()
+    return wait(deleted)
+  },
+  allowDeletedProject: async (id) => {
+    requireAdmin()
+    const d = deleted.find((x) => x.id === id)
+    if (!d) throw new Error('not found')
+    if (!d.allowedAt) Object.assign(d, { allowedBy: session.user!.username, allowedAt: new Date().toISOString() })
+    return wait(d)
+  },
+  reviewDependency: async (_project, patch) => {
+    guard()
+    return wait(reviewDependency(patch, 'mara'))
+  },
+  analyses: async (query) => {
+    guard()
+    return wait(queryAnalyses(query))
+  },
+  analysis: async (id) => {
+    guard()
+    const detail = analysisDetail(id)
+    if (!detail) throw new Error('not found')
+    return wait(detail)
+  },
+  projects: async () => {
+    guard()
+    return wait({
+      ...PROJECT_LIST,
+      projects: PROJECT_LIST.projects.filter((p) => projectKeys.includes(p.key)).map((p) => ({ ...p, ...shown(p.key) })),
+      waiting: waitingKeys.map((key) => ({ key, name: settings.get(key)?.name ?? null, githubRepository: settings.get(key)?.githubRepository ?? null })),
+    })
+  },
+  createProject: async (key, mainBranch) => {
+    requireAdmin()
+    // As the server checks them.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(key)) throw new Error(`invalid project key "${key}": use letters, digits, '.', '_' or '-'`)
+    if (!mainBranch.trim() || /^pr:\d+$/.test(mainBranch)) throw new Error(`"${mainBranch}" can't be a main branch`)
+    refuseDeleted(key)
+    if (projectKeys.includes(key) || waitingKeys.includes(key)) throw new Error(`project "${key}" already exists`)
+    waitingKeys.push(key)
+    settings.set(key, { name: null, mainBranch: mainBranch.trim(), qualityGate: null, githubRepository: null, changes: [] })
+    return wait({ key })
+  },
+  project: async (key, branch) => {
+    guard()
+    if (!projectKeys.includes(key)) throw new Error('not found')
+    const detail = projectDetail(key, branch, settings.get(key))
+    if (!detail) throw new Error('not found')
+    // As the server judges it: by its server gate's conditions, when it has one.
+    const gate = serverGates.find((g) => g.id === settings.get(key)?.qualityGate)
+    if (gate) {
+      detail.gate = {
+        state: 'passed',
+        conditions: gate.conditions.map((c) => ({ label: conditionLabel(c), metric: c.metric, actual: null, status: 'no_data' })),
+        serverGate: { id: gate.id, name: gate.name },
       }
-      deleted.unshift(d)
-      settings.delete(project)
-      return wait(d)
-    },
-    deletedProjects: async () => {
-      requireAdmin()
-      return wait(deleted)
-    },
-    allowDeletedProject: async (id) => {
-      requireAdmin()
-      const d = deleted.find((x) => x.id === id)
-      if (!d) throw new Error('not found')
-      if (!d.allowedAt) Object.assign(d, { allowedBy: session.user!.username, allowedAt: new Date().toISOString() })
-      return wait(d)
-    },
-    githubApp: async () => {
-      requireAdmin()
-      return wait(github)
-    },
-    githubAppManifest: async (owner, name) => {
-      requireAdmin()
-      if (github.source) throw new Error('a GitHub App is already connected; disconnect it first')
-      manifestState = MOCK_MANIFEST_STATE
-      const page = owner ? `https://github.com/organizations/${owner}/settings/apps/new` : 'https://github.com/settings/apps/new'
-      const manifest = { name, url: location.origin, redirect_url: `${location.origin}/admin/github/created`, public: false }
-      return wait({ action: `${page}?state=${manifestState}`, manifest: JSON.stringify(manifest) })
-    },
-    createGithubApp: async (code, state) => {
-      requireAdmin()
-      const started = manifestState === state
-      manifestState = null
-      if (!started) throw new Error('this App wasn\'t started here by you, or it took over an hour: start again')
-      if (code !== 'good') throw new Error("GitHub didn't accept the code, which works once and within the hour: start again")
-      github = { ...MOCK_GITHUB_APP, createdBy: session.user!.username, createdAt: new Date().toISOString() }
-      return wait(github)
-    },
-    githubAppInstallations: async () => {
-      requireAdmin()
-      if (github.source !== 'stored' && github.source !== 'config') throw new Error('no GitHub App is connected')
-      return wait(installations)
-    },
-    disconnectGithubApp: async () => {
-      requireAdmin()
-      if (github.source === 'config') throw new Error('this App is configured by the server\'s configuration (SONDA_GITHUB_APP_ID); remove it there')
-      github = structuredClone(NO_GITHUB_APP)
-      installations = []
-      return wait(github)
-    },
-    reviewDependency: async (_project, patch) => {
-      guard()
-      return wait(reviewDependency(patch, 'mara'))
-    },
-    analyses: async (query) => {
-      guard()
-      return wait(queryAnalyses(query))
-    },
-    analysis: async (id) => {
-      guard()
-      const detail = analysisDetail(id)
-      if (!detail) throw new Error('not found')
-      return wait(detail)
-    },
-    projects: async () => {
-      guard()
-      return wait({
-        ...PROJECT_LIST,
-        projects: PROJECT_LIST.projects.filter((p) => projectKeys.includes(p.key)).map((p) => ({ ...p, ...shown(p.key) })),
-        waiting: waitingKeys.map((key) => ({ key, name: settings.get(key)?.name ?? null, githubRepository: settings.get(key)?.githubRepository ?? null })),
-      })
-    },
-    createProject: async (key, mainBranch) => {
-      requireAdmin()
-      // As the server checks them.
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(key)) throw new Error(`invalid project key "${key}": use letters, digits, '.', '_' or '-'`)
-      if (!mainBranch.trim() || /^pr:\d+$/.test(mainBranch)) throw new Error(`"${mainBranch}" can't be a main branch`)
-      refuseDeleted(key)
-      if (projectKeys.includes(key) || waitingKeys.includes(key)) throw new Error(`project "${key}" already exists`)
-      waitingKeys.push(key)
-      settings.set(key, { name: null, mainBranch: mainBranch.trim(), qualityGate: null, githubRepository: null, changes: [] })
-      return wait({ key })
-    },
-    project: async (key, branch) => {
-      guard()
-      if (!projectKeys.includes(key)) throw new Error('not found')
-      const detail = projectDetail(key, branch, settings.get(key))
-      if (!detail) throw new Error('not found')
-      // As the server judges it: by its server gate's conditions, when it has one.
-      const gate = serverGates.find((g) => g.id === settings.get(key)?.qualityGate)
-      if (gate) {
-        detail.gate = {
-          state: 'passed',
-          conditions: gate.conditions.map((c) => ({ label: conditionLabel(c), metric: c.metric, actual: null, status: 'no_data' })),
-          serverGate: { id: gate.id, name: gate.name },
-        }
-      }
-      return wait(detail)
-    },
-    issues: async (query) => {
-      guard()
-      return wait(queryIssues(counted(), query))
-    },
-    issue: async (id) => {
-      guard()
-      return wait(findIssue(id))
-    },
-    issuesPrompt: async (query, ids) => {
-      guard()
-      const page = queryIssues(counted(), { ...query, offset: 0, limit: counted().length })
-      const chosen = ids?.length ? page.items.filter((i) => ids.includes(i.id)) : page.items
-      return wait(mockPrompt(chosen.slice(0, PROMPT_LIMIT).map((i) => findIssue(i.id)), ids?.length ? chosen.length : page.total))
-    },
-    updateIssue: async (id, patch) => wait(update(id, patch)),
-    rules: async () => {
-      guard()
-      return wait({ ...catalog, rules: ruleSettings.withSettings(catalog.rules, projectKeys) })
-    },
-    projectRules: async (key) => {
-      guard()
-      const detail = projectDetail(key)
-      if (!detail) throw new Error('not found')
-      const open = issues.filter((i) => i.status === 'open' || i.status === 'confirmed')
-      return wait(ruleSettings.projectRules(key, detail.languages.map((l) => l.id), catalog.rules, open))
-    },
-    ruleProfiles: async () => {
-      guard()
-      return wait(ruleSettings.profiles(projectKeys))
-    },
-    ruleProfile: async (id) => {
-      guard()
-      return wait(ruleSettings.profileDetail(id, projectKeys, new Map(catalog.rules.map((r) => [r.id, r.name]))))
-    },
-    createRuleProfile: async (name, copyFrom) => {
-      requireAdmin()
-      return wait(ruleSettings.createProfile(name, session.user!.username, copyFrom))
-    },
-    updateRuleProfile: async (id, patch) => {
-      requireAdmin()
-      ruleSettings.updateProfile(id, patch)
-      await wait(null)
-    },
-    deleteRuleProfile: async (id) => {
-      requireAdmin()
-      ruleSettings.deleteProfile(id)
-      await wait(null)
-    },
-    setProfileRule: async (id, rule, state, severity, note) => {
-      requireAdmin()
-      findRule(rule)
-      ruleSettings.setProfileRule(id, rule, state, session.user!.username, severity, note)
-      await wait(null)
-    },
-    setProjectProfile: async (key, profile) => {
-      requireAdmin()
-      if (!projectKeys.includes(key)) throw new Error('not found')
-      ruleSettings.setProjectProfile(key, profile)
-      await wait(null)
-    },
-    setRuleOff: async (rule, off, note) => {
-      requireAdmin()
-      findRule(rule)
-      if (off) ruleSettings.turnOff(rule, session.user!.username, note)
-      else ruleSettings.turnBackOn(rule, note)
-      await wait(null)
-    },
-    setProjectRule: async (key, rule, state, note) => {
-      requireAdmin()
-      findRule(rule)
-      if (!projectKeys.includes(key)) throw new Error('not found')
-      ruleSettings.setProject(key, rule, state, session.user!.username, note)
-      await wait(null)
-    },
+    }
+    return wait(detail)
+  },
+  }
+}
+
+/** The GitHub App. */
+function githubApi(m: MockState): Pick<SondaApi, 'githubApp' | 'githubAppManifest' | 'createGithubApp' | 'githubAppInstallations' | 'disconnectGithubApp'> {
+  const { live, session, requireAdmin, wait } = m
+  return {
+  githubApp: async () => {
+    requireAdmin()
+    return wait(live.github)
+  },
+  githubAppManifest: async (owner, name) => {
+    requireAdmin()
+    if (live.github.source) throw new Error('a GitHub App is already connected; disconnect it first')
+    live.manifestState = MOCK_MANIFEST_STATE
+    const page = owner ? `https://github.com/organizations/${owner}/settings/apps/new` : 'https://github.com/settings/apps/new'
+    const manifest = { name, url: location.origin, redirect_url: `${location.origin}/admin/github/created`, public: false }
+    return wait({ action: `${page}?state=${live.manifestState}`, manifest: JSON.stringify(manifest) })
+  },
+  createGithubApp: async (code, state) => {
+    requireAdmin()
+    const started = live.manifestState === state
+    live.manifestState = null
+    if (!started) throw new Error('this App wasn\'t started here by you, or it took over an hour: start again')
+    if (code !== 'good') throw new Error("GitHub didn't accept the code, which works once and within the hour: start again")
+    live.github = { ...MOCK_GITHUB_APP, createdBy: session.user!.username, createdAt: new Date().toISOString() }
+    return wait(live.github)
+  },
+  githubAppInstallations: async () => {
+    requireAdmin()
+    if (live.github.source !== 'stored' && live.github.source !== 'config') throw new Error('no GitHub App is connected')
+    return wait(live.installations)
+  },
+  disconnectGithubApp: async () => {
+    requireAdmin()
+    if (live.github.source === 'config') throw new Error('this App is configured by the server\'s configuration (SONDA_GITHUB_APP_ID); remove it there')
+    live.github = structuredClone(NO_GITHUB_APP)
+    live.installations = []
+    return wait(live.github)
+  },
+  }
+}
+
+/** Issues, and the prompt for an AI assistant. */
+function issueApi(m: MockState): Pick<SondaApi, 'issues' | 'issue' | 'issuesPrompt' | 'updateIssue'> {
+  const { counted, wait, guard, findIssue, update } = m
+  return {
+  issues: async (query) => {
+    guard()
+    return wait(queryIssues(counted(), query))
+  },
+  issue: async (id) => {
+    guard()
+    return wait(findIssue(id))
+  },
+  issuesPrompt: async (query, ids) => {
+    guard()
+    const page = queryIssues(counted(), { ...query, offset: 0, limit: counted().length })
+    const chosen = ids?.length ? page.items.filter((i) => ids.includes(i.id)) : page.items
+    return wait(mockPrompt(chosen.slice(0, PROMPT_LIMIT).map((i) => findIssue(i.id)), ids?.length ? chosen.length : page.total))
+  },
+  updateIssue: async (id, patch) => wait(update(id, patch)),
+  }
+}
+
+/** Rules, rule profiles and their settings. */
+function ruleApi(m: MockState): Pick<SondaApi, 'rules' | 'projectRules' | 'ruleProfiles' | 'ruleProfile' | 'createRuleProfile' | 'updateRuleProfile' | 'deleteRuleProfile' | 'setProfileRule' | 'setProjectProfile' | 'setRuleOff' | 'setProjectRule'> {
+  const { issues, catalog, ruleSettings, projectKeys, findRule, session, requireAdmin, wait, guard } = m
+  return {
+  rules: async () => {
+    guard()
+    return wait({ ...catalog, rules: ruleSettings.withSettings(catalog.rules, projectKeys) })
+  },
+  projectRules: async (key) => {
+    guard()
+    const detail = projectDetail(key)
+    if (!detail) throw new Error('not found')
+    const open = issues.filter((i) => i.status === 'open' || i.status === 'confirmed')
+    return wait(ruleSettings.projectRules(key, detail.languages.map((l) => l.id), catalog.rules, open))
+  },
+  ruleProfiles: async () => {
+    guard()
+    return wait(ruleSettings.profiles(projectKeys))
+  },
+  ruleProfile: async (id) => {
+    guard()
+    return wait(ruleSettings.profileDetail(id, projectKeys, new Map(catalog.rules.map((r) => [r.id, r.name]))))
+  },
+  createRuleProfile: async (name, copyFrom) => {
+    requireAdmin()
+    return wait(ruleSettings.createProfile(name, session.user!.username, copyFrom))
+  },
+  updateRuleProfile: async (id, patch) => {
+    requireAdmin()
+    ruleSettings.updateProfile(id, patch)
+    await wait(null)
+  },
+  deleteRuleProfile: async (id) => {
+    requireAdmin()
+    ruleSettings.deleteProfile(id)
+    await wait(null)
+  },
+  setProfileRule: async (id, rule, state, severity, note) => {
+    requireAdmin()
+    findRule(rule)
+    ruleSettings.setProfileRule(id, rule, state, session.user!.username, severity, note)
+    await wait(null)
+  },
+  setProjectProfile: async (key, profile) => {
+    requireAdmin()
+    if (!projectKeys.includes(key)) throw new Error('not found')
+    ruleSettings.setProjectProfile(key, profile)
+    await wait(null)
+  },
+  setRuleOff: async (rule, off, note) => {
+    requireAdmin()
+    findRule(rule)
+    if (off) ruleSettings.turnOff(rule, session.user!.username, note)
+    else ruleSettings.turnBackOn(rule, note)
+    await wait(null)
+  },
+  setProjectRule: async (key, rule, state, note) => {
+    requireAdmin()
+    findRule(rule)
+    if (!projectKeys.includes(key)) throw new Error('not found')
+    ruleSettings.setProject(key, rule, state, session.user!.username, note)
+    await wait(null)
+  },
   }
 }
 
