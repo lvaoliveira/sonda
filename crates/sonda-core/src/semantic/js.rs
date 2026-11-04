@@ -62,11 +62,12 @@ pub(super) fn build<'t>(root: Node<'t>, src: &[u8], deadline: Instant) -> Option
         not_refs: HashSet::new(),
         function_bodies: HashSet::new(),
     };
-    // (depth of the node that opened it, scope)
-    let mut scopes: Vec<(usize, ScopeId)> = vec![(0, 0)];
-    let mut ancestors: Vec<Node<'t>> = Vec::new();
+    let mut walk = Walk {
+        scopes: vec![(0, 0)],
+        ancestors: Vec::new(),
+        depth: 0,
+    };
     let mut cursor = root.walk();
-    let mut depth = 0;
     let mut visited = 0u32;
     loop {
         visited += 1;
@@ -74,30 +75,83 @@ pub(super) fn build<'t>(root: Node<'t>, src: &[u8], deadline: Instant) -> Option
             return None;
         }
         let node = cursor.node();
-        let scope = scopes.last().map_or(0, |s| s.1);
-        if let Some(opened) = b.visit(node, ancestors.last().copied(), scope) {
-            scopes.push((depth, opened));
+        let scope = walk.scopes.last().map_or(0, |s| s.1);
+        if let Some(opened) = b.visit(node, walk.ancestors.last().copied(), scope) {
+            walk.scopes.push((walk.depth, opened));
         }
         if cursor.goto_first_child() {
-            ancestors.push(node);
-            depth += 1;
+            walk.ancestors.push(node);
+            walk.depth += 1;
             continue;
         }
+        if !walk.leave(&mut cursor) {
+            b.m.root = Some(root);
+            b.m.resolve();
+            return Some(b.m);
+        }
+    }
+}
+
+/// The parts of a binding pattern that can bind names, each with whether a
+/// `...rest` sibling follows it in an object pattern.
+fn pattern_parts(n: Node, rest_sibling: bool) -> Vec<(Node, bool)> {
+    let mut c = n.walk();
+    match n.kind() {
+        "object_pattern" => {
+            let has_rest = n.named_children(&mut c).any(|x| x.kind() == "rest_pattern");
+            let mut c = n.walk();
+            n.named_children(&mut c)
+                .map(|child| (child, has_rest && child.kind() != "rest_pattern"))
+                .collect()
+        }
+        "pair_pattern" => n
+            .child_by_field_name("value")
+            .map(|v| (v, rest_sibling))
+            .into_iter()
+            .collect(),
+        "assignment_pattern" | "object_assignment_pattern" => n
+            .child_by_field_name("left")
+            .map(|l| (l, rest_sibling))
+            .into_iter()
+            .collect(),
+        "required_parameter" | "optional_parameter" => n
+            .child_by_field_name("pattern")
+            .map(|p| (p, false))
+            .into_iter()
+            .collect(),
+        "array_pattern" | "rest_pattern" => n
+            .named_children(&mut c)
+            .map(|child| (child, false))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Where `build`'s walk is: the scopes open, each with the depth of the
+/// node that opened it, and the nodes above the cursor.
+struct Walk<'t> {
+    scopes: Vec<(usize, ScopeId)>,
+    ancestors: Vec<Node<'t>>,
+    depth: usize,
+}
+
+impl<'t> Walk<'t> {
+    /// Leaves the node at the cursor for the next one that isn't below it,
+    /// closing the scopes the nodes left opened; false when that's the end
+    /// of the tree.
+    fn leave(&mut self, cursor: &mut tree_sitter::TreeCursor<'t>) -> bool {
         loop {
-            // Leaving the node at `depth`: close the scopes it opened.
-            while scopes.len() > 1 && scopes.last().is_some_and(|s| s.0 >= depth) {
-                scopes.pop();
+            while self.scopes.len() > 1 && self.scopes.last().is_some_and(|s| s.0 >= self.depth) {
+                self.scopes.pop();
             }
             if cursor.goto_next_sibling() {
-                break;
+                return true;
             }
             if !cursor.goto_parent() {
-                b.m.root = Some(root);
-                b.m.resolve();
-                return Some(b.m);
+                return false;
             }
-            ancestors.pop();
-            depth -= 1;
+            self.ancestors.pop();
+            self.depth -= 1;
         }
     }
 }
@@ -428,49 +482,33 @@ impl<'t> Binder<'t, '_> {
     fn pattern(&mut self, scope: ScopeId, pattern: Node<'t>, kind: Option<DeclKind>) {
         let mut stack = vec![(pattern, false)];
         while let Some((n, rest_sibling)) = stack.pop() {
-            match n.kind() {
-                "identifier" | "shorthand_property_identifier_pattern" => match kind {
-                    Some(kind) => {
-                        self.declare(scope, n, kind);
-                        if rest_sibling && let Some(d) = self.m.decls.last_mut() {
-                            d.rest_sibling = true;
-                        }
-                    }
-                    None => {
-                        self.not_refs.insert(n.id());
-                    }
-                },
-                "object_pattern" => {
-                    let mut c = n.walk();
-                    let has_rest = n.named_children(&mut c).any(|x| x.kind() == "rest_pattern");
-                    let mut c = n.walk();
-                    for child in n.named_children(&mut c) {
-                        stack.push((child, has_rest && child.kind() != "rest_pattern"));
-                    }
-                }
-                "pair_pattern" => {
-                    if let Some(v) = n.child_by_field_name("value") {
-                        stack.push((v, rest_sibling));
-                    }
-                }
-                "assignment_pattern" | "object_assignment_pattern" => {
-                    if let Some(l) = n.child_by_field_name("left") {
-                        stack.push((l, rest_sibling));
-                    }
-                }
-                "required_parameter" | "optional_parameter" => {
-                    if let Some(p) = n.child_by_field_name("pattern") {
-                        stack.push((p, false));
-                    }
-                }
-                "array_pattern" | "rest_pattern" => {
-                    let mut c = n.walk();
-                    for child in n.named_children(&mut c) {
-                        stack.push((child, false));
-                    }
-                }
-                _ => {}
+            if matches!(
+                n.kind(),
+                "identifier" | "shorthand_property_identifier_pattern"
+            ) {
+                self.bind_pattern_name(scope, n, kind, rest_sibling);
+            } else {
+                stack.extend(pattern_parts(n, rest_sibling));
             }
+        }
+    }
+
+    /// A name a pattern binds: declared, or with no `kind` kept from being
+    /// a reference. `rest_sibling`: an object pattern's `...rest` follows.
+    fn bind_pattern_name(
+        &mut self,
+        scope: ScopeId,
+        n: Node<'t>,
+        kind: Option<DeclKind>,
+        rest_sibling: bool,
+    ) {
+        let Some(kind) = kind else {
+            self.not_refs.insert(n.id());
+            return;
+        };
+        self.declare(scope, n, kind);
+        if rest_sibling && let Some(d) = self.m.decls.last_mut() {
+            d.rest_sibling = true;
         }
     }
 
