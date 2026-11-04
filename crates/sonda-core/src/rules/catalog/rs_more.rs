@@ -234,7 +234,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: RUST,
             query: "(function_signature_item) @match",
-            filter: Some(Keep(is_inline_trait_signature)),
+            filter: Some(Find(inline_on_bodiless_method)),
         },
         example: Some(Example {
             lang: Lang::Rust,
@@ -376,7 +376,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: RUST,
             query: IMPL_OF_TRAIT,
-            filter: Some(Keep(hash_eq_pair_split)),
+            filter: Some(Find(hash_with_manual_eq)),
         },
         example: Some(Example {
             lang: Lang::Rust,
@@ -441,18 +441,24 @@ fn has_wildcard_import(declaration: Node, src: &[u8]) -> bool {
     if declaration
         .child(0)
         .is_some_and(|c| c.kind() == "visibility_modifier")
+        // Test code globs freely.
+        || in_test_code(declaration, src)
     {
+        return false;
+    }
+    // A prelude exists to be globbed.
+    if text(declaration, src).windows(7).any(|w| w == b"prelude") {
         return false;
     }
     let mut stack = vec![declaration];
     while let Some(n) = stack.pop() {
         if n.kind() == "use_wildcard" {
-            let path = text(n, src);
-            // A prelude exists to be globbed; `super::*` is how a test module
-            // reaches the code it tests.
-            let prelude = text(declaration, src).windows(7).any(|w| w == b"prelude");
-            let test_glob = path == b"super::*" && in_test_code(declaration, src);
-            if !prelude && !test_glob {
+            // `use Enum::*` is `enum_glob_use`'s, a separate lint: what comes
+            // before the `*` is a type, named in CamelCase.
+            let last = text(n, src)
+                .strip_suffix(b"::*")
+                .and_then(|p| p.rsplit(|b| *b == b':').next());
+            if !last.is_some_and(|l| l.first().is_some_and(u8::is_ascii_uppercase)) {
                 return true;
             }
         }
@@ -462,25 +468,25 @@ fn has_wildcard_import(declaration: Node, src: &[u8]) -> bool {
     false
 }
 
-fn is_inline_trait_signature(signature: Node, src: &[u8]) -> bool {
+fn inline_on_bodiless_method<'t>(signature: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if !signature
         .parent()
         .and_then(|p| p.parent())
         .is_some_and(|t| t.kind() == "trait_item")
     {
-        return false;
+        return None;
     }
     let mut previous = signature.prev_named_sibling();
     while let Some(p) = previous {
         match p.kind() {
-            "attribute_item" if text(p, src).starts_with(b"#[inline") => return true,
+            "attribute_item" if text(p, src).starts_with(b"#[inline") => return Some(p),
             "attribute_item" | "line_comment" | "block_comment" => {
                 previous = p.prev_named_sibling()
             }
-            _ => return false,
+            _ => return None,
         }
     }
-    false
+    None
 }
 
 /// The traits a type item derives, from the attributes written before it.
@@ -548,12 +554,32 @@ fn ord_pair_split(implementation: Node, src: &[u8]) -> bool {
     })
 }
 
-fn hash_eq_pair_split(implementation: Node, src: &[u8]) -> bool {
-    implemented_and_derived(implementation, src).is_some_and(|(implemented, derived)| {
-        let has = |t: &str| derived.iter().any(|d| d == t);
-        (implemented == "PartialEq" && has("Hash") && !has("PartialEq"))
-            || (implemented == "Hash" && has("PartialEq") && !has("Hash"))
-    })
+fn hash_with_manual_eq<'t>(implementation: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    // Only a `PartialEq` for the type itself: `PartialEq<Other>` isn't the one
+    // `Hash` must agree with.
+    let trait_text = text(implementation.child_by_field_name("trait")?, src);
+    if trait_text != b"PartialEq" && trait_text != b"PartialEq<Self>" {
+        return None;
+    }
+    let ty = type_name(implementation.child_by_field_name("type")?, src);
+    let declaration = declaration_beside(implementation, ty, src)?;
+    let derived = derives(declaration, src);
+    if !derived.iter().any(|d| d == "Hash") || derived.iter().any(|d| d == "PartialEq") {
+        return None;
+    }
+    // Reported at the `#[derive(..)]` that has `Hash`, as Clippy does.
+    let mut attr = declaration.prev_named_sibling();
+    while let Some(a) = attr.filter(|a| matches!(a.kind(), "attribute_item" | "line_comment")) {
+        let t = text(a, src);
+        if a.kind() == "attribute_item"
+            && t.starts_with(b"#[derive")
+            && t.windows(4).any(|w| w == b"Hash")
+        {
+            return Some(a);
+        }
+        attr = a.prev_named_sibling();
+    }
+    None
 }
 
 /// The field names of a struct declared in the file as `name`.
@@ -635,7 +661,10 @@ fn has_invisible_character(literal: Node, src: &[u8]) -> bool {
 }
 
 fn approximates_constant(literal: Node, src: &[u8]) -> bool {
-    use std::f64::consts::*;
+    use std::f64::consts::{
+        E, FRAC_1_PI, FRAC_1_SQRT_2, FRAC_2_PI, FRAC_2_SQRT_PI, FRAC_PI_2, FRAC_PI_3, FRAC_PI_4,
+        FRAC_PI_6, FRAC_PI_8, LN_2, LN_10, LOG2_10, LOG2_E, LOG10_2, LOG10_E, PI, SQRT_2, TAU,
+    };
     // Clippy's table: each constant and the fewest characters of it to count.
     const KNOWN: &[(f64, usize)] = &[
         (E, 4),
@@ -688,7 +717,35 @@ fn block_has_value(block: Node) -> bool {
     })
 }
 
-fn is_unit_block_like(expression: Node) -> bool {
+/// Whether a branch's value is unit or never, by its shape: an empty or
+/// statement-ending block, an assignment, `()`, `return`/`break`/`continue`,
+/// or a macro that panics or prints.
+fn is_unit_valued(value: Node, src: &[u8]) -> bool {
+    match value.kind() {
+        "block" => !block_has_value(value),
+        "assignment_expression"
+        | "compound_assignment_expr"
+        | "unit_expression"
+        | "return_expression"
+        | "break_expression"
+        | "continue_expression" => true,
+        "macro_invocation" => [
+            &b"panic"[..],
+            b"unreachable",
+            b"todo",
+            b"unimplemented",
+            b"println",
+            b"print",
+            b"eprintln",
+            b"eprint",
+        ]
+        .iter()
+        .any(|m| is_macro(value, src, m)),
+        _ => false,
+    }
+}
+
+fn is_unit_block_like(expression: Node, src: &[u8]) -> bool {
     match expression.kind() {
         "if_expression" => {
             let mut blocks = Vec::new();
@@ -726,19 +783,19 @@ fn is_unit_block_like(expression: Node) -> bool {
             !arms.is_empty()
                 && arms.iter().all(|arm| {
                     arm.child_by_field_name("value")
-                        .is_some_and(|v| v.kind() == "block" && !block_has_value(v))
+                        .is_some_and(|v| is_unit_valued(v, src))
                 })
         }
         _ => false,
     }
 }
 
-fn is_unnecessary_semicolon(semicolon: Node, _src: &[u8]) -> bool {
+fn is_unnecessary_semicolon(semicolon: Node, src: &[u8]) -> bool {
     semicolon
         .prev_named_sibling()
         .filter(|p| p.kind() == "expression_statement")
         .and_then(|p| p.named_child(0))
-        .is_some_and(is_unit_block_like)
+        .is_some_and(|e| is_unit_block_like(e, src))
 }
 
 /// The kinds of expression whose evaluation does nothing but compute a value.
@@ -746,8 +803,8 @@ fn is_effect_free(expression: Node) -> bool {
     let mut stack = vec![expression];
     while let Some(n) = stack.pop() {
         match n.kind() {
-            "identifier" | "field_identifier" | "scoped_identifier" | "boolean_literal"
-            | "integer_literal" | "float_literal" | "string_literal" | "char_literal" | "self" => {}
+            "identifier" | "field_identifier" | "boolean_literal" | "integer_literal"
+            | "float_literal" | "string_literal" | "char_literal" | "self" => {}
             "binary_expression"
             | "unary_expression"
             | "reference_expression"
@@ -755,7 +812,8 @@ fn is_effect_free(expression: Node) -> bool {
             | "field_expression"
             | "parenthesized_expression"
             | "tuple_expression"
-            | "array_expression" => {
+            | "array_expression"
+            | "index_expression" => {
                 let mut c = n.walk();
                 stack.extend(n.named_children(&mut c));
             }
@@ -793,9 +851,22 @@ fn contains_kind(root: Node, kinds: &[&str]) -> bool {
     false
 }
 
-fn never_loops(node: Node, _src: &[u8]) -> bool {
+fn never_loops(node: Node, src: &[u8]) -> bool {
     let Some(body) = node.child_by_field_name("body") else {
         return false;
+    };
+    // `'outer: loop`: its label, to tell a `break 'outer` from one aimed elsewhere.
+    let label_text = |l: Node| {
+        String::from_utf8_lossy(text(l, src))
+            .trim()
+            .trim_end_matches(':')
+            .to_string()
+    };
+    let own_label = {
+        let mut c = node.walk();
+        node.named_children(&mut c)
+            .find(|n| n.kind() == "label")
+            .map(label_text)
     };
     // Where the body leaves unconditionally: directly in its statements.
     let leaves = block_items(body).iter().any(|item| {
@@ -806,10 +877,11 @@ fn never_loops(node: Node, _src: &[u8]) -> bool {
         };
         e.is_some_and(|e| match e.kind() {
             "return_expression" => true,
-            // A label sends it to some other loop.
-            "break_expression" => {
-                e.named_child_count() == 0 || e.named_child(0).is_some_and(|c| c.kind() != "label")
-            }
+            "break_expression" => match e.named_child(0).filter(|c| c.kind() == "label") {
+                None => true,
+                // A label sends it to this loop or to another one.
+                Some(l) => own_label.as_deref() == Some(label_text(l).as_str()),
+            },
             _ => false,
         })
     });
@@ -826,16 +898,15 @@ fn vec_then_push(declaration: Node, src: &[u8]) -> bool {
     if pattern.kind() != "identifier" {
         return false;
     }
-    let creates_vec = match value.kind() {
+    // Clippy lints an empty `Vec::new()` or `vec![]`, not one sized with an
+    // expression it couldn't keep.
+    let empty = match value.kind() {
         "call_expression" => value
             .child_by_field_name("function")
             .filter(|f| f.kind() == "scoped_identifier")
             .is_some_and(|f| {
                 f.child_by_field_name("path").map(|p| text(p, src)) == Some(b"Vec")
-                    && matches!(
-                        f.child_by_field_name("name").map(|n| text(n, src)),
-                        Some(b"new" | b"with_capacity")
-                    )
+                    && f.child_by_field_name("name").map(|n| text(n, src)) == Some(b"new")
             }),
         "macro_invocation" => {
             is_macro(value, src, b"vec")
@@ -845,24 +916,31 @@ fn vec_then_push(declaration: Node, src: &[u8]) -> bool {
         }
         _ => false,
     };
-    if !creates_vec {
+    if !empty {
         return false;
     }
     let name = text(pattern, src);
-    // The next statement pushes onto it a value that doesn't use it.
-    declaration
-        .next_named_sibling()
-        .filter(|s| s.kind() == "expression_statement")
-        .and_then(|s| s.named_child(0))
-        .is_some_and(|call| {
-            call.kind() == "call_expression"
-                && method(call).is_some_and(|m| text(m, src) == b"push")
-                && call
-                    .child_by_field_name("function")
-                    .and_then(|f| f.child_by_field_name("value"))
-                    .is_some_and(|r| text(r, src) == name)
-                && arguments(call).iter().all(|a| !mentions(*a, name, src))
-        })
+    // Two or more pushes in a row, of values that don't use the vector; a
+    // single `push` is not worth a literal, to Clippy.
+    let is_push = |statement: Node| {
+        statement.kind() == "expression_statement"
+            && statement.named_child(0).is_some_and(|call| {
+                call.kind() == "call_expression"
+                    && method(call).is_some_and(|m| text(m, src) == b"push")
+                    && call
+                        .child_by_field_name("function")
+                        .and_then(|f| f.child_by_field_name("value"))
+                        .is_some_and(|r| text(r, src) == name)
+                    && arguments(call).iter().all(|a| !mentions(*a, name, src))
+            })
+    };
+    let mut pushes = 0;
+    let mut next = declaration.next_named_sibling();
+    while let Some(statement) = next.filter(|s| is_push(*s)) {
+        pushes += 1;
+        next = statement.next_named_sibling();
+    }
+    pushes >= 2
 }
 
 /// Whether the identifier `name` appears under `root`.
@@ -926,20 +1004,19 @@ fn is_mistyped_suffix(literal: Node, src: &[u8]) -> bool {
 }
 
 fn is_reversed_range(range: Node, src: &[u8]) -> bool {
-    // Only where it is iterated or sliced: `for _ in 5..3`, `v[5..3]`.
-    let used = range.parent().is_some_and(|p| {
-        p.kind() == "index_expression"
-            || (p.kind() == "for_expression"
-                && p.child_by_field_name("value").map(|v| v.id()) == Some(range.id()))
-    });
+    // `(10..0).rev()` is how a countdown is written: not a mistake.
+    let reversed_on_purpose = range
+        .parent()
+        .filter(|p| p.kind() == "parenthesized_expression")
+        .and_then(|p| p.parent())
+        .is_some_and(|g| g.kind() == "field_expression");
     let mut c = range.walk();
     let bounds: Vec<Node> = range.named_children(&mut c).collect();
     let [from, to] = bounds.as_slice() else {
         return false;
     };
-    let inclusive = text(range, src).windows(3).any(|w| w == b"..=");
     match (integer_value(*from, src), integer_value(*to, src)) {
-        (Some(a), Some(b)) => used && (if inclusive { a > b } else { a > b }),
+        (Some(a), Some(b)) => !reversed_on_purpose && a > b,
         _ => false,
     }
 }
@@ -968,25 +1045,21 @@ fn is_erasing(node: Node, src: &[u8]) -> bool {
 
 fn is_unreadable_literal(literal: Node, src: &[u8]) -> bool {
     let t = std::str::from_utf8(text(literal, src)).unwrap_or("");
-    if t.contains('_') {
+    if t.contains('_') || t.starts_with("0o") || t.starts_with("0b") {
         return false;
     }
-    let digits = t
-        .trim_end_matches(|c: char| c.is_ascii_alphabetic() && !t.starts_with("0x"))
-        .trim_start_matches("0x");
-    let hex = t.starts_with("0x");
-    let count = digits
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit() || c.is_ascii_digit())
-        .count();
-    if t.starts_with("0o") || t.starts_with("0b") {
-        return false;
-    }
-    if hex { count >= 5 } else { count >= 5 }
+    // Clippy's threshold, found by comparing: six digits, decimal or hexadecimal.
+    let digits = match t.strip_prefix("0x") {
+        Some(hex) => hex
+            .trim_end_matches(|c: char| c.is_ascii_alphabetic() && !c.is_ascii_hexdigit())
+            .len(),
+        None => t.chars().take_while(char::is_ascii_digit).count(),
+    };
+    digits >= 6
 }
 
 fn prints_to_stdout(node: Node, src: &[u8]) -> bool {
-    is_macro(node, src, b"print") || is_macro(node, src, b"println")
+    (is_macro(node, src, b"print") || is_macro(node, src, b"println")) && !in_test_code(node, src)
 }
 
 fn set_len_on_fresh_vec<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1009,12 +1082,11 @@ fn set_len_on_fresh_vec<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .parent()
         .and_then(|b| b.parent())
         .filter(|u| u.kind() == "unsafe_block")
+        && block_items(statement.parent()?).len() == 1
     {
-        if block_items(statement.parent()?).len() == 1 {
-            statement = unsafe_block
-                .parent()
-                .filter(|p| p.kind() == "expression_statement")?;
-        }
+        statement = unsafe_block
+            .parent()
+            .filter(|p| p.kind() == "expression_statement")?;
     }
     let previous = statement.prev_named_sibling()?;
     let made_here = previous.kind() == "let_declaration"
@@ -1036,7 +1108,8 @@ fn set_len_on_fresh_vec<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         });
     // A `Vec<MaybeUninit<T>>` has nothing to initialize.
     let uninit = text(previous, src).windows(11).any(|w| w == b"MaybeUninit");
-    ((made_here || reserved) && !uninit).then_some(name_node)
+    // Reported where the vector gets its length-less storage, as Clippy does.
+    ((made_here || reserved) && !uninit).then_some(previous)
 }
 
 #[cfg(test)]
@@ -1158,30 +1231,35 @@ mod tests {
     }
 
     #[test]
-    fn pushes_right_after_an_empty_vec_are_a_literal() {
+    fn two_pushes_right_after_an_empty_vec_are_a_literal() {
         assert!(in_fn(
+            "rs/vec-init-then-push",
+            "let mut v = Vec::new();\nv.push(1);\nv.push(2);"
+        ));
+        assert!(in_fn(
+            "rs/vec-init-then-push",
+            "let mut v = vec![];\nv.push(1);\nv.push(2);\nv.push(3);"
+        ));
+        // One push isn't worth a literal, and a sized vector couldn't keep its capacity.
+        assert!(!in_fn(
             "rs/vec-init-then-push",
             "let mut v = Vec::new();\nv.push(1);"
         ));
-        assert!(in_fn(
+        assert!(!in_fn(
             "rs/vec-init-then-push",
-            "let mut v = Vec::with_capacity(4);\nv.push(1);"
-        ));
-        assert!(in_fn(
-            "rs/vec-init-then-push",
-            "let mut v = vec![];\nv.push(1);"
+            "let mut v = Vec::with_capacity(n);\nv.push(1);\nv.push(2);"
         ));
         assert!(!in_fn(
             "rs/vec-init-then-push",
-            "let mut v = Vec::new();\nv.push(v.len());"
+            "let mut v = Vec::new();\nv.push(1);\nv.push(v.len());"
         ));
         assert!(!in_fn(
             "rs/vec-init-then-push",
-            "let mut v = Vec::new();\ng();\nv.push(1);"
+            "let mut v = Vec::new();\ng();\nv.push(1);\nv.push(2);"
         ));
         assert!(!in_fn(
             "rs/vec-init-then-push",
-            "let mut v = vec![1];\nv.push(1);"
+            "let mut v = vec![1];\nv.push(1);\nv.push(2);"
         ));
     }
 
@@ -1264,13 +1342,22 @@ mod tests {
     }
 
     #[test]
-    fn a_reversed_range_is_flagged_where_it_is_iterated_or_sliced() {
+    fn a_range_with_literal_bounds_that_runs_backwards_is_empty_wherever_it_is_written() {
         assert!(in_fn("rs/reversed-empty-range", "for _ in 5..3 {}"));
         assert!(in_fn("rs/reversed-empty-range", "for _ in 5..=3 {}"));
         assert!(in_fn("rs/reversed-empty-range", "let s = &v[5..3];"));
+        assert!(in_fn(
+            "rs/reversed-empty-range",
+            "let r = m.get_range(4..2);"
+        ));
         assert!(!in_fn("rs/reversed-empty-range", "for _ in 3..5 {}"));
         assert!(!in_fn("rs/reversed-empty-range", "for _ in 3..=3 {}"));
-        assert!(!in_fn("rs/reversed-empty-range", "let r = 5..3;"));
+        // How a countdown is written.
+        assert!(!in_fn(
+            "rs/reversed-empty-range",
+            "for _ in (10..0).rev() {}"
+        ));
+        assert!(!in_fn("rs/reversed-empty-range", "let r = a..b;"));
     }
 
     #[test]
@@ -1308,12 +1395,20 @@ mod tests {
         assert!(hit("rs/derive-ord-with-manual-partial-ord", ord2));
         let both = "#[derive(PartialEq, Eq, Ord, PartialOrd)]\nstruct S(u8);";
         assert!(!hit("rs/derive-ord-with-manual-partial-ord", both));
-        let hash = "#[derive(Hash)]\nstruct S(u8);\nimpl PartialEq for S { fn eq(&self, o: &Self) -> bool { true } }";
-        assert!(hit("rs/derived-hash-with-manual-eq", hash));
-        let hash2 = "#[derive(PartialEq)]\nstruct S<T>(T);\nimpl<T> std::hash::Hash for S<T> { fn hash<H: std::hash::Hasher>(&self, h: &mut H) {} }";
-        assert!(hit("rs/derived-hash-with-manual-eq", hash2));
-        let manual_both = "struct S(u8);\nimpl PartialEq for S { fn eq(&self, o: &Self) -> bool { true } }\nimpl std::hash::Hash for S { fn hash<H: std::hash::Hasher>(&self, h: &mut H) {} }";
-        assert!(!hit("rs/derived-hash-with-manual-eq", manual_both));
+    }
+
+    #[test]
+    fn a_derived_hash_with_a_hand_written_eq_is_reported_at_the_derive() {
+        let hash = "#[derive(Debug)]\n#[derive(Hash)]\nstruct S(u8);\nimpl PartialEq for S { fn eq(&self, o: &Self) -> bool { true } }";
+        assert_eq!(lines("rs/derived-hash-with-manual-eq", hash), [2]);
+        // The reverse, a hand-written Hash with a derived PartialEq, is not this lint.
+        let reverse = "#[derive(PartialEq)]\nstruct S<T>(T);\nimpl<T> std::hash::Hash for S<T> { fn hash<H: std::hash::Hasher>(&self, h: &mut H) {} }";
+        assert!(!hit("rs/derived-hash-with-manual-eq", reverse));
+        // `PartialEq<Other>` is another trait from the one `Hash` must agree with.
+        let other = "#[derive(Hash)]\nstruct S(u8);\nimpl PartialEq<u8> for S { fn eq(&self, o: &u8) -> bool { true } }";
+        assert!(!hit("rs/derived-hash-with-manual-eq", other));
+        let both_derived = "#[derive(Hash, PartialEq)]\nstruct S(u8);";
+        assert!(!hit("rs/derived-hash-with-manual-eq", both_derived));
     }
 
     #[test]
@@ -1334,6 +1429,69 @@ mod tests {
             "rs/uninit-vec",
             "let mut v: Vec<MaybeUninit<u8>> = Vec::with_capacity(n);\nunsafe { v.set_len(n); }"
         ));
+    }
+
+    #[test]
+    fn enum_globs_and_test_code_are_left_alone() {
+        assert!(!hit("rs/wildcard-import", "use self::Kind::*;"));
+        assert!(!hit(
+            "rs/wildcard-import",
+            "use crate::error::ErrorKind::*;"
+        ));
+        assert!(hit("rs/wildcard-import", "use crate::error::*;"));
+        assert!(!hit(
+            "rs/wildcard-import",
+            "#[cfg(test)]\nmod t { use crate::helpers::*; }"
+        ));
+        assert!(!hit(
+            "rs/print-stdout",
+            "#[test]\nfn t() { println!(\"x\"); }"
+        ));
+        assert!(!hit(
+            "rs/print-stdout",
+            "#[cfg(test)]\nmod t { fn h() { println!(\"x\"); } }"
+        ));
+        assert!(hit("rs/print-stdout", "fn f() { println!(\"x\"); }"));
+    }
+
+    #[test]
+    fn arms_that_assign_panic_or_leave_are_unit_too() {
+        assert!(in_fn(
+            "rs/unnecessary-semicolon",
+            "match a { 1 => x = 2, _ => panic!(\"no\") };"
+        ));
+        assert!(in_fn(
+            "rs/unnecessary-semicolon",
+            "for i in v { match i { 0 => continue, _ => {} }; }"
+        ));
+        assert!(!in_fn(
+            "rs/unnecessary-semicolon",
+            "match a { 1 => g(), _ => h() };"
+        ));
+    }
+
+    #[test]
+    fn a_labeled_break_to_this_loop_leaves_it_and_to_another_does_not() {
+        assert!(in_fn("rs/never-loop", "'a: loop { g(); break 'a; }"));
+        assert!(!in_fn(
+            "rs/never-loop",
+            "'a: loop { 'b: loop { g(); } break 'b; }"
+        ));
+    }
+
+    #[test]
+    fn a_path_statement_is_the_const_assert_idiom_and_indexing_is_not() {
+        assert!(!in_fn("rs/no-effect", "Assert::<N, 0>::GREATER;"));
+        assert!(!in_fn("rs/no-effect", "Self::CHECK;"));
+        assert!(in_fn("rs/no-effect", "a[0];"));
+    }
+
+    #[test]
+    fn the_inline_and_uninit_findings_sit_where_clippy_reports_them() {
+        let src = "trait T {\n    #[inline]\n    #[allow(unused)]\n    fn m(&self);\n}";
+        assert_eq!(lines("rs/inline-without-body", src), [2]);
+        let src = "fn f(n: usize) {\n    let mut v = Vec::with_capacity(n);\n    unsafe {\n        v.set_len(n);\n    }\n}";
+        assert_eq!(lines("rs/uninit-vec", src), [2]);
     }
 
     #[test]

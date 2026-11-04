@@ -4,7 +4,8 @@ finding of the lints below. tools/clippy-oracle/README.md has the command.
 """
 import glob,json,os,shutil,subprocess,time
 # sonda rule id -> the Clippy lint it follows. Add a rule's pair here when it lands.
-LINTS={'rs/self-assignment':'self_assignment','rs/identical-operands':'eq_op','rs/same-condition-in-chain':'ifs_same_cond','rs/skip-zero':'iter_skip_zero','rs/step-by-zero':'iterator_step_by_zero','rs/splitn-limit':'suspicious_splitn','rs/modulo-one':'modulo_one','rs/resize-to-zero':'vec_resize_to_zero','rs/option-env-unwrap':'option_env_unwrap','rs/uninit-assumed-init':'uninit_assumed_init','rs/replace-with-uninit':'mem_replace_with_uninit','rs/null-pointer-from-zero':'zero_ptr','rs/redundant-field-name':'redundant_field_names','rs/let-and-return':'let_and_return','rs/match-on-bool':'match_bool','rs/else-if-without-else':'else_if_without_else'}
+LINTS={'rs/self-assignment':'self_assignment','rs/identical-operands':'eq_op','rs/same-condition-in-chain':'ifs_same_cond','rs/skip-zero':'iter_skip_zero','rs/step-by-zero':'iterator_step_by_zero','rs/splitn-limit':'suspicious_splitn','rs/modulo-one':'modulo_one','rs/resize-to-zero':'vec_resize_to_zero','rs/option-env-unwrap':'option_env_unwrap','rs/uninit-assumed-init':'uninit_assumed_init','rs/replace-with-uninit':'mem_replace_with_uninit','rs/null-pointer-from-zero':'zero_ptr','rs/redundant-field-name':'redundant_field_names','rs/let-and-return':'let_and_return','rs/match-on-bool':'match_bool','rs/else-if-without-else':'else_if_without_else',
+ 'rs/wildcard-import':'wildcard_imports','rs/unnecessary-semicolon':'unnecessary_semicolon','rs/invisible-characters':'invisible_characters','rs/approximate-constant':'approx_constant','rs/never-loop':'never_loop','rs/no-effect':'no_effect','rs/vec-init-then-push':'vec_init_then_push','rs/misnamed-getter':'misnamed_getters','rs/almost-swapped':'almost_swapped','rs/iter-next-loop':'iter_next_loop','rs/inline-without-body':'inline_fn_without_body','rs/mistyped-literal-suffix':'mistyped_literal_suffixes','rs/reversed-empty-range':'reversed_empty_ranges','rs/erasing-op':'erasing_op','rs/unreadable-literal':'unreadable_literal','rs/print-stdout':'print_stdout','rs/derive-ord-with-manual-partial-ord':'derive_ord_xor_partial_ord','rs/derived-hash-with-manual-eq':'derived_hash_with_manual_eq','rs/uninit-vec':'uninit_vec'}
 inv={v:k for k,v in LINTS.items()}
 crates=json.load(open('/in/_crates.json'))
 results={}
@@ -28,7 +29,7 @@ for c in crates:
                     out.add((inv[code[8:]],sp['file_name'],sp['line_start'])); break
         # The files this run compiled: Cargo's dependency info lists each target's sources.
         compiled=set()
-        for dep in glob.glob('/home/oracle/target/*/deps/*.d'):
+        for dep in glob.glob('/home/oracle/target/*/deps/*.d') + glob.glob('/home/oracle/target/*/examples/*.d'):
             if os.path.getmtime(dep)<started: continue
             for tok in open(dep).read().replace('\\\n',' ').split():
                 tok=tok.rstrip(':')

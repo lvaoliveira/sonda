@@ -21,6 +21,16 @@ file, the report formats and the public library API.
   they do there; `// NOSONAR` silences them here too.
   Checked against Clippy on 66 crates, in a container
   (`tools/clippy-oracle/`): 74% to 100% precision where the pattern occurs.
+- 19 more Rust rules: wildcard imports, an unnecessary `;`, invisible
+  characters, an approximated math constant, a loop that never loops, a
+  statement with no effect, `vec![]` written as pushes, a misnamed getter,
+  an almost-swap, `for x in it.next()`, `#[inline]` on a bodiless trait
+  method, a mistyped literal suffix, a reversed range, an erasing operation,
+  a derived `Ord`/`Hash` beside a hand-written `PartialOrd`/`PartialEq`,
+  `set_len` on a fresh `Vec`, and, off by default as in SonarQube, an
+  unreadable literal and `print!`/`println!`. Measured against Clippy: 82% to
+  100% precision on the ones that occur in 51 crates. Test code and test
+  files are exempt from the wildcard and print rules, as in Clippy.
 - Rust: `.rs` files are parsed, with lines, functions, complexity and
   duplication measured, and `common/cognitive-complexity` and
   `common/too-many-parameters` run on them, as SonarQube's Rust rules
