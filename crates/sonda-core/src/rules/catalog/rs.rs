@@ -89,7 +89,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Major,
         effort_minutes: 2,
-        sonar: &[exact("S7456")],
+        sonar: &[related("S7456")],
         check: Check::Query {
             langs: RUST,
             query: METHOD_CALL,
@@ -780,18 +780,49 @@ fn let_and_return<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let attributed = declaration
         .prev_named_sibling()
         .is_some_and(|p| p.kind() == "attribute_item");
-    // Returning a temporary that borrows from a guard changes when the guard
-    // drops, which Clippy checks with types: skip what usually holds one.
-    let guard = [
-        &b".lock("[..],
-        b".borrow(",
-        b".borrow_mut(",
-        b".read(",
-        b".write(",
-    ]
-    .iter()
-    .any(|m| text(value, src).windows(m.len()).any(|w| w == *m));
-    (!attributed && !guard).then_some(*tail)
+    (!attributed && !may_hold_temporary(value)).then_some(*tail)
+}
+
+/// Whether the initializer may build a temporary that lives until the end of
+/// the statement: written inline as the block's value, it would live until
+/// after the block's locals drop, which can change the program or stop it
+/// compiling. Clippy tells by type; this skips the shapes that usually do:
+/// guards, borrows, `unsafe` blocks, macros, `.await` and long method chains.
+fn may_hold_temporary(value: Node) -> bool {
+    let mut stack = vec![value];
+    while let Some(n) = stack.pop() {
+        if matches!(
+            n.kind(),
+            "unsafe_block" | "reference_expression" | "macro_invocation" | "await_expression"
+        ) {
+            return true;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    // `a.b().c().d()`: each call's result is a temporary the next borrows.
+    let (mut chain, mut n) = (0, value);
+    loop {
+        match n.kind() {
+            "call_expression" => match n
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "field_expression")
+                .and_then(|f| f.child_by_field_name("value"))
+            {
+                Some(receiver) => {
+                    chain += 1;
+                    n = receiver;
+                }
+                None => break,
+            },
+            "try_expression" | "parenthesized_expression" => match n.named_child(0) {
+                Some(inner) => n = inner,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    chain >= 3
 }
 
 fn is_bool_match(node: Node, src: &[u8]) -> bool {
@@ -1020,9 +1051,26 @@ mod tests {
         assert!(!hit("rs/let-and-return", "let x: u8 = a;\nx"));
         assert!(!hit("rs/let-and-return", "let x = a;\nlog(x);\nx"));
         assert!(!hit("rs/let-and-return", "let x = a;\nx;"));
+        // What Clippy skips, by type: temporaries that would outlive the block's locals.
         assert!(!hit(
             "rs/let-and-return",
             "let x = m.lock().unwrap().len();\nx"
+        ));
+        assert!(!hit(
+            "rs/let-and-return",
+            "let s = unsafe { v.get_unchecked(1) };\ns"
+        ));
+        assert!(!hit(
+            "rs/let-and-return",
+            "let s = String::from_utf8_lossy(&b).into_owned();\ns"
+        ));
+        assert!(!hit(
+            "rs/let-and-return",
+            "let c = it.iter().copied().map(f).collect();\nc"
+        ));
+        assert!(hit(
+            "rs/let-and-return",
+            "let t = o.to_timestamp(d).context(e)?;\nt"
         ));
         assert!(!hit("rs/let-and-return", "let y = a;\nx"));
         assert!(!hit("rs/let-and-return", "#[allow(unused)]\nlet x = a;\nx"));
