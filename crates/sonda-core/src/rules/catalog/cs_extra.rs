@@ -868,29 +868,36 @@ pub(super) fn is_pascal_case(name: &[u8]) -> bool {
     if name.is_empty() || !name[0].is_ascii_uppercase() || name.contains(&b'_') {
         return false;
     }
-    // A run of capitals followed by a lower case letter ends with that word's
-    // first letter: "IOStream" is IO + Stream.
     let mut i = 0;
     while i < name.len() {
-        if name[i].is_ascii_uppercase() {
-            let start = i;
-            while i < name.len() && name[i].is_ascii_uppercase() {
-                i += 1;
-            }
-            let run = i - start;
-            let acronym = if i < name.len() && name[i].is_ascii_lowercase() {
-                run - 1
-            } else {
-                run
-            };
-            if acronym > 2 {
-                return false;
-            }
-        } else {
+        if !name[i].is_ascii_uppercase() {
             i += 1;
+            continue;
         }
+        let (end, acronym) = capital_run(name, i);
+        if acronym > 2 {
+            return false;
+        }
+        i = end;
     }
     true
+}
+
+/// The run of capitals at `start`: where it ends, and how many of its
+/// letters are an acronym. A run followed by a lower case letter ends with
+/// that word's first letter: "IOStream" is IO + Stream.
+fn capital_run(name: &[u8], start: usize) -> (usize, usize) {
+    let mut i = start;
+    while i < name.len() && name[i].is_ascii_uppercase() {
+        i += 1;
+    }
+    let run = i - start;
+    let acronym = if i < name.len() && name[i].is_ascii_lowercase() {
+        run - 1
+    } else {
+        run
+    };
+    (i, acronym)
 }
 
 // ---------------------------------------------------- filters
@@ -1506,46 +1513,52 @@ fn event_raised_with_null<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     }
     let body = class.child_by_field_name("body")?;
     find_in_scope(body, &[], |n| {
-        if n.kind() != "invocation_expression" {
-            return false;
+        raises_one_of(n, &events, src) && passes_null(n, src)
+    })
+}
+
+/// `E?.Invoke(...)`, `E.Invoke(...)` or `E(...)`, with E one of `events`.
+fn raises_one_of(n: Node, events: &[&[u8]], src: &[u8]) -> bool {
+    if n.kind() != "invocation_expression" {
+        return false;
+    }
+    let Some(function) = n.child_by_field_name("function") else {
+        return false;
+    };
+    let t = text(function, src);
+    events
+        .iter()
+        .any(|e| t == *e || t == [*e, b"?.Invoke"].concat() || t == [*e, b".Invoke"].concat())
+}
+
+/// `(null, e)` outside a static member, whose events have no sender, or
+/// `(sender, null)`.
+fn passes_null(n: Node, src: &[u8]) -> bool {
+    match cs_call_arguments(n).as_slice() {
+        [sender, data] => {
+            (sender.kind() == "null_literal" && !in_static_member(n, src))
+                || data.kind() == "null_literal"
         }
-        let Some(function) = n.child_by_field_name("function") else {
+        _ => false,
+    }
+}
+
+/// Whether the method, accessor or property `n` is in is static.
+fn in_static_member(n: Node, src: &[u8]) -> bool {
+    let mut current = n.parent();
+    for _ in 0..64 {
+        let Some(m) = current else {
             return false;
         };
-        // E?.Invoke(...), E.Invoke(...) or E(...)
-        let t = text(function, src);
-        let raised = events
-            .iter()
-            .any(|e| t == *e || t == [*e, b"?.Invoke"].concat() || t == [*e, b".Invoke"].concat());
-        if !raised {
-            return false;
+        if matches!(
+            m.kind(),
+            "method_declaration" | "accessor_declaration" | "property_declaration"
+        ) {
+            return cs_has_modifier(m, "static", src);
         }
-        let args = cs_call_arguments(n);
-        let in_static = n.parent().is_some_and(|_| {
-            let mut current = n.parent();
-            for _ in 0..64 {
-                match current {
-                    Some(m)
-                        if matches!(
-                            m.kind(),
-                            "method_declaration" | "accessor_declaration" | "property_declaration"
-                        ) =>
-                    {
-                        return cs_has_modifier(m, "static", src);
-                    }
-                    Some(m) => current = m.parent(),
-                    None => return false,
-                }
-            }
-            false
-        });
-        match args.as_slice() {
-            [sender, data] => {
-                (sender.kind() == "null_literal" && !in_static) || data.kind() == "null_literal"
-            }
-            _ => false,
-        }
-    })
+        current = m.parent();
+    }
+    false
 }
 
 fn subtracts_from_now(node: Node, src: &[u8]) -> bool {

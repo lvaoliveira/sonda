@@ -688,7 +688,30 @@ fn self_contained(class: Node, src: &[u8]) -> bool {
 // ---------------------------------------------------- filters
 
 fn unconstrained_null_check<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Type parameters of the method and of its class, with their constraints.
+    let free = unconstrained_type_params(method, src);
+    if free.is_empty() {
+        return None;
+    }
+    let params = method.child_by_field_name("parameters")?;
+    let mut cursor = params.walk();
+    let values: Vec<&[u8]> = params
+        .named_children(&mut cursor)
+        .filter(|p| {
+            p.child_by_field_name("type")
+                .is_some_and(|t| free.contains(&text(t, src)))
+        })
+        .filter_map(|p| p.child_by_field_name("name").map(|n| text(n, src)))
+        .collect();
+    if values.is_empty() {
+        return None;
+    }
+    let body = method.child_by_field_name("body")?;
+    find_in_scope(body, CS_SCOPE_STOPS, |n| null_test_of(n, &values, src))
+}
+
+/// The type parameters of the method and of its class without a `class`,
+/// `struct` or `unmanaged` constraint.
+fn unconstrained_type_params<'s>(method: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut parameters: Vec<&[u8]> = Vec::new();
     let mut constrained: Vec<&[u8]> = Vec::new();
     let mut owners = vec![method];
@@ -721,36 +744,22 @@ fn unconstrained_null_check<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
             }
         }
     }
-    let free: Vec<&[u8]> = parameters
+    parameters
         .into_iter()
         .filter(|p| !constrained.contains(p))
-        .collect();
-    if free.is_empty() {
-        return None;
+        .collect()
+}
+
+/// `x == null` or `null != x`, with x one of `values`.
+fn null_test_of(n: Node, values: &[&[u8]], src: &[u8]) -> bool {
+    if n.kind() != "binary_expression" || !matches!(operator_text(n, src), b"==" | b"!=") {
+        return false;
     }
-    let params = method.child_by_field_name("parameters")?;
-    let mut cursor = params.walk();
-    let values: Vec<&[u8]> = params
-        .named_children(&mut cursor)
-        .filter(|p| {
-            p.child_by_field_name("type")
-                .is_some_and(|t| free.contains(&text(t, src)))
-        })
-        .filter_map(|p| p.child_by_field_name("name").map(|n| text(n, src)))
-        .collect();
-    if values.is_empty() {
-        return None;
-    }
-    let body = method.child_by_field_name("body")?;
-    find_in_scope(body, CS_SCOPE_STOPS, |n| {
-        n.kind() == "binary_expression" && matches!(operator_text(n, src), b"==" | b"!=") && {
-            let side = |f: &str| n.child_by_field_name(f);
-            let is_null = |x: Option<Node>| x.is_some_and(|x| x.kind() == "null_literal");
-            let is_value = |x: Option<Node>| x.is_some_and(|x| values.contains(&text(x, src)));
-            (is_null(side("left")) && is_value(side("right")))
-                || (is_value(side("left")) && is_null(side("right")))
-        }
-    })
+    let side = |f: &str| n.child_by_field_name(f);
+    let is_null = |x: Option<Node>| x.is_some_and(|x| x.kind() == "null_literal");
+    let is_value = |x: Option<Node>| x.is_some_and(|x| values.contains(&text(x, src)));
+    (is_null(side("left")) && is_value(side("right")))
+        || (is_value(side("left")) && is_null(side("right")))
 }
 
 fn optional_field_without_callback<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1053,72 +1062,77 @@ fn unused_private_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
 }
 
 fn string_appended_in_loop<'t>(loop_node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Strings declared in the enclosing member, before the loop.
-    let mut owner = loop_node.parent();
-    for _ in 0..64 {
-        match owner {
-            Some(n)
-                if matches!(
-                    n.kind(),
-                    "method_declaration"
-                        | "accessor_declaration"
-                        | "constructor_declaration"
-                        | "local_function_statement"
-                        | "lambda_expression"
-                ) =>
-            {
-                break;
-            }
-            Some(n) => owner = n.parent(),
-            None => return None,
-        }
-    }
-    let owner = owner?;
-    let strings: Vec<&[u8]> = {
-        let mut out = Vec::new();
-        let body = owner.child_by_field_name("body")?;
-        // Declarations before the loop, outside nested functions.
-        let mut stack = vec![body];
-        while let Some(n) = stack.pop() {
-            if n.start_byte() >= loop_node.start_byte() {
-                continue;
-            }
-            if n.kind() == "variable_declaration"
-                && n.child_by_field_name("type")
-                    .is_some_and(|t| text(t, src) == b"string")
-            {
-                let mut c = n.walk();
-                out.extend(
-                    n.named_children(&mut c)
-                        .filter(|d| d.kind() == "variable_declarator")
-                        .filter_map(|d| d.child_by_field_name("name").map(|x| text(x, src))),
-                );
-            }
-            if CS_SCOPE_STOPS.contains(&n.kind()) && n != body {
-                continue;
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
-        }
-        out
-    };
+    let owner = enclosing_member(loop_node)?;
+    let strings = strings_declared_before(owner.child_by_field_name("body")?, loop_node, src);
     if strings.is_empty() {
         return None;
     }
     let body = loop_node.child_by_field_name("body")?;
-    find_in_scope(body, CS_SCOPE_STOPS, |n| {
-        n.kind() == "assignment_expression"
-            && n.child_by_field_name("left")
-                .is_some_and(|l| strings.contains(&text(l, src)))
-            && (operator_text(n, src) == b"+="
-                || operator_text(n, src) == b"="
-                    && n.child_by_field_name("right").is_some_and(|r| {
-                        r.kind() == "binary_expression"
-                            && operator_text(r, src) == b"+"
-                            && n.child_by_field_name("left")
-                                .is_some_and(|l| text(r, src).starts_with(text(l, src)))
-                    }))
-    })
+    find_in_scope(body, CS_SCOPE_STOPS, |n| appends_to(n, &strings, src))
+}
+
+/// The member a loop is in, up to 64 levels up.
+fn enclosing_member(loop_node: Node) -> Option<Node> {
+    let mut owner = loop_node.parent();
+    for _ in 0..64 {
+        let n = owner?;
+        if matches!(
+            n.kind(),
+            "method_declaration"
+                | "accessor_declaration"
+                | "constructor_declaration"
+                | "local_function_statement"
+                | "lambda_expression"
+        ) {
+            break;
+        }
+        owner = n.parent();
+    }
+    owner
+}
+
+/// Strings the member's body declares before the loop, outside nested
+/// functions.
+fn strings_declared_before<'s>(body: Node, loop_node: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut out = Vec::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.start_byte() >= loop_node.start_byte() {
+            continue;
+        }
+        if n.kind() == "variable_declaration"
+            && n.child_by_field_name("type")
+                .is_some_and(|t| text(t, src) == b"string")
+        {
+            let mut c = n.walk();
+            out.extend(
+                n.named_children(&mut c)
+                    .filter(|d| d.kind() == "variable_declarator")
+                    .filter_map(|d| d.child_by_field_name("name").map(|x| text(x, src))),
+            );
+        }
+        if CS_SCOPE_STOPS.contains(&n.kind()) && n != body {
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    out
+}
+
+/// `s += ...` or `s = s + ...`, with s one of `strings`.
+fn appends_to(n: Node, strings: &[&[u8]], src: &[u8]) -> bool {
+    n.kind() == "assignment_expression"
+        && n.child_by_field_name("left")
+            .is_some_and(|l| strings.contains(&text(l, src)))
+        && (operator_text(n, src) == b"+="
+            || operator_text(n, src) == b"="
+                && n.child_by_field_name("right").is_some_and(|r| {
+                    r.kind() == "binary_expression"
+                        && operator_text(r, src) == b"+"
+                        && n.child_by_field_name("left")
+                            .is_some_and(|l| text(r, src).starts_with(text(l, src)))
+                }))
 }
 
 const ASSERTION_WORDS: &[&[u8]] = &[
@@ -1182,60 +1196,65 @@ fn field_only_set_at_construction<'t>(class: Node<'t>, src: &[u8]) -> Option<Nod
     plain_private_fields(class, src)
         .into_iter()
         .find_map(|(name, field, declarator)| {
-            if cs_has_modifier(field, "readonly", src) || cs_has_modifier(field, "volatile", src) {
-                return None;
-            }
-            // A readonly field of a mutable struct makes every call on it work on
-            // a copy, which changes behaviour (a lazy value never caches, say).
-            // Without types, only suggest it for types known to be safe.
-            let mut fc = field.walk();
-            let ty = field
-                .named_children(&mut fc)
-                .find(|c| c.kind() == "variable_declaration")
-                .and_then(|d| d.child_by_field_name("type"))?;
-            if !is_reference_like(ty, src) {
-                return None;
-            }
-            let is_static = cs_has_modifier(field, "static", src);
-            // Writes anywhere but in the matching constructors. Lambdas inside a
-            // constructor can run later, so they count as anywhere.
-            let in_constructor = |n: Node| {
-                let mut current = n.parent();
-                for _ in 0..64 {
-                    match current {
-                        Some(c) if c.kind() == "constructor_declaration" => {
-                            return cs_has_modifier(c, "static", src) == is_static;
-                        }
-                        Some(c)
-                            if matches!(
-                                c.kind(),
-                                "lambda_expression"
-                                    | "anonymous_method_expression"
-                                    | "local_function_statement"
-                                    | "method_declaration"
-                                    | "accessor_declaration"
-                            ) =>
-                        {
-                            return false;
-                        }
-                        Some(c) => current = c.parent(),
-                        None => return false,
-                    }
-                }
-                false
-            };
-            let written_elsewhere = find_in_scope(body, &[], |n| {
-                writes_field(n, name, src) && !in_constructor(n)
-            })
-            .is_some();
-            let written_in_constructor = find_in_scope(body, &[], |n| {
-                writes_field(n, name, src) && in_constructor(n)
-            })
-            .is_some();
-            let initialized = declarator.named_child_count() > 1;
-            (!written_elsewhere && (written_in_constructor || initialized))
-                .then(|| declarator.child_by_field_name("name"))?
+            only_set_at_construction(body, name, field, declarator, src)
         })
+}
+
+/// The field's name, when only its initializer or the constructors set it.
+/// A readonly field of a mutable struct makes every call on it work on a
+/// copy, which changes behaviour (a lazy value never caches, say): without
+/// types, only types known to be safe count.
+fn only_set_at_construction<'t>(
+    body: Node,
+    name: &[u8],
+    field: Node,
+    declarator: Node<'t>,
+    src: &[u8],
+) -> Option<Node<'t>> {
+    if cs_has_modifier(field, "readonly", src) || cs_has_modifier(field, "volatile", src) {
+        return None;
+    }
+    let mut fc = field.walk();
+    let ty = field
+        .named_children(&mut fc)
+        .find(|c| c.kind() == "variable_declaration")
+        .and_then(|d| d.child_by_field_name("type"))?;
+    if !is_reference_like(ty, src) {
+        return None;
+    }
+    let is_static = cs_has_modifier(field, "static", src);
+    let written_elsewhere = find_in_scope(body, &[], |n| {
+        writes_field(n, name, src) && !in_matching_constructor(n, is_static, src)
+    })
+    .is_some();
+    let written_in_constructor = find_in_scope(body, &[], |n| {
+        writes_field(n, name, src) && in_matching_constructor(n, is_static, src)
+    })
+    .is_some();
+    let initialized = declarator.named_child_count() > 1;
+    (!written_elsewhere && (written_in_constructor || initialized))
+        .then(|| declarator.child_by_field_name("name"))?
+}
+
+/// Whether `n` is in a constructor, static or not as the field is. Lambdas
+/// inside a constructor can run later, so they count as anywhere.
+fn in_matching_constructor(n: Node, is_static: bool, src: &[u8]) -> bool {
+    let mut current = n.parent();
+    for _ in 0..64 {
+        let Some(c) = current else {
+            return false;
+        };
+        match c.kind() {
+            "constructor_declaration" => return cs_has_modifier(c, "static", src) == is_static,
+            "lambda_expression"
+            | "anonymous_method_expression"
+            | "local_function_statement"
+            | "method_declaration"
+            | "accessor_declaration" => return false,
+            _ => current = c.parent(),
+        }
+    }
+    false
 }
 
 /// Types whose fields can be readonly without copies: built-in types,

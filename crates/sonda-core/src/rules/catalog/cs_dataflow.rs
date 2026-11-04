@@ -7,7 +7,7 @@
 use super::prelude::*;
 use crate::semantic::cs_cfg::{self, Access, Cfg, ENTRY, EXIT};
 use crate::semantic::{DeclId, DeclKind, Model};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Rules that are off unless `rules.enabled` lists them: the one whose key
 /// is outside SonarQube's default profile.
@@ -249,51 +249,52 @@ fn dead_stores<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let mut found = Vec::new();
     for g in &graphs {
         // As documented: no issue in a method with try blocks.
-        if g.cfg.has_try {
-            continue;
-        }
-        // Locals that something reads (S1481 covers the others), not captured.
-        let tracked: HashSet<DeclId> = g
-            .own
-            .iter()
-            .copied()
-            .filter(|d| {
-                m.decls[*d].kind == DeclKind::Let
-                    && m.decls[*d].reads > 0
-                    && !g.cfg.escaped.contains(d)
-            })
-            .collect();
-        if tracked.is_empty() {
-            continue;
-        }
-        let live = cs_cfg::live_after(&g.cfg, &tracked);
-        for (i, k, e) in writes(&g.cfg) {
-            if !tracked.contains(&e.decl)
-                || live[i].contains(&e.decl)
-                || read_later_in_block(&g.cfg, i, k, e.decl)
-            {
-                continue;
-            }
-            // Assignments, initializers, compound assignments and ++/--;
-            // not loop variables, patterns, catch variables or out arguments.
-            if !matches!(
-                e.node.kind(),
-                "assignment_expression"
-                    | "variable_declarator"
-                    | "prefix_unary_expression"
-                    | "postfix_unary_expression"
-            ) {
-                continue;
-            }
-            if written_value(e.node).is_some_and(|v| is_default_value(v, src)) {
-                continue;
-            }
-            found.push(e.node);
+        if !g.cfg.has_try {
+            dead_stores_in(m, g, src, &mut found);
         }
     }
     found.sort_by_key(|n| n.start_byte());
     found.dedup_by_key(|n| n.id());
     found
+}
+
+/// The writes in one function that no path reads.
+fn dead_stores_in<'t>(m: &Model<'t>, g: &Graph<'t>, src: &[u8], found: &mut Vec<Node<'t>>) {
+    // Locals that something reads (S1481 covers the others), not captured.
+    let tracked: HashSet<DeclId> = g
+        .own
+        .iter()
+        .copied()
+        .filter(|d| {
+            m.decls[*d].kind == DeclKind::Let && m.decls[*d].reads > 0 && !g.cfg.escaped.contains(d)
+        })
+        .collect();
+    if tracked.is_empty() {
+        return;
+    }
+    let live = cs_cfg::live_after(&g.cfg, &tracked);
+    for (i, k, e) in writes(&g.cfg) {
+        if tracked.contains(&e.decl)
+            && !live[i].contains(&e.decl)
+            && !read_later_in_block(&g.cfg, i, k, e.decl)
+            && discardable_store(e.node, src)
+        {
+            found.push(e.node);
+        }
+    }
+}
+
+/// Assignments, initializers, compound assignments and ++/--, other than of
+/// a default value; not loop variables, patterns, catch variables or out
+/// arguments.
+fn discardable_store(node: Node, src: &[u8]) -> bool {
+    matches!(
+        node.kind(),
+        "assignment_expression"
+            | "variable_declarator"
+            | "prefix_unary_expression"
+            | "postfix_unary_expression"
+    ) && !written_value(node).is_some_and(|v| is_default_value(v, src))
 }
 
 // ---------------------------------------------------- parameters
@@ -302,34 +303,7 @@ fn overwritten_before_read<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let (graphs, _) = graphs(m, src);
     let mut found = Vec::new();
     for g in &graphs {
-        let mut candidates: Vec<(DeclId, usize)> = Vec::new();
-        // Parameters, bound on entry; ref, out and in pass values through.
-        // `_` is a discard, not a parameter anyone reads.
-        for d in g.own.iter().copied().filter(|d| {
-            m.decls[*d].kind == DeclKind::Param && !m.decls[*d].name.chars().all(|c| c == '_')
-        }) {
-            let passes = m.decls[d].declarator.is_some_and(|p| {
-                let mut c = p.walk();
-                p.kind() == "parameter"
-                    && p.named_children(&mut c).any(|x| {
-                        x.kind() == "modifier"
-                            && matches!(x.utf8_text(src), Ok("ref" | "out" | "in"))
-                    })
-            });
-            if !passes {
-                candidates.push((d, ENTRY));
-            }
-        }
-        // Caught exceptions, bound by their catch clause.
-        for (i, b) in g.cfg.blocks.iter().enumerate() {
-            if b.syntax.is_some_and(|s| s.kind() == "catch_clause") {
-                for e in &b.events {
-                    if m.decls[e.decl].kind == DeclKind::CatchParam {
-                        candidates.push((e.decl, i));
-                    }
-                }
-            }
-        }
+        let candidates = bound_values(m, g, src);
         if candidates.is_empty() {
             continue;
         }
@@ -340,35 +314,89 @@ fn overwritten_before_read<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             .collect();
         let live = cs_cfg::live_after(&g.cfg, &tracked);
         for (d, binding) in candidates {
-            if !tracked.contains(&d) || live[binding].contains(&d) {
-                continue;
+            if tracked.contains(&d) && !live[binding].contains(&d) {
+                found.extend(first_overwrite(&g.cfg, d, binding));
             }
-            // Overwritten somewhere, and no path reads the passed value: the
-            // first write is the one that throws it away.
-            let first = writes(&g.cfg)
-                .chain(maybe_writes(&g.cfg))
-                .filter(|(i, _, e)| e.decl == d && *i != binding)
-                .map(|(_, _, e)| e.node)
-                .min_by_key(|n| n.start_byte());
-            found.extend(first);
         }
     }
     found.sort_by_key(|n| n.start_byte());
     found
 }
 
+/// The values a function receives, and the block that binds each:
+/// parameters on entry (ref, out and in pass values through; `_` is a
+/// discard, not a parameter anyone reads), caught exceptions by their
+/// catch clause.
+fn bound_values(m: &Model, g: &Graph, src: &[u8]) -> Vec<(DeclId, usize)> {
+    let mut candidates: Vec<(DeclId, usize)> = Vec::new();
+    for d in g.own.iter().copied().filter(|d| {
+        m.decls[*d].kind == DeclKind::Param && !m.decls[*d].name.chars().all(|c| c == '_')
+    }) {
+        let passes = m.decls[d].declarator.is_some_and(|p| {
+            let mut c = p.walk();
+            p.kind() == "parameter"
+                && p.named_children(&mut c).any(|x| {
+                    x.kind() == "modifier" && matches!(x.utf8_text(src), Ok("ref" | "out" | "in"))
+                })
+        });
+        if !passes {
+            candidates.push((d, ENTRY));
+        }
+    }
+    for (i, b) in g.cfg.blocks.iter().enumerate() {
+        if b.syntax.is_some_and(|s| s.kind() == "catch_clause") {
+            candidates.extend(
+                b.events
+                    .iter()
+                    .filter(|e| m.decls[e.decl].kind == DeclKind::CatchParam)
+                    .map(|e| (e.decl, i)),
+            );
+        }
+    }
+    candidates
+}
+
+/// Overwritten somewhere, and no path reads the passed value: the first
+/// write is the one that throws it away.
+fn first_overwrite<'t>(cfg: &Cfg<'t>, d: DeclId, binding: usize) -> Option<Node<'t>> {
+    writes(cfg)
+        .chain(maybe_writes(cfg))
+        .filter(|(i, _, e)| e.decl == d && *i != binding)
+        .map(|(_, _, e)| e.node)
+        .min_by_key(|n| n.start_byte())
+}
+
 // ---------------------------------------------------- fields
 
 fn fields_used_as_locals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let candidates = plain_private_fields(m, src);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let (graphs, failed) = graphs(m, src);
+    let tracked: HashSet<DeclId> = candidates.iter().copied().collect();
+    let (carries_state, used) = field_states(&graphs, &tracked);
+    candidates
+        .into_iter()
+        .filter(|d| used.contains(d) && !carries_state.contains(d))
+        .filter(|d| {
+            !m.refs
+                .iter()
+                .any(|r| r.decl == Some(*d) && outside_graphs(&graphs, &failed, r.node))
+        })
+        .map(|d| m.decls[d].node)
+        .collect()
+}
+
+/// Plain private instance fields: no initializer, attributes or modifiers
+/// beyond `private` and `readonly`, read somewhere.
+fn plain_private_fields(m: &Model, src: &[u8]) -> Vec<DeclId> {
     let has = |n: Node, word: &str| {
         let mut c = n.walk();
         n.named_children(&mut c)
             .any(|x| x.kind() == "modifier" && x.utf8_text(src) == Ok(word))
     };
-    // Plain private instance fields: no initializer, attributes or modifiers
-    // beyond `private` and `readonly`, read somewhere.
-    let candidates: Vec<DeclId> = m
-        .decls
+    m.decls
         .iter()
         .enumerate()
         .filter(|(_, d)| d.kind == DeclKind::Field && !d.is_static && d.reads > 0)
@@ -396,51 +424,36 @@ fn fields_used_as_locals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
                     .any(|w| has(field, w))
         })
         .map(|(i, _)| i)
-        .collect();
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-    let (graphs, failed) = graphs(m, src);
-    let tracked: HashSet<DeclId> = candidates.iter().copied().collect();
-    // Per field: whether some function reads it before writing it, or reads
-    // it where no graph sees.
-    let mut carries_state: HashMap<DeclId, bool> = HashMap::new();
+        .collect()
+}
+
+/// Per field: whether some function reads it before writing it, or a
+/// closure captures it, so it carries state between calls; and whether
+/// any function uses it at all.
+fn field_states(graphs: &[Graph], tracked: &HashSet<DeclId>) -> (HashSet<DeclId>, HashSet<DeclId>) {
+    let mut carries_state = HashSet::new();
     let mut used = HashSet::new();
-    for g in &graphs {
-        let live = cs_cfg::live_after(&g.cfg, &tracked);
+    for g in graphs {
+        let live = cs_cfg::live_after(&g.cfg, tracked);
         for b in &g.cfg.blocks {
             for e in b.events.iter().filter(|e| tracked.contains(&e.decl)) {
                 used.insert(e.decl);
                 // Captured by a closure: read at some later time.
                 if g.cfg.escaped.contains(&e.decl) {
-                    carries_state.insert(e.decl, true);
+                    carries_state.insert(e.decl);
                 }
             }
         }
-        for d in &tracked {
-            if live[ENTRY].contains(d) {
-                carries_state.insert(*d, true);
-            }
-        }
+        carries_state.extend(tracked.iter().filter(|d| live[ENTRY].contains(d)));
     }
-    // Every use must sit in a function that has a graph.
-    let in_graph = |n: Node| {
-        graphs.iter().any(|g| {
-            n.start_byte() >= g.function.start_byte() && n.end_byte() <= g.function.end_byte()
-        })
-    };
-    let unseen = |n: Node| {
-        !in_graph(n)
-            || failed
-                .iter()
-                .any(|f| n.start_byte() >= f.start_byte() && n.end_byte() <= f.end_byte())
-    };
-    candidates
-        .into_iter()
-        .filter(|d| used.contains(d) && !carries_state.get(d).copied().unwrap_or(false))
-        .filter(|d| !m.refs.iter().any(|r| r.decl == Some(*d) && unseen(r.node)))
-        .map(|d| m.decls[d].node)
-        .collect()
+    (carries_state, used)
+}
+
+/// Whether `n` sits where no graph sees: outside every function that has
+/// one, or in one whose graph failed.
+fn outside_graphs(graphs: &[Graph], failed: &[Node], n: Node) -> bool {
+    let within = |f: Node| n.start_byte() >= f.start_byte() && n.end_byte() <= f.end_byte();
+    !graphs.iter().any(|g| within(g.function)) || failed.iter().any(|f| within(*f))
 }
 
 // ---------------------------------------------------- endless loops
@@ -449,110 +462,130 @@ fn endless<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let (graphs, _) = graphs(m, src);
     let mut found = Vec::new();
     for g in &graphs {
-        let cfg = &g.cfg;
-        let reached = cs_cfg::reachable(cfg, ENTRY, |_| false);
-        // Blocks from which the function can end: backwards from EXIT.
-        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); cfg.blocks.len()];
-        for (i, b) in cfg.blocks.iter().enumerate() {
-            for s in &b.succ {
-                preds[*s].push(i);
-            }
-        }
-        let mut can_end = vec![false; cfg.blocks.len()];
-        let mut stack = vec![EXIT];
-        while let Some(i) = stack.pop() {
-            if !can_end[i] {
-                can_end[i] = true;
-                stack.extend(preds[i].iter().copied());
-            }
-        }
-        // A loop no edge leaves; a `goto` cycle from which the function
-        // can't end. Generators may loop forever on purpose.
-        let within = |b: &cs_cfg::Block, s: Node| {
-            b.syntax
-                .is_some_and(|x| x.start_byte() >= s.start_byte() && x.end_byte() <= s.end_byte())
-        };
-        for (i, b) in cfg.blocks.iter().enumerate() {
-            let Some(s) = b.loop_statement.filter(|_| reached[i]) else {
-                continue;
-            };
-            if s.utf8_text(src)
-                .unwrap_or_default()
-                .contains("yield return")
-            {
-                continue;
-            }
-            let endless = if s.kind() == "labeled_statement" {
-                !can_end[i]
-            } else {
-                // Every block of the loop only leads to blocks of the loop.
-                !cfg.blocks
-                    .iter()
-                    .filter(|x| within(x, s))
-                    .any(|x| x.succ.iter().any(|t| !within(&cfg.blocks[*t], s)))
-            };
-            if endless {
-                found.push(s);
-            }
-        }
-        // Recursion: every path to the end goes through a call to itself.
-        // Not explicit implementations, overrides or hiding methods, which
-        // call other methods of the same name; nor in a class that may inherit
-        // overloads this file doesn't show.
-        let mut c = g.function.walk();
-        let explicit = g
-            .function
-            .named_children(&mut c)
-            .any(|x| x.kind() == "explicit_interface_specifier");
-        let mut mc = g.function.walk();
-        let redeclares = g
-            .function
-            .named_children(&mut mc)
-            .any(|x| x.kind() == "modifier" && matches!(x.utf8_text(src), Ok("override" | "new")));
-        let inherits = g
-            .function
-            .parent()
-            .and_then(|l| l.parent())
-            .is_some_and(|class| {
-                let mut cc = class.walk();
-                class
-                    .named_children(&mut cc)
-                    .find(|x| x.kind() == "base_list")
-                    .and_then(|b| b.named_child(0))
-                    .is_some_and(|first| {
-                        let name = first.utf8_text(src).unwrap_or_default();
-                        let mut chars = name.chars();
-                        !(chars.next() == Some('I') && chars.next().is_some_and(char::is_uppercase))
-                    })
-            });
-        if g.function.kind() == "method_declaration"
-            && !explicit
-            && !redeclares
-            && !inherits
-            && let Some(name) = g.function.child_by_field_name("name")
-        {
-            let overloaded = m
-                .decls
-                .iter()
-                .filter(|d| {
-                    d.kind == DeclKind::Method && d.node.utf8_text(src) == name.utf8_text(src)
-                })
-                .count()
-                > 1;
-            let recurses_somewhere = cfg
-                .blocks
-                .iter()
-                .enumerate()
-                .any(|(i, b)| b.recurses && reached[i]);
-            let ends = cs_cfg::reachable(cfg, ENTRY, |i| cfg.blocks[i].recurses)[EXIT];
-            if !overloaded && recurses_somewhere && !ends && can_end[ENTRY] {
-                found.push(name);
-            }
-        }
+        let reached = cs_cfg::reachable(&g.cfg, ENTRY, |_| false);
+        let can_end = ends_from(&g.cfg);
+        endless_loops(&g.cfg, &reached, &can_end, src, &mut found);
+        found.extend(endless_recursion(m, g, &reached, &can_end, src));
     }
     found.sort_by_key(|n| n.start_byte());
     found.dedup_by_key(|n| n.id());
     found
+}
+
+/// The blocks from which the function can end: backwards from EXIT.
+fn ends_from(cfg: &Cfg) -> Vec<bool> {
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); cfg.blocks.len()];
+    for (i, b) in cfg.blocks.iter().enumerate() {
+        for s in &b.succ {
+            preds[*s].push(i);
+        }
+    }
+    let mut can_end = vec![false; cfg.blocks.len()];
+    let mut stack = vec![EXIT];
+    while let Some(i) = stack.pop() {
+        if !can_end[i] {
+            can_end[i] = true;
+            stack.extend(preds[i].iter().copied());
+        }
+    }
+    can_end
+}
+
+/// A loop no edge leaves; a `goto` cycle from which the function can't
+/// end. Generators may loop forever on purpose.
+fn endless_loops<'t>(
+    cfg: &Cfg<'t>,
+    reached: &[bool],
+    can_end: &[bool],
+    src: &[u8],
+    found: &mut Vec<Node<'t>>,
+) {
+    let within = |b: &cs_cfg::Block, s: Node| {
+        b.syntax
+            .is_some_and(|x| x.start_byte() >= s.start_byte() && x.end_byte() <= s.end_byte())
+    };
+    for (i, b) in cfg.blocks.iter().enumerate() {
+        let Some(s) = b.loop_statement.filter(|_| reached[i]) else {
+            continue;
+        };
+        if s.utf8_text(src)
+            .unwrap_or_default()
+            .contains("yield return")
+        {
+            continue;
+        }
+        let endless = if s.kind() == "labeled_statement" {
+            !can_end[i]
+        } else {
+            // Every block of the loop only leads to blocks of the loop.
+            !cfg.blocks
+                .iter()
+                .filter(|x| within(x, s))
+                .any(|x| x.succ.iter().any(|t| !within(&cfg.blocks[*t], s)))
+        };
+        if endless {
+            found.push(s);
+        }
+    }
+}
+
+/// A method every path to whose end goes through a call to itself: its
+/// name.
+fn endless_recursion<'t>(
+    m: &Model<'t>,
+    g: &Graph<'t>,
+    reached: &[bool],
+    can_end: &[bool],
+    src: &[u8],
+) -> Option<Node<'t>> {
+    if g.function.kind() != "method_declaration" || calls_other_methods(g.function, src) {
+        return None;
+    }
+    let name = g.function.child_by_field_name("name")?;
+    let cfg = &g.cfg;
+    let overloaded = m
+        .decls
+        .iter()
+        .filter(|d| d.kind == DeclKind::Method && d.node.utf8_text(src) == name.utf8_text(src))
+        .count()
+        > 1;
+    let recurses_somewhere = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .any(|(i, b)| b.recurses && reached[i]);
+    let ends = cs_cfg::reachable(cfg, ENTRY, |i| cfg.blocks[i].recurses)[EXIT];
+    (!overloaded && recurses_somewhere && !ends && can_end[ENTRY]).then_some(name)
+}
+
+/// Whether a call of the method's own name may be another method's: an
+/// explicit implementation, an override or a hiding method, or one of a
+/// class that may inherit overloads this file doesn't show.
+fn calls_other_methods(function: Node, src: &[u8]) -> bool {
+    let mut c = function.walk();
+    let explicit = function
+        .named_children(&mut c)
+        .any(|x| x.kind() == "explicit_interface_specifier");
+    let mut mc = function.walk();
+    let redeclares = function
+        .named_children(&mut mc)
+        .any(|x| x.kind() == "modifier" && matches!(x.utf8_text(src), Ok("override" | "new")));
+    let inherits = function
+        .parent()
+        .and_then(|l| l.parent())
+        .is_some_and(|class| {
+            let mut cc = class.walk();
+            class
+                .named_children(&mut cc)
+                .find(|x| x.kind() == "base_list")
+                .and_then(|b| b.named_child(0))
+                .is_some_and(|first| {
+                    let name = first.utf8_text(src).unwrap_or_default();
+                    let mut chars = name.chars();
+                    !(chars.next() == Some('I') && chars.next().is_some_and(char::is_uppercase))
+                })
+        });
+    explicit || redeclares || inherits
 }
 
 #[cfg(test)]
