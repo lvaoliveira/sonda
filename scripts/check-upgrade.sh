@@ -120,9 +120,21 @@ start "$new_server"
 # The same session still works: it was kept in the database.
 snapshot after
 
+# Fields the new server adds are compatible: what the old one served must
+# all still be there, unchanged, and anything new is left out of the diff.
+# Lists keep their length, so a lost or extra row still shows.
+# shellcheck disable=SC2016 # jq's variables, not the shell's
+keep='def keep($b):
+  if type == "object" and ($b | type) == "object" then
+    with_entries(select(.key as $k | $b | has($k)) | .key as $k | .value |= keep($b[$k]))
+  elif type == "array" and ($b | type) == "array" and length == ($b | length) then
+    [range(length) as $i | .[$i] | keep($b[$i])]
+  else . end;
+keep($old[0])'
 for f in "$work"/before.*; do
   name=${f##*/before.}
-  if ! diff -u "$f" "$work/after.$name" > "$work/diff"; then
+  jq -S --slurpfile old "$f" "$keep" "$work/after.$name" > "$work/kept.$name"
+  if ! diff -u "$f" "$work/kept.$name" > "$work/diff"; then
     echo "check-upgrade: $name changed in the upgrade" >&2
     cat "$work/diff" >&2
     exit 1

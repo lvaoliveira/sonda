@@ -12,6 +12,7 @@ import { GateDot, GateStatus } from '@/components/sonda/status'
 import { componentLabel, componentUrl, coverageUrl, dependenciesUrl } from '@/lib/links'
 import { compactCount, formatAge, formatDebt, formatNumber, shortDate } from '@/lib/format'
 import { ECOSYSTEM_LABEL, GATE, coverageColor, languageLabel, scoreColor } from '@/lib/visual'
+import { issuesUrl } from '@/lib/issues'
 
 export function ProjectPage() {
   const api = useApi()
@@ -21,7 +22,7 @@ export function ProjectPage() {
   const detail = useAsync(() => api.project(key, branch), [api, key, branch])
   const name = detail.state === 'ready' ? detail.data.name : null
   return (
-    <AppShell crumbs={[{ label: 'Projects', to: '/projects' }, { label: name ?? key, to: `/projects/${encodeURIComponent(key)}` }]}>
+    <AppShell project={key} crumbs={[{ label: 'Projects', to: '/projects' }, { label: name ?? key, to: `/projects/${encodeURIComponent(key)}` }]}>
       {detail.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
       {detail.state === 'error' && (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
@@ -231,17 +232,16 @@ type Scope = 'overall' | 'newCode'
 function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   const [scope, setScope] = useState<Scope>('overall')
   const m: MeasureSet = p.measures[scope]
-  const issues = (extra: string) =>
-    `/issues?project=${encodeURIComponent(p.key)}&branch=${encodeURIComponent(p.branch)}${extra}${scope === 'newCode' ? '&new' : ''}`
+  const issues = (more: Record<string, string | boolean> = {}) => issuesUrl(p.key, { branch: p.branch, new: scope === 'newCode', ...more })
   const count = (v: number | null) => (v == null ? '—' : formatNumber(v))
   const pct = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}%`)
   const period = p.newCodePeriod
   // Without per-line data, the server keeps the scan's own values for these.
   const fromScan = (metric: string) => scope === 'newCode' && period != null && period.fromScan.includes(metric)
   const tiles: { label: string; value: string; sub: string; to?: string; color?: string }[] = [
-    { label: 'Bugs', value: count(m.bugs), sub: 'Reliability', to: issues('&cat=bug') },
-    { label: 'Vulnerabilities', value: count(m.vulnerabilities), sub: 'Security', to: issues('&cat=vulnerability') },
-    { label: 'Code smells', value: count(m.codeSmells), sub: 'Maintainability', to: issues('&cat=code_smell') },
+    { label: 'Bugs', value: count(m.bugs), sub: 'Reliability', to: issues({ cat: 'bug' }) },
+    { label: 'Vulnerabilities', value: count(m.vulnerabilities), sub: 'Security', to: issues({ cat: 'vulnerability' }) },
+    { label: 'Code smells', value: count(m.codeSmells), sub: 'Maintainability', to: issues({ cat: 'code_smell' }) },
     {
       label: 'Coverage',
       value: pct(m.coverage),
@@ -250,7 +250,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
       to: coverageUrl(p.key, p.branch, p.mainBranch),
     },
     { label: 'Duplication', value: pct(m.duplication), sub: fromScan('new_duplicated_lines_density') ? 'in lines the scan changed' : 'duplicated lines' },
-    { label: 'Debt', value: m.debtMinutes == null ? '—' : formatDebt(m.debtMinutes), sub: 'to fix every issue', to: issues('') },
+    { label: 'Debt', value: m.debtMinutes == null ? '—' : formatDebt(m.debtMinutes), sub: 'to fix every issue', to: issues() },
   ]
   return (
     <Card
@@ -474,7 +474,7 @@ function Components({ p }: { p: ProjectDetail }) {
   const th = 'border-b border-line px-2 py-2 text-left font-normal'
   const td = 'border-b border-line px-2 py-[10px]'
   const issuesIn = (path: string) =>
-    `/issues?project=${encodeURIComponent(p.key)}&branch=${encodeURIComponent(p.branch)}&comp=${encodeURIComponent(path)}`
+    issuesUrl(p.key, { branch: p.branch, comp: path })
   return (
     <Card id="components" padded={false} title="Components" subtitle="Top-level directories · owners from the uploaded CODEOWNERS">
       <div className="relative overflow-x-auto">

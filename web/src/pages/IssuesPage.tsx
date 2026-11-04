@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { FacetKey, IssueDetail, IssuePage, IssuePatch, IssueSummary, TriageStatus } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
@@ -9,17 +9,42 @@ import { Mono, PageHeader } from '@/components/sonda/layout'
 import { ReasonForm } from '@/components/sonda/triage'
 import { SeverityGlyph, SeverityPill } from '@/components/sonda/status'
 import { formatAge, formatEffort, formatNumber, shortDate } from '@/lib/format'
-import { DEFAULT_FILTER, filterFromParams, type IssueFilter, PAGE_SIZE, toQuery } from '@/lib/issues'
+import { DEFAULT_FILTER, filterFromParams, type IssueFilter, issuesUrl, PAGE_SIZE, toQuery } from '@/lib/issues'
 import { CATEGORY_LABEL, DECISION_PROMPT, languageLabel, SEVERITY, SEVERITY_ORDER, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
 
+/** Every project's issues. A link for one project goes to its own Issues tab instead. */
 export function IssuesPage() {
+  const [params] = useSearchParams()
+  const project = params.get('project')
+  if (project) {
+    const rest = Object.fromEntries([...params].filter(([k]) => k !== 'project'))
+    return <Navigate replace to={issuesUrl(project, rest)} />
+  }
+  return <IssuesScreen />
+}
+
+/** A project's Issues tab: the same page, fixed to the project. */
+export function ProjectIssuesPage() {
+  const { key = '' } = useParams()
+  return <IssuesScreen project={key} />
+}
+
+function IssuesScreen({ project }: { project?: string }) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
+  const crumbs = project
+    ? [
+        { label: 'Projects', to: '/projects' },
+        { label: project, to: `/projects/${encodeURIComponent(project)}` },
+        { label: 'Issues', to: issuesUrl(project) },
+      ]
+    : [{ label: 'Issues', to: '/issues' }]
   return (
-    <AppShell crumbs={[{ label: 'Issues', to: '/issues' }]}>
+    <AppShell crumbs={crumbs} project={project}>
       {shell.state === 'error' && <p role="alert">Could not load issues: {shell.error.message}</p>}
       {shell.state === 'loading' && <IssuesSkeleton />}
-      {shell.state === 'ready' && <Issues me={shell.data.me} />}
+      {/* Another project's tab starts afresh. */}
+      {shell.state === 'ready' && <Issues key={project} me={shell.data.me} project={project} />}
     </AppShell>
   )
 }
@@ -58,11 +83,13 @@ function useWide(min: number) {
 /** Triage changes made on this page, laid over the server's list until it reloads. */
 type Overrides = Record<number, Pick<IssueSummary, 'status' | 'assignee'>>
 
-function Issues({ me }: { me: string | null }) {
+function Issues({ me, project }: { me: string | null; project?: string }) {
   const api = useApi()
   const [params, setParams] = useSearchParams()
-  const drill = useMemo(() => filterFromParams(params), [params])
-  const [filter, setFilter] = useState<IssueFilter>(drill?.filter ?? DEFAULT_FILTER)
+  const drill = useMemo(() => filterFromParams(params, project), [params, project])
+  // What resetting goes back to: on a project's tab, still that project.
+  const [base] = useState<IssueFilter>(() => (project ? { ...DEFAULT_FILTER, project, branch: drill?.filter.branch } : DEFAULT_FILTER))
+  const [filter, setFilter] = useState<IssueFilter>(drill?.filter ?? base)
   const [offset, setOffset] = useState(0)
   const [selectedId, setSelectedId] = useState<number | null>(drill?.issue ?? null)
   const [checked, setChecked] = useState<number[]>([])
@@ -165,7 +192,7 @@ function Issues({ me }: { me: string | null }) {
       <PageHeader
         title="Issues"
         summary={`${formatNumber(page.total)} ${page.total === 1 ? 'issue matches' : 'issues match'} · ${
-          filter.project ? `${filter.project} on ${filter.branch ?? 'its main branch'}` : "each project's main branch"
+          filter.project ? `${filter.project} on ${filter.branch ?? 'its main branch'}` : "all projects, each on its main branch"
         }`}
       >
         <div className="flex items-center gap-2">
@@ -180,7 +207,7 @@ function Issues({ me }: { me: string | null }) {
         <div role="status" className="flex items-center gap-2.5 rounded-[10px] bg-brand-soft px-3.5 py-2.5 text-[13px]">
           <span className="font-mono text-[10px] tracking-[.06em] text-brand uppercase">Drill-down</span>
           <span className="flex-1">{drill.description}</span>
-          <button type="button" onClick={() => changeFilter(DEFAULT_FILTER)} className="cursor-pointer border-0 bg-transparent p-0 text-[12.5px] text-brand">
+          <button type="button" onClick={() => changeFilter(base)} className="cursor-pointer border-0 bg-transparent p-0 text-[12.5px] text-brand">
             Clear
           </button>
         </div>
@@ -188,7 +215,7 @@ function Issues({ me }: { me: string | null }) {
       {loaded.state === 'error' && <p role="alert">Could not load issues: {loaded.error.message}</p>}
 
       <div className="grid min-h-[calc(100vh-220px)] gap-px overflow-hidden rounded-xl bg-line" style={{ gridTemplateColumns: columns, boxShadow: '0 0 0 1px var(--sd-line)' }}>
-        {showFacets && !listHidden && <Facets page={page} filter={filter} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
+        {showFacets && !listHidden && <Facets page={page} filter={filter} base={base} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
 
         <section hidden={listHidden} aria-label="Issue list" aria-busy={loaded.state === 'loading'} className="flex min-w-0 flex-col bg-panel-2">
           <div className="flex min-h-12 flex-wrap items-center gap-2.5 border-b border-line px-3.5">
@@ -214,7 +241,7 @@ function Issues({ me }: { me: string | null }) {
             <div className="flex flex-col gap-1.5 px-[18px] py-10">
               <span className="text-base font-semibold">Nothing matches</span>
               <span className="text-[13px] text-fg-muted">Either very good news or a filter that's too narrow.</span>
-              <Button className="mt-2 self-start" onClick={() => changeFilter(DEFAULT_FILTER)}>
+              <Button className="mt-2 self-start" onClick={() => changeFilter(base)}>
                 Reset filters
               </Button>
             </div>
@@ -301,12 +328,15 @@ const FACET_OPTIONS: Record<Exclude<FacetKey, 'component'>, { value: string; lab
 function Facets({
   page,
   filter,
+  base,
   me,
   toggleIn,
   changeFilter,
 }: {
   page: IssuePage
   filter: IssueFilter
+  /** What a saved view starts from. */
+  base: IssueFilter
   me: string | null
   toggleIn: (key: FacetKey, value: string) => void
   changeFilter: (patch: Partial<IssueFilter>) => void
@@ -353,6 +383,7 @@ function Facets({
           )
         })}
       </div>
+      {!filter.project && <ProjectFacet page={page} filter={filter} />}
       {groups.map((g) => (
         <fieldset key={g.key} className="m-0 flex flex-col gap-px border-0 p-0">
           <legend className="pb-2 micro-label">{g.label}</legend>
@@ -377,7 +408,7 @@ function Facets({
             key={label}
             type="button"
             disabled={disabled}
-            onClick={() => changeFilter({ ...DEFAULT_FILTER, ...patch })}
+            onClick={() => changeFilter({ ...base, ...patch })}
             className="cursor-pointer rounded-md border-0 bg-transparent px-1.5 py-[5px] text-left text-[13px] text-fg-muted hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-45"
           >
             {label}
@@ -385,6 +416,29 @@ function Facets({
         ))}
       </div>
     </aside>
+  )
+}
+
+/** On the all-projects page: each project, opening its own Issues tab with these filters. */
+function ProjectFacet({ page, filter }: { page: IssuePage; filter: IssueFilter }) {
+  const projects = Object.entries(page.facets.project ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  const carried = {
+    cat: filter.category.length === 1 ? filter.category[0] : undefined,
+    sev: filter.severity.join(','),
+    new: filter.isNew,
+    me: filter.mine,
+  }
+  return (
+    <nav aria-label="Projects" className="flex flex-col gap-px">
+      <span className="pb-2 micro-label">Project</span>
+      {projects.length === 0 && <span className="px-1.5 text-[12.5px] text-fg-faint">None</span>}
+      {projects.map(([key, count]) => (
+        <Link key={key} to={issuesUrl(key, carried)} className="flex items-center gap-[9px] rounded-md px-1.5 py-[5px] text-[13px] text-fg no-underline hover:bg-hover">
+          <span className="min-w-0 flex-1 overflow-hidden font-mono text-[11px] text-ellipsis whitespace-nowrap">{key}</span>
+          <Mono className="text-[10px] text-fg-faint">{count}</Mono>
+        </Link>
+      ))}
+    </nav>
   )
 }
 

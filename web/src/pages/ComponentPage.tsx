@@ -10,6 +10,7 @@ import { SeverityGlyph } from '@/components/sonda/status'
 import { compactCount, formatDebt, formatNumber, shortDate } from '@/lib/format'
 import { componentLabel, componentUrl, projectUrl } from '@/lib/links'
 import { SEVERITY, SEVERITY_ORDER, languageLabel } from '@/lib/visual'
+import { issuesUrl } from '@/lib/issues'
 
 export function ComponentPage() {
   const api = useApi()
@@ -19,6 +20,7 @@ export function ComponentPage() {
   const detail = useAsync(() => api.component(key, component, branch), [api, key, component, branch])
   return (
     <AppShell
+      project={key}
       crumbs={[
         { label: 'Projects', to: '/projects' },
         { label: key, to: projectUrl(key, branch) },
@@ -43,18 +45,17 @@ export function ComponentPage() {
 }
 
 function Component({ c }: { c: ComponentDetail }) {
-  const issues = (extra: string) =>
-    `/issues?project=${encodeURIComponent(c.project)}&branch=${encodeURIComponent(c.branch)}&comp=${encodeURIComponent(c.path)}${extra}`
+  const issues = (more: Record<string, string | boolean> = {}) => issuesUrl(c.project, { branch: c.branch, comp: c.path, ...more })
   const severities = SEVERITY_ORDER.filter((s) => c.issues.bySeverity[s])
     .slice(0, 2)
     .map((s) => `${c.issues.bySeverity[s]} ${SEVERITY[s].label.toLowerCase()}`)
     .join(' · ')
   const tiles: { label: string; value: number | string; sub: string; to?: string }[] = [
-    { label: 'Open issues', value: c.issues.total, sub: severities || 'none open', to: issues('') },
-    { label: 'On new code', value: c.issues.new, sub: 'issues in changed lines', to: issues('&new') },
-    { label: 'Bugs', value: c.issues.byCategory.bug ?? 0, sub: 'Reliability', to: issues('&cat=bug') },
-    { label: 'Vulnerabilities', value: c.issues.byCategory.vulnerability ?? 0, sub: 'Security', to: issues('&cat=vulnerability') },
-    { label: 'Code smells', value: c.issues.byCategory.code_smell ?? 0, sub: 'Maintainability', to: issues('&cat=code_smell') },
+    { label: 'Open issues', value: c.issues.total, sub: severities || 'none open', to: issues() },
+    { label: 'On new code', value: c.issues.new, sub: 'issues in changed lines', to: issues({ new: true }) },
+    { label: 'Bugs', value: c.issues.byCategory.bug ?? 0, sub: 'Reliability', to: issues({ cat: 'bug' }) },
+    { label: 'Vulnerabilities', value: c.issues.byCategory.vulnerability ?? 0, sub: 'Security', to: issues({ cat: 'vulnerability' }) },
+    { label: 'Code smells', value: c.issues.byCategory.code_smell ?? 0, sub: 'Maintainability', to: issues({ cat: 'code_smell' }) },
     { label: 'Debt', value: c.issues.debtMinutes ? formatDebt(c.issues.debtMinutes) : '0', sub: 'to fix every issue' },
   ]
   return (
@@ -226,7 +227,7 @@ function Files({ c }: { c: ComponentDetail }) {
             {files.map((f) => {
               const rel = f.path.startsWith(prefix) ? f.path.slice(prefix.length) : f.path
               const slash = rel.lastIndexOf('/')
-              const to = `/issues?project=${encodeURIComponent(c.project)}&branch=${encodeURIComponent(c.branch)}&file=${encodeURIComponent(f.path)}`
+              const to = issuesUrl(c.project, { branch: c.branch, file: f.path })
               return (
                 <tr key={f.path} className="hover:bg-hover">
                   <td className={`${td} px-5`}>

@@ -16,12 +16,15 @@ export function queryIssues(all: IssueDetail[], q: IssueQuery): IssuePage {
     for (const i of all.filter((i) => matches(i, q, key))) counts[i[key]] = (counts[i[key]] ?? 0) + 1
     facets[key] = counts
   }
+  // Every project's, so the all-projects page can list them.
+  const projects: Record<string, number> = {}
+  for (const i of all.filter((i) => matches(i, { ...q, project: undefined }))) projects[i.project] = (projects[i.project] ?? 0) + 1
   return {
     total: matching.length,
     offset: q.offset,
     limit: q.limit,
     items: matching.slice(q.offset, q.offset + q.limit).map(summary),
-    facets,
+    facets: { ...facets, project: projects },
   }
 }
 

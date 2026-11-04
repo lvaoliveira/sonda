@@ -62,6 +62,7 @@ export function CoveragePage() {
   const list = useAsync(() => api.coverage(key, branch), [api, key, branch])
   return (
     <AppShell
+      project={key}
       crumbs={[
         { label: 'Projects', to: '/projects' },
         { label: key, to: projectUrl(key, branch) },
@@ -339,6 +340,7 @@ export function FileCoveragePage() {
   const file = useAsync(() => api.fileCoverage(key, path, branch), [api, key, path, branch])
   return (
     <AppShell
+      project={key}
       crumbs={[
         { label: 'Projects', to: '/projects' },
         { label: key, to: projectUrl(key, branch) },

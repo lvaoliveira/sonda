@@ -259,14 +259,38 @@ describe('Projects', () => {
     expect(await screen.findByText(/analyzed branches: main, release\/2.4/)).toBeInTheDocument()
   })
 
-  it("links a project's issues to the Issues page, filtered to it", async () => {
+  it("sends an old link for one project to that project's Issues tab", async () => {
     renderAt('/issues?project=billing-service')
-    expect(await screen.findByText(/Showing billing-service — from the metric you clicked/)).toBeInTheDocument()
-    expect(screen.getByText(/billing-service on its main branch/)).toBeInTheDocument()
+    expect(await screen.findByText(/billing-service on its main branch/)).toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Project' })).getByRole('link', { name: 'Issues' })).toHaveAttribute('aria-current', 'page')
     // billing-service has two of the mock's issues; the accepted one is filtered out by default.
     const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
     expect(rows).toHaveLength(1)
     expect(rows[0]).toHaveTextContent('StripeConfig.java')
+  })
+
+  it("opens a measure's issues on the project's tab, and stays in the project", async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/payments-platform')
+    const [measures] = await screen.findAllByRole('region', { name: 'Measures' })
+    await user.click(within(within(measures).getByText('Bugs').parentElement!).getByRole('link'))
+    expect(await screen.findByText(/payments-platform on main/)).toBeInTheDocument()
+    const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
+    const bugs = (await createMockApi(0).issues({ project: 'payments-platform', branch: 'main', severity: [], category: ['bug'], status: ['open', 'confirmed'], component: [], file: '', isNew: false, offset: 0, limit: 50 })).total
+    expect(rows).toHaveLength(Math.min(bugs, 50))
+    expect(screen.getByRole('checkbox', { name: /Bug/ })).toBeChecked()
+    // Clearing the drill-down keeps to the project.
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(await screen.findByText(/payments-platform on main/)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Bug/ })).not.toBeChecked()
+  })
+
+  it("lists projects on the all-projects Issues page, each opening its tab", async () => {
+    renderAt('/issues')
+    expect(await screen.findByText(/all projects, each on its main branch/)).toBeInTheDocument()
+    const projects = screen.getByRole('navigation', { name: 'Projects' })
+    expect(within(projects).getByRole('link', { name: /billing-service/ })).toHaveAttribute('href', '/projects/billing-service/issues')
+    expect(screen.queryByRole('navigation', { name: 'Project' })).not.toBeInTheDocument()
   })
 })
 
@@ -436,7 +460,7 @@ describe('Analyses', () => {
     expect(within(introduced).getByRole('link', { name: 'js/no-eval' })).toHaveAttribute('href', '/rules#js%2Fno-eval')
     expect(within(introduced).getByRole('link', { name: 'services/checkout-api/handlers.js:88' })).toHaveAttribute(
       'href',
-      '/issues?project=payments-platform&branch=main&file=services%2Fcheckout-api%2Fhandlers.js',
+      '/projects/payments-platform/issues?branch=main&file=services%2Fcheckout-api%2Fhandlers.js',
     )
     expect(screen.getByRole('region', { name: 'Warnings' })).toHaveTextContent('skipped, looks minified')
     await user.click(screen.getByRole('link', { name: /^← / }))
@@ -499,7 +523,7 @@ describe('Components', () => {
     expect(screen.getByRole('heading', { name: 'Open issues · 8 weeks' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Owners' })).toHaveTextContent('@checkout')
     const files = screen.getByRole('region', { name: 'Files' })
-    expect(within(files).getAllByRole('link')[0]).toHaveAttribute('href', '/issues?project=payments-platform&branch=main&file=services%2Finternal%2Fhandlers.go')
+    expect(within(files).getAllByRole('link')[0]).toHaveAttribute('href', '/projects/payments-platform/issues?branch=main&file=services%2Finternal%2Fhandlers.go')
     await user.click(within(files).getByRole('button', { name: 'Path' }))
     expect(within(files).getAllByRole('link')[0]).toHaveTextContent('config.go')
     await user.click(screen.getByRole('link', { name: /packages\// }))
@@ -890,7 +914,8 @@ describe('Overview', () => {
     renderAt('/')
     await user.click(await screen.findByRole('button', { name: /Live Stripe secret committed to billing-service/ }))
     // The Issues page, filtered to that file's blockers, with the issue open.
-    expect(await screen.findByText(/Showing billing-service on main · blocker · src\/main\/java\/com\/acme\/billing\/config\/StripeConfig\.java/)).toBeInTheDocument()
+    expect(await screen.findByText(/Showing on main · blocker · src\/main\/java\/com\/acme\/billing\/config\/StripeConfig\.java/)).toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Project' })).getByRole('link', { name: 'Issues' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     const list = await screen.findByRole('listbox')
     expect(within(list).getAllByRole('option')).toHaveLength(1)

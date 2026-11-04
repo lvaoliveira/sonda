@@ -178,8 +178,13 @@ impl Filters {
         let empty: &[String] = &[];
         let facet =
             |name: &str, values: &'q [String]| if except == Some(name) { empty } else { values };
+        // The project facet counts every project's, so it lists them all.
+        let project = self
+            .project
+            .as_deref()
+            .filter(|_| except != Some("project"));
         query
-            .bind(&self.project)
+            .bind(project)
             .bind(&self.branch)
             .bind(facet("severity", &self.severity))
             .bind(facet("category", &self.category))
@@ -253,6 +258,7 @@ pub async fn list_issues(
 
     let mut facets = BTreeMap::new();
     for (name, column) in [
+        ("project", "s.project_key"),
         ("severity", "s.severity"),
         ("category", "s.category"),
         ("status", "s.state"),

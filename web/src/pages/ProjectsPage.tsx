@@ -11,6 +11,7 @@ import { CoverageRing, PipMeter } from '@/components/sonda/meters'
 import { GateStatus } from '@/components/sonda/status'
 import { compactCount, formatAge, formatNumber } from '@/lib/format'
 import { languageLabel, scoreColor } from '@/lib/visual'
+import { issuesUrl } from '@/lib/issues'
 
 export function ProjectsPage() {
   const api = useApi()
@@ -233,7 +234,7 @@ function ProjectTable({ rows, total }: { rows: ProjectRow[]; total: number }) {
                 </td>
                 <td className={`${td} text-right font-mono text-xs text-fg-muted`}>{p.duplication == null ? '—' : `${p.duplication.toFixed(1)}%`}</td>
                 <td className={`${td} text-right font-mono text-xs`}>
-                  <Link to={`/issues?project=${encodeURIComponent(p.key)}`} onClick={(e) => e.stopPropagation()} className="text-fg-muted">
+                  <Link to={issuesUrl(p.key)} onClick={(e) => e.stopPropagation()} className="text-fg-muted">
                     {formatNumber(p.issues)}
                   </Link>
                 </td>

@@ -8,6 +8,7 @@ import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { RuleBrowser, type RuleFilter, RuleSearch } from '@/components/sonda/RuleBrowser'
 import { formatNumber, shortDate } from '@/lib/format'
 import { SET_BY_LABEL, TOML_CHANGE_LABEL, languageLabel } from '@/lib/visual'
+import { issuesUrl } from '@/lib/issues'
 
 /** A project's rules (ADR-0016, ADR-0018): the ones for its languages, each with its state here; admins enable and disable them. */
 export function ProjectRulesPage() {
@@ -17,6 +18,7 @@ export function ProjectRulesPage() {
   const data = useAsync(() => Promise.all([api.projectRules(key), api.shell(), api.ruleProfiles()]), [api, key])
   return (
     <AppShell
+      project={key}
       crumbs={[
         { label: 'Projects', to: '/projects' },
         { label: key, to: projectUrl },
@@ -96,7 +98,7 @@ function Rules({ rules, isAdmin, profiles, reload }: { rules: ProjectRules; isAd
               )}{' '}
               · <Mono className="text-[11.5px] text-fg">{r.effortMinutes}</Mono> min to fix each
             </span>
-            <Link to={`/issues?project=${encodeURIComponent(rules.project)}`} className="ml-auto text-[13px]">
+            <Link to={issuesUrl(rules.project)} className="ml-auto text-[13px]">
               See issues →
             </Link>
           </>

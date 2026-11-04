@@ -11,6 +11,7 @@ import { ReasonForm } from '@/components/sonda/triage'
 import { formatAge, formatNumber, shortDate } from '@/lib/format'
 import { componentLabel, componentUrl, cweUrl, dependenciesUrl, projectUrl } from '@/lib/links'
 import { DECISION_PROMPT, SEVERITY, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
+import { issuesUrl } from '@/lib/issues'
 
 export function SecurityPage() {
   const api = useApi()
@@ -248,7 +249,7 @@ function ReviewRow({
   onTriage: (patch: IssuePatch, message: string) => Promise<boolean>
 }) {
   const [deciding, setDeciding] = useState<keyof typeof DECISION_PROMPT | null>(null)
-  const issueUrl = `/issues?project=${encodeURIComponent(f.project)}&branch=${encodeURIComponent(f.branch)}&file=${encodeURIComponent(f.file)}&cat=vulnerability&issue=${f.id}`
+  const issueUrl = issuesUrl(f.project, { branch: f.branch, file: f.file, cat: 'vulnerability', issue: f.id })
   return (
     <li
       aria-label={`${f.rule} at ${f.file}:${f.line}`}
@@ -331,7 +332,7 @@ function FixFirst({ s }: { s: Security }) {
                   </Link>
                   {' › '}
                   <Link
-                    to={`/issues?project=${encodeURIComponent(f.project)}&file=${encodeURIComponent(f.path)}&cat=vulnerability`}
+                    to={issuesUrl(f.project, { file: f.path, cat: 'vulnerability' })}
                     className="font-mono text-[11.5px] [overflow-wrap:anywhere]"
                   >
                     {f.path}:{f.line}
@@ -429,7 +430,7 @@ function Projects({ s }: { s: Security }) {
         {s.projects.map((p) => (
           <li key={p.project} className="flex flex-col gap-1">
             <span className="flex items-baseline justify-between text-[13px]">
-              <Link to={`/issues?project=${encodeURIComponent(p.project)}&cat=vulnerability`} className="text-fg">
+              <Link to={issuesUrl(p.project, { cat: 'vulnerability' })} className="text-fg">
                 {p.project}
               </Link>
               <Mono className="text-xs text-fg-muted">

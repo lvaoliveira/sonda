@@ -69,15 +69,21 @@ const SEVERITIES: Severity[] = ['blocker', 'critical', 'major', 'minor', 'info']
  * combinable, and `issue=` to open one of the results. Returns the filter, a human description
  * and the issue, or null when there is nothing to apply.
  */
-export function filterFromParams(params: URLSearchParams): { filter: IssueFilter; description: string; issue: number | null } | null {
+/**
+ * The filters a link carries in its query string. On a project's Issues
+ * tab, `project` comes from the route instead of the query.
+ */
+export function filterFromParams(params: URLSearchParams, routeProject?: string): { filter: IssueFilter; description: string; issue: number | null } | null {
   const filter: IssueFilter = { ...DEFAULT_FILTER }
   const parts: string[] = []
-  const project = params.get('project')
+  const project = routeProject ?? params.get('project')
   if (project) {
     filter.project = project
     const branch = params.get('branch')
     if (branch) filter.branch = branch
-    parts.push(branch ? `${project} on ${branch}` : project)
+    // On the project's own tab, its name is already on the page.
+    if (!routeProject) parts.push(branch ? `${project} on ${branch}` : project)
+    else if (branch) parts.push(`on ${branch}`)
   }
   if (params.has('new')) {
     filter.isNew = true
@@ -110,4 +116,20 @@ export function filterFromParams(params: URLSearchParams): { filter: IssueFilter
   if (parts.length === 0) return null
   const issue = Number(params.get('issue'))
   return { filter, description: `Showing ${parts.join(' · ')} — from the metric you clicked`, issue: Number.isInteger(issue) && issue > 0 ? issue : null }
+}
+
+/**
+ * The Issues page with these filters (as `filterFromParams` reads them): a
+ * project's own Issues tab, or all projects' without one. `true` sets a
+ * flag such as `new`; empty values are left out.
+ */
+export function issuesUrl(project: string | null | undefined, params: Record<string, string | number | boolean | null | undefined> = {}): string {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === true) query.set(key, '')
+    else if (value != null && value !== false && value !== '') query.set(key, String(value))
+  }
+  const base = project ? `/projects/${encodeURIComponent(project)}/issues` : '/issues'
+  const q = query.toString()
+  return q ? `${base}?${q}` : base
 }
