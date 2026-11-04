@@ -6,7 +6,7 @@ import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { RuleBrowser, type RuleFilter, RuleSearch } from '@/components/sonda/RuleBrowser'
-import { formatNumber, shortDate } from '@/lib/format'
+import { countOf, formatNumber, shortDate } from '@/lib/format'
 import { SET_BY_LABEL, TOML_CHANGE_LABEL, languageLabel } from '@/lib/visual'
 import { issuesUrl } from '@/lib/issues'
 
@@ -265,7 +265,7 @@ function RepositorySettings({ rules }: Readonly<{ rules: ProjectRules }>) {
     <Card id="sonda-toml" title="The repository's sonda.toml" subtitle={`Its [rules] settings, as the latest analysis of ${rules.mainBranch} recorded them`}>
       <p className="m-0 text-[13px] text-fg-muted">
         {toml
-          ? `${toml.disabled.length} disabled, ${toml.enabled.length} enabled, ${n} ${n === 1 ? 'severity' : 'severities'} changed. Where the server sets a rule, the server wins in scans that upload.`
+          ? `${toml.disabled.length} disabled, ${toml.enabled.length} enabled, ${countOf(n, 'severity', 'severities')} changed. Where the server sets a rule, the server wins in scans that upload.`
           : 'Unknown: the latest analysis came from an older sonda. They show after the next upload.'}
       </p>
       {rules.tomlChanges.length > 0 && (

@@ -9,6 +9,12 @@ const CONDITION_MARK: Record<GateCondition['status'], { glyph: string; color: st
   ignored: { glyph: '–', color: 'var(--sd-faint)', label: 'Ignored' },
 }
 
+/** A condition's measured value, to one decimal unless it's whole. */
+function actualValue(actual: number | null, unit: string): string {
+  if (actual == null) return 'no data'
+  return `${Number.isInteger(actual) ? actual : actual.toFixed(1)}${unit}`
+}
+
 /** A gate's conditions: a glyph and a word for the status, the condition, and its actual value. */
 export function GateConditions({ conditions }: Readonly<{ conditions: GateCondition[] }>) {
   return (
@@ -26,7 +32,7 @@ export function GateConditions({ conditions }: Readonly<{ conditions: GateCondit
               {c.status === 'ignored' && <span className="text-xs text-fg-faint"> · ignored: {c.reason ?? 'fewer than 20 new lines'}</span>}
             </span>
             <Mono className="text-xs">
-              <span style={{ color: m.color }}>{c.actual == null ? 'no data' : `${Number.isInteger(c.actual) ? c.actual : c.actual.toFixed(1)}${unit}`}</span>
+              <span style={{ color: m.color }}>{actualValue(c.actual, unit)}</span>
             </Mono>
           </li>
         )

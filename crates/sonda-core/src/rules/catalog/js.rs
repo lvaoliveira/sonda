@@ -1,6 +1,7 @@
 //! JavaScript and TypeScript rules.
 
 use super::prelude::*;
+use crate::semantic::Model;
 
 pub(super) static RULES: &[Rule] = &[
     // ---- JavaScript / TypeScript ----
@@ -1277,10 +1278,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S3358")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: JS_TS,
-            query: "(ternary_expression) @match",
-            filter: Some(Keep(has_nested_ternary)),
+            find: nested_ternaries,
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -4044,14 +4044,45 @@ fn is_property_of_arguments(name: Node, src: &[u8]) -> bool {
     })
 }
 
-fn has_nested_ternary(ternary: Node, _: &[u8]) -> bool {
-    // Reported on the inner conditional, as SonarQube does: that is the one
-    // that makes the outer hard to read.
-    let mut parent = ternary.parent();
-    while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
-        parent = p.parent();
+/// Every ternary inside another, as SonarQube reports them: anywhere in
+/// the outer one (an operand, a call's argument, a template literal), but
+/// not past a function, whose body reads on its own, an object literal,
+/// whose properties do, or into a JSX expression container of its own
+/// (`a ? <X y={b ? 1 : 2} /> : null` is conditional rendering). One walk
+/// with a cursor: asking each ternary for its ancestors costs the depth for
+/// every step up.
+fn nested_ternaries<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    let Some(root) = m.root else {
+        return found;
+    };
+    let mut cursor = root.walk();
+    // Whether each node on the cursor's path is inside a ternary.
+    let mut inside = vec![false];
+    loop {
+        let n = cursor.node();
+        let within = *inside.last().unwrap_or(&false);
+        let ternary = n.kind() == "ternary_expression";
+        if ternary && within {
+            found.push(n);
+        }
+        let children_within =
+            if FUNCTIONS.contains(&n.kind()) || matches!(n.kind(), "object" | "jsx_expression") {
+                false
+            } else {
+                ternary || within
+            };
+        if cursor.goto_first_child() {
+            inside.push(children_within);
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return found;
+            }
+            inside.pop();
+        }
     }
-    parent.is_some_and(|p| p.kind() == "ternary_expression")
 }
 
 /// `return;` or `continue;`, with no value or label.
@@ -5896,8 +5927,10 @@ mod tests {
             "if (a) { ".repeat(2_000),
             "}".repeat(2_000)
         );
+        // The inner ternary is the deepest operand of a 20,000-term sum.
+        let ternary = format!("const t = c ? (d ? 1 : 2) + {sum}0 : 0;");
         let src = format!(
-            "const o = {{ {keys} }};\nconst s = {sum}0;\nswitch (x) {{ {cases} }}\n{chain}{{ g(); }}\n{nested}\n"
+            "const o = {{ {keys} }};\nconst s = {sum}0;\nswitch (x) {{ {cases} }}\n{chain}{{ g(); }}\n{nested}\n{ternary}\n"
         );
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).unwrap();
@@ -5909,6 +5942,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(limit);
         let file = analyze("t", JS, &src, &rules, &cfg, deadline).expect("finishes in time");
         assert!(file.issues.iter().any(|i| i.rule == "js/jump-in-finally"));
+        assert!(file.issues.iter().any(|i| i.rule == "js/nested-ternary"));
     }
 
     #[test]
@@ -5962,6 +5996,17 @@ v = load
         let jsx = "const v = <div>{!rows ? <Spinner /> : rows.length ? <List /> : x ? <A /> : <B />}</div>;";
         // SonarQube reports these too: a nested ternary is one wherever it sits.
         assert_eq!(flagged("js/nested-ternary", JS, jsx), [1, 1]);
+        // Further in than an operand too, as SonarQube finds them (checked on
+        // a 42-issue corpus); not past a function, an object literal or a
+        // JSX container of its own.
+        let deeper = "a = x ? `${n} ${n === 1 ? 'rule' : 'rules'}` : '';
+b = x ? f(y ? 1 : 2) : 0;
+c = x ? 'a' + (y ? 'b' : '') : '';
+d = x ? () => (y ? 1 : 2) : null;
+e = x ? { message: y ? 'on' : 'off' } : null;
+g = <A>{x ? <B c={y ? 1 : 2} /> : null}</A>;
+h = <A>{x ? `${y ? 1 : 2}` : null}</A>;";
+        assert_eq!(flagged("js/nested-ternary", JS, deeper), [1, 2, 3, 7]);
         assert_eq!(flagged("js/call-arguments-new-line", JS, src), [9]);
         let jumps = "const f = () => { g(); return; };\nwhile (a) { b(); continue; }\nfunction h() { return; /* done */ }";
         assert_eq!(flagged("js/redundant-jump", TS, jumps), [1, 2]);

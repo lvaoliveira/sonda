@@ -25,6 +25,11 @@ export function formatNumber(n: number): string {
   return n.toLocaleString('en-US')
 }
 
+/** `n` and the word for that many: `1 rule`, `3 rules`, `2 analyses`. */
+export function countOf(n: number, one: string, many = `${one}s`): string {
+  return `${formatNumber(n)} ${n === 1 ? one : many}`
+}
+
 export function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
@@ -47,13 +52,13 @@ export function branchLabel(a: { branch: string; pullRequest: { number: number; 
   return a.pullRequest ? `#${a.pullRequest.number} ${a.pullRequest.head} → ${a.pullRequest.base}` : a.branch
 }
 
-/** `s` without its trailing `char`s. A regex such as /-+$/ backtracks on a long run of them. */
 /** `+` before a rise, `−` before a fall, nothing for no change. */
 export function signOf(change: number): string {
   if (change > 0) return '+'
   return change < 0 ? '−' : ''
 }
 
+/** `s` without its trailing `char`s. A regex such as /-+$/ backtracks on a long run of them. */
 export function trimTrailing(s: string, char: string): string {
   let end = s.length
   while (end > 0 && s[end - 1] === char) end--

@@ -6,7 +6,7 @@ import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { RuleBrowser, type RuleFilter, RuleSearch } from '@/components/sonda/RuleBrowser'
-import { formatNumber, shortDate } from '@/lib/format'
+import { countOf, shortDate } from '@/lib/format'
 import { SEVERITY, SEVERITY_ORDER } from '@/lib/visual'
 
 const input = 'h-8 rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge'
@@ -63,7 +63,7 @@ function Profiles({ profiles, catalog, isAdmin, reload }: Readonly<{ profiles: R
                     {p.builtin && <span className="text-xs font-normal text-fg-faint">built in</span>}
                   </span>
                   <span className="text-xs text-fg-faint">
-                    {p.builtin ? 'the catalog’s defaults' : `${formatNumber(p.rules)} ${p.rules === 1 ? 'rule' : 'rules'} set`} · {p.projects.length}{' '}
+                    {p.builtin ? 'the catalog’s defaults' : `${countOf(p.rules, 'rule')} set`} · {p.projects.length}{' '}
                     {p.projects.length === 1 ? 'project' : 'projects'}
                   </span>
                 </button>
@@ -173,7 +173,7 @@ function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: Readonly<
         subtitle={
           summary.builtin
             ? 'Built in: the catalog’s defaults. Copy it to make your own.'
-            : `${formatNumber(summary.rules)} ${summary.rules === 1 ? 'rule' : 'rules'} set; every other rule keeps its catalog default`
+            : `${countOf(summary.rules, 'rule')} set; every other rule keeps its catalog default`
         }
       >
         <p className="m-0 text-[13px] text-fg-muted">

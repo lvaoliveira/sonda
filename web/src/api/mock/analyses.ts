@@ -56,7 +56,8 @@ export function analysisDetail(id: number): AnalysisDetail | null {
   const same = ROWS.filter((r) => r.project === row.project && r.branch === row.branch)
   const at = same.findIndex((r) => r.id === row.id)
   // The newest analysis continues the older, synthesized history.
-  const previous = at < 0 ? olderRow(id - 1) : (same[at + 1] ?? (row.id === ROWS[0].id ? olderRow(910) : null))
+  const continued = row.id === ROWS[0].id ? olderRow(910) : null
+  const previous = at < 0 ? olderRow(id - 1) : (same[at + 1] ?? continued)
   const next = at < 0 ? (olderRow(id + 1) ?? same.at(-1) ?? null) : (same[at - 1] ?? null)
   const failing = row.gate === 'failed'
   return {
