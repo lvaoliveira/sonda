@@ -776,77 +776,67 @@ fn pattern_names<'a>(pattern: Node<'_>, src: &'a [u8], out: &mut Vec<&'a [u8]>) 
 fn declared_names<'a>(root: Node<'_>, src: &'a [u8]) -> Vec<&'a [u8]> {
     let mut out: Vec<&[u8]> = Vec::new();
     let mut visit = |n: Node<'_>| {
-        match n.kind() {
-            "variable_declarator" => {
-                if let Some(p) = n.child_by_field_name("name") {
-                    pattern_names(p, src, &mut out);
-                }
-            }
-            "function_declaration"
-            | "generator_function_declaration"
-            | "class_declaration"
-            | "function_expression"
-            | "function"
-            | "generator_function"
-            | "class"
-            | "abstract_class_declaration"
-            | "enum_declaration"
-            | "internal_module"
-            | "module"
-            | "function_signature" => {
-                if let Some(p) = n.child_by_field_name("name") {
-                    out.push(text(p, src));
-                }
-            }
-            "formal_parameters" => {
-                for c in named(n) {
-                    pattern_names(c, src, &mut out);
-                }
-            }
-            "arrow_function" => {
-                if let Some(p) = n.child_by_field_name("parameter") {
-                    pattern_names(p, src, &mut out);
-                }
-            }
-            "catch_clause" => {
-                if let Some(p) = n.child_by_field_name("parameter") {
-                    pattern_names(p, src, &mut out);
-                }
-            }
-            "import_specifier" => {
-                if let Some(p) = n
-                    .child_by_field_name("alias")
-                    .or_else(|| n.child_by_field_name("name"))
-                {
-                    out.push(text(p, src));
-                }
-            }
-            "namespace_import" | "import_clause" | "import_require_clause" => {
-                for c in named(n) {
-                    if c.kind() == "identifier" {
-                        out.push(text(c, src));
-                    }
-                }
-            }
-            "for_in_statement" => {
-                if n.child_by_field_name("kind").is_some()
-                    && let Some(l) = n.child_by_field_name("left")
-                {
-                    pattern_names(l, src, &mut out);
-                }
-            }
-            "index_signature" => {
-                if let Some(p) = n.child_by_field_name("name") {
-                    out.push(text(p, src));
-                }
-            }
-            _ => {}
-        }
+        names_declared_by(n, src, &mut out);
         true
     };
     visit(root);
     walk(root, &mut visit);
     out
+}
+
+/// The declarations whose `name` field is the one name they declare.
+const NAMED_DECLARATIONS: &[&str] = &[
+    "function_declaration",
+    "generator_function_declaration",
+    "class_declaration",
+    "function_expression",
+    "function",
+    "generator_function",
+    "class",
+    "abstract_class_declaration",
+    "enum_declaration",
+    "internal_module",
+    "module",
+    "function_signature",
+    "index_signature",
+];
+
+/// The names `n` itself declares, added to `out`.
+fn names_declared_by<'a>(n: Node<'_>, src: &'a [u8], out: &mut Vec<&'a [u8]>) {
+    match n.kind() {
+        "variable_declarator" => pattern_field(n, "name", src, out),
+        k if NAMED_DECLARATIONS.contains(&k) => {
+            out.extend(n.child_by_field_name("name").map(|p| text(p, src)));
+        }
+        "formal_parameters" => {
+            for c in named(n) {
+                pattern_names(c, src, out);
+            }
+        }
+        "arrow_function" | "catch_clause" => pattern_field(n, "parameter", src, out),
+        "import_specifier" => out.extend(
+            n.child_by_field_name("alias")
+                .or_else(|| n.child_by_field_name("name"))
+                .map(|p| text(p, src)),
+        ),
+        "namespace_import" | "import_clause" | "import_require_clause" => out.extend(
+            named(n)
+                .into_iter()
+                .filter(|c| c.kind() == "identifier")
+                .map(|c| text(c, src)),
+        ),
+        "for_in_statement" if n.child_by_field_name("kind").is_some() => {
+            pattern_field(n, "left", src, out);
+        }
+        _ => {}
+    }
+}
+
+/// The names the pattern in `n`'s `field` binds, added to `out`.
+fn pattern_field<'a>(n: Node<'_>, field: &str, src: &'a [u8], out: &mut Vec<&'a [u8]>) {
+    if let Some(p) = n.child_by_field_name(field) {
+        pattern_names(p, src, out);
+    }
 }
 
 /// An identifier that reads or writes a variable, with its parent and
@@ -1278,74 +1268,7 @@ fn dereferences_a_null_value<'t>(if_: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
 
 fn gratuitous_condition<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     match node.kind() {
-        "if_statement" | "ternary_expression" => {
-            let cond = strip_parens(node.child_by_field_name("condition")?);
-            if matches!(cond.kind(), "true" | "false" | "null" | "undefined")
-                || (cond.kind() == "number" && matches!(text(cond, src), b"0" | b"1"))
-            {
-                return Some(cond);
-            }
-            if node.kind() != "if_statement" {
-                return None;
-            }
-            let simple = |c: Node| {
-                matches!(c.kind(), "identifier" | "member_expression")
-                    && !text(c, src).contains(&b'(')
-            };
-            if !simple(cond) {
-                return None;
-            }
-            let body = node.child_by_field_name("consequence")?;
-            let root_name: Vec<u8> = text(cond, src)
-                .split(|b| *b == b'.')
-                .next()
-                .unwrap_or_default()
-                .to_vec();
-            // Only the statements of the block itself: a walk of everything
-            // below would be quadratic on deeply nested code.
-            let statements = if body.kind() == "statement_block" {
-                named(body)
-            } else {
-                vec![body]
-            };
-            for statement in statements {
-                if statement.kind() == "if_statement"
-                    && statement
-                        .child_by_field_name("condition")
-                        .is_some_and(|c| text(strip_parens(c), src) == text(cond, src))
-                {
-                    return statement.child_by_field_name("condition");
-                }
-                let writes_it = |n: Node| {
-                    matches!(
-                        n.kind(),
-                        "assignment_expression"
-                            | "augmented_assignment_expression"
-                            | "update_expression"
-                    ) && n
-                        .child_by_field_name("left")
-                        .or_else(|| n.child_by_field_name("argument"))
-                        .is_some_and(|t| {
-                            text(t, src)
-                                .split(|b| *b == b'.')
-                                .next()
-                                .unwrap_or_default()
-                                == root_name.as_slice()
-                        })
-                };
-                let mut written = writes_it(statement);
-                if statement.kind() != "if_statement" {
-                    walk(statement, &mut |n| {
-                        written |= writes_it(n);
-                        !written
-                    });
-                }
-                if written {
-                    return None;
-                }
-            }
-            None
-        }
+        "if_statement" | "ternary_expression" => constant_or_repeated_condition(node, src),
         "binary_expression" => {
             if !matches!(operator_text(node, src), b"&&" | b"||") {
                 return None;
@@ -1358,6 +1281,74 @@ fn gratuitous_condition<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         }
         _ => None,
     }
+}
+
+/// An `if`'s or a ternary's constant condition (`true`, `null`, `0`), or the
+/// same condition tested again inside an `if`'s body before anything
+/// writes the value it tests.
+fn constant_or_repeated_condition<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let cond = strip_parens(node.child_by_field_name("condition")?);
+    if matches!(cond.kind(), "true" | "false" | "null" | "undefined")
+        || (cond.kind() == "number" && matches!(text(cond, src), b"0" | b"1"))
+    {
+        return Some(cond);
+    }
+    let simple = matches!(cond.kind(), "identifier" | "member_expression")
+        && !text(cond, src).contains(&b'(');
+    if node.kind() != "if_statement" || !simple {
+        return None;
+    }
+    repeated_in_body(node.child_by_field_name("consequence")?, cond, src)
+}
+
+/// The first `if` in `body` testing `cond` again, unless a statement before
+/// it writes the value `cond` reads.
+fn repeated_in_body<'t>(body: Node<'t>, cond: Node, src: &[u8]) -> Option<Node<'t>> {
+    let root_name = first_segment(text(cond, src));
+    // Only the statements of the block itself: a walk of everything below
+    // would be quadratic on deeply nested code.
+    let statements = if body.kind() == "statement_block" {
+        named(body)
+    } else {
+        vec![body]
+    };
+    for statement in statements {
+        if statement.kind() == "if_statement"
+            && statement
+                .child_by_field_name("condition")
+                .is_some_and(|c| text(strip_parens(c), src) == text(cond, src))
+        {
+            return statement.child_by_field_name("condition");
+        }
+        let mut written = writes_root(statement, root_name, src);
+        if statement.kind() != "if_statement" {
+            walk(statement, &mut |n| {
+                written |= writes_root(n, root_name, src);
+                !written
+            });
+        }
+        if written {
+            return None;
+        }
+    }
+    None
+}
+
+/// `a` of `a.b.c`.
+fn first_segment(t: &[u8]) -> &[u8] {
+    t.split(|b| *b == b'.').next().unwrap_or_default()
+}
+
+/// Whether `n` assigns to, or increments, a variable named `root_name` or
+/// one of its members.
+fn writes_root(n: Node, root_name: &[u8], src: &[u8]) -> bool {
+    matches!(
+        n.kind(),
+        "assignment_expression" | "augmented_assignment_expression" | "update_expression"
+    ) && n
+        .child_by_field_name("left")
+        .or_else(|| n.child_by_field_name("argument"))
+        .is_some_and(|t| first_segment(text(t, src)) == root_name)
 }
 
 // ------------------------------------------------------------- S3524
@@ -1499,36 +1490,60 @@ fn promise_chain_in_try<'t>(try_: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         if found.is_some() || is_function_kind(n.kind()) {
             return false;
         }
-        if n.kind() == "call_expression"
-            && let Some(f) = n.child_by_field_name("function")
-            && f.kind() == "member_expression"
-            && f.child_by_field_name("property")
-                .is_some_and(|p| text(p, src) == b"then")
-            && !n.parent().is_some_and(|p| {
-                let mut up = Some(p);
-                while let Some(a) = up {
-                    if matches!(a.kind(), "return_statement" | "await_expression") {
-                        return true;
-                    }
-                    if matches!(a.kind(), "expression_statement" | "statement_block") {
-                        break;
-                    }
-                    up = a.parent();
-                }
-                false
-                    || (p.kind() == "member_expression"
-                        && p.child_by_field_name("property").is_some_and(|x| {
-                            matches!(text(x, src), b"catch" | b"then" | b"finally")
-                        }))
-            })
-            && n.child_by_field_name("arguments")
-                .is_some_and(|a| named(a).len() < 2)
+        if is_then_call(n, src)
+            && !n.parent().is_some_and(|p| handled_by(p, src))
+            && takes_no_rejection_handler(n)
         {
             found = Some(n);
         }
         true
     });
     found
+}
+
+/// `x.then(...)`.
+fn is_then_call(n: Node, src: &[u8]) -> bool {
+    n.kind() == "call_expression"
+        && n.child_by_field_name("function").is_some_and(|f| {
+            f.kind() == "member_expression"
+                && f.child_by_field_name("property")
+                    .is_some_and(|p| text(p, src) == b"then")
+        })
+}
+
+/// Whether the promise a `then` call returns, inside `p`, is still taken
+/// care of: returned or awaited, or chained on (`.catch`, `.then`,
+/// `.finally`).
+fn handled_by(p: Node, src: &[u8]) -> bool {
+    awaited_or_returned(p) || chained(p, src)
+}
+
+/// Whether a `return` or an `await` takes the expression `p` is in, before
+/// its statement ends.
+fn awaited_or_returned(p: Node) -> bool {
+    let mut up = Some(p);
+    while let Some(a) = up {
+        if matches!(a.kind(), "return_statement" | "await_expression") {
+            return true;
+        }
+        if matches!(a.kind(), "expression_statement" | "statement_block") {
+            return false;
+        }
+        up = a.parent();
+    }
+    false
+}
+
+fn chained(p: Node, src: &[u8]) -> bool {
+    p.kind() == "member_expression"
+        && p.child_by_field_name("property")
+            .is_some_and(|x| matches!(text(x, src), b"catch" | b"then" | b"finally"))
+}
+
+/// A `then` with fewer than two arguments: no rejection handler.
+fn takes_no_rejection_handler(call: Node) -> bool {
+    call.child_by_field_name("arguments")
+        .is_some_and(|a| named(a).len() < 2)
 }
 
 // ------------------------------------------------------------- tests

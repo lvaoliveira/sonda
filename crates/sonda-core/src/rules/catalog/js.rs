@@ -4545,45 +4545,59 @@ fn is_called_conditionally(call: Node, src: &[u8]) -> bool {
         }
         if FUNCTIONS.contains(&kind) {
             // A hook after `if (...) return` runs on some renders only.
-            let after_early_return = top_statement.is_some_and(|top| {
-                let mut prev = top.prev_named_sibling();
-                while let Some(p) = prev {
-                    if p.kind() == "if_statement"
-                        && p.child_by_field_name("alternative").is_none()
-                        && p.child_by_field_name("consequence").is_some_and(|c| {
-                            c.kind() == "return_statement"
-                                || (c.kind() == "statement_block"
-                                    && c.named_child_count() > 0
-                                    && c.named_child((c.named_child_count() - 1) as u32)
-                                        .is_some_and(|l| l.kind() == "return_statement"))
-                        })
-                    {
-                        return true;
-                    }
-                    prev = p.prev_named_sibling();
-                }
-                false
-            });
+            let after_early_return = top_statement.is_some_and(after_early_return);
             return (conditional || after_early_return) && is_component_or_hook(parent, src);
         }
         if kind == "program" {
             return false;
         }
-        let branch = |f: &str| parent.child_by_field_name(f) == Some(child);
-        conditional |= match kind {
-            "if_statement" | "ternary_expression" => branch("consequence") || branch("alternative"),
-            "binary_expression" => {
-                branch("right")
-                    && parent
-                        .child_by_field_name("operator")
-                        .is_some_and(|o| matches!(o.kind(), "&&" | "||" | "??"))
-            }
-            "switch_case" | "switch_default" | "catch_clause" => true,
-            _ => LOOPS.contains(&kind),
-        };
+        conditional |= makes_it_conditional(parent, child);
         child = parent;
     }
     false
+}
+
+/// Whether an `if` without `else` that returns comes before `statement`.
+fn after_early_return(statement: Node) -> bool {
+    let mut prev = statement.prev_named_sibling();
+    while let Some(p) = prev {
+        if is_early_return(p) {
+            return true;
+        }
+        prev = p.prev_named_sibling();
+    }
+    false
+}
+
+/// `if (...) return;` or `if (...) { ...; return; }`, without an `else`.
+fn is_early_return(p: Node) -> bool {
+    p.kind() == "if_statement"
+        && p.child_by_field_name("alternative").is_none()
+        && p.child_by_field_name("consequence").is_some_and(|c| {
+            c.kind() == "return_statement"
+                || (c.kind() == "statement_block"
+                    && c.named_child_count() > 0
+                    && c.named_child((c.named_child_count() - 1) as u32)
+                        .is_some_and(|l| l.kind() == "return_statement"))
+        })
+}
+
+/// Whether `parent` runs `child` only sometimes: a branch, the right of
+/// `&&`/`||`/`??`, a case, a catch, or a loop.
+fn makes_it_conditional(parent: Node, child: Node) -> bool {
+    let branch = |f: &str| parent.child_by_field_name(f) == Some(child);
+    let kind = parent.kind();
+    match kind {
+        "if_statement" | "ternary_expression" => branch("consequence") || branch("alternative"),
+        "binary_expression" => {
+            branch("right")
+                && parent
+                    .child_by_field_name("operator")
+                    .is_some_and(|o| matches!(o.kind(), "&&" | "||" | "??"))
+        }
+        "switch_case" | "switch_default" | "catch_clause" => true,
+        _ => LOOPS.contains(&kind),
+    }
 }
 
 /// A function named like a component (`Panel`) or a hook (`usePanel`),
@@ -5431,26 +5445,8 @@ fn first_escape<'t>(block: Node<'t>, src: &[u8], loop_body: bool) -> Option<Node
         match n.kind() {
             "return_statement" | "throw_statement" => return Some(n),
             "yield_expression" | "await_expression" if loop_body => return Some(n),
-            kind @ ("break_statement" | "continue_statement") => {
-                let label = n
-                    .named_child(0)
-                    .filter(|l| l.kind() == "statement_identifier")
-                    .map(|l| text(l, src));
-                let stays = around.iter().any(|(_, a)| match label {
-                    Some(l) => {
-                        a.kind() == "labeled_statement"
-                            && a.child_by_field_name("label").map(|x| text(x, src)) == Some(l)
-                    }
-                    None => {
-                        LOOPS.contains(&a.kind())
-                            || (kind == "break_statement" && a.kind() == "switch_statement")
-                    }
-                });
-                let continues_this_loop =
-                    loop_body && kind == "continue_statement" && label.is_none();
-                if !stays && !continues_this_loop {
-                    return Some(n);
-                }
+            "break_statement" | "continue_statement" if jump_leaves(n, &around, loop_body, src) => {
+                return Some(n);
             }
             _ => {}
         }
@@ -5466,6 +5462,30 @@ fn first_escape<'t>(block: Node<'t>, src: &[u8], loop_body: bool) -> Option<Node
             depth -= 1;
         }
     }
+}
+
+/// Whether a `break` or `continue` leaves the block `first_escape` reads,
+/// given the statements `around` it there: one that a loop, a switch or
+/// its label inside the block takes doesn't, and neither does an unlabeled
+/// `continue` of the loop whose body it is.
+fn jump_leaves(n: Node, around: &[(usize, Node)], loop_body: bool, src: &[u8]) -> bool {
+    let kind = n.kind();
+    let label = n
+        .named_child(0)
+        .filter(|l| l.kind() == "statement_identifier")
+        .map(|l| text(l, src));
+    let stays = around.iter().any(|(_, a)| match label {
+        Some(l) => {
+            a.kind() == "labeled_statement"
+                && a.child_by_field_name("label").map(|x| text(x, src)) == Some(l)
+        }
+        None => {
+            LOOPS.contains(&a.kind())
+                || (kind == "break_statement" && a.kind() == "switch_statement")
+        }
+    });
+    let continues_this_loop = loop_body && kind == "continue_statement" && label.is_none();
+    !stays && !continues_this_loop
 }
 
 fn never_ends(lp: Node, src: &[u8]) -> bool {

@@ -597,17 +597,7 @@ fn text_has_control_characters(pattern: &str, _: &Regex) -> bool {
     while i < chars.len() {
         if chars[i] == '\\' {
             let rest: String = chars[i + 1..].iter().take(8).collect();
-            let hex_value = |digits: &str| u32::from_str_radix(digits, 16).ok();
-            let found = if let Some(d) = rest.strip_prefix('x') {
-                d.get(..2).and_then(hex_value)
-            } else if let Some(d) = rest.strip_prefix("u{") {
-                d.split('}').next().and_then(hex_value)
-            } else if let Some(d) = rest.strip_prefix('u') {
-                d.get(..4).and_then(hex_value)
-            } else {
-                None
-            };
-            if found.is_some_and(|v| v < 0x20 && !matches!(v, 9 | 10 | 13)) {
+            if escape_is_control(&rest) {
                 return true;
             }
             i += 2;
@@ -619,6 +609,22 @@ fn text_has_control_characters(pattern: &str, _: &Regex) -> bool {
         }
     }
     false
+}
+
+/// Whether the escape after a backslash, `\\xhh`, `\\uhhhh` or `\\u{h...}`,
+/// is a control character other than tab, line feed and carriage return.
+fn escape_is_control(rest: &str) -> bool {
+    let hex_value = |digits: &str| u32::from_str_radix(digits, 16).ok();
+    let found = if let Some(d) = rest.strip_prefix('x') {
+        d.get(..2).and_then(hex_value)
+    } else if let Some(d) = rest.strip_prefix("u{") {
+        d.split('}').next().and_then(hex_value)
+    } else if let Some(d) = rest.strip_prefix('u') {
+        d.get(..4).and_then(hex_value)
+    } else {
+        None
+    };
+    found.is_some_and(|v| v < 0x20 && !matches!(v, 9 | 10 | 13))
 }
 
 fn text_needs_unicode_flag(pattern: &str, r: &Regex) -> bool {

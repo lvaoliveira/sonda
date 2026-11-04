@@ -302,53 +302,66 @@ fn declared_events(call: Node, src: &[u8]) -> Vec<Vec<u8>> {
         .child_by_field_name("arguments")
         .and_then(|a| a.named_child(0))
     {
-        match arg.kind() {
-            "array" => {
-                for e in named(arg).into_iter().filter(|e| e.kind() == "string") {
-                    out.push(string_content(e, src).to_vec());
-                }
-            }
-            "object" => {
-                for p in named(arg) {
-                    if let Some(k) = key_text(p, src) {
-                        out.push(k.to_vec());
-                    }
-                }
-            }
-            _ => {}
-        }
+        runtime_events(arg, src, &mut out);
     }
     if let Some(types) = call
         .child_by_field_name("type_arguments")
         .and_then(|t| t.named_child(0))
         .filter(|t| t.kind() == "object_type")
     {
-        for m in named(types) {
-            match m.kind() {
-                "call_signature" => {
-                    // (e: 'change', value: string): void
-                    let mut strings = Vec::new();
-                    walk(m, &mut |n| {
-                        if n.kind() == "string" && strings.is_empty() {
-                            strings.push(string_content(n, src).to_vec());
-                        }
-                        strings.is_empty()
-                    });
-                    out.append(&mut strings);
-                }
-                "property_signature" => {
-                    if let Some(n) = m.child_by_field_name("name") {
-                        out.push(match n.kind() {
-                            "string" => string_content(n, src).to_vec(),
-                            _ => text(n, src).to_vec(),
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
+        typed_events(types, src, &mut out);
     }
     out
+}
+
+/// `defineEmits(['change'])` or `defineEmits({ change: ... })`.
+fn runtime_events(arg: Node, src: &[u8], out: &mut Vec<Vec<u8>>) {
+    match arg.kind() {
+        "array" => out.extend(
+            named(arg)
+                .into_iter()
+                .filter(|e| e.kind() == "string")
+                .map(|e| string_content(e, src).to_vec()),
+        ),
+        "object" => out.extend(
+            named(arg)
+                .into_iter()
+                .filter_map(|p| key_text(p, src))
+                .map(<[u8]>::to_vec),
+        ),
+        _ => {}
+    }
+}
+
+/// `defineEmits<{ (e: 'change', value: string): void; update: [...] }>()`.
+fn typed_events(types: Node, src: &[u8], out: &mut Vec<Vec<u8>>) {
+    for m in named(types) {
+        match m.kind() {
+            // (e: 'change', value: string): void
+            "call_signature" => out.extend(first_string(m, src)),
+            "property_signature" => {
+                if let Some(n) = m.child_by_field_name("name") {
+                    out.push(match n.kind() {
+                        "string" => string_content(n, src).to_vec(),
+                        _ => text(n, src).to_vec(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The first string literal under `node`, its quotes aside.
+fn first_string(node: Node, src: &[u8]) -> Option<Vec<u8>> {
+    let mut found = None;
+    walk(node, &mut |n| {
+        if n.kind() == "string" && found.is_none() {
+            found = Some(string_content(n, src).to_vec());
+        }
+        found.is_none()
+    });
+    found
 }
 
 fn emits_an_undeclared_event(call: Node, src: &[u8]) -> bool {

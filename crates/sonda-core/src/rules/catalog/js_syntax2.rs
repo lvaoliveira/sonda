@@ -460,23 +460,7 @@ fn asserts_the_literal_it_has(expr: Node, src: &[u8]) -> bool {
 
 fn var_used_before_declaration<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let body = function.child_by_field_name("body")?;
-    let mut declared: Vec<(&[u8], usize)> = Vec::new();
-    walk(body, &mut |n| {
-        if is_function_kind(n.kind()) {
-            return false;
-        }
-        if n.kind() == "variable_declaration" {
-            for d in named(n) {
-                if let Some(name) = d
-                    .child_by_field_name("name")
-                    .filter(|x| x.kind() == "identifier")
-                {
-                    declared.push((text(name, src), name.start_byte()));
-                }
-            }
-        }
-        true
-    });
+    let declared = var_declarations(body, src);
     if declared.is_empty() {
         return None;
     }
@@ -485,23 +469,52 @@ fn var_used_before_declaration<'t>(function: Node<'t>, src: &[u8]) -> Option<Nod
         if found.is_some() || is_function_kind(n.kind()) {
             return false;
         }
-        if n.kind() == "identifier"
-            && n.parent().is_none_or(|p| {
-                p.kind() != "variable_declarator" || p.child_by_field_name("name") != Some(n)
-            })
-        {
-            let first = declared
-                .iter()
-                .filter(|(name, _)| *name == text(n, src))
-                .map(|(_, at)| *at)
-                .min();
-            if first.is_some_and(|at| n.start_byte() < at) {
-                found = Some(n);
-            }
+        if used_before_declared(n, &declared, src) {
+            found = Some(n);
         }
         true
     });
     found
+}
+
+/// The names `var` declares in `body`, outside its inner functions, each
+/// with where.
+fn var_declarations<'s>(body: Node, src: &'s [u8]) -> Vec<(&'s [u8], usize)> {
+    let mut declared: Vec<(&[u8], usize)> = Vec::new();
+    walk(body, &mut |n| {
+        if is_function_kind(n.kind()) {
+            return false;
+        }
+        if n.kind() == "variable_declaration" {
+            declared.extend(
+                named(n)
+                    .into_iter()
+                    .filter_map(|d| d.child_by_field_name("name"))
+                    .filter(|x| x.kind() == "identifier")
+                    .map(|name| (text(name, src), name.start_byte())),
+            );
+        }
+        true
+    });
+    declared
+}
+
+/// Whether `n` is a use of a name, not its declaration, before the first
+/// `var` that declares it.
+fn used_before_declared(n: Node, declared: &[(&[u8], usize)], src: &[u8]) -> bool {
+    if n.kind() != "identifier"
+        || n.parent().is_some_and(|p| {
+            p.kind() == "variable_declarator" && p.child_by_field_name("name") == Some(n)
+        })
+    {
+        return false;
+    }
+    declared
+        .iter()
+        .filter(|(name, _)| *name == text(n, src))
+        .map(|(_, at)| *at)
+        .min()
+        .is_some_and(|at| n.start_byte() < at)
 }
 
 fn is_inline_element(node: Node, src: &[u8]) -> bool {

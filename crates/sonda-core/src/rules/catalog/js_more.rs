@@ -878,57 +878,70 @@ fn is_provably(expr: Node, src: &[u8], depth: usize, strings: bool) -> bool {
     if depth > 6 {
         return false;
     }
-    let again = |e: Node| is_provably(e, src, depth + 1, strings);
     if strings {
-        return match expr.kind() {
-            "string" | "template_string" => true,
-            "parenthesized_expression" => expr.named_child(0).is_some_and(again),
-            "await_expression" => expr.named_child(0).is_some_and(|c| {
-                c.child_by_field_name("function")
-                    .and_then(|f| f.child_by_field_name("property"))
-                    .is_some_and(|p| text(p, src) == b"text")
-            }),
-            "binary_expression" => {
-                operator_text(expr, src) == b"+"
-                    && ["left", "right"].iter().any(|f| {
-                        expr.child_by_field_name(f)
-                            .is_some_and(|c| matches!(c.kind(), "string" | "template_string"))
-                    })
-            }
-            "call_expression" => {
-                let Some(f) = expr.child_by_field_name("function") else {
-                    return false;
-                };
-                let t = text(f, src);
-                if matches!(t, b"String" | b"JSON.stringify") {
-                    return true;
-                }
-                // fs.readFileSync(path, 'utf8') returns text.
-                if t.ends_with(b"readFileSync")
-                    && call_arguments_of(expr)
-                        .get(1)
-                        .is_some_and(|a| a.kind() == "string")
-                {
-                    return true;
-                }
-                f.child_by_field_name("property").is_some_and(|m| {
-                    matches!(
-                        text(m, src),
-                        b"toString"
-                            | b"trim"
-                            | b"toLowerCase"
-                            | b"toUpperCase"
-                            | b"padStart"
-                            | b"padEnd"
-                            | b"join"
-                            | b"toFixed"
-                    )
-                })
-            }
-            "identifier" => lookup_declared(expr, src, |v| is_provably(v, src, depth + 1, true)),
-            _ => false,
-        };
+        provably_string(expr, src, depth)
+    } else {
+        provably_array(expr, src, depth)
     }
+}
+
+fn provably_string(expr: Node, src: &[u8], depth: usize) -> bool {
+    match expr.kind() {
+        "string" | "template_string" => true,
+        "parenthesized_expression" => expr
+            .named_child(0)
+            .is_some_and(|e| is_provably(e, src, depth + 1, true)),
+        "await_expression" => expr.named_child(0).is_some_and(|c| {
+            c.child_by_field_name("function")
+                .and_then(|f| f.child_by_field_name("property"))
+                .is_some_and(|p| text(p, src) == b"text")
+        }),
+        "binary_expression" => {
+            operator_text(expr, src) == b"+"
+                && ["left", "right"].iter().any(|f| {
+                    expr.child_by_field_name(f)
+                        .is_some_and(|c| matches!(c.kind(), "string" | "template_string"))
+                })
+        }
+        "call_expression" => call_returns_a_string(expr, src),
+        "identifier" => lookup_declared(expr, src, |v| is_provably(v, src, depth + 1, true)),
+        _ => false,
+    }
+}
+
+/// `String(x)`, `JSON.stringify(x)`, `fs.readFileSync(path, 'utf8')`, or a
+/// string method that returns one.
+fn call_returns_a_string(call: Node, src: &[u8]) -> bool {
+    let Some(f) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let t = text(f, src);
+    if matches!(t, b"String" | b"JSON.stringify") {
+        return true;
+    }
+    if t.ends_with(b"readFileSync")
+        && call_arguments_of(call)
+            .get(1)
+            .is_some_and(|a| a.kind() == "string")
+    {
+        return true;
+    }
+    f.child_by_field_name("property").is_some_and(|m| {
+        matches!(
+            text(m, src),
+            b"toString"
+                | b"trim"
+                | b"toLowerCase"
+                | b"toUpperCase"
+                | b"padStart"
+                | b"padEnd"
+                | b"join"
+                | b"toFixed"
+        )
+    })
+}
+
+fn provably_array(expr: Node, src: &[u8], depth: usize) -> bool {
     match expr.kind() {
         "array" => true,
         "parenthesized_expression" => expr
@@ -937,37 +950,41 @@ fn is_provably(expr: Node, src: &[u8], depth: usize, strings: bool) -> bool {
         "new_expression" => expr
             .child_by_field_name("constructor")
             .is_some_and(|c| text(c, src) == b"Array"),
-        "call_expression" => {
-            let Some(function) = expr.child_by_field_name("function") else {
-                return false;
-            };
-            let t = text(function, src);
-            if matches!(
-                t,
-                b"Array.from" | b"Array.of" | b"Object.keys" | b"Object.values" | b"Object.entries"
-            ) {
-                return true;
-            }
-            match function.kind() {
-                "member_expression" => {
-                    let method = function
-                        .child_by_field_name("property")
-                        .map(|p| text(p, src))
-                        .unwrap_or_default();
-                    match method {
-                        b"split" => true,
-                        b"map" | b"filter" | b"slice" | b"concat" | b"flat" | b"flatMap"
-                        | b"sort" | b"toSorted" | b"reverse" => function
-                            .child_by_field_name("object")
-                            .is_some_and(|o| is_provably_array(o, src, depth + 1)),
-                        _ => false,
-                    }
-                }
-                "identifier" => returns_an_array(expr, t, src, depth),
+        "call_expression" => call_returns_an_array(expr, src, depth),
+        "identifier" => lookup_declared(expr, src, |v| is_provably(v, src, depth + 1, false)),
+        _ => false,
+    }
+}
+
+/// `Array.from`, `Object.keys` and the like, a method that returns an
+/// array (of an array, for `map` and the rest), or a function that does.
+fn call_returns_an_array(call: Node, src: &[u8], depth: usize) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let t = text(function, src);
+    if matches!(
+        t,
+        b"Array.from" | b"Array.of" | b"Object.keys" | b"Object.values" | b"Object.entries"
+    ) {
+        return true;
+    }
+    match function.kind() {
+        "member_expression" => {
+            let method = function
+                .child_by_field_name("property")
+                .map(|p| text(p, src))
+                .unwrap_or_default();
+            match method {
+                b"split" => true,
+                b"map" | b"filter" | b"slice" | b"concat" | b"flat" | b"flatMap" | b"sort"
+                | b"toSorted" | b"reverse" => function
+                    .child_by_field_name("object")
+                    .is_some_and(|o| is_provably_array(o, src, depth + 1)),
                 _ => false,
             }
         }
-        "identifier" => lookup_declared(expr, src, |v| is_provably(v, src, depth + 1, false)),
+        "identifier" => returns_an_array(call, t, src, depth),
         _ => false,
     }
 }
@@ -979,49 +996,55 @@ fn lookup_declared(id: Node, src: &[u8], accept: impl Fn(Node) -> bool) -> bool 
     let name = text(id, src);
     let mut scope = id.parent();
     while let Some(s) = scope {
-        let is_function = matches!(
-            s.kind(),
-            "function_declaration"
-                | "function_expression"
-                | "arrow_function"
-                | "method_definition"
-                | "generator_function"
-                | "generator_function_declaration"
-                | "program"
-        );
-        if is_function {
+        if declares_names(s) {
             if declares_parameter(s, name, src) {
                 return false;
             }
-            let mut declared: Option<Node> = None;
-            crate::rules::catalog::js_syntax::walk(s, &mut |n| {
-                if declared.is_some() {
-                    return false;
-                }
-                if matches!(
-                    n.kind(),
-                    "function_declaration"
-                        | "function_expression"
-                        | "arrow_function"
-                        | "method_definition"
-                ) {
-                    return false;
-                }
-                if n.kind() == "variable_declarator"
-                    && n.child_by_field_name("name")
-                        .is_some_and(|x| text(x, src) == name)
-                {
-                    declared = Some(n);
-                }
-                true
-            });
-            if let Some(d) = declared {
+            if let Some(d) = declarator_in(s, name, src) {
                 return d.child_by_field_name("value").is_some_and(&accept);
             }
         }
         scope = s.parent();
     }
     false
+}
+
+/// A function or the program: where `lookup_declared` looks for a name.
+fn declares_names(n: Node) -> bool {
+    matches!(
+        n.kind(),
+        "function_declaration"
+            | "function_expression"
+            | "arrow_function"
+            | "method_definition"
+            | "generator_function"
+            | "generator_function_declaration"
+            | "program"
+    )
+}
+
+/// The first declarator of `name` in `scope`, outside the functions in it.
+fn declarator_in<'t>(scope: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    let mut declared: Option<Node> = None;
+    crate::rules::catalog::js_syntax::walk(scope, &mut |n| {
+        if declared.is_some() {
+            return false;
+        }
+        if matches!(
+            n.kind(),
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
+        ) {
+            return false;
+        }
+        if n.kind() == "variable_declarator"
+            && n.child_by_field_name("name")
+                .is_some_and(|x| text(x, src) == name)
+        {
+            declared = Some(n);
+        }
+        true
+    });
+    declared
 }
 
 fn declares_parameter(function: Node, name: &[u8], src: &[u8]) -> bool {
@@ -1241,20 +1264,43 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    // The value the left side guards: `a && ...`, `a != null && ...`,
-    // `!a || ...`, `a == null || ...`.
-    let is_value = |n: Node| matches!(n.kind(), "identifier" | "member_expression" | "this");
-    // In `a && b && b.c` the operand beside `b.c` is `b`, the end of the left chain.
-    let mut l = l;
+    let Some(subject) = guarded_subject(last_operand(l, binary, src), and, src) else {
+        return false;
+    };
+    // `!a || a.b` is `!a?.b` only when the right side is itself a negation
+    // or a null test; a plain read there would flip the result.
+    if or && !right_side_is_negation_or_null_test(r, src) {
+        return false;
+    }
+    if !reads_property_of(r, text(subject, src), src, and) {
+        return false;
+    }
+    // `a && a.x === 1 && a.y === 2`: SonarQube leaves a chain whose later
+    // operands are comparisons of the same value, which cannot join one
+    // optional chain. Asked last: `parent()` searches down from the root, so
+    // asking it for every `&&` is quadratic in deeply nested code.
+    !(and && next_operand_compares_it(binary, text(subject, src), src))
+}
+
+/// In `a && b && b.c` the operand beside `b.c` is `b`, the end of the left
+/// chain.
+fn last_operand<'t>(mut l: Node<'t>, binary: Node, src: &[u8]) -> Node<'t> {
     while l.kind() == "binary_expression"
         && operator_text(l, src) == operator_text(binary, src)
         && let Some(last) = l.child_by_field_name("right")
     {
         l = last;
     }
-    let subject = match l.kind() {
+    l
+}
+
+/// The value the left side guards: `a && ...`, `a != null && ...`,
+/// `!a || ...`, `a == null || ...`.
+fn guarded_subject<'t>(l: Node<'t>, and: bool, src: &[u8]) -> Option<Node<'t>> {
+    let is_value = |n: Node| matches!(n.kind(), "identifier" | "member_expression" | "this");
+    match l.kind() {
         "identifier" | "member_expression" | "this" if and => Some(l),
-        "unary_expression" if or => l
+        "unary_expression" if !and => l
             .child_by_field_name("argument")
             .filter(|a| is_value(*a) && text(l, src).starts_with(b"!")),
         "binary_expression" => {
@@ -1275,49 +1321,39 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
             }
         }
         _ => None,
-    };
-    let Some(subject) = subject else {
-        return false;
-    };
-    // `!a || a.b` is `!a?.b` only when the right side is itself a negation
-    // or a null test; a plain read there would flip the result.
-    if or {
-        let mut right = r;
-        while right.kind() == "parenthesized_expression" {
-            match right.named_child(0) {
-                Some(inner) => right = inner,
-                None => return false,
-            }
-        }
-        let negated = right.kind() == "unary_expression" && text(right, src).starts_with(b"!");
-        let null_test = right.kind() == "binary_expression"
-            && right
-                .child_by_field_name("right")
-                .is_some_and(|n| matches!(n.kind(), "null" | "undefined"));
-        if !negated && !null_test {
-            return false;
+    }
+}
+
+/// Whether `r`, its parentheses aside, is a negation or a null test.
+fn right_side_is_negation_or_null_test(r: Node, src: &[u8]) -> bool {
+    let mut right = r;
+    while right.kind() == "parenthesized_expression" {
+        match right.named_child(0) {
+            Some(inner) => right = inner,
+            None => return false,
         }
     }
-    if !reads_property_of(r, text(subject, src), src, and) {
-        return false;
-    }
-    // `a && a.x === 1 && a.y === 2`: SonarQube leaves a chain whose later
-    // operands are comparisons of the same value, which cannot join one
-    // optional chain. Asked last: `parent()` searches down from the root, so
-    // asking it for every `&&` is quadratic in deeply nested code.
-    if and
-        && let Some(outer) = binary.parent().filter(|p| {
+    let negated = right.kind() == "unary_expression" && text(right, src).starts_with(b"!");
+    let null_test = right.kind() == "binary_expression"
+        && right
+            .child_by_field_name("right")
+            .is_some_and(|n| matches!(n.kind(), "null" | "undefined"));
+    negated || null_test
+}
+
+/// Whether the `&&` after `binary` compares a property of `subject` too.
+fn next_operand_compares_it(binary: Node, subject: &[u8], src: &[u8]) -> bool {
+    binary
+        .parent()
+        .filter(|p| {
             p.kind() == "binary_expression"
                 && operator_text(*p, src) == b"&&"
                 && p.child_by_field_name("left") == Some(binary)
         })
-        && let Some(next) = outer.child_by_field_name("right")
-        && next.kind() == "binary_expression"
-        && reads_property_of(next, text(subject, src), src, true)
-    {
-        return false;
-    }
-    true
+        .and_then(|outer| outer.child_by_field_name("right"))
+        .is_some_and(|next| {
+            next.kind() == "binary_expression" && reads_property_of(next, subject, src, true)
+        })
 }
 
 /// Whether `expr` reads a property or calls a method of `subject`, in a way
@@ -1328,65 +1364,75 @@ fn guards_then_reads_the_same_value(binary: Node, src: &[u8]) -> bool {
 fn reads_property_of(expr: Node, subject: &[u8], src: &[u8], and: bool) -> bool {
     let mut node = expr;
     loop {
-        match node.kind() {
-            "member_expression" | "subscript_expression" => {
-                let Some(object) = node.child_by_field_name("object") else {
-                    return false;
-                };
-                if text(object, src) == subject {
-                    return true;
-                }
-                node = object;
-            }
-            "call_expression" => match node.child_by_field_name("function") {
-                Some(f) => node = f,
-                None => return false,
-            },
-            "binary_expression" => {
-                let op = operator_text(node, src);
-                let equality = matches!(op, b"==" | b"===" | b"!=" | b"!==");
-                if !equality {
-                    return false;
-                }
-                let (Some(left), Some(right)) = (
-                    node.child_by_field_name("left"),
-                    node.child_by_field_name("right"),
-                ) else {
-                    return false;
-                };
-                let nullish = |n: Node| matches!(n.kind(), "null" | "undefined");
-                if !and && !nullish(right) {
-                    return false;
-                }
-                // `a && a.b !== null` is true for a nullish `a?.b`, so a rewrite
-                // would change the answer; only some nullish tests survive it.
-                if and && nullish(right) {
-                    let undefined = right.kind() == "undefined";
-                    let safe = match op {
-                        b"!=" => true,
-                        b"!==" => undefined,
-                        b"===" => !undefined,
-                        _ => false,
-                    };
-                    if !safe {
-                        return false;
-                    }
-                }
-                node = left;
-            }
-            "unary_expression" if !and && text(node, src).starts_with(b"!") => {
-                match node.child_by_field_name("argument") {
-                    Some(a) => node = a,
-                    None => return false,
-                }
-            }
-            "parenthesized_expression" | "non_null_expression" => match node.named_child(0) {
-                Some(inner) => node = inner,
-                None => return false,
-            },
-            _ => return false,
+        match chain_step(node, subject, src, and) {
+            Step::Found => return true,
+            Step::Next(next) => node = next,
+            Step::Stop => return false,
         }
     }
+}
+
+/// One step of `reads_property_of` down an expression.
+enum Step<'t> {
+    /// A member of `subject`.
+    Found,
+    /// Look at this part next.
+    Next(Node<'t>),
+    /// Not a read an optional chain can replace.
+    Stop,
+}
+
+fn chain_step<'t>(node: Node<'t>, subject: &[u8], src: &[u8], and: bool) -> Step<'t> {
+    let next = |n: Option<Node<'t>>| n.map_or(Step::Stop, Step::Next);
+    match node.kind() {
+        "member_expression" | "subscript_expression" => {
+            let Some(object) = node.child_by_field_name("object") else {
+                return Step::Stop;
+            };
+            if text(object, src) == subject {
+                Step::Found
+            } else {
+                Step::Next(object)
+            }
+        }
+        "call_expression" => next(node.child_by_field_name("function")),
+        "binary_expression" => next(equality_left(node, src, and)),
+        "unary_expression" if !and && text(node, src).starts_with(b"!") => {
+            next(node.child_by_field_name("argument"))
+        }
+        "parenthesized_expression" | "non_null_expression" => next(node.named_child(0)),
+        _ => Step::Stop,
+    }
+}
+
+/// The left side of an equality test an optional chain keeps the answer
+/// of: after `||`, against null or undefined; after `&&`, only the nullish
+/// tests that survive the rewrite (`a && a.b !== null` is true for a nullish
+/// `a?.b`).
+fn equality_left<'t>(node: Node<'t>, src: &[u8], and: bool) -> Option<Node<'t>> {
+    let op = operator_text(node, src);
+    if !matches!(op, b"==" | b"===" | b"!=" | b"!==") {
+        return None;
+    }
+    let left = node.child_by_field_name("left")?;
+    let right = node.child_by_field_name("right")?;
+    let nullish = matches!(right.kind(), "null" | "undefined");
+    if !and && !nullish {
+        return None;
+    }
+    if and && nullish {
+        let undefined = right.kind() == "undefined";
+        let safe = match op {
+            b"!=" => true,
+            b"!==" => undefined,
+            b"===" => !undefined,
+            _ => false,
+        };
+        if !safe {
+            return None;
+        }
+    }
+    Some(left)
 }
 
 fn ternary_is_a_nullish_default(ternary: Node, src: &[u8]) -> bool {
@@ -1756,6 +1802,29 @@ fn union_has_a_redundant_member(union: Node, src: &[u8]) -> bool {
     if union.parent().is_some_and(|p| p.kind() == union.kind()) {
         return false;
     }
+    let members = union_members(union);
+    if members.len() < 2 {
+        return false;
+    }
+    let has = |kind: &str, accept: &dyn Fn(&[u8]) -> bool| {
+        members
+            .iter()
+            .any(|m| m.kind() == kind && accept(text(*m, src)))
+    };
+    let absorbs = has("predefined_type", &|t| {
+        matches!(t, b"any" | b"unknown" | b"never")
+    });
+    let string_and_literal = has("predefined_type", &|t| t == b"string")
+        && has("literal_type", &|t| t.first() == Some(&b'\''));
+    let number_and_literal = has("predefined_type", &|t| t == b"number")
+        && has("literal_type", &|t| {
+            t.first().is_some_and(u8::is_ascii_digit)
+        });
+    absorbs || string_and_literal || number_and_literal
+}
+
+/// A union's members, nested unions flattened.
+fn union_members(union: Node) -> Vec<Node> {
     let mut members: Vec<Node> = Vec::new();
     let mut stack = vec![union];
     while let Some(n) = stack.pop() {
@@ -1767,25 +1836,7 @@ fn union_has_a_redundant_member(union: Node, src: &[u8]) -> bool {
             }
         }
     }
-    if members.len() < 2 {
-        return false;
-    }
-    let absorbs = members.iter().any(|m| {
-        m.kind() == "predefined_type" && matches!(text(*m, src), b"any" | b"unknown" | b"never")
-    });
-    let primitive_and_literal = members
-        .iter()
-        .any(|m| m.kind() == "predefined_type" && text(*m, src) == b"string")
-        && members
-            .iter()
-            .any(|m| m.kind() == "literal_type" && text(*m, src).first() == Some(&b'\''))
-        || members
-            .iter()
-            .any(|m| m.kind() == "predefined_type" && text(*m, src) == b"number")
-            && members.iter().any(|m| {
-                m.kind() == "literal_type" && text(*m, src).first().is_some_and(u8::is_ascii_digit)
-            });
-    absorbs || primitive_and_literal
+    members
 }
 
 fn mixes_number_and_string_values(body: Node, _: &[u8]) -> bool {
