@@ -168,6 +168,10 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
   const setStatus = (ids: number[], status: TriageStatus, reason?: string) =>
     apply(ids, { status, ...(reason && { reason }) }, `Marked ${STATUS_LABEL[status].toLowerCase()}`)
   const assignToMe = (ids: number[]) => me && apply(ids, { assignee: me }, 'Assigned to you')
+  const open = (id: number) => {
+    setSelectedId(id)
+    if (narrow) setReading(true)
+  }
   /** The chosen issues (whatever their status), or the first PROMPT_LIMIT matching, as a prompt for an AI assistant (ADR-0025). */
   const copyPrompt = async (ids?: number[]) => {
     const query = toQuery(filter, me ?? '', 0)
@@ -284,9 +288,13 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
                   key={issue.id}
                   role="option"
                   aria-selected={on}
-                  onClick={() => {
-                    setSelectedId(issue.id)
-                    if (narrow) setReading(true)
+                  // The selected issue is the one Tab reaches; Enter or Space opens it.
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => open(issue.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+                    e.preventDefault()
+                    open(issue.id)
                   }}
                   className="grid cursor-pointer grid-cols-[16px_14px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-3 pr-3.5 pl-[11px] hover:bg-hover"
                   style={{ borderLeft: `3px solid ${on ? 'var(--sd-accent)' : 'transparent'}`, background: on ? 'var(--sd-panel)' : undefined }}
@@ -374,7 +382,7 @@ function Facets({
   changeFilter: (patch: Partial<IssueFilter>) => void
 }) {
   // Components come from the data; a selected one stays listed even at zero.
-  const components = [...new Set([...Object.keys(page.facets.component), ...filter.component])].sort()
+  const components = [...new Set([...Object.keys(page.facets.component), ...filter.component])].sort((a, b) => a.localeCompare(b))
   const groups: { label: string; key: FacetKey; options: { value: string; label: string; mono?: boolean }[] }[] = [
     { label: 'Severity', key: 'severity', options: FACET_OPTIONS.severity },
     { label: 'Category', key: 'category', options: FACET_OPTIONS.category },

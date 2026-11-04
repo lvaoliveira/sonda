@@ -69,11 +69,12 @@ export interface Crumb {
 /** A project's own pages: shown as tabs on each of them, so moving between them never leaves the project. */
 function ProjectTabs({ project }: { project: string }) {
   const base = `/projects/${encodeURIComponent(project)}`
-  // A branch's pages stay on that branch; rules and settings are the project's.
+  // A branch's pages stay on that branch; analyses, rules and settings are the project's.
   const branch = useSearchParams()[0].get('branch')
   const on = branch ? `?branch=${encodeURIComponent(branch)}` : ''
   const tabs = [
     { to: `${base}${on}`, label: 'Overview', end: true },
+    { to: `${base}/analyses`, label: 'Analyses' },
     { to: `${base}/issues${on}`, label: 'Issues' },
     { to: `${base}/coverage${on}`, label: 'Coverage' },
     { to: `${base}/dependencies${on}`, label: 'Dependencies' },

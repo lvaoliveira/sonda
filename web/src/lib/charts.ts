@@ -34,9 +34,10 @@ export function waffleCells(counts: { severity: Severity; open: number }[]): Sev
   const shares = counts
     .filter((c) => c.open > 0)
     .map((c) => ({ severity: c.severity, cells: Math.max(1, Math.round((c.open / total) * 100)) }))
-  const largest = shares.reduce((a, b) => (b.cells > a.cells ? b : a))
+  // Not empty: some count is above zero.
+  const largest = shares.reduce((a, b) => (b.cells > a.cells ? b : a), shares[0])
   largest.cells += 100 - shares.reduce((sum, s) => sum + s.cells, 0)
-  return shares.flatMap((s) => Array<Severity>(s.cells).fill(s.severity))
+  return shares.flatMap((s) => new Array<Severity>(s.cells).fill(s.severity))
 }
 
 /** Stroke dash for a ring of radius `r` filled to `pct` percent. */

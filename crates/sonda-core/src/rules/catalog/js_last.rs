@@ -1785,9 +1785,6 @@ fn function_captures_nothing(function: Node, src: &[u8]) -> bool {
     let Some(enclosing) = enclosing_function_of(name_owner) else {
         return false;
     };
-    if enclosing.kind() == "method_definition" && false {
-        return false;
-    }
     let uses_this = {
         let mut found = false;
         walk(func, &mut |n| {
