@@ -49,6 +49,7 @@ tree-sitter-cpp = "0.23.4"
 tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 # pnpm-lock.yaml and Yarn 2+ yarn.lock (ADR-0009). serde_yaml, serde_yml and
 # yaml-rust carry RustSec unmaintained/unsound advisories; this is the

@@ -171,14 +171,13 @@ export function mockRuleSettings() {
         .sort((a, b) => a.rule.localeCompare(b.rule))
       return { ...summary, rulesSet }
     },
-    createProfile(name: string, by: string, copyFrom?: number): { id: number; name: string } {
+    createProfile(name: string, _by: string, copyFrom?: number): { id: number; name: string } {
       const trimmed = name.trim()
       if (!trimmed || trimmed.length > 100) throw new Error("a profile's name has 1-100 characters")
       if (profiles.some((p) => p.name === trimmed)) throw new Error(`a profile named "${trimmed}" exists`)
       const from = copyFrom === undefined ? undefined : profiles.find((p) => p.id === copyFrom)
       if (copyFrom !== undefined && !from) throw new Error(`no profile ${copyFrom} to copy`)
       const p: MockProfile = { id: Math.max(...profiles.map((x) => x.id)) + 1, name: trimmed, builtin: false, rules: new Map(from?.rules ?? []) }
-      void by
       profiles.push(p)
       return { id: p.id, name: p.name }
     },

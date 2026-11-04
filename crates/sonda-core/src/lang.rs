@@ -13,6 +13,7 @@ pub enum Lang {
     C,
     Cpp,
     CSharp,
+    Rust,
 }
 
 pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
@@ -24,6 +25,17 @@ pub(crate) const JAVA: &[Lang] = &[Lang::Java];
 pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
 pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
 pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
+/// Every language but Rust, for the `common/` rules SonarQube has no Rust key for.
+pub(crate) const NOT_RUST: &[Lang] = &[
+    Lang::JavaScript,
+    Lang::TypeScript,
+    Lang::Tsx,
+    Lang::Python,
+    Lang::Java,
+    Lang::C,
+    Lang::Cpp,
+    Lang::CSharp,
+];
 /// Every supported language.
 pub const ALL: &[Lang] = &[
     Lang::JavaScript,
@@ -34,6 +46,7 @@ pub const ALL: &[Lang] = &[
     Lang::C,
     Lang::Cpp,
     Lang::CSharp,
+    Lang::Rust,
 ];
 
 impl Lang {
@@ -51,6 +64,7 @@ impl Lang {
             "c" | "h" => Lang::C,
             "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => Lang::Cpp,
             "cs" => Lang::CSharp,
+            "rs" => Lang::Rust,
             _ => return None,
         })
     }
@@ -74,6 +88,7 @@ impl Lang {
             Lang::C => "c",
             Lang::Cpp => "cpp",
             Lang::CSharp => "csharp",
+            Lang::Rust => "rust",
         }
     }
 
@@ -87,6 +102,7 @@ impl Lang {
             Lang::C => tree_sitter_c::LANGUAGE.into(),
             Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
         }
     }
 
@@ -97,6 +113,7 @@ impl Lang {
             Lang::Java => &JAVA_SYNTAX,
             Lang::C | Lang::Cpp => &C_SYNTAX,
             Lang::CSharp => &CSHARP_SYNTAX,
+            Lang::Rust => &RUST_SYNTAX,
         }
     }
 }
@@ -107,9 +124,16 @@ impl Lang {
 pub(crate) struct Syntax {
     /// Nodes measured as functions (complexity, length, parameters).
     pub(crate) functions: &'static [&'static str],
+    /// Nodes whose complexity is measured on its own but that aren't counted
+    /// as functions (Rust's closures, which SonarQube adds to complexity only).
+    pub(crate) closures: &'static [&'static str],
+    /// Whether a `_ =>` arm is a default case, which costs no cyclomatic
+    /// complexity: C#'s discard is, Rust's wildcard isn't.
+    pub(crate) wildcard_arm_is_default: bool,
     /// Loops, catches and ternaries: +1 cyclomatic, +1 (+nesting) cognitive.
     pub(crate) branches: &'static [&'static str],
-    /// Switch/match constructs: +1 (+nesting) cognitive once per switch.
+    /// Switch/match constructs: +1 (+nesting) cognitive once per switch, and
+    /// no cyclomatic of their own (their cases add it).
     pub(crate) switches: &'static [&'static str],
     /// Switch cases: +1 cyclomatic each (default cases excluded).
     pub(crate) cases: &'static [&'static str],
@@ -127,6 +151,8 @@ static JS_SYNTAX: Syntax = Syntax {
         "arrow_function",
         "method_definition",
     ],
+    closures: &[],
+    wildcard_arm_is_default: false,
     branches: &[
         "for_statement",
         "for_in_statement",
@@ -143,6 +169,8 @@ static JS_SYNTAX: Syntax = Syntax {
 
 static PYTHON_SYNTAX: Syntax = Syntax {
     functions: &["function_definition"],
+    closures: &[],
+    wildcard_arm_is_default: false,
     branches: &[
         "for_statement",
         "while_statement",
@@ -166,6 +194,8 @@ static JAVA_SYNTAX: Syntax = Syntax {
         "compact_constructor_declaration",
         "lambda_expression",
     ],
+    closures: &[],
+    wildcard_arm_is_default: false,
     branches: &[
         "for_statement",
         "enhanced_for_statement",
@@ -182,6 +212,8 @@ static JAVA_SYNTAX: Syntax = Syntax {
 
 static C_SYNTAX: Syntax = Syntax {
     functions: &["function_definition", "lambda_expression"],
+    closures: &[],
+    wildcard_arm_is_default: false,
     branches: &[
         "for_statement",
         "for_range_loop",
@@ -208,6 +240,8 @@ static CSHARP_SYNTAX: Syntax = Syntax {
         "lambda_expression",
         "anonymous_method_expression",
     ],
+    closures: &[],
+    wildcard_arm_is_default: true,
     branches: &[
         "for_statement",
         "foreach_statement",
@@ -220,6 +254,18 @@ static CSHARP_SYNTAX: Syntax = Syntax {
     cases: &["switch_section", "switch_expression_arm"],
     comments: &["comment"],
     dup_ignore: &["using_directive", "extern_alias_directive"],
+};
+
+static RUST_SYNTAX: Syntax = Syntax {
+    functions: &["function_item"],
+    closures: &["closure_expression"],
+    wildcard_arm_is_default: false,
+    branches: &["for_expression", "while_expression"],
+    // `loop` has no condition, so no decision: it only nests, like a match.
+    switches: &["match_expression", "loop_expression"],
+    cases: &["match_arm"],
+    comments: &["line_comment", "block_comment"],
+    dup_ignore: &["use_declaration", "extern_crate_declaration"],
 };
 
 #[cfg(test)]
@@ -241,6 +287,7 @@ mod tests {
         assert_eq!(Lang::from_path(Path::new("x.PY")), Some(Lang::Python));
         assert_eq!(Lang::from_path(Path::new("x.hpp")), Some(Lang::Cpp));
         assert_eq!(Lang::from_path(Path::new("App.CS")), Some(Lang::CSharp));
+        assert_eq!(Lang::from_path(Path::new("lib.rs")), Some(Lang::Rust));
         assert_eq!(Lang::from_path(Path::new("Makefile")), None);
     }
 
@@ -251,6 +298,7 @@ mod tests {
             let kinds = syn
                 .functions
                 .iter()
+                .chain(syn.closures)
                 .chain(syn.branches)
                 .chain(syn.switches)
                 .chain(syn.cases)

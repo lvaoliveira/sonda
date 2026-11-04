@@ -35,6 +35,7 @@ LANGUAGES = {
     "c": ("C", {"c"}),
     "cpp": ("C++", {"cpp"}),
     "cs": ("C#", {"csharp"}),
+    "rust": ("Rust", {"rust"}),
 }
 TIERS = ("syntactic", "types", "dataflow")
 

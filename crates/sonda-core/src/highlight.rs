@@ -99,6 +99,11 @@ fn push(tokens: &mut Vec<Token>, text: &str, role: Role) {
 /// The length in bytes (always at least one character) and role of the
 /// token at the start of `s`.
 fn next_token(syntax: &Syntax, s: &str) -> (usize, Role) {
+    if syntax.rust
+        && let Some(token) = rust_token(s)
+    {
+        return token;
+    }
     if let Some(start) = syntax.line_comment.iter().find(|c| s.starts_with(**c)) {
         let end = s[start.len()..]
             .find('\n')
@@ -168,6 +173,54 @@ fn string_end(s: &str, quote: char) -> usize {
     s.len()
 }
 
+/// The tokens only Rust has: nested `/* */` comments, raw strings (`r#"…"#`,
+/// `br"…"`), and `'` as a lifetime rather than the start of a char literal.
+/// None for everything else, which the shared rules lex.
+fn rust_token(s: &str) -> Option<(usize, Role)> {
+    if s.starts_with("/*") {
+        let (mut depth, mut i) = (0usize, 0usize);
+        while i < s.len() {
+            if s[i..].starts_with("/*") {
+                depth += 1;
+                i += 2;
+            } else if s[i..].starts_with("*/") {
+                depth -= 1;
+                i += 2;
+                if depth == 0 {
+                    return Some((i, Role::Comment));
+                }
+            } else {
+                i += s[i..].chars().next().map_or(1, char::len_utf8);
+            }
+        }
+        return Some((s.len(), Role::Comment));
+    }
+    let after_prefix = s.strip_prefix("br").or_else(|| s.strip_prefix('r'));
+    if let Some(rest) = after_prefix {
+        let hashes = rest.bytes().take_while(|&b| b == b'#').count();
+        if rest[hashes..].starts_with('"') {
+            let close = format!("\"{}", "#".repeat(hashes));
+            let body = hashes + 1;
+            let end = rest[body..]
+                .find(&close)
+                .map_or(rest.len(), |n| body + n + close.len());
+            return Some((s.len() - rest.len() + end, Role::String));
+        }
+    }
+    if let Some(rest) = s.strip_prefix('\'') {
+        let mut chars = rest.chars();
+        let first = chars.next()?;
+        if first != '\\' && chars.next() != Some('\'') {
+            // `'a`, `'static`: a lifetime or a loop label.
+            let end = rest
+                .find(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                .unwrap_or(rest.len());
+            return Some((1 + end.max(first.len_utf8()), Role::Type));
+        }
+    }
+    None
+}
+
 struct Syntax {
     line_comment: &'static [&'static str],
     block_comments: bool,
@@ -175,6 +228,8 @@ struct Syntax {
     backticks: bool,
     keywords: &'static [&'static str],
     types: &'static [&'static str],
+    /// Rust's lexical oddities: lifetimes beside char literals, raw strings, nested block comments.
+    rust: bool,
 }
 
 impl Syntax {
@@ -187,6 +242,7 @@ impl Syntax {
                 backticks: true,
                 keywords: JS_KEYWORDS,
                 types: TS_TYPES,
+                rust: false,
             },
             Lang::Python => Self {
                 line_comment: &["#"],
@@ -195,6 +251,7 @@ impl Syntax {
                 backticks: false,
                 keywords: PY_KEYWORDS,
                 types: PY_TYPES,
+                rust: false,
             },
             Lang::Java => Self {
                 line_comment: &["//"],
@@ -203,6 +260,7 @@ impl Syntax {
                 backticks: false,
                 keywords: JAVA_KEYWORDS,
                 types: JAVA_TYPES,
+                rust: false,
             },
             Lang::C | Lang::Cpp => Self {
                 line_comment: &["//"],
@@ -211,6 +269,7 @@ impl Syntax {
                 backticks: false,
                 keywords: C_KEYWORDS,
                 types: C_TYPES,
+                rust: false,
             },
             Lang::CSharp => Self {
                 line_comment: &["//"],
@@ -219,6 +278,16 @@ impl Syntax {
                 backticks: false,
                 keywords: CS_KEYWORDS,
                 types: CS_TYPES,
+                rust: false,
+            },
+            Lang::Rust => Self {
+                line_comment: &["//"],
+                block_comments: false,
+                triple_quotes: false,
+                backticks: false,
+                keywords: RUST_KEYWORDS,
+                types: RUST_TYPES,
+                rust: true,
             },
         }
     }
@@ -398,6 +467,18 @@ const C_TYPES: &[&str] = &[
     "short", "signed", "size_t", "uint16_t", "uint32_t", "uint64_t", "uint8_t", "unsigned", "void",
     "wchar_t",
 ];
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
+    "where", "while", "union",
+];
+
+const RUST_TYPES: &[&str] = &[
+    "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize", "str", "u8", "u16",
+    "u32", "u64", "u128", "usize",
+];
+
 const CS_KEYWORDS: &[&str] = &[
     "abstract",
     "as",
@@ -510,6 +591,22 @@ mod tests {
                 ("// note", Comment),
             ]
         );
+    }
+
+    #[test]
+    fn rust_lifetimes_are_not_strings_and_raw_strings_are() {
+        let src = "fn f<'a>(x: &'a str, c: char) { let r = r#\"a \"b\" c\"#; let q = '\\''; let n = 'x'; /* a /* b */ c */ }\n";
+        let lines = highlight(Lang::Rust, src, 1, 1);
+        let roles = roles(&lines[0]);
+        let has = |text: &str, role: Role| roles.iter().any(|(t, r)| *t == text && *r == role);
+        assert!(has("'a", Role::Type), "{roles:?}");
+        assert!(has("r#\"a \"b\" c\"#", Role::String), "{roles:?}");
+        assert!(has("'\\''", Role::String), "{roles:?}");
+        assert!(has("'x'", Role::String), "{roles:?}");
+        assert!(has("/* a /* b */ c */", Role::Comment), "{roles:?}");
+        // The text round-trips: the lexer drops and adds nothing.
+        let joined: String = lines[0].tokens.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(joined, src.trim_end());
     }
 
     #[test]
