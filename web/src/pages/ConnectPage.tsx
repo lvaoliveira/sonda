@@ -10,6 +10,7 @@ import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { GateStatus } from '@/components/sonda/status'
 import { localServer, newFileUrl, newSecretUrl, parseRepository, projectKeyFor, type Runner, SECRET_NAME, serverProblem, WORKFLOW_PATH, workflowYaml } from '@/lib/connect'
 import { branchLabel } from '@/lib/format'
+import { copyText } from '@/lib/clipboard'
 
 /** How often Done checks for the first analysis. */
 export const FIRST_ANALYSIS_POLL_MS = 5000
@@ -373,12 +374,7 @@ function Copyable({ label, value }: { label: string; value: string }) {
 function CopyButton({ value, children }: { value: string; children: ReactNode }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value)
-      setState('copied')
-    } catch {
-      setState('failed')
-    }
+    setState((await copyText(value)) ? 'copied' : 'failed')
   }
   return <Button onClick={() => void copy()}>{state === 'copied' ? 'Copied' : state === 'failed' ? 'Select it to copy' : children}</Button>
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import { type FacetKey, type IssueDetail, type IssuePage, type IssuePatch, type IssueSummary, PROMPT_LIMIT, type TriageStatus } from '@/api/types'
@@ -11,6 +11,7 @@ import { SeverityGlyph, SeverityPill } from '@/components/sonda/status'
 import { formatAge, formatEffort, formatNumber, shortDate } from '@/lib/format'
 import { DEFAULT_FILTER, filterFromParams, type IssueFilter, issuesUrl, PAGE_SIZE, toQuery } from '@/lib/issues'
 import { CATEGORY_LABEL, DECISION_PROMPT, languageLabel, SEVERITY, SEVERITY_ORDER, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
+import { copyText } from '@/lib/clipboard'
 
 /** Every project's issues. A link for one project goes to its own Issues tab instead. */
 export function IssuesPage() {
@@ -96,6 +97,7 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
   const [overrides, setOverrides] = useState<Overrides>({})
   const [detailVersion, setDetailVersion] = useState(0)
   const [toast, setToast] = useState<ToastMessage | null>(null)
+  const [manualPrompt, setManualPrompt] = useState<string | null>(null)
   const clearToast = useCallback(() => setToast(null), [])
   const wide = useWide(1280)
   // On a phone, one pane at a time: the list, or the issue picked from it.
@@ -169,13 +171,20 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
   /** The chosen issues (whatever their status), or the first PROMPT_LIMIT matching, as a prompt for an AI assistant (ADR-0025). */
   const copyPrompt = async (ids?: number[]) => {
     const query = toQuery(filter, me ?? '', 0)
+    let prompt: string
     try {
-      await navigator.clipboard.writeText(await api.issuesPrompt(ids ? { ...query, status: [] } : query, ids))
-      const n = ids?.length ?? Math.min(page?.total ?? 0, PROMPT_LIMIT)
-      setToast({ text: `Copied a prompt for ${n} ${n === 1 ? 'issue' : 'issues'}: paste it into your AI assistant` })
+      prompt = await api.issuesPrompt(ids ? { ...query, status: [] } : query, ids)
     } catch (e) {
-      setToast({ text: `Not copied: ${(e as Error).message}` })
+      setToast({ text: `No prompt: ${(e as Error).message}` })
+      return
     }
+    if (!(await copyText(prompt))) {
+      // The browser wouldn't copy (plain HTTP, after waiting on the server): copy it by hand.
+      setManualPrompt(prompt)
+      return
+    }
+    const n = ids?.length ?? Math.min(page?.total ?? 0, PROMPT_LIMIT)
+    setToast({ text: `Copied a prompt for ${n} ${n === 1 ? 'issue' : 'issues'}: paste it into your AI assistant` })
   }
 
   // j/k move, a assigns to me, c confirms (not while typing).
@@ -337,6 +346,7 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
         )}
       </div>
       <Toast toast={toast} onDone={clearToast} />
+      {manualPrompt !== null && <CopyByHand text={manualPrompt} onClose={() => setManualPrompt(null)} />}
     </>
   )
 }
@@ -461,6 +471,28 @@ function ProjectFacet({ page, filter }: { page: IssuePage; filter: IssueFilter }
         </Link>
       ))}
     </nav>
+  )
+}
+
+/** The prompt, selected, for when the browser won't copy it (plain HTTP): Ctrl/Cmd+C copies it. */
+function CopyByHand({ text, onClose }: { text: string; onClose: () => void }) {
+  const area = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    area.current?.focus()
+    area.current?.select()
+  }, [])
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Copy the prompt" className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+      <div className="flex w-full max-w-[720px] flex-col gap-3 rounded-xl bg-panel p-4 edge">
+        <p className="m-0 text-[13px] text-fg-muted">
+          This browser won't copy here (sonda is served over plain HTTP). The prompt is selected: press <Key>⌘</Key> <Key>C</Key> or <Key>Ctrl</Key> <Key>C</Key>, then paste it into your AI assistant.
+        </p>
+        <textarea ref={area} readOnly aria-label="Prompt" value={text} className="h-[50vh] w-full resize-none rounded-lg border-0 bg-canvas p-3 font-mono text-[12px] edge" />
+        <Button className="self-end" onClick={onClose}>
+          Done
+        </Button>
+      </div>
+    </div>
   )
 }
 
