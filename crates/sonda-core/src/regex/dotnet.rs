@@ -47,6 +47,11 @@ enum Stop {
 type Scan<T> = Result<T, Stop>;
 
 /// The constructor throws; `_why` names the error it throws.
+/// Fine when what a reference names exists; else the constructor throws.
+fn defined(exists: bool, why: &str) -> Scan<()> {
+    if exists { Ok(()) } else { invalid(why) }
+}
+
 fn invalid<T>(_why: &str) -> Scan<T> {
     Err(Stop::Invalid)
 }
@@ -113,100 +118,153 @@ struct Groups {
     names: HashSet<String>,
 }
 
-impl Groups {
-    fn count(c: &[char], options: Options) -> Groups {
-        let (mut x, mut n) = (options.x, options.n);
-        let mut saved: Vec<(bool, bool)> = Vec::new();
-        let mut slots = HashSet::from([0]);
-        let mut names: Vec<String> = Vec::new();
-        let mut autocap = 1u64;
-        let mut ignore_next = false;
-        let mut i = 0;
-        while i < c.len() {
-            let ch = c[i];
-            i += 1;
-            match ch {
-                '\\' => i += 1,
-                '#' if x => {
-                    while i < c.len() && c[i] != '\n' {
-                        i += 1;
-                    }
-                }
-                '[' => {
-                    let mut p = Parser::bare(c, i);
-                    i = match p.class(0) {
-                        Ok(()) => p.pos,
-                        Err(_) => c.len(),
-                    };
-                }
-                ')' => {
-                    if let Some(s) = saved.pop() {
-                        (x, n) = s;
-                    }
-                }
-                '(' if c.get(i) == Some(&'?') && c.get(i + 1) == Some(&'#') => {
-                    while i < c.len() && c[i] != ')' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                '(' => {
-                    saved.push((x, n));
-                    if c.get(i) == Some(&'?') {
-                        i += 1;
-                        if i + 1 < c.len() && matches!(c[i], '<' | '\'') {
-                            i += 1;
-                            if c[i] != '0' && is_word(c[i]) {
-                                let mut p = Parser::bare(c, i);
-                                if c[i].is_ascii_digit() {
-                                    slots.insert(p.decimal().unwrap_or(u64::MAX));
-                                } else {
-                                    names.push(p.capname());
-                                }
-                                i = p.pos;
-                            }
-                        } else {
-                            let mut p = Parser::bare(c, i);
-                            p.options = Options { x, n };
-                            p.scan_options();
-                            (x, n, i) = (p.options.x, p.options.n, p.pos);
-                            match c.get(i) {
-                                Some(')') => {
-                                    i += 1;
-                                    saved.pop();
-                                }
-                                // The condition of `(?(...)yes|no)` doesn't capture.
-                                Some('(') => {
-                                    ignore_next = true;
-                                    continue;
-                                }
-                                _ => {}
-                            }
-                        }
-                    } else if !n && !ignore_next {
-                        slots.insert(autocap);
-                        autocap += 1;
-                    }
-                    ignore_next = false;
-                }
-                _ => {}
+/// `Groups::count`'s pass over the pattern: where it is, the options in
+/// force (and those to restore at each `)`), and the groups so far.
+struct GroupScan<'c> {
+    c: &'c [char],
+    i: usize,
+    x: bool,
+    n: bool,
+    saved: Vec<(bool, bool)>,
+    slots: HashSet<u64>,
+    names: Vec<String>,
+    autocap: u64,
+    /// The next `(` is a conditional's condition, which doesn't capture.
+    ignore_next: bool,
+}
+
+impl GroupScan<'_> {
+    fn step(&mut self) {
+        let c = self.c;
+        let ch = c[self.i];
+        self.i += 1;
+        match ch {
+            '\\' => self.i += 1,
+            '#' if self.x => self.skip_to('\n'),
+            '[' => {
+                let mut p = Parser::bare(c, self.i);
+                self.i = match p.class(0) {
+                    Ok(()) => p.pos,
+                    Err(_) => c.len(),
+                };
             }
+            ')' => {
+                if let Some(s) = self.saved.pop() {
+                    (self.x, self.n) = s;
+                }
+            }
+            '(' if c.get(self.i) == Some(&'?') && c.get(self.i + 1) == Some(&'#') => {
+                self.skip_to(')');
+                self.i += 1;
+            }
+            '(' => self.open(),
+            _ => {}
         }
+    }
+
+    fn skip_to(&mut self, end: char) {
+        while self.i < self.c.len() && self.c[self.i] != end {
+            self.i += 1;
+        }
+    }
+
+    /// After a `(`: a named or numbered group, an options group, or a plain
+    /// one that captures unless `(?n)` is on.
+    fn open(&mut self) {
+        self.saved.push((self.x, self.n));
+        if self.c.get(self.i) == Some(&'?') {
+            self.i += 1;
+            if self.i + 1 < self.c.len() && matches!(self.c[self.i], '<' | '\'') {
+                self.i += 1;
+                self.named_group();
+            } else if self.options_group() {
+                return;
+            }
+        } else if !self.n && !self.ignore_next {
+            self.slots.insert(self.autocap);
+            self.autocap += 1;
+        }
+        self.ignore_next = false;
+    }
+
+    /// `(?<name>` or `(?<2>`, after the `<`.
+    fn named_group(&mut self) {
+        let c = self.c;
+        let i = self.i;
+        if c[i] == '0' || !is_word(c[i]) {
+            return;
+        }
+        let mut p = Parser::bare(c, i);
+        if c[i].is_ascii_digit() {
+            self.slots.insert(p.decimal().unwrap_or(u64::MAX));
+        } else {
+            self.names.push(p.capname());
+        }
+        self.i = p.pos;
+    }
+
+    /// `(?imnsx-imnsx)` or `(?imnsx:`; true when a conditional's `(`
+    /// follows, whose condition doesn't capture.
+    fn options_group(&mut self) -> bool {
+        let mut p = Parser::bare(self.c, self.i);
+        p.options = Options {
+            x: self.x,
+            n: self.n,
+        };
+        p.scan_options();
+        (self.x, self.n, self.i) = (p.options.x, p.options.n, p.pos);
+        match self.c.get(self.i) {
+            Some(')') => {
+                self.i += 1;
+                self.saved.pop();
+                false
+            }
+            // The condition of `(?(...)yes|no)` doesn't capture.
+            Some('(') => {
+                self.ignore_next = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Named groups take the numbers after the numbered ones, each name once.
+    fn finish(mut self) -> Groups {
         let mut named = HashSet::new();
-        for name in names {
+        for name in std::mem::take(&mut self.names) {
             if named.contains(&name) {
                 continue;
             }
-            while slots.contains(&autocap) {
-                autocap += 1;
+            while self.slots.contains(&self.autocap) {
+                self.autocap += 1;
             }
-            slots.insert(autocap);
+            self.slots.insert(self.autocap);
             named.insert(name);
         }
         Groups {
-            slots,
+            slots: self.slots,
             names: named,
         }
+    }
+}
+
+impl Groups {
+    fn count(c: &[char], options: Options) -> Groups {
+        let mut scan = GroupScan {
+            c,
+            i: 0,
+            x: options.x,
+            n: options.n,
+            saved: Vec::new(),
+            slots: HashSet::from([0]),
+            names: Vec::new(),
+            autocap: 1,
+            ignore_next: false,
+        };
+        while scan.i < c.len() {
+            scan.step();
+        }
+        scan.finish()
     }
 }
 
@@ -221,6 +279,14 @@ enum Opened {
     Conditional {
         bars: usize,
     },
+}
+
+/// Where `Parser::class` is in a class: at its first member, after a
+/// range's `-`, and the character the range starts with.
+struct ClassState {
+    first: bool,
+    in_range: bool,
+    prev: char,
 }
 
 struct Frame {
@@ -275,13 +341,7 @@ impl<'c> Parser<'c> {
         while self.pos < self.c.len() {
             self.blank()?;
             let start = self.pos;
-            while let Some(ch) = self.peek() {
-                let stops = is_special(ch) || (self.options.x && (is_space(ch) || ch == '#'));
-                if stops && !(ch == '{' && !self.true_quantifier()) {
-                    break;
-                }
-                self.pos += 1;
-            }
+            self.literal_run();
             let end = self.pos;
             self.blank()?;
             let Some(ch) = self.peek().filter(|c| is_special(*c)) else {
@@ -290,72 +350,8 @@ impl<'c> Parser<'c> {
             self.pos += 1;
             // A quantifier right after literal text takes its last character.
             let unit = start < end && is_quantifier(ch);
-            match ch {
-                '[' => self.class(0)?,
-                '(' => {
-                    let saved = self.options;
-                    match self.group_open()? {
-                        Opened::Options => {}
-                        Opened::Group => stack.push(Frame { saved, bars: None }),
-                        Opened::Conditional { bars } => stack.push(Frame {
-                            saved,
-                            bars: Some((bars, 0)),
-                        }),
-                    }
-                    continue;
-                }
-                '|' => {
-                    if let Some(Frame {
-                        bars: Some((limit, bars)),
-                        ..
-                    }) = stack.last_mut()
-                    {
-                        *bars += 1;
-                        if *bars > *limit {
-                            return invalid("too many | in (?()|)");
-                        }
-                    }
-                    continue;
-                }
-                ')' => {
-                    let Some(frame) = stack.pop() else {
-                        return invalid("too many )'s");
-                    };
-                    self.options = frame.saved;
-                }
-                '\\' => self.backslash()?,
-                '^' | '$' | '.' => {}
-                _ => {
-                    if !unit {
-                        return invalid("quantifier following nothing");
-                    }
-                    self.pos -= 1;
-                }
-            }
-            self.blank()?;
-            if !self.true_quantifier() {
-                continue;
-            }
-            if self.next() == Some('{') {
-                let min = self.decimal()?;
-                let max = if self.peek() == Some(',') {
-                    self.pos += 1;
-                    if self.peek() == Some('}') {
-                        u64::MAX
-                    } else {
-                        self.decimal()?
-                    }
-                } else {
-                    min
-                };
-                self.pos += 1;
-                if min > max {
-                    return invalid("illegal {x,y} with x > y");
-                }
-            }
-            self.blank()?;
-            if self.peek() == Some('?') {
-                self.pos += 1;
+            if self.special(ch, unit, &mut stack)? {
+                self.repeat_after()?;
             }
         }
         if stack.is_empty() {
@@ -365,34 +361,132 @@ impl<'c> Parser<'c> {
         }
     }
 
-    /// Skips comments, and whitespace under `IgnorePatternWhitespace`.
-    fn blank(&mut self) -> Scan<()> {
-        loop {
-            if self.options.x {
-                while self.peek().is_some_and(is_space) {
-                    self.pos += 1;
+    /// Literal text, up to a special character (or, with `(?x)`, a space
+    /// or a comment); a `{` that starts no quantifier is literal.
+    fn literal_run(&mut self) {
+        while let Some(ch) = self.peek() {
+            let stops = is_special(ch) || (self.options.x && (is_space(ch) || ch == '#'));
+            if stops && !(ch == '{' && !self.true_quantifier()) {
+                break;
+            }
+            self.pos += 1;
+        }
+    }
+
+    /// The special character `ch`, just consumed; whether a quantifier may
+    /// follow what it starts or ends.
+    fn special(&mut self, ch: char, unit: bool, stack: &mut Vec<Frame>) -> Scan<bool> {
+        match ch {
+            '[' => self.class(0)?,
+            '(' => {
+                let saved = self.options;
+                match self.group_open()? {
+                    Opened::Options => {}
+                    Opened::Group => stack.push(Frame { saved, bars: None }),
+                    Opened::Conditional { bars } => stack.push(Frame {
+                        saved,
+                        bars: Some((bars, 0)),
+                    }),
                 }
-                if self.peek() == Some('#') {
-                    while self.peek().is_some_and(|c| c != '\n') {
-                        self.pos += 1;
+                return Ok(false);
+            }
+            '|' => {
+                if let Some(Frame {
+                    bars: Some((limit, bars)),
+                    ..
+                }) = stack.last_mut()
+                {
+                    *bars += 1;
+                    if *bars > *limit {
+                        return invalid("too many | in (?()|)");
                     }
-                    continue;
                 }
+                return Ok(false);
             }
-            if self.peek() == Some('(')
-                && self.peek_at(1) == Some('?')
-                && self.peek_at(2) == Some('#')
-            {
-                while self.peek().is_some_and(|c| c != ')') {
-                    self.pos += 1;
-                }
-                if self.next().is_none() {
-                    return invalid("unterminated (?#...) comment");
-                }
-                continue;
+            ')' => {
+                let Some(frame) = stack.pop() else {
+                    return invalid("too many )'s");
+                };
+                self.options = frame.saved;
             }
+            '\\' => self.backslash()?,
+            '^' | '$' | '.' => {}
+            _ => {
+                if !unit {
+                    return invalid("quantifier following nothing");
+                }
+                self.pos -= 1;
+            }
+        }
+        Ok(true)
+    }
+
+    /// The quantifier after an atom, if any, and its lazy `?`.
+    fn repeat_after(&mut self) -> Scan<()> {
+        self.blank()?;
+        if !self.true_quantifier() {
             return Ok(());
         }
+        if self.next() == Some('{') {
+            let min = self.decimal()?;
+            let max = if self.peek() == Some(',') {
+                self.pos += 1;
+                if self.peek() == Some('}') {
+                    u64::MAX
+                } else {
+                    self.decimal()?
+                }
+            } else {
+                min
+            };
+            self.pos += 1;
+            if min > max {
+                return invalid("illegal {x,y} with x > y");
+            }
+        }
+        self.blank()?;
+        if self.peek() == Some('?') {
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    /// Skips comments, and whitespace under `IgnorePatternWhitespace`.
+    fn blank(&mut self) -> Scan<()> {
+        while (self.options.x && self.skip_spaces_and_comment()) || self.inline_comment()? {}
+        Ok(())
+    }
+
+    /// Under `IgnorePatternWhitespace`, the spaces here, and a `#` comment
+    /// after them; whether there was a comment.
+    fn skip_spaces_and_comment(&mut self) -> bool {
+        while self.peek().is_some_and(is_space) {
+            self.pos += 1;
+        }
+        if self.peek() != Some('#') {
+            return false;
+        }
+        while self.peek().is_some_and(|c| c != '\n') {
+            self.pos += 1;
+        }
+        true
+    }
+
+    /// A `(?#...)` comment here; whether there was one.
+    fn inline_comment(&mut self) -> Scan<bool> {
+        if !(self.peek() == Some('(')
+            && self.peek_at(1) == Some('?')
+            && self.peek_at(2) == Some('#'))
+        {
+            return Ok(false);
+        }
+        while self.peek().is_some_and(|c| c != ')') {
+            self.pos += 1;
+        }
+        if self.next().is_none() {
+            return invalid("unterminated (?#...) comment");
+        }
+        Ok(true)
     }
 
     /// `*`, `+`, `?`, `{n}`, `{n,}` or `{n,m}`: other braces are literal.
@@ -513,49 +607,11 @@ impl<'c> Parser<'c> {
     /// `(?<name>`, `(?<number>`, and the balancing `(?<name-other>` and
     /// `(?<-other>`, from the first character of the name.
     fn named_group(&mut self, ch: char, close: char) -> Scan<Opened> {
-        let bogus = |p: &Self, also: char| p.peek().is_some_and(|c| c != close && c != also);
-        let mut capture = None;
-        let mut proceed = false;
-        if ch.is_ascii_digit() {
-            let n = self.decimal()?;
-            capture = self.groups.slots.contains(&n).then_some(n);
-            if bogus(self, '-') {
-                return invalid("invalid group name");
-            }
-            if capture == Some(0) {
-                return invalid("capture number cannot be zero");
-            }
-        } else if is_word(ch) {
-            let name = self.capname();
-            capture = self.groups.names.contains(&name).then_some(0);
-            if bogus(self, '-') {
-                return invalid("invalid group name");
-            }
-        } else if ch == '-' {
-            proceed = true;
-        } else {
-            return invalid("invalid group name");
-        }
+        let (capture, proceed) = self.group_capture(ch, close)?;
         let mut balances = false;
         if (capture.is_some() || proceed) && self.remaining() > 1 && self.peek() == Some('-') {
             self.pos += 1;
-            let ch = self.peek().unwrap_or(close);
-            if ch.is_ascii_digit() {
-                let n = self.decimal()?;
-                if !self.groups.slots.contains(&n) {
-                    return invalid("reference to undefined group number");
-                }
-            } else if is_word(ch) {
-                let name = self.capname();
-                if !self.groups.names.contains(&name) {
-                    return invalid("reference to undefined group name");
-                }
-            } else {
-                return invalid("invalid group name");
-            }
-            if bogus(self, close) {
-                return invalid("invalid group name");
-            }
+            self.balancing_part(close)?;
             balances = true;
         }
         if (capture.is_some() || balances) && self.next() == Some(close) {
@@ -563,6 +619,57 @@ impl<'c> Parser<'c> {
         } else {
             invalid("unrecognized grouping construct")
         }
+    }
+
+    /// The group a name or number before any `-` names: its number (0 for a
+    /// name), when it's a group the pattern has; and whether a `-` starts
+    /// it, `(?<-other>`.
+    fn group_capture(&mut self, ch: char, close: char) -> Scan<(Option<u64>, bool)> {
+        let bogus = |p: &Self| p.peek().is_some_and(|c| c != close && c != '-');
+        if ch.is_ascii_digit() {
+            let n = self.decimal()?;
+            let capture = self.groups.slots.contains(&n).then_some(n);
+            if bogus(self) {
+                return invalid("invalid group name");
+            }
+            if capture == Some(0) {
+                return invalid("capture number cannot be zero");
+            }
+            Ok((capture, false))
+        } else if is_word(ch) {
+            let name = self.capname();
+            let capture = self.groups.names.contains(&name).then_some(0);
+            if bogus(self) {
+                return invalid("invalid group name");
+            }
+            Ok((capture, false))
+        } else if ch == '-' {
+            Ok((None, true))
+        } else {
+            invalid("invalid group name")
+        }
+    }
+
+    /// The group a balancing group's `-other` names, which must exist.
+    fn balancing_part(&mut self, close: char) -> Scan<()> {
+        let ch = self.peek().unwrap_or(close);
+        if ch.is_ascii_digit() {
+            let n = self.decimal()?;
+            if !self.groups.slots.contains(&n) {
+                return invalid("reference to undefined group number");
+            }
+        } else if is_word(ch) {
+            let name = self.capname();
+            if !self.groups.names.contains(&name) {
+                return invalid("reference to undefined group name");
+            }
+        } else {
+            return invalid("invalid group name");
+        }
+        if self.peek().is_some_and(|c| c != close) {
+            return invalid("invalid group name");
+        }
+        Ok(())
     }
 
     /// After `(?(`: a group reference, or an expression the main scan
@@ -625,9 +732,21 @@ impl<'c> Parser<'c> {
     /// A backreference, `\1`, `\k<name>`, `\<name>`, or else a character.
     fn reference(&mut self) -> Scan<()> {
         let back = self.pos;
-        let mut ch = self.peek().unwrap_or('\\');
-        let mut close = None;
+        let (ch, close) = self.reference_start()?;
+        if let Some(result) = self.known_reference(ch, close)? {
+            return result;
+        }
+        // Not a reference: a character, `\10` in octal.
+        self.pos = back;
+        self.char_escape().map(|_| ())
+    }
+
+    /// The first character of a reference, and the bracket it closes with:
+    /// `\k<`, `\k'`, `\<`, `\'`, or none.
+    fn reference_start(&mut self) -> Scan<(char, Option<char>)> {
+        let ch = self.peek().unwrap_or('\\');
         if ch == 'k' {
+            let mut close = None;
             if self.remaining() >= 2 {
                 self.pos += 1;
                 close = match self.next() {
@@ -639,47 +758,51 @@ impl<'c> Parser<'c> {
             if close.is_none() || self.remaining() == 0 {
                 return invalid("malformed \\k<...> named back reference");
             }
-            ch = self.peek().unwrap_or('\\');
-        } else if matches!(ch, '<' | '\'') && self.remaining() > 1 {
-            close = Some(if ch == '<' { '>' } else { '\'' });
-            self.pos += 1;
-            ch = self.peek().unwrap_or('\\');
+            return Ok((self.peek().unwrap_or('\\'), close));
         }
+        if matches!(ch, '<' | '\'') && self.remaining() > 1 {
+            self.pos += 1;
+            return Ok((
+                self.peek().unwrap_or('\\'),
+                Some(if ch == '<' { '>' } else { '\'' }),
+            ));
+        }
+        Ok((ch, None))
+    }
+
+    /// The reference's verdict, `Some`, when it is one: a number or a name
+    /// in brackets, or `\1` to `\9` (and more digits for a group that
+    /// exists); None when it reads as a character instead.
+    fn known_reference(&mut self, ch: char, close: Option<char>) -> Scan<Option<Scan<()>>> {
         match close {
             Some(close) if ch.is_ascii_digit() => {
                 let n = self.decimal()?;
-                if self.next() == Some(close) {
-                    return if self.groups.slots.contains(&n) {
-                        Ok(())
-                    } else {
-                        invalid("reference to undefined group number")
-                    };
-                }
+                let closed = self.next() == Some(close);
+                Ok(closed.then(|| {
+                    defined(
+                        self.groups.slots.contains(&n),
+                        "reference to undefined group number",
+                    )
+                }))
             }
             None if ('1'..='9').contains(&ch) => {
                 let n = self.decimal()?;
-                if self.groups.slots.contains(&n) {
-                    return Ok(());
-                }
-                if n <= 9 {
-                    return invalid("reference to undefined group number");
-                }
+                let exists = self.groups.slots.contains(&n);
+                Ok((exists || n <= 9)
+                    .then(|| defined(exists, "reference to undefined group number")))
             }
             Some(close) if is_word(ch) => {
                 let name = self.capname();
-                if self.next() == Some(close) {
-                    return if self.groups.names.contains(&name) {
-                        Ok(())
-                    } else {
-                        invalid("reference to undefined group name")
-                    };
-                }
+                let closed = self.next() == Some(close);
+                Ok(closed.then(|| {
+                    defined(
+                        self.groups.names.contains(&name),
+                        "reference to undefined group name",
+                    )
+                }))
             }
-            _ => {}
+            _ => Ok(None),
         }
-        // Not a reference: a character, `\10` in octal.
-        self.pos = back;
-        self.char_escape().map(|_| ())
     }
 
     /// After `\p` or `\P`: `{name}`.
@@ -763,74 +886,92 @@ impl<'c> Parser<'c> {
         if self.peek() == Some('^') {
             self.pos += 1;
         }
-        let (mut first, mut in_range, mut prev) = (true, false, '\0');
-        let must_end = |p: &Self| {
-            if p.peek().is_some_and(|c| c != ']') {
-                invalid("a subtraction must be the last element in a character class")
-            } else {
-                Ok(())
-            }
+        let mut state = ClassState {
+            first: true,
+            in_range: false,
+            prev: '\0',
         };
-        while let Some(mut ch) = self.next() {
-            let mut translated = false;
-            if ch == ']' {
-                if !first {
-                    return Ok(());
-                }
-            } else if ch == '\\' && self.remaining() > 0 {
-                match self.next() {
-                    Some(e @ ('d' | 'D' | 's' | 'S' | 'w' | 'W' | 'p' | 'P')) => {
-                        if in_range {
-                            return invalid("cannot include a class in a character range");
-                        }
-                        if matches!(e, 'p' | 'P') {
-                            self.property()?;
-                        }
-                        first = false;
-                        continue;
-                    }
-                    Some('-') => {
-                        first = false;
-                        continue;
-                    }
-                    _ => {
-                        self.pos -= 1;
-                        ch = self.char_escape()?;
-                        translated = true;
-                    }
-                }
-            } else if ch == '[' && self.peek() == Some(':') && !in_range {
-                // `[:name:]` reads as itself, or else as `[`.
-                let save = self.pos;
-                self.pos += 1;
-                self.capname();
-                if !(self.next() == Some(':') && self.next() == Some(']')) {
-                    self.pos = save;
-                }
+        while let Some(ch) = self.next() {
+            if ch == ']' && !state.first {
+                return Ok(());
             }
-            if in_range {
-                in_range = false;
-                if ch == '[' && !translated && !first {
-                    self.class(depth + 1)?;
-                    must_end(self)?;
-                } else if prev > ch {
-                    return invalid("[x-y] range in reverse order");
-                }
-            } else if self.remaining() >= 2
-                && self.peek() == Some('-')
-                && self.peek_at(1) != Some(']')
-            {
-                prev = ch;
-                in_range = true;
-                self.pos += 1;
-            } else if ch == '-' && !translated && !first && self.peek() == Some('[') {
-                self.pos += 1;
-                self.class(depth + 1)?;
-                must_end(self)?;
+            if let Some((ch, translated)) = self.class_char(ch, state.in_range)? {
+                self.class_member(ch, translated, &mut state, depth)?;
             }
-            first = false;
+            state.first = false;
         }
         invalid("unterminated [] set")
+    }
+
+    /// The character a class member starts with, and whether an escape
+    /// wrote it; None for a shorthand (`\\d`, `\\p{...}`) or `\\-`, which
+    /// end the member there. `[:name:]` reads as itself, or else as `[`.
+    fn class_char(&mut self, ch: char, in_range: bool) -> Scan<Option<(char, bool)>> {
+        if ch == '\\' && self.remaining() > 0 {
+            return match self.next() {
+                Some(e @ ('d' | 'D' | 's' | 'S' | 'w' | 'W' | 'p' | 'P')) => {
+                    if in_range {
+                        return invalid("cannot include a class in a character range");
+                    }
+                    if matches!(e, 'p' | 'P') {
+                        self.property()?;
+                    }
+                    Ok(None)
+                }
+                Some('-') => Ok(None),
+                _ => {
+                    self.pos -= 1;
+                    Ok(Some((self.char_escape()?, true)))
+                }
+            };
+        }
+        if ch == '[' && self.peek() == Some(':') && !in_range {
+            let save = self.pos;
+            self.pos += 1;
+            self.capname();
+            if !(self.next() == Some(':') && self.next() == Some(']')) {
+                self.pos = save;
+            }
+        }
+        Ok(Some((ch, false)))
+    }
+
+    /// What follows a class's character: the end of a range (or, after
+    /// `-`, a subtraction `[...]`), the start of one, or a subtraction.
+    fn class_member(
+        &mut self,
+        ch: char,
+        translated: bool,
+        state: &mut ClassState,
+        depth: usize,
+    ) -> Scan<()> {
+        if state.in_range {
+            state.in_range = false;
+            if ch == '[' && !translated && !state.first {
+                self.class(depth + 1)?;
+                self.subtraction_ends()?;
+            } else if state.prev > ch {
+                return invalid("[x-y] range in reverse order");
+            }
+        } else if self.remaining() >= 2 && self.peek() == Some('-') && self.peek_at(1) != Some(']')
+        {
+            state.prev = ch;
+            state.in_range = true;
+            self.pos += 1;
+        } else if ch == '-' && !translated && !state.first && self.peek() == Some('[') {
+            self.pos += 1;
+            self.class(depth + 1)?;
+            self.subtraction_ends()?;
+        }
+        Ok(())
+    }
+
+    fn subtraction_ends(&self) -> Scan<()> {
+        if self.peek().is_some_and(|c| c != ']') {
+            invalid("a subtraction must be the last element in a character class")
+        } else {
+            Ok(())
+        }
     }
 }
 
