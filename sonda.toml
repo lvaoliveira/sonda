@@ -1,0 +1,8 @@
+# sonda's own analysis (CONTRIBUTING.md, "Self-analysis"). Everything not
+# set here is sonda's default.
+
+[thresholds]
+# SonarQube's limit for JavaScript and TypeScript (S138, 200 lines): this
+# repository's code is the web app, where a page component's JSX makes
+# 80 lines too few.
+function_lines = 200

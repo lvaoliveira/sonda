@@ -227,10 +227,11 @@ sonda and SonarQube both analyze sonda's own code, so their results on the
 same commit can be compared (`.github/workflows/self-analysis.yml`). It
 runs after CI passes on `main`, or by hand from the Actions tab, on a
 self-hosted runner where both servers are: sonda on `localhost:9300`, and
-SonarQube at `SONAR_HOST_URL`. sonda analyzes the web app and the scripts,
-since it has no Rust analyzer; SonarQube also analyzes the Rust crates
-(`sonar-project.properties`), with the coverage CI's `coverage` job
-measured. The web app's coverage is `pnpm test:coverage`.
+SonarQube at `SONAR_HOST_URL`. Both analyze the web app, the scripts and
+the Rust crates (`sonar-project.properties`), with the coverage CI's
+`coverage` job measured. The web app's coverage is `pnpm test:coverage`.
+`sonda.toml` sets the function-length threshold to SonarQube's, so the two
+flag the same functions.
 
 **This repository is public, so the runner needs one setting first.** A
 pull request from a fork runs its own copy of the workflows, and could aim
