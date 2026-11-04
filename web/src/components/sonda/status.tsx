@@ -2,7 +2,7 @@ import type { GateState, Severity } from '@/api/types'
 import { GATE, SEVERITY } from '@/lib/visual'
 
 /** Gate status: a shaped dot plus a word, never a filled pill. */
-export function GateStatus({ state, className = 'text-[13px]' }: { state: GateState; className?: string }) {
+export function GateStatus({ state, className = 'text-[13px]' }: Readonly<{ state: GateState; className?: string }>) {
   const g = GATE[state]
   return (
     <span className={`inline-flex items-center gap-[7px] whitespace-nowrap ${className}`} style={{ color: g.color }}>
@@ -13,7 +13,7 @@ export function GateStatus({ state, className = 'text-[13px]' }: { state: GateSt
 }
 
 /** Just the dot, for dense places (trees, chips); always paired with a text label nearby. */
-export function GateDot({ state }: { state: GateState }) {
+export function GateDot({ state }: Readonly<{ state: GateState }>) {
   const g = GATE[state]
   return (
     <span
@@ -26,7 +26,7 @@ export function GateDot({ state }: { state: GateState }) {
 }
 
 /** The severity glyph; screen readers get the label. */
-export function SeverityGlyph({ severity, className = 'text-[10px]' }: { severity: Severity; className?: string }) {
+export function SeverityGlyph({ severity, className = 'text-[10px]' }: Readonly<{ severity: Severity; className?: string }>) {
   const s = SEVERITY[severity]
   return (
     <span role="img" aria-label={s.label} className={className} style={{ color: s.color }}>
@@ -36,7 +36,7 @@ export function SeverityGlyph({ severity, className = 'text-[10px]' }: { severit
 }
 
 /** Severity as a soft pill with glyph and label (detail panes). */
-export function SeverityPill({ severity }: { severity: Severity }) {
+export function SeverityPill({ severity }: Readonly<{ severity: Severity }>) {
   const s = SEVERITY[severity]
   return (
     <span

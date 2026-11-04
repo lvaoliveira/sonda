@@ -1,10 +1,11 @@
 import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { AnalysisPage, AnalysisQuery } from '@/api/types'
+import type { AnalysisPage, AnalysisQuery, AnalysisRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
 import { branchLabel, formatAge, formatNumber } from '@/lib/format'
+import { withQuery } from '@/lib/links'
 import { GATE } from '@/lib/visual'
 
 const PAGE_SIZE = 50
@@ -16,8 +17,8 @@ export function AnalysesPage() {
   const [params] = useSearchParams()
   const project = params.get('project')
   if (project) {
-    const rest = new URLSearchParams([...params].filter(([k]) => k !== 'project')).toString()
-    return <Navigate replace to={`/projects/${encodeURIComponent(project)}/analyses${rest ? `?${rest}` : ''}`} />
+    const rest = new URLSearchParams([...params].filter(([k]) => k !== 'project'))
+    return <Navigate replace to={withQuery(`/projects/${encodeURIComponent(project)}/analyses`, rest)} />
   }
   return <AnalysesScreen />
 }
@@ -28,7 +29,7 @@ export function ProjectAnalysesPage() {
   return <AnalysesScreen project={key} />
 }
 
-function AnalysesScreen({ project: fixed }: { project?: string }) {
+function AnalysesScreen({ project: fixed }: Readonly<{ project?: string }>) {
   const api = useApi()
   const [params, setParams] = useSearchParams()
   const project = fixed ?? params.get('project') ?? ''
@@ -81,7 +82,7 @@ function AnalysesScreen({ project: fixed }: { project?: string }) {
         />
         {!fixed && (
           <label className="flex items-center gap-2 text-[13px] text-fg-muted">
-            Project
+            <span>Project</span>
             <select value={project} onChange={(e) => set({ project: e.target.value, offset: null })} className="h-8 rounded-md bg-canvas px-2 text-[13px] text-fg edge">
               <option value="">All projects</option>
               {projects.state === 'ready' &&
@@ -101,7 +102,17 @@ function AnalysesScreen({ project: fixed }: { project?: string }) {
   )
 }
 
-function AnalysisList({ page, byProject, onOffset }: { page: AnalysisPage; /** Whether rows say which project: a project's own tab doesn't. */ byProject: boolean; onOffset: (offset: number) => void }) {
+/** What an analysis's row says: the failing condition, or its new issues. */
+function analysisNote(a: AnalysisRow): string {
+  if (a.failing.length > 0) {
+    const more = a.failing.length > 1 ? ` (+${a.failing.length - 1})` : ''
+    return `Gate failed: ${a.failing[0]}${more}`
+  }
+  if (!a.newIssues) return 'No new issues'
+  return `${a.newIssues} new ${a.newIssues === 1 ? 'issue' : 'issues'}`
+}
+
+function AnalysisList({ page, byProject, onOffset }: Readonly<{ page: AnalysisPage; /** Whether rows say which project: a project's own tab doesn't. */ byProject: boolean; onOffset: (offset: number) => void }>) {
   if (page.items.length === 0) {
     return (
       <div className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
@@ -118,12 +129,7 @@ function AnalysisList({ page, byProject, onOffset }: { page: AnalysisPage; /** W
       <ol aria-label="Analyses" className="relative m-0 list-none overflow-x-auto p-0">
         {page.items.map((a) => {
           const g = GATE[a.gate]
-          const note =
-            a.failing.length > 0
-              ? `Gate failed: ${a.failing[0]}${a.failing.length > 1 ? ` (+${a.failing.length - 1})` : ''}`
-              : a.newIssues
-                ? `${a.newIssues} new ${a.newIssues === 1 ? 'issue' : 'issues'}`
-                : 'No new issues'
+          const note = analysisNote(a)
           return (
             <li
               key={a.id}

@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type SubmitEvent, useEffect, useRef, useState } from 'react'
 import { useApi, useAsync } from '@/api/hooks'
 import { type DeletedProject, type GitHubApp, type GitHubAppManifest, MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type UserRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
@@ -27,7 +27,7 @@ export function AdminPage() {
 
 const input = 'h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] edge-strong'
 
-function Users({ me }: { me: string | null }) {
+function Users({ me }: Readonly<{ me: string | null }>) {
   const api = useApi()
   const [version, setVersion] = useState(0)
   const users = useAsync(() => api.users(), [api, version])
@@ -105,7 +105,7 @@ function Users({ me }: { me: string | null }) {
  * user, such as a `ci` service user whose tokens outlive a person's account.
  * Nobody can read a secret after it's generated.
  */
-function AllTokens({ owners }: { owners: string[] }) {
+function AllTokens({ owners }: Readonly<{ owners: string[] }>) {
   const api = useApi()
   const [version, setVersion] = useState(0)
   const tokens = useAsync(() => api.tokens(), [api, version])
@@ -178,7 +178,7 @@ function GitHubAppCard() {
   )
 }
 
-function GitHubAppState({ app, onDisconnect }: { app: GitHubApp; onDisconnect: () => void }) {
+function GitHubAppState({ app, onDisconnect }: Readonly<{ app: GitHubApp; onDisconnect: () => void }>) {
   const [confirming, setConfirming] = useState(false)
   const disconnect = confirming ? (
     <span className="flex flex-wrap items-center gap-2 text-[13px]">
@@ -236,7 +236,7 @@ function GitHubAppState({ app, onDisconnect }: { app: GitHubApp; onDisconnect: (
 }
 
 /** Where the App is installed, asked of GitHub: sonda has no webhook to be told. */
-function Installations({ installUrl }: { installUrl: string | null }) {
+function Installations({ installUrl }: Readonly<{ installUrl: string | null }>) {
   const api = useApi()
   const installed = useAsync(() => api.githubAppInstallations(), [api])
   if (installed.state === 'loading') return <p className="m-0 text-[13px] text-fg-faint">Asking GitHub where it's installed…</p>
@@ -283,8 +283,7 @@ function Installations({ installUrl }: { installUrl: string | null }) {
           Pull requests are decorated only in these repositories.{' '}
           <a href={installUrl} target="_blank" rel="noreferrer">
             Install it on another account
-          </a>
-          .
+          </a>.
         </p>
       )}
     </>
@@ -304,7 +303,7 @@ function CreateGitHubApp() {
   useEffect(() => {
     if (form) formRef.current?.submit()
   }, [form])
-  const submit = async (e: FormEvent) => {
+  const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     setError('')
@@ -342,12 +341,12 @@ function CreateGitHubApp() {
           </div>
           {owner === 'org' && (
             <label className="flex flex-col gap-1.5 text-[13px]">
-              Organization
+              <span>Organization</span>
               <input required autoCapitalize="none" spellCheck={false} pattern="[A-Za-z0-9][A-Za-z0-9\-]{0,38}" value={org} onChange={(e) => setOrg(e.target.value)} className={input} />
             </label>
           )}
           <label className="flex flex-col gap-1.5 text-[13px]">
-            App name
+            <span>App name</span>
             <input required maxLength={34} value={name} onChange={(e) => setName(e.target.value)} className={input} />
           </label>
           <Button type="submit" primary disabled={busy || !name.trim()}>
@@ -423,10 +422,10 @@ function DeletedProjects() {
   )
 }
 
-function UserRowView({ user, isMe, update }: { user: UserRow; isMe: boolean; update: (u: UserRow, p: UserPatch, done: string) => Promise<void> }) {
+function UserRowView({ user, isMe, update }: Readonly<{ user: UserRow; isMe: boolean; update: (u: UserRow, p: UserPatch, done: string) => Promise<void> }>) {
   const [resetting, setResetting] = useState(false)
   const [password, setPassword] = useState('')
-  const reset = async (e: FormEvent) => {
+  const reset = async (e: SubmitEvent) => {
     e.preventDefault()
     await update(user, { password }, `Reset the password of ${user.username}; they were signed out everywhere.`)
     setResetting(false)
@@ -497,14 +496,14 @@ function UserRowView({ user, isMe, update }: { user: UserRow; isMe: boolean; upd
   )
 }
 
-function CreateUser({ onCreated, onError }: { onCreated: (username: string, service: boolean) => void; onError: (message: string) => void }) {
+function CreateUser({ onCreated, onError }: Readonly<{ onCreated: (username: string, service: boolean) => void; onError: (message: string) => void }>) {
   const api = useApi()
   const empty = { username: '', displayName: '', role: 'member' as Role, password: '' }
   const [user, setUser] = useState(empty)
   const [service, setService] = useState(false)
   const [busy, setBusy] = useState(false)
   const set = (patch: Partial<typeof empty>) => setUser((u) => ({ ...u, ...patch }))
-  const submit = async (e: FormEvent) => {
+  const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     const { password, ...fields } = user
@@ -529,15 +528,15 @@ function CreateUser({ onCreated, onError }: { onCreated: (username: string, serv
     <Card title="Add a user" subtitle="Usernames are lowercase and permanent; they are what issues are assigned to.">
       <form onSubmit={submit} className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] items-end gap-3">
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Username
+          <span>Username</span>
           <input required autoCapitalize="none" spellCheck={false} pattern="[a-z0-9][a-z0-9._\-]{1,63}" value={user.username} onChange={(e) => set({ username: e.target.value })} className={input} />
         </label>
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Display name
+          <span>Display name</span>
           <input required maxLength={100} value={user.displayName} onChange={(e) => set({ displayName: e.target.value })} className={input} />
         </label>
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Role
+          <span>Role</span>
           <select value={service ? 'member' : user.role} disabled={service} onChange={(e) => set({ role: e.target.value as Role })} className={input}>
             <option value="member">Member</option>
             <option value="admin">Admin</option>
@@ -545,7 +544,7 @@ function CreateUser({ onCreated, onError }: { onCreated: (username: string, serv
         </label>
         {!service && (
           <label className="flex flex-col gap-1.5 text-[13px]">
-            Initial password
+            <span>Initial password</span>
             <input
               type="password"
               autoComplete="new-password"
@@ -560,7 +559,7 @@ function CreateUser({ onCreated, onError }: { onCreated: (username: string, serv
         <label className="flex items-center gap-2 self-center text-[13px]">
           <input type="checkbox" checked={service} onChange={(e) => setService(e.target.checked)} className="accent-brand" />
           <span>
-            Service user
+            <span>Service user</span>
             <span className="block text-xs text-fg-faint">No password, can’t sign in: owns CI tokens.</span>
           </span>
         </label>

@@ -1,5 +1,5 @@
 import { Check } from 'lucide-react'
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type SubmitEvent, type ReactNode, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { AnalysisRow, ProjectSettings, WaitingProject } from '@/api/types'
@@ -56,7 +56,7 @@ interface Connected {
   server: string
 }
 
-function Connect({ waiting }: { waiting: WaitingProject | null }) {
+function Connect({ waiting }: Readonly<{ waiting: WaitingProject | null }>) {
   const api = useApi()
   const [repository, setRepository] = useState(waiting?.githubRepository ? `https://github.com/${waiting.githubRepository}` : '')
   const repo = parseRepository(repository)
@@ -76,7 +76,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
   }
   const problem = repository.trim() && !repo ? "Paste the repository's GitHub URL, such as https://github.com/acme/shop." : server ? serverProblem(server, runner) : null
 
-  const connect = async (e: FormEvent) => {
+  const connect = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     setError(null)
@@ -110,7 +110,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
       <Card title="Repository" subtitle="sonda creates the project and its upload token; you add them on GitHub's own pages next. sonda gets no access to the repository.">
         <form onSubmit={(e) => void connect(e)} className="flex max-w-[560px] flex-col gap-4">
           <label className="flex flex-col gap-1.5 text-[13px]">
-            GitHub repository URL
+            <span>GitHub repository URL</span>
             <input
               className={input}
               value={repository}
@@ -124,12 +124,12 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
           </label>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
             <label className="flex flex-col gap-1.5 text-[13px]">
-              Project key
+              <span>Project key</span>
               <input className={`${input} font-mono`} value={projectKey} onChange={(e) => setKey(e.target.value)} autoComplete="off" required disabled={!!waiting} />
             </label>
             {!waiting && (
               <label className="flex flex-col gap-1.5 text-[13px]">
-                Main branch
+                <span>Main branch</span>
                 <input className={`${input} font-mono`} value={mainBranch} onChange={(e) => setMainBranch(e.target.value)} autoComplete="off" required />
               </label>
             )}
@@ -147,7 +147,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
             />
           </div>
           <label className="flex flex-col gap-1.5 text-[13px]">
-            Server address the runner uploads to
+            <span>Server address the runner uploads to</span>
             <input className={`${input} font-mono`} value={server} onChange={(e) => setServer(e.target.value)} autoComplete="off" required />
           </label>
           {problem && <p className="m-0 text-[13px] text-warn">{problem}</p>}
@@ -167,7 +167,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
   )
 }
 
-function Steps({ done }: { done: Connected }) {
+function Steps({ done }: Readonly<{ done: Connected }>) {
   const { settings, token, runner, server } = done
   const [finished, setFinished] = useState(false)
   // One step at a time, in order: the workflow runs CI as soon as it's
@@ -271,7 +271,7 @@ function Steps({ done }: { done: Connected }) {
  * Checks every few seconds until the project's first analysis arrives,
  * which proves the secret, the workflow and the runner all work.
  */
-function FirstAnalysis({ project, n }: { project: string; n: number }) {
+function FirstAnalysis({ project, n }: Readonly<{ project: string; n: number }>) {
   const api = useApi()
   const [first, setFirst] = useState<AnalysisRow | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -334,7 +334,7 @@ function FirstAnalysis({ project, n }: { project: string; n: number }) {
 }
 
 /** A step: the current one shows everything; a done one only that it's done; a later one only its title. */
-function Step({ n, title, state = 'current', onReopen, children }: { n: number; title: string; state?: 'done' | 'current' | 'locked'; onReopen?: () => void; children: ReactNode }) {
+function Step({ n, title, state = 'current', onReopen, children }: Readonly<{ n: number; title: string; state?: 'done' | 'current' | 'locked'; onReopen?: () => void; children: ReactNode }>) {
   return (
     <Card
       id={`step-${n}`}
@@ -359,7 +359,7 @@ function Step({ n, title, state = 'current', onReopen, children }: { n: number; 
   )
 }
 
-function Copyable({ label, value }: { label: string; value: string }) {
+function Copyable({ label, value }: Readonly<{ label: string; value: string }>) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2.5">
       <span className="w-16 flex-none text-[13px] text-fg-muted">{label}</span>
@@ -371,7 +371,7 @@ function Copyable({ label, value }: { label: string; value: string }) {
   )
 }
 
-function CopyButton({ value, children }: { value: string; children: ReactNode }) {
+function CopyButton({ value, children }: Readonly<{ value: string; children: ReactNode }>) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const copy = async () => {
     setState((await copyText(value)) ? 'copied' : 'failed')
@@ -380,7 +380,7 @@ function CopyButton({ value, children }: { value: string; children: ReactNode })
 }
 
 /** Pull requests are decorated only where the App is installed (ADR-0024). */
-function InstallApp({ repository }: { repository: string }) {
+function InstallApp({ repository }: Readonly<{ repository: string }>) {
   const api = useApi()
   const app = useAsync(() => api.githubApp(), [api])
   const installUrl = app.state === 'ready' ? app.data.installUrl : null
@@ -390,8 +390,7 @@ function InstallApp({ repository }: { repository: string }) {
       Pull requests are decorated where the GitHub App is installed. If it isn't on <Mono className="text-xs text-fg">{repository}</Mono> yet,{' '}
       <a href={installUrl} target="_blank" rel="noreferrer">
         install it there
-      </a>
-      .
+      </a>.
     </p>
   )
 }

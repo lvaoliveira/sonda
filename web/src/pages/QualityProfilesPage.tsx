@@ -25,7 +25,7 @@ export function QualityProfilesPage() {
   )
 }
 
-function Profiles({ profiles, catalog, isAdmin, reload }: { profiles: RuleProfileSummary[]; catalog: RuleCatalog; isAdmin: boolean; reload: () => void }) {
+function Profiles({ profiles, catalog, isAdmin, reload }: Readonly<{ profiles: RuleProfileSummary[]; catalog: RuleCatalog; isAdmin: boolean; reload: () => void }>) {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const selected = profiles.find((p) => p.id === selectedId) ?? profiles[0]
   const def = profiles.find((p) => p.isDefault)
@@ -40,7 +40,10 @@ function Profiles({ profiles, catalog, isAdmin, reload }: { profiles: RuleProfil
           </>
         }
       />
-      {isAdmin && <NewProfile profiles={profiles} onCreated={(id) => (setSelectedId(id), reload())} />}
+      {isAdmin && <NewProfile profiles={profiles} onCreated={(id) => {
+            setSelectedId(id)
+            reload()
+          }} />}
       <div className="grid grid-cols-1 gap-5 min-[1100px]:grid-cols-[minmax(240px,0.35fr)_minmax(0,1fr)]">
         <ul aria-label="Profiles" className="m-0 flex list-none flex-col gap-px self-start overflow-hidden rounded-xl bg-line p-0" style={{ boxShadow: '0 0 0 1px var(--sd-line)' }}>
           {profiles.map((p) => {
@@ -75,7 +78,7 @@ function Profiles({ profiles, catalog, isAdmin, reload }: { profiles: RuleProfil
 }
 
 /** Admins create a profile, empty or as a copy. */
-function NewProfile({ profiles, onCreated }: { profiles: RuleProfileSummary[]; onCreated: (id: number) => void }) {
+function NewProfile({ profiles, onCreated }: Readonly<{ profiles: RuleProfileSummary[]; onCreated: (id: number) => void }>) {
   const api = useApi()
   const [name, setName] = useState('')
   const [from, setFrom] = useState('')
@@ -101,11 +104,11 @@ function NewProfile({ profiles, onCreated }: { profiles: RuleProfileSummary[]; o
       }}
     >
       <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        New profile
+        <span>New profile</span>
         <input aria-label="New profile name" placeholder="Name, such as Strict" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} className={`${input} w-[220px]`} />
       </label>
       <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        Starting from
+        <span>Starting from</span>
         <select aria-label="Copy from" value={from} onChange={(e) => setFrom(e.target.value)} className={input}>
           <option value="">The catalog’s defaults</option>
           {profiles
@@ -142,7 +145,7 @@ const SET_FILTER: RuleFilter<InProfile> = {
   test: (r, v) => (v === 'set' ? r.setting !== null : v === 'on' ? (r.setting?.on ?? r.onByDefault) : !(r.setting?.on ?? r.onByDefault)),
 }
 
-function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: { summary: RuleProfileSummary; catalog: RuleCatalog; isAdmin: boolean; reload: () => void; onDeleted: () => void }) {
+function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: Readonly<{ summary: RuleProfileSummary; catalog: RuleCatalog; isAdmin: boolean; reload: () => void; onDeleted: () => void }>) {
   const api = useApi()
   const detail = useAsync(() => api.ruleProfile(summary.id), [api, summary.id])
   const [q, setQ] = useState('')
@@ -224,7 +227,7 @@ function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: { summary
 }
 
 /** Admins rename a profile, make it the default, or delete it. */
-function ProfileActions({ summary, reload, onDeleted }: { summary: RuleProfileSummary; reload: () => void; onDeleted: () => void }) {
+function ProfileActions({ summary, reload, onDeleted }: Readonly<{ summary: RuleProfileSummary; reload: () => void; onDeleted: () => void }>) {
   const api = useApi()
   const [name, setName] = useState(summary.name)
   const [busy, setBusy] = useState(false)
@@ -257,7 +260,10 @@ function ProfileActions({ summary, reload, onDeleted }: { summary: RuleProfileSu
         </Button>
       )}
       {!summary.builtin && !summary.isDefault && (
-        <Button onClick={() => void run(() => api.deleteRuleProfile(summary.id), () => (onDeleted(), reload()))} disabled={busy}>
+        <Button onClick={() => void run(() => api.deleteRuleProfile(summary.id), () => {
+              onDeleted()
+              reload()
+            })} disabled={busy}>
           Delete
         </Button>
       )}
@@ -271,7 +277,7 @@ function ProfileActions({ summary, reload, onDeleted }: { summary: RuleProfileSu
 }
 
 /** The rule's setting in this profile, and for admins, changing it. */
-function InThisProfile({ profile, rule, editable, reload }: { profile: number; rule: InProfile; editable: boolean; reload: () => void }) {
+function InThisProfile({ profile, rule, editable, reload }: Readonly<{ profile: number; rule: InProfile; editable: boolean; reload: () => void }>) {
   const api = useApi()
   const s = rule.setting
   const [severity, setSeverity] = useState<Severity | ''>(s?.severity ?? '')

@@ -90,7 +90,7 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
     branch: on,
     branches,
     languages: p.languages.map((id, i) => ({ id, ncloc: Math.round(p.ncloc / 2 ** (i + 1)) })),
-    analysis: { id: 911, sha: '9f3c2a1e7b04', analyzedAt: p.analyzedAt, toolVersion: '0.1.0', newCodeReference: 'origin/main', version: history[history.length - 1].version },
+    analysis: { id: 911, sha: '9f3c2a1e7b04', analyzedAt: p.analyzedAt, toolVersion: '0.1.0', newCodeReference: 'origin/main', version: history.at(-1)!.version },
     gate: {
       state: failing ? 'failed' : on === 'main' ? p.gate : 'passed',
       conditions: [

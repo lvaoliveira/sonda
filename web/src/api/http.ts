@@ -5,6 +5,14 @@ import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
 
+/** `?name=value&…` for the parameters that have a value, or nothing. */
+function query(params: Record<string, string | null | undefined>): string {
+  const p = new URLSearchParams()
+  for (const [name, value] of Object.entries(params)) if (value) p.set(name, value)
+  const s = p.toString()
+  return s ? `?${s}` : ''
+}
+
 /**
  * The contract over `sonda server`'s HTTP API (docs/server.md). The session
  * is a cookie the page cannot read; changes add `Sonda-Csrf`, which the
@@ -84,14 +92,14 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
       if (q.isNew) p.set('new', 'true')
       return call<SecurityReview>('GET', `/security/review?${p}`)
     },
-    components: (project) => call<ComponentList>('GET', `/components${project ? `?project=${encodeURIComponent(project)}` : ''}`),
+    components: (project) => call<ComponentList>('GET', `/components${query({ project })}`),
     component: (project, path, branch) =>
       call<ComponentDetail>(
         'GET',
-        `/projects/${encodeURIComponent(project)}/components/${encodeURIComponent(path)}${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`,
+        `/projects/${encodeURIComponent(project)}/components/${encodeURIComponent(path)}${query({ branch })}`,
       ),
     dependencies: (project, branch) =>
-      call<DependencyList>('GET', `/projects/${encodeURIComponent(project)}/dependencies${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
+      call<DependencyList>('GET', `/projects/${encodeURIComponent(project)}/dependencies${query({ branch })}`),
     setNewCodePeriod: (project, analysis) => call<NewCodePeriod>('PUT', `/projects/${encodeURIComponent(project)}/new-code`, { analysis }),
     projectSettings: (project) => call<ProjectSettings>('GET', `/projects/${encodeURIComponent(project)}/settings`),
     updateProjectSettings: (project, patch) => call<ProjectSettings>('PATCH', `/projects/${encodeURIComponent(project)}/settings`, patch),
@@ -104,11 +112,11 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     githubAppInstallations: () => call<GitHubInstallation[]>('GET', '/github/app/installations'),
     disconnectGithubApp: () => call<GitHubApp>('DELETE', '/github/app'),
     coverage: (project, branch) =>
-      call<CoverageList>('GET', `/projects/${encodeURIComponent(project)}/coverage${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
+      call<CoverageList>('GET', `/projects/${encodeURIComponent(project)}/coverage${query({ branch })}`),
     fileCoverage: (project, path, branch) =>
       call<FileCoverage>(
         'GET',
-        `/projects/${encodeURIComponent(project)}/coverage/file?path=${encodeURIComponent(path)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`,
+        `/projects/${encodeURIComponent(project)}/coverage/file${query({ path, branch })}`,
       ),
     reviewDependency: (project, patch) =>
       call<DependencyReview>('PATCH', `/projects/${encodeURIComponent(project)}/dependencies/reviews`, patch),
@@ -122,7 +130,7 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     analysis: (id) => call<AnalysisDetail>('GET', `/analyses/${id}`),
     projects: () => call<ProjectList>('GET', '/projects'),
     createProject: (key, mainBranch) => call<{ key: string }>('POST', '/projects', { key, mainBranch }),
-    project: (key, branch) => call<ProjectDetail>('GET', `/projects/${encodeURIComponent(key)}${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
+    project: (key, branch) => call<ProjectDetail>('GET', `/projects/${encodeURIComponent(key)}${query({ branch })}`),
     issues: (query) => call<IssuePage>('GET', `/issues?${issueSearchParams(query)}`),
     issuesPrompt: (query, ids) => {
       const params = issueSearchParams({ ...query, offset: 0, limit: PROMPT_LIMIT })

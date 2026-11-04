@@ -4,10 +4,11 @@ import { useApi, useAsync } from '@/api/hooks'
 import type { CoverageCounts, CoverageFile, CoverageList, FileCoverage } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button, Chip, Segmented } from '@/components/sonda/controls'
+import { Tokens } from '@/components/sonda/CodeViewer'
 import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
 import { formatAge, formatNumber } from '@/lib/format'
 import { coverageUrl, fileCoverageUrl, projectUrl } from '@/lib/links'
-import { ROLE_COLOR, coverageColor } from '@/lib/visual'
+import { coverageColor } from '@/lib/visual'
 
 /** Rows rendered at once; searching narrows the rest. */
 const SHOWN = 500
@@ -39,8 +40,9 @@ const ZERO: CoverageCounts = { covered: 0, total: 0 }
 const add = (a: CoverageCounts, b: CoverageCounts | null): CoverageCounts => (b ? { covered: a.covered + b.covered, total: a.total + b.total } : a)
 
 const pctOf = (e: { covered: number; uncovered: number }) => (e.covered + e.uncovered === 0 ? null : (100 * e.covered) / (e.covered + e.uncovered))
+const pctLabel = (pct: number | null) => (pct == null ? 'No data' : `${pct.toFixed(1)}%`)
 
-function Failed({ what, error, back }: { what: string; error: Error; back: { to: string; label: string } }) {
+function Failed({ what, error, back }: Readonly<{ what: string; error: Error; back: { to: string; label: string } }>) {
   return (
     <div role="alert" className="flex flex-col items-start gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
       <span className="font-semibold">Could not load {what}</span>
@@ -76,7 +78,7 @@ export function CoveragePage() {
   )
 }
 
-function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: string }) {
+function Coverage({ c, branch, dir }: Readonly<{ c: CoverageList; branch?: string; dir: string }>) {
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<Sort>('uncovered')
   const [gapsOnly, setGapsOnly] = useState(false)
@@ -164,7 +166,7 @@ function Coverage({ c, branch, dir }: { c: CoverageList; branch?: string; dir: s
             }
             subtitle={
               dir
-                ? `${pctOf(here) == null ? 'No data' : `${pctOf(here)!.toFixed(1)}%`} · ${formatNumber(here.uncovered)} uncovered lines in this directory`
+                ? `${pctLabel(pctOf(here))} · ${formatNumber(here.uncovered)} uncovered lines in this directory`
                 : 'Directories add up their files; open one, or a file to see its lines'
             }
           >
@@ -279,7 +281,7 @@ function group(files: CoverageFile[], prefix: string): Entry[] {
   return [...dirs.values(), ...rows]
 }
 
-function Bar({ pct }: { pct: number | null }) {
+function Bar({ pct }: Readonly<{ pct: number | null }>) {
   if (pct == null) return <span className="text-xs text-fg-faint">nothing coverable</span>
   return (
     <span className="flex items-center gap-2">
@@ -292,7 +294,7 @@ function Bar({ pct }: { pct: number | null }) {
 }
 
 /** "50.0% 1/2", colored as coverage is; a dash without data. */
-function Fraction({ counts }: { counts: CoverageCounts }) {
+function Fraction({ counts }: Readonly<{ counts: CoverageCounts }>) {
   if (counts.total === 0) return <span className="text-xs text-fg-faint">—</span>
   const pct = (100 * counts.covered) / counts.total
   return (
@@ -305,7 +307,7 @@ function Fraction({ counts }: { counts: CoverageCounts }) {
   )
 }
 
-function CountTile({ label, counts, what }: { label: string; counts: CoverageCounts; what: string }) {
+function CountTile({ label, counts, what }: Readonly<{ label: string; counts: CoverageCounts; what: string }>) {
   const pct = counts.total === 0 ? null : (100 * counts.covered) / counts.total
   return (
     <Tile
@@ -317,7 +319,7 @@ function CountTile({ label, counts, what }: { label: string; counts: CoverageCou
   )
 }
 
-function Tile({ label, value, note, color }: { label: string; value: string; note: string; color?: string }) {
+function Tile({ label, value, note, color }: Readonly<{ label: string; value: string; note: string; color?: string }>) {
   return (
     <div className="flex flex-col gap-1 bg-panel-2 px-4 py-3">
       <span className="text-[12.5px] text-fg-muted">{label}</span>
@@ -355,7 +357,7 @@ export function FileCoveragePage() {
   )
 }
 
-function FileView({ f }: { f: FileCoverage }) {
+function FileView({ f }: Readonly<{ f: FileCoverage }>) {
   const covered = useMemo(() => new Set(f.covered ?? []), [f.covered])
   const uncovered = useMemo(() => new Set(f.uncovered ?? []), [f.uncovered])
   const branchAt = useMemo(() => new Map((f.branches ?? []).map((b) => [b.line, b])), [f.branches])
@@ -387,10 +389,10 @@ function FileView({ f }: { f: FileCoverage }) {
   }
   const n = covered.size + uncovered.size
   const pct = n === 0 ? null : (100 * covered.size) / n
-  const count = (items: { ok: boolean }[] | null, what: string) =>
-    items && items.length > 0 ? ` · ${items.filter((i) => i.ok).length} of ${items.length} ${what}` : ''
-  const branchesTaken = f.branches && f.branches.flatMap((b) => Array.from({ length: b.total }, (_, i) => ({ ok: i < b.taken })))
-  const functionsCalled = f.functions && f.functions.map((fn) => ({ ok: fn.calls > 0 }))
+  const count = (items: { ok: boolean }[] | undefined, what: string) =>
+    items?.length ? ` · ${items.filter((i) => i.ok).length} of ${items.length} ${what}` : ''
+  const branchesTaken = f.branches?.flatMap((b) => Array.from({ length: b.total }, (_, i) => ({ ok: i < b.taken })))
+  const functionsCalled = f.functions?.map((fn) => ({ ok: fn.calls > 0 }))
   return (
     <>
       <PageHeader
@@ -463,11 +465,7 @@ function FileView({ f }: { f: FileCoverage }) {
                   {state === 'uncovered' ? '✗' : state === 'covered' ? '✓' : ''}
                 </span>
                 <span className="pr-5 whitespace-pre">
-                  {line.tokens.map((t, i) => (
-                    <span key={i} style={{ color: ROLE_COLOR[t.role] }}>
-                      {t.text}
-                    </span>
-                  ))}
+                  <Tokens tokens={line.tokens} />
                 </span>
                 <Marks branches={branchAt.get(line.number)} uncalled={uncalledAt.get(line.number)} />
               </div>
@@ -482,7 +480,7 @@ function FileView({ f }: { f: FileCoverage }) {
 }
 
 /** A line's untaken branches and never-called functions, after its code. */
-function Marks({ branches, uncalled }: { branches?: { taken: number; total: number }; uncalled?: string[] }) {
+function Marks({ branches, uncalled }: Readonly<{ branches?: { taken: number; total: number }; uncalled?: string[] }>) {
   const partly = branches && branches.taken < branches.total
   if (!partly && !uncalled) return null
   const mark = 'rounded px-1.5 font-sans text-[11px] whitespace-nowrap select-none'
@@ -507,7 +505,7 @@ function Marks({ branches, uncalled }: { branches?: { taken: number; total: numb
   )
 }
 
-function Legend({ color, glyph, label }: { color: string; glyph: string; label: string }) {
+function Legend({ color, glyph, label }: Readonly<{ color: string; glyph: string; label: string }>) {
   return (
     <span className="flex items-center gap-1.5">
       <span aria-hidden="true" style={{ color }}>

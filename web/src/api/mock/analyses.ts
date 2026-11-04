@@ -57,7 +57,7 @@ export function analysisDetail(id: number): AnalysisDetail | null {
   const at = same.findIndex((r) => r.id === row.id)
   // The newest analysis continues the older, synthesized history.
   const previous = at < 0 ? olderRow(id - 1) : (same[at + 1] ?? (row.id === ROWS[0].id ? olderRow(910) : null))
-  const next = at < 0 ? (olderRow(id + 1) ?? same[same.length - 1] ?? null) : (same[at - 1] ?? null)
+  const next = at < 0 ? (olderRow(id + 1) ?? same.at(-1) ?? null) : (same[at - 1] ?? null)
   const failing = row.gate === 'failed'
   return {
     id: row.id,

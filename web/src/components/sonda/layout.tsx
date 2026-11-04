@@ -9,7 +9,7 @@ export function Card({
   className = '',
   padded = true,
   id,
-}: {
+}: Readonly<{
   title?: ReactNode
   subtitle?: ReactNode
   aside?: ReactNode
@@ -17,7 +17,7 @@ export function Card({
   className?: string
   padded?: boolean
   id?: string
-}) {
+}>) {
   const headingId = id ? `${id}-h` : undefined
   return (
     <section
@@ -45,7 +45,7 @@ export function Card({
  * Seamless metric grid: the container is the hairline color and cells sit
  * on panel-2 with a 1px gap, so the gaps draw the dividers.
  */
-export function MetricGrid({ label, minCell = 180, children }: { label: string; minCell?: number; children: ReactNode }) {
+export function MetricGrid({ label, minCell = 180, children }: Readonly<{ label: string; minCell?: number; children: ReactNode }>) {
   return (
     <section
       aria-label={label}
@@ -57,7 +57,7 @@ export function MetricGrid({ label, minCell = 180, children }: { label: string; 
   )
 }
 
-export function PageHeader({ title, summary, children }: { title: string; summary: ReactNode; children?: ReactNode }) {
+export function PageHeader({ title, summary, children }: Readonly<{ title: string; summary: ReactNode; children?: ReactNode }>) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="flex flex-col gap-1.5">
@@ -69,6 +69,6 @@ export function PageHeader({ title, summary, children }: { title: string; summar
   )
 }
 
-export function Mono({ children, className = '' }: { children: ReactNode; className?: string }) {
+export function Mono({ children, className = '' }: Readonly<{ children: ReactNode; className?: string }>) {
   return <span className={`font-mono ${className}`}>{children}</span>
 }
