@@ -3073,19 +3073,7 @@ fn only_unpacking_targets(scope: Node, name: &[u8], src: &[u8]) -> bool {
 
 fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
     let n = text(name, src);
-    // The parameter list belongs to a def, not a lambda.
-    let Some(function) = name
-        .parent()
-        .and_then(|p| {
-            if p.kind() == "parameters" {
-                Some(p)
-            } else {
-                p.parent()
-            }
-        })
-        .and_then(|params| params.parent())
-        .filter(|f| f.kind() == "function_definition")
-    else {
+    let Some(function) = defining_function(name) else {
         return false;
     };
     if n.starts_with(b"_") || matches!(n, b"self" | b"cls") {
@@ -3100,8 +3088,43 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
     let Some(body) = body_of(function) else {
         return false;
     };
-    // Nested functions are callbacks with a signature somebody else chose.
-    // A def under an `if`/`try` at module or class level is still top level.
+    // A body with nothing in it is an interface, not dead code.
+    if !is_top_level_def(function)
+        || overrides_a_library_method(function, fname, src)
+        || is_stub_body(body)
+    {
+        return false;
+    }
+    let whole = text(body, src);
+    if reads_its_locals(whole) {
+        return false;
+    }
+    // A method that a base class of this file declares is an override.
+    if overrides_a_method_of_this_file(function, fname, src) {
+        return false;
+    }
+    count_word(whole, n) == 0
+}
+
+/// The `def` whose parameter list `name` is in; a lambda's doesn't count.
+fn defining_function(name: Node) -> Option<Node> {
+    name.parent()
+        .and_then(|p| {
+            if p.kind() == "parameters" {
+                Some(p)
+            } else {
+                p.parent()
+            }
+        })
+        .and_then(|params| params.parent())
+        .filter(|f| f.kind() == "function_definition")
+}
+
+/// Whether `function` is a module or class member, not nested in another
+/// function: nested functions are callbacks with a signature somebody else
+/// chose. A def under an `if`/`try` at module or class level is still top
+/// level.
+fn is_top_level_def(function: Node) -> bool {
     let mut owner = function.parent();
     while let Some(o) = owner {
         match o.kind() {
@@ -3113,19 +3136,18 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
             | "try_statement"
             | "except_clause"
             | "finally_clause"
-            | "with_statement" => {
-                owner = o.parent();
-            }
-            "module" | "class_definition" => break,
+            | "with_statement" => owner = o.parent(),
+            "module" | "class_definition" => return true,
             _ => return false,
         }
     }
-    if owner.is_none() {
-        return false;
-    }
-    // A public method of a class that extends the standard library is most
-    // likely an override: its signature belongs to the library.
-    if !fname.starts_with(b"_")
+    false
+}
+
+/// A public method of a class that extends the standard library is most
+/// likely an override: its signature belongs to the library.
+fn overrides_a_library_method(function: Node, fname: &[u8], src: &[u8]) -> bool {
+    !fname.starts_with(b"_")
         && function
             .parent()
             .filter(|b| b.kind() == "block")
@@ -3133,32 +3155,13 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
             .is_some_and(|c| {
                 c.kind() == "class_definition" && extends_a_standard_library_class(c, src)
             })
-    {
-        return false;
-    }
-    // A body with nothing in it is an interface, not dead code.
-    let only_pass = statements(body).iter().all(|s| match s.kind() {
-        "pass_statement" | "raise_statement" => true,
-        "expression_statement" => s
-            .named_child(0)
-            .is_some_and(|e| matches!(e.kind(), "string" | "ellipsis")),
-        _ => false,
-    });
-    if only_pass {
-        return false;
-    }
-    let whole = text(body, src);
-    if [&b"locals()"[..], b"vars()", b"eval(", b"exec("]
+}
+
+/// `locals()`, `vars()`, `eval(` or `exec(`: the body may read any name.
+fn reads_its_locals(body: &[u8]) -> bool {
+    [&b"locals()"[..], b"vars()", b"eval(", b"exec("]
         .iter()
-        .any(|w| contains_ignoring_case(whole, w))
-    {
-        return false;
-    }
-    // A method that a base class of this file declares is an override.
-    if overrides_a_method_of_this_file(function, fname, src) {
-        return false;
-    }
-    count_word(whole, n) == 0
+        .any(|w| contains_ignoring_case(body, w))
 }
 
 /// Whether `function` is a method of a class whose base, defined in this file,

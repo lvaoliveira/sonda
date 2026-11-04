@@ -1876,59 +1876,12 @@ pub(super) const BUILTIN_NAMES: &[&str] = &[
 /// name found here is never reported, so the rule errs towards silence.
 fn bound_names<'s>(root: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut names: Vec<&[u8]> = Vec::new();
-    let add_all = |node: Node, names: &mut Vec<&'s [u8]>| {
-        if node.kind() == "identifier" {
-            names.push(text(node, src));
-            return;
-        }
-        for n in collect_in_scope(node, &[], |n| n.kind() == "identifier") {
-            names.push(text(n, src));
-        }
-    };
     let mut cursor = root.walk();
     let mut descend = true;
     loop {
         let node = cursor.node();
         if descend {
-            match node.kind() {
-                "function_definition" | "class_definition" => {
-                    if let Some(n) = node.child_by_field_name("name") {
-                        names.push(text(n, src));
-                    }
-                    if let Some(p) = node.child_by_field_name("parameters") {
-                        add_all(p, &mut names);
-                    }
-                }
-                "lambda" => {
-                    if let Some(p) = node.child_by_field_name("parameters") {
-                        add_all(p, &mut names);
-                    }
-                }
-                "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
-                    if let Some(l) = node.child_by_field_name("left") {
-                        add_all(l, &mut names);
-                    }
-                }
-                "import_statement"
-                | "import_from_statement"
-                | "global_statement"
-                | "nonlocal_statement"
-                | "as_pattern"
-                | "except_clause"
-                | "with_item"
-                | "case_clause"
-                | "type_alias_statement"
-                | "delete_statement"
-                | "type_parameter" => {
-                    add_all(node, &mut names);
-                }
-                "named_expression" => {
-                    if let Some(n) = node.child_by_field_name("name") {
-                        names.push(text(n, src));
-                    }
-                }
-                _ => {}
-            }
+            names_bound_by(node, src, &mut names);
         }
         if descend && cursor.goto_first_child() {
             continue;
@@ -1942,6 +1895,55 @@ fn bound_names<'s>(root: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
         }
         descend = false;
     }
+}
+
+/// The names `node` itself binds, added to `names`.
+fn names_bound_by<'s>(node: Node, src: &'s [u8], names: &mut Vec<&'s [u8]>) {
+    let field = |f: &str| node.child_by_field_name(f);
+    match node.kind() {
+        "function_definition" | "class_definition" => {
+            names.extend(field("name").map(|n| text(n, src)));
+            if let Some(p) = field("parameters") {
+                add_identifiers(p, src, names);
+            }
+        }
+        "lambda" => {
+            if let Some(p) = field("parameters") {
+                add_identifiers(p, src, names);
+            }
+        }
+        "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
+            if let Some(l) = field("left") {
+                add_identifiers(l, src, names);
+            }
+        }
+        "import_statement"
+        | "import_from_statement"
+        | "global_statement"
+        | "nonlocal_statement"
+        | "as_pattern"
+        | "except_clause"
+        | "with_item"
+        | "case_clause"
+        | "type_alias_statement"
+        | "delete_statement"
+        | "type_parameter" => add_identifiers(node, src, names),
+        "named_expression" => names.extend(field("name").map(|n| text(n, src))),
+        _ => {}
+    }
+}
+
+/// `node`, if it's a name, or every name under it.
+fn add_identifiers<'s>(node: Node, src: &'s [u8], names: &mut Vec<&'s [u8]>) {
+    if node.kind() == "identifier" {
+        names.push(text(node, src));
+        return;
+    }
+    names.extend(
+        collect_in_scope(node, &[], |n| n.kind() == "identifier")
+            .into_iter()
+            .map(|n| text(n, src)),
+    );
 }
 
 fn first_undefined_name<'t>(module: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -2161,36 +2163,42 @@ fn module_level_names<'s>(module: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
                 | "named_expression"
         )
     }) {
-        match n.kind() {
-            "function_definition" | "class_definition" => {
-                if n.parent().is_some_and(|p| {
-                    p.kind() == "module"
-                        || p.kind() == "decorated_definition"
-                        || p.kind() == "block"
-                }) {
-                    names.push(name_of(n, src));
-                }
-            }
-            "import_statement" | "import_from_statement" => {
-                names.extend(imported_names(n, src));
-                for c in collect_in_scope(n, &[], |c| c.kind() == "identifier") {
-                    names.push(text(c, src));
-                }
-            }
-            "assignment" | "for_statement" => {
-                if let Some(l) = n.child_by_field_name("left") {
-                    for c in collect_in_scope(l, &[], |c| c.kind() == "identifier") {
-                        names.push(text(c, src));
-                    }
-                    if l.kind() == "identifier" {
-                        names.push(text(l, src));
-                    }
-                }
-            }
-            _ => {}
-        }
+        module_names_of(n, src, &mut names);
     }
     names
+}
+
+/// The module-level names a definition, an import, an assignment or a
+/// `for` binds, added to `names`.
+fn module_names_of<'s>(n: Node, src: &'s [u8], names: &mut Vec<&'s [u8]>) {
+    let identifiers = |under: Node| -> Vec<&'s [u8]> {
+        collect_in_scope(under, &[], |c| c.kind() == "identifier")
+            .into_iter()
+            .map(|c| text(c, src))
+            .collect()
+    };
+    match n.kind() {
+        "function_definition" | "class_definition" => {
+            if n.parent().is_some_and(|p| {
+                p.kind() == "module" || p.kind() == "decorated_definition" || p.kind() == "block"
+            }) {
+                names.push(name_of(n, src));
+            }
+        }
+        "import_statement" | "import_from_statement" => {
+            names.extend(imported_names(n, src));
+            names.extend(identifiers(n));
+        }
+        "assignment" | "for_statement" => {
+            if let Some(l) = n.child_by_field_name("left") {
+                names.extend(identifiers(l));
+                if l.kind() == "identifier" {
+                    names.push(text(l, src));
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn all_lists_an_undefined_name<'t>(assignment: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
