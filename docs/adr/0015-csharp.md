@@ -69,6 +69,13 @@ findings settle it:
   example show static members only. Counting nested types would add 107
   findings, nearly all properties named after another nested type.
 
+S5856 reads a pattern the way .NET's `Regex` does (`regex/dotnet.rs`): a
+first pass numbers the groups, so a reference may come before its group, and
+a second rejects what the constructor rejects. Patterns and options must be
+constants; under `ECMAScript`, whose syntax differs, patterns aren't judged.
+`NonBacktracking` is checked for what the documentation names, negative
+lookarounds, not for its other limits.
+
 The other partial rules need what sonda doesn't have:
 
 - the project file: S3904, S3990, S3992, S4026 (generated assembly
@@ -85,7 +92,7 @@ The other partial rules need what sonda doesn't have:
   a secure generator), S4261 (`ValueTask` and async streams, which TAP
   names with Async but the text leaves out);
 - more work: S3925 (nine serialization checks, and which projects are
-  test projects), S5856 (a .NET regex parser).
+  test projects).
 
 ### Suppressions
 

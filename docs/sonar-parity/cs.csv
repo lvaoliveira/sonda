@@ -386,7 +386,7 @@ csharpsquid:S5659,vulnerability,critical,yes,main,syntactic,done,cs/jwt-unverifi
 csharpsquid:S5693,vulnerability,major,yes,all,syntactic,done,cs/request-size-unlimited,400 770,A05
 csharpsquid:S5753,vulnerability,major,yes,main,syntactic,done,cs/request-validation-disabled,79,A03
 csharpsquid:S5766,vulnerability,major,yes,all,syntactic,partial,cs/deserialization-skips-validation,502,A08
-csharpsquid:S5856,bug,critical,yes,all,syntactic,partial,cs/invalid-regex,,
+csharpsquid:S5856,bug,critical,yes,all,syntactic,done,cs/invalid-regex,,
 csharpsquid:S6354,code_smell,major,no,main,syntactic,done,cs/untestable-clock,,
 csharpsquid:S6377,vulnerability,major,yes,main,syntactic,partial,cs/xml-signature-unverified-key,347,A02
 csharpsquid:S6418,vulnerability,blocker,yes,main,syntactic,partial,cs/hardcoded-credential,798,A07

@@ -1638,7 +1638,7 @@ fn overload_with_one_more<'m, 't>(
 }
 
 /// The name a call goes by: the method's, or the type's for `new`.
-fn call_name<'s>(call: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+pub(super) fn call_name<'s>(call: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     let name = match call.kind() {
         "object_creation_expression" => {
             let ty = call.child_by_field_name("type")?;

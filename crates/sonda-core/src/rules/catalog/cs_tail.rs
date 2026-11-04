@@ -3,14 +3,13 @@
 //! identifiers C# 14 makes contextual keywords. Queries stay cheap on deep
 //! trees: see the notes in `js_modern.rs`.
 
-use super::cs::{CS_SCOPE_STOPS, cs_has_modifier, operand, simple_name};
+use super::cs::{CS_SCOPE_STOPS, cs_has_modifier, operand};
 use super::cs_bugs::{attribute_names, cs_call_arguments};
 use super::cs_more::{enclosing_type, members};
 use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
 use super::prelude::*;
-use crate::regex::{Flags, parse_java};
 
 /// Rules that are off unless `rules.enabled` lists them (see
 /// `catalog::OFF_BY_DEFAULT`).
@@ -69,17 +68,15 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Critical,
         effort_minutes: 5,
-        sonar: &[related("S5856")],
-        check: Check::Query {
+        sonar: &[exact("S5856")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "[(object_creation_expression arguments: (argument_list)) \
-                     (invocation_expression function: (member_access_expression))] @match",
-            filter: Some(Find(invalid_regex)),
+            find: super::cs_documented::invalid_regexes,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { bool F(string s) { return Regex.IsMatch(s, \"(ab\"); } }",
-            good: "class A { bool F(string s) { return Regex.IsMatch(s, \"(ab)\"); } }",
+            bad: "using System.Text.RegularExpressions;\nclass A { bool F(string s) { return Regex.IsMatch(s, \"(ab\"); } }",
+            good: "using System.Text.RegularExpressions;\nclass A { bool F(string s) { return Regex.IsMatch(s, \"(ab)\"); } }",
         }),
     },
     // ---- Vulnerabilities ----
@@ -485,101 +482,6 @@ fn base_call_drops_optional<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
     })
 }
 
-/// A C# string literal's value: escapes decoded for regular strings, `""`
-/// for verbatim ones. None for interpolated strings and unknown escapes.
-fn decoded_string(node: Node, src: &[u8]) -> Option<String> {
-    let t = std::str::from_utf8(text(node, src)).ok()?;
-    match node.kind() {
-        "verbatim_string_literal" => {
-            let inner = t.strip_prefix("@\"")?.strip_suffix('"')?;
-            Some(inner.replace("\"\"", "\""))
-        }
-        "string_literal" => {
-            let inner = t.strip_prefix('"')?.strip_suffix('"')?;
-            let mut out = String::new();
-            let mut chars = inner.chars();
-            while let Some(c) = chars.next() {
-                if c != '\\' {
-                    out.push(c);
-                    continue;
-                }
-                match chars.next()? {
-                    '\\' => out.push('\\'),
-                    '"' => out.push('"'),
-                    '\'' => out.push('\''),
-                    'n' => out.push('\n'),
-                    't' => out.push('\t'),
-                    'r' => out.push('\r'),
-                    '0' => out.push('\0'),
-                    'u' => {
-                        let hex: String = (0..4).filter_map(|_| chars.next()).collect();
-                        out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
-                    }
-                    _ => return None,
-                }
-            }
-            Some(out)
-        }
-        _ => None,
-    }
-}
-
-/// .NET-only regex syntax the Java parser doesn't know: class subtraction,
-/// balancing and quote-named groups, and the `n` (explicit capture) option.
-fn uses_dotnet_only_syntax(pattern: &str) -> bool {
-    pattern.contains("-[")
-        || pattern.contains("(?'")
-        || pattern.contains("\\k'")
-        || pattern.contains("(?n")
-        || pattern.contains("(?x")
-        || pattern.match_indices("(?<").any(|(i, _)| {
-            pattern[i + 3..]
-                .chars()
-                .take_while(|c| *c != '>')
-                .any(|c| c == '-')
-        })
-}
-
-fn invalid_regex<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let args = cs_call_arguments(node);
-    let pattern = if node.kind() == "object_creation_expression" {
-        let is_regex = node
-            .child_by_field_name("type")
-            .is_some_and(|t| simple_name(t, src) == b"Regex");
-        if !is_regex {
-            return None;
-        }
-        *args.first()?
-    } else {
-        let function = node.child_by_field_name("function")?;
-        let receiver = function
-            .child_by_field_name("expression")
-            .map(|e| simple_name(e, src));
-        let method = function.child_by_field_name("name").map(|n| text(n, src));
-        if receiver != Some(b"Regex")
-            || !matches!(
-                method,
-                Some(b"IsMatch" | b"Match" | b"Matches" | b"Replace" | b"Split" | b"Count")
-            )
-        {
-            return None;
-        }
-        // Static calls take (input, pattern, ...).
-        *args.get(1)?
-    };
-    let value = decoded_string(pattern, src)?;
-    // RegexOptions.IgnorePatternWhitespace changes how the pattern reads.
-    let ignores_whitespace = args
-        .iter()
-        .any(|a| contains_ignoring_case(text(*a, src), b"IgnorePatternWhitespace"));
-    if uses_dotnet_only_syntax(&value) || ignores_whitespace {
-        return None;
-    }
-    parse_java(&value, Flags::default())
-        .is_err()
-        .then_some(pattern)
-}
-
 fn permissive_csp(node: Node, src: &[u8]) -> bool {
     let is_csp_name = |n: Node| {
         super::cs::cs_string_value(n, src)
@@ -854,7 +756,6 @@ fn mentions_scoped(parameter: Node, src: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
-    use super::{decoded_string, uses_dotnet_only_syntax};
 
     fn method(body: &str) -> String {
         format!("namespace N;\nclass A {{\nvoid F() {{\n{body}\n}}\n}}\n")
@@ -865,37 +766,6 @@ mod tests {
         let src = "namespace N;\nclass A : B {\nvoid F() { double a = 1 / 3; double b = 1.0 / 3; int c = 1 / 3; float d = (2 / 4); }\n[Key] public DateTime Taken { get; set; }\npublic DateTime Id { get; set; }\npublic DateTime Created { get; set; }\npublic override void Save(string p, bool force = false) { base.Save(p); }\npublic override void Load(string p, bool force = false) { base.Load(p, force); }\n}";
         assert_eq!(flagged("cs/datetime-primary-key", src), [4, 5]);
         assert_eq!(flagged("cs/optional-not-passed-to-base", src), [7]);
-    }
-
-    #[test]
-    fn regexes() {
-        assert_eq!(decoded_string_of("\"a\\\\d\""), Some("a\\d".to_string()));
-        assert!(uses_dotnet_only_syntax("[a-z-[aeiou]]"));
-        assert!(uses_dotnet_only_syntax("(?<open-close>x)"));
-        assert!(!uses_dotnet_only_syntax("(?<name>x)"));
-        let src = method(
-            "Regex.IsMatch(s, \"(ab\");\nRegex.IsMatch(s, \"(ab)\");\nnew Regex(@\"[a-z\");\nnew Regex(@\"[a-z-[aeiou]]\");\nnew Regex(\"\\\\d+\");\nRegex.Replace(s, \"*x\", \"y\");\nnew Regex(\"# comment (\", RegexOptions.IgnorePatternWhitespace);",
-        );
-        assert_eq!(flagged("cs/invalid-regex", &src), [4, 6, 9]);
-    }
-
-    fn decoded_string_of(literal: &str) -> Option<String> {
-        let src = format!("class A {{ string s = {literal}; }}");
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&crate::lang::Lang::CSharp.grammar())
-            .unwrap();
-        let tree = parser.parse(&src, None).unwrap();
-        let mut found = None;
-        let mut stack = vec![tree.root_node()];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "string_literal" {
-                found = decoded_string(n, src.as_bytes());
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
-        }
-        found
     }
 
     #[test]
