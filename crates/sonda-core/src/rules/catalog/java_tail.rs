@@ -471,46 +471,17 @@ fn keyword_follows_the_brace(keyword: Node, _: &[u8]) -> bool {
 fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let condition = for_statement.child_by_field_name("condition")?;
     let mut cursor = for_statement.walk();
-    let updates: Vec<Node> = for_statement
+    let has_updates = for_statement
         .children_by_field_name("update", &mut cursor)
-        .collect();
-    // method calls in the condition (list.size()) are not plain variables
-    // only operands of a comparison are bounds; a bare flag is a different idiom
-    let mut compared: Vec<Vec<u8>> = Vec::new();
-    let mut stack = vec![condition];
-    while let Some(x) = stack.pop() {
-        if x.kind() == "binary_expression"
-            && x.child_by_field_name("operator").is_some_and(|o| {
-                matches!(text(o, src), b"<" | b"<=" | b">" | b">=" | b"!=" | b"==")
-            })
-        {
-            for side in ["left", "right"] {
-                if let Some(s) = x
-                    .child_by_field_name(side)
-                    .filter(|s| s.kind() == "identifier")
-                {
-                    compared.push(text(s, src).to_vec());
-                }
-            }
-        }
-        let mut c = x.walk();
-        stack.extend(x.named_children(&mut c));
-    }
+        .next()
+        .is_some();
     // The counter itself (compared and updated by the loop header) is also
     // off limits inside the body.
-    let mut bound: Vec<Vec<u8>> = compared;
+    let mut bound = compared_variables(condition, src);
     // Every variable the header declares is off limits in the body, and a
     // loop with no update clause only guards what it declares.
-    let mut declared: Vec<Vec<u8>> = Vec::new();
-    let mut c = for_statement.walk();
-    for init in for_statement.children_by_field_name("init", &mut c) {
-        for d in children_of_kind(init, "variable_declarator") {
-            if let Some(n) = d.child_by_field_name("name") {
-                declared.push(text(n, src).to_vec());
-            }
-        }
-    }
-    if updates.is_empty() {
+    let declared = header_declarations(for_statement, src);
+    if !has_updates {
         bound.retain(|b| declared.contains(b));
     }
     for d in declared {
@@ -519,15 +490,59 @@ fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Opti
         }
     }
     let body = for_statement.child_by_field_name("body")?;
-    find_node(body, |n| {
-        let target = match n.kind() {
-            "assignment_expression" => n.child_by_field_name("left"),
-            "update_expression" => n.named_child(0),
-            _ => None,
-        };
-        target.is_some_and(|t| {
-            t.kind() == "identifier" && bound.iter().any(|b| b.as_slice() == text(t, src))
-        })
+    find_node(body, |n| writes_one_of(n, &bound, src))
+}
+
+/// The variables a comparison in the condition reads directly: method calls
+/// (`list.size()`) aren't plain variables, and a bare flag is a different
+/// idiom.
+fn compared_variables(condition: Node, src: &[u8]) -> Vec<Vec<u8>> {
+    let mut compared: Vec<Vec<u8>> = Vec::new();
+    let mut stack = vec![condition];
+    while let Some(x) = stack.pop() {
+        if x.kind() == "binary_expression"
+            && x.child_by_field_name("operator").is_some_and(|o| {
+                matches!(text(o, src), b"<" | b"<=" | b">" | b">=" | b"!=" | b"==")
+            })
+        {
+            compared.extend(
+                ["left", "right"]
+                    .into_iter()
+                    .filter_map(|side| x.child_by_field_name(side))
+                    .filter(|s| s.kind() == "identifier")
+                    .map(|s| text(s, src).to_vec()),
+            );
+        }
+        let mut c = x.walk();
+        stack.extend(x.named_children(&mut c));
+    }
+    compared
+}
+
+/// The variables the loop's header declares.
+fn header_declarations(for_statement: Node, src: &[u8]) -> Vec<Vec<u8>> {
+    let mut declared: Vec<Vec<u8>> = Vec::new();
+    let mut c = for_statement.walk();
+    for init in for_statement.children_by_field_name("init", &mut c) {
+        declared.extend(
+            children_of_kind(init, "variable_declarator")
+                .into_iter()
+                .filter_map(|d| d.child_by_field_name("name"))
+                .map(|n| text(n, src).to_vec()),
+        );
+    }
+    declared
+}
+
+/// Whether `n` assigns to, or increments, one of the variables `bound`.
+fn writes_one_of(n: Node, bound: &[Vec<u8>], src: &[u8]) -> bool {
+    let target = match n.kind() {
+        "assignment_expression" => n.child_by_field_name("left"),
+        "update_expression" => n.named_child(0),
+        _ => None,
+    };
+    target.is_some_and(|t| {
+        t.kind() == "identifier" && bound.iter().any(|b| b.as_slice() == text(t, src))
     })
 }
 
@@ -602,26 +617,30 @@ fn file_declares_static_method(root: Node, name: &[u8], src: &[u8]) -> bool {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.as_ref().is_none_or(|(k, _)| *k != key) {
-            let mut names = HashSet::new();
-            let mut cursor = root.walk();
-            'walk: loop {
-                let n = cursor.node();
-                if n.kind() == "method_declaration" && has_modifier(n, "static") {
-                    names.insert(name_text(n, src).to_vec());
-                }
-                if cursor.goto_first_child() {
-                    continue;
-                }
-                while !cursor.goto_next_sibling() {
-                    if !cursor.goto_parent() {
-                        break 'walk;
-                    }
-                }
-            }
-            *c = Some((key, names));
+            *c = Some((key, static_method_names(root, src)));
         }
         c.as_ref().is_some_and(|(_, names)| names.contains(name))
     })
+}
+
+/// The names of the static methods under `root`.
+fn static_method_names(root: Node, src: &[u8]) -> std::collections::HashSet<Vec<u8>> {
+    let mut names = std::collections::HashSet::new();
+    let mut cursor = root.walk();
+    loop {
+        let n = cursor.node();
+        if n.kind() == "method_declaration" && has_modifier(n, "static") {
+            names.insert(name_text(n, src).to_vec());
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return names;
+            }
+        }
+    }
 }
 
 fn calls_a_static_method_on_an_instance(call: Node, src: &[u8]) -> bool {

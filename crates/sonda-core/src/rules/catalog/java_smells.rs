@@ -2673,7 +2673,33 @@ fn type_parameter_name_is_unconventional(param: Node, src: &[u8]) -> bool {
 }
 
 fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
-    if modifiers_of(class).is_some_and(|m| {
+    if annotated_or_abstract(class, src)
+        || class.child_by_field_name("superclass").is_some()
+        || class.child_by_field_name("interfaces").is_some()
+    {
+        return false;
+    }
+    let Some(body) = class.child_by_field_name("body") else {
+        return false;
+    };
+    let mut has_member = false;
+    let mut constructors = Vec::new();
+    for member in members(body) {
+        match member_kind(member, src) {
+            MemberKind::Constructor => constructors.push(member),
+            MemberKind::Static => has_member = true,
+            MemberKind::Nested => {}
+            MemberKind::Instance => return false,
+        }
+    }
+    has_member
+        && (constructors.is_empty() || constructors.iter().any(|c| !has_modifier(*c, "private")))
+}
+
+/// Abstract, or with an annotation other than `@Deprecated` and
+/// `@SuppressWarnings`: a framework may make instances.
+fn annotated_or_abstract(class: Node, src: &[u8]) -> bool {
+    modifiers_of(class).is_some_and(|m| {
         let mut c = m.walk();
         m.children(&mut c).any(|k| {
             k.kind() == "abstract"
@@ -2682,51 +2708,39 @@ fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
                         matches!(text(n, src), b"Deprecated" | b"SuppressWarnings")
                     }))
         })
-    }) {
-        return false;
-    }
-    if class.child_by_field_name("superclass").is_some()
-        || class.child_by_field_name("interfaces").is_some()
-    {
-        return false;
-    }
-    let Some(body) = class.child_by_field_name("body") else {
-        return false;
-    };
-    let items = members(body);
-    let mut has_member = false;
-    let mut constructors = Vec::new();
-    for member in &items {
-        match member.kind() {
-            "constructor_declaration" => constructors.push(*member),
-            "method_declaration" => {
-                if !has_modifier(*member, "static") {
-                    return false;
-                }
-                if member
+    })
+}
+
+/// What a member says about whether its class is a utility class.
+enum MemberKind {
+    Constructor,
+    /// A static method, other than `main`, or a static field.
+    Static,
+    /// A nested type or a static initializer: neither way.
+    Nested,
+    /// Anything an instance would have, or `main`.
+    Instance,
+}
+
+fn member_kind(member: Node, src: &[u8]) -> MemberKind {
+    match member.kind() {
+        "constructor_declaration" => MemberKind::Constructor,
+        "method_declaration"
+            if has_modifier(member, "static")
+                && !member
                     .child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == b"main")
-                {
-                    return false;
-                }
-                has_member = true;
-            }
-            "field_declaration" => {
-                if !has_modifier(*member, "static") {
-                    return false;
-                }
-                has_member = true;
-            }
-            "class_declaration"
-            | "interface_declaration"
-            | "enum_declaration"
-            | "record_declaration"
-            | "static_initializer" => {}
-            _ => return false,
+                    .is_some_and(|n| text(n, src) == b"main") =>
+        {
+            MemberKind::Static
         }
+        "field_declaration" if has_modifier(member, "static") => MemberKind::Static,
+        "class_declaration"
+        | "interface_declaration"
+        | "enum_declaration"
+        | "record_declaration"
+        | "static_initializer" => MemberKind::Nested,
+        _ => MemberKind::Instance,
     }
-    has_member
-        && (constructors.is_empty() || constructors.iter().any(|c| !has_modifier(*c, "private")))
 }
 
 /// SonarQube reports a visible constructor where there is one, and the class
@@ -4073,31 +4087,13 @@ fn private_field_is_never_used(field: Node, src: &[u8]) -> bool {
 fn field_is_only_written(class: Node, name: &[u8], src: &[u8]) -> bool {
     let mut cursor = class.walk();
     let (mut writes, mut reads) = (0, 0);
-    'walk: loop {
+    loop {
         let n = cursor.node();
         if n.kind() == "identifier" && text(n, src) == name {
-            let parent = n.parent();
-            let is_this_field = parent.is_some_and(|p| {
-                p.kind() == "field_access"
-                    && p.child_by_field_name("field")
-                        .is_some_and(|f| f.id() == n.id())
-            });
-            let target = if is_this_field { parent } else { Some(n) };
-            let assigned = target
-                .and_then(|t| t.parent().map(|p| (t, p)))
-                .is_some_and(|(t, p)| {
-                    p.kind() == "assignment_expression"
-                        && operator_text(p, src) == b"="
-                        && p.child_by_field_name("left")
-                            .is_some_and(|l| l.id() == t.id())
-                });
-            let declarator = parent.is_some_and(|p| p.kind() == "variable_declarator");
-            if declarator {
-                // the field itself, or a local of the same name
-            } else if assigned {
-                writes += 1;
-            } else if is_this_field || !name_is_shadowed(n, name, src) {
-                reads += 1;
+            match field_use(n, name, src) {
+                Some(FieldUse::Write) => writes += 1,
+                Some(FieldUse::Read) => reads += 1,
+                None => {}
             }
         }
         if cursor.goto_first_child() {
@@ -4105,11 +4101,45 @@ fn field_is_only_written(class: Node, name: &[u8], src: &[u8]) -> bool {
         }
         while !cursor.goto_next_sibling() {
             if !cursor.goto_parent() {
-                break 'walk;
+                return writes > 0 && reads == 0;
             }
         }
     }
-    writes > 0 && reads == 0
+}
+
+enum FieldUse {
+    Write,
+    Read,
+}
+
+/// What the identifier `n`, named like the field, does with it: assigns
+/// it, reads it, or neither (it declares the field, or a local shadows it).
+fn field_use(n: Node, name: &[u8], src: &[u8]) -> Option<FieldUse> {
+    let parent = n.parent();
+    if parent.is_some_and(|p| p.kind() == "variable_declarator") {
+        return None;
+    }
+    let is_this_field = parent.is_some_and(|p| {
+        p.kind() == "field_access"
+            && p.child_by_field_name("field")
+                .is_some_and(|f| f.id() == n.id())
+    });
+    let target = if is_this_field { parent } else { Some(n) };
+    let assigned = target
+        .and_then(|t| t.parent().map(|p| (t, p)))
+        .is_some_and(|(t, p)| {
+            p.kind() == "assignment_expression"
+                && operator_text(p, src) == b"="
+                && p.child_by_field_name("left")
+                    .is_some_and(|l| l.id() == t.id())
+        });
+    if assigned {
+        Some(FieldUse::Write)
+    } else if is_this_field || !name_is_shadowed(n, name, src) {
+        Some(FieldUse::Read)
+    } else {
+        None
+    }
 }
 
 /// Whether a parameter or local of this name is in scope at `use_site`.
@@ -4220,64 +4250,73 @@ fn identifier_uses(scope: Node, name: &[u8], src: &[u8]) -> usize {
 /// as SonarQube counts them: five characters or more (quotes included in Sonar's seven), outside annotations.
 fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
     use std::cell::RefCell;
-    use std::collections::HashMap;
-    type Counts = HashMap<Vec<u8>, (usize, usize)>;
     thread_local! {
-        static CACHE: RefCell<Option<((usize, usize), Counts)>> = const { RefCell::new(None) };
+        static CACHE: RefCell<Option<((usize, usize), StringCounts)>> = const { RefCell::new(None) };
     }
-    let eligible = |n: Node| -> Option<Vec<u8>> {
-        if n.kind() != "string_literal"
-            || n.parent().is_some_and(|p| {
-                matches!(
-                    p.kind(),
-                    "element_value_pair"
-                        | "annotation_argument_list"
-                        | "annotation"
-                        | "marker_annotation"
-                )
-            })
-        {
-            return None;
-        }
-        string_value(n, src)
-            .filter(|v| v.len() >= 5)
-            .map(<[u8]>::to_vec)
-    };
-    let Some(mine) = eligible(string) else {
+    let Some(mine) = countable_string(string, src) else {
         return false;
     };
     let key = (src.as_ptr() as usize, src.len());
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.as_ref().is_none_or(|(k, _)| *k != key) {
-            let mut counts: Counts = HashMap::new();
-            let mut root = string;
-            while let Some(p) = root.parent() {
-                root = p;
-            }
-            let mut cursor = root.walk();
-            if cursor.goto_first_child() {
-                'walk: loop {
-                    let n = cursor.node();
-                    if let Some(v) = eligible(n) {
-                        counts.entry(v).or_insert((0, n.start_byte())).0 += 1;
-                    }
-                    if cursor.goto_first_child() {
-                        continue;
-                    }
-                    while !cursor.goto_next_sibling() {
-                        if !cursor.goto_parent() {
-                            break 'walk;
-                        }
-                    }
-                }
-            }
-            *c = Some((key, counts));
+            *c = Some((key, string_counts(string, src)));
         }
         c.as_ref()
             .and_then(|(_, counts)| counts.get(&mine))
             .is_some_and(|(count, first)| *count >= 3 && *first == string.start_byte())
     })
+}
+
+/// Each countable string's value: how many times it occurs, and where first.
+type StringCounts = std::collections::HashMap<Vec<u8>, (usize, usize)>;
+
+/// A string literal's value, when it counts: five characters or more, and
+/// not in an annotation.
+fn countable_string(n: Node, src: &[u8]) -> Option<Vec<u8>> {
+    if n.kind() != "string_literal"
+        || n.parent().is_some_and(|p| {
+            matches!(
+                p.kind(),
+                "element_value_pair"
+                    | "annotation_argument_list"
+                    | "annotation"
+                    | "marker_annotation"
+            )
+        })
+    {
+        return None;
+    }
+    string_value(n, src)
+        .filter(|v| v.len() >= 5)
+        .map(<[u8]>::to_vec)
+}
+
+/// The countable strings of the file `string` is in.
+fn string_counts(string: Node, src: &[u8]) -> StringCounts {
+    let mut counts = StringCounts::new();
+    let mut root = string;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut cursor = root.walk();
+    if !cursor.goto_first_child() {
+        return counts;
+    }
+    loop {
+        let n = cursor.node();
+        if let Some(v) = countable_string(n, src) {
+            counts.entry(v).or_insert((0, n.start_byte())).0 += 1;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return counts;
+            }
+        }
+    }
 }
 
 fn casts_after_instanceof(statement: Node, src: &[u8]) -> bool {

@@ -1663,63 +1663,83 @@ fn private_field_used_in_one_method<'t>(class: Node<'t>, src: &[u8]) -> Option<N
     let members = class_members(class);
     let whole = text(class, src);
     members.iter().find_map(|f| {
-        if f.kind() != "field_declaration"
-            || !has_modifier(*f, "private")
-            || has_modifier(*f, "static")
-            || has_modifier(*f, "final")
-            || f.child_by_field_name("type").is_none()
-        {
-            return None;
-        }
-        let modifiers = f.child(0).filter(|m| m.kind() == "modifiers");
-        if modifiers.is_some_and(|m| {
-            count_word(text(m, src), b"Autowired") + count_word(text(m, src), b"Inject") > 0
-        }) || modifiers.is_some_and(|m| {
-            m.named_child_count() > 1 && m.child_count() > 1 && text(m, src).contains(&b'@')
-        }) {
-            return None;
-        }
-        let declarator = children_of_kind(*f, "variable_declarator")
-            .into_iter()
-            .next()?;
-        if declarator.child_by_field_name("value").is_some() {
-            return None;
-        }
+        let declarator = plain_private_field(*f, src)?;
         let name = text(declarator.child_by_field_name("name")?, src);
-        let users: Vec<&Node> = members
-            .iter()
-            .filter(|m| {
-                matches!(m.kind(), "method_declaration" | "constructor_declaration")
-                    && count_word(text(**m, src), name) > 0
-            })
-            .collect();
-        let [user] = users.as_slice() else {
-            return None;
-        };
-        if user.kind() != "method_declaration"
-            || count_word(whole, name) != count_word(text(**user, src), name) + 1
-        {
-            return None;
-        }
-        let first_use = find_node(user.child_by_field_name("body")?, |n| {
-            n.kind() == "identifier" && text(n, src) == name
-        })?;
-        let assigned = first_use.parent().is_some_and(|p| {
-            (p.kind() == "assignment_expression"
-                && p.child_by_field_name("left") == Some(first_use)
-                && text(p, src)[first_use.end_byte() - p.start_byte()..]
-                    .trim_ascii_start()
-                    .starts_with(b"="))
-                || (p.kind() == "field_access"
-                    && p.parent().is_some_and(|q| {
-                        q.kind() == "assignment_expression"
-                            && q.child_by_field_name("left") == Some(p)
-                    }))
-        });
-        assigned
+        let user = sole_method_user(&members, name, whole, src)?;
+        first_use_assigns(user, name, src)?
             .then(|| declarator.child_by_field_name("name"))
             .flatten()
     })
+}
+
+/// The declarator of a private instance field that isn't final, injected,
+/// annotated or initialized.
+fn plain_private_field<'t>(f: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if f.kind() != "field_declaration"
+        || !has_modifier(f, "private")
+        || has_modifier(f, "static")
+        || has_modifier(f, "final")
+        || f.child_by_field_name("type").is_none()
+    {
+        return None;
+    }
+    let modifiers = f.child(0).filter(|m| m.kind() == "modifiers");
+    if modifiers.is_some_and(|m| {
+        count_word(text(m, src), b"Autowired") + count_word(text(m, src), b"Inject") > 0
+    }) || modifiers.is_some_and(|m| {
+        m.named_child_count() > 1 && m.child_count() > 1 && text(m, src).contains(&b'@')
+    }) {
+        return None;
+    }
+    let declarator = children_of_kind(f, "variable_declarator")
+        .into_iter()
+        .next()?;
+    declarator
+        .child_by_field_name("value")
+        .is_none()
+        .then_some(declarator)
+}
+
+/// The one method that mentions `name`, when no constructor does and the
+/// class mentions it nowhere else but its declaration.
+fn sole_method_user<'t>(
+    members: &[Node<'t>],
+    name: &[u8],
+    whole: &[u8],
+    src: &[u8],
+) -> Option<Node<'t>> {
+    let users: Vec<&Node> = members
+        .iter()
+        .filter(|m| {
+            matches!(m.kind(), "method_declaration" | "constructor_declaration")
+                && count_word(text(**m, src), name) > 0
+        })
+        .collect();
+    let [user] = users.as_slice() else {
+        return None;
+    };
+    (user.kind() == "method_declaration"
+        && count_word(whole, name) == count_word(text(**user, src), name) + 1)
+        .then_some(**user)
+}
+
+/// Whether the method's first mention of `name` assigns it (`name = ...`
+/// or `this.name = ...`); `None` when it has no body or no mention.
+fn first_use_assigns(user: Node, name: &[u8], src: &[u8]) -> Option<bool> {
+    let first_use = find_node(user.child_by_field_name("body")?, |n| {
+        n.kind() == "identifier" && text(n, src) == name
+    })?;
+    Some(first_use.parent().is_some_and(|p| {
+        (p.kind() == "assignment_expression"
+            && p.child_by_field_name("left") == Some(first_use)
+            && text(p, src)[first_use.end_byte() - p.start_byte()..]
+                .trim_ascii_start()
+                .starts_with(b"="))
+            || (p.kind() == "field_access"
+                && p.parent().is_some_and(|q| {
+                    q.kind() == "assignment_expression" && q.child_by_field_name("left") == Some(p)
+                }))
+    }))
 }
 
 fn method_ignores_the_instance(method: Node, src: &[u8]) -> bool {

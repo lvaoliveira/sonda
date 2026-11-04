@@ -1421,38 +1421,37 @@ pub(super) fn named_children(node: Node) -> Vec<Node> {
 pub(super) fn declared_type<'t>(from: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
     let mut p = from.parent();
     while let Some(n) = p {
-        match n.kind() {
-            "method_declaration" | "constructor_declaration" => {
-                if let Some(params) = n.child_by_field_name("parameters") {
-                    for fp in named_children(params) {
-                        if fp
-                            .child_by_field_name("name")
-                            .is_some_and(|x| text(x, src) == name)
-                        {
-                            return fp.child_by_field_name("type");
-                        }
-                    }
-                }
-                if let Some(body) = n.child_by_field_name("body") {
-                    let local = find_node(body, |x| {
-                        x.kind() == "local_variable_declaration"
-                            && declarator_names(x, src).contains(&name)
-                    });
-                    if let Some(l) = local {
-                        return l.child_by_field_name("type");
-                    }
-                }
-            }
+        let found = match n.kind() {
+            "method_declaration" | "constructor_declaration" => declared_in_method(n, name, src),
             "class_declaration" | "enum_declaration" | "record_declaration" => {
-                if let Some(f) = declared_field(n, name, src) {
-                    return f.child_by_field_name("type");
-                }
+                declared_field(n, name, src).map(|f| f.child_by_field_name("type"))
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(ty) = found {
+            return ty;
         }
         p = n.parent();
     }
     None
+}
+
+/// The type of a parameter or local of `method` named `name`, when it
+/// declares one: `Some(None)` for one declared without a type node.
+fn declared_in_method<'t>(method: Node<'t>, name: &[u8], src: &[u8]) -> Option<Option<Node<'t>>> {
+    if let Some(params) = method.child_by_field_name("parameters")
+        && let Some(fp) = named_children(params).into_iter().find(|fp| {
+            fp.child_by_field_name("name")
+                .is_some_and(|x| text(x, src) == name)
+        })
+    {
+        return Some(fp.child_by_field_name("type"));
+    }
+    let body = method.child_by_field_name("body")?;
+    let local = find_node(body, |x| {
+        x.kind() == "local_variable_declaration" && declarator_names(x, src).contains(&name)
+    })?;
+    Some(local.child_by_field_name("type"))
 }
 
 pub(super) fn declared_field<'t>(class: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
