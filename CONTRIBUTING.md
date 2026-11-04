@@ -19,7 +19,10 @@ cargo install cargo-deny cargo-audit cargo-llvm-cov   # optional, CI runs them t
 ## Before you open a pull request
 
 All of these must pass. CI runs them too, with the tests on Linux, macOS and
-Windows:
+Windows. On a pull request, CI runs only the jobs that test what it changes
+(`scripts/ci-changes.sh`): a change to the docs runs none, one to the web
+app only the web and Docker jobs. Pushes to `main` and changes to the
+workflows run everything.
 
 ```sh
 cargo fmt --all -- --check
