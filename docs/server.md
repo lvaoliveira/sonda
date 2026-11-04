@@ -287,16 +287,20 @@ each project's main branch. Every filter is optional:
 | `project`, `branch` | One project; a branch other than its main one |
 | `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted`, `false_positive` or `fixed` |
 | `file` | Any part of the path |
+| `language` | Comma-separated: `javascript`, `typescript`, `tsx`, `python`, `java`, `c`, `cpp`, `csharp`, `rust` |
 | `assignee`, `new=true` | Assigned to someone; on new code only |
 | `ids` | Comma-separated issue ids: these only |
 | `offset`, `limit` | Paging; `limit` is 1-200, default 50 |
 
 An unknown value or parameter is a `400`, so a typo never looks like "no
 issues". The answer holds `total`, the page of `items`, and `facets`: for
-project, severity, category, status and component, the count per value. Each facet
-ignores its own selection, so choosing *critical* still shows how many
-*major* issues there are. A component is a path's top-level directory, or
-`.` for files at the root.
+project, severity, category, status, component and language, the count
+per value. Each facet ignores its own selection, so choosing *critical*
+still shows how many *major* issues there are. A component is a path's
+top-level directory, or `.` for files at the root. A language is the
+file's, as the latest analysis that saw the issue read it; an issue in a
+file sonda doesn't parse, such as a lockfile, has none and counts toward
+no language.
 
 `GET /api/issues/{id}` adds:
 - the rule's name, description and examples;

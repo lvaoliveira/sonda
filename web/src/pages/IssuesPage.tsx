@@ -441,7 +441,7 @@ function Pager({ page, last, onOffset }: Readonly<{ page: IssuePage; last: numbe
   )
 }
 
-const FACET_OPTIONS: Record<Exclude<FacetKey, 'component'>, { value: string; label: string }[]> = {
+const FACET_OPTIONS: Record<Exclude<FacetKey, 'component' | 'language'>, { value: string; label: string }[]> = {
   severity: SEVERITY_ORDER.map((s) => ({ value: s, label: SEVERITY[s].label })),
   category: (['vulnerability', 'bug', 'code_smell'] as const).map((c) => ({ value: c, label: CATEGORY_LABEL[c] })),
   status: (['open', 'confirmed', 'accepted', 'false_positive', 'fixed'] as const).map((s) => ({ value: s, label: STATUS_LABEL[s] })),
@@ -465,10 +465,15 @@ function Facets({
 }>) {
   // Components come from the data; a selected one stays listed even at zero.
   const components = [...new Set([...Object.keys(page.facets.component), ...filter.component])].sort((a, b) => a.localeCompare(b))
+  // Languages too, by their names.
+  const languages = [...new Set([...Object.keys(page.facets.language), ...filter.language])]
+    .map((l) => ({ value: l, label: languageLabel(l) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
   const groups: { label: string; key: FacetKey; options: { value: string; label: string; mono?: boolean }[] }[] = [
     { label: 'Severity', key: 'severity', options: FACET_OPTIONS.severity },
     { label: 'Category', key: 'category', options: FACET_OPTIONS.category },
     { label: 'Status', key: 'status', options: FACET_OPTIONS.status },
+    { label: 'Language', key: 'language', options: languages },
     { label: 'Component', key: 'component', options: components.map((c) => ({ value: c, label: c === '.' ? '(root)' : c, mono: true })) },
   ]
   const toggles = [

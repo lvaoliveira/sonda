@@ -28,11 +28,15 @@ const STATES: &[&str] = &["open", "confirmed", "accepted", "false_positive", "fi
 // bound as parameters). That is why `sqlx::AssertSqlSafe` is sound here.
 
 /// Columns derived for every issue: the project's key, the status shown
-/// (`fixed` comes from scans), and the component (top-level directory).
+/// (`fixed` comes from scans), the component (top-level directory), and
+/// the file's language as the latest analysis that saw it read it (none for
+/// a file it didn't parse, such as a lockfile).
 const DERIVED: &str = "
     i.*, p.key AS project_key,
     CASE WHEN i.fixed_analysis_id IS NOT NULL THEN 'fixed' ELSE i.status::text END AS state,
-    CASE WHEN strpos(i.path, '/') > 0 THEN split_part(i.path, '/', 1) ELSE '.' END AS component";
+    CASE WHEN strpos(i.path, '/') > 0 THEN split_part(i.path, '/', 1) ELSE '.' END AS component,
+    (SELECT f.language FROM analysis_files f
+     WHERE f.analysis_id = i.last_analysis_id AND f.path = i.path) AS language";
 
 /// UTC, ISO 8601, e.g. `2026-10-29T20:56:14.053Z`.
 const ISO_8601: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'";
@@ -62,7 +66,8 @@ const FILTERED: &str = "
       AND ($7::text IS NULL OR strpos(s.path, $7) > 0)
       AND ($8::text IS NULL OR s.assignee = $8)
       AND (NOT $9 OR s.is_new)
-      AND (cardinality($10::bigint[]) = 0 OR s.id = ANY($10))";
+      AND (cardinality($10::bigint[]) = 0 OR s.id = ANY($10))
+      AND (cardinality($11::text[]) = 0 OR s.language = ANY($11))";
 
 const SEVERITY_RANK: &str =
     "array_position(ARRAY['blocker','critical','major','minor','info'], s.severity)";
@@ -85,6 +90,8 @@ pub struct ListQuery {
     new: bool,
     /// Comma-separated issue ids: these only, such as those selected.
     ids: Option<String>,
+    /// Comma-separated, as sonda names them: `csharp`, `typescript`, ...
+    language: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
 }
@@ -133,9 +140,7 @@ fn view_columns() -> String {
     format!(
         "s.id, encode(s.fingerprint, 'hex') AS key, s.project_key AS project, s.branch,
         s.severity, s.category, s.rule, s.message, s.component, s.path AS file, s.line,
-        s.end_line,
-        (SELECT f.language FROM analysis_files f
-         WHERE f.analysis_id = s.last_analysis_id AND f.path = s.path) AS language,
+        s.end_line, s.language,
         s.effort_minutes, s.state AS status, s.assignee, s.is_new,
         (SELECT to_char(a.received_at AT TIME ZONE 'UTC', {ISO_8601})
          FROM analyses a WHERE a.id = s.first_analysis_id) AS detected_at,
@@ -155,6 +160,7 @@ struct Filters {
     assignee: Option<String>,
     new: bool,
     ids: Vec<i64>,
+    language: Vec<String>,
 }
 
 impl Filters {
@@ -180,10 +186,11 @@ impl Filters {
                         .map_err(|_| ApiError::BadRequest(format!("issue id {v:?} isn't a number")))
                 })
                 .collect::<Result<_, _>>()?,
+            language: list(q.language, "language", Some(&languages()))?,
         })
     }
 
-    /// Binds `scoped()` and `FILTERED` parameters ($1-$10) onto `query`.
+    /// Binds `scoped()` and `FILTERED` parameters ($1-$11) onto `query`.
     /// `except` binds an empty list for that facet instead.
     fn bind<'q, O>(
         &'q self,
@@ -209,7 +216,13 @@ impl Filters {
             .bind(&self.assignee)
             .bind(self.new)
             .bind(&self.ids)
+            .bind(facet("language", &self.language))
     }
+}
+
+/// The languages sonda reads, by the names it stores.
+fn languages() -> Vec<&'static str> {
+    sonda_core::lang::ALL.iter().map(|l| l.name()).collect()
 }
 
 /// A comma-separated filter. Unknown values are an error, not an empty
@@ -249,7 +262,7 @@ async fn matching(
     let items_sql = format!(
         "{scoped} SELECT {columns} {FILTERED}
          ORDER BY {SEVERITY_RANK}, s.project_key, s.path, s.line, s.id
-         OFFSET $11 LIMIT $12"
+         OFFSET $12 LIMIT $13"
     );
     let items: Vec<IssueView> = filters
         .bind(sqlx::query_as(sqlx::AssertSqlSafe(items_sql)), None)
@@ -322,8 +335,12 @@ pub async fn list_issues(
         ("category", "s.category"),
         ("status", "s.state"),
         ("component", "s.component"),
+        ("language", "s.language"),
     ] {
-        let sql = format!("{scoped} SELECT {column}, count(*) {FILTERED} GROUP BY 1");
+        // Issues in files without a language don't count toward one.
+        let sql = format!(
+            "{scoped} SELECT {column}, count(*) {FILTERED} AND {column} IS NOT NULL GROUP BY 1"
+        );
         let rows: Vec<(String, i64)> = filters
             .bind(sqlx::query_as(sqlx::AssertSqlSafe(sql)), Some(name))
             .fetch_all(&state.pool)
