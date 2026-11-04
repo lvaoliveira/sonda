@@ -193,7 +193,7 @@ csharpsquid:S3215,code_smell,critical,no,main,syntactic,done,cs/interface-downca
 csharpsquid:S3216,code_smell,critical,no,main,syntactic,done,cs/missing-configure-await,,
 csharpsquid:S3217,code_smell,critical,yes,all,syntactic,done,cs/foreach-explicit-conversion,,
 csharpsquid:S3218,code_smell,critical,yes,all,syntactic,partial,cs/inner-member-shadows-outer,,
-csharpsquid:S3220,code_smell,minor,yes,all,syntactic,todo,,,
+csharpsquid:S3220,code_smell,minor,yes,all,types,done,cs/ambiguous-params-overload,,
 csharpsquid:S3234,code_smell,minor,no,all,syntactic,done,cs/suppress-finalize-without-finalizer,,
 csharpsquid:S3235,code_smell,minor,no,all,syntactic,done,cs/redundant-parentheses-around-value,,
 csharpsquid:S3236,code_smell,minor,yes,all,syntactic,done,cs/caller-info-passed,,

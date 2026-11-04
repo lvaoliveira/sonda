@@ -47,8 +47,6 @@ KNOWN_GAPS = {
     "cs": {
         "S1944": ("Invalid casts: needs the values reaching a cast and types from other files.",
                   CSHARP_ADR),
-        "S3220": ("Calls resolving to a `params` overload: needs C#'s overload resolution.",
-                  CSHARP_ADR),
         "S6802": ("Lambdas in loops in Blazor markup: checks `.razor` files, which sonda doesn't parse.",
                   CSHARP_ADR),
     },

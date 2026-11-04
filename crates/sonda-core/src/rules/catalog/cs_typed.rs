@@ -146,6 +146,26 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "cs/ambiguous-params-overload",
+        name: "Method calls should not resolve ambiguously to overloads with params",
+        description: "When a call binds to a `params` overload while another overload applies too, a small \
+                      change to an argument's type binds it elsewhere.",
+        message: "Make the intended overload explicit; another one without params applies too.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S3220")],
+        check: Check::Semantic {
+            langs: CSHARP,
+            find: super::cs_inferred::ambiguous_params_calls,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "public class MyClass { private void Format(string a, params object[] b) { } private void Format(object a, object b, object c) { } void F() { Format(\"\", null, null); } }",
+            good: "public class MyClass { private void Format(string a, params object[] b) { } private void Format(object a, object b, object c) { } void F() { Format(\"\", new object[] { null, null }); } }",
+        }),
+    },
+    Rule {
         id: "cs/ignored-pure-result",
         name: "Methods without side effects should not have their return values ignored",
         description: "LINQ, [Pure] methods, the methods of C#'s built-in types and of immutable collections \

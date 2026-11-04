@@ -317,6 +317,15 @@ declarations and light inference, not the project's own checker.
    at most 0.15 s to the largest project, since a call is resolved only
    when its name or arguments could matter.
 
+   S3220 is ported on the same resolution: a call that binds to a
+   `params` overload while another overload without one applies too,
+   whether it passes an array or loose arguments, as the documentation
+   doesn't tell them apart. On the corpus it reports 20 calls, mostly
+   `string.Join` and `Expression.Call` with an array the `IEnumerable<T>`
+   overload would also take. Expression types and supertypes are kept per
+   file, for every rule that resolves calls to share, so scan time with
+   S3220 on by default didn't change.
+
    **3b, built.** Exact now:
    - S1128 (`semantic/cs_infer/usings.rs`): a using directive for a
      namespace nothing in the file comes through, while every name that

@@ -2313,6 +2313,77 @@ pub(super) fn localizable_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t
     found
 }
 
+// ---------------------------------------------------- S3220
+
+/// The names of the platform's methods with an overload taking a `params`
+/// array and one, in the same type, without: other calls can't bind to a
+/// `params` overload another one rivals.
+fn params_names() -> &'static HashSet<&'static str> {
+    static NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        let mut out = HashSet::new();
+        for t in dotnet::platform().types() {
+            let takes_params = |m: &dotnet::PlatformMember| {
+                m.params
+                    .last()
+                    .is_some_and(|p| p.tags.iter().any(|t| t == "params"))
+            };
+            for m in t
+                .members
+                .iter()
+                .filter(|m| m.kind == "method" && takes_params(m))
+            {
+                let rivalled = t
+                    .members
+                    .iter()
+                    .any(|o| o.kind == "method" && o.name == m.name && !takes_params(o));
+                if rivalled {
+                    out.insert(m.name.as_str());
+                }
+            }
+        }
+        out
+    })
+}
+
+/// Calls that bind to a method with a `params` array while another
+/// overload without one applies too: a small change to an argument's type
+/// would bind the call elsewhere.
+pub(super) fn ambiguous_params_calls<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    // Methods of the file's that may have a `params` overload.
+    let local: HashSet<&str> = if src.windows(7).any(|w| w == b"params ") {
+        method_names(m)
+    } else {
+        HashSet::new()
+    };
+    let mut found = Vec::new();
+    resolved_calls(
+        m,
+        src,
+        false,
+        |infer, call, args| {
+            let named = !args.is_empty()
+                && call_name(call, src)
+                    .and_then(|n| std::str::from_utf8(n).ok())
+                    .is_some_and(|n| params_names().contains(n) || local.contains(n));
+            // Candidates with and without `params`, before typing arguments.
+            named && {
+                let lists = infer.candidate_params(call, args.len());
+                let takes = |ps: &Vec<crate::semantic::cs_infer::Param>| {
+                    ps.last().is_some_and(|p| p.params)
+                };
+                lists.iter().any(takes) && lists.iter().any(|ps| !takes(ps))
+            }
+        },
+        |_, call, _, b| {
+            if b.rivals > 0 && b.params.iter().any(|p| p.params) {
+                found.push(call);
+            }
+        },
+    );
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -2761,5 +2832,22 @@ mod tests {
             throw new ArgumentException(\"Bad value\", nameof(hour));\n\
             } }";
         assert_eq!(flagged("cs/localizable-literal", src), [6, 7, 9, 10, 11]);
+    }
+
+    #[test]
+    fn ambiguous_params_as_documented() {
+        let src = "using System;\npublic class MyClass {\n\
+            private void Format(string a, params object[] b) { }\n\
+            private void Format(object a, object b, object c) { }\n\
+            private void Only(params int[] xs) { }\n\
+            void F(int i) {\n\
+            Format(\"\", null, null);\n\
+            Format(\"\", null);\n\
+            Format(1, 2, 3);\n\
+            Only(1, 2);\n\
+            Console.WriteLine(\"{0} {1}\", i, i);\n\
+            Console.WriteLine(\"{0} {1} {2} {3}\", i, i, i, i);\n\
+            } }";
+        assert_eq!(flagged("cs/ambiguous-params-overload", src), [7]);
     }
 }
