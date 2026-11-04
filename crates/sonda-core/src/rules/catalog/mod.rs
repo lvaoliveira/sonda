@@ -62,11 +62,12 @@ mod py_quality;
 mod py_regex;
 mod py_security;
 mod regex_checks;
+mod rs;
 pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
-pub(super) use crate::lang::{C_CPP, C_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, TS};
+pub(super) use crate::lang::{C_CPP, C_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, RUST, TS};
 pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
 pub(super) use crate::model::Severity::{Blocker, Critical, Info, Major, Minor};
 use std::sync::LazyLock;
@@ -78,8 +79,9 @@ pub(super) use tree_sitter::Node;
 mod prelude {
     pub(super) use super::{
         Blocker, Bug, C_CPP, C_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find, Info, JAVA,
-        JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, Rule, TS, Vulnerability, bare_except,
-        empty_block, exact, has_equality_operator, no_arguments, not_nullish_comparison, related,
+        JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, RUST, Rule, TS, Vulnerability,
+        bare_except, empty_block, exact, has_equality_operator, no_arguments,
+        not_nullish_comparison, related,
     };
 }
 
@@ -146,6 +148,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_flow::RULES, cs_flow::OFF_BY_DEFAULT),
     (cs_dataflow::RULES, cs_dataflow::OFF_BY_DEFAULT),
     (cs_semantic::RULES, cs_semantic::OFF_BY_DEFAULT),
+    (rs::RULES, rs::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

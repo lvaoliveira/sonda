@@ -99,10 +99,11 @@ pub(crate) fn analyze(
     let mut suppressions: HashMap<usize, Suppression> = HashMap::new();
     // C#'s `#pragma warning disable S1234` regions and `[SuppressMessage]`
     // attributes silence SonarQube keys.
-    let pragmas = if lang == Lang::CSharp {
-        suppressed_regions(src, root)
-    } else {
-        Vec::new()
+    let pragmas = match lang {
+        Lang::CSharp => suppressed_regions(src, root),
+        // Rust's `#[allow(clippy::...)]`, which silences SonarQube's Clippy-based rules.
+        Lang::Rust => crate::rust_suppress::regions(src, root),
+        _ => Vec::new(),
     };
     if lang == Lang::Rust {
         issues.retain(|i| !rules::NOT_ON_RUST.contains(&i.rule));
@@ -2103,6 +2104,27 @@ pub(crate) struct SuppressedRegion {
     key: Option<String>,
     start: usize,
     end: usize,
+}
+
+impl SuppressedRegion {
+    pub(crate) fn new(key: Option<String>, start: usize, end: usize) -> Self {
+        Self { key, start, end }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start(&self) -> usize {
+        self.start
+    }
+
+    #[cfg(test)]
+    pub(crate) fn end(&self) -> usize {
+        self.end
+    }
 }
 
 /// The fact kind a C# file's suppressed regions travel under, for issues the
