@@ -1,0 +1,91 @@
+name: Self-analysis
+
+# sonda and SonarQube on sonda's own code, side by side, on the maintainer's
+# server (CONTRIBUTING.md, "Self-analysis"): after CI passes on main, or by
+# hand. Never on a pull request: the runner is self-hosted and this
+# repository is public, so no code from a pull request may run there.
+# `workflow_run` runs this file as it is on main, on main's commit.
+#
+# sonda analyzes the web app and the scripts (it has no Rust analyzer);
+# SonarQube analyzes those and the Rust crates, with coverage from CI's
+# `coverage` job and the web app's tests.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# The latest commit wins; an older analysis has nothing to add.
+concurrency:
+  group: self-analysis
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: [self-hosted, sonda]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # CI's coverage report, from its run of this commit.
+      actions: read
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Blame and new code, for both servers.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The Rust coverage CI measured
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-lcov
+          path: ${{ runner.temp }}/rust-coverage
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      # CI's paths are its own checkout's: make them the repository's.
+      - name: Paths from the repository's root
+        if: github.event_name == 'workflow_run'
+        run: sed -i 's#^SF:.*/crates/#SF:crates/#' "$RUNNER_TEMP/rust-coverage/lcov.info"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: The web app's tests, with coverage
+        working-directory: web
+        run: corepack enable && pnpm install --frozen-lockfile && pnpm test:coverage
+
+      # SonarQube's Rust analyzer runs Clippy itself.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - name: SonarQube
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          # Without CI's report (a run by hand), Rust has no coverage.
+          args: >-
+            ${{ github.event_name == 'workflow_run' && format('-Dsonar.rust.lcov.reportPaths={0}/rust-coverage/lcov.info', runner.temp) || '' }}
+
+      # The CLI from this same commit, so main analyzes itself.
+      - run: scripts/install-cli.sh "$RUNNER_TEMP/bin"
+      - name: sonda
+        env:
+          SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}
+        run: >
+          "$RUNNER_TEMP/bin/sonda" scan . --upload
+          --server http://localhost:9300 --project sonda
+          --branch main --commit "$SHA"
+          --coverage web/coverage/lcov.info

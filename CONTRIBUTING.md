@@ -216,6 +216,41 @@ were built from), attested and attached to the release. The first push creates t
 public once, under the repository's Packages settings. Until every binary is attached it stays a draft; if a job fails,
 fix it on `main`, delete the draft and the tag, and tag again.
 
+## Self-analysis
+
+sonda and SonarQube both analyze sonda's own code, so their results on the
+same commit can be compared (`.github/workflows/self-analysis.yml`). It
+runs after CI passes on `main`, or by hand from the Actions tab, on a
+self-hosted runner where both servers are: sonda on `localhost:9300`, and
+SonarQube at `SONAR_HOST_URL`. sonda analyzes the web app and the scripts,
+since it has no Rust analyzer; SonarQube also analyzes the Rust crates
+(`sonar-project.properties`), with the coverage CI's `coverage` job
+measured. The web app's coverage is `pnpm test:coverage`.
+
+**This repository is public, so the runner needs one setting first.** A
+pull request from a fork runs its own copy of the workflows, and could aim
+one at the self-hosted runner. Under Settings → Actions → General, set
+"Approval for running fork pull request workflows from contributors" to
+**Require approval for all external contributors**, and read a fork's
+workflow changes before approving its run. The self-analysis itself never
+runs on a pull request.
+
+Setting it up on the server:
+
+1. Register a runner for this repository, in a directory of its own,
+   following Settings → Actions → Runners → New self-hosted runner, with
+   the label `sonda`:
+   `./config.sh --url https://github.com/<owner>/sonda --token <token> --labels sonda`,
+   then `sudo ./svc.sh install && sudo ./svc.sh start`. It needs Docker, to
+   build the CLI (`scripts/install-cli.sh`); Node and Rust are installed by
+   the workflow.
+2. In sonda, an admin creates the project `sonda` (Projects → Connect a
+   repository, choosing "This machine") and keeps its upload token. The
+   workflow Connect offers isn't needed: this one replaces it.
+3. In SonarQube, create the project `sonda` and a token for it.
+4. Add the repository secrets `SONDA_TOKEN`, `SONAR_TOKEN` and
+   `SONAR_HOST_URL` (such as `http://localhost:9000`).
+
 ## Commits and pull requests
 
 - Keep each change small and focused, with a message that explains *why*.
