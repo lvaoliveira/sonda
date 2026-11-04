@@ -7,8 +7,8 @@ use super::cs::{
     CS_SCOPE_STOPS, cs_has_modifier, cs_statements, cs_string_value, operand, same_code,
     simple_name, unparenthesized,
 };
-use super::cs_bugs::{attribute_arguments, attribute_names, cs_call_arguments};
-use super::cs_more::{declared_type, enclosing_type, members};
+use super::cs_bugs::{attribute_arguments, attribute_names};
+use super::cs_more::{enclosing_type, members};
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
@@ -118,22 +118,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/use-null-coalescing",
-        name: "?? should be used instead of a null-checking conditional",
-        description: "`a != null ? a : b` is `a ?? b`.",
-        message: "Use '??' instead of this conditional.",
+        name: "The simplest possible condition syntax should be used",
+        description: "An if/else assigning one variable is a conditional, `a != null ? a : b` is `a ?? b`, \
+                      and `if (a == null) a = b;` is `a ??= b`.",
+        message: "Use the simpler syntax: '?:', '??' or '??='.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S3240")],
-        check: Check::Query {
+        sonar: &[exact("S3240")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(conditional_expression condition: (binary_expression)) @match",
-            filter: Some(Keep(is_null_coalescing_shape)),
+            find: super::cs_documented::verbose_conditions,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string F(string a) { return a != null ? a : \"\"; } }",
-            good: "class A { string F(string a) { return a ?? \"\"; } }",
+            bad: "class A { object F(object a, object b) { object x; if (a != null) { x = a; } else { x = b; } return x; } }",
+            good: "class A { object F(object a, object b) { object x; x = a ?? b; return x; } }",
         }),
     },
     Rule {
@@ -158,22 +158,23 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/explicit-delegate-creation",
-        name: "Delegates should not be created explicitly",
-        description: "`new EventHandler(OnClick)` is what `OnClick` alone becomes; the explicit form is noise.",
-        message: "Pass the method group directly.",
+        name: "Declarations and initializations should be as concise as possible",
+        description: "What the context already gives can be left out: an empty initializer, an array's \
+                      element type or size, `new EventHandler(...)` around a lambda, `new int?(...)`, \
+                      lambda parameter types.",
+        message: "Remove what the context already gives.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[related("S3257")],
-        check: Check::Query {
+        sonar: &[exact("S3257")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(object_creation_expression type: (_) arguments: (argument_list (argument (identifier)) .)) @match",
-            filter: Some(Keep(wraps_method_group)),
+            find: super::cs_documented::verbose_declarations,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { void F(B b) { b.Clicked += new EventHandler(OnClick); } }",
-            good: "class A { void F(B b) { b.Clicked += OnClick; } }",
+            bad: "using System;\nclass A { void F() { Func<int, int> f1 = (int i) => 1; var ints = new int[3] { 1, 2, 3 }; } }",
+            good: "using System;\nclass A { void F() { Func<int, int> f1 = (i) => 1; var ints = new[] { 1, 2, 3 }; } }",
         }),
     },
     Rule {
@@ -219,43 +220,43 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/struct-without-iequatable",
-        name: "Structs should implement IEquatable<T>",
-        description: "Without it, Equals(object) boxes the struct and compares field by field through \
+        name: "Value types should implement IEquatable<T>",
+        description: "Without it, comparing structs boxes them and compares their fields through \
                       reflection, which is slow.",
         message: "Implement IEquatable<T> for this struct.",
         category: CodeSmell,
-        severity: Major,
-        effort_minutes: 10,
-        sonar: &[related("S3898")],
+        severity: Minor,
+        effort_minutes: 15,
+        sonar: &[exact("S3898")],
         check: Check::Query {
             langs: CSHARP,
             query: "(struct_declaration name: (identifier) @match body: (declaration_list))",
-            filter: Some(Keep(struct_lacks_iequatable)),
+            filter: Some(Keep(super::cs_documented::struct_without_iequatable)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "struct Point { public int X; public override bool Equals(object o) => false; public override int GetHashCode() => X; }",
-            good: "struct Point : IEquatable<Point> { public int X; public bool Equals(Point p) => p.X == X; public override bool Equals(object o) => o is Point p && Equals(p); public override int GetHashCode() => X; }",
+            bad: "struct MyStruct { public int Value { get; set; } }",
+            good: "struct MyStruct : IEquatable<MyStruct> { public int Value { get; set; } public bool Equals(MyStruct other) => Value == other.Value; }",
         }),
     },
     Rule {
         id: "cs/custom-event-handler-delegate",
-        name: "Events should use EventHandler<T>",
-        description: "A custom delegate with the (sender, args) shape is EventHandler<TArgs> written by hand.",
-        message: "Declare this event as EventHandler<T> and remove the custom delegate.",
+        name: "Generic event handlers should be used",
+        description: "A delegate declared as `(object sender, MyEventArgs e)` for an event is what \
+                      `EventHandler<MyEventArgs>` already is.",
+        message: "Use EventHandler<T> for this event's handler and remove this delegate.",
         category: CodeSmell,
-        severity: Major,
+        severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S3908")],
-        check: Check::Query {
+        sonar: &[exact("S3908")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(compilation_unit) @match",
-            filter: Some(Find(event_of_custom_handler)),
+            find: super::cs_documented::old_style_event_handlers,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "delegate void SavedHandler(object sender, SavedEventArgs e); class A { public event SavedHandler Saved; }",
-            good: "class A { public event EventHandler<SavedEventArgs> Saved; }",
+            bad: "using System;\npublic class MyEventArgs : EventArgs { }\npublic delegate void MyEventHandler(object sender, MyEventArgs e);\npublic class EventProducer { public event MyEventHandler MyEvent; }",
+            good: "using System;\npublic class MyEventArgs : EventArgs { }\npublic class EventProducer { public event EventHandler<MyEventArgs> MyEvent; }",
         }),
     },
     Rule {
@@ -879,7 +880,7 @@ fn is_local_variable(name: Node, src: &[u8]) -> bool {
     false
 }
 
-fn is_null_coalescing_shape(node: Node, src: &[u8]) -> bool {
+pub(super) fn is_null_coalescing_shape(node: Node, src: &[u8]) -> bool {
     let Some(condition) = node.child_by_field_name("condition").map(unparenthesized) else {
         return false;
     };
@@ -907,32 +908,6 @@ fn is_null_coalescing_shape(node: Node, src: &[u8]) -> bool {
         "alternative"
     });
     kept.is_some_and(|k| same_code(unparenthesized(k), subject, src))
-}
-
-fn wraps_method_group(creation: Node, src: &[u8]) -> bool {
-    let delegate = creation.child_by_field_name("type").is_some_and(|t| {
-        let name = simple_name(t, src);
-        [
-            &b"Handler"[..],
-            b"Action",
-            b"Func",
-            b"Predicate",
-            b"Callback",
-        ]
-        .iter()
-        .any(|s| name.ends_with(s))
-    });
-    // `new Action(Validate).ShouldThrow()`: a method group has no members, so
-    // the explicit delegate is needed there.
-    let receiver = creation.parent().is_some_and(|p| {
-        p.kind() == "member_access_expression"
-            && p.child_by_field_name("expression") == Some(creation)
-    });
-    // `new EventHandler(OnClick)`: one argument, a bare method name.
-    let args = cs_call_arguments(creation);
-    delegate
-        && !receiver
-        && matches!(args.as_slice(), [a] if a.kind() == "identifier" && text(*a, src).first().is_some_and(u8::is_ascii_uppercase))
 }
 
 fn repeated_anonymous_name<'t>(creation: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -979,63 +954,6 @@ pub(super) fn is_type_parameter_name(t: &[u8]) -> bool {
     t == b"T"
         || (t.len() > 1 && t[0] == b'T' && t[1].is_ascii_uppercase())
         || (t.len() <= 2 && t.first().is_some_and(u8::is_ascii_uppercase))
-}
-
-fn implements(declaration: Node, src: &[u8], interface: &[u8]) -> bool {
-    let mut cursor = declaration.walk();
-    declaration
-        .named_children(&mut cursor)
-        .filter(|c| c.kind() == "base_list")
-        .any(|b| count_word(text(b, src), interface) > 0)
-}
-
-fn struct_lacks_iequatable(name: Node, src: &[u8]) -> bool {
-    let Some(declaration) = name.parent() else {
-        return false;
-    };
-    // Only structs that define equality: one that doesn't uses the default.
-    let overrides_equals = members(declaration).iter().any(|m| {
-        m.kind() == "method_declaration"
-            && cs_has_modifier(*m, "override", src)
-            && m.child_by_field_name("name")
-                .is_some_and(|n| text(n, src) == b"Equals")
-    });
-    overrides_equals && !implements(declaration, src, b"IEquatable")
-}
-
-fn event_of_custom_handler<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Delegates declared in this file with the (object sender, TArgs e) shape.
-    let mut handlers: Vec<&[u8]> = Vec::new();
-    let mut stack = vec![unit];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "delegate_declaration" {
-            let params = n.child_by_field_name("parameters");
-            let shape = params.is_some_and(|p| {
-                let mut c = p.walk();
-                let types: Vec<&[u8]> = p
-                    .named_children(&mut c)
-                    .filter_map(|x| x.child_by_field_name("type").map(|t| simple_name(t, src)))
-                    .collect();
-                types.len() == 2 && types[0] == b"object" && types[1].ends_with(b"EventArgs")
-            });
-            if shape && let Some(name) = n.child_by_field_name("name") {
-                handlers.push(text(name, src));
-            }
-            continue;
-        }
-        if matches!(n.kind(), "block" | "method_declaration") {
-            continue;
-        }
-        let mut c = n.walk();
-        stack.extend(n.named_children(&mut c));
-    }
-    if handlers.is_empty() {
-        return None;
-    }
-    find_in_scope(unit, &["block"], |n| {
-        n.kind() == "event_field_declaration"
-            && declared_type(n).is_some_and(|t| handlers.contains(&text(t, src)))
-    })
 }
 
 fn only_non_generic_collection(name: Node, src: &[u8]) -> bool {
@@ -1561,7 +1479,7 @@ mod tests {
     #[test]
     fn calls_and_delegates() {
         let src = class(
-            "void Save(string p, bool force = false) { }\nvoid F(B b) {\nSave(\"x\", false);\nSave(\"x\", true);\nSave(\"x\");\nb.Clicked += new EventHandler(OnClick);\nb.Clicked += OnClick;\nvar o = new { Name = p.Name, Total = p.Count, p.Id };\n}",
+            "void Save(string p, bool force = false) { } void OnClick(object s, EventArgs e) { }\nvoid F(B b) {\nSave(\"x\", false);\nSave(\"x\", true);\nSave(\"x\");\nb.Clicked += new EventHandler(OnClick);\nb.Clicked += OnClick;\nvar o = new { Name = p.Name, Total = p.Count, p.Id };\n}",
         );
         assert_eq!(flagged("cs/default-argument-passed", &src), [5]);
         assert_eq!(flagged("cs/explicit-delegate-creation", &src), [8]);
@@ -1570,10 +1488,11 @@ mod tests {
 
     #[test]
     fn types() {
-        let src = "namespace N;\nclass I { int this[double d] => 0; int this[int i] => 0; int this[string s] => 0; }\nstruct P { public int X; public override bool Equals(object o) => false; public override int GetHashCode() => 0; }\nstruct Q : IEquatable<Q> { public override bool Equals(object o) => false; public override int GetHashCode() => 0; public bool Equals(Q q) => true; }\ndelegate void SavedHandler(object sender, SavedEventArgs e);\nclass E { public event SavedHandler Saved; public event EventHandler<SavedEventArgs> Ok; }\nclass Bag : IEnumerable { }\nclass Good : IEnumerable<int>, IEnumerable { }\nclass Collections { }\nclass RetryAttribute : Attribute { }\nsealed class OkAttribute : Attribute { }";
+        let src = "namespace N;\nclass I { int this[double d] => 0; int this[int i] => 0; int this[string s] => 0; }\nstruct P { public int X; public override bool Equals(object o) => false; public override int GetHashCode() => 0; }\nstruct Q : IEquatable<Q> { public override bool Equals(object o) => false; public override int GetHashCode() => 0; public bool Equals(Q q) => true; }\ndelegate void SavedHandler(object sender, SavedEventArgs e); class SavedEventArgs : EventArgs { }\nclass E { public event SavedHandler Saved; public event EventHandler<SavedEventArgs> Ok; }\nclass Bag : IEnumerable { }\nclass Good : IEnumerable<int>, IEnumerable { }\nclass Collections { }\nclass RetryAttribute : Attribute { }\nsealed class OkAttribute : Attribute { }";
         assert_eq!(flagged("cs/indexer-parameter-type", src), [2]);
         assert_eq!(flagged("cs/struct-without-iequatable", src), [3]);
-        assert_eq!(flagged("cs/custom-event-handler-delegate", src), [6]);
+        // The delegate, where the documentation marks it.
+        assert_eq!(flagged("cs/custom-event-handler-delegate", src), [5]);
         assert_eq!(flagged("cs/non-generic-collection", src), [7]);
         assert_eq!(flagged("cs/type-named-like-namespace", src), [9]);
         assert_eq!(flagged("cs/attribute-not-sealed", src), [10]);

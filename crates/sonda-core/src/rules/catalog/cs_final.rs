@@ -211,23 +211,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/abstract-class-only-abstract",
-        name: "Abstract classes with only abstract members should be interfaces",
-        description: "An abstract class without fields or implemented members is an interface that uses up the \
-                      single base class a type can have.",
-        message: "Turn this abstract class into an interface.",
+        name: "An abstract class should have both abstract and concrete methods",
+        description: "An abstract class with only abstract members provides no inheritable behavior: an \
+                      interface says the same without using up the single base class.",
+        message: "Convert this abstract class to an interface.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 10,
-        sonar: &[related("S1694")],
-        check: Check::Query {
+        sonar: &[exact("S1694")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(class_declaration (modifier) name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(interface_shaped_abstract_class)),
+            find: super::cs_documented::interface_shaped_abstract_classes,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "abstract class Shape { public abstract double Area(); }",
-            good: "interface IShape { double Area(); }",
+            bad: "public abstract class Animal { public abstract void Move(); public abstract void Feed(); }",
+            good: "public interface Animal { void Move(); void Feed(); }",
         }),
     },
     Rule {
@@ -1120,29 +1119,6 @@ fn string_appended_in_loop<'t>(loop_node: Node<'t>, src: &[u8]) -> Option<Node<'
                                 .is_some_and(|l| text(r, src).starts_with(text(l, src)))
                     }))
     })
-}
-
-fn interface_shaped_abstract_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut cursor = class.walk();
-    let derives = class
-        .named_children(&mut cursor)
-        .any(|c| c.kind() == "base_list");
-    if !cs_has_modifier(class, "abstract", src) || derives {
-        return None;
-    }
-    let ms = members(class);
-    let all_abstract = !ms.is_empty()
-        && ms.iter().all(|m| {
-            matches!(
-                m.kind(),
-                "method_declaration"
-                    | "property_declaration"
-                    | "event_declaration"
-                    | "indexer_declaration"
-            ) && cs_has_modifier(*m, "abstract", src)
-                && cs_has_modifier(*m, "public", src)
-        });
-    all_abstract.then(|| class.child_by_field_name("name"))?
 }
 
 const ASSERTION_WORDS: &[&[u8]] = &[

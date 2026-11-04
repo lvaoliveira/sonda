@@ -234,23 +234,22 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/event-handler-signature",
-        name: "Events should use the (sender, args) handler signature",
-        description: "Handlers that take (object sender, TEventArgs e) can be shared and extended; an \
-                      Action or Func event can't add data later without breaking subscribers.",
-        message: "Declare this event as EventHandler or EventHandler<TEventArgs>.",
+        name: "Event handlers should have the correct signature",
+        description: "An event's delegate should return void and take `(object sender, EventArgs e)`, or a \
+                      type derived from EventArgs, so handlers can be shared and extended.",
+        message: "Give this event a delegate taking (object sender, EventArgs e) and returning void.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 10,
-        sonar: &[related("S3906")],
-        check: Check::Query {
+        sonar: &[exact("S3906")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(event_field_declaration (variable_declaration type: (_) @match))",
-            filter: Some(Keep(is_action_or_func)),
+            find: super::cs_documented::events_with_wrong_signature,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { public event Action<int> Changed; }",
-            good: "class A { public event EventHandler<ChangedEventArgs> Changed; }",
+            bad: "public delegate void AlarmEventHandler(object s);\npublic class Foo { public event AlarmEventHandler AlarmEvent; }",
+            good: "public delegate void AlarmEventHandler(object sender, AlarmEventArgs e);\npublic class Foo { public event AlarmEventHandler AlarmEvent; }",
         }),
     },
     Rule {
@@ -809,10 +808,6 @@ fn has_base_list(declaration: Node) -> bool {
     declaration
         .named_children(&mut cursor)
         .any(|c| c.kind() == "base_list")
-}
-
-fn is_action_or_func(ty: Node, src: &[u8]) -> bool {
-    matches!(simple_name(ty, src), b"Action" | b"Func")
 }
 
 fn string_overload_not_delegating<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

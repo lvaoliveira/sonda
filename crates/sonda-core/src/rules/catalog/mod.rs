@@ -7,6 +7,7 @@ mod cs;
 mod cs_bugs;
 mod cs_classes;
 mod cs_dataflow;
+mod cs_documented;
 mod cs_extra;
 mod cs_final;
 mod cs_flow;

@@ -55,6 +55,20 @@ The first batch reviewed its findings on five open-source projects
 (Newtonsoft.Json, Polly, AutoMapper, Serilog and MediatR, 2,646 files); the
 scan took under a second per project.
 
+Partial rules are re-audited against their documentation, every case,
+example and exception, and become `exact` when nothing documented is left
+out (`rules/catalog/cs_documented.rs`). Where the documentation reads two
+ways and the wider reading would add many findings to a default rule, the
+rule keeps the narrower one and stays `related` until SonarQube's own
+findings settle it:
+
+- **S818**: the title says literal suffixes, the text and example say `l`,
+  which reads as `1`. Upper-casing `f`, `d` and `m` too would add 551
+  findings on the corpus.
+- **S3218**: the title adds "type members" to static ones, the text and
+  example show static members only. Counting nested types would add 107
+  findings, nearly all properties named after another nested type.
+
 ### Suppressions
 
 Code that SonarQube analyzed carries its suppressions: `#pragma warning

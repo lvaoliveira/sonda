@@ -176,41 +176,41 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/inner-member-shadows-outer",
-        name: "Nested type members should not shadow the outer type's static members",
+        name: "Inner class members should not shadow outer class static or type members",
         description: "Inside the nested type, the name means its own member, which readers may take for the \
-                      outer one.",
-        message: "Rename this member; it shadows a static member of the outer type.",
+                      outer type's static member.",
+        message: "Rename this member; it shadows a static member of an outer type.",
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
         sonar: &[related("S3218")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: shadows_outer_static,
+            find: super::cs_documented::shadowing_inner_members,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class Outer { public static int A; class Inner { public int A; } }",
-            good: "class Outer { public static int A; class Inner { public int B; } }",
+            bad: "class Outer { public static int A; public class Inner { public int A; public int MyProp { get => A; } } }",
+            good: "class Outer { public static int A; public class Inner { public int B; public int MyProp { get => A; } } }",
         }),
     },
     Rule {
         id: "cs/unused-private-return",
-        name: "Private methods should not return values that no caller uses",
-        description: "When every call discards the result, the return value is dead code.",
+        name: "Methods should not return values that are never used",
+        description: "When every call of a private method drops what it returns, the return is dead code.",
         message: "Make this method return void; no caller uses its result.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 5,
-        sonar: &[related("S3241")],
+        sonar: &[exact("S3241")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: private_returns_unused,
+            find: super::cs_documented::unused_private_returns,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { private int Count() => 42; public void F() { Count(); } }",
-            good: "class A { private void Count() { } public void F() { Count(); } }",
+            bad: "class SomeClass { private int PrivateMethod() => 42; public void PublicMethod() { PrivateMethod(); } }",
+            good: "class SomeClass { private void PrivateMethod() { } public void PublicMethod() { PrivateMethod(); } }",
         }),
     },
     Rule {
@@ -655,127 +655,6 @@ fn assigns_through_readonly_generic<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'
     found
 }
 
-fn static_member_names<'s>(class: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
-    let mut names = Vec::new();
-    for m in members(class) {
-        let is_static = cs_has_modifier(m, "static", src) || cs_has_modifier(m, "const", src);
-        match m.kind() {
-            "field_declaration" if is_static => {
-                names.extend(
-                    super::cs_more::declarators(m)
-                        .into_iter()
-                        .filter_map(|d| d.child_by_field_name("name"))
-                        .map(|n| text(n, src)),
-                );
-            }
-            "property_declaration" | "method_declaration" | "event_declaration" if is_static => {
-                names.push(name_of(m, src))
-            }
-            _ => {}
-        }
-    }
-    names
-}
-
-fn shadows_outer_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let types = type_index(m);
-    let mut found = Vec::new();
-    for outer in classes(&types) {
-        let statics = static_member_names(outer, src);
-        if statics.is_empty() {
-            continue;
-        }
-        for inner in members(outer).into_iter().filter(|x| {
-            matches!(
-                x.kind(),
-                "class_declaration" | "struct_declaration" | "record_declaration"
-            )
-        }) {
-            for member in members(inner) {
-                let names: Vec<Node<'t>> = match member.kind() {
-                    "field_declaration" => super::cs_more::declarators(member)
-                        .into_iter()
-                        .filter_map(|d| d.child_by_field_name("name"))
-                        .collect(),
-                    "property_declaration" | "method_declaration" | "event_declaration" => {
-                        member.child_by_field_name("name").into_iter().collect()
-                    }
-                    _ => Vec::new(),
-                };
-                // `public Address Address`: a member named after its own type,
-                // a nested type of the outer one, is C#'s usual idiom.
-                let own_type = member
-                    .child_by_field_name("type")
-                    .or_else(|| super::cs_more::declared_type(member))
-                    .or_else(|| member.child_by_field_name("returns"))
-                    .map(|t| simple_name(t, src));
-                found.extend(names.into_iter().filter(|n| {
-                    let name = text(*n, src);
-                    statics.contains(&name) && name != name_of(inner, src) && own_type != Some(name)
-                }));
-            }
-        }
-    }
-    found
-}
-
-fn private_returns_unused<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let by_decl = refs_by_decl(m);
-    let types = type_index(m);
-    m.decls
-        .iter()
-        .enumerate()
-        .filter(|(i, d)| {
-            let Some(method) = d.declarator.filter(|_| d.kind == DeclKind::Method) else {
-                return false;
-            };
-            let returns = d.ty.map_or(&b"void"[..], |t| simple_name(t, src));
-            if matches!(
-                returns,
-                b"void"
-                    | b"Task"
-                    | b"ValueTask"
-                    | b"IEnumerable"
-                    | b"IEnumerator"
-                    | b"IAsyncEnumerable"
-            ) || !is_private(method, src)
-                || ["override", "virtual", "abstract", "partial", "extern"]
-                    .iter()
-                    .any(|w| cs_has_modifier(method, w, src))
-                || by_decl[*i].is_empty()
-                || m.decls_named(d.scope, &d.name).len() > 1
-            {
-                return false;
-            }
-            let class = method.parent().and_then(|l| l.parent());
-            if class.is_none_or(|c| {
-                cs_has_modifier(c, "partial", src)
-                    || types
-                        .get(std::str::from_utf8(name_of(c, src)).unwrap_or_default())
-                        .is_some_and(|p| p.len() > 1)
-            }) {
-                return false;
-            }
-            // Every use is a call whose result is dropped.
-            by_decl[*i].iter().all(|r| {
-                let name = m.refs[*r].node;
-                let callee = name
-                    .parent()
-                    .filter(|p| p.kind() == "member_access_expression")
-                    .unwrap_or(name);
-                callee.parent().is_some_and(|call| {
-                    call.kind() == "invocation_expression"
-                        && call.child_by_field_name("function") == Some(callee)
-                        && call
-                            .parent()
-                            .is_some_and(|s| s.kind() == "expression_statement")
-                })
-            })
-        })
-        .filter_map(|(_, d)| d.ty)
-        .collect()
-}
-
 /// How a type parameter is used in a member signature: only as the result,
 /// only as an input, or otherwise.
 #[derive(Clone, Copy, PartialEq)]
@@ -1180,6 +1059,7 @@ mod tests {
     #[test]
     fn nesting_and_variance() {
         let src = "namespace N;\nclass Outer {\npublic static int A;\nprivate static int Twice(int n) => n * 2;\nprivate static int Both(int n) => n;\nint G() => Both(1);\nclass Inner { public int A; public Item Item { get; set; } int F() => Twice(2) + Both(3); }\nclass Item { }\n}\ninterface ISource<T> { T Next(); }\ninterface ISink<T> { void Put(T item); }\ninterface IBoth<T> { T Get(); void Set(T v); }\ninterface IList2<T> { List<T> All(); }\ninterface IDone<out T> { T Get(); }\ndelegate R Map<X, R>(X x);";
+        // `Item Item` is named after its own type: left alone.
         assert_eq!(flagged("cs/inner-member-shadows-outer", src), [7]);
         assert_eq!(flagged("cs/private-static-only-nested", src), [4]);
         assert_eq!(flagged("cs/generic-variance", src), [10, 11, 15, 15]);
