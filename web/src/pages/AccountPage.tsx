@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type SubmitEvent, useState } from 'react'
 import { useApi, useAsync } from '@/api/hooks'
 import { MIN_PASSWORD_LENGTH } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
@@ -18,7 +18,7 @@ export function AccountPage() {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const submit = async (e: FormEvent) => {
+  const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     if (next !== confirm) {
       setResult({ ok: false, text: 'The new passwords differ.' })
@@ -59,15 +59,15 @@ export function AccountPage() {
           <Card title="Change password" subtitle={`At least ${MIN_PASSWORD_LENGTH} characters. A long passphrase is best.`}>
             <form onSubmit={submit} className="flex flex-col gap-3">
               <label className="flex flex-col gap-1.5 text-[13px]">
-                Current password
+                <span>Current password</span>
                 <input type="password" autoComplete="current-password" required value={current} onChange={(e) => setCurrent(e.target.value)} className={input} />
               </label>
               <label className="flex flex-col gap-1.5 text-[13px]">
-                New password
+                <span>New password</span>
                 <input type="password" autoComplete="new-password" required minLength={MIN_PASSWORD_LENGTH} value={next} onChange={(e) => setNext(e.target.value)} className={input} />
               </label>
               <label className="flex flex-col gap-1.5 text-[13px]">
-                Repeat the new password
+                <span>Repeat the new password</span>
                 <input type="password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
               </label>
               {result && (

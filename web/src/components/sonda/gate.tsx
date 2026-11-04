@@ -10,7 +10,7 @@ const CONDITION_MARK: Record<GateCondition['status'], { glyph: string; color: st
 }
 
 /** A gate's conditions: a glyph and a word for the status, the condition, and its actual value. */
-export function GateConditions({ conditions }: { conditions: GateCondition[] }) {
+export function GateConditions({ conditions }: Readonly<{ conditions: GateCondition[] }>) {
   return (
     <ul className="m-0 flex list-none flex-col p-0">
       {conditions.map((c) => {
@@ -36,7 +36,7 @@ export function GateConditions({ conditions }: { conditions: GateCondition[] }) 
 }
 
 /** Which gate judged a result (ADR-0017): a server gate, or the repository's sonda.toml. */
-export function GateSource({ serverGate }: { serverGate: ServerGateRef }) {
+export function GateSource({ serverGate }: Readonly<{ serverGate: ServerGateRef }>) {
   return serverGate ? (
     <span className="text-xs text-fg-faint">
       server gate{' '}

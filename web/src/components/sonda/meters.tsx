@@ -3,7 +3,7 @@ import { areaPoints, linePoints, ringDash } from '@/lib/charts'
 import { coverageColor, levelColor } from '@/lib/visual'
 
 /** A 5-segment rating meter: bars of rising height, filled up to the level. */
-export function PipMeter({ level, label, width = 4 }: { level: Level; label: string; width?: number }) {
+export function PipMeter({ level, label, width = 4 }: Readonly<{ level: Level; label: string; width?: number }>) {
   const color = levelColor(level)
   return (
     <span role="img" aria-label={`${label}: level ${level} of 5`} title={`${label}: level ${level} of 5`} className="flex h-3.5 items-end gap-0.5">
@@ -19,7 +19,7 @@ export function PipMeter({ level, label, width = 4 }: { level: Level; label: str
 }
 
 /** Coverage as an 18px ring donut (stroke 5), with the value beside it. */
-export function CoverageRing({ pct }: { pct: number }) {
+export function CoverageRing({ pct }: Readonly<{ pct: number }>) {
   return (
     <span className="flex items-center gap-2">
       <svg width="18" height="18" viewBox="0 0 36 36" aria-hidden="true">
@@ -47,13 +47,13 @@ export function Sparkline({
   fill,
   className,
   label,
-}: {
+}: Readonly<{
   series: number[]
   color: string
   fill?: string
   className?: string
   label?: string
-}) {
+}>) {
   return (
     <svg
       viewBox="0 0 100 24"
@@ -77,7 +77,7 @@ export function Sparkline({
 }
 
 /** The 0–100 health index as a 20-segment meter: red, then amber, then green zones. */
-export function HealthBar({ score }: { score: number }) {
+export function HealthBar({ score }: Readonly<{ score: number }>) {
   const filled = Math.round(score / 5)
   return (
     <div aria-hidden="true" className="flex gap-[3px]">

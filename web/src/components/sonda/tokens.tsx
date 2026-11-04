@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type SubmitEvent, useState } from 'react'
 import type { ApiToken, CreatedToken, NewToken, TokenType } from '@/api/types'
 import { formatAge, shortDate } from '@/lib/format'
 import { TOKEN_TYPE } from '@/lib/visual'
@@ -23,11 +23,11 @@ export function TokenGenerator({
   owners,
   onGenerate,
   onGenerated,
-}: {
+}: Readonly<{
   owners?: string[]
   onGenerate: (token: NewToken, owner: string) => Promise<CreatedToken>
   onGenerated: () => void
-}) {
+}>) {
   const [name, setName] = useState('')
   const [owner, setOwner] = useState('')
   const [type, setType] = useState<TokenType>('project_analysis')
@@ -38,7 +38,7 @@ export function TokenGenerator({
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const generate = async (e: FormEvent) => {
+  const generate = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     setError('')
@@ -69,7 +69,7 @@ export function TokenGenerator({
       <form onSubmit={generate} className="flex flex-wrap items-end gap-3">
         {owners && (
           <label className="flex flex-col gap-1.5 text-[13px]">
-            Owner
+            <span>Owner</span>
             <select required value={owner} onChange={(e) => setOwner(e.target.value)} className={input}>
               <option value="">Choose a user</option>
               {owners.map((o) => (
@@ -81,11 +81,11 @@ export function TokenGenerator({
           </label>
         )}
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Name
+          <span>Name</span>
           <input required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder="ci-payments" className={input} />
         </label>
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Type
+          <span>Type</span>
           <select value={type} onChange={(e) => setType(e.target.value as TokenType)} className={input}>
             {(Object.keys(TOKEN_TYPE) as TokenType[]).map((t) => (
               <option key={t} value={t}>
@@ -96,12 +96,12 @@ export function TokenGenerator({
         </label>
         {type === 'project_analysis' && (
           <label className="flex flex-col gap-1.5 text-[13px]">
-            Project key
+            <span>Project key</span>
             <input required value={project} onChange={(e) => setProject(e.target.value)} placeholder="payments-platform" className={input} />
           </label>
         )}
         <label className="flex flex-col gap-1.5 text-[13px]">
-          Expires in
+          <span>Expires in</span>
           <select value={expiry} onChange={(e) => setExpiry(e.target.value)} className={input}>
             {EXPIRY.map((x) => (
               <option key={x.value} value={x.value}>
@@ -143,7 +143,7 @@ const STATUS = {
 } as const
 
 /** Tokens without their secrets; active ones can be revoked. */
-export function TokenTable({ tokens, showOwner = false, onRevoke }: { tokens: ApiToken[]; showOwner?: boolean; onRevoke: (t: ApiToken) => void }) {
+export function TokenTable({ tokens, showOwner = false, onRevoke }: Readonly<{ tokens: ApiToken[]; showOwner?: boolean; onRevoke: (t: ApiToken) => void }>) {
   if (tokens.length === 0) return <p className="m-0 text-[13px] text-fg-faint">No tokens yet.</p>
   const th = 'border-b border-line px-2 py-2 text-left font-normal'
   const td = 'border-b border-line px-2 py-2 align-top'
