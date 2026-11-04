@@ -408,46 +408,114 @@ fn decode(body: &[u8], gzip: bool, max_json: u64) -> Result<Upload, ApiError> {
         .map_err(|e| ApiError::BadRequest(format!("the body is not a sonda upload: {e}")))
 }
 
+fn invalid(m: String) -> ApiError {
+    ApiError::Unprocessable(m)
+}
+
 fn validate(upload: Upload) -> Result<Analysis, ApiError> {
-    let invalid = |m: String| ApiError::Unprocessable(m);
-    if upload
-        .codeowners
+    let Upload {
+        project,
+        branch,
+        commit,
+        version,
+        pull_request,
+        commit_message,
+        scan_duration_ms,
+        report: r,
+        sources,
+        codeowners,
+    } = upload;
+    if codeowners
         .as_ref()
         .is_some_and(|c| c.len() as u64 > sonda_core::codeowners::MAX_BYTES)
     {
         return Err(invalid("the CODEOWNERS file is too large".into()));
     }
-    let mut meta = Meta {
-        project: upload.project,
-        branch: upload.branch,
-        commit: upload.commit.to_ascii_lowercase(),
-        version: upload.version,
-        pull_request: upload.pull_request.map(|mut pr| {
+    let meta = branch_meta(Meta {
+        project,
+        branch,
+        commit: commit.to_ascii_lowercase(),
+        version,
+        pull_request: pull_request.map(|mut pr| {
             pr.head_sha = pr.head_sha.map(|s| s.to_ascii_lowercase());
             pr
         }),
-    };
+    })?;
+    check_commit_message(commit_message.as_deref())?;
+    let scan_duration_ms = scan_duration(scan_duration_ms)?;
+    let gate_passed = check_report_header(&r)?;
+    let (files, by_path, unknown_languages) = validate_files(&r.files)?;
+    let sources = validate_sources(sources, &by_path)?;
+    let issues = validate_issues(r.issues, &by_path)?;
+    let warnings = with_language_warnings(r.warnings, &unknown_languages)?;
+    let rule_settings = r
+        .rule_settings
+        .map(validate_rule_settings)
+        .transpose()
+        .map_err(invalid)?;
+    let rule_profile = validate_rule_profile(r.rule_profile)?;
+    check_active_rules(r.active_rules.as_deref())?;
+    let dependencies_recorded = r.dependencies.is_some();
+    let dependencies =
+        validate_dependencies(r.dependencies.unwrap_or_default()).map_err(invalid)?;
+    Ok(Analysis {
+        meta,
+        commit_message,
+        scan_duration_ms,
+        token_id: None,
+        tool_version: r.version,
+        new_code_reference: r.new_code_reference,
+        measures: r.measures,
+        gate: r.gate,
+        gate_passed,
+        warnings,
+        files,
+        sources,
+        issues,
+        codeowners,
+        dependencies,
+        dependencies_recorded,
+        rule_settings,
+        rule_profile,
+        active_rules: r.active_rules,
+    })
+}
+
+/// The upload's project, branch and commit, checked. A pull request's
+/// analyses and issues are tracked as a branch of their own, apart from
+/// real branches (ADR-0021).
+fn branch_meta(mut meta: Meta) -> Result<Meta, ApiError> {
     validate_meta(&meta).map_err(|e| invalid(e.to_string()))?;
-    // A pull request's analyses and issues are tracked as a branch of their
-    // own, apart from real branches (ADR-0021).
     if let Some(pr) = &meta.pull_request {
         meta.branch = pull_request_branch(pr.number);
     }
-    if upload.commit_message.as_ref().is_some_and(|m| {
+    Ok(meta)
+}
+
+fn check_commit_message(message: Option<&str>) -> Result<(), ApiError> {
+    if message.is_some_and(|m| {
         m.trim().is_empty() || m.chars().count() > 300 || m.chars().any(char::is_control)
     }) {
         return Err(invalid(
             "invalid commit message: use 1-300 characters, no control characters".into(),
         ));
     }
-    // A week bounds what a scan could take.
-    let scan_duration_ms = match upload.scan_duration_ms {
+    Ok(())
+}
+
+/// A week bounds what a scan could take.
+fn scan_duration(ms: Option<u64>) -> Result<Option<i64>, ApiError> {
+    match ms {
         Some(ms) if ms > 7 * 24 * 3_600_000 => {
-            return Err(invalid("invalid scan duration: more than a week".into()));
+            Err(invalid("invalid scan duration: more than a week".into()))
         }
-        ms => ms.map(|ms| ms as i64),
-    };
-    let r = upload.report;
+        ms => Ok(ms.map(|ms| ms as i64)),
+    }
+}
+
+/// Who wrote the report and in which format, its bounds, and whether its
+/// gate passed.
+fn check_report_header(r: &Report) -> Result<bool, ApiError> {
     if r.tool != "sonda" {
         return Err(invalid("the report was not written by sonda".into()));
     }
@@ -471,11 +539,22 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     if r.files.len() > MAX_FILES || r.issues.len() > MAX_ISSUES {
         return Err(invalid("the report lists too many files or issues".into()));
     }
+    Ok(gate_passed)
+}
 
-    let mut files = Vec::with_capacity(r.files.len());
-    let mut by_path: HashMap<&str, [u8; 32]> = HashMap::with_capacity(r.files.len());
+/// Files to store, each path's SHA-256, and how many files are in each
+/// language this server doesn't read.
+type CheckedFiles<'a> = (
+    Vec<StoredFile>,
+    HashMap<&'a str, [u8; 32]>,
+    BTreeMap<&'a str, usize>,
+);
+
+fn validate_files(report_files: &[File]) -> Result<CheckedFiles<'_>, ApiError> {
+    let mut files = Vec::with_capacity(report_files.len());
+    let mut by_path: HashMap<&str, [u8; 32]> = HashMap::with_capacity(report_files.len());
     let mut unknown_languages: BTreeMap<&str, usize> = BTreeMap::new();
-    for f in &r.files {
+    for f in report_files {
         check_relative_path(&f.path).map_err(|e| invalid(e.to_string()))?;
         // A newer CLI may read a language this server doesn't: stored, with
         // a warning, rather than refusing the whole analysis.
@@ -494,15 +573,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         if by_path.insert(&f.path, sha256).is_some() {
             return Err(invalid(format!("{} is listed twice", f.path)));
         }
-        if let Some(c) = f.metrics.get("coverage") {
-            check_coverage(c).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
-        }
-        if let Some(b) = f.metrics.get("branch_coverage") {
-            check_branch_coverage(b).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
-        }
-        if let Some(c) = f.metrics.get("function_coverage") {
-            check_function_coverage(c).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
-        }
+        check_file_coverage(f).map_err(|e| invalid(format!("{}: {e}", f.path)))?;
         files.push(StoredFile {
             path: f.path.clone(),
             language: f.language.clone(),
@@ -510,18 +581,39 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
             metrics: Value::Object(f.metrics.clone()),
         });
     }
+    Ok((files, by_path, unknown_languages))
+}
 
-    // Exactly one source per file, matching the hash the scan recorded.
-    if upload.sources.len() != files.len() {
+/// A file's line, branch and function coverage, where the report has them.
+fn check_file_coverage(f: &File) -> Result<(), String> {
+    if let Some(c) = f.metrics.get("coverage") {
+        check_coverage(c)?;
+    }
+    if let Some(b) = f.metrics.get("branch_coverage") {
+        check_branch_coverage(b)?;
+    }
+    if let Some(c) = f.metrics.get("function_coverage") {
+        check_function_coverage(c)?;
+    }
+    Ok(())
+}
+
+/// Exactly one source per file, matching the hash the scan recorded; each
+/// distinct content once, by its SHA-256.
+fn validate_sources(
+    upload_sources: Vec<Source>,
+    by_path: &HashMap<&str, [u8; 32]>,
+) -> Result<Vec<([u8; 32], String)>, ApiError> {
+    if upload_sources.len() != by_path.len() {
         return Err(invalid(format!(
             "{} files but {} sources",
-            files.len(),
-            upload.sources.len()
+            by_path.len(),
+            upload_sources.len()
         )));
     }
-    let mut seen_sources = HashSet::with_capacity(upload.sources.len());
+    let mut seen_sources = HashSet::with_capacity(upload_sources.len());
     let mut sources: HashMap<[u8; 32], String> = HashMap::new();
-    for s in upload.sources {
+    for s in upload_sources {
         let expected = by_path
             .get(s.path.as_str())
             .ok_or_else(|| invalid(format!("source {} is not in the report", s.path)))?;
@@ -537,10 +629,18 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
         }
         sources.entry(actual).or_insert(s.content);
     }
+    Ok(sources.into_iter().collect())
+}
 
-    let mut issues = Vec::with_capacity(r.issues.len());
-    let mut fingerprints = HashSet::with_capacity(r.issues.len());
-    for i in r.issues {
+/// Each issue in a file of the report, from a rule this server knows, with
+/// a fingerprint of its own.
+fn validate_issues(
+    report_issues: Vec<Issue>,
+    by_path: &HashMap<&str, [u8; 32]>,
+) -> Result<Vec<StoredIssue>, ApiError> {
+    let mut issues = Vec::with_capacity(report_issues.len());
+    let mut fingerprints = HashSet::with_capacity(report_issues.len());
+    for i in report_issues {
         let rule = sonda_core::rules::find(&i.rule)
             .ok_or_else(|| invalid(format!("unknown rule {:?}", i.rule)))?;
         if !by_path.contains_key(i.path.as_str()) {
@@ -557,40 +657,55 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
                 i.fingerprint
             )));
         }
-        let pos = |v: u32| i32::try_from(v).ok().filter(|&v| v >= 1);
-        let (Some(line), Some(col), Some(end_line), Some(end_col)) = (
-            pos(i.line),
-            pos(i.column),
-            pos(i.end_line),
-            pos(i.end_column),
-        ) else {
-            return Err(invalid(format!("{}: issue position out of range", i.path)));
-        };
-        if end_line < line || i.message.len() > MAX_TEXT {
-            return Err(invalid(format!("{}:{line}: malformed issue", i.path)));
-        }
-        issues.push(StoredIssue {
-            fingerprint,
-            rule: rule.id,
-            severity: i.severity.as_str(),
-            category: rule.category.as_str(),
-            message: i.message,
-            path: i.path,
-            line,
-            col,
-            end_line,
-            end_col,
-            effort_minutes: i32::try_from(i.effort_minutes)
-                .map_err(|_| invalid("effort out of range".into()))?,
-            is_new: i.is_new,
-        });
+        issues.push(stored_issue(i, rule, fingerprint)?);
     }
+    Ok(issues)
+}
 
-    if r.warnings.len() > MAX_FILES || r.warnings.iter().any(|w| w.len() > MAX_TEXT) {
+fn stored_issue(
+    i: Issue,
+    rule: &'static sonda_core::rules::Rule,
+    fingerprint: [u8; 16],
+) -> Result<StoredIssue, ApiError> {
+    let pos = |v: u32| i32::try_from(v).ok().filter(|&v| v >= 1);
+    let (Some(line), Some(col), Some(end_line), Some(end_col)) = (
+        pos(i.line),
+        pos(i.column),
+        pos(i.end_line),
+        pos(i.end_column),
+    ) else {
+        return Err(invalid(format!("{}: issue position out of range", i.path)));
+    };
+    if end_line < line || i.message.len() > MAX_TEXT {
+        return Err(invalid(format!("{}:{line}: malformed issue", i.path)));
+    }
+    Ok(StoredIssue {
+        fingerprint,
+        rule: rule.id,
+        severity: i.severity.as_str(),
+        category: rule.category.as_str(),
+        message: i.message,
+        path: i.path,
+        line,
+        col,
+        end_line,
+        end_col,
+        effort_minutes: i32::try_from(i.effort_minutes)
+            .map_err(|_| invalid("effort out of range".into()))?,
+        is_new: i.is_new,
+    })
+}
+
+/// The report's warnings, and one more for each language this server
+/// doesn't read.
+fn with_language_warnings(
+    mut warnings: Vec<String>,
+    unknown_languages: &BTreeMap<&str, usize>,
+) -> Result<Vec<String>, ApiError> {
+    if warnings.len() > MAX_FILES || warnings.iter().any(|w| w.len() > MAX_TEXT) {
         return Err(invalid("the report's warnings are too large".into()));
     }
-    let mut warnings = r.warnings;
-    for (language, n) in &unknown_languages {
+    for (language, n) in unknown_languages {
         tracing::warn!(
             language,
             files = n,
@@ -602,19 +717,23 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
             if *n == 1 { "file" } else { "files" }
         ));
     }
-    let rule_settings = r
-        .rule_settings
-        .map(validate_rule_settings)
-        .transpose()
-        .map_err(invalid)?;
-    let rule_profile = match r.rule_profile {
+    Ok(warnings)
+}
+
+fn validate_rule_profile(profile: Option<RuleProfileIn>) -> Result<Option<Value>, ApiError> {
+    match profile {
         Some(p) if (1..=100).contains(&p.name.len()) && (1..=100).contains(&p.revision.len()) => {
-            Some(serde_json::json!({ "name": p.name, "revision": p.revision }))
+            Ok(Some(
+                serde_json::json!({ "name": p.name, "revision": p.revision }),
+            ))
         }
-        Some(_) => return Err(invalid("the report's rule profile is invalid".into())),
-        None => None,
-    };
-    if r.active_rules.as_ref().is_some_and(|ids| {
+        Some(_) => Err(invalid("the report's rule profile is invalid".into())),
+        None => Ok(None),
+    }
+}
+
+fn check_active_rules(ids: Option<&[String]>) -> Result<(), ApiError> {
+    if ids.is_some_and(|ids| {
         ids.len() > MAX_RULE_SETTINGS
             || ids
                 .iter()
@@ -622,30 +741,7 @@ fn validate(upload: Upload) -> Result<Analysis, ApiError> {
     }) {
         return Err(invalid("the report's active rules are invalid".into()));
     }
-    let dependencies_recorded = r.dependencies.is_some();
-    let dependencies =
-        validate_dependencies(r.dependencies.unwrap_or_default()).map_err(invalid)?;
-    Ok(Analysis {
-        meta,
-        commit_message: upload.commit_message,
-        scan_duration_ms,
-        token_id: None,
-        tool_version: r.version,
-        new_code_reference: r.new_code_reference,
-        measures: r.measures,
-        gate: r.gate,
-        gate_passed,
-        warnings,
-        files,
-        sources: sources.into_iter().collect(),
-        issues,
-        codeowners: upload.codeowners,
-        dependencies,
-        dependencies_recorded,
-        rule_settings,
-        rule_profile,
-        active_rules: r.active_rules,
-    })
+    Ok(())
 }
 
 /// Bounded, sorted and deduplicated, as stored and shown. Rule ids aren't

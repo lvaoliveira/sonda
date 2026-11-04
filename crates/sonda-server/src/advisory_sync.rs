@@ -106,32 +106,49 @@ fn fetch_changes(base: &str, ecosystem: &str, since: Option<&str>) -> anyhow::Re
         .map(|id| format!("{base}/{ecosystem}/{id}.json"))
         .collect();
 
-    let queue = Mutex::new(urls.into_iter());
-    let results = Mutex::new((Vec::new(), Vec::new()));
-    std::thread::scope(|scope| {
-        for _ in 0..CONCURRENCY {
-            scope.spawn(|| {
-                // The guard is dropped inside `and_then`, not held across the fetch.
-                while let Some(url) = queue.lock().ok().and_then(|mut q| q.next()) {
-                    let outcome = get(&agent, &url, MAX_RECORD_BYTES);
-                    if let Ok(mut r) = results.lock() {
-                        match outcome {
-                            Ok(text) => r.0.push((url, text)),
-                            Err(e) => r.1.push(format!("{url}: {e}")),
-                        }
-                    }
-                }
-            });
-        }
-    });
-    let (mut records, mut failures) = results.into_inner().unwrap_or_default();
-    records.sort();
-    failures.sort();
+    let (records, failures) = fetch_all(&agent, urls);
     Ok((
         newest.or_else(|| since.map(str::to_string)),
         records,
         failures,
     ))
+}
+
+/// Fetches `urls` on `CONCURRENCY` threads: the (url, record) pairs and the
+/// failures, each sorted.
+fn fetch_all(agent: &ureq::Agent, urls: Vec<String>) -> Fetched {
+    let queue = Mutex::new(urls.into_iter());
+    let results = Mutex::new((Vec::new(), Vec::new()));
+    std::thread::scope(|scope| {
+        for _ in 0..CONCURRENCY {
+            scope.spawn(|| fetch_queued(agent, &queue, &results));
+        }
+    });
+    let (mut records, mut failures) = results.into_inner().unwrap_or_default();
+    records.sort();
+    failures.sort();
+    (records, failures)
+}
+
+/// (url, record) pairs fetched, and the failures.
+type Fetched = (Vec<(String, String)>, Vec<String>);
+
+/// One of `fetch_all`'s threads: fetches from `queue` until it's empty.
+fn fetch_queued(
+    agent: &ureq::Agent,
+    queue: &Mutex<std::vec::IntoIter<String>>,
+    results: &Mutex<Fetched>,
+) {
+    // The guard is dropped inside `and_then`, not held across the fetch.
+    while let Some(url) = queue.lock().ok().and_then(|mut q| q.next()) {
+        let outcome = get(agent, &url, MAX_RECORD_BYTES);
+        if let Ok(mut r) = results.lock() {
+            match outcome {
+                Ok(text) => r.0.push((url, text)),
+                Err(e) => r.1.push(format!("{url}: {e}")),
+            }
+        }
+    }
 }
 
 fn get(agent: &ureq::Agent, url: &str, max: u64) -> anyhow::Result<String> {
