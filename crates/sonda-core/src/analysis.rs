@@ -81,6 +81,16 @@ pub(crate) fn analyze(
     let syn = lang.syntax();
 
     let mut issues = run_queries(&ctx, lang, root, rules, deadline)?;
+    if lang == Lang::Rust {
+        issues.extend(macro_argument_issues(
+            &mut parser,
+            src,
+            root,
+            path,
+            rules,
+            deadline,
+        ));
+    }
     let semantic_incomplete = run_semantic(&ctx, lang, root, rules, deadline, &mut issues);
     let mut metrics = FileMetrics::default();
     measure_functions(&ctx, syn, root, rules, cfg, &mut issues, &mut metrics);
@@ -1503,6 +1513,19 @@ fn run_queries(
     rules: &RuleSet,
     deadline: Instant,
 ) -> Result<Vec<Issue>, FileError> {
+    run_queries_in(ctx, lang, root, rules, deadline, None)
+}
+
+/// `run_queries`, keeping only what it finds inside `within`'s macro
+/// arguments when given: the second pass over a Rust file's rewritten macros.
+fn run_queries_in(
+    ctx: &Ctx,
+    lang: Lang,
+    root: Node,
+    rules: &RuleSet,
+    deadline: Instant,
+    within: Option<&crate::rust_macros::Shadow>,
+) -> Result<Vec<Issue>, FileError> {
     let bytes = ctx.src.as_bytes();
     let mut issues = Vec::new();
     let mut cursor = QueryCursor::new();
@@ -1534,7 +1557,9 @@ fn run_queries(
                     Some(Filter::Keep(keep)) => keep(cap.node, bytes).then_some(cap.node),
                     Some(Filter::Find(find)) => find(cap.node, bytes),
                 };
-                if let Some(node) = node {
+                if let Some(node) = node
+                    && within.is_none_or(|w| w.covers(node.start_byte()))
+                {
                     let msg = active.rule.message.to_string();
                     issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
                 }
@@ -1545,6 +1570,46 @@ fn run_queries(
         return Err(FileError::QueryTimeout);
     }
     Ok(issues)
+}
+
+/// What the rules find inside the arguments of Rust's expression macros,
+/// which the first parse leaves as tokens (`rust_macros.rs`). A copy that
+/// can't be parsed in time costs only these findings, not the file.
+fn macro_argument_issues(
+    parser: &mut Parser,
+    src: &str,
+    root: Node,
+    path: &str,
+    rules: &RuleSet,
+    deadline: Instant,
+) -> Vec<Issue> {
+    let Some(shadow) = crate::rust_macros::shadow(src, root) else {
+        return Vec::new();
+    };
+    let bytes = shadow.source.as_bytes();
+    let mut check_deadline = |_: &_| expired(deadline);
+    let options = ParseOptions::new().progress_callback(&mut check_deadline);
+    let Some(tree) = parser.parse_with_options(
+        &mut |offset, _| &bytes[offset.min(bytes.len())..],
+        None,
+        Some(options),
+    ) else {
+        return Vec::new();
+    };
+    let ctx = Ctx {
+        path,
+        src: &shadow.source,
+        lines: LineIndex::new(&shadow.source),
+    };
+    run_queries_in(
+        &ctx,
+        Lang::Rust,
+        tree.root_node(),
+        rules,
+        deadline,
+        Some(&shadow),
+    )
+    .unwrap_or_default()
 }
 
 /// Whether `path` (relative, `/`-separated) looks like a test file, by

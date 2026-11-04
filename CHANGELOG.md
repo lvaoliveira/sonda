@@ -21,6 +21,12 @@ file, the report formats and the public library API.
   they do there; `// NOSONAR` silences them here too.
   Checked against Clippy on 66 crates, in a container
   (`tools/clippy-oracle/`): 74% to 100% precision where the pattern occurs.
+- Rust rules now see inside the arguments of the standard macros that take
+  expressions (`assert!`, `println!`, `format!`, `write!`, `panic!`, ...),
+  which Clippy lints and tree-sitter leaves as tokens. `identical-operands`
+  recall on 51 crates went from 25% to 75% and `reversed-empty-range` from
+  44% to 78%, at the same precision. Test code is exempt from
+  `identical-operands`, as in Clippy.
 - 19 more Rust rules: wildcard imports, an unnecessary `;`, invisible
   characters, an approximated math constant, a loop that never loops, a
   statement with no effect, `vec![]` written as pushes, a misnamed getter,

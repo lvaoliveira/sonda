@@ -400,6 +400,12 @@ pub(super) fn same_pure_expression(a: Node, b: Node, src: &[u8]) -> bool {
 }
 
 fn is_self_assignment(node: Node, src: &[u8]) -> bool {
+    // `name = value` as an argument is a format macro's named argument
+    // (`println!("{x}", x = x)`), which reads as an assignment once its
+    // arguments are parsed.
+    if node.parent().is_some_and(|p| p.kind() == "arguments") {
+        return false;
+    }
     match (
         node.child_by_field_name("left"),
         node.child_by_field_name("right"),
@@ -409,7 +415,38 @@ fn is_self_assignment(node: Node, src: &[u8]) -> bool {
     }
 }
 
+/// Whether `node` is inside a test module or function: a module named `test`
+/// or `tests`, or anything written under `#[cfg(test)]` or `#[test]`.
+pub(super) fn in_test_code(node: Node, src: &[u8]) -> bool {
+    let mut n = Some(node);
+    while let Some(cur) = n {
+        if matches!(cur.kind(), "mod_item" | "function_item") {
+            if cur.kind() == "mod_item"
+                && cur
+                    .child_by_field_name("name")
+                    .is_some_and(|m| matches!(text(m, src), b"test" | b"tests"))
+            {
+                return true;
+            }
+            let mut attr = cur.prev_named_sibling();
+            while let Some(a) = attr.filter(|a| a.kind() == "attribute_item") {
+                let t = text(a, src);
+                if t.windows(9).any(|w| w == b"cfg(test)") || t == b"#[test]" {
+                    return true;
+                }
+                attr = a.prev_named_sibling();
+            }
+        }
+        n = cur.parent();
+    }
+    false
+}
+
 fn has_identical_operands(node: Node, src: &[u8]) -> bool {
+    // Tests compare a value with itself to check `==` and the operators.
+    if in_test_code(node, src) {
+        return false;
+    }
     let Some(op) = node.child_by_field_name("operator") else {
         return false;
     };
@@ -906,6 +943,51 @@ mod tests {
         assert!(hit(
             "rs/identical-operands",
             "let _ = (a + b) * 2 == (a +  b)  *  2;"
+        ));
+    }
+
+    #[test]
+    fn rules_see_into_the_arguments_of_expression_macros() {
+        assert!(hit(
+            "rs/identical-operands",
+            "fn f() { debug_assert!(min == min, \"nan\"); }"
+        ));
+        // Clippy leaves `assert_eq!(x, x)` alone: it is how reflexivity is tested.
+        assert!(!hit(
+            "rs/identical-operands",
+            "fn f() { assert_eq!(a.b, a.b); }"
+        ));
+        assert!(hit(
+            "rs/identical-operands",
+            "fn f() { assert!(g(x) || (a < a)); }"
+        ));
+        assert!(!hit(
+            "rs/identical-operands",
+            "fn f() { assert_eq!(a, b); }"
+        ));
+        assert!(!hit(
+            "rs/identical-operands",
+            "fn f() { assert_eq!(g(), g()); }"
+        ));
+        assert!(hit(
+            "rs/skip-zero",
+            "fn f() { println!(\"{}\", it.skip(0).count()); }"
+        ));
+        // The position is the one in the file.
+        let src = "fn f() {\n    let a = 1;\n    assert!(\n        a == a\n    );\n}\n";
+        assert_eq!(lines("rs/identical-operands", src), [4]);
+        // Named format arguments and macros outside the list are not parsed as code.
+        assert!(!hit(
+            "rs/self-assignment",
+            "fn f() { println!(\"{x}\", x = x); }"
+        ));
+        assert!(!hit(
+            "rs/identical-operands",
+            "fn f() { my_macro!(a == a); }"
+        ));
+        assert!(!hit(
+            "rs/identical-operands",
+            "fn f() { let _ = vec![a == a]; }"
         ));
     }
 

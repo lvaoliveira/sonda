@@ -48,6 +48,7 @@ mod measures;
 mod newcode;
 mod project;
 mod regex;
+mod rust_macros;
 mod rust_suppress;
 mod sandbox;
 mod scanner;

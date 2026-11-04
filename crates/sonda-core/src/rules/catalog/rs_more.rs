@@ -5,8 +5,8 @@
 use super::java_security::text;
 use super::prelude::*;
 use super::rs::{
-    arguments, block_items, has_side_effects, integer_value, is_integer, is_macro, method,
-    same_pure_expression,
+    arguments, block_items, has_side_effects, in_test_code, integer_value, is_integer, is_macro,
+    method, same_pure_expression,
 };
 
 /// Rules that are off unless `rules.enabled` lists them (see
@@ -408,33 +408,6 @@ pub(super) static RULES: &[Rule] = &[
 ];
 
 // ---- Items ----
-
-/// Whether `node` is inside a test module or function: a module named `test`
-/// or `tests`, or anything written under `#[cfg(test)]` or `#[test]`.
-fn in_test_code(node: Node, src: &[u8]) -> bool {
-    let mut n = Some(node);
-    while let Some(cur) = n {
-        if matches!(cur.kind(), "mod_item" | "function_item") {
-            if cur.kind() == "mod_item"
-                && cur
-                    .child_by_field_name("name")
-                    .is_some_and(|m| matches!(text(m, src), b"test" | b"tests"))
-            {
-                return true;
-            }
-            let mut attr = cur.prev_named_sibling();
-            while let Some(a) = attr.filter(|a| a.kind() == "attribute_item") {
-                let t = text(a, src);
-                if t.windows(9).any(|w| w == b"cfg(test)") || t == b"#[test]" {
-                    return true;
-                }
-                attr = a.prev_named_sibling();
-            }
-        }
-        n = cur.parent();
-    }
-    false
-}
 
 fn has_wildcard_import(declaration: Node, src: &[u8]) -> bool {
     // A re-export (`pub use a::*`) is the module's interface, not a convenience.

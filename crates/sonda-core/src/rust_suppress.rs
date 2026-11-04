@@ -133,8 +133,12 @@ fn keys(name: &str) -> Vec<&'static str> {
 }
 
 /// The rules Clippy doesn't apply to test code: printing and globbing are
-/// how tests are written.
-pub(crate) const TEST_EXEMPT: &[&str] = &["rs/wildcard-import", "rs/print-stdout"];
+/// how tests are written, and they compare a value with itself on purpose.
+pub(crate) const TEST_EXEMPT: &[&str] = &[
+    "rs/wildcard-import",
+    "rs/print-stdout",
+    "rs/identical-operands",
+];
 
 /// Whether a file is test code by where it is: under a `tests` directory, or
 /// a module file named `tests.rs` or `test.rs`.
