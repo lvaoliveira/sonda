@@ -595,14 +595,23 @@ function ProjectFacet({ page, filter }: Readonly<{ page: IssuePage; filter: Issu
 
 /** The prompt, selected, for when the browser won't copy it (plain HTTP): Ctrl/Cmd+C copies it. */
 function CopyByHand({ text, onClose }: Readonly<{ text: string; onClose: () => void }>) {
+  const dialog = useRef<HTMLDialogElement>(null)
   const area = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
+    // Modal: the browser keeps focus inside, and Escape closes it. Opened
+    // once: an open dialog's showModal() throws in older browsers.
+    if (dialog.current && !dialog.current.open) dialog.current.showModal()
     area.current?.focus()
     area.current?.select()
   }, [])
   return (
-    <div role="dialog" aria-modal="true" aria-label="Copy the prompt" className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-      <div className="flex w-full max-w-[720px] flex-col gap-3 rounded-xl bg-panel p-4 edge">
+    <dialog
+      ref={dialog}
+      aria-label="Copy the prompt"
+      onClose={onClose}
+      className="m-auto w-[calc(100%-2rem)] max-w-[720px] rounded-xl border-0 bg-panel p-4 text-fg edge backdrop:bg-black/40"
+    >
+      <div className="flex flex-col gap-3">
         <p className="m-0 text-[13px] text-fg-muted">
           This browser won't copy here (sonda is served over plain HTTP). The prompt is selected: press <Key>⌘</Key> <Key>C</Key> or <Key>Ctrl</Key> <Key>C</Key>, then paste it into your AI assistant.
         </p>
@@ -611,7 +620,7 @@ function CopyByHand({ text, onClose }: Readonly<{ text: string; onClose: () => v
           Done
         </Button>
       </div>
-    </div>
+    </dialog>
   )
 }
 

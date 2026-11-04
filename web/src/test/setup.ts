@@ -4,6 +4,11 @@ import { afterEach } from 'vitest'
 
 afterEach(cleanup)
 
+// jsdom has no modal dialogs: open them in place.
+HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+  this.open = true
+}
+
 // jsdom has no matchMedia; report a wide desktop window.
 window.matchMedia ??= (query: string) =>
   ({
