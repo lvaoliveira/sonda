@@ -117,45 +117,67 @@ fn parse_at(b: &[u8], i: &mut usize, depth: u8) -> Option<Ty> {
     if depth > 16 {
         return None;
     }
-    let mut ty = if b[*i..].starts_with(b"!!") || b[*i..].starts_with(b"!") {
-        let method = b[*i..].starts_with(b"!!");
-        *i += if method { 2 } else { 1 };
-        let start = *i;
-        while *i < b.len() && b[*i].is_ascii_digit() {
-            *i += 1;
-        }
-        let n: u32 = std::str::from_utf8(&b[start..*i]).ok()?.parse().ok()?;
-        if method { Ty::MVar(n) } else { Ty::Var(n) }
+    let ty = if b[*i..].starts_with(b"!") {
+        parse_type_variable(b, i)?
     } else {
-        let start = *i;
-        while *i < b.len() && !matches!(b[*i], b'<' | b',' | b'>' | b'[' | b']' | b'*') {
-            *i += 1;
-        }
-        let key = std::str::from_utf8(&b[start..*i]).ok()?.to_string();
-        let mut args = Vec::new();
-        if b.get(*i) == Some(&b'<') {
-            *i += 1;
-            loop {
-                args.push(parse_at(b, i, depth + 1)?);
-                match b.get(*i) {
-                    Some(b',') => *i += 1,
-                    Some(b'>') => {
-                        *i += 1;
-                        break;
-                    }
-                    _ => return None,
-                }
-            }
-        }
-        if key.is_empty() {
-            return None;
-        }
-        Ty::Named {
-            key,
-            args,
-            local: false,
-        }
+        parse_named(b, i, depth)?
     };
+    array_suffixes(b, i, ty)
+}
+
+/// `!0`, a type's type parameter, or `!!0`, a method's.
+fn parse_type_variable(b: &[u8], i: &mut usize) -> Option<Ty> {
+    let method = b[*i..].starts_with(b"!!");
+    *i += if method { 2 } else { 1 };
+    let start = *i;
+    while *i < b.len() && b[*i].is_ascii_digit() {
+        *i += 1;
+    }
+    let n: u32 = std::str::from_utf8(&b[start..*i]).ok()?.parse().ok()?;
+    Some(if method { Ty::MVar(n) } else { Ty::Var(n) })
+}
+
+/// A type's key, and its type arguments in `<...>`.
+fn parse_named(b: &[u8], i: &mut usize, depth: u8) -> Option<Ty> {
+    let start = *i;
+    while *i < b.len() && !matches!(b[*i], b'<' | b',' | b'>' | b'[' | b']' | b'*') {
+        *i += 1;
+    }
+    let key = std::str::from_utf8(&b[start..*i]).ok()?.to_string();
+    let args = if b.get(*i) == Some(&b'<') {
+        *i += 1;
+        parse_type_arguments(b, i, depth)?
+    } else {
+        Vec::new()
+    };
+    if key.is_empty() {
+        return None;
+    }
+    Some(Ty::Named {
+        key,
+        args,
+        local: false,
+    })
+}
+
+/// The type arguments after `<`, up to and past the `>`.
+fn parse_type_arguments(b: &[u8], i: &mut usize, depth: u8) -> Option<Vec<Ty>> {
+    let mut args = Vec::new();
+    loop {
+        args.push(parse_at(b, i, depth + 1)?);
+        match b.get(*i) {
+            Some(b',') => *i += 1,
+            Some(b'>') => {
+                *i += 1;
+                return Some(args);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// `ty` with the `[]`s that follow it; None for a pointer (`*`).
+fn array_suffixes(b: &[u8], i: &mut usize, mut ty: Ty) -> Option<Ty> {
     loop {
         match b.get(*i) {
             Some(b'[') => {
@@ -194,6 +216,39 @@ fn keyword_type(word: &str) -> Option<&'static str> {
         "void" => "System.Void",
         _ => return None,
     })
+}
+
+/// Between numeric types: implicit when it widens, explicit otherwise.
+fn numeric_conversion(from: &Ty, to: &Ty) -> Option<Conversion> {
+    let (f, t) = (from.key()?, to.key()?);
+    let wider = widens_to(f)?;
+    widens_to(t)?;
+    Some(if wider.contains(&t) {
+        Conversion::Implicit
+    } else {
+        Conversion::Explicit
+    })
+}
+
+/// A numeric literal's type, from its kind and its lowercase text's suffix.
+fn numeric_literal_type(kind: &str, t: &str) -> &'static str {
+    if kind == "integer_literal" {
+        if t.ends_with("ul") || t.ends_with("lu") {
+            "System.UInt64"
+        } else if t.ends_with('l') {
+            "System.Int64"
+        } else if t.ends_with('u') {
+            "System.UInt32"
+        } else {
+            "System.Int32"
+        }
+    } else if t.ends_with('f') {
+        "System.Single"
+    } else if t.ends_with('m') {
+        "System.Decimal"
+    } else {
+        "System.Double"
+    }
 }
 
 /// The numeric types, by key, that a value of this numeric type converts to
@@ -250,58 +305,64 @@ fn widens_to(key: &str) -> Option<&'static [&'static str]> {
 /// The type both operands of an arithmetic operator are promoted to, as
 /// C#'s binary numeric promotion does; None when it's an error or not
 /// numeric.
+const SIGNED: &[&str] = &[
+    "System.SByte",
+    "System.Int16",
+    "System.Int32",
+    "System.Int64",
+];
+
+const INTEGRAL: &[&str] = &[
+    "System.SByte",
+    "System.Byte",
+    "System.Int16",
+    "System.UInt16",
+    "System.Char",
+    "System.Int32",
+    "System.UInt32",
+    "System.Int64",
+    "System.UInt64",
+];
+
+fn is_floating(k: &str) -> bool {
+    matches!(k, "System.Single" | "System.Double")
+}
+
+fn is_numeric(k: &str) -> bool {
+    INTEGRAL.contains(&k) || is_floating(k) || k == "System.Decimal"
+}
+
 fn promoted(a: &str, b: &str) -> Option<&'static str> {
-    const SIGNED: &[&str] = &[
-        "System.SByte",
-        "System.Int16",
-        "System.Int32",
-        "System.Int64",
-    ];
-    const INTEGRAL: &[&str] = &[
-        "System.SByte",
-        "System.Byte",
-        "System.Int16",
-        "System.UInt16",
-        "System.Char",
-        "System.Int32",
-        "System.UInt32",
-        "System.Int64",
-        "System.UInt64",
-    ];
-    let floating = |k: &str| matches!(k, "System.Single" | "System.Double");
-    let numeric = |k: &str| INTEGRAL.contains(&k) || floating(k) || k == "System.Decimal";
-    if !numeric(a) || !numeric(b) {
+    if !is_numeric(a) || !is_numeric(b) {
         return None;
     }
     let either = |k: &str| a == k || b == k;
-    Some(if either("System.Decimal") {
-        if floating(a) || floating(b) {
-            return None;
-        }
-        "System.Decimal"
-    } else if either("System.Double") {
-        "System.Double"
-    } else if either("System.Single") {
-        "System.Single"
-    } else if either("System.UInt64") {
-        if SIGNED.contains(&a) || SIGNED.contains(&b) {
-            return None;
-        }
-        "System.UInt64"
-    } else if either("System.Int64") {
-        "System.Int64"
-    } else if either("System.UInt32") {
-        if ["System.SByte", "System.Int16", "System.Int32"]
+    if either("System.Decimal") {
+        return (!is_floating(a) && !is_floating(b)).then_some("System.Decimal");
+    }
+    if either("System.Double") {
+        return Some("System.Double");
+    }
+    if either("System.Single") {
+        return Some("System.Single");
+    }
+    if either("System.UInt64") {
+        return (!SIGNED.contains(&a) && !SIGNED.contains(&b)).then_some("System.UInt64");
+    }
+    if either("System.Int64") {
+        return Some("System.Int64");
+    }
+    if either("System.UInt32") {
+        let signed = ["System.SByte", "System.Int16", "System.Int32"]
             .iter()
-            .any(|s| either(s))
-        {
+            .any(|s| either(s));
+        return Some(if signed {
             "System.Int64"
         } else {
             "System.UInt32"
-        }
-    } else {
-        "System.Int32"
-    })
+        });
+    }
+    Some("System.Int32")
 }
 
 /// The type an operand of a unary operator or a shift is promoted to:
@@ -419,75 +480,118 @@ impl<'m, 't> Infer<'m, 't> {
     }
 }
 
+/// What `Context::read` collects from a file, as it walks it.
+struct ContextParts<'s, 't> {
+    src: &'s [u8],
+    root: Node<'t>,
+    /// The scope of each type's members, by its node.
+    scopes: HashMap<usize, ScopeId>,
+    usings: Vec<String>,
+    namespaces: Vec<(usize, usize, String)>,
+    locals: HashMap<String, Option<LocalType<'t>>>,
+    type_params: HashSet<String>,
+}
+
+impl<'t> ContextParts<'_, 't> {
+    fn text(&self, n: Node) -> String {
+        n.utf8_text(self.src).unwrap_or_default().to_string()
+    }
+
+    /// Records what `n` declares; whether the walk goes into it.
+    fn visit(&mut self, n: Node<'t>) -> bool {
+        match n.kind() {
+            "using_directive" => {
+                let t = self.text(n);
+                if n.child_by_field_name("name").is_none()
+                    && !t.contains("static")
+                    && let Some(name) = n.named_child(0)
+                {
+                    self.usings.push(self.text(name));
+                }
+                false
+            }
+            "file_scoped_namespace_declaration" | "namespace_declaration" => {
+                if let Some(name) = n.child_by_field_name("name") {
+                    let end = if n.kind() == "namespace_declaration" {
+                        n.end_byte()
+                    } else {
+                        self.root.end_byte()
+                    };
+                    self.namespaces.push((n.start_byte(), end, self.text(name)));
+                }
+                true
+            }
+            "type_parameter" => {
+                if let Some(name) = n.child_by_field_name("name").or_else(|| n.named_child(0)) {
+                    self.type_params.insert(self.text(name));
+                }
+                true
+            }
+            "class_declaration"
+            | "struct_declaration"
+            | "record_declaration"
+            | "record_struct_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "delegate_declaration" => {
+                self.local_type(n);
+                true
+            }
+            // Expressions and statements declare no types.
+            "block" | "arrow_expression_clause" => false,
+            _ => true,
+        }
+    }
+
+    /// A type the file declares, by name and arity; None once it's
+    /// declared twice.
+    fn local_type(&mut self, n: Node<'t>) {
+        let Some(name) = n.child_by_field_name("name") else {
+            return;
+        };
+        let arity = n
+            .named_children(&mut n.walk())
+            .find(|c| c.kind() == "type_parameter_list")
+            .map_or(0, |l| l.named_child_count());
+        let key = format!("{}`{arity}", self.text(name));
+        let local = LocalType {
+            node: n,
+            members: self.scopes.get(&n.id()).copied(),
+        };
+        self.locals
+            .entry(key)
+            .and_modify(|e| *e = None)
+            .or_insert(Some(local));
+    }
+}
+
 impl<'t> Context<'t> {
     fn read(m: &Model<'t>, src: &[u8]) -> Option<Context<'t>> {
         let root = m.root?;
         let platform = dotnet::platform();
-        let text = |n: Node| n.utf8_text(src).unwrap_or_default().to_string();
-        let mut usings = Vec::new();
-        let mut namespaces = Vec::new();
-        let mut locals: HashMap<String, Option<LocalType<'t>>> = HashMap::new();
-        let mut type_params = HashSet::new();
-        let scopes: HashMap<usize, ScopeId> =
-            m.type_scopes.iter().map(|(n, s)| (n.id(), *s)).collect();
+        let mut parts = ContextParts {
+            src,
+            root,
+            scopes: m.type_scopes.iter().map(|(n, s)| (n.id(), *s)).collect(),
+            usings: Vec::new(),
+            namespaces: Vec::new(),
+            locals: HashMap::new(),
+            type_params: HashSet::new(),
+        };
         let mut stack = vec![root];
         while let Some(n) = stack.pop() {
-            match n.kind() {
-                "using_directive" => {
-                    let t = text(n);
-                    if n.child_by_field_name("name").is_none()
-                        && !t.contains("static")
-                        && let Some(name) = n.named_child(0)
-                    {
-                        usings.push(text(name));
-                    }
-                    continue;
-                }
-                "file_scoped_namespace_declaration" | "namespace_declaration" => {
-                    if let Some(name) = n.child_by_field_name("name") {
-                        let end = if n.kind() == "namespace_declaration" {
-                            n.end_byte()
-                        } else {
-                            root.end_byte()
-                        };
-                        namespaces.push((n.start_byte(), end, text(name)));
-                    }
-                }
-                "type_parameter" => {
-                    if let Some(name) = n.child_by_field_name("name").or_else(|| n.named_child(0)) {
-                        type_params.insert(text(name));
-                    }
-                }
-                "class_declaration"
-                | "struct_declaration"
-                | "record_declaration"
-                | "record_struct_declaration"
-                | "interface_declaration"
-                | "enum_declaration"
-                | "delegate_declaration" => {
-                    if let Some(name) = n.child_by_field_name("name") {
-                        let arity = n
-                            .named_children(&mut n.walk())
-                            .find(|c| c.kind() == "type_parameter_list")
-                            .map_or(0, |l| l.named_child_count());
-                        let key = format!("{}`{arity}", text(name));
-                        let local = LocalType {
-                            node: n,
-                            members: scopes.get(&n.id()).copied(),
-                        };
-                        locals
-                            .entry(key)
-                            .and_modify(|e| *e = None)
-                            .or_insert(Some(local));
-                    }
-                }
-                // Expressions and statements declare no types.
-                "block" | "arrow_expression_clause" => continue,
-                _ => {}
+            if parts.visit(n) {
+                let mut c = n.walk();
+                stack.extend(n.named_children(&mut c));
             }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
         }
+        let ContextParts {
+            usings,
+            namespaces,
+            locals,
+            type_params,
+            ..
+        } = parts;
         // A file's own namespaces, and those sharing their first segment,
         // are taken for the project's.
         let roots: HashSet<&str> = namespaces
@@ -657,39 +761,8 @@ impl<'m, 't> Infer<'m, 't> {
     /// The platform key `path` names at `byte`: through the enclosing
     /// namespaces and the usings, then the implicit ones.
     fn platform_key(&self, path: &str, byte: usize, qualified: bool) -> Option<String> {
-        let mut prefixes: Vec<&str> = vec![""];
-        let mut enclosing: Vec<&(usize, usize, String)> = self
-            .namespaces
-            .iter()
-            .filter(|(s, e, _)| *s <= byte && byte < *e)
-            .collect();
-        enclosing.sort_by_key(|(s, _, _)| std::cmp::Reverse(*s));
-        for (_, _, ns) in enclosing {
-            let mut ns = ns.as_str();
-            loop {
-                prefixes.push(ns);
-                match ns.rsplit_once('.') {
-                    Some((outer, _)) => ns = outer,
-                    None => break,
-                }
-            }
-        }
-        prefixes.extend(self.usings.iter().map(String::as_str));
-        let find = |prefixes: &mut dyn Iterator<Item = &str>| -> Vec<String> {
-            let mut found: Vec<String> = Vec::new();
-            for p in prefixes {
-                let key = if p.is_empty() {
-                    path.to_string()
-                } else {
-                    format!("{p}.{path}")
-                };
-                if self.platform.get(&key).is_some() && !found.contains(&key) {
-                    found.push(key);
-                }
-            }
-            found
-        };
-        let found = find(&mut prefixes.into_iter());
+        let prefixes = self.namespace_prefixes(byte);
+        let found = self.platform_keys(path, prefixes.into_iter());
         match found.len() {
             1 => return found.into_iter().next(),
             0 => {}
@@ -698,10 +771,50 @@ impl<'m, 't> Infer<'m, 't> {
         if qualified || !self.implicit {
             return None;
         }
-        let found = find(&mut IMPLICIT_USINGS.iter().copied());
+        let found = self.platform_keys(path, IMPLICIT_USINGS.iter().copied());
         (found.len() == 1)
             .then(|| found.into_iter().next())
             .flatten()
+    }
+
+    /// Where a name at `byte` may be declared: the global namespace, the
+    /// namespaces around it and those enclosing them, innermost first, and
+    /// the file's usings.
+    fn namespace_prefixes(&self, byte: usize) -> Vec<&str> {
+        let mut prefixes: Vec<&str> = vec![""];
+        let mut enclosing: Vec<&(usize, usize, String)> = self
+            .namespaces
+            .iter()
+            .filter(|(s, e, _)| *s <= byte && byte < *e)
+            .collect();
+        enclosing.sort_by_key(|(s, _, _)| std::cmp::Reverse(*s));
+        for (_, _, ns) in enclosing {
+            prefixes.extend(std::iter::successors(Some(ns.as_str()), |ns| {
+                ns.rsplit_once('.').map(|(outer, _)| outer)
+            }));
+        }
+        prefixes.extend(self.usings.iter().map(String::as_str));
+        prefixes
+    }
+
+    /// The distinct platform keys `path` names under each of `prefixes`.
+    fn platform_keys<'p>(
+        &self,
+        path: &str,
+        prefixes: impl Iterator<Item = &'p str>,
+    ) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        for p in prefixes {
+            let key = if p.is_empty() {
+                path.to_string()
+            } else {
+                format!("{p}.{path}")
+            };
+            if self.platform.get(&key).is_some() && !found.contains(&key) {
+                found.push(key);
+            }
+        }
+        found
     }
 
     fn is_value_type(&self, ty: &Ty) -> bool {
@@ -831,34 +944,11 @@ impl<'m, 't> Infer<'m, 't> {
         if from == to {
             return Some(Conversion::Identity);
         }
-        if let (Some(f), Some(t)) = (from.key(), to.key())
-            && let Some(wider) = widens_to(f)
-            && widens_to(t).is_some()
-        {
-            return Some(if wider.contains(&t) {
-                Conversion::Implicit
-            } else {
-                Conversion::Explicit
-            });
+        if let Some(numeric) = numeric_conversion(from, to) {
+            return Some(numeric);
         }
-        const NULLABLE: &str = "System.Nullable`1";
-        match (from.is(NULLABLE), to.is(NULLABLE)) {
-            (false, true) => {
-                return match self.conversion(from, to.args().first()?)? {
-                    Conversion::Identity | Conversion::Implicit => Some(Conversion::Implicit),
-                    other => Some(other),
-                };
-            }
-            (true, true) => {
-                return match self.conversion(from.args().first()?, to.args().first()?)? {
-                    Conversion::Identity => Some(Conversion::Identity),
-                    other => Some(other),
-                };
-            }
-            (true, false) if from.args().first() == Some(to) => {
-                return Some(Conversion::Explicit);
-            }
-            _ => {}
+        if let Some(nullable) = self.nullable_conversion(from, to) {
+            return nullable;
         }
         if to.is("System.Object") {
             return Some(Conversion::Implicit);
@@ -870,27 +960,66 @@ impl<'m, 't> Infer<'m, 't> {
         if up.contains(to) {
             return Some(Conversion::Implicit);
         }
-        // `IEnumerable<string>` to `IEnumerable<object>`: variance, which
-        // the declarations here don't record, of interfaces and delegates.
-        if up.iter().any(|s| s.key().is_some() && s.key() == to.key())
-            && (self.interface(to) != Some(false) || self.delegate(to))
-        {
+        if self.may_be_variant(&up, to) {
             return None;
         }
         if let (Ty::Array(a), Ty::Array(b)) = (from, to) {
-            return match self.conversion(a, b)? {
-                Conversion::Implicit if self.value_type(a) == Some(false) => {
-                    Some(Conversion::Implicit)
-                }
-                Conversion::Implicit | Conversion::Explicit
-                    if self.value_type(a) == Some(false) && self.value_type(b) == Some(false) =>
-                {
-                    Some(Conversion::Explicit)
-                }
-                _ => None,
-            };
+            return self.array_conversion(a, b);
         }
-        let down = self.supertypes(to).contains(from);
+        if self.explicitly_related(from, to) {
+            return Some(Conversion::Explicit);
+        }
+        // C# allows no conversion operator between types related otherwise.
+        self.user_conversion(from, to, false)
+            .then_some(Conversion::UserDefined)
+    }
+
+    /// `IEnumerable<string>` to `IEnumerable<object>`: variance, which the
+    /// declarations here don't record, of interfaces and delegates.
+    fn may_be_variant(&self, up: &[Ty], to: &Ty) -> bool {
+        up.iter().any(|s| s.key().is_some() && s.key() == to.key())
+            && (self.interface(to) != Some(false) || self.delegate(to))
+    }
+
+    /// The conversion when either side is a `Nullable<T>`, as `Some`; None
+    /// when neither is, or this rule doesn't decide it.
+    fn nullable_conversion(&self, from: &Ty, to: &Ty) -> Option<Option<Conversion>> {
+        const NULLABLE: &str = "System.Nullable`1";
+        match (from.is(NULLABLE), to.is(NULLABLE)) {
+            (false, true) => Some(to.args().first().and_then(
+                |t| match self.conversion(from, t)? {
+                    Conversion::Identity | Conversion::Implicit => Some(Conversion::Implicit),
+                    other => Some(other),
+                },
+            )),
+            (true, true) => Some(
+                from.args()
+                    .first()
+                    .zip(to.args().first())
+                    .and_then(|(f, t)| self.conversion(f, t)),
+            ),
+            (true, false) if from.args().first() == Some(to) => Some(Some(Conversion::Explicit)),
+            _ => None,
+        }
+    }
+
+    /// Arrays of reference types convert as their elements do.
+    fn array_conversion(&self, a: &Ty, b: &Ty) -> Option<Conversion> {
+        match self.conversion(a, b)? {
+            Conversion::Implicit if self.value_type(a) == Some(false) => Some(Conversion::Implicit),
+            Conversion::Implicit | Conversion::Explicit
+                if self.value_type(a) == Some(false) && self.value_type(b) == Some(false) =>
+            {
+                Some(Conversion::Explicit)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether an explicit conversion exists: down the type hierarchy,
+    /// between an enum and a number, or between an interface and a type
+    /// that may implement it.
+    fn explicitly_related(&self, from: &Ty, to: &Ty) -> bool {
         let enum_number =
             |a: &Ty, b: &Ty| self.kind(a) == Some("enum") && b.key().and_then(widens_to).is_some();
         let interface_class = |a: &Ty, b: &Ty| {
@@ -898,17 +1027,11 @@ impl<'m, 't> Infer<'m, 't> {
                 && (self.interface(b) == Some(true)
                     || (self.value_type(b) == Some(false) && !self.sealed(b)))
         };
-        if down
+        self.supertypes(to).contains(from)
             || enum_number(from, to)
             || enum_number(to, from)
             || interface_class(from, to)
             || interface_class(to, from)
-        {
-            return Some(Conversion::Explicit);
-        }
-        // C# allows no conversion operator between types related otherwise.
-        self.user_conversion(from, to, false)
-            .then_some(Conversion::UserDefined)
     }
 
     /// A platform type's kind, or a local one's: "class", "struct",
@@ -1229,63 +1352,77 @@ impl<'m, 't> Infer<'m, 't> {
             if out.contains(&t) || out.len() > 64 {
                 continue;
             }
-            match &t {
-                Ty::Array(e) => {
-                    for key in [
-                        "System.Collections.Generic.IList`1",
-                        "System.Collections.Generic.IReadOnlyList`1",
-                    ] {
-                        todo.push_back(Ty::platform(key, vec![(**e).clone()]));
-                    }
-                    todo.push_back(Ty::platform("System.Array", Vec::new()));
-                }
-                Ty::Named {
-                    key,
-                    args,
-                    local: false,
-                } => {
-                    if let Some(p) = self.platform.get(key) {
-                        let next = p
-                            .base
-                            .iter()
-                            .chain(p.interfaces.iter())
-                            .filter_map(|b| Ty::parse(b))
-                            .map(|b| b.substitute(args, &[]));
-                        todo.extend(next);
-                        if p.kind == "interface" {
-                            todo.push_back(Ty::platform("System.Object", Vec::new()));
-                        }
-                    }
-                }
-                Ty::Named {
-                    key, local: true, ..
-                } => {
-                    if let Some(local) = self.locals.get(key).copied().flatten()
-                        && let Some(bases) = local
-                            .node
-                            .named_children(&mut local.node.walk())
-                            .find(|c| c.kind() == "base_list")
-                    {
-                        let mut c = bases.walk();
-                        let written: Vec<Ty> = bases
-                            .named_children(&mut c)
-                            .filter_map(|b| {
-                                let b = if b.kind() == "primary_constructor_base_type" {
-                                    b.named_child(0)?
-                                } else {
-                                    b
-                                };
-                                self.written(b)
-                            })
-                            .collect();
-                        todo.extend(written);
-                    }
-                }
-                _ => {}
-            }
+            todo.extend(self.direct_supertypes(&t));
             out.push(t);
         }
         out
+    }
+
+    /// What `t` derives from or implements directly: an array's
+    /// `IList<T>`, `IReadOnlyList<T>` and `Array`; a platform type's base
+    /// and interfaces (and `object`, for an interface); a type of this
+    /// file's base list.
+    fn direct_supertypes(&self, t: &Ty) -> Vec<Ty> {
+        match t {
+            Ty::Array(e) => vec![
+                Ty::platform("System.Collections.Generic.IList`1", vec![(**e).clone()]),
+                Ty::platform(
+                    "System.Collections.Generic.IReadOnlyList`1",
+                    vec![(**e).clone()],
+                ),
+                Ty::platform("System.Array", Vec::new()),
+            ],
+            Ty::Named {
+                key,
+                args,
+                local: false,
+            } => {
+                let Some(p) = self.platform.get(key) else {
+                    return Vec::new();
+                };
+                let mut next: Vec<Ty> = p
+                    .base
+                    .iter()
+                    .chain(p.interfaces.iter())
+                    .filter_map(|b| Ty::parse(b))
+                    .map(|b| b.substitute(args, &[]))
+                    .collect();
+                if p.kind == "interface" {
+                    next.push(Ty::platform("System.Object", Vec::new()));
+                }
+                next
+            }
+            Ty::Named {
+                key, local: true, ..
+            } => self.local_bases(key),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The types written in the base list of the file's type `key`.
+    fn local_bases(&self, key: &str) -> Vec<Ty> {
+        let Some(local) = self.locals.get(key).copied().flatten() else {
+            return Vec::new();
+        };
+        let Some(bases) = local
+            .node
+            .named_children(&mut local.node.walk())
+            .find(|c| c.kind() == "base_list")
+        else {
+            return Vec::new();
+        };
+        let mut c = bases.walk();
+        bases
+            .named_children(&mut c)
+            .filter_map(|b| {
+                let b = if b.kind() == "primary_constructor_base_type" {
+                    b.named_child(0)?
+                } else {
+                    b
+                };
+                self.written(b)
+            })
+            .collect()
     }
 
     /// The members named `name` a type has: methods taking `arguments`
@@ -1308,54 +1445,69 @@ impl<'m, 't> Infer<'m, 't> {
                     key,
                     args,
                     local: false,
-                } => {
-                    let Some(p) = self.platform.get(key) else {
-                        continue;
-                    };
-                    for m in p.members.iter().filter(|m| m.name == name) {
-                        let fits = match arguments {
-                            Some(n) => m.kind == "method" && accepts(m, n, 0),
-                            None => matches!(m.kind.as_str(), "property" | "field" | "event"),
-                        };
-                        if fits {
-                            out.push(Found::Platform {
-                                declaring: p,
-                                member: m,
-                                vars: args.clone(),
-                            });
-                        }
-                    }
-                }
+                } => out.extend(self.platform_members(key, args, name, arguments)),
                 Ty::Named {
                     key, local: true, ..
-                } => {
-                    let Some(scope) = self
-                        .locals
-                        .get(key)
-                        .copied()
-                        .flatten()
-                        .and_then(|l| l.members)
-                    else {
-                        continue;
-                    };
-                    for &d in self.m.decls_named(scope, name) {
-                        let d = &self.m.decls[d];
-                        let fits = match arguments {
-                            Some(n) => {
-                                d.kind == DeclKind::Method
-                                    && d.declarator.is_some_and(|m| self.local_accepts(m, n))
-                            }
-                            None => matches!(d.kind, DeclKind::Field | DeclKind::Property),
-                        };
-                        if fits {
-                            out.push(Found::Local(d));
-                        }
-                    }
-                }
+                } => out.extend(self.local_members(key, name, arguments)),
                 _ => {}
             }
         }
         out
+    }
+
+    /// The members named `name` of the platform type `key`: methods that
+    /// take `arguments` arguments, or, without a count, properties, fields
+    /// and events.
+    fn platform_members(
+        &self,
+        key: &str,
+        args: &[Ty],
+        name: &str,
+        arguments: Option<usize>,
+    ) -> Vec<Found<'m, 't>> {
+        let Some(p) = self.platform.get(key) else {
+            return Vec::new();
+        };
+        p.members
+            .iter()
+            .filter(|m| m.name == name)
+            .filter(|m| match arguments {
+                Some(n) => m.kind == "method" && accepts(m, n, 0),
+                None => matches!(m.kind.as_str(), "property" | "field" | "event"),
+            })
+            .map(|m| Found::Platform {
+                declaring: p,
+                member: m,
+                vars: args.to_vec(),
+            })
+            .collect()
+    }
+
+    /// The members named `name` of the file's type `key`: methods that take
+    /// `arguments` arguments, or, without a count, fields and properties.
+    fn local_members(&self, key: &str, name: &str, arguments: Option<usize>) -> Vec<Found<'m, 't>> {
+        let Some(scope) = self
+            .locals
+            .get(key)
+            .copied()
+            .flatten()
+            .and_then(|l| l.members)
+        else {
+            return Vec::new();
+        };
+        self.m
+            .decls_named(scope, name)
+            .iter()
+            .map(|&d| &self.m.decls[d])
+            .filter(|d| match arguments {
+                Some(n) => {
+                    d.kind == DeclKind::Method
+                        && d.declarator.is_some_and(|m| self.local_accepts(m, n))
+                }
+                None => matches!(d.kind, DeclKind::Field | DeclKind::Property),
+            })
+            .map(Found::Local)
+            .collect()
     }
 
     fn local_accepts(&self, method: Node, n: usize) -> bool {
@@ -1528,7 +1680,6 @@ impl<'m, 't> Infer<'m, 't> {
             return None;
         }
         let d = depth + 1;
-        let string = || Some(Ty::platform(STRING, Vec::new()));
         match expr.kind() {
             "parenthesized_expression" => self.typed(expr.named_child(0)?, d),
             "identifier" => self.name_type(expr, d),
@@ -1538,164 +1689,25 @@ impl<'m, 't> Infer<'m, 't> {
                 let receiver = self.receiver(expr.child_by_field_name("expression")?, d)?;
                 self.agreed(&self.members(&receiver, self.text(simple(name)?), None))
             }
-            "invocation_expression" => {
-                // `nameof(x)`, unless a method of that name is declared.
-                if let Some(f) = expr.child_by_field_name("function")
-                    && f.kind() == "identifier"
-                    && self.text(f) == "nameof"
-                    && self.m.decl_of(f).is_none()
-                {
-                    return string();
-                }
-                let Some(call) = self.call_at(expr, d) else {
-                    return self.object_method(expr);
-                };
-                if call.extension {
-                    // The method's own type arguments come from the receiver.
-                    let mut types = call.methods.iter().map(|f| match f {
-                        Found::Platform { member, .. } => {
-                            let receiver = call.receiver.as_ref()?;
-                            let bound = self.bind_extension(member, receiver)?;
-                            Ty::parse(&member.ty).map(|t| t.substitute(&[], &bound))
-                        }
-                        Found::Local(_) => None,
-                    });
-                    let first = types.next()??;
-                    types
-                        .all(|t| t.as_ref() == Some(&first))
-                        .then_some(first)
-                        .and_then(Ty::known)
-                        .filter(|t| !contains_unbound(t))
-                } else {
-                    self.agreed(&call.methods)
-                }
-            }
+            "invocation_expression" => self.invocation_type(expr, d),
             "object_creation_expression" | "array_creation_expression" | "cast_expression" => {
                 self.written(expr.child_by_field_name("type")?)
             }
             "as_expression" => self.written(expr.child_by_field_name("right")?),
-            "await_expression" => {
-                let awaited = self.typed(expr.named_child(0)?, d)?;
-                match awaited.key()? {
-                    "System.Threading.Tasks.Task`1" | "System.Threading.Tasks.ValueTask`1" => {
-                        awaited.args().first().cloned().and_then(Ty::known)
-                    }
-                    _ => None,
-                }
-            }
-            "element_access_expression" => {
-                let receiver = self.typed(expr.child_by_field_name("expression")?, d)?;
-                match receiver {
-                    Ty::Array(e) => (*e).known(),
-                    ref t if t.is(STRING) => Some(Ty::platform("System.Char", Vec::new())),
-                    t => self.agreed(
-                        &self
-                            .members(&t, "Item", None)
-                            .into_iter()
-                            .filter(|f| matches!(f, Found::Platform { member, .. } if member.params.len() == 1))
-                            .collect::<Vec<_>>(),
-                    ),
-                }
-            }
+            "await_expression" => self.await_type(expr, d),
+            "element_access_expression" => self.indexed_type(expr, d),
             "string_literal"
             | "verbatim_string_literal"
             | "raw_string_literal"
-            | "interpolated_string_expression" => string(),
+            | "interpolated_string_expression" => Some(Ty::platform(STRING, Vec::new())),
             "boolean_literal" => Some(Ty::platform("System.Boolean", Vec::new())),
             "character_literal" => Some(Ty::platform("System.Char", Vec::new())),
-            "integer_literal" | "real_literal" => {
-                let t = self.text(expr).to_ascii_lowercase();
-                let key = if expr.kind() == "integer_literal" {
-                    if t.ends_with("ul") || t.ends_with("lu") {
-                        "System.UInt64"
-                    } else if t.ends_with('l') {
-                        "System.Int64"
-                    } else if t.ends_with('u') {
-                        "System.UInt32"
-                    } else {
-                        "System.Int32"
-                    }
-                } else if t.ends_with('f') {
-                    "System.Single"
-                } else if t.ends_with('m') {
-                    "System.Decimal"
-                } else {
-                    "System.Double"
-                };
-                Some(Ty::platform(key, Vec::new()))
-            }
-            "binary_expression" => {
-                let op = self.text(expr.child_by_field_name("operator")?);
-                let (l, r) = (
-                    expr.child_by_field_name("left")?,
-                    expr.child_by_field_name("right")?,
-                );
-                match op {
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => {
-                        Some(Ty::platform("System.Boolean", Vec::new()))
-                    }
-                    "+" if [l, r]
-                        .iter()
-                        .any(|x| self.typed(*x, d).is_some_and(|t| t.is(STRING))) =>
-                    {
-                        string()
-                    }
-                    "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" => {
-                        let (a, b) = (self.typed(l, d)?, self.typed(r, d)?);
-                        let bool_key = "System.Boolean";
-                        if matches!(op, "&" | "|" | "^") && a.is(bool_key) && b.is(bool_key) {
-                            return Some(a);
-                        }
-                        let key = promoted(a.key()?, b.key()?)?;
-                        let floating = ["System.Single", "System.Double", "System.Decimal"];
-                        if matches!(op, "&" | "|" | "^") && floating.contains(&key) {
-                            return None;
-                        }
-                        Some(Ty::platform(key, Vec::new()))
-                    }
-                    "<<" | ">>" | ">>>" => {
-                        let a = self.typed(l, d)?;
-                        let key = unary_promoted(a.key()?)?;
-                        matches!(
-                            key,
-                            "System.Int32" | "System.UInt32" | "System.Int64" | "System.UInt64"
-                        )
-                        .then(|| Ty::platform(key, Vec::new()))
-                    }
-                    _ => None,
-                }
-            }
-            "prefix_unary_expression" => {
-                let operand = expr.named_child(0)?;
-                let op = self.text(expr).trim_start();
-                if op.starts_with('!') {
-                    return Some(Ty::platform("System.Boolean", Vec::new()));
-                }
-                let t = self.typed(operand, d)?;
-                let key = t.key()?;
-                if op.starts_with("++") || op.starts_with("--") {
-                    return widens_to(key).map(|_| t.clone());
-                }
-                if op.starts_with('-') {
-                    // -uint is a long, -ulong an error.
-                    return match key {
-                        "System.UInt32" => Some(Ty::platform("System.Int64", Vec::new())),
-                        "System.UInt64" => None,
-                        _ => unary_promoted(key).map(|k| Ty::platform(k, Vec::new())),
-                    };
-                }
-                if op.starts_with('+') {
-                    return unary_promoted(key).map(|k| Ty::platform(k, Vec::new()));
-                }
-                if op.starts_with('~') {
-                    return unary_promoted(key)
-                        .filter(|k| {
-                            !matches!(*k, "System.Single" | "System.Double" | "System.Decimal")
-                        })
-                        .map(|k| Ty::platform(k, Vec::new()));
-                }
-                None
-            }
+            "integer_literal" | "real_literal" => Some(Ty::platform(
+                numeric_literal_type(expr.kind(), &self.text(expr).to_ascii_lowercase()),
+                Vec::new(),
+            )),
+            "binary_expression" => self.binary_type(expr, d),
+            "prefix_unary_expression" => self.prefix_type(expr, d),
             "conditional_expression" => {
                 let a = self.typed(expr.child_by_field_name("consequence")?, d)?;
                 let b = self.typed(expr.child_by_field_name("alternative")?, d)?;
@@ -1703,6 +1715,155 @@ impl<'m, 't> Infer<'m, 't> {
             }
             _ => None,
         }
+    }
+
+    /// A call's type: `nameof(x)` is a string unless a method of that name
+    /// is declared; else what the methods it can call agree on.
+    fn invocation_type(&self, expr: Node, d: u8) -> Option<Ty> {
+        if let Some(f) = expr.child_by_field_name("function")
+            && f.kind() == "identifier"
+            && self.text(f) == "nameof"
+            && self.m.decl_of(f).is_none()
+        {
+            return Some(Ty::platform(STRING, Vec::new()));
+        }
+        let Some(call) = self.call_at(expr, d) else {
+            return self.object_method(expr);
+        };
+        if call.extension {
+            self.extension_result(&call)
+        } else {
+            self.agreed(&call.methods)
+        }
+    }
+
+    /// An extension call's type, when every candidate agrees: the method's
+    /// own type arguments come from the receiver.
+    fn extension_result(&self, call: &Call) -> Option<Ty> {
+        let mut types = call.methods.iter().map(|f| match f {
+            Found::Platform { member, .. } => {
+                let receiver = call.receiver.as_ref()?;
+                let bound = self.bind_extension(member, receiver)?;
+                Ty::parse(&member.ty).map(|t| t.substitute(&[], &bound))
+            }
+            Found::Local(_) => None,
+        });
+        let first = types.next()??;
+        types
+            .all(|t| t.as_ref() == Some(&first))
+            .then_some(first)
+            .and_then(Ty::known)
+            .filter(|t| !contains_unbound(t))
+    }
+
+    /// `await t`: the result of a `Task<T>` or a `ValueTask<T>`.
+    fn await_type(&self, expr: Node, d: u8) -> Option<Ty> {
+        let awaited = self.typed(expr.named_child(0)?, d)?;
+        match awaited.key()? {
+            "System.Threading.Tasks.Task`1" | "System.Threading.Tasks.ValueTask`1" => {
+                awaited.args().first().cloned().and_then(Ty::known)
+            }
+            _ => None,
+        }
+    }
+
+    /// `x[i]`: an array's element, a string's char, or what a one-argument
+    /// indexer returns.
+    fn indexed_type(&self, expr: Node, d: u8) -> Option<Ty> {
+        let receiver = self.typed(expr.child_by_field_name("expression")?, d)?;
+        match receiver {
+            Ty::Array(e) => (*e).known(),
+            ref t if t.is(STRING) => Some(Ty::platform("System.Char", Vec::new())),
+            t => self.agreed(
+                &self
+                    .members(&t, "Item", None)
+                    .into_iter()
+                    .filter(
+                        |f| matches!(f, Found::Platform { member, .. } if member.params.len() == 1),
+                    )
+                    .collect::<Vec<_>>(),
+            ),
+        }
+    }
+
+    fn binary_type(&self, expr: Node, d: u8) -> Option<Ty> {
+        let op = self.text(expr.child_by_field_name("operator")?);
+        let (l, r) = (
+            expr.child_by_field_name("left")?,
+            expr.child_by_field_name("right")?,
+        );
+        match op {
+            "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => {
+                Some(Ty::platform("System.Boolean", Vec::new()))
+            }
+            "+" if [l, r]
+                .iter()
+                .any(|x| self.typed(*x, d).is_some_and(|t| t.is(STRING))) =>
+            {
+                Some(Ty::platform(STRING, Vec::new()))
+            }
+            "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" => self.arithmetic_type(op, l, r, d),
+            "<<" | ">>" | ">>>" => self.shift_type(l, d),
+            _ => None,
+        }
+    }
+
+    /// Arithmetic and bitwise operators: the operands' promoted type; `&`,
+    /// `|` and `^` of two bools are a bool, and of floating point an error.
+    fn arithmetic_type(&self, op: &str, l: Node, r: Node, d: u8) -> Option<Ty> {
+        let (a, b) = (self.typed(l, d)?, self.typed(r, d)?);
+        let bool_key = "System.Boolean";
+        let bitwise = matches!(op, "&" | "|" | "^");
+        if bitwise && a.is(bool_key) && b.is(bool_key) {
+            return Some(a);
+        }
+        let key = promoted(a.key()?, b.key()?)?;
+        let floating = ["System.Single", "System.Double", "System.Decimal"];
+        if bitwise && floating.contains(&key) {
+            return None;
+        }
+        Some(Ty::platform(key, Vec::new()))
+    }
+
+    /// Shifts: the left operand's promoted integral type.
+    fn shift_type(&self, l: Node, d: u8) -> Option<Ty> {
+        let a = self.typed(l, d)?;
+        let key = unary_promoted(a.key()?)?;
+        matches!(
+            key,
+            "System.Int32" | "System.UInt32" | "System.Int64" | "System.UInt64"
+        )
+        .then(|| Ty::platform(key, Vec::new()))
+    }
+
+    fn prefix_type(&self, expr: Node, d: u8) -> Option<Ty> {
+        let operand = expr.named_child(0)?;
+        let op = self.text(expr).trim_start();
+        if op.starts_with('!') {
+            return Some(Ty::platform("System.Boolean", Vec::new()));
+        }
+        let t = self.typed(operand, d)?;
+        let key = t.key()?;
+        if op.starts_with("++") || op.starts_with("--") {
+            return widens_to(key).map(|_| t.clone());
+        }
+        if op.starts_with('-') {
+            // -uint is a long, -ulong an error.
+            return match key {
+                "System.UInt32" => Some(Ty::platform("System.Int64", Vec::new())),
+                "System.UInt64" => None,
+                _ => unary_promoted(key).map(|k| Ty::platform(k, Vec::new())),
+            };
+        }
+        if op.starts_with('+') {
+            return unary_promoted(key).map(|k| Ty::platform(k, Vec::new()));
+        }
+        if op.starts_with('~') {
+            return unary_promoted(key)
+                .filter(|k| !matches!(*k, "System.Single" | "System.Double" | "System.Decimal"))
+                .map(|k| Ty::platform(k, Vec::new()));
+        }
+        None
     }
 
     /// A receiver: an expression's type, or a type named for a static
