@@ -7,7 +7,7 @@
 //! module holds their checks.
 
 use crate::semantic::cs_index::{
-    FACT, FileIndex, MemberDecl, ParamDecl, ProjectIndex, Span, TypeDecl, TypeId, TypeRef,
+    FACT, FileIndex, MemberDecl, ParamDecl, ProjectIndex, Site, Span, TypeDecl, TypeId, TypeRef,
 };
 use crate::semantic::dotnet::{self, PlatformType};
 
@@ -61,26 +61,7 @@ pub(crate) fn run<'f>(
     for id in 0..index.len() {
         let (_, decl) = index.decl(id);
         match decl.kind.as_str() {
-            "class" | "struct" | "record" => {
-                overrides_and_implementations(&index, id, &on, &mut found);
-                if decl.kind != "struct" && on("cs/disposable-fields-without-idisposable") {
-                    disposable_fields(&index, id, &mut found);
-                }
-                if decl.kind == "class" {
-                    if on("cs/deep-inheritance") {
-                        deep_inheritance(&index, id, &mut found);
-                    }
-                    if on("cs/hiding-member-less-visible") || on("cs/base-method-hidden") {
-                        hidden_base_methods(&index, id, &on, &mut found);
-                    }
-                    if on("cs/field-differs-from-base-by-case") {
-                        fields_differing_by_case(&index, id, &mut found);
-                    }
-                    if on("cs/dispose-pattern") {
-                        dispose_pattern(&index, id, &mut found);
-                    }
-                }
-            }
+            "class" | "struct" | "record" => type_rules(&index, id, &decl.kind, &on, &mut found),
             "interface" if on("cs/interface-colliding-members") => {
                 colliding_members(&index, id, &mut found)
             }
@@ -118,6 +99,7 @@ pub(crate) fn targeted_regions<'f>(
         })
         .collect();
     let index = ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
+    let files: Vec<usize> = parsed.iter().map(|(i, _)| *i).collect();
     let mut out = Vec::new();
     for (n, (scope, target)) in targets.iter().enumerate() {
         let target = target.trim().trim_start_matches('~');
@@ -128,59 +110,86 @@ pub(crate) fn targeted_regions<'f>(
             }
             continue;
         }
-        match (prefix, *scope) {
-            ("T", _) | ("", "type") => {
-                if let Some(id) = index.type_named(&doc_type_name(name)) {
-                    for (file, t) in index.parts(id) {
-                        out.push((n, parsed[*file].0, t.lines.0, t.lines.1));
-                    }
-                }
-            }
+        let regions = match (prefix, *scope) {
+            ("T", _) | ("", "type") => type_regions(&index, name),
             ("N", "namespaceanddescendants") | ("", "namespaceanddescendants") => {
-                for id in 0..index.len() {
-                    for (file, t) in index.parts(id) {
-                        let ns = &t.namespace;
-                        let inside =
-                            ns == name || ns.strip_prefix(name).is_some_and(|r| r.starts_with('.'));
-                        if inside && t.outer.is_empty() {
-                            out.push((n, parsed[*file].0, t.lines.0, t.lines.1));
-                        }
-                    }
-                }
+                namespace_regions(&index, name)
             }
-            ("M" | "P" | "F" | "E", _) | ("", "member") => {
-                // Parameters, then the return type of a conversion operator.
-                let (path, params) = match name.split_once('(') {
-                    Some((path, rest)) => (path, Some(rest.split(')').next().unwrap_or(""))),
-                    None => (name, None),
-                };
-                let path = path.split('~').next().unwrap_or(path);
-                let Some((owner, member)) = path.rsplit_once('.') else {
-                    continue;
-                };
-                // Explicit implementations: `Ns#IStore#Save`.
-                let member = member.rsplit('#').next().unwrap_or(member);
-                let member = member.split('`').next().unwrap_or(member);
-                let arity = params.map(doc_param_count);
-                let Some(id) = index.type_named(&doc_type_name(owner)) else {
-                    continue;
-                };
-                for (file, t) in index.parts(id) {
-                    for m in &t.members {
-                        let named = match path.rsplit('.').next() {
-                            Some("#ctor") => m.kind == "constructor" && !m.has("static"),
-                            Some("#cctor") => m.kind == "constructor" && m.has("static"),
-                            Some("Finalize") if m.kind == "destructor" => true,
-                            _ => m.name == member,
-                        };
-                        let fits = prefix != "M" || arity.unwrap_or(0) == m.params.len();
-                        if named && fits {
-                            out.push((n, parsed[*file].0, m.lines.0, m.lines.1));
-                        }
-                    }
-                }
+            ("M" | "P" | "F" | "E", _) | ("", "member") => member_regions(&index, prefix, name),
+            _ => Vec::new(),
+        };
+        out.extend(
+            regions
+                .into_iter()
+                .map(|(file, start, end)| (n, files[file], start, end)),
+        );
+    }
+    out
+}
+
+/// (file of the index, first line, last line) of a type's parts.
+type Regions = Vec<(usize, usize, usize)>;
+
+/// The parts of the type `name`.
+fn type_regions(index: &ProjectIndex, name: &str) -> Regions {
+    let Some(id) = index.type_named(&doc_type_name(name)) else {
+        return Vec::new();
+    };
+    index
+        .parts(id)
+        .iter()
+        .map(|(file, t)| (*file, t.lines.0, t.lines.1))
+        .collect()
+}
+
+/// The top-level types of the namespace `name` and those inside it.
+fn namespace_regions(index: &ProjectIndex, name: &str) -> Regions {
+    let mut out = Vec::new();
+    for id in 0..index.len() {
+        for (file, t) in index.parts(id) {
+            let ns = &t.namespace;
+            let inside = ns == name || ns.strip_prefix(name).is_some_and(|r| r.starts_with('.'));
+            if inside && t.outer.is_empty() {
+                out.push((*file, t.lines.0, t.lines.1));
             }
-            _ => {}
+        }
+    }
+    out
+}
+
+/// The members a documentation ID names: by name (and, for a method, by
+/// its number of parameters), a constructor, a static constructor or a
+/// finalizer.
+fn member_regions(index: &ProjectIndex, prefix: &str, name: &str) -> Regions {
+    // Parameters, then the return type of a conversion operator.
+    let (path, params) = match name.split_once('(') {
+        Some((path, rest)) => (path, Some(rest.split(')').next().unwrap_or(""))),
+        None => (name, None),
+    };
+    let path = path.split('~').next().unwrap_or(path);
+    let Some((owner, member)) = path.rsplit_once('.') else {
+        return Vec::new();
+    };
+    // Explicit implementations: `Ns#IStore#Save`.
+    let member = member.rsplit('#').next().unwrap_or(member);
+    let member = member.split('`').next().unwrap_or(member);
+    let arity = params.map(doc_param_count);
+    let Some(id) = index.type_named(&doc_type_name(owner)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (file, t) in index.parts(id) {
+        for m in &t.members {
+            let named = match path.rsplit('.').next() {
+                Some("#ctor") => m.kind == "constructor" && !m.has("static"),
+                Some("#cctor") => m.kind == "constructor" && m.has("static"),
+                Some("Finalize") if m.kind == "destructor" => true,
+                _ => m.name == member,
+            };
+            let fits = prefix != "M" || arity.unwrap_or(0) == m.params.len();
+            if named && fits {
+                out.push((*file, m.lines.0, m.lines.1));
+            }
         }
     }
     out
@@ -307,6 +316,35 @@ fn counterpart<'a>(
     None
 }
 
+/// The project rules about a class, struct or record.
+fn type_rules(
+    index: &ProjectIndex,
+    id: TypeId,
+    kind: &str,
+    on: &dyn Fn(&str) -> bool,
+    found: &mut Vec<Finding>,
+) {
+    overrides_and_implementations(index, id, on, found);
+    if kind != "struct" && on("cs/disposable-fields-without-idisposable") {
+        disposable_fields(index, id, found);
+    }
+    if kind != "class" {
+        return;
+    }
+    if on("cs/deep-inheritance") {
+        deep_inheritance(index, id, found);
+    }
+    if on("cs/hiding-member-less-visible") || on("cs/base-method-hidden") {
+        hidden_base_methods(index, id, on, found);
+    }
+    if on("cs/field-differs-from-base-by-case") {
+        fields_differing_by_case(index, id, found);
+    }
+    if on("cs/dispose-pattern") {
+        dispose_pattern(index, id, found);
+    }
+}
+
 fn overrides_and_implementations(
     index: &ProjectIndex,
     id: TypeId,
@@ -325,33 +363,49 @@ fn overrides_and_implementations(
         }
         let pairs: Vec<(&ParamDecl, &ParamDecl)> =
             method.params.iter().zip(&other.params).collect();
-        // The first differing name; `_` marks a parameter unused on purpose.
         if on("cs/parameter-name-mismatch")
-            && let Some((mine, _)) = pairs
-                .iter()
-                .find(|(a, b)| a.name != b.name && !a.name.chars().all(|c| c == '_'))
+            && let Some(mine) = parameter_name_mismatch(&pairs)
         {
             found.push(("cs/parameter-name-mismatch", file, mine.span));
         }
-        for (mine, theirs) in &pairs {
-            // Overrides, as documented: an interface's defaults apply only
-            // through the interface.
-            if on("cs/override-changes-default")
-                && method.has("override")
-                && let (Some(a), Some(b)) = (&mine.default, &theirs.default)
-                && canonical_default(a) != canonical_default(b)
-            {
-                found.push(("cs/override-changes-default", file, mine.span));
-            }
-            if method.has("override") {
-                if on("cs/override-without-params") && theirs.is_params && !mine.is_params {
-                    found.push(("cs/override-without-params", file, mine.span));
-                }
-                if on("cs/override-adds-params") && mine.is_params && !theirs.is_params {
-                    found.push(("cs/override-adds-params", file, mine.span));
-                }
+        if method.has("override") {
+            for (mine, theirs) in &pairs {
+                override_parameter_findings(mine, theirs, file, on, found);
             }
         }
+    }
+}
+
+/// The first parameter named otherwise than its counterpart; `_` marks a
+/// parameter unused on purpose.
+fn parameter_name_mismatch<'p>(pairs: &[(&'p ParamDecl, &ParamDecl)]) -> Option<&'p ParamDecl> {
+    pairs
+        .iter()
+        .find(|(a, b)| a.name != b.name && !a.name.chars().all(|c| c == '_'))
+        .map(|(mine, _)| *mine)
+}
+
+/// An override's parameter against the one it overrides: a different
+/// default (an interface's defaults apply only through the interface, so
+/// overrides only, as documented), a `params` dropped or added.
+fn override_parameter_findings(
+    mine: &ParamDecl,
+    theirs: &ParamDecl,
+    file: usize,
+    on: &dyn Fn(&str) -> bool,
+    found: &mut Vec<Finding>,
+) {
+    if on("cs/override-changes-default")
+        && let (Some(a), Some(b)) = (&mine.default, &theirs.default)
+        && canonical_default(a) != canonical_default(b)
+    {
+        found.push(("cs/override-changes-default", file, mine.span));
+    }
+    if on("cs/override-without-params") && theirs.is_params && !mine.is_params {
+        found.push(("cs/override-without-params", file, mine.span));
+    }
+    if on("cs/override-adds-params") && mine.is_params && !theirs.is_params {
+        found.push(("cs/override-adds-params", file, mine.span));
     }
 }
 
@@ -554,19 +608,30 @@ fn dispose_pattern(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
         .bases(id)
         .iter()
         .any(|(_, _, b)| b.name == "IDisposable" && b.arity == 0);
-    let base_disposable = match base_of(index, id) {
-        Base::Object => false,
-        Base::Project(b) => match index.implements(b, DISPOSABLE) {
-            Some(d) => d,
-            None => return,
-        },
-        Base::Platform(p) => dotnet::platform().implements(&p.name, DISPOSABLE),
-        Base::Unknown => return,
+    let Some(base_disposable) = base_disposable(index, id) else {
+        return;
     };
     if !lists && !base_disposable {
         return;
     }
     let members: Vec<&MemberDecl> = index.members(id).map(|(_, m)| m).collect();
+    if dispose_problem(&members, lists, base_disposable) {
+        found.push(("cs/dispose-pattern", file, decl.span));
+    }
+}
+
+/// Whether the base class is disposable; None when that's unknown.
+fn base_disposable(index: &ProjectIndex, id: TypeId) -> Option<bool> {
+    match base_of(index, id) {
+        Base::Object => Some(false),
+        Base::Project(b) => index.implements(b, DISPOSABLE),
+        Base::Platform(p) => Some(dotnet::platform().implements(&p.name, DISPOSABLE)),
+        Base::Unknown => None,
+    }
+}
+
+/// Whether a disposable type's members break the dispose pattern.
+fn dispose_problem(members: &[&MemberDecl], lists: bool, base_disposable: bool) -> bool {
     let dispose = |explicit: bool| {
         members.iter().find(|m| {
             m.kind == "method"
@@ -588,7 +653,7 @@ fn dispose_pattern(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
     let calls = |m: &MemberDecl, c: &str| m.calls.iter().any(|x| x == c);
     let only = |m: &MemberDecl, body: &str| calls(m, &format!("only:{body}"));
     let (public_dispose, explicit_dispose) = (dispose(false), dispose(true));
-    let problem = (lists && base_disposable)
+    (lists && base_disposable)
         || explicit_dispose.is_some()
         || finalizer.is_some_and(|f| f.has_body && !only(f, "Dispose(false)"))
         || if base_disposable {
@@ -604,10 +669,7 @@ fn dispose_pattern(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
                 || public_dispose.is_some_and(|d| {
                     d.has_body && !only(d, "Dispose(true);GC.SuppressFinalize(this)")
                 })
-        };
-    if problem {
-        found.push(("cs/dispose-pattern", file, decl.span));
-    }
+        }
 }
 
 /// A class that creates an IDisposable and keeps it in a field must be
@@ -684,143 +746,189 @@ fn uses(index: &ProjectIndex, on: &dyn Fn(&str) -> bool, found: &mut Vec<Finding
     let mut models: Vec<TypeId> = Vec::new();
     for (file, f) in index.files().iter().enumerate() {
         for site in &f.sites {
-            let named = TypeRef {
-                name: site.name.clone(),
-                arity: site.arity,
-                ..TypeRef::default()
-            };
-            let resolved = || index.resolve_in(file, &site.namespace, &named);
-            match site.kind.as_str() {
-                "bitwise" if on("cs/bitwise-on-non-flags-enum") => {
-                    let non_flags = match resolved() {
-                        Some(id) => {
-                            index.decl(id).1.kind == "enum"
-                                && !index
-                                    .parts(id)
-                                    .iter()
-                                    .any(|(_, t)| t.attributes.iter().any(|a| a == "Flags"))
-                        }
-                        None => index
-                            .platform_type(file, &site.namespace, &named)
-                            .is_some_and(|p| p.kind == "enum" && !p.has("Flags")),
-                    };
-                    if non_flags {
-                        found.push(("cs/bitwise-on-non-flags-enum", file, site.span));
-                    }
-                }
-                "cast" if on("cs/interface-downcast") => {
-                    let kind = |text: &str| -> Option<(String, String)> {
-                        let r = TypeRef::parse(text)?;
-                        match index.resolve_at(file, &site.namespace, &site.owner, &r) {
-                            Some(id) => {
-                                let (_, t) = index.decl(id);
-                                Some((t.kind.clone(), t.full_name()))
-                            }
-                            None => index
-                                .platform_type(file, &site.namespace, &r)
-                                .map(|p| (p.kind.clone(), p.name.clone())),
-                        }
-                    };
-                    let from = site.receiver.as_deref().and_then(kind);
-                    let to = kind(&site.name);
-                    if let (Some((from, _)), Some((to, target))) = (from, to)
-                        && from == "interface"
-                        && matches!(to.as_str(), "class" | "struct" | "record")
-                        && target != "System.Object"
-                    {
-                        found.push(("cs/interface-downcast", file, site.span));
-                    }
-                }
-                "params-array" if on("cs/array-for-params") => {
-                    let target = match &site.receiver {
-                        None => index.type_named(&site.owner),
-                        Some(t) => index.resolve_in(
-                            file,
-                            &site.namespace,
-                            &TypeRef {
-                                name: t.clone(),
-                                arity: 0,
-                                ..TypeRef::default()
-                            },
-                        ),
-                    };
-                    let Some(target) = target else {
-                        continue;
-                    };
-                    let mut types = vec![target];
-                    types.extend(index.ancestors(target));
-                    let candidates: Vec<&MemberDecl> = types
-                        .iter()
-                        .flat_map(|t| index.members(*t).map(|(_, m)| m).collect::<Vec<_>>())
-                        .filter(|m| {
-                            m.kind == "method"
-                                && m.name == site.name
-                                && m.params.len() == site.count
-                        })
-                        .collect();
-                    // The call binds to a `params` method when no overload of
-                    // its arity takes the array as a plain parameter.
-                    let to_params = candidates
-                        .iter()
-                        .any(|m| m.params.last().is_some_and(|p| p.is_params))
-                        && !candidates
-                            .iter()
-                            .any(|m| m.params.last().is_some_and(|p| !p.is_params));
-                    if to_params {
-                        found.push(("cs/array-for-params", file, site.span));
-                    }
-                }
-                "new" if on("cs/shared-part-created-with-new") => {
-                    let shared = resolved().is_some_and(|id| {
-                        index.parts(id).iter().any(|(_, t)| {
-                            t.attributes
-                                .iter()
-                                .any(|a| a == "PartCreationPolicy.Shared")
-                        })
-                    });
-                    if shared {
-                        found.push(("cs/shared-part-created-with-new", file, site.span));
-                    }
-                }
-                "extension" if on("cs/extension-in-same-namespace") => {
-                    let neighbour = resolved().is_some_and(|id| {
-                        let (_, d) = index.decl(id);
-                        matches!(d.kind.as_str(), "class" | "struct" | "record" | "interface")
-                            && d.namespace == site.namespace
-                            && !index
-                                .parts(id)
-                                .iter()
-                                .any(|(_, t)| t.attributes.iter().any(|a| a == "GeneratedCode"))
-                    });
-                    if neighbour {
-                        found.push(("cs/extension-in-same-namespace", file, site.span));
-                    }
-                }
-                "entity" if on("cs/durable-entity-interface") => {
-                    if let Some(id) = resolved().filter(|id| index.decl(*id).1.kind == "interface")
-                        && !entities.contains(&id)
-                    {
-                        entities.push(id);
-                    }
-                }
-                "action-param" if on("cs/underposting-value-type") => {
-                    let controller = index
-                        .type_named(&site.owner)
-                        .is_some_and(|c| is_controller(index, c));
-                    if controller
-                        && let Some(id) = resolved().filter(|id| {
-                            matches!(index.decl(*id).1.kind.as_str(), "class" | "record")
-                        })
-                        && !models.contains(&id)
-                    {
-                        models.push(id);
-                    }
-                }
-                _ => {}
+            if let Some(rule) = site_finding(index, on, file, site) {
+                found.push((rule, file, site.span));
             }
+            collect_site_types(index, on, file, site, &mut entities, &mut models);
         }
     }
-    for id in entities {
+    entity_interfaces(index, &entities, found);
+    underposted_models(index, &models, found);
+}
+
+/// A rule's check of one site.
+type SiteCheck = fn(&ProjectIndex, usize, &Site) -> bool;
+
+/// The rule a site breaks on its own, if any.
+fn site_finding(
+    index: &ProjectIndex,
+    on: &dyn Fn(&str) -> bool,
+    file: usize,
+    site: &Site,
+) -> Option<&'static str> {
+    let (rule, check): (&'static str, SiteCheck) = match site.kind.as_str() {
+        "bitwise" => ("cs/bitwise-on-non-flags-enum", non_flags_enum),
+        "cast" => ("cs/interface-downcast", interface_downcast),
+        "params-array" => ("cs/array-for-params", array_for_params),
+        "new" => ("cs/shared-part-created-with-new", shared_part),
+        "extension" => ("cs/extension-in-same-namespace", extends_a_neighbour),
+        _ => return None,
+    };
+    (on(rule) && check(index, file, site)).then_some(rule)
+}
+
+/// The entity interfaces and the action models a site names, each once,
+/// for the rules that judge them as a whole.
+fn collect_site_types(
+    index: &ProjectIndex,
+    on: &dyn Fn(&str) -> bool,
+    file: usize,
+    site: &Site,
+    entities: &mut Vec<TypeId>,
+    models: &mut Vec<TypeId>,
+) {
+    let (found, into) = match site.kind.as_str() {
+        "entity" if on("cs/durable-entity-interface") => (
+            resolve_site(index, file, site).filter(|id| index.decl(*id).1.kind == "interface"),
+            entities,
+        ),
+        "action-param" if on("cs/underposting-value-type") => {
+            (action_model(index, file, site), models)
+        }
+        _ => return,
+    };
+    if let Some(id) = found
+        && !into.contains(&id)
+    {
+        into.push(id);
+    }
+}
+
+/// The site's type name, by its name and arity, resolved where it's used.
+fn resolve_site(index: &ProjectIndex, file: usize, site: &Site) -> Option<TypeId> {
+    index.resolve_in(file, &site.namespace, &site_type(site))
+}
+
+fn site_type(site: &Site) -> TypeRef {
+    TypeRef {
+        name: site.name.clone(),
+        arity: site.arity,
+        ..TypeRef::default()
+    }
+}
+
+/// `|`, `&` or `^` on an enum, of the project or the platform, without
+/// `[Flags]`.
+fn non_flags_enum(index: &ProjectIndex, file: usize, site: &Site) -> bool {
+    match resolve_site(index, file, site) {
+        Some(id) => {
+            index.decl(id).1.kind == "enum"
+                && !index
+                    .parts(id)
+                    .iter()
+                    .any(|(_, t)| t.attributes.iter().any(|a| a == "Flags"))
+        }
+        None => index
+            .platform_type(file, &site.namespace, &site_type(site))
+            .is_some_and(|p| p.kind == "enum" && !p.has("Flags")),
+    }
+}
+
+/// A cast from an interface to a class, struct or record other than object.
+fn interface_downcast(index: &ProjectIndex, file: usize, site: &Site) -> bool {
+    let kind = |text: &str| -> Option<(String, String)> {
+        let r = TypeRef::parse(text)?;
+        match index.resolve_at(file, &site.namespace, &site.owner, &r) {
+            Some(id) => {
+                let (_, t) = index.decl(id);
+                Some((t.kind.clone(), t.full_name()))
+            }
+            None => index
+                .platform_type(file, &site.namespace, &r)
+                .map(|p| (p.kind.clone(), p.name.clone())),
+        }
+    };
+    let from = site.receiver.as_deref().and_then(kind);
+    let to = kind(&site.name);
+    matches!((from, to), (Some((from, _)), Some((to, target)))
+        if from == "interface"
+            && matches!(to.as_str(), "class" | "struct" | "record")
+            && target != "System.Object")
+}
+
+/// An array written out for a call that binds to a `params` method: no
+/// overload of its arity takes the array as a plain parameter.
+fn array_for_params(index: &ProjectIndex, file: usize, site: &Site) -> bool {
+    let target = match &site.receiver {
+        None => index.type_named(&site.owner),
+        Some(t) => index.resolve_in(
+            file,
+            &site.namespace,
+            &TypeRef {
+                name: t.clone(),
+                arity: 0,
+                ..TypeRef::default()
+            },
+        ),
+    };
+    let Some(target) = target else {
+        return false;
+    };
+    let mut types = vec![target];
+    types.extend(index.ancestors(target));
+    let candidates: Vec<&MemberDecl> = types
+        .iter()
+        .flat_map(|t| index.members(*t).map(|(_, m)| m).collect::<Vec<_>>())
+        .filter(|m| m.kind == "method" && m.name == site.name && m.params.len() == site.count)
+        .collect();
+    candidates
+        .iter()
+        .any(|m| m.params.last().is_some_and(|p| p.is_params))
+        && !candidates
+            .iter()
+            .any(|m| m.params.last().is_some_and(|p| !p.is_params))
+}
+
+/// `new` of a part exported as shared.
+fn shared_part(index: &ProjectIndex, file: usize, site: &Site) -> bool {
+    resolve_site(index, file, site).is_some_and(|id| {
+        index.parts(id).iter().any(|(_, t)| {
+            t.attributes
+                .iter()
+                .any(|a| a == "PartCreationPolicy.Shared")
+        })
+    })
+}
+
+/// An extension method for a type of the same namespace, not generated.
+fn extends_a_neighbour(index: &ProjectIndex, file: usize, site: &Site) -> bool {
+    resolve_site(index, file, site).is_some_and(|id| {
+        let (_, d) = index.decl(id);
+        matches!(d.kind.as_str(), "class" | "struct" | "record" | "interface")
+            && d.namespace == site.namespace
+            && !index
+                .parts(id)
+                .iter()
+                .any(|(_, t)| t.attributes.iter().any(|a| a == "GeneratedCode"))
+    })
+}
+
+/// The class or record a controller's action takes as its model.
+fn action_model(index: &ProjectIndex, file: usize, site: &Site) -> Option<TypeId> {
+    let controller = index
+        .type_named(&site.owner)
+        .is_some_and(|c| is_controller(index, c));
+    if !controller {
+        return None;
+    }
+    resolve_site(index, file, site)
+        .filter(|id| matches!(index.decl(*id).1.kind.as_str(), "class" | "record"))
+}
+
+/// Durable entity interfaces: not generic, and only methods taking at most
+/// one argument and returning void or Task.
+fn entity_interfaces(index: &ProjectIndex, entities: &[TypeId], found: &mut Vec<Finding>) {
+    for &id in entities {
         let (file, decl) = index.decl(id);
         if decl.arity > 0 {
             found.push(("cs/durable-entity-interface", file, decl.span));
@@ -837,7 +945,12 @@ fn uses(index: &ProjectIndex, on: &dyn Fn(&str) -> bool, found: &mut Vec<Finding
             }
         }
     }
-    for id in models {
+}
+
+/// The public settable value-type properties of action models that
+/// nothing requires: a request that leaves them out gets their default.
+fn underposted_models(index: &ProjectIndex, models: &[TypeId], found: &mut Vec<Finding>) {
+    for &id in models {
         for (f, property) in index
             .members(id)
             .filter(|(_, m)| m.kind == "property" && m.has("public"))

@@ -166,92 +166,86 @@ pub(super) fn verbose_conditions<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>>
     let (Some(root), Some(infer)) = (m.root, Infer::new(m, src)) else {
         return Vec::new();
     };
-    // `c ? a : b` and `a ?? b` need one value to convert to the other's
-    // type: before C# 9, `c ? new A() : new B()` doesn't compile.
-    let compatible = |a: Node, b: Node| {
-        let (Some(x), Some(y)) = (infer.type_of(a), infer.type_of(b)) else {
-            return false;
-        };
-        let implicit = |from: &Ty, to: &Ty| {
-            matches!(
-                infer.conversion(from, to),
-                Some(Conversion::Identity | Conversion::Implicit)
-            )
-        };
-        implicit(&x, &y) || implicit(&y, &x)
-    };
     let modern = std::cell::OnceCell::new();
     let modern = || *modern.get_or_init(|| csharp8(root, src));
     let mut found = Vec::new();
-    walk_tree(m, |n, _| match n.kind() {
-        "if_statement" => {
-            let Some(then) = n.child_by_field_name("consequence") else {
-                return;
-            };
-            let Some(a) = single_assignment(then).filter(|a| plain(*a, src)) else {
-                return;
-            };
-            let Some(target) = a.child_by_field_name("left") else {
-                return;
-            };
-            match n.child_by_field_name("alternative") {
-                Some(otherwise) => {
-                    let Some(b) = single_assignment(otherwise).filter(|b| plain(*b, src)) else {
-                        return;
-                    };
-                    let same_target = b
-                        .child_by_field_name("left")
-                        .is_some_and(|t| same_code(t, target, src));
-                    let values = a
-                        .child_by_field_name("right")
-                        .zip(b.child_by_field_name("right"));
-                    if same_target && values.is_some_and(|(x, y)| compatible(x, y)) {
-                        found.push(n);
-                    }
-                }
-                None => {
-                    let checked = n
-                        .child_by_field_name("condition")
-                        .and_then(|c| null_check(c, src, true));
-                    if checked.is_some_and(|s| same_code(s, target, src)) && modern() {
-                        found.push(n);
-                    }
-                }
-            }
+    walk_tree(m, |n, _| {
+        let verbose = match n.kind() {
+            "if_statement" => verbose_if(&infer, n, src, &modern),
+            "conditional_expression" => super::cs_opt2::is_null_coalescing_shape(n, src),
+            "binary_expression" => verbose_coalescing(n, src, &modern),
+            _ => false,
+        };
+        if verbose {
+            found.push(n);
         }
-        "conditional_expression" => {
-            if super::cs_opt2::is_null_coalescing_shape(n, src) {
-                found.push(n);
-            }
-        }
-        "binary_expression" => {
-            let coalesces = n
-                .child_by_field_name("operator")
-                .is_some_and(|o| text(o, src) == b"??");
-            if !coalesces {
-                return;
-            }
-            let left = n.child_by_field_name("left").map(unparenthesized);
-            if left.is_some_and(|l| l.kind() == "null_literal") {
-                found.push(n);
-                return;
-            }
-            // `a = a ?? b`
-            let assigned = n
-                .parent()
-                .filter(|p| p.kind() == "assignment_expression" && plain(*p, src))
-                .filter(|p| p.child_by_field_name("right").map(|r| r.id()) == Some(n.id()))
-                .and_then(|p| p.child_by_field_name("left"));
-            if let (Some(t), Some(l)) = (assigned, left)
-                && same_code(t, l, src)
-                && modern()
-            {
-                found.push(n);
-            }
-        }
-        _ => {}
     });
     found
+}
+
+/// `c ? a : b` and `a ?? b` need one value to convert to the other's type:
+/// before C# 9, `c ? new A() : new B()` doesn't compile.
+fn compatible(infer: &Infer, a: Node, b: Node) -> bool {
+    let (Some(x), Some(y)) = (infer.type_of(a), infer.type_of(b)) else {
+        return false;
+    };
+    let implicit = |from: &Ty, to: &Ty| {
+        matches!(
+            infer.conversion(from, to),
+            Some(Conversion::Identity | Conversion::Implicit)
+        )
+    };
+    implicit(&x, &y) || implicit(&y, &x)
+}
+
+/// `if (c) x = a; else x = b;`, a conditional expression; or `if (x == null)
+/// x = a;`, a `??=` from C# 8 on.
+fn verbose_if(infer: &Infer, n: Node, src: &[u8], modern: &dyn Fn() -> bool) -> bool {
+    let Some(then) = n.child_by_field_name("consequence") else {
+        return false;
+    };
+    let Some(a) = single_assignment(then).filter(|a| plain(*a, src)) else {
+        return false;
+    };
+    let Some(target) = a.child_by_field_name("left") else {
+        return false;
+    };
+    let Some(otherwise) = n.child_by_field_name("alternative") else {
+        let checked = n
+            .child_by_field_name("condition")
+            .and_then(|c| null_check(c, src, true));
+        return checked.is_some_and(|s| same_code(s, target, src)) && modern();
+    };
+    let Some(b) = single_assignment(otherwise).filter(|b| plain(*b, src)) else {
+        return false;
+    };
+    let same_target = b
+        .child_by_field_name("left")
+        .is_some_and(|t| same_code(t, target, src));
+    let values = a
+        .child_by_field_name("right")
+        .zip(b.child_by_field_name("right"));
+    same_target && values.is_some_and(|(x, y)| compatible(infer, x, y))
+}
+
+/// `null ?? b`, or `a = a ?? b`, a `??=` from C# 8 on.
+fn verbose_coalescing(n: Node, src: &[u8], modern: &dyn Fn() -> bool) -> bool {
+    let coalesces = n
+        .child_by_field_name("operator")
+        .is_some_and(|o| text(o, src) == b"??");
+    if !coalesces {
+        return false;
+    }
+    let left = n.child_by_field_name("left").map(unparenthesized);
+    if left.is_some_and(|l| l.kind() == "null_literal") {
+        return true;
+    }
+    let assigned = n
+        .parent()
+        .filter(|p| p.kind() == "assignment_expression" && plain(*p, src))
+        .filter(|p| p.child_by_field_name("right").map(|r| r.id()) == Some(n.id()))
+        .and_then(|p| p.child_by_field_name("left"));
+    matches!((assigned, left), (Some(t), Some(l)) if same_code(t, l, src) && modern())
 }
 
 // ---------------------------------------------------- S3257
@@ -304,150 +298,149 @@ pub(super) fn verbose_declarations<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t
         return Vec::new();
     };
     let mut found = Vec::new();
-    walk_tree(m, |n, _| match n.kind() {
-        "object_creation_expression" => {
-            // `new List<int>() { }`
-            let empty = n
-                .child_by_field_name("initializer")
-                .is_some_and(|i| i.named_child_count() == 0);
-            if empty {
-                found.push(n);
-                return;
-            }
-            let Some(ty) = n.child_by_field_name("type").and_then(|t| infer.written(t)) else {
-                return;
-            };
-            let Some(args) = n.child_by_field_name("arguments") else {
-                return;
-            };
-            let values: Vec<Node> = args
-                .named_children(&mut args.walk())
-                .filter(|a| a.kind() == "argument")
-                .filter_map(|a| a.named_child(0))
-                .collect();
-            let [value] = values.as_slice() else {
-                return;
-            };
-            let required = required_type(&infer, n);
-            if ty.is("System.Nullable`1") {
-                // `int? i = new int?(5)`
-                if matches!(&required, Some(Required::Type(t)) if *t == ty) {
-                    found.push(n);
-                }
-                return;
-            }
-            let wraps = matches!(
-                value.kind(),
-                "lambda_expression" | "anonymous_method_expression"
-            ) || value.kind() == "identifier"
-                && m.decl_of(*value)
-                    .is_some_and(|d| matches!(d.kind, DeclKind::Method | DeclKind::Function));
-            let fits = match &required {
-                Some(Required::Combined) => true,
-                Some(Required::Type(t)) => *t == ty,
-                None => false,
-            };
-            if infer.delegate(&ty) && wraps && fits {
-                found.push(n);
-            }
-        }
-        "array_creation_expression" => {
-            let (Some(ty), Some(init)) = (
-                n.child_by_field_name("type"),
-                n.named_children(&mut n.walk())
-                    .find(|c| c.kind() == "initializer_expression"),
-            ) else {
-                return;
-            };
-            let Some(rank) = ty.child_by_field_name("rank") else {
-                return;
-            };
-            // `new int[3] { 1, 2, 3 }`
-            if rank.named_child_count() > 0 {
-                found.push(n);
-                return;
-            }
-            // `new int[] { 1, 2, 3 }`: every element already an int.
-            let Some(element) = ty
-                .child_by_field_name("type")
-                .and_then(|t| infer.written(t))
-            else {
-                return;
-            };
-            let elements: Vec<Node> = init.named_children(&mut init.walk()).collect();
-            let all = !elements.is_empty()
-                && elements
-                    .iter()
-                    .all(|e| infer.type_of(*e).as_ref() == Some(&element));
-            if all {
-                found.push(n);
-            }
-        }
-        "lambda_expression" => {
-            let Some(params) = n
-                .child_by_field_name("parameters")
-                .filter(|p| p.kind() == "parameter_list")
-            else {
-                return;
-            };
-            let list: Vec<Node> = params
-                .named_children(&mut params.walk())
-                .filter(|p| p.kind() == "parameter")
-                .collect();
-            // Typed, without modifiers, attributes or defaults; `ref`, `out`,
-            // `in` and `scoped` are tokens of their own.
-            let plain = !list.is_empty()
-                && list.iter().all(|p| {
-                    p.child_by_field_name("type")
-                        .is_some_and(|t| !matches!(t.kind(), "ref_type" | "scoped_type"))
-                        && p.named_child_count() == 2
-                        && p.child_count() == 2
-                });
-            let delegate = match required_type(&infer, n) {
-                Some(Required::Combined) => true,
-                Some(Required::Type(t)) => infer.delegate(&t),
-                None => false,
-            };
-            if plain && delegate {
-                found.push(params);
-            }
-        }
-        "anonymous_method_expression" => {
-            let Some(params) = n
-                .named_children(&mut n.walk())
-                .find(|c| c.kind() == "parameter_list")
-            else {
-                return;
-            };
-            let list: Vec<Node> = params
-                .named_children(&mut params.walk())
-                .filter(|p| p.kind() == "parameter")
-                .collect();
-            let unused = !list.is_empty()
-                && list.iter().all(|p| {
-                    let out = p
-                        .named_children(&mut p.walk())
-                        .any(|c| c.kind() == "modifier" && text(c, src) == b"out");
-                    !out && p.child_by_field_name("name").is_some_and(|name| {
-                        !m.refs.iter().any(|r| {
-                            r.decl
-                                .and_then(|d| m.decls.get(d))
-                                .is_some_and(|d| d.node.id() == name.id())
-                        })
-                    })
-                });
-            let delegate = match required_type(&infer, n) {
-                Some(Required::Combined) => true,
-                Some(Required::Type(t)) => infer.delegate(&t),
-                None => false,
-            };
-            if unused && delegate {
-                found.push(params);
-            }
-        }
-        _ => {}
+    walk_tree(m, |n, _| {
+        let at = match n.kind() {
+            "object_creation_expression" => verbose_creation(&infer, m, n).then_some(n),
+            "array_creation_expression" => verbose_array(&infer, n).then_some(n),
+            "lambda_expression" => verbose_lambda_params(&infer, n),
+            "anonymous_method_expression" => verbose_anonymous_params(&infer, m, n, src),
+            _ => None,
+        };
+        found.extend(at);
     });
     found
+}
+
+/// `new List<int>() { }`, `int? i = new int?(5)`, or a delegate created
+/// around a lambda or a method where its type is required anyway.
+fn verbose_creation(infer: &Infer, m: &Model, n: Node) -> bool {
+    let empty = n
+        .child_by_field_name("initializer")
+        .is_some_and(|i| i.named_child_count() == 0);
+    if empty {
+        return true;
+    }
+    let Some(ty) = n.child_by_field_name("type").and_then(|t| infer.written(t)) else {
+        return false;
+    };
+    let Some(args) = n.child_by_field_name("arguments") else {
+        return false;
+    };
+    let values: Vec<Node> = args
+        .named_children(&mut args.walk())
+        .filter(|a| a.kind() == "argument")
+        .filter_map(|a| a.named_child(0))
+        .collect();
+    let [value] = values.as_slice() else {
+        return false;
+    };
+    let required = required_type(infer, n);
+    if ty.is("System.Nullable`1") {
+        return matches!(&required, Some(Required::Type(t)) if *t == ty);
+    }
+    let wraps = matches!(
+        value.kind(),
+        "lambda_expression" | "anonymous_method_expression"
+    ) || value.kind() == "identifier"
+        && m.decl_of(*value)
+            .is_some_and(|d| matches!(d.kind, DeclKind::Method | DeclKind::Function));
+    let fits = match &required {
+        Some(Required::Combined) => true,
+        Some(Required::Type(t)) => *t == ty,
+        None => false,
+    };
+    infer.delegate(&ty) && wraps && fits
+}
+
+/// `new int[3] { 1, 2, 3 }`, or `new int[] { 1, 2, 3 }` with every element
+/// already an int.
+fn verbose_array(infer: &Infer, n: Node) -> bool {
+    let (Some(ty), Some(init)) = (
+        n.child_by_field_name("type"),
+        n.named_children(&mut n.walk())
+            .find(|c| c.kind() == "initializer_expression"),
+    ) else {
+        return false;
+    };
+    let Some(rank) = ty.child_by_field_name("rank") else {
+        return false;
+    };
+    if rank.named_child_count() > 0 {
+        return true;
+    }
+    let Some(element) = ty
+        .child_by_field_name("type")
+        .and_then(|t| infer.written(t))
+    else {
+        return false;
+    };
+    let elements: Vec<Node> = init.named_children(&mut init.walk()).collect();
+    !elements.is_empty()
+        && elements
+            .iter()
+            .all(|e| infer.type_of(*e).as_ref() == Some(&element))
+}
+
+/// Whether the context requires a delegate of `n`'s type anyway.
+fn delegate_required(infer: &Infer, n: Node) -> bool {
+    match required_type(infer, n) {
+        Some(Required::Combined) => true,
+        Some(Required::Type(t)) => infer.delegate(&t),
+        None => false,
+    }
+}
+
+/// A lambda's parameter list, when every parameter's type is written and
+/// the delegate type gives them anyway. Typed, without modifiers,
+/// attributes or defaults; `ref`, `out`, `in` and `scoped` are tokens of
+/// their own.
+fn verbose_lambda_params<'t>(infer: &Infer, n: Node<'t>) -> Option<Node<'t>> {
+    let params = n
+        .child_by_field_name("parameters")
+        .filter(|p| p.kind() == "parameter_list")?;
+    let list: Vec<Node> = params
+        .named_children(&mut params.walk())
+        .filter(|p| p.kind() == "parameter")
+        .collect();
+    let plain = !list.is_empty()
+        && list.iter().all(|p| {
+            p.child_by_field_name("type")
+                .is_some_and(|t| !matches!(t.kind(), "ref_type" | "scoped_type"))
+                && p.named_child_count() == 2
+                && p.child_count() == 2
+        });
+    (plain && delegate_required(infer, n)).then_some(params)
+}
+
+/// An anonymous method's parameter list, when none of its parameters is
+/// used (nor `out`) and the delegate type gives them anyway.
+fn verbose_anonymous_params<'t>(
+    infer: &Infer,
+    m: &Model,
+    n: Node<'t>,
+    src: &[u8],
+) -> Option<Node<'t>> {
+    let params = n
+        .named_children(&mut n.walk())
+        .find(|c| c.kind() == "parameter_list")?;
+    let list: Vec<Node> = params
+        .named_children(&mut params.walk())
+        .filter(|p| p.kind() == "parameter")
+        .collect();
+    let unused = !list.is_empty()
+        && list.iter().all(|p| {
+            let out = p
+                .named_children(&mut p.walk())
+                .any(|c| c.kind() == "modifier" && text(c, src) == b"out");
+            !out && p.child_by_field_name("name").is_some_and(|name| {
+                !m.refs.iter().any(|r| {
+                    r.decl
+                        .and_then(|d| m.decls.get(d))
+                        .is_some_and(|d| d.node.id() == name.id())
+                })
+            })
+        });
+    (unused && delegate_required(infer, n)).then_some(params)
 }
 
 // ---------------------------------------------------- S3898
@@ -785,7 +778,8 @@ pub(super) fn shadowing_inner_members<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node
     // (type declaration, the names its enclosing types make visible)
     let mut stack: Vec<(Node<'t>, Vec<&[u8]>)> = vec![(root, Vec::new())];
     while let Some((n, outer)) = stack.pop() {
-        let body = if TYPE_DECLARATIONS.contains(&n.kind()) {
+        let is_type = TYPE_DECLARATIONS.contains(&n.kind());
+        let body = if is_type {
             n.child_by_field_name("body")
         } else {
             Some(n)
@@ -793,51 +787,59 @@ pub(super) fn shadowing_inner_members<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node
         let Some(body) = body else {
             continue;
         };
-        let is_type = TYPE_DECLARATIONS.contains(&n.kind());
         if is_type && !outer.is_empty() {
-            // `public Address Address`, a member of the outer type's nested
-            // type named after it: C# resolves the name either way.
-            found.extend(
-                member_names(body)
-                    .into_iter()
-                    .filter(|(name, ty)| {
-                        let n = text(*name, src);
-                        outer.contains(&n) && ty.is_none_or(|t| super::cs::simple_name(t, src) != n)
-                    })
-                    .map(|(name, _)| name),
-            );
+            found.extend(shadowing_members(body, &outer, src));
         }
         let mut inner = outer.clone();
         if is_type {
             inner.extend(visible_names(body, src));
         }
-        for c in body.named_children(&mut body.walk()) {
-            if TYPE_DECLARATIONS.contains(&c.kind())
-                || c.kind().starts_with("preproc")
-                || matches!(
-                    c.kind(),
-                    "namespace_declaration"
-                        | "file_scoped_namespace_declaration"
-                        | "declaration_list"
-                )
-            {
-                let next = if is_type {
-                    inner.clone()
-                } else {
-                    outer.clone()
-                };
-                if c.kind() == "namespace_declaration" {
-                    if let Some(b) = c.child_by_field_name("body") {
-                        stack.push((b, next));
-                    }
-                } else {
-                    stack.push((c, next));
-                }
-            }
-        }
+        let next = if is_type { inner } else { outer };
+        push_nested(body, &next, &mut stack);
     }
     found.sort_by_key(|n| n.start_byte());
     found
+}
+
+/// The members of a nested type named like a name of an enclosing type,
+/// other than `public Address Address`, a member typed after it: C#
+/// resolves the name either way.
+fn shadowing_members<'t>(body: Node<'t>, outer: &[&[u8]], src: &[u8]) -> Vec<Node<'t>> {
+    member_names(body)
+        .into_iter()
+        .filter(|(name, ty)| {
+            let n = text(*name, src);
+            outer.contains(&n) && ty.is_none_or(|t| super::cs::simple_name(t, src) != n)
+        })
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// The type declarations and namespaces in `body`, with the names visible
+/// in them, for `shadowing_inner_members` to look at next.
+fn push_nested<'t, 's>(
+    body: Node<'t>,
+    names: &[&'s [u8]],
+    stack: &mut Vec<(Node<'t>, Vec<&'s [u8]>)>,
+) {
+    for c in body.named_children(&mut body.walk()) {
+        let nests = TYPE_DECLARATIONS.contains(&c.kind())
+            || c.kind().starts_with("preproc")
+            || matches!(
+                c.kind(),
+                "namespace_declaration" | "file_scoped_namespace_declaration" | "declaration_list"
+            );
+        if !nests {
+            continue;
+        }
+        if c.kind() == "namespace_declaration" {
+            if let Some(b) = c.child_by_field_name("body") {
+                stack.push((b, names.to_vec()));
+            }
+        } else {
+            stack.push((c, names.to_vec()));
+        }
+    }
 }
 
 // ---------------------------------------------------- S3241
@@ -863,11 +865,7 @@ pub(super) fn unused_private_returns<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
     };
     let mut found = Vec::new();
     walk_tree(m, |class, _| {
-        if !matches!(
-            class.kind(),
-            "class_declaration" | "struct_declaration" | "record_declaration"
-        ) || cs_has_modifier(class, "partial", src)
-        {
+        if !checked_class(class, src) {
             return;
         }
         let Some(body) = class.child_by_field_name("body") else {
@@ -884,9 +882,7 @@ pub(super) fn unused_private_returns<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
         names.sort();
         names.dedup();
         // The identifiers of the body, by name: one walk for every method.
-        let mut occurrences: std::collections::HashMap<&[u8], Vec<Node>> =
-            std::collections::HashMap::new();
-        let mut walked = false;
+        let mut occurrences: Option<Occurrences> = None;
         for name in names {
             let group: Vec<Node> = methods
                 .iter()
@@ -896,125 +892,170 @@ pub(super) fn unused_private_returns<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
                         .is_some_and(|n| text(n, src) == name)
                 })
                 .collect();
-            let candidates: Vec<Node> = group
-                .iter()
-                .copied()
-                .filter(|method| {
-                    let returns = method
-                        .child_by_field_name("returns")
-                        .map_or(&b"void"[..], |t| super::cs::simple_name(t, src));
-                    let explicit = method
-                        .named_children(&mut method.walk())
-                        .any(|c| c.kind() == "explicit_interface_specifier");
-                    !USED_BY_SHAPE.contains(&returns)
-                        && !explicit
-                        && !["public", "protected", "internal"]
-                            .iter()
-                            .chain(&["override", "virtual", "abstract", "partial", "extern"])
-                            .any(|w| cs_has_modifier(*method, w, src))
-                })
-                .collect();
+            let candidates = droppable_candidates(&group, src);
             if candidates.is_empty() {
                 continue;
             }
-            // Each use of the name in the type: a call, and the method it
-            // binds to, and whether its value is dropped.
-            let mut uses: Vec<(usize, bool)> = Vec::new();
-            let mut open = false;
-            if !walked {
-                walked = true;
-                let mut stack = vec![body];
-                while let Some(n) = stack.pop() {
-                    stack.extend(n.named_children(&mut n.walk()));
-                    if n.kind() == "identifier" {
-                        occurrences.entry(text(n, src)).or_default().push(n);
-                    }
-                }
-            }
-            for &n in occurrences.get(name).map_or(&[][..], Vec::as_slice) {
-                // A declaration's own name.
-                if n.parent().is_some_and(|p| {
-                    p.kind() == "method_declaration" && p.child_by_field_name("name") == Some(n)
-                }) {
-                    continue;
-                }
-                let parent = n.parent();
-                let accessed = parent.filter(|p| {
-                    p.kind() == "member_access_expression"
-                        && p.child_by_field_name("name") == Some(n)
-                });
-                let callee = accessed.unwrap_or(n);
-                let call = callee.parent().filter(|c| {
-                    c.kind() == "invocation_expression"
-                        && c.child_by_field_name("function") == Some(callee)
-                });
-                let Some(call) = call else {
-                    // `other.Name` of another type, or a method group of
-                    // this one.
-                    let own = accessed
-                        .and_then(|a| a.child_by_field_name("expression"))
-                        .and_then(|e| infer.type_of(e))
-                        .zip(infer.enclosing_type(n))
-                        .is_some_and(|(a, b)| a == b);
-                    if accessed.is_some() && !own {
-                        continue;
-                    }
-                    open = true;
-                    break;
-                };
-                // One method of that name: a bare or `this.` call is it.
-                let this_call = accessed
-                    .and_then(|a| a.child_by_field_name("expression"))
-                    .is_none_or(|e| e.kind() == "this_expression" || text(e, src) == b"this");
-                if group.len() == 1 && this_call {
-                    let dropped = call
-                        .parent()
-                        .is_some_and(|s| s.kind() == "expression_statement");
-                    uses.push((0, dropped));
-                    continue;
-                }
-                let bound = infer.resolve_with(call, &arguments(call));
-                let resolved = bound.is_some();
-                let target = match bound.map(|b| b.method) {
-                    Some(Found::Local(d)) => group.iter().position(|g| d.declarator == Some(*g)),
-                    _ => None,
-                };
-                let Some(target) = target else {
-                    // Another type's method of the same name.
-                    if accessed.is_some() && resolved {
-                        continue;
-                    }
-                    open = true;
-                    break;
-                };
-                let dropped = call
-                    .parent()
-                    .is_some_and(|s| s.kind() == "expression_statement");
-                uses.push((target, dropped));
-            }
-            if open {
-                continue;
-            }
-            for method in candidates {
-                let index = group
-                    .iter()
-                    .position(|g| *g == method)
-                    .unwrap_or(usize::MAX);
-                let calls: Vec<bool> = uses
-                    .iter()
-                    .filter(|(t, _)| *t == index)
-                    .map(|(_, d)| *d)
-                    .collect();
-                if !calls.is_empty()
-                    && calls.iter().all(|d| *d)
-                    && let Some(returns) = method.child_by_field_name("returns")
-                {
-                    found.push(returns);
-                }
+            let occurrences = occurrences.get_or_insert_with(|| identifier_occurrences(body, src));
+            let named = occurrences.get(name).map_or(&[][..], Vec::as_slice);
+            if let Some(uses) = name_uses(&infer, &group, named, src) {
+                push_always_dropped(&candidates, &group, &uses, &mut found);
             }
         }
     });
     found
+}
+
+/// A class, struct or record that isn't partial: other files may call a
+/// partial type's methods.
+fn checked_class(class: Node, src: &[u8]) -> bool {
+    matches!(
+        class.kind(),
+        "class_declaration" | "struct_declaration" | "record_declaration"
+    ) && !cs_has_modifier(class, "partial", src)
+}
+
+/// The methods of `group` whose value may go unused: private, returning
+/// something not used by its shape, and not an explicit interface member.
+fn droppable_candidates<'t>(group: &[Node<'t>], src: &[u8]) -> Vec<Node<'t>> {
+    group
+        .iter()
+        .copied()
+        .filter(|method| {
+            let returns = method
+                .child_by_field_name("returns")
+                .map_or(&b"void"[..], |t| super::cs::simple_name(t, src));
+            let explicit = method
+                .named_children(&mut method.walk())
+                .any(|c| c.kind() == "explicit_interface_specifier");
+            !USED_BY_SHAPE.contains(&returns)
+                && !explicit
+                && !["public", "protected", "internal"]
+                    .iter()
+                    .chain(&["override", "virtual", "abstract", "partial", "extern"])
+                    .any(|w| cs_has_modifier(*method, w, src))
+        })
+        .collect()
+}
+
+/// A type body's identifiers, by name.
+type Occurrences<'s, 't> = std::collections::HashMap<&'s [u8], Vec<Node<'t>>>;
+
+fn identifier_occurrences<'s, 't>(body: Node<'t>, src: &'s [u8]) -> Occurrences<'s, 't> {
+    let mut occurrences = Occurrences::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        stack.extend(n.named_children(&mut n.walk()));
+        if n.kind() == "identifier" {
+            occurrences.entry(text(n, src)).or_default().push(n);
+        }
+    }
+    occurrences
+}
+
+/// What one mention of a method's name is.
+enum NameUse {
+    /// Not this type's method: its own declaration, or another type's.
+    Other,
+    /// Can't tell which method it is, or a method group: report none.
+    Open,
+    /// A call of method `.0` of the group; whether its value is dropped.
+    Call(usize, bool),
+}
+
+/// Each call of a method of `group` among the name's `occurrences`: the
+/// method it binds to, and whether its value is dropped. None when a use
+/// leaves it open.
+fn name_uses(
+    infer: &Infer,
+    group: &[Node],
+    occurrences: &[Node],
+    src: &[u8],
+) -> Option<Vec<(usize, bool)>> {
+    let mut uses = Vec::new();
+    for &n in occurrences {
+        match use_of(infer, n, group, src) {
+            NameUse::Other => {}
+            NameUse::Open => return None,
+            NameUse::Call(target, dropped) => uses.push((target, dropped)),
+        }
+    }
+    Some(uses)
+}
+
+fn use_of(infer: &Infer, n: Node, group: &[Node], src: &[u8]) -> NameUse {
+    let parent = n.parent();
+    // A declaration's own name.
+    if parent.is_some_and(|p| {
+        p.kind() == "method_declaration" && p.child_by_field_name("name") == Some(n)
+    }) {
+        return NameUse::Other;
+    }
+    let accessed = parent.filter(|p| {
+        p.kind() == "member_access_expression" && p.child_by_field_name("name") == Some(n)
+    });
+    let callee = accessed.unwrap_or(n);
+    let call = callee.parent().filter(|c| {
+        c.kind() == "invocation_expression" && c.child_by_field_name("function") == Some(callee)
+    });
+    let Some(call) = call else {
+        // `other.Name` of another type, or a method group of this one.
+        let own = accessed
+            .and_then(|a| a.child_by_field_name("expression"))
+            .and_then(|e| infer.type_of(e))
+            .zip(infer.enclosing_type(n))
+            .is_some_and(|(a, b)| a == b);
+        return if accessed.is_some() && !own {
+            NameUse::Other
+        } else {
+            NameUse::Open
+        };
+    };
+    let dropped = call
+        .parent()
+        .is_some_and(|s| s.kind() == "expression_statement");
+    // One method of that name: a bare or `this.` call is it.
+    let this_call = accessed
+        .and_then(|a| a.child_by_field_name("expression"))
+        .is_none_or(|e| e.kind() == "this_expression" || text(e, src) == b"this");
+    if group.len() == 1 && this_call {
+        return NameUse::Call(0, dropped);
+    }
+    let bound = infer.resolve_with(call, &arguments(call));
+    let resolved = bound.is_some();
+    let target = match bound.map(|b| b.method) {
+        Some(Found::Local(d)) => group.iter().position(|g| d.declarator == Some(*g)),
+        _ => None,
+    };
+    match target {
+        Some(target) => NameUse::Call(target, dropped),
+        // Another type's method of the same name.
+        None if accessed.is_some() && resolved => NameUse::Other,
+        None => NameUse::Open,
+    }
+}
+
+/// The candidates called at least once, whose value every call drops.
+fn push_always_dropped<'t>(
+    candidates: &[Node<'t>],
+    group: &[Node<'t>],
+    uses: &[(usize, bool)],
+    found: &mut Vec<Node<'t>>,
+) {
+    for method in candidates {
+        let index = group.iter().position(|g| g == method).unwrap_or(usize::MAX);
+        let calls: Vec<bool> = uses
+            .iter()
+            .filter(|(t, _)| *t == index)
+            .map(|(_, d)| *d)
+            .collect();
+        if !calls.is_empty()
+            && calls.iter().all(|d| *d)
+            && let Some(returns) = method.child_by_field_name("returns")
+        {
+            found.push(returns);
+        }
+    }
 }
 
 // ---------------------------------------------------- S4070
@@ -1169,62 +1210,68 @@ pub(super) fn cleartext_protocols<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>
         return Vec::new();
     };
     let mut found = Vec::new();
-    walk_tree(m, |n, ancestors| match n.kind() {
-        "string_literal" | "verbatim_string_literal" => {
-            let Some(value) = super::cs::cs_string_value(n, src) else {
-                return;
-            };
-            let lower = value.to_ascii_lowercase();
-            let scheme = [&b"http://"[..], b"ftp://", b"telnet://"]
-                .iter()
-                .any(|p| lower.starts_with(p));
-            let public = url_host(value).is_some_and(|h| {
-                !super::java_security::is_private_host(&h)
-                    && !super::java_security::is_namespace_host(&h)
-                    && h != "tempuri.org"
-                    && h != "schema.org"
-                    && !h.starts_with("schemas.")
-            });
-            if scheme && public {
-                found.push(n);
-            }
+    walk_tree(m, |n, ancestors| {
+        let cleartext = match n.kind() {
+            "string_literal" | "verbatim_string_literal" => cleartext_url(n, src),
+            "object_creation_expression" => cleartext_client(&infer, n, ancestors, src),
+            _ => false,
+        };
+        if cleartext {
+            found.push(n);
         }
-        "object_creation_expression" => {
-            let Some(ty) = n.child_by_field_name("type") else {
-                return;
-            };
-            if text(ty, src)
-                .to_ascii_lowercase()
-                .windows(6)
-                .any(|w| w == b"telnet")
-            {
-                found.push(n);
-                return;
-            }
-            let smtp = infer
-                .written(ty)
-                .is_some_and(|t| t.is("System.Net.Mail.SmtpClient"));
-            if !smtp {
-                return;
-            }
-            // `{ EnableSsl = ... }`, or `x.EnableSsl = ...` in the same body.
-            let in_initializer = n
-                .child_by_field_name("initializer")
-                .is_some_and(|i| text(i, src).windows(9).any(|w| w == b"EnableSsl"));
-            let body = ancestors.iter().rev().find(|a| {
-                matches!(
-                    a.kind(),
-                    "block" | "arrow_expression_clause" | "declaration_list" | "compilation_unit"
-                )
-            });
-            let later = body.is_some_and(|b| text(*b, src).windows(10).any(|w| w == b".EnableSsl"));
-            if !in_initializer && !later {
-                found.push(n);
-            }
-        }
-        _ => {}
     });
     found
+}
+
+/// An `http://`, `ftp://` or `telnet://` URL to a public host.
+fn cleartext_url(n: Node, src: &[u8]) -> bool {
+    let Some(value) = super::cs::cs_string_value(n, src) else {
+        return false;
+    };
+    let lower = value.to_ascii_lowercase();
+    let scheme = [&b"http://"[..], b"ftp://", b"telnet://"]
+        .iter()
+        .any(|p| lower.starts_with(p));
+    scheme
+        && url_host(value).is_some_and(|h| {
+            !super::java_security::is_private_host(&h)
+                && !super::java_security::is_namespace_host(&h)
+                && h != "tempuri.org"
+                && h != "schema.org"
+                && !h.starts_with("schemas.")
+        })
+}
+
+/// A Telnet client, or an SmtpClient whose `EnableSsl` is set neither in
+/// its initializer nor later in the same body.
+fn cleartext_client(infer: &Infer, n: Node, ancestors: &[Node], src: &[u8]) -> bool {
+    let Some(ty) = n.child_by_field_name("type") else {
+        return false;
+    };
+    if text(ty, src)
+        .to_ascii_lowercase()
+        .windows(6)
+        .any(|w| w == b"telnet")
+    {
+        return true;
+    }
+    let smtp = infer
+        .written(ty)
+        .is_some_and(|t| t.is("System.Net.Mail.SmtpClient"));
+    if !smtp {
+        return false;
+    }
+    let in_initializer = n
+        .child_by_field_name("initializer")
+        .is_some_and(|i| text(i, src).windows(9).any(|w| w == b"EnableSsl"));
+    let body = ancestors.iter().rev().find(|a| {
+        matches!(
+            a.kind(),
+            "block" | "arrow_expression_clause" | "declaration_list" | "compilation_unit"
+        )
+    });
+    let later = body.is_some_and(|b| text(*b, src).windows(10).any(|w| w == b".EnableSsl"));
+    !in_initializer && !later
 }
 
 // ---------------------------------------------------- S6585
@@ -1555,81 +1602,108 @@ pub(super) fn undisposed_resources<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t
         let initial = (declarator.named_child_count() > 1)
             .then(|| declarator.named_child(declarator.named_child_count() as u32 - 1))
             .flatten();
-        match d.kind {
-            DeclKind::Let => {
-                let Some(value) = initial.filter(|v| creates_tracked(&infer, root, *v, src)) else {
-                    continue;
-                };
-                // `using var x = ...`, `using (var x = ...)`.
-                let statement = declarator.parent().and_then(|v| v.parent());
-                let using = statement.is_none_or(|s| {
-                    s.kind() != "local_declaration_statement"
-                        || s.children(&mut s.walk()).any(|c| c.kind() == "using")
-                });
-                if !using && !wraps_disposable(&infer, value) && !any_released(&uses[i], src) {
-                    found.push(d.node);
-                }
-            }
-            DeclKind::Field => {
-                let Some(declaration) = declarator.parent().and_then(|v| v.parent()) else {
-                    continue;
-                };
-                let private = !["public", "protected", "internal"]
-                    .iter()
-                    .any(|w| cs_has_modifier(declaration, w, src));
-                let typed = d.ty.is_some_and(|t| tracked_type(&infer, root, t, src));
-                let Some(class) = declaration
-                    .parent()
-                    .filter(|p| p.kind() == "declaration_list")
-                else {
-                    continue;
-                };
-                if !private || !typed {
-                    continue;
-                }
-                // Its uses: the name alone, or `this.name`.
-                let name = d.name.as_bytes();
-                let mut occurrences = Vec::new();
-                let mut stack = vec![class];
-                while let Some(n) = stack.pop() {
-                    stack.extend(n.named_children(&mut n.walk()));
-                    if n.kind() != "identifier" || text(n, src) != name || n.id() == d.node.id() {
-                        continue;
-                    }
-                    let this = n.parent().filter(|p| {
-                        p.kind() == "member_access_expression"
-                            && p.child_by_field_name("name") == Some(n)
-                            && p.child_by_field_name("expression")
-                                .is_some_and(|e| text(e, src) == b"this")
-                    });
-                    match this {
-                        Some(access) => occurrences.push(access),
-                        None if m.decl_of(n).is_some_and(|x| std::ptr::eq(x, d)) => {
-                            occurrences.push(n)
-                        }
-                        None => {}
-                    }
-                }
-                // Created: by its initializer, or by an assignment.
-                let created = initial.is_some_and(|v| creates_tracked(&infer, root, v, src))
-                    || occurrences.iter().any(|o| {
-                        o.parent()
-                            .filter(|a| {
-                                a.kind() == "assignment_expression"
-                                    && a.child_by_field_name("left") == Some(*o)
-                            })
-                            .and_then(|a| a.child_by_field_name("right"))
-                            .is_some_and(|v| creates_tracked(&infer, root, v, src))
-                    });
-                if created && !any_released(&occurrences, src) {
-                    found.push(d.node);
-                }
-            }
-            _ => {}
+        let undisposed = match d.kind {
+            DeclKind::Let => undisposed_local(&infer, root, declarator, initial, &uses[i], src),
+            DeclKind::Field => undisposed_field(&infer, root, m, d, declarator, initial, src),
+            _ => false,
+        };
+        if undisposed {
+            found.push(d.node);
         }
     }
     found.sort_by_key(|n| n.start_byte());
     found
+}
+
+/// A local created as a tracked resource, outside `using var x = ...` and
+/// `using (var x = ...)`, that nothing releases nor wraps.
+fn undisposed_local(
+    infer: &Infer,
+    root: Node,
+    declarator: Node,
+    initial: Option<Node>,
+    uses: &[Node],
+    src: &[u8],
+) -> bool {
+    let Some(value) = initial.filter(|v| creates_tracked(infer, root, *v, src)) else {
+        return false;
+    };
+    let statement = declarator.parent().and_then(|v| v.parent());
+    let using = statement.is_none_or(|s| {
+        s.kind() != "local_declaration_statement"
+            || s.children(&mut s.walk()).any(|c| c.kind() == "using")
+    });
+    !using && !wraps_disposable(infer, value) && !any_released(uses, src)
+}
+
+/// A private field of a tracked type, created by its initializer or by an
+/// assignment, that nothing releases.
+fn undisposed_field<'t>(
+    infer: &Infer,
+    root: Node,
+    m: &Model<'t>,
+    d: &crate::semantic::Decl<'t>,
+    declarator: Node<'t>,
+    initial: Option<Node>,
+    src: &[u8],
+) -> bool {
+    let Some(declaration) = declarator.parent().and_then(|v| v.parent()) else {
+        return false;
+    };
+    let private = !["public", "protected", "internal"]
+        .iter()
+        .any(|w| cs_has_modifier(declaration, w, src));
+    let typed = d.ty.is_some_and(|t| tracked_type(infer, root, t, src));
+    let Some(class) = declaration
+        .parent()
+        .filter(|p| p.kind() == "declaration_list")
+    else {
+        return false;
+    };
+    if !private || !typed {
+        return false;
+    }
+    let occurrences = field_occurrences(m, d, class, src);
+    let created = initial.is_some_and(|v| creates_tracked(infer, root, v, src))
+        || occurrences.iter().any(|o| {
+            o.parent()
+                .filter(|a| {
+                    a.kind() == "assignment_expression" && a.child_by_field_name("left") == Some(*o)
+                })
+                .and_then(|a| a.child_by_field_name("right"))
+                .is_some_and(|v| creates_tracked(infer, root, v, src))
+        });
+    created && !any_released(&occurrences, src)
+}
+
+/// A field's uses in its class: the name alone, or `this.name`.
+fn field_occurrences<'t>(
+    m: &Model<'t>,
+    d: &crate::semantic::Decl<'t>,
+    class: Node<'t>,
+    src: &[u8],
+) -> Vec<Node<'t>> {
+    let name = d.name.as_bytes();
+    let mut occurrences = Vec::new();
+    let mut stack = vec![class];
+    while let Some(n) = stack.pop() {
+        stack.extend(n.named_children(&mut n.walk()));
+        if n.kind() != "identifier" || text(n, src) != name || n.id() == d.node.id() {
+            continue;
+        }
+        let this = n.parent().filter(|p| {
+            p.kind() == "member_access_expression"
+                && p.child_by_field_name("name") == Some(n)
+                && p.child_by_field_name("expression")
+                    .is_some_and(|e| text(e, src) == b"this")
+        });
+        match this {
+            Some(access) => occurrences.push(access),
+            None if m.decl_of(n).is_some_and(|x| std::ptr::eq(x, d)) => occurrences.push(n),
+            None => {}
+        }
+    }
+    occurrences
 }
 
 #[cfg(test)]
