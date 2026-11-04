@@ -795,9 +795,7 @@ impl Parser {
             return err("missing ), unterminated subpattern");
         }
         // inline flags inside a group end with it
-        if !matches!(kind, GroupKind::NonCapture) || true {
-            self.flags = saved;
-        }
+        self.flags = saved;
         Ok(Node::Group {
             kind,
             index,

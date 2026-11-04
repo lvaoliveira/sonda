@@ -3980,11 +3980,7 @@ fn switch_statement_lacks_default(switch: Node, src: &[u8]) -> bool {
         return false;
     }
     let labels = case_labels(switch);
-    !labels.is_empty()
-        && !labels.iter().any(|l| text(*l, src).starts_with(b"default"))
-        && !labels
-            .iter()
-            .any(|l| text(*l, src).contains(&b'>') && false)
+    !labels.is_empty() && !labels.iter().any(|l| text(*l, src).starts_with(b"default"))
 }
 
 fn loop_has_several_jumps(loop_: Node, _: &[u8]) -> bool {

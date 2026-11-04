@@ -36,7 +36,7 @@ function Components({ list }: { list: ComponentList }) {
       },
       { replace: true },
     )
-  const projects = useMemo(() => [...new Set(list.components.map((c) => c.project))].sort(), [list.components])
+  const projects = useMemo(() => [...new Set(list.components.map((c) => c.project))].sort((a, b) => a.localeCompare(b)), [list.components])
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return list.components

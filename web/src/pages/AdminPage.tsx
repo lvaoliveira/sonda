@@ -6,7 +6,7 @@ import { ExternalButton } from '@/components/sonda/connect'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { TokenGenerator, TokenTable } from '@/components/sonda/tokens'
-import { shortDate } from '@/lib/format'
+import { shortDate, trimTrailing } from '@/lib/format'
 
 /** Administration: users and roles (ADR-0006). Admins only; the server enforces it too. */
 export function AdminPage() {
@@ -139,7 +139,7 @@ function AllTokens({ owners }: { owners: string[] }) {
 
 /** A name GitHub will take for a new App: at most 34 characters. */
 function proposedAppName(host: string): string {
-  return `sonda-${host.replace(/[^A-Za-z0-9-]+/g, '-')}`.slice(0, 34).replace(/-+$/, '')
+  return trimTrailing(`sonda-${host.replace(/[^A-Za-z0-9-]+/g, '-')}`.slice(0, 34), '-')
 }
 
 /**
