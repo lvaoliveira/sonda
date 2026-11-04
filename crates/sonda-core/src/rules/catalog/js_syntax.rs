@@ -1338,21 +1338,16 @@ fn has_several_jumps(loop_: Node, _: &[u8]) -> bool {
             if is_function_kind(kind) {
                 continue;
             }
-            if kind == "break_statement" {
-                if child.child_by_field_name("label").is_none() && !in_loop && !in_switch {
-                    n += 1;
-                }
-            } else if kind == "continue_statement" {
-                if child.child_by_field_name("label").is_none() && !in_loop {
-                    n += 1;
-                }
-            } else {
-                n += count(
+            let unlabeled = child.child_by_field_name("label").is_none();
+            n += match kind {
+                "break_statement" => usize::from(unlabeled && !in_loop && !in_switch),
+                "continue_statement" => usize::from(unlabeled && !in_loop),
+                _ => count(
                     child,
                     in_loop || is_loop_kind(kind),
                     in_switch || kind == "switch_statement",
-                );
-            }
+                ),
+            };
         }
         n
     }
@@ -1836,50 +1831,8 @@ fn captures_loop_state(function: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
-    let mut mutable: Vec<&[u8]> = Vec::new();
-    walk(loop_, &mut |n| {
-        match n.kind() {
-            "variable_declaration" => {
-                for d in named(n) {
-                    if let Some(name) = d
-                        .child_by_field_name("name")
-                        .filter(|x| x.kind() == "identifier")
-                    {
-                        mutable.push(text(name, src));
-                    }
-                }
-            }
-            "assignment_expression" | "augmented_assignment_expression" => {
-                if let Some(l) = n
-                    .child_by_field_name("left")
-                    .filter(|l| l.kind() == "identifier")
-                {
-                    mutable.push(text(l, src));
-                }
-            }
-            "update_expression" => {
-                if let Some(a) = n
-                    .child_by_field_name("argument")
-                    .filter(|a| a.kind() == "identifier")
-                {
-                    mutable.push(text(a, src));
-                }
-            }
-            _ => {}
-        }
-        true
-    });
-    // `for (let i ...)` gives each iteration its own binding.
-    if let Some(init) = loop_
-        .child_by_field_name("initializer")
-        .filter(|i| i.kind() == "lexical_declaration")
-    {
-        for d in named(init) {
-            if let Some(name) = d.child_by_field_name("name") {
-                mutable.retain(|m| *m != text(name, src));
-            }
-        }
-    }
+    let mut mutable = names_written_in(loop_, src);
+    drop_per_iteration_bindings(loop_, src, &mut mutable);
     let mut captured = false;
     walk(function, &mut |n| {
         if n.kind() == "identifier" && mutable.contains(&text(n, src)) {
@@ -1888,6 +1841,53 @@ fn captures_loop_state(function: Node, src: &[u8]) -> bool {
         !captured
     });
     captured
+}
+
+/// The variables declared, assigned or incremented anywhere in `loop_`.
+fn names_written_in<'s>(loop_: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut mutable: Vec<&[u8]> = Vec::new();
+    walk(loop_, &mut |n| {
+        if n.kind() == "variable_declaration" {
+            mutable.extend(
+                named(n)
+                    .into_iter()
+                    .filter_map(|d| d.child_by_field_name("name"))
+                    .filter(|x| x.kind() == "identifier")
+                    .map(|x| text(x, src)),
+            );
+        } else if let Some(target) = written_identifier(n) {
+            mutable.push(text(target, src));
+        }
+        true
+    });
+    mutable
+}
+
+/// The variable an assignment or an increment writes, when it's a plain name.
+fn written_identifier(n: Node) -> Option<Node> {
+    let target = match n.kind() {
+        "assignment_expression" | "augmented_assignment_expression" => {
+            n.child_by_field_name("left")
+        }
+        "update_expression" => n.child_by_field_name("argument"),
+        _ => None,
+    };
+    target.filter(|t| t.kind() == "identifier")
+}
+
+/// `for (let i ...)` gives each iteration its own binding: those don't count.
+fn drop_per_iteration_bindings(loop_: Node, src: &[u8], mutable: &mut Vec<&[u8]>) {
+    let Some(init) = loop_
+        .child_by_field_name("initializer")
+        .filter(|i| i.kind() == "lexical_declaration")
+    else {
+        return;
+    };
+    for d in named(init) {
+        if let Some(name) = d.child_by_field_name("name") {
+            mutable.retain(|m| *m != text(name, src));
+        }
+    }
 }
 
 fn index_only_reads_the_array(for_: Node, src: &[u8]) -> bool {
@@ -1899,72 +1899,60 @@ fn index_only_reads_the_array(for_: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
+    let Some(var_name) = zero_initialized(init, src) else {
+        return false;
+    };
+    let Some(array) = length_bound(cond, var_name, src) else {
+        return false;
+    };
+    increments(step, var_name, src) && reads_only_elements(body, var_name, text(array, src), src)
+}
+
+/// The variable `let i = 0` declares, when it's the only one.
+fn zero_initialized<'s>(init: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     let declarators = named(init);
     let [declarator] = declarators.as_slice() else {
-        return false;
+        return None;
     };
-    let (Some(var), Some(zero)) = (
-        declarator.child_by_field_name("name"),
-        declarator.child_by_field_name("value"),
-    ) else {
-        return false;
-    };
-    if text(zero, src) != b"0" {
-        return false;
-    }
-    let var_name = text(var, src);
+    let var = declarator.child_by_field_name("name")?;
+    let zero = declarator.child_by_field_name("value")?;
+    (text(zero, src) == b"0").then(|| text(var, src))
+}
+
+/// The array of `i < array.length`.
+fn length_bound<'t>(cond: Node<'t>, var_name: &[u8], src: &[u8]) -> Option<Node<'t>> {
     let cond = if cond.kind() == "expression_statement" {
-        match cond.named_child(0) {
-            Some(c) => c,
-            None => return false,
-        }
+        cond.named_child(0)?
     } else {
         cond
     };
     if cond.kind() != "binary_expression" || operator_text(cond, src) != b"<" {
-        return false;
+        return None;
     }
-    let (Some(left), Some(right)) = (
-        cond.child_by_field_name("left"),
-        cond.child_by_field_name("right"),
-    ) else {
-        return false;
-    };
+    let left = cond.child_by_field_name("left")?;
+    let right = cond.child_by_field_name("right")?;
     if text(left, src) != var_name || right.kind() != "member_expression" {
-        return false;
+        return None;
     }
-    let (Some(array), Some(prop)) = (
-        right.child_by_field_name("object"),
-        right.child_by_field_name("property"),
-    ) else {
-        return false;
-    };
-    if text(prop, src) != b"length" || array.kind() != "identifier" {
-        return false;
-    }
+    let array = right.child_by_field_name("object")?;
+    let prop = right.child_by_field_name("property")?;
+    (text(prop, src) == b"length" && array.kind() == "identifier").then_some(array)
+}
+
+/// `i++` or `++i`.
+fn increments(step: Node, var_name: &[u8], src: &[u8]) -> bool {
     let step_text = text(step, src);
-    if step_text != [var_name, b"++"].concat() && step_text != [b"++", var_name].concat() {
-        return false;
-    }
-    let array_name = text(array, src);
+    step_text == [var_name, b"++"].concat() || step_text == [b"++", var_name].concat()
+}
+
+/// Whether the body uses `var_name` only to read `array_name[var_name]`, at
+/// least once.
+fn reads_only_elements(body: Node, var_name: &[u8], array_name: &[u8], src: &[u8]) -> bool {
     let mut uses = 0;
     let mut other = false;
     walk(body, &mut |n| {
         if n.kind() == "identifier" && text(n, src) == var_name {
-            let read_only = n.parent().is_some_and(|p| {
-                p.kind() == "subscript_expression"
-                    && p.child_by_field_name("index") == Some(n)
-                    && p.child_by_field_name("object")
-                        .is_some_and(|o| text(o, src) == array_name)
-                    && !p.parent().is_some_and(|g| {
-                        matches!(
-                            g.kind(),
-                            "assignment_expression" | "augmented_assignment_expression"
-                        ) && g.child_by_field_name("left") == Some(p)
-                            || g.kind() == "update_expression"
-                    })
-            });
-            if read_only {
+            if element_read(n, array_name, src) {
                 uses += 1;
             } else {
                 other = true;
@@ -1973,6 +1961,23 @@ fn index_only_reads_the_array(for_: Node, src: &[u8]) -> bool {
         true
     });
     uses > 0 && !other
+}
+
+/// Whether the index `n` reads an element of `array_name`, not writes one.
+fn element_read(n: Node, array_name: &[u8], src: &[u8]) -> bool {
+    n.parent().is_some_and(|p| {
+        p.kind() == "subscript_expression"
+            && p.child_by_field_name("index") == Some(n)
+            && p.child_by_field_name("object")
+                .is_some_and(|o| text(o, src) == array_name)
+            && !p.parent().is_some_and(|g| {
+                matches!(
+                    g.kind(),
+                    "assignment_expression" | "augmented_assignment_expression"
+                ) && g.child_by_field_name("left") == Some(p)
+                    || g.kind() == "update_expression"
+            })
+    })
 }
 
 fn is_unshadowed_global(id: Node, src: &[u8]) -> bool {

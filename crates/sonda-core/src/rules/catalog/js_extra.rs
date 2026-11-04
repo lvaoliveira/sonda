@@ -921,8 +921,26 @@ pub(super) fn operator_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
 }
 
 fn first_call_with_extra_arguments<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Top-level function declarations, by name; a name declared twice is ambiguous.
-    let mut functions: Vec<(&[u8], Node<'t>)> = Vec::new();
+    let functions = top_level_functions(program, src);
+    if functions.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    super::js_syntax::walk(program, &mut |call| {
+        if found.is_some() {
+            return false;
+        }
+        if passes_extra_arguments(call, &functions, src) {
+            found = Some(call);
+        }
+        true
+    });
+    found
+}
+
+/// Top-level function declarations, exported or not, by name.
+fn top_level_functions<'t, 's>(program: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Node<'t>)> {
+    let mut functions = Vec::new();
     for n in named(program) {
         let d = if n.kind() == "export_statement" {
             match n.child_by_field_name("declaration") {
@@ -938,57 +956,43 @@ fn first_call_with_extra_arguments<'t>(program: Node<'t>, src: &[u8]) -> Option<
             functions.push((text(name, src), d));
         }
     }
-    if functions.is_empty() {
-        return None;
+    functions
+}
+
+/// Whether `call` passes more arguments than the one top-level function of
+/// its name declares (a name declared twice is ambiguous), with no spread,
+/// rest parameter or use of `arguments` to take the extras.
+fn passes_extra_arguments(call: Node, functions: &[(&[u8], Node)], src: &[u8]) -> bool {
+    if call.kind() != "call_expression" {
+        return false;
     }
-    let mut cursor = program.walk();
-    if !cursor.goto_first_child() {
-        return None;
-    }
-    loop {
-        let call = cursor.node();
-        if call.kind() == "call_expression"
-            && let (Some(callee), Some(args)) = (
-                call.child_by_field_name("function")
-                    .filter(|c| c.kind() == "identifier"),
-                call.child_by_field_name("arguments"),
-            )
-        {
-            let name = text(callee, src);
-            let matches: Vec<&Node> = functions
-                .iter()
-                .filter(|(n, _)| *n == name)
-                .map(|(_, d)| d)
-                .collect();
-            if let [function] = matches.as_slice() {
-                let given = named(args);
-                let spread = given.iter().any(|a| a.kind() == "spread_element");
-                let declared = function.child_by_field_name("parameters").map(named);
-                let rest = declared.as_ref().is_some_and(|d| {
-                    d.iter()
-                        .any(|p| matches!(p.kind(), "rest_pattern" | "rest_parameter"))
-                });
-                let uses_arguments = function
-                    .child_by_field_name("body")
-                    .is_some_and(|b| count_word(text(b, src), b"arguments") > 0);
-                if !spread
-                    && !rest
-                    && !uses_arguments
-                    && declared.is_some_and(|d| given.len() > d.len())
-                {
-                    return Some(call);
-                }
-            }
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return None;
-            }
-        }
-    }
+    let (Some(callee), Some(args)) = (
+        call.child_by_field_name("function")
+            .filter(|c| c.kind() == "identifier"),
+        call.child_by_field_name("arguments"),
+    ) else {
+        return false;
+    };
+    let name = text(callee, src);
+    let matches: Vec<&Node> = functions
+        .iter()
+        .filter(|(n, _)| *n == name)
+        .map(|(_, d)| d)
+        .collect();
+    let [function] = matches.as_slice() else {
+        return false;
+    };
+    let given = named(args);
+    let spread = given.iter().any(|a| a.kind() == "spread_element");
+    let declared = function.child_by_field_name("parameters").map(named);
+    let rest = declared.as_ref().is_some_and(|d| {
+        d.iter()
+            .any(|p| matches!(p.kind(), "rest_pattern" | "rest_parameter"))
+    });
+    let uses_arguments = function
+        .child_by_field_name("body")
+        .is_some_and(|b| count_word(text(b, src), b"arguments") > 0);
+    !spread && !rest && !uses_arguments && declared.is_some_and(|d| given.len() > d.len())
 }
 
 fn labels_a_non_loop(labeled: Node, _: &[u8]) -> bool {
@@ -1045,6 +1049,31 @@ fn block_has_chain_repeating_a_body<'t>(block: Node<'t>, src: &[u8]) -> Option<N
 }
 
 fn called_both_ways<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mut constructed: Vec<&[u8]> = Vec::new();
+    let mut called: Vec<(Node<'t>, &[u8])> = Vec::new();
+    super::js_syntax::walk(program, &mut |n| {
+        match n.kind() {
+            "new_expression" => {
+                constructed.extend(class_name(n.child_by_field_name("constructor"), src));
+            }
+            "call_expression" => {
+                if let Some(t) = class_name(n.child_by_field_name("function"), src) {
+                    called.push((n, t));
+                }
+            }
+            _ => {}
+        }
+        true
+    });
+    called
+        .into_iter()
+        .find(|(_, t)| constructed.contains(t))
+        .map(|(n, _)| n)
+}
+
+/// The capitalized name `x` is, other than the built-ins meant to be called
+/// both ways (`String(x)`, `new String(x)`).
+fn class_name<'s>(x: Option<Node>, src: &'s [u8]) -> Option<&'s [u8]> {
     const COERCIONS: &[&[u8]] = &[
         b"String",
         b"Number",
@@ -1060,44 +1089,9 @@ fn called_both_ways<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         b"TypeError",
         b"RangeError",
     ];
-    let mut constructed: Vec<&[u8]> = Vec::new();
-    let mut called: Vec<(Node<'t>, &[u8])> = Vec::new();
-    let mut cursor = program.walk();
-    if !cursor.goto_first_child() {
-        return None;
-    }
-    loop {
-        let n = cursor.node();
-        let name_of = |x: Option<Node<'t>>| {
-            x.filter(|c| c.kind() == "identifier")
-                .map(|c| text(c, src))
-                .filter(|t| t.first().is_some_and(u8::is_ascii_uppercase) && !COERCIONS.contains(t))
-        };
-        match n.kind() {
-            "new_expression" => {
-                if let Some(t) = name_of(n.child_by_field_name("constructor")) {
-                    constructed.push(t);
-                }
-            }
-            "call_expression" => {
-                if let Some(t) = name_of(n.child_by_field_name("function")) {
-                    called.push((n, t));
-                }
-            }
-            _ => {}
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return called
-                    .into_iter()
-                    .find(|(_, t)| constructed.contains(t))
-                    .map(|(n, _)| n);
-            }
-        }
-    }
+    x.filter(|c| c.kind() == "identifier")
+        .map(|c| text(c, src))
+        .filter(|t| t.first().is_some_and(u8::is_ascii_uppercase) && !COERCIONS.contains(t))
 }
 
 fn index_only_reads_the_array(for_loop: Node, src: &[u8]) -> bool {
