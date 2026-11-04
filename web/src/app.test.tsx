@@ -1292,6 +1292,26 @@ describe('Shell', () => {
     expect(await within(nav).findByTitle('Server version')).toHaveTextContent('0.1.0')
   })
 
+  it('keeps the organization and version between pages, instead of flashing placeholders', async () => {
+    const user = userEvent.setup()
+    const base = createMockApi(0)
+    let calls = 0
+    // Only the first page's shell arrives: the next page shows what it had.
+    const api: SondaApi = { ...base, shell: () => (++calls === 1 ? base.shell() : new Promise(() => {})) }
+    renderAt('/rules', api)
+    let nav = await screen.findByRole('complementary', { name: 'Primary' })
+    expect(await within(nav).findByTitle('Server version')).toHaveTextContent('0.1.0')
+    await user.click(within(nav).getByRole('link', { name: /Issues/ }))
+    const trail = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    await within(trail).findByText('Issues')
+    expect(trail).toHaveTextContent('acme-corp')
+    nav = screen.getByRole('complementary', { name: 'Primary' })
+    expect(within(nav).getByTitle('Server version')).toHaveTextContent('0.1.0')
+    expect(nav).toHaveTextContent('self-hosted')
+    // It still asked for a fresh one.
+    expect(calls).toBeGreaterThan(1)
+  })
+
   it('toggles and remembers the theme', async () => {
     const user = userEvent.setup()
     renderAt('/rules')
