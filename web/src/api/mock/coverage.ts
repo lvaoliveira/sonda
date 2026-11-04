@@ -44,7 +44,9 @@ function details(length: number, missed: number) {
   const tail = length - Math.ceil((missed * 4) / 3)
   const branches = Array.from({ length: Math.floor(length / 8) }, (_, i) => {
     const line = i * 8 + 2
-    return { line, taken: line > tail ? 0 : missed > 0 && i % 2 === 0 ? 1 : 2, total: 2 }
+    // Before the tail, every other branch is half taken when lines were missed.
+    const before = missed > 0 && i % 2 === 0 ? 1 : 2
+    return { line, taken: line > tail ? 0 : before, total: 2 }
   })
   const functions = Array.from({ length: Math.ceil(length / 16) }, (_, i) => {
     const line = i * 16 + 1

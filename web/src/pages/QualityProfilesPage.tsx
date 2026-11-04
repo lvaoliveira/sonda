@@ -142,7 +142,11 @@ const SET_FILTER: RuleFilter<InProfile> = {
     { value: 'on', label: 'On' },
     { value: 'off', label: 'Off' },
   ],
-  test: (r, v) => (v === 'set' ? r.setting !== null : v === 'on' ? (r.setting?.on ?? r.onByDefault) : !(r.setting?.on ?? r.onByDefault)),
+  test: (r, v) => {
+    if (v === 'set') return r.setting !== null
+    const on = r.setting?.on ?? r.onByDefault
+    return v === 'on' ? on : !on
+  },
 }
 
 function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: Readonly<{ summary: RuleProfileSummary; catalog: RuleCatalog; isAdmin: boolean; reload: () => void; onDeleted: () => void }>) {
@@ -204,7 +208,7 @@ function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: Readonly<
         sortLabel="rules it sets first"
         extraFilter={SET_FILTER}
         search={{ q, setQ }}
-        listTags={(r) =>
+        renderTags={(r) =>
           r.setting && (
             <>
               <span>·</span>
@@ -214,13 +218,13 @@ function ProfileView({ summary, catalog, isAdmin, reload, onDeleted }: Readonly<
             </>
           )
         }
-        summary={(r) => (
+        renderSummary={(r) => (
           <span className="text-[12.5px] text-fg-muted">
             <Mono className="text-[11.5px] text-fg">{r.openIssues}</Mono> open issues in <Mono className="text-[11.5px] text-fg">{r.projects}</Mono>{' '}
             {r.projects === 1 ? 'project' : 'projects'}, across every profile
           </span>
         )}
-        panel={(r) => <InThisProfile key={`${r.id}-${r.setting?.change.changedAt ?? ''}`} profile={summary.id} rule={r} editable={editable} reload={refresh} />}
+        renderPanel={(r) => <InThisProfile key={`${r.id}-${r.setting?.change.changedAt ?? ''}`} profile={summary.id} rule={r} editable={editable} reload={refresh} />}
       />
     </div>
   )

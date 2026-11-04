@@ -56,6 +56,26 @@ interface Connected {
   server: string
 }
 
+/** Where the workflow reaches sonda: this host's own port for a self-hosted runner, this page's address when it's public. */
+function serverFor(runner: Runner): string {
+  if (runner === 'self-hosted') return localServer(window.location)
+  return window.location.protocol === 'https:' ? window.location.origin : ''
+}
+
+/** What stops the form, if anything: the repository first, then the server. */
+function connectProblem(repository: string, repo: string | null, server: string, runner: Runner): string | null {
+  if (repository.trim() && !repo) return "Paste the repository's GitHub URL, such as https://github.com/acme/shop."
+  return server ? serverProblem(server, runner) : null
+}
+
+type StepState = 'done' | 'current' | 'locked'
+
+/** Steps before the current one are done; the ones after it wait. */
+function stepState(step: number, current: number): StepState {
+  if (step < current) return 'done'
+  return step === current ? 'current' : 'locked'
+}
+
 function Connect({ waiting }: Readonly<{ waiting: WaitingProject | null }>) {
   const api = useApi()
   const [repository, setRepository] = useState(waiting?.githubRepository ? `https://github.com/${waiting.githubRepository}` : '')
@@ -72,9 +92,9 @@ function Connect({ waiting }: Readonly<{ waiting: WaitingProject | null }>) {
 
   const chooseRunner = (r: Runner) => {
     setRunner(r)
-    setServer(r === 'self-hosted' ? localServer(window.location) : window.location.protocol === 'https:' ? window.location.origin : '')
+    setServer(serverFor(r))
   }
-  const problem = repository.trim() && !repo ? "Paste the repository's GitHub URL, such as https://github.com/acme/shop." : server ? serverProblem(server, runner) : null
+  const problem = connectProblem(repository, repo, server, runner)
 
   const connect = async (e: SubmitEvent) => {
     e.preventDefault()
@@ -232,13 +252,13 @@ function Steps({ done }: Readonly<{ done: Connected }>) {
       {settings.githubApp ? (
         <InstallApp repository={repository} />
       ) : (
-        <p role="status" className="m-0 max-w-[720px] rounded-lg bg-panel-2 px-4 py-3 text-[13px] text-warn edge">
+        <output className="block m-0 max-w-[720px] rounded-lg bg-panel-2 px-4 py-3 text-[13px] text-warn edge">
           This server has no GitHub App, so results won't be posted on pull requests; analyses still upload.{' '}
           <Link to="/admin#github">Create one under Administration</Link>.
-        </p>
+        </output>
       )}
       {steps.map((step, i) => {
-        const state = i < current ? 'done' : i === current ? 'current' : 'locked'
+        const state = stepState(i, current)
         return (
           <Step key={step.title} n={i + 1} title={step.title} state={state} onReopen={() => setCurrent(i)}>
             {step.body}
@@ -334,28 +354,30 @@ function FirstAnalysis({ project, n }: Readonly<{ project: string; n: number }>)
 }
 
 /** A step: the current one shows everything; a done one only that it's done; a later one only its title. */
-function Step({ n, title, state = 'current', onReopen, children }: Readonly<{ n: number; title: string; state?: 'done' | 'current' | 'locked'; onReopen?: () => void; children: ReactNode }>) {
+function Step({ n, title, state = 'current', onReopen, children }: Readonly<{ n: number; title: string; state?: StepState; onReopen?: () => void; children: ReactNode }>) {
   return (
     <Card
       id={`step-${n}`}
       title={`${n}. ${title}`}
       className={state === 'locked' ? 'opacity-55' : ''}
-      aside={
-        state === 'done' ? (
-          <div className="flex items-center gap-2.5 text-[13px]">
-            <span className="flex items-center gap-1 text-ok">
-              <Check size={14} strokeWidth={2.5} aria-hidden="true" />
-              Done
-            </span>
-            {onReopen && <Button onClick={onReopen}>Show again</Button>}
-          </div>
-        ) : state === 'locked' ? (
-          <span className="text-[13px] text-fg-muted">After step {n - 1}</span>
-        ) : undefined
-      }
+      aside={state === 'current' ? undefined : <StepStatus state={state} n={n} onReopen={onReopen} />}
     >
       {state === 'current' && <div className="flex max-w-[720px] min-w-0 flex-col gap-3">{children}</div>}
     </Card>
+  )
+}
+
+/** Beside a step that isn't the current one: done (and how to reopen it), or what it waits for. */
+function StepStatus({ state, n, onReopen }: Readonly<{ state: Exclude<StepState, 'current'>; n: number; onReopen?: () => void }>) {
+  if (state === 'locked') return <span className="text-[13px] text-fg-muted">After step {n - 1}</span>
+  return (
+    <div className="flex items-center gap-2.5 text-[13px]">
+      <span className="flex items-center gap-1 text-ok">
+        <Check size={14} strokeWidth={2.5} aria-hidden="true" />
+        <span>Done</span>
+      </span>
+      {onReopen && <Button onClick={onReopen}>Show again</Button>}
+    </div>
   )
 }
 
@@ -376,7 +398,8 @@ function CopyButton({ value, children }: Readonly<{ value: string; children: Rea
   const copy = async () => {
     setState((await copyText(value)) ? 'copied' : 'failed')
   }
-  return <Button onClick={() => void copy()}>{state === 'copied' ? 'Copied' : state === 'failed' ? 'Select it to copy' : children}</Button>
+  const label = { idle: children, copied: 'Copied', failed: 'Select it to copy' }[state]
+  return <Button onClick={() => void copy()}>{label}</Button>
 }
 
 /** Pull requests are decorated only where the App is installed (ADR-0024). */

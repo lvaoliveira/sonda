@@ -141,29 +141,7 @@ impl<'t> Binder<'t, '_> {
             "statement_block" | "switch_body" | "for_statement" => {
                 Some(self.m.push_scope(scope, ScopeKind::Block))
             }
-            "for_in_statement" => {
-                let block = self.m.push_scope(scope, ScopeKind::Block);
-                let declares = [
-                    ("var", DeclKind::Var),
-                    ("let", DeclKind::Let),
-                    ("const", DeclKind::Const),
-                ]
-                .into_iter()
-                .find(|(token, _)| has_token(node, token));
-                if let (Some((_, decl_kind)), Some(left)) =
-                    (declares, node.child_by_field_name("left"))
-                {
-                    let target = if decl_kind == DeclKind::Var {
-                        self.m.function_scope(scope)
-                    } else {
-                        block
-                    };
-                    let first = self.m.decls.len();
-                    self.declare_pattern(target, left, decl_kind);
-                    self.written_in(first, block);
-                }
-                Some(block)
-            }
+            "for_in_statement" => Some(self.for_in(node, scope)),
             "catch_clause" => {
                 let block = self.m.push_scope(scope, ScopeKind::Block);
                 if let Some(param) = node.child_by_field_name("parameter") {
@@ -171,74 +149,14 @@ impl<'t> Binder<'t, '_> {
                 }
                 Some(block)
             }
-            // tree-sitter-javascript reads `let // comment` + newline + `a, b`
-            // as the expression `let` followed by the expression `a, b`:
-            // declare those names as the `let` they are.
-            "expression_statement"
-                if node
-                    .named_child(0)
-                    .is_some_and(|c| c.kind() == "identifier" && self.text(c) == "let")
-                    && node
-                        .named_children(&mut node.walk())
-                        .skip(1)
-                        .all(|c| c.kind() == "comment") =>
-            {
-                if let Some(c) = node.named_child(0) {
-                    self.not_refs.insert(c.id());
-                }
-                let mut next = node.next_named_sibling();
-                while let Some(n) = next.filter(|n| n.kind() == "comment") {
-                    next = n.next_named_sibling();
-                }
-                let mut stack: Vec<Node> = next
-                    .filter(|n| n.kind() == "expression_statement")
-                    .and_then(|n| n.named_child(0))
-                    .into_iter()
-                    .collect();
-                while let Some(n) = stack.pop() {
-                    match n.kind() {
-                        "sequence_expression" => {
-                            let mut c = n.walk();
-                            stack.extend(n.named_children(&mut c));
-                        }
-                        "assignment_expression" => {
-                            if let Some(l) = n.child_by_field_name("left")
-                                && l.kind() == "identifier"
-                            {
-                                self.declare(scope, l, DeclKind::Let);
-                            }
-                        }
-                        "identifier" => self.declare(scope, n, DeclKind::Let),
-                        _ => {}
-                    }
-                }
+            "expression_statement" if self.is_bare_let(node) => {
+                self.bare_let(node, scope);
                 None
             }
             "lexical_declaration" | "variable_declaration" => {
-                let (decl_kind, target) = if kind == "variable_declaration" {
-                    (DeclKind::Var, self.m.function_scope(scope))
-                } else if has_token(node, "const") {
-                    (DeclKind::Const, scope)
-                } else {
-                    (DeclKind::Let, scope)
-                };
-                let first = self.m.decls.len();
-                let mut cursor = node.walk();
-                for declarator in node.named_children(&mut cursor) {
-                    if let Some(name) = declarator.child_by_field_name("name") {
-                        self.declare_pattern(target, name, decl_kind);
-                        if name.kind() == "identifier"
-                            && let Some(d) = self.m.decls.last_mut()
-                        {
-                            d.declarator = Some(declarator);
-                        }
-                    }
-                }
-                self.written_in(first, scope);
+                self.variables(node, scope);
                 None
             }
-            // Parameter names in a type (`(a: T) => U`) or an overload
-            // signature bind nothing at run time and refer to nothing.
             "function_type"
             | "constructor_type"
             | "call_signature"
@@ -246,18 +164,7 @@ impl<'t> Binder<'t, '_> {
             | "method_signature"
             | "function_signature"
             | "abstract_method_signature" => {
-                if let Some(params) = node.child_by_field_name("parameters") {
-                    let mut cursor = params.walk();
-                    let list: Vec<Node> = params.named_children(&mut cursor).collect();
-                    for p in list {
-                        self.pattern(scope, p, None);
-                    }
-                }
-                if kind == "function_signature"
-                    && let Some(name) = node.child_by_field_name("name")
-                {
-                    self.not_refs.insert(name.id());
-                }
+                self.signature(node, scope);
                 None
             }
             "import_statement" => {
@@ -265,23 +172,7 @@ impl<'t> Binder<'t, '_> {
                 None
             }
             "export_statement" => {
-                // `export { a as b } from './m'` names nothing local.
-                let reexport = node.child_by_field_name("source").is_some();
-                let mut cursor = node.walk();
-                for clause in node
-                    .named_children(&mut cursor)
-                    .filter(|c| c.kind() == "export_clause")
-                {
-                    let mut inner = clause.walk();
-                    for spec in clause.named_children(&mut inner) {
-                        if let Some(alias) = spec.child_by_field_name("alias") {
-                            self.not_refs.insert(alias.id());
-                        }
-                        if reexport && let Some(name) = spec.child_by_field_name("name") {
-                            self.not_refs.insert(name.id());
-                        }
-                    }
-                }
+                self.export(node);
                 None
             }
             "interface_declaration"
@@ -299,6 +190,134 @@ impl<'t> Binder<'t, '_> {
                 None
             }
             _ => None,
+        }
+    }
+
+    fn for_in(&mut self, node: Node<'t>, scope: ScopeId) -> ScopeId {
+        let block = self.m.push_scope(scope, ScopeKind::Block);
+        let declares = [
+            ("var", DeclKind::Var),
+            ("let", DeclKind::Let),
+            ("const", DeclKind::Const),
+        ]
+        .into_iter()
+        .find(|(token, _)| has_token(node, token));
+        if let (Some((_, decl_kind)), Some(left)) = (declares, node.child_by_field_name("left")) {
+            let target = if decl_kind == DeclKind::Var {
+                self.m.function_scope(scope)
+            } else {
+                block
+            };
+            let first = self.m.decls.len();
+            self.declare_pattern(target, left, decl_kind);
+            self.written_in(first, block);
+        }
+        block
+    }
+
+    /// tree-sitter-javascript reads `let // comment` + newline + `a, b` as
+    /// the expression `let` followed by the expression `a, b`.
+    fn is_bare_let(&self, node: Node<'t>) -> bool {
+        node.named_child(0)
+            .is_some_and(|c| c.kind() == "identifier" && self.text(c) == "let")
+            && node
+                .named_children(&mut node.walk())
+                .skip(1)
+                .all(|c| c.kind() == "comment")
+    }
+
+    /// Declares the names after a bare `let` as the `let` they are.
+    fn bare_let(&mut self, node: Node<'t>, scope: ScopeId) {
+        if let Some(c) = node.named_child(0) {
+            self.not_refs.insert(c.id());
+        }
+        let mut next = node.next_named_sibling();
+        while let Some(n) = next.filter(|n| n.kind() == "comment") {
+            next = n.next_named_sibling();
+        }
+        let mut stack: Vec<Node> = next
+            .filter(|n| n.kind() == "expression_statement")
+            .and_then(|n| n.named_child(0))
+            .into_iter()
+            .collect();
+        while let Some(n) = stack.pop() {
+            match n.kind() {
+                "sequence_expression" => {
+                    let mut c = n.walk();
+                    stack.extend(n.named_children(&mut c));
+                }
+                "assignment_expression" => {
+                    if let Some(l) = n.child_by_field_name("left")
+                        && l.kind() == "identifier"
+                    {
+                        self.declare(scope, l, DeclKind::Let);
+                    }
+                }
+                "identifier" => self.declare(scope, n, DeclKind::Let),
+                _ => {}
+            }
+        }
+    }
+
+    fn variables(&mut self, node: Node<'t>, scope: ScopeId) {
+        let kind = node.kind();
+        let (decl_kind, target) = if kind == "variable_declaration" {
+            (DeclKind::Var, self.m.function_scope(scope))
+        } else if has_token(node, "const") {
+            (DeclKind::Const, scope)
+        } else {
+            (DeclKind::Let, scope)
+        };
+        let first = self.m.decls.len();
+        let mut cursor = node.walk();
+        for declarator in node.named_children(&mut cursor) {
+            if let Some(name) = declarator.child_by_field_name("name") {
+                self.declare_pattern(target, name, decl_kind);
+                if name.kind() == "identifier"
+                    && let Some(d) = self.m.decls.last_mut()
+                {
+                    d.declarator = Some(declarator);
+                }
+            }
+        }
+        self.written_in(first, scope);
+    }
+
+    /// Parameter names in a type (`(a: T) => U`) or an overload signature
+    /// bind nothing at run time and refer to nothing.
+    fn signature(&mut self, node: Node<'t>, scope: ScopeId) {
+        let kind = node.kind();
+        if let Some(params) = node.child_by_field_name("parameters") {
+            let mut cursor = params.walk();
+            let list: Vec<Node> = params.named_children(&mut cursor).collect();
+            for p in list {
+                self.pattern(scope, p, None);
+            }
+        }
+        if kind == "function_signature"
+            && let Some(name) = node.child_by_field_name("name")
+        {
+            self.not_refs.insert(name.id());
+        }
+    }
+
+    /// `export { a as b } from './m'` names nothing local.
+    fn export(&mut self, node: Node<'t>) {
+        let reexport = node.child_by_field_name("source").is_some();
+        let mut cursor = node.walk();
+        for clause in node
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() == "export_clause")
+        {
+            let mut inner = clause.walk();
+            for spec in clause.named_children(&mut inner) {
+                if let Some(alias) = spec.child_by_field_name("alias") {
+                    self.not_refs.insert(alias.id());
+                }
+                if reexport && let Some(name) = spec.child_by_field_name("name") {
+                    self.not_refs.insert(name.id());
+                }
+            }
         }
     }
 

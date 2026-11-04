@@ -70,8 +70,9 @@ export function AccountPage() {
                 <span>Repeat the new password</span>
                 <input type="password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
               </label>
-              {result && (
-                <p role={result.ok ? 'status' : 'alert'} className={`m-0 text-[13px] ${result.ok ? 'text-ok' : 'text-crit'}`}>
+              {result?.ok && <output className="block text-[13px] text-ok">{result.text}</output>}
+              {result && !result.ok && (
+                <p role="alert" className="m-0 text-[13px] text-crit">
                   {result.text}
                 </p>
               )}

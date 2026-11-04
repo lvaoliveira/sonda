@@ -156,7 +156,7 @@ impl Rule {
     /// The languages it checks. A structural rule's are in its id's
     /// prefix; `common/` rules check every language.
     pub fn langs(&self) -> &'static [Lang] {
-        use crate::lang::{ALL, CSHARP, JAVA, JS_TS, NOT_RUST, PYTHON};
+        use crate::lang::{ALL, CSHARP, JAVA, JS_TS, NOT_RUST, PYTHON, RUST};
         match self.check {
             Check::Query { langs, .. } | Check::Semantic { langs, .. } => langs,
             Check::Structural => match self.id.split('/').next() {
@@ -164,6 +164,7 @@ impl Rule {
                 Some("java") => JAVA,
                 Some("py") => PYTHON,
                 Some("js") => JS_TS,
+                Some("rs") => RUST,
                 _ if NOT_ON_RUST.contains(&self.id) => NOT_RUST,
                 _ => ALL,
             },
@@ -402,7 +403,7 @@ mod tests {
         {
             let prefix = r.id.split('/').next().unwrap();
             assert!(
-                matches!(prefix, "cs" | "java" | "py" | "js" | "common"),
+                matches!(prefix, "cs" | "java" | "py" | "js" | "rs" | "common"),
                 "{}: no languages for its prefix",
                 r.id
             );

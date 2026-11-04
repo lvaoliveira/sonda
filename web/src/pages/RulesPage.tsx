@@ -46,7 +46,7 @@ function Rules({ catalog, isAdmin, reload }: Readonly<{ catalog: RuleCatalog; is
         count={count}
         sortLabel="sorted by open issues"
         search={{ q, setQ }}
-        listTags={(r) =>
+        renderTags={(r) =>
           r.serverOff && (
             <>
               <span>·</span>
@@ -54,7 +54,7 @@ function Rules({ catalog, isAdmin, reload }: Readonly<{ catalog: RuleCatalog; is
             </>
           )
         }
-        summary={(r) => (
+        renderSummary={(r) => (
           <>
             <span className="text-[12.5px] text-fg-muted">
               <Mono className="text-[11.5px] text-fg">{r.openIssues}</Mono> open issues in <Mono className="text-[11.5px] text-fg">{r.projects}</Mono>{' '}
@@ -65,13 +65,21 @@ function Rules({ catalog, isAdmin, reload }: Readonly<{ catalog: RuleCatalog; is
             </Link>
           </>
         )}
-        panel={(r) => <WhereOff key={r.id} rule={r} isAdmin={isAdmin} reload={reload} />}
+        renderPanel={(r) => <WhereOff key={r.id} rule={r} isAdmin={isAdmin} reload={reload} />}
       />
     </>
   )
 }
 
 /** Where the rule is off, and for admins, turning it off in the default profile (ADR-0016, ADR-0018). */
+/** How many projects turn a rule off, and how; or whether it runs everywhere. */
+function offSummary(rule: Rule): string {
+  const off = rule.offIn
+  if (!off) return rule.onByDefault ? 'On in every project.' : 'Off by default, and no project turns it on.'
+  const n = off.sondaToml + off.server
+  return `Off in ${formatNumber(n)} ${n === 1 ? 'project' : 'projects'}: ${off.sondaToml} by their sonda.toml, ${off.server} on the server.`
+}
+
 function WhereOff({ rule, isAdmin, reload }: Readonly<{ rule: Rule; isAdmin: boolean; reload: () => void }>) {
   const api = useApi()
   const [note, setNote] = useState('')
@@ -90,7 +98,6 @@ function WhereOff({ rule, isAdmin, reload }: Readonly<{ rule: Rule; isAdmin: boo
       setBusy(false)
     }
   }
-  const off = rule.offIn
   return (
     <section aria-label="Where it's off" className="flex flex-col gap-2">
       <h3 className="m-0 font-normal micro-label">Where it's off</h3>
@@ -105,11 +112,7 @@ function WhereOff({ rule, isAdmin, reload }: Readonly<{ rule: Rule; isAdmin: boo
         </p>
       )}
       <p className="m-0 text-[13px] text-fg-muted">
-        {off
-          ? `Off in ${formatNumber(off.sondaToml + off.server)} ${off.sondaToml + off.server === 1 ? 'project' : 'projects'}: ${off.sondaToml} by their sonda.toml, ${off.server} on the server.`
-          : rule.onByDefault
-            ? 'On in every project.'
-            : 'Off by default, and no project turns it on.'}
+        {offSummary(rule)}
       </p>
       {rule.inProfiles.length > 0 && (
         <p className="m-0 text-[13px] text-fg-muted">

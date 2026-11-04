@@ -43,6 +43,12 @@ export function DependenciesPage() {
   )
 }
 
+/** Whether a dependency is declared or pulled in, when the lockfile says. */
+function directness(direct: boolean | null): string {
+  if (direct == null) return '—'
+  return direct ? 'direct' : 'transitive'
+}
+
 /** The list with dependency `name`'s `advisory` reviewed as `review`. */
 function withReview(d: DependencyList, name: string, advisory: string, review: DependencyReview): DependencyList {
   const reviewed = (r: DependencyRow) => ({ ...r, advisories: r.advisories.map((a) => (a.id === advisory ? { ...a, review } : a)) })
@@ -193,7 +199,7 @@ function Dependencies({ d: loaded }: Readonly<{ d: DependencyList }>) {
                         </span>
                       </td>
                       <td className={`${td} font-mono text-[12px]`}>{r.version}</td>
-                      <td className={`${td} text-fg-muted`}>{r.direct === true ? 'direct' : r.direct === false ? 'transitive' : '—'}</td>
+                      <td className={`${td} text-fg-muted`}>{directness(r.direct)}</td>
                       <td className={`${td} font-mono text-[12px] text-fg-muted`}>{r.license ?? '—'}</td>
                       <td className={`${td} pr-5 font-mono text-[11.5px] text-fg-muted`}>{r.lockfiles.join(', ')}</td>
                     </tr>

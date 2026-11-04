@@ -216,10 +216,10 @@ function GitHubAppState({ app, onDisconnect }: Readonly<{ app: GitHubApp; onDisc
     case 'unreadable':
       return (
         <>
-          <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+          <output className="block m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
             <Mono className="text-[12px]">{app.slug}</Mono>'s private key can't be read: <Mono className="text-[12px]">SONDA_SECRET_KEY</Mono> is missing, or isn't the one it was
             stored with. Restore that key and restart the server, or disconnect it and create a new App.
-          </p>
+          </output>
           <div>{disconnect}</div>
         </>
       )
@@ -227,10 +227,10 @@ function GitHubAppState({ app, onDisconnect }: Readonly<{ app: GitHubApp; onDisc
       return app.secretKey ? (
         <CreateGitHubApp />
       ) : (
-        <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+        <output className="block m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
           No GitHub App yet. Creating one here needs <Mono className="text-[12px]">SONDA_SECRET_KEY</Mono>, which encrypts its private key: rerun{' '}
           <Mono className="text-[12px]">scripts/setup-server.sh</Mono>, which creates it (see the server docs).
-        </p>
+        </output>
       )
   }
 }
@@ -264,13 +264,7 @@ function Installations({ installUrl }: Readonly<{ installUrl: string | null }>) 
           <li key={i.account} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-line py-2.5 text-[13px] first:border-t-0">
             <span className="font-semibold">{i.account}</span>
             <span className="min-w-0 flex-1 text-fg-muted">
-              {i.repositories === null ? (
-                'all repositories'
-              ) : i.repositories.length === 0 ? (
-                'no repositories'
-              ) : (
-                <Mono className="text-[12.5px]">{i.repositories.map((r) => r.slice(r.indexOf('/') + 1)).join(', ')}</Mono>
-              )}
+              <InstalledOn repositories={i.repositories} />
             </span>
             <a href={i.settingsUrl} target="_blank" rel="noreferrer">
               Change repositories
@@ -288,6 +282,13 @@ function Installations({ installUrl }: Readonly<{ installUrl: string | null }>) 
       )}
     </>
   )
+}
+
+/** An installation's repositories: all of them, none, or their names. */
+function InstalledOn({ repositories }: Readonly<{ repositories: string[] | null }>) {
+  if (repositories === null) return 'all repositories'
+  if (repositories.length === 0) return 'no repositories'
+  return <Mono className="text-[12.5px]">{repositories.map((r) => r.slice(r.indexOf('/') + 1)).join(', ')}</Mono>
 }
 
 function CreateGitHubApp() {

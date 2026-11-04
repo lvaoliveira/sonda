@@ -100,16 +100,29 @@ def number(key):
 
 
 def rule_status(rule, exact, related):
-    """Where sonda stands on one SonarQube rule."""
-    if rule["status"] == "DEPRECATED":
-        return "deprecated"
-    if rule["isTemplate"]:
-        return "template"
-    if exact:
-        return "done"
-    if related:
-        return "partial"
-    return "todo"
+    """Where sonda stands on one SonarQube rule: the first of these that holds."""
+    checks = [
+        (rule["status"] == "DEPRECATED", "deprecated"),
+        (rule["isTemplate"], "template"),
+        (exact, "done"),
+        (related, "partial"),
+    ]
+    return next((status for holds, status in checks if holds), "todo")
+
+
+def covering(sonda, sonda_langs, short):
+    """The sonda rules of these languages that cover SonarQube rule `short`:
+    those that match it exactly, and those that are related."""
+    exact, related = [], []
+    for s in sonda:
+        if not sonda_langs & set(s["languages"]):
+            continue
+        kinds = {x["exact"] for x in s["sonar"] if x["key"] == short}
+        if True in kinds:
+            exact.append(s["id"])
+        if False in kinds:
+            related.append(s["id"])
+    return exact, related
 
 
 def language_rows(server, token, sonda, lang, sonda_langs, profile, expected):
@@ -125,11 +138,7 @@ def language_rows(server, token, sonda, lang, sonda_langs, profile, expected):
         found = dict(zip(live, pool.map(lambda k: standards(server, token, k), live)))
     rows = []
     for r in sorted(rules, key=lambda r: number(r["key"])):
-        short = r["key"].split(":")[1]
-        exact = [s["id"] for s in sonda if sonda_langs & set(s["languages"])
-                 and any(x["key"] == short and x["exact"] for x in s["sonar"])]
-        related = [s["id"] for s in sonda if sonda_langs & set(s["languages"])
-                   and any(x["key"] == short and not x["exact"] for x in s["sonar"])]
+        exact, related = covering(sonda, sonda_langs, r["key"].split(":")[1])
         cwe, owasp = found.get(r["key"], ([], []))
         for rule in exact:
             seen = expected.setdefault(rule, (set(), set()))
@@ -157,6 +166,11 @@ def write_csv(out, lang, rows):
         writer.writerows(rows)
 
 
+def status_count(rows, status, tier=None):
+    """How many rows have `status`, and `tier` when given."""
+    return sum(1 for r in rows if r["status"] == status and tier in (None, r["tier"]))
+
+
 def summary_table(summary):
     """The counts per language, as table rows."""
     lines = []
@@ -165,11 +179,9 @@ def summary_table(summary):
             lines.append(f"| {label} | not available on this SonarQube edition | | | | | |")
             continue
         live = [r for r in rows if r["status"] not in ("deprecated", "template")]
-        count = lambda pred: sum(1 for r in live if pred(r))
-        todo = lambda t: count(lambda r: r["status"] == "todo" and r["tier"] == t)
-        lines.append(f"| {label} | {len(live)} | {count(lambda r: r['status'] == 'done')} | "
-                     f"{count(lambda r: r['status'] == 'partial')} | {todo('syntactic')} | "
-                     f"{todo('types')} | {todo('dataflow')} |")
+        cells = [len(live), status_count(live, "done"), status_count(live, "partial")]
+        cells += [status_count(live, "todo", tier) for tier in ("syntactic", "types", "dataflow")]
+        lines.append(f"| {label} | " + " | ".join(str(c) for c in cells) + " |")
     return lines
 
 

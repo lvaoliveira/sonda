@@ -9,6 +9,16 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Rust rules, from SonarQube's Rust set, which is Clippy's lints under
+  its own keys: self-assignment, identical operands, a condition repeated in
+  an `if`/`else if` chain, `skip(0)`, `step_by(0)`, `splitn` with a limit of
+  0 or 1, `% 1`, `resize(0, ..)`, `option_env!(..).unwrap()`,
+  `MaybeUninit::uninit().assume_init()`, `mem::replace` with an
+  uninitialized value, `0 as *const T`, a redundant field name, let-and-
+  return, and, off by default as in SonarQube, a `match` on a bool and an
+  `else if` chain without an `else`. `#[allow(clippy::lint)]`,
+  `#[expect(...)]` and `#![allow(...)]` silence them, groups included, as
+  they do there; `// NOSONAR` silences them here too.
 - Rust: `.rs` files are parsed, with lines, functions, complexity and
   duplication measured, and `common/cognitive-complexity` and
   `common/too-many-parameters` run on them, as SonarQube's Rust rules
@@ -42,6 +52,9 @@ file, the report formats and the public library API.
 - `js/find-for-existence` no longer takes `key && items.find(...)` for a
   test of whether something was found: the right of `&&` is its value,
   tested only when the whole expression is.
+- `js/handler-on-plain-element` and `js/click-without-keyboard` leave
+  alone an `aria-hidden` element (a backdrop that closes a menu) and a
+  table row, whose role is interactive, as SonarQube does.
 
 
 ## [0.2.0] - 2026-11-03

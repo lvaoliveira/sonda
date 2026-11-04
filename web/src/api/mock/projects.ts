@@ -58,6 +58,53 @@ export interface MockProjectSettings {
 }
 
 /** A plausible project page for any listed project; null for unknown keys. */
+/** payments-platform sends versions; 2.4.0 started a new code period. */
+function sampleVersion(key: string, i: number): string | null {
+  if (key !== 'payments-platform') return null
+  return i < 7 ? '2.3.0' : '2.4.0'
+}
+
+/** The latest analysis has the project's gate; one in four before it failed. */
+function sampleGate(gate: GateState, i: number): GateState {
+  if (i === 11) return gate
+  return i % 4 === 1 ? 'failed' : 'passed'
+}
+
+/** Level 5 from 80% up, one less per 10 points down to 1 below 50%. */
+function coverageLevel(pct: number): Level {
+  return ([50, 60, 70, 80].filter((t) => pct >= t).length + 1) as Level
+}
+
+/** The project's last 12 analyses on its main branch, a day apart. */
+function sampleHistory(p: ProjectRow) {
+  return Array.from({ length: 12 }, (_, i) => ({
+    id: 900 + i,
+    sha: (0x9f3c2a1 + i * 7919).toString(16),
+    analyzedAt: new Date(NOW - (11 - i) * 86_400_000).toISOString(),
+    // payments-platform sends versions; 2.4.0 started a new code period.
+    version: sampleVersion(p.key, i),
+    gate: sampleGate(p.gate, i),
+    issues: p.issues - 11 + i + (i % 3),
+    coverage: p.coverage == null ? null : Math.round((p.coverage - 1.5 + i * 0.12) * 10) / 10,
+    duplication: Math.round((p.duplication ?? 0) * 10 + (i % 4) - 1) / 10,
+    debtMinutes: 9_000 + i * 140,
+  }))
+}
+
+/** The project's top-level directories, each smaller than the one before. */
+function sampleComponents(p: ProjectRow) {
+  const dirs = p.key === 'payments-platform' ? ['services', 'packages', 'proto', 'tools'] : ['src', 'test', 'scripts']
+  return dirs.map((path, i) => ({
+    path,
+    languages: p.languages.slice(0, Math.max(1, p.languages.length - i)),
+    files: 120 - i * 30,
+    ncloc: Math.round(p.ncloc / 2 ** (i + 1)),
+    owner: ['@checkout', '@web-platform'][i] ?? null,
+    issues: Math.max(0, Math.round(p.issues / 2 ** (i + 1))),
+    debtMinutes: 4_000 / (i + 1),
+  }))
+}
+
 export function projectDetail(key: string, branch?: string, settings?: MockProjectSettings): ProjectDetail | null {
   const p = projects.find((r) => r.key === key)
   if (!p) return null
@@ -70,19 +117,8 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
   if (!branches.some((b) => b.name === on)) throw new Error(`branch "${on}" has no analyses; analyzed branches: main, release/2.4`)
   // Only the main branch fails; the release branch passes.
   const failing = p.gate === 'failed' && on === 'main'
-  const history = Array.from({ length: 12 }, (_, i) => ({
-    id: 900 + i,
-    sha: (0x9f3c2a1 + i * 7919).toString(16),
-    analyzedAt: new Date(NOW - (11 - i) * 86_400_000).toISOString(),
-    // payments-platform sends versions; 2.4.0 started a new code period.
-    version: p.key === 'payments-platform' ? (i < 7 ? '2.3.0' : '2.4.0') : null,
-    gate: (i === 11 ? p.gate : i % 4 === 1 ? 'failed' : 'passed') as GateState,
-    issues: p.issues - 11 + i + (i % 3),
-    coverage: p.coverage == null ? null : Math.round((p.coverage - 1.5 + i * 0.12) * 10) / 10,
-    duplication: Math.round((p.duplication ?? 0) * 10 + (i % 4) - 1) / 10,
-    debtMinutes: 9_000 + i * 140,
-  }))
-  const dirs = p.key === 'payments-platform' ? ['services', 'packages', 'proto', 'tools'] : ['src', 'test', 'scripts']
+  const verdict = failing ? 'error' : 'ok'
+  const history = sampleHistory(p)
   return {
     key: p.key,
     name: settings?.name ?? p.name,
@@ -92,11 +128,11 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
     languages: p.languages.map((id, i) => ({ id, ncloc: Math.round(p.ncloc / 2 ** (i + 1)) })),
     analysis: { id: 911, sha: '9f3c2a1e7b04', analyzedAt: p.analyzedAt, toolVersion: '0.1.0', newCodeReference: 'origin/main', version: history.at(-1)!.version },
     gate: {
-      state: failing ? 'failed' : on === 'main' ? p.gate : 'passed',
+      state: on === 'main' ? p.gate : 'passed',
       conditions: [
         { label: 'New bugs > 0', metric: 'new_bugs', actual: 0, status: 'ok' },
-        { label: 'New vulnerabilities > 0', metric: 'new_vulnerabilities', actual: failing ? 2 : 0, status: failing ? 'error' : 'ok' },
-        { label: 'Coverage on new code < 80%', metric: 'new_coverage', actual: p.coverage == null ? null : 76.8, status: p.coverage == null ? 'no_data' : failing ? 'error' : 'ok' },
+        { label: 'New vulnerabilities > 0', metric: 'new_vulnerabilities', actual: failing ? 2 : 0, status: verdict },
+        { label: 'Coverage on new code < 80%', metric: 'new_coverage', actual: p.coverage == null ? null : 76.8, status: p.coverage == null ? 'no_data' : verdict },
         { label: 'Duplication on new code > 3%', metric: 'new_duplicated_lines_density', actual: 1.4, status: 'ok' },
       ],
       serverGate: null,
@@ -106,22 +142,14 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
       reliability: p.reliability,
       security: p.security,
       maintainability: p.maintainability,
-      coverage: p.coverage == null ? null : ((p.coverage >= 80 ? 5 : p.coverage >= 70 ? 4 : p.coverage >= 60 ? 3 : p.coverage >= 50 ? 2 : 1) as Level),
+      coverage: p.coverage == null ? null : coverageLevel(p.coverage),
     },
     measures: {
       overall: { lines: p.ncloc, issues: p.issues, bugs: 18, vulnerabilities: failing ? 5 : 0, codeSmells: p.issues - 18, coverage: p.coverage, duplication: p.duplication, debtMinutes: 10_540 },
       newCode: { lines: 1_240, issues: 6, bugs: 1, vulnerabilities: failing ? 2 : 0, codeSmells: 3, coverage: p.coverage == null ? null : 76.8, duplication: 1.4, debtMinutes: 95 },
     },
     history,
-    components: dirs.map((path, i) => ({
-      path,
-      languages: p.languages.slice(0, Math.max(1, p.languages.length - i)),
-      files: 120 - i * 30,
-      ncloc: Math.round(p.ncloc / 2 ** (i + 1)),
-      owner: i === 0 ? '@checkout' : i === 1 ? '@web-platform' : null,
-      issues: Math.max(0, Math.round(p.issues / 2 ** (i + 1))),
-      debtMinutes: 4_000 / (i + 1),
-    })),
+    components: sampleComponents(p),
     // A release branch analyzed before lockfiles were read.
     dependencies: on === main ? DEPENDENCY_SUMMARY : null,
     newCodePeriod: on === main ? newCodePeriod(p.key, history) : null,
