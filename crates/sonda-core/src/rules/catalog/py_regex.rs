@@ -2,9 +2,9 @@
 //! pattern is read from the `re` call, parsed by `crate::regex`, and each
 //! rule reports the pattern's string when its analysis finds something.
 
+use super::prelude::*;
 use super::py_security::{call_arguments, callee_name, has_interpolation, string_value, text};
 use super::regex_checks as checks;
-use super::*;
 use crate::regex::{Flags, Regex, parse};
 
 pub(super) static RULES: &[Rule] = &[

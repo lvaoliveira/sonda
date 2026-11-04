@@ -1,6 +1,6 @@
 //! JavaScript and TypeScript rules.
 
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     // ---- JavaScript / TypeScript ----

@@ -9,7 +9,7 @@ use super::js::{
 use super::js_checks::literal_kind;
 use super::js_extra::{named, operator_text};
 use super::js_syntax::{is_function_kind, root_node, strip_parens, walk, walk_with_ancestors};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

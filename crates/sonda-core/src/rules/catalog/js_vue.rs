@@ -7,7 +7,7 @@
 use super::js::{has_token, string_content, text};
 use super::js_extra::named;
 use super::js_syntax::{root_node, walk};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

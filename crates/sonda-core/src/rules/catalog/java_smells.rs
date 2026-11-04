@@ -10,7 +10,7 @@ use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, is_all_literals, method_name, string_value,
     text,
 };
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

@@ -5,8 +5,8 @@
 
 use super::java_extra::declared_type;
 use super::java_security::{call_arguments, method_name, string_value, text};
+use super::prelude::*;
 use super::regex_checks as checks;
-use super::*;
 use crate::regex::{Flags, Regex, parse_java};
 
 /// This module's rules that are off unless `rules.enabled` lists them

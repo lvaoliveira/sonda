@@ -5,7 +5,7 @@ use super::cs::{cs_string_value, simple_name};
 use super::cs_bugs::{attribute_arguments, cs_call_arguments, cs_integer};
 use super::java_bugs::operator_text;
 use super::java_security::{contains_ignoring_case, find_node, is_public_cleartext_url, text};
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

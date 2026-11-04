@@ -14,7 +14,7 @@ use super::java_bugs::{find_in_scope, operator_text};
 use super::java_last::count_nodes;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
-use super::*;
+use super::prelude::*;
 use crate::semantic::Model;
 
 /// Rules that are off unless `rules.enabled` lists them (see

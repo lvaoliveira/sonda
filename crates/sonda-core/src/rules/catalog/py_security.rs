@@ -1,7 +1,7 @@
 //! Python security rules (ADR-0007, batch 4). Queries stay cheap on deep trees:
 //! see the notes in `js_modern.rs`.
 
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

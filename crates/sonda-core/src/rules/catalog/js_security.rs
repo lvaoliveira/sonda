@@ -1,7 +1,7 @@
 //! JavaScript and TypeScript rules for security-sensitive configuration:
 //! framework and library options that weaken a defense (ADR-0007, batch 1).
 
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

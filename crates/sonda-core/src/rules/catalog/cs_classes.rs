@@ -14,7 +14,7 @@ use super::cs_types::walk_tree;
 use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
-use super::*;
+use super::prelude::*;
 use crate::semantic::{DeclId, DeclKind, Model, ScopeId, ScopeKind};
 use std::collections::HashMap;
 

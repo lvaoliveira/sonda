@@ -4,7 +4,7 @@
 //! reports where these differ from SonarQube's.
 
 use crate::rules::Owasp;
-use crate::rules::owasp::y2021::*;
+use crate::rules::owasp::y2021::{A01, A02, A03, A04, A05, A07, A08};
 
 /// (rule id, CWE ids, OWASP Top 10 2021 categories), in catalog order. The
 /// 2025 categories are derived from the CWE ids.

@@ -6,7 +6,7 @@
 use super::js::{has_token, text};
 use super::js_extra::{named, operator_text};
 use super::js_syntax::{ancestors_in_function, is_function_kind, root_node, walk};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

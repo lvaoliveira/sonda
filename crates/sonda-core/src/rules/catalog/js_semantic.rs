@@ -1,7 +1,7 @@
 //! JavaScript and TypeScript rules on the semantic model (ADR-0008, phase
 //! S1: scopes and symbols).
 
-use super::*;
+use super::prelude::*;
 use crate::semantic::{DeclId, DeclKind, Model, ScopeKind};
 use std::collections::{HashMap, HashSet};
 

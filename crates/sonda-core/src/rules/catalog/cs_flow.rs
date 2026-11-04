@@ -10,7 +10,7 @@
 use super::cs::simple_name;
 use super::java_bugs::find_in_scope;
 use super::java_security::{contains_ignoring_case, text};
-use super::*;
+use super::prelude::*;
 use crate::semantic::{DeclKind, Model};
 
 /// Rules that are off unless `rules.enabled` lists them: those whose keys

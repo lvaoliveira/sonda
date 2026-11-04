@@ -7,7 +7,7 @@ use super::js::{
     string_content, tag_name, text,
 };
 use super::js_modern::collect_below;
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

@@ -10,7 +10,7 @@ use super::cs_more::{declarators, enclosing_type, is_test_method, log_template, 
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::{contains_ignoring_case, text};
 use super::java_smells::count_word;
-use super::*;
+use super::prelude::*;
 
 /// Rules that are off unless `rules.enabled` lists them (see
 /// `catalog::OFF_BY_DEFAULT`).

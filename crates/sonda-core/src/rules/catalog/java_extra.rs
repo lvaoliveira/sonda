@@ -7,7 +7,7 @@ use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{
     children_of_kind, count_word, declarator_names, enclosing_class, members,
 };
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

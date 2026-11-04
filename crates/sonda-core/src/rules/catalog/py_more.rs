@@ -2,6 +2,7 @@
 //! see the notes in `js_modern.rs`; whole-block checks run as `Find` filters.
 
 use super::js_extra::count_word;
+use super::prelude::*;
 use super::py_quality::{
     SCOPE_STOPS, children_of_kind, find_in_scope, has_token, nearest_function, statements,
     two_operands,
@@ -10,7 +11,6 @@ use super::py_security::{
     call_arguments, callee_name, contains_ignoring_case, has_interpolation, integer_value,
     keyword_value, string_value, text,
 };
-use super::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {

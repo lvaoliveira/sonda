@@ -13,7 +13,7 @@ use super::cs_types::{
 };
 use super::java_bugs::operator_text;
 use super::java_security::{contains_ignoring_case, text};
-use super::*;
+use super::prelude::*;
 use crate::semantic::Model;
 use crate::semantic::cs_infer::Infer;
 

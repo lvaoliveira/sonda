@@ -10,7 +10,7 @@ use super::cs::simple_name;
 use super::cs_bugs::{cs_call_arguments, cs_integer};
 use super::java_bugs::operator_text;
 use super::java_security::text;
-use super::*;
+use super::prelude::*;
 use crate::semantic::cs_infer::{Found, Infer, Ty};
 use crate::semantic::{Decl, DeclKind, Model};
 

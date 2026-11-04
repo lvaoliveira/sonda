@@ -2,6 +2,7 @@
 //! the type-hint and ML-library checks.
 
 use super::js_extra::count_word;
+use super::prelude::*;
 use super::py_more::{
     assignment_of, body_of, call_statement_of, first_parameter_name, imported_names, in_class,
     is_decorated, is_dunder, is_generator, is_private_name, is_stub_body, literal_family,
@@ -15,7 +16,6 @@ use super::py_security::{
     call_arguments, callee_name, contains_ignoring_case, integer_value, keyword_value,
     string_value, text,
 };
-use super::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

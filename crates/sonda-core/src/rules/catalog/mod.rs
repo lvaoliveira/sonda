@@ -72,6 +72,17 @@ pub(super) use crate::model::Severity::{Blocker, Critical, Info, Major, Minor};
 use std::sync::LazyLock;
 pub(super) use tree_sitter::Node;
 
+/// What the catalog's files share, as `use super::prelude::*`: named here,
+/// so a file's imports say where its names come from, and the wildcard is
+/// the one Rust and SonarQube allow (a module named `prelude`).
+mod prelude {
+    pub(super) use super::{
+        Blocker, Bug, C_CPP, C_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find, Info, JAVA,
+        JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, Rule, TS, Vulnerability, bare_except,
+        empty_block, exact, has_equality_operator, no_arguments, not_nullish_comparison, related,
+    };
+}
+
 /// Every catalog module, in a fixed order (structural rules first, then by
 /// language), so reports and docs/rules.md stay deterministic: its rules,
 /// and which of them are off by default. A module lists its own

@@ -4,11 +4,11 @@
 //! only the file it reports on.
 
 use super::js_syntax::walk;
+use super::prelude::*;
 use super::py_last::{Signature, is_lambda_handler, signature};
 use super::py_more::{body_of, name_of};
 use super::py_quality::statements;
 use super::py_security::{call_arguments, callee_name, keyword_value, text};
-use super::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

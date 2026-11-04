@@ -9,7 +9,7 @@ use super::java_final::{base_type, root_of};
 use super::java_flow::{find_declared_type, has_method, nodes_in, superclass_name};
 use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, enclosing_class};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

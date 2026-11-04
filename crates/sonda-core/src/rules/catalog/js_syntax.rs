@@ -5,7 +5,7 @@
 
 use super::js::{has_token, string_content, text};
 use super::js_extra::{named, operator_text};
-use super::*;
+use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
 /// (see `catalog::OFF_BY_DEFAULT`).

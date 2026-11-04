@@ -4,7 +4,7 @@
 //! and loops and recursion with no way out. Each function gets its graph
 //! once per file; a function past the graph's bounds is skipped.
 
-use super::*;
+use super::prelude::*;
 use crate::semantic::cs_cfg::{self, Access, Cfg, ENTRY, EXIT};
 use crate::semantic::{DeclId, DeclKind, Model};
 use std::collections::{HashMap, HashSet};

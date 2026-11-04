@@ -8,7 +8,7 @@ use super::js::{
     string_content, tag_name, text,
 };
 use super::js_extra::{count_pattern, count_word, named, operator_text};
-use super::*;
+use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
     Rule {
