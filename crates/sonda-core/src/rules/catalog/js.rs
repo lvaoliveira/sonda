@@ -4061,17 +4061,12 @@ fn nested_ternaries<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
     let mut inside = vec![false];
     loop {
         let n = cursor.node();
-        let within = *inside.last().unwrap_or(&false);
+        let within = inside.last().copied().unwrap_or(false);
         let ternary = n.kind() == "ternary_expression";
         if ternary && within {
             found.push(n);
         }
-        let children_within =
-            if FUNCTIONS.contains(&n.kind()) || matches!(n.kind(), "object" | "jsx_expression") {
-                false
-            } else {
-                ternary || within
-            };
+        let children_within = (ternary || within) && !separates_ternaries(n);
         if cursor.goto_first_child() {
             inside.push(children_within);
             continue;
@@ -4083,6 +4078,12 @@ fn nested_ternaries<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
             inside.pop();
         }
     }
+}
+
+/// A function, an object literal or a JSX expression container: a ternary
+/// inside one isn't nested in a ternary outside it (`nested_ternaries`).
+fn separates_ternaries(n: Node) -> bool {
+    FUNCTIONS.contains(&n.kind()) || matches!(n.kind(), "object" | "jsx_expression")
 }
 
 /// `return;` or `continue;`, with no value or label.
