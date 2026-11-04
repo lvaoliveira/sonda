@@ -1006,8 +1006,26 @@ fn boto_call_without_client_error<'t>(function: Node<'t>, src: &[u8]) -> Option<
     if !is_lambda_handler(function, src) {
         return None;
     }
-    let root = root_of(function);
-    // Variables holding a boto3 client or resource.
+    let clients = boto_clients(root_of(function), src);
+    if clients.is_empty() {
+        return None;
+    }
+    let body = function.child_by_field_name("body")?;
+    let mut found = None;
+    walk(body, &mut |n| {
+        if found.is_some() {
+            return false;
+        }
+        if is_client_call(n, &clients, src) && !handled_by_client_error(n, function, src) {
+            found = Some(n);
+        }
+        true
+    });
+    found
+}
+
+/// The variables holding a boto3 client or resource.
+fn boto_clients<'s>(root: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut clients: Vec<&[u8]> = Vec::new();
     walk(root, &mut |n| {
         if n.kind() == "assignment"
@@ -1027,46 +1045,38 @@ fn boto_call_without_client_error<'t>(function: Node<'t>, src: &[u8]) -> Option<
         }
         true
     });
-    if clients.is_empty() {
-        return None;
+    clients
+}
+
+/// `client.method(...)` on one of `clients`.
+fn is_client_call(n: Node, clients: &[&[u8]], src: &[u8]) -> bool {
+    n.kind() == "call"
+        && n.child_by_field_name("function").is_some_and(|f| {
+            f.kind() == "attribute"
+                && f.child_by_field_name("object")
+                    .is_some_and(|o| o.kind() == "identifier" && clients.contains(&text(o, src)))
+        })
+}
+
+/// Whether a `try` around `n`, inside `function`, has a handler that names
+/// ClientError.
+fn handled_by_client_error(n: Node, function: Node, src: &[u8]) -> bool {
+    let mut handled = false;
+    let mut up = n.parent();
+    while let Some(p) = up {
+        if p.id() == function.id() {
+            break;
+        }
+        if p.kind() == "try_statement" {
+            let mut cursor = p.walk();
+            handled |= p
+                .children(&mut cursor)
+                .filter(|c| c.kind() == "except_clause" || c.kind() == "except_group_clause")
+                .any(|c| mentions(text(c, src), b"ClientError"));
+        }
+        up = p.parent();
     }
-    let body = function.child_by_field_name("body")?;
-    let mut found = None;
-    walk(body, &mut |n| {
-        if found.is_some() {
-            return false;
-        }
-        if n.kind() == "call"
-            && let Some(f) = n.child_by_field_name("function")
-            && f.kind() == "attribute"
-            && f.child_by_field_name("object")
-                .is_some_and(|o| o.kind() == "identifier" && clients.contains(&text(o, src)))
-        {
-            // Inside a try whose handlers name ClientError?
-            let mut handled = false;
-            let mut up = n.parent();
-            while let Some(p) = up {
-                if p.id() == function.id() {
-                    break;
-                }
-                if p.kind() == "try_statement" {
-                    let mut cursor = p.walk();
-                    handled |= p
-                        .children(&mut cursor)
-                        .filter(|c| {
-                            c.kind() == "except_clause" || c.kind() == "except_group_clause"
-                        })
-                        .any(|c| mentions(text(c, src), b"ClientError"));
-                }
-                up = p.parent();
-            }
-            if !handled {
-                found = Some(n);
-            }
-        }
-        true
-    });
-    found
+    handled
 }
 
 // ---------------------------------------------------------------- comments
@@ -1199,6 +1209,57 @@ fn method_unittest_will_not_run(name_node: Node, src: &[u8]) -> bool {
 }
 
 fn default_is_modified_in_the_body(name: Node, src: &[u8]) -> bool {
+    let Some(function) = name
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .filter(|f| f.kind() == "function_definition")
+    else {
+        return false;
+    };
+    let Some(body) = function.child_by_field_name("body") else {
+        return false;
+    };
+    let param = text(name, src);
+    // A parameter that is rebound (`seen = seen or set()`) holds a new object.
+    if is_rebound(body, param, src) {
+        return false;
+    }
+    let mut modified = false;
+    walk(body, &mut |n| {
+        if modified
+            || matches!(
+                n.kind(),
+                "function_definition" | "lambda" | "class_definition"
+            )
+        {
+            return false;
+        }
+        modified |= mutates(n, param, src);
+        true
+    });
+    modified
+}
+
+/// Whether `body` assigns the name `param` itself.
+fn is_rebound(body: Node, param: &[u8], src: &[u8]) -> bool {
+    let mut rebound = false;
+    walk(body, &mut |n| {
+        if n.kind() == "assignment"
+            && n.child_by_field_name("left")
+                .is_some_and(|l| l.kind() == "identifier" && text(l, src) == param)
+        {
+            rebound = true;
+        }
+        !rebound
+    });
+    rebound
+}
+
+/// Whether `n` changes the object `param` holds: `param.attr = ...`,
+/// `param[i] = ...`, `param += ...`, `param.append(...)` and the other
+/// mutating methods, or `del param[...]`.
+fn mutates(n: Node, param: &[u8], src: &[u8]) -> bool {
     const MUTATORS: &[&[u8]] = &[
         b"append",
         b"extend",
@@ -1214,74 +1275,27 @@ fn default_is_modified_in_the_body(name: Node, src: &[u8]) -> bool {
         b"setdefault",
         b"popitem",
     ];
-    let Some(function) = name
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.parent())
-        .filter(|f| f.kind() == "function_definition")
-    else {
-        return false;
-    };
-    let Some(body) = function.child_by_field_name("body") else {
-        return false;
-    };
-    let param = text(name, src);
-    // A parameter that is rebound (`seen = seen or set()`) holds a new object.
-    let mut rebound = false;
-    walk(body, &mut |n| {
-        if n.kind() == "assignment"
-            && n.child_by_field_name("left")
-                .is_some_and(|l| l.kind() == "identifier" && text(l, src) == param)
-        {
-            rebound = true;
+    let is_param =
+        |x: Option<Node>| x.is_some_and(|x| x.kind() == "identifier" && text(x, src) == param);
+    match n.kind() {
+        "assignment" | "augmented_assignment" => {
+            n.child_by_field_name("left")
+                .is_some_and(|left| match left.kind() {
+                    "attribute" => is_param(left.child_by_field_name("object")),
+                    "subscript" => is_param(left.child_by_field_name("value")),
+                    "identifier" => n.kind() == "augmented_assignment" && is_param(Some(left)),
+                    _ => false,
+                })
         }
-        !rebound
-    });
-    if rebound {
-        return false;
+        "call" => n.child_by_field_name("function").is_some_and(|f| {
+            f.kind() == "attribute"
+                && is_param(f.child_by_field_name("object"))
+                && f.child_by_field_name("attribute")
+                    .is_some_and(|a| MUTATORS.contains(&text(a, src)))
+        }),
+        "delete_statement" => text(n, src).windows(param.len()).any(|w| w == param),
+        _ => false,
     }
-    let mut modified = false;
-    walk(body, &mut |n| {
-        if modified
-            || matches!(
-                n.kind(),
-                "function_definition" | "lambda" | "class_definition"
-            )
-        {
-            return false;
-        }
-        let is_param =
-            |x: Option<Node>| x.is_some_and(|x| x.kind() == "identifier" && text(x, src) == param);
-        match n.kind() {
-            // param.attr = ..., param[i] = ..., param += ...
-            "assignment" | "augmented_assignment" => {
-                if let Some(left) = n.child_by_field_name("left") {
-                    modified |= match left.kind() {
-                        "attribute" => is_param(left.child_by_field_name("object")),
-                        "subscript" => is_param(left.child_by_field_name("value")),
-                        "identifier" => n.kind() == "augmented_assignment" && is_param(Some(left)),
-                        _ => false,
-                    };
-                }
-            }
-            "call" => {
-                if let Some(f) = n.child_by_field_name("function")
-                    && f.kind() == "attribute"
-                    && is_param(f.child_by_field_name("object"))
-                    && f.child_by_field_name("attribute")
-                        .is_some_and(|a| MUTATORS.contains(&text(a, src)))
-                {
-                    modified = true;
-                }
-            }
-            "delete_statement" => {
-                modified |= text(n, src).windows(param.len()).any(|w| w == param);
-            }
-            _ => {}
-        }
-        true
-    });
-    modified
 }
 
 // ---------------------------------------------------------------- Django

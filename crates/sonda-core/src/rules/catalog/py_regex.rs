@@ -544,12 +544,6 @@ fn unescape_python(raw: &str) -> String {
         }
         let next = chars[i + 1];
         i += 2;
-        let take_hex = |i: &mut usize, n: usize| -> Option<char> {
-            let digits: String = chars.get(*i..*i + n)?.iter().collect();
-            let v = u32::from_str_radix(&digits, 16).ok()?;
-            *i += n;
-            char::from_u32(v)
-        };
         match next {
             'n' => out.push('\n'),
             't' => out.push('\t'),
@@ -560,31 +554,10 @@ fn unescape_python(raw: &str) -> String {
             'v' => out.push('\u{b}'),
             '\\' | '\'' | '"' => out.push(next),
             '\n' => {}
-            'x' => match take_hex(&mut i, 2) {
-                Some(c) => out.push(c),
-                None => out.push_str("\\x"),
-            },
-            'u' => match take_hex(&mut i, 4) {
-                Some(c) => out.push(c),
-                None => out.push_str("\\u"),
-            },
-            'U' => match take_hex(&mut i, 8) {
-                Some(c) => out.push(c),
-                None => out.push_str("\\U"),
-            },
-            '0'..='7' => {
-                let mut v = next.to_digit(8).unwrap_or(0);
-                for _ in 0..2 {
-                    match chars.get(i).and_then(|c| c.to_digit(8)) {
-                        Some(d) => {
-                            v = v * 8 + d;
-                            i += 1;
-                        }
-                        None => break,
-                    }
-                }
-                out.push(char::from_u32(v).unwrap_or('\0'));
-            }
+            'x' => i = hex_escape(&chars, i, 2, "\\x", &mut out),
+            'u' => i = hex_escape(&chars, i, 4, "\\u", &mut out),
+            'U' => i = hex_escape(&chars, i, 8, "\\U", &mut out),
+            '0'..='7' => i = python_octal(&chars, i, next, &mut out),
             other => {
                 out.push('\\');
                 out.push(other);
@@ -592,6 +565,42 @@ fn unescape_python(raw: &str) -> String {
         }
     }
     out
+}
+
+/// `n` hex digits from `i`, after `\\x`, `\\u` or `\\U`, added to `out` as
+/// the character they name; `written` (the escape as written) when they
+/// aren't hex digits or aren't a character. Returns where it ends: past
+/// the digits whenever they're hex.
+fn hex_escape(chars: &[char], i: usize, n: usize, written: &str, out: &mut String) -> usize {
+    let Some(v) = chars
+        .get(i..i + n)
+        .and_then(|d| u32::from_str_radix(&d.iter().collect::<String>(), 16).ok())
+    else {
+        out.push_str(written);
+        return i;
+    };
+    match char::from_u32(v) {
+        Some(c) => out.push(c),
+        None => out.push_str(written),
+    }
+    i + n
+}
+
+/// An octal escape from `i`, after its first digit `first`: up to three
+/// digits. Returns where it ends.
+fn python_octal(chars: &[char], mut i: usize, first: char, out: &mut String) -> usize {
+    let mut v = first.to_digit(8).unwrap_or(0);
+    for _ in 0..2 {
+        match chars.get(i).and_then(|c| c.to_digit(8)) {
+            Some(d) => {
+                v = v * 8 + d;
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    out.push(char::from_u32(v).unwrap_or('\0'));
+    i
 }
 
 /// The value of a string literal (or implicit concatenation of them) whose
@@ -756,29 +765,57 @@ fn replacement_names_missing_group<'t>(call: Node<'t>, src: &[u8]) -> Option<Nod
             i += 1;
             continue;
         }
-        let next = chars[i + 1];
-        if next.is_ascii_digit() && next != '0' {
-            let mut n = next.to_digit(10).unwrap_or(0) as usize;
-            if chars.get(i + 2).is_some_and(|c| c.is_ascii_digit()) {
-                n = n * 10 + chars[i + 2].to_digit(10).unwrap_or(0) as usize;
-            }
-            if n > regex.groups {
+        match group_reference(&chars, i) {
+            GroupRef::Index(n) if n > regex.groups => return Some(pattern),
+            GroupRef::Named(reference) if names_a_missing_group(&reference, &regex) => {
                 return Some(pattern);
             }
-        } else if next == 'g' && chars.get(i + 2) == Some(&'<') {
-            let end = chars[i + 3..].iter().position(|c| *c == '>')? + i + 3;
-            let reference: String = chars[i + 3..end].iter().collect();
-            let missing = match reference.parse::<usize>() {
-                Ok(n) => n > regex.groups,
-                Err(_) => !regex.names.contains(&reference),
-            };
-            if missing {
-                return Some(pattern);
-            }
+            GroupRef::Unterminated => return None,
+            _ => {}
         }
         i += 2;
     }
     None
+}
+
+/// A group reference in a replacement string.
+enum GroupRef {
+    /// `\\1` to `\\99`.
+    Index(usize),
+    /// What `\\g<...>` names.
+    Named(String),
+    /// `\\g<` with no `>`.
+    Unterminated,
+    /// Any other escape.
+    Other,
+}
+
+/// The reference the backslash at `i` starts.
+fn group_reference(chars: &[char], i: usize) -> GroupRef {
+    let next = chars[i + 1];
+    if next.is_ascii_digit() && next != '0' {
+        let mut n = next.to_digit(10).unwrap_or(0) as usize;
+        if chars.get(i + 2).is_some_and(|c| c.is_ascii_digit()) {
+            n = n * 10 + chars[i + 2].to_digit(10).unwrap_or(0) as usize;
+        }
+        return GroupRef::Index(n);
+    }
+    if next != 'g' || chars.get(i + 2) != Some(&'<') {
+        return GroupRef::Other;
+    }
+    match chars[i + 3..].iter().position(|c| *c == '>') {
+        Some(len) => GroupRef::Named(chars[i + 3..i + 3 + len].iter().collect()),
+        None => GroupRef::Unterminated,
+    }
+}
+
+/// Whether `\\g<reference>` names a group the pattern doesn't have, by
+/// number or by name.
+fn names_a_missing_group(reference: &str, regex: &Regex) -> bool {
+    match reference.parse::<usize>() {
+        Ok(n) => n > regex.groups,
+        Err(_) => !regex.names.iter().any(|n| n == reference),
+    }
 }
 
 fn regex_has_single_character_alternation<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

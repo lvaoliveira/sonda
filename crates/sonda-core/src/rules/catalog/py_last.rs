@@ -689,32 +689,7 @@ fn top_level_bindings<'s>(module: Node, src: &'s [u8]) -> Vec<(&'s [u8], usize)>
     loop {
         let n = cursor.node();
         if descend {
-            match n.kind() {
-                "function_definition" | "class_definition" => {
-                    if let Some(name) = n.child_by_field_name("name") {
-                        out.push((text(name, src), n.start_byte()));
-                    }
-                }
-                "assignment" | "augmented_assignment" | "for_statement" => {
-                    if let Some(l) = n.child_by_field_name("left") {
-                        for id in super::py_extra::identifiers_in(l) {
-                            out.push((text(id, src), id.start_byte()));
-                        }
-                    }
-                }
-                "import_statement" | "import_from_statement" => {
-                    for name in imported_names(n, src) {
-                        out.push((name, n.start_byte()));
-                    }
-                }
-                "with_item" | "as_pattern" | "named_expression" | "except_clause"
-                | "global_statement" => {
-                    for id in super::py_extra::identifiers_in(n) {
-                        out.push((text(id, src), id.start_byte()));
-                    }
-                }
-                _ => {}
-            }
+            bindings_of(n, src, &mut out);
         }
         if descend && !nested.contains(&n.kind()) && cursor.goto_first_child() {
             continue;
@@ -728,59 +703,93 @@ fn top_level_bindings<'s>(module: Node, src: &'s [u8]) -> Vec<(&'s [u8], usize)>
     }
 }
 
+/// The names `n` itself binds, each with where, added to `out`.
+fn bindings_of<'s>(n: Node, src: &'s [u8], out: &mut Vec<(&'s [u8], usize)>) {
+    let identifiers = |under: Node| -> Vec<(&'s [u8], usize)> {
+        super::py_extra::identifiers_in(under)
+            .into_iter()
+            .map(|id| (text(id, src), id.start_byte()))
+            .collect()
+    };
+    match n.kind() {
+        "function_definition" | "class_definition" => {
+            out.extend(
+                n.child_by_field_name("name")
+                    .map(|name| (text(name, src), n.start_byte())),
+            );
+        }
+        "assignment" | "augmented_assignment" | "for_statement" => {
+            if let Some(l) = n.child_by_field_name("left") {
+                out.extend(identifiers(l));
+            }
+        }
+        "import_statement" | "import_from_statement" => {
+            out.extend(
+                imported_names(n, src)
+                    .into_iter()
+                    .map(|name| (name, n.start_byte())),
+            );
+        }
+        "with_item" | "as_pattern" | "named_expression" | "except_clause" | "global_statement" => {
+            out.extend(identifiers(n));
+        }
+        _ => {}
+    }
+}
+
 fn module_uses_name_before_definition<'t>(module: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if find_in_scope(module, &[], |n| n.kind() == "wildcard_import").is_some()
         || contains_ignoring_case(src, b"globals()")
     {
         return None;
     }
+    // Comprehension variables are local to the comprehension.
+    let stops = [
+        "function_definition",
+        "class_definition",
+        "lambda",
+        "list_comprehension",
+        "set_comprehension",
+        "dictionary_comprehension",
+        "generator_expression",
+    ];
     let bindings = top_level_bindings(module, src);
-    for s in statements(module) {
-        if s.kind() != "expression_statement" {
-            continue;
-        }
-        // Comprehension variables are local to the comprehension.
-        let stops = [
-            "function_definition",
-            "class_definition",
-            "lambda",
-            "list_comprehension",
-            "set_comprehension",
-            "dictionary_comprehension",
-            "generator_expression",
-        ];
-        let hit = find_in_scope(s, &stops, |n| {
-            if n.kind() != "identifier" {
-                return false;
-            }
-            let name = text(n, src);
-            if BUILTIN_NAMES.iter().any(|b| b.as_bytes() == name) {
-                return false;
-            }
-            let loaded = match n.parent() {
-                Some(p) => match p.kind() {
-                    "attribute" => p.child_by_field_name("object") == Some(n),
-                    "keyword_argument" => p.child_by_field_name("value") == Some(n),
-                    "assignment" => p.child_by_field_name("left") != Some(n),
-                    _ => true,
-                },
-                None => false,
-            };
-            if !loaded {
-                return false;
-            }
-            let mut mine = bindings
-                .iter()
-                .filter(|(b, _)| *b == name)
-                .map(|(_, at)| *at);
-            let first = mine.clone().min();
-            first.is_some_and(|f| f > n.start_byte()) && mine.all(|at| at > n.start_byte())
-        });
-        if hit.is_some() {
-            return hit;
-        }
+    statements(module)
+        .into_iter()
+        .filter(|s| s.kind() == "expression_statement")
+        .find_map(|s| find_in_scope(s, &stops, |n| used_before_bound(n, &bindings, src)))
+}
+
+/// Whether `n` reads a module-level name, not a builtin, before every place
+/// the module binds it.
+fn used_before_bound(n: Node, bindings: &[(&[u8], usize)], src: &[u8]) -> bool {
+    if n.kind() != "identifier" {
+        return false;
     }
-    None
+    let name = text(n, src);
+    if BUILTIN_NAMES.iter().any(|b| b.as_bytes() == name) || !is_loaded(n) {
+        return false;
+    }
+    let mut mine = bindings
+        .iter()
+        .filter(|(b, _)| *b == name)
+        .map(|(_, at)| *at);
+    let first = mine.clone().min();
+    first.is_some_and(|f| f > n.start_byte()) && mine.all(|at| at > n.start_byte())
+}
+
+/// Whether the identifier `n` is read: not an attribute's or keyword's name,
+/// nor an assignment's target.
+fn is_loaded(n: Node) -> bool {
+    match n.parent() {
+        Some(p) => match p.kind() {
+            "attribute" => p.child_by_field_name("object") == Some(n),
+            "keyword_argument" => p.child_by_field_name("value") == Some(n),
+            "assignment" => p.child_by_field_name("left") != Some(n),
+            _ => true,
+        },
+        None => false,
+    }
 }
 
 fn function_uses_a_typevar(function: Node, src: &[u8]) -> bool {

@@ -370,42 +370,39 @@ fn is_unbounded(node: &Rx) -> bool {
 
 fn repeat_body_ambiguous(body: &Rx, flags: &Flags) -> bool {
     let body = peel(body);
-    // (a|a)*, (a|ab)*: alternatives that can match a common prefix
-    if let Rx::Alt(alts) = body {
-        for (i, a) in alts.iter().enumerate() {
-            for b in &alts[i + 1..] {
-                if literal_text(a)
-                    .zip(literal_text(b))
-                    .is_some_and(|(x, y)| x.starts_with(&y) || y.starts_with(&x))
-                {
-                    return true;
-                }
-                if single_char_set(a, flags)
+    match body {
+        Rx::Alt(alts) => alternatives_overlap(alts, flags),
+        _ => tail_repeat_overlaps(body, flags),
+    }
+}
+
+/// (a|a)*, (a|ab)*: alternatives that can match a common prefix.
+fn alternatives_overlap(alts: &[Rx], flags: &Flags) -> bool {
+    alts.iter().enumerate().any(|(i, a)| {
+        alts[i + 1..].iter().any(|b| {
+            literal_text(a)
+                .zip(literal_text(b))
+                .is_some_and(|(x, y)| x.starts_with(&y) || y.starts_with(&x))
+                || single_char_set(a, flags)
                     .zip(single_char_set(b, flags))
                     .is_some_and(|(x, y)| x.overlaps(&y))
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
+        })
+    })
+}
+
+/// An unbounded repeat at the end of the body, past what can match nothing,
+/// whose characters can also start the next iteration: (a+)+, (\w+\s?)*.
+fn tail_repeat_overlaps(body: &Rx, flags: &Flags) -> bool {
     let items = items_of(body);
     let begin = first_set(body, flags);
-    // an unbounded repeat at the end of the body whose characters can also
-    // start the next iteration: (a+)+, (\w+\s?)*
-    for (i, item) in items.iter().enumerate().rev() {
+    for item in items.iter().rev() {
         if is_unbounded(item) {
             let Rx::Repeat { inner, .. } = item else {
                 break;
             };
-            let chars = first_set(inner, flags);
-            if chars.overlaps(&begin) {
+            if first_set(inner, flags).overlaps(&begin) {
                 return true;
             }
-        }
-        if !nullable(item) && i + 1 != items.len() {
-            break;
         }
         if !nullable(item) {
             break;

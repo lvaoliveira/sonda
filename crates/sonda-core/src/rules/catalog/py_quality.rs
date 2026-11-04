@@ -2755,58 +2755,66 @@ fn raises_base_exception(raise: Node, src: &[u8]) -> bool {
 /// SonarQube counts them: ten characters or more, not a bare identifier.
 fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
     use std::cell::RefCell;
-    use std::collections::HashMap;
-    type Counts = HashMap<Vec<u8>, (usize, usize)>;
     thread_local! {
-        static CACHE: RefCell<Option<((usize, usize), Counts)>> = const { RefCell::new(None) };
+        static CACHE: RefCell<Option<((usize, usize), StringCounts)>> = const { RefCell::new(None) };
     }
-    let eligible = |n: Node| -> Option<Vec<u8>> {
-        if n.kind() != "string"
-            || n.parent()
-                .is_none_or(|p| p.kind() == "expression_statement")
-        {
-            return None;
-        }
-        let v = string_value(n, src).filter(|v| v.len() >= 5)?;
-        let identifier_like = v.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
-        (!identifier_like).then(|| v.to_vec())
-    };
-    let Some(mine) = eligible(string) else {
+    let Some(mine) = countable_string(string, src) else {
         return false;
     };
     let key = (src.as_ptr() as usize, src.len());
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.as_ref().is_none_or(|(k, _)| *k != key) {
-            let mut counts: Counts = HashMap::new();
-            let mut root = string;
-            while let Some(p) = root.parent() {
-                root = p;
-            }
-            let mut cursor = root.walk();
-            if cursor.goto_first_child() {
-                'walk: loop {
-                    let n = cursor.node();
-                    if let Some(v) = eligible(n) {
-                        let e = counts.entry(v).or_insert((0, n.start_byte()));
-                        e.0 += 1;
-                    }
-                    if cursor.goto_first_child() {
-                        continue;
-                    }
-                    while !cursor.goto_next_sibling() {
-                        if !cursor.goto_parent() {
-                            break 'walk;
-                        }
-                    }
-                }
-            }
-            *c = Some((key, counts));
+            *c = Some((key, string_counts(string, src)));
         }
         c.as_ref()
             .and_then(|(_, counts)| counts.get(&mine))
             .is_some_and(|(count, first)| *count >= 3 && *first == string.start_byte())
     })
+}
+
+/// Each countable string's value: how many times it occurs, and where first.
+type StringCounts = std::collections::HashMap<Vec<u8>, (usize, usize)>;
+
+/// A string's value, when it counts: five characters or more, not an
+/// identifier, and not a statement of its own (a docstring).
+fn countable_string(n: Node, src: &[u8]) -> Option<Vec<u8>> {
+    if n.kind() != "string"
+        || n.parent()
+            .is_none_or(|p| p.kind() == "expression_statement")
+    {
+        return None;
+    }
+    let v = string_value(n, src).filter(|v| v.len() >= 5)?;
+    let identifier_like = v.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
+    (!identifier_like).then(|| v.to_vec())
+}
+
+/// The countable strings of the file `string` is in.
+fn string_counts(string: Node, src: &[u8]) -> StringCounts {
+    let mut counts = StringCounts::new();
+    let mut root = string;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut cursor = root.walk();
+    if !cursor.goto_first_child() {
+        return counts;
+    }
+    loop {
+        let n = cursor.node();
+        if let Some(v) = countable_string(n, src) {
+            counts.entry(v).or_insert((0, n.start_byte())).0 += 1;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return counts;
+            }
+        }
+    }
 }
 
 fn negates_a_simple_comparison(not: Node, src: &[u8]) -> bool {
