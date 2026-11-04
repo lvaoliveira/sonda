@@ -631,6 +631,28 @@ fn lines(n: Node) -> (usize, usize) {
     (n.start_position().row + 1, n.end_position().row + 1)
 }
 
+/// The distinct platform types `path` names under each of `prefixes`.
+fn platform_lookup<'p>(
+    platform: &'static dotnet::Platform,
+    path: &str,
+    prefixes: impl Iterator<Item = &'p str>,
+) -> Vec<&'static PlatformType> {
+    let mut found: Vec<&'static PlatformType> = Vec::new();
+    for prefix in prefixes {
+        let key = if prefix.is_empty() {
+            path.to_string()
+        } else {
+            format!("{prefix}.{path}")
+        };
+        if let Some(t) = platform.get(&key)
+            && !found.iter().any(|f| std::ptr::eq(*f, t))
+        {
+            found.push(t);
+        }
+    }
+    found
+}
+
 fn unparenthesized(mut n: Node) -> Node {
     while n.kind() == "parenthesized_expression" {
         match n.named_child(0) {
@@ -644,352 +666,387 @@ fn unparenthesized(mut n: Node) -> Node {
 /// Summarizes what a C# file declares, and where it uses declarations a
 /// project rule has to look up. One iterative walk; the semantic model is
 /// built only when a site needs a variable's declared type.
-pub(crate) fn extract(root: Node, src: &[u8], deadline: std::time::Instant) -> FileIndex {
-    let x = Extractor { src };
-    let mut index = FileIndex::default();
-    // (depth, name) of enclosing namespaces; (depth, name, arity) of types.
-    let mut namespaces: Vec<(usize, String)> = Vec::new();
-    let mut file_namespace = String::new();
-    let mut outer: Vec<(usize, String, usize)> = Vec::new();
-    let mut pending: Vec<Pending> = Vec::new();
+pub(crate) fn extract<'t>(root: Node<'t>, src: &[u8], deadline: std::time::Instant) -> FileIndex {
+    let mut indexer = Indexer {
+        x: Extractor { src },
+        index: FileIndex::default(),
+        namespaces: Vec::new(),
+        file_namespace: String::new(),
+        outer: Vec::new(),
+        pending: Vec::new(),
+    };
     let mut cursor = root.walk();
     let mut depth = 0;
     loop {
-        let node = cursor.node();
-        let ns = || {
-            let mut parts: Vec<&str> = Vec::new();
-            if !file_namespace.is_empty() {
-                parts.push(&file_namespace);
-            }
-            parts.extend(namespaces.iter().map(|(_, n)| n.as_str()));
-            parts.join(".")
-        };
-        // The full name of the innermost enclosing type, as `full_name` has it.
-        let owner = || {
-            let Some((_, name, arity)) = outer.last() else {
-                return String::new();
-            };
-            let namespace = ns();
-            let mut parts: Vec<&str> = Vec::new();
-            if !namespace.is_empty() {
-                parts.push(&namespace);
-            }
-            parts.extend(outer[..outer.len() - 1].iter().map(|(_, n, _)| n.as_str()));
-            parts.push(name);
-            format!("{}`{arity}", parts.join("."))
-        };
-        match node.kind() {
-            "using_directive" => {
-                // Plain `using N;`, not aliases or `using static`.
-                let t = x.text(node);
-                if node.child_by_field_name("name").is_none()
-                    && !t.contains("static")
-                    && let Some(n) = node.named_child(0)
-                {
-                    if t.starts_with("global") {
-                        index.global_usings.push(x.text(n));
-                    } else {
-                        index.usings.push(x.text(n));
-                    }
-                }
-            }
-            "file_scoped_namespace_declaration" => {
-                file_namespace = node
-                    .child_by_field_name("name")
-                    .map(|n| x.text(n))
-                    .unwrap_or_default();
-            }
-            "namespace_declaration" => {
-                if let Some(n) = node.child_by_field_name("name") {
-                    namespaces.push((depth, x.text(n)));
-                }
-            }
-            // `(Concrete)value` and `value as Concrete`: the variable's
-            // declared type and the target decide.
-            "cast_expression" | "as_expression" => {
-                let (target, value) = if node.kind() == "cast_expression" {
-                    (
-                        node.child_by_field_name("type"),
-                        node.child_by_field_name("value"),
-                    )
-                } else {
-                    (
-                        node.child_by_field_name("right"),
-                        node.child_by_field_name("left"),
-                    )
-                };
-                if let (Some(target), Some(value)) = (target, value)
-                    && matches!(
-                        target.kind(),
-                        "identifier" | "generic_name" | "qualified_name"
-                    )
-                    && unparenthesized(value).kind() == "identifier"
-                {
-                    let name = x.type_text(target);
-                    pending.push((
-                        x.site("cast", name, 0, &ns(), &owner(), x.span(node)),
-                        vec![unparenthesized(value)],
-                    ));
-                }
-            }
-            "binary_expression" => {
-                let op = node
-                    .child_by_field_name("operator")
-                    .map(|o| x.text(o))
-                    .unwrap_or_default();
-                if matches!(op.as_str(), "|" | "&" | "^")
-                    && let (Some(l), Some(r)) = (
-                        node.child_by_field_name("left"),
-                        node.child_by_field_name("right"),
-                    )
-                {
-                    match (x.enum_member(l), x.enum_member(r)) {
-                        (Some(a), Some(b)) if a == b => {
-                            index.sites.push(x.site(
-                                "bitwise",
-                                a,
-                                0,
-                                &ns(),
-                                &owner(),
-                                x.span(node),
-                            ));
-                        }
-                        // `flags | Color.Red`: the variable's declared type decides.
-                        (Some(a), None) | (None, Some(a)) => {
-                            let variable = if x.enum_member(l).is_some() { r } else { l };
-                            if unparenthesized(variable).kind() == "identifier" {
-                                pending.push((
-                                    x.site("bitwise", a, 0, &ns(), &owner(), x.span(node)),
-                                    vec![unparenthesized(variable)],
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            "invocation_expression" => {
-                let args: Vec<Node> = node
-                    .child_by_field_name("arguments")
-                    .map(|a| {
-                        let mut c = a.walk();
-                        a.named_children(&mut c)
-                            .filter_map(|arg| {
-                                arg.named_child(arg.named_child_count().saturating_sub(1) as u32)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                // An array written out for the last argument.
-                // `[.. xs]` spreads a sequence into the array, which `params`
-                // can't do on its own.
-                let spreads = |a: &Node| {
-                    let mut c = a.walk();
-                    a.named_children(&mut c).any(|e| {
-                        e.named_child(0)
-                            .is_some_and(|x| x.kind() == "spread_element")
-                    })
-                };
-                let written = args.last().filter(|a| {
-                    a.kind() == "implicit_array_creation_expression"
-                        || (a.kind() == "collection_expression" && !spreads(a))
-                        || (a.kind() == "array_creation_expression" && a.named_child_count() >= 2)
-                });
-                if let (Some(last), Some(function)) =
-                    (written, node.child_by_field_name("function"))
-                {
-                    let mut site = x.site(
-                        "params-array",
-                        String::new(),
-                        0,
-                        &ns(),
-                        &owner(),
-                        x.span(*last),
-                    );
-                    site.count = args.len();
-                    match function.kind() {
-                        "identifier" | "generic_name" => {
-                            site.name = x.simple(function);
-                            index.sites.push(site);
-                        }
-                        "member_access_expression" => {
-                            site.name = function
-                                .child_by_field_name("name")
-                                .map(|n| x.simple(n))
-                                .unwrap_or_default();
-                            match function.child_by_field_name("expression") {
-                                // `this.M(...)`: the owner's.
-                                Some(r) if x.text(r) == "this" => index.sites.push(site),
-                                // `Type.M(...)` or `variable.M(...)`: the model tells.
-                                Some(r) if r.kind() == "identifier" => {
-                                    pending.push((site, vec![r]))
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            "object_creation_expression" => {
-                if let Some(t) = node.child_by_field_name("type") {
-                    let arity = if t.kind() == "generic_name" {
-                        t.named_child(1).map_or(0, |a| a.named_child_count())
-                    } else {
-                        0
-                    };
-                    index.sites.push(x.site(
-                        "new",
-                        x.simple(t),
-                        arity,
-                        &ns(),
-                        &owner(),
-                        x.span(node),
-                    ));
-                }
-            }
-            "generic_name" => {
-                if ENTITY_CALLS.contains(&x.simple(node).as_str())
-                    && let Some(arg) = node.named_child(1).and_then(|a| a.named_child(0))
-                {
-                    index.sites.push(x.site(
-                        "entity",
-                        x.simple(arg),
-                        0,
-                        &ns(),
-                        &owner(),
-                        x.span(node),
-                    ));
-                }
-            }
-            "parameter" => {
-                let mut c = node.walk();
-                let this = node
-                    .named_children(&mut c)
-                    .any(|m| m.kind() == "modifier" && x.text(m) == "this");
-                if this && let Some(t) = node.child_by_field_name("type") {
-                    let arity = if t.kind() == "generic_name" {
-                        t.named_child(1).map_or(0, |a| a.named_child_count())
-                    } else {
-                        0
-                    };
-                    index.sites.push(x.site(
-                        "extension",
-                        x.simple(t),
-                        arity,
-                        &ns(),
-                        &owner(),
-                        x.span(t),
-                    ));
-                }
-            }
-            "method_declaration" => {
-                // A public action of a class named like a controller: its
-                // parameters' types may be request models.
-                let controller = outer
-                    .last()
-                    .is_some_and(|(_, n, _)| n.ends_with("Controller"));
-                let modifiers = x.modifiers(node);
-                if controller
-                    && modifiers.iter().any(|m| m == "public")
-                    && !modifiers.iter().any(|m| m == "static")
-                    && let Some(list) = node.child_by_field_name("parameters")
-                {
-                    let mut c = list.walk();
-                    for p in list
-                        .named_children(&mut c)
-                        .filter(|p| p.kind() == "parameter")
-                    {
-                        if x.attributes(p).iter().any(|a| a == "FromServices") {
-                            continue;
-                        }
-                        if let Some(t) = p.child_by_field_name("type") {
-                            index.sites.push(x.site(
-                                "action-param",
-                                x.simple(t),
-                                0,
-                                &ns(),
-                                &owner(),
-                                x.span(t),
-                            ));
-                        }
-                    }
-                }
-            }
-            k => {
-                if let Some((_, kind)) = TYPE_KINDS.iter().find(|(tk, _)| *tk == k)
-                    && let Some(name) = node.child_by_field_name("name")
-                {
-                    let mut c = node.walk();
-                    let type_params = node
-                        .named_children(&mut c)
-                        .find(|p| p.kind() == "type_parameter_list");
-                    let mut bc = node.walk();
-                    let bases = node
-                        .named_children(&mut bc)
-                        .find(|b| b.kind() == "base_list")
-                        .map(|b| {
-                            let mut c = b.walk();
-                            b.named_children(&mut c).map(|t| x.type_ref(t)).collect()
-                        })
-                        .unwrap_or_default();
-                    let body = node
-                        .child_by_field_name("body")
-                        .filter(|b| b.kind() == "declaration_list");
-                    let mut members: Vec<MemberDecl> = body
-                        .map(|b| {
-                            let mut c = b.walk();
-                            b.named_children(&mut c).flat_map(|m| x.member(m)).collect()
-                        })
-                        .unwrap_or_default();
-                    if let Some(b) = body {
-                        for field in created_fields(b, &x) {
-                            for m in members
-                                .iter_mut()
-                                .filter(|m| m.kind == "field" && m.name == field)
-                            {
-                                m.created = true;
-                            }
-                        }
-                    }
-                    let arity = type_params.map_or(0, |p| p.named_child_count());
-                    index.types.push(TypeDecl {
-                        name: x.text(name),
-                        arity,
-                        namespace: ns(),
-                        outer: outer.iter().map(|(_, n, _)| n.clone()).collect(),
-                        kind: kind.to_string(),
-                        modifiers: x.modifiers(node),
-                        attributes: x.attributes(node),
-                        bases,
-                        members,
-                        span: x.span(name),
-                        lines: lines(node),
-                    });
-                    outer.push((depth, x.text(name), arity));
-                }
-            }
-        }
+        indexer.visit(cursor.node(), depth);
         if cursor.goto_first_child() {
             depth += 1;
             continue;
         }
         loop {
-            while namespaces.last().is_some_and(|(d, _)| *d >= depth) {
-                namespaces.pop();
-            }
-            while outer.last().is_some_and(|(d, _, _)| *d >= depth) {
-                outer.pop();
-            }
+            indexer.leave(depth);
             if cursor.goto_next_sibling() {
                 break;
             }
             if !cursor.goto_parent() {
+                let Indexer {
+                    mut index, pending, ..
+                } = indexer;
                 resolve_pending(&mut index, pending, root, src, deadline);
                 return index;
             }
             depth -= 1;
         }
+    }
+}
+
+/// `extract`'s walk: what it has found, and where it is.
+struct Indexer<'s, 't> {
+    x: Extractor<'s>,
+    index: FileIndex,
+    /// (depth, name) of the enclosing namespaces.
+    namespaces: Vec<(usize, String)>,
+    file_namespace: String,
+    /// (depth, name, arity) of the enclosing types.
+    outer: Vec<(usize, String, usize)>,
+    pending: Vec<Pending<'t>>,
+}
+
+/// The number of type arguments of a `generic_name`; 0 for any other type.
+fn generic_arity(t: Node) -> usize {
+    if t.kind() == "generic_name" {
+        t.named_child(1).map_or(0, |a| a.named_child_count())
+    } else {
+        0
+    }
+}
+
+impl<'t> Indexer<'_, 't> {
+    fn visit(&mut self, node: Node<'t>, depth: usize) {
+        match node.kind() {
+            "using_directive" => self.using(node),
+            "file_scoped_namespace_declaration" => {
+                self.file_namespace = node
+                    .child_by_field_name("name")
+                    .map(|n| self.x.text(n))
+                    .unwrap_or_default();
+            }
+            "namespace_declaration" => {
+                if let Some(n) = node.child_by_field_name("name") {
+                    self.namespaces.push((depth, self.x.text(n)));
+                }
+            }
+            "cast_expression" | "as_expression" => self.cast(node),
+            "binary_expression" => self.bitwise(node),
+            "invocation_expression" => self.params_array(node),
+            "object_creation_expression" => self.creation(node),
+            "generic_name" => self.entity(node),
+            "parameter" => self.extension(node),
+            "method_declaration" => self.action_params(node),
+            k => {
+                if let Some((_, kind)) = TYPE_KINDS.iter().find(|(tk, _)| *tk == k)
+                    && let Some(name) = node.child_by_field_name("name")
+                {
+                    self.type_declaration(node, name, kind, depth);
+                }
+            }
+        }
+    }
+
+    /// Leaving the node at `depth`: the namespaces and types it opened end.
+    fn leave(&mut self, depth: usize) {
+        while self.namespaces.last().is_some_and(|(d, _)| *d >= depth) {
+            self.namespaces.pop();
+        }
+        while self.outer.last().is_some_and(|(d, _, _)| *d >= depth) {
+            self.outer.pop();
+        }
+    }
+
+    fn ns(&self) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if !self.file_namespace.is_empty() {
+            parts.push(&self.file_namespace);
+        }
+        parts.extend(self.namespaces.iter().map(|(_, n)| n.as_str()));
+        parts.join(".")
+    }
+
+    /// The full name of the innermost enclosing type, as `full_name` has it.
+    fn owner(&self) -> String {
+        let Some((_, name, arity)) = self.outer.last() else {
+            return String::new();
+        };
+        let namespace = self.ns();
+        let mut parts: Vec<&str> = Vec::new();
+        if !namespace.is_empty() {
+            parts.push(&namespace);
+        }
+        parts.extend(
+            self.outer[..self.outer.len() - 1]
+                .iter()
+                .map(|(_, n, _)| n.as_str()),
+        );
+        parts.push(name);
+        format!("{}`{arity}", parts.join("."))
+    }
+
+    /// A site of `kind` at `span`, in the current namespace and type.
+    fn site(&self, kind: &str, name: String, arity: usize, span: Span) -> Site {
+        self.x
+            .site(kind, name, arity, &self.ns(), &self.owner(), span)
+    }
+
+    /// Plain `using N;`, not aliases or `using static`.
+    fn using(&mut self, node: Node) {
+        let t = self.x.text(node);
+        if node.child_by_field_name("name").is_none()
+            && !t.contains("static")
+            && let Some(n) = node.named_child(0)
+        {
+            if t.starts_with("global") {
+                self.index.global_usings.push(self.x.text(n));
+            } else {
+                self.index.usings.push(self.x.text(n));
+            }
+        }
+    }
+
+    /// `(Concrete)value` and `value as Concrete`: the variable's declared
+    /// type and the target decide.
+    fn cast(&mut self, node: Node<'t>) {
+        let (target, value) = if node.kind() == "cast_expression" {
+            (
+                node.child_by_field_name("type"),
+                node.child_by_field_name("value"),
+            )
+        } else {
+            (
+                node.child_by_field_name("right"),
+                node.child_by_field_name("left"),
+            )
+        };
+        if let (Some(target), Some(value)) = (target, value)
+            && matches!(
+                target.kind(),
+                "identifier" | "generic_name" | "qualified_name"
+            )
+            && unparenthesized(value).kind() == "identifier"
+        {
+            let name = self.x.type_text(target);
+            let site = self.site("cast", name, 0, self.x.span(node));
+            self.pending.push((site, vec![unparenthesized(value)]));
+        }
+    }
+
+    /// `Color.Red | Color.Red`, or `flags | Color.Red`, where the variable's
+    /// declared type decides.
+    fn bitwise(&mut self, node: Node<'t>) {
+        let op = node
+            .child_by_field_name("operator")
+            .map(|o| self.x.text(o))
+            .unwrap_or_default();
+        if !matches!(op.as_str(), "|" | "&" | "^") {
+            return;
+        }
+        let (Some(l), Some(r)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) else {
+            return;
+        };
+        match (self.x.enum_member(l), self.x.enum_member(r)) {
+            (Some(a), Some(b)) if a == b => {
+                let site = self.site("bitwise", a, 0, self.x.span(node));
+                self.index.sites.push(site);
+            }
+            (Some(a), None) | (None, Some(a)) => {
+                let variable = if self.x.enum_member(l).is_some() {
+                    r
+                } else {
+                    l
+                };
+                if unparenthesized(variable).kind() == "identifier" {
+                    let site = self.site("bitwise", a, 0, self.x.span(node));
+                    self.pending.push((site, vec![unparenthesized(variable)]));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// An array written out for a call's last argument.
+    fn params_array(&mut self, node: Node<'t>) {
+        let args: Vec<Node> = node
+            .child_by_field_name("arguments")
+            .map(|a| {
+                let mut c = a.walk();
+                a.named_children(&mut c)
+                    .filter_map(|arg| {
+                        arg.named_child(arg.named_child_count().saturating_sub(1) as u32)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        // `[.. xs]` spreads a sequence into the array, which `params` can't
+        // do on its own.
+        let spreads = |a: &Node| {
+            let mut c = a.walk();
+            a.named_children(&mut c).any(|e| {
+                e.named_child(0)
+                    .is_some_and(|x| x.kind() == "spread_element")
+            })
+        };
+        let written = args.last().filter(|a| {
+            a.kind() == "implicit_array_creation_expression"
+                || (a.kind() == "collection_expression" && !spreads(a))
+                || (a.kind() == "array_creation_expression" && a.named_child_count() >= 2)
+        });
+        let (Some(last), Some(function)) = (written, node.child_by_field_name("function")) else {
+            return;
+        };
+        let mut site = self.site("params-array", String::new(), 0, self.x.span(*last));
+        site.count = args.len();
+        match function.kind() {
+            "identifier" | "generic_name" => {
+                site.name = self.x.simple(function);
+                self.index.sites.push(site);
+            }
+            "member_access_expression" => {
+                site.name = function
+                    .child_by_field_name("name")
+                    .map(|n| self.x.simple(n))
+                    .unwrap_or_default();
+                match function.child_by_field_name("expression") {
+                    // `this.M(...)`: the owner's.
+                    Some(r) if self.x.text(r) == "this" => self.index.sites.push(site),
+                    // `Type.M(...)` or `variable.M(...)`: the model tells.
+                    Some(r) if r.kind() == "identifier" => self.pending.push((site, vec![r])),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn creation(&mut self, node: Node) {
+        if let Some(t) = node.child_by_field_name("type") {
+            let site = self.site("new", self.x.simple(t), generic_arity(t), self.x.span(node));
+            self.index.sites.push(site);
+        }
+    }
+
+    /// `Set<T>()` and the other entity calls: `T` is an entity.
+    fn entity(&mut self, node: Node) {
+        if ENTITY_CALLS.contains(&self.x.simple(node).as_str())
+            && let Some(arg) = node.named_child(1).and_then(|a| a.named_child(0))
+        {
+            let site = self.site("entity", self.x.simple(arg), 0, self.x.span(node));
+            self.index.sites.push(site);
+        }
+    }
+
+    /// An extension method's `this` parameter: its type is extended.
+    fn extension(&mut self, node: Node) {
+        let mut c = node.walk();
+        let this = node
+            .named_children(&mut c)
+            .any(|m| m.kind() == "modifier" && self.x.text(m) == "this");
+        if this && let Some(t) = node.child_by_field_name("type") {
+            let site = self.site(
+                "extension",
+                self.x.simple(t),
+                generic_arity(t),
+                self.x.span(t),
+            );
+            self.index.sites.push(site);
+        }
+    }
+
+    /// A public action of a class named like a controller: its parameters'
+    /// types may be request models.
+    fn action_params(&mut self, node: Node) {
+        let controller = self
+            .outer
+            .last()
+            .is_some_and(|(_, n, _)| n.ends_with("Controller"));
+        let modifiers = self.x.modifiers(node);
+        if !controller
+            || !modifiers.iter().any(|m| m == "public")
+            || modifiers.iter().any(|m| m == "static")
+        {
+            return;
+        }
+        let Some(list) = node.child_by_field_name("parameters") else {
+            return;
+        };
+        let mut c = list.walk();
+        for p in list
+            .named_children(&mut c)
+            .filter(|p| p.kind() == "parameter")
+        {
+            if self.x.attributes(p).iter().any(|a| a == "FromServices") {
+                continue;
+            }
+            if let Some(t) = p.child_by_field_name("type") {
+                let site = self.site("action-param", self.x.simple(t), 0, self.x.span(t));
+                self.index.sites.push(site);
+            }
+        }
+    }
+
+    /// A class, struct, interface, record or enum: its declaration, and the
+    /// type the walk is now in.
+    fn type_declaration(&mut self, node: Node, name: Node, kind: &str, depth: usize) {
+        let x = &self.x;
+        let mut c = node.walk();
+        let type_params = node
+            .named_children(&mut c)
+            .find(|p| p.kind() == "type_parameter_list");
+        let mut bc = node.walk();
+        let bases = node
+            .named_children(&mut bc)
+            .find(|b| b.kind() == "base_list")
+            .map(|b| {
+                let mut c = b.walk();
+                b.named_children(&mut c).map(|t| x.type_ref(t)).collect()
+            })
+            .unwrap_or_default();
+        let body = node
+            .child_by_field_name("body")
+            .filter(|b| b.kind() == "declaration_list");
+        let mut members: Vec<MemberDecl> = body
+            .map(|b| {
+                let mut c = b.walk();
+                b.named_children(&mut c).flat_map(|m| x.member(m)).collect()
+            })
+            .unwrap_or_default();
+        if let Some(b) = body {
+            for field in created_fields(b, x) {
+                for m in members
+                    .iter_mut()
+                    .filter(|m| m.kind == "field" && m.name == field)
+                {
+                    m.created = true;
+                }
+            }
+        }
+        let arity = type_params.map_or(0, |p| p.named_child_count());
+        let declaration = TypeDecl {
+            name: x.text(name),
+            arity,
+            namespace: self.ns(),
+            outer: self.outer.iter().map(|(_, n, _)| n.clone()).collect(),
+            kind: kind.to_string(),
+            modifiers: x.modifiers(node),
+            attributes: x.attributes(node),
+            bases,
+            members,
+            span: x.span(name),
+            lines: lines(node),
+        };
+        self.index.types.push(declaration);
+        self.outer.push((depth, x.text(name), arity));
     }
 }
 
@@ -1262,22 +1319,6 @@ impl<'a> ProjectIndex<'a> {
         } else {
             format!("{}.{own}", r.qualifier)
         };
-        let lookup = |prefixes: &mut dyn Iterator<Item = &str>| -> Vec<&'static PlatformType> {
-            let mut found: Vec<&'static PlatformType> = Vec::new();
-            for prefix in prefixes {
-                let key = if prefix.is_empty() {
-                    path.clone()
-                } else {
-                    format!("{prefix}.{path}")
-                };
-                if let Some(t) = platform.get(&key)
-                    && !found.iter().any(|f| std::ptr::eq(*f, t))
-                {
-                    found.push(t);
-                }
-            }
-            found
-        };
         let enclosing =
             std::iter::successors(Some(namespace), |ns| ns.rsplit_once('.').map(|(p, _)| p))
                 .filter(|ns| !ns.is_empty());
@@ -1287,27 +1328,31 @@ impl<'a> ProjectIndex<'a> {
             .chain(self.global_usings())
             .map(String::as_str)
             .collect();
-        let mut prefixes = std::iter::once("")
+        let prefixes = std::iter::once("")
             .chain(enclosing)
             .chain(usings.iter().copied());
-        match lookup(&mut prefixes).as_slice() {
+        match platform_lookup(platform, &path, prefixes).as_slice() {
             [one] => return Some(*one),
             [] => {}
             _ => return None,
         }
-        // The SDK's implicit usings, when nothing the file imports could
-        // declare the name instead, or when the file imports none of their
-        // namespaces itself, which projects without them nearly always do.
-        let known = |ns: &str| platform.has_namespace(ns) || self.namespaces.contains(ns);
-        let implicit =
-            usings.iter().all(|u| known(u)) || !usings.iter().any(|u| IMPLICIT_USINGS.contains(u));
-        if !r.qualifier.is_empty() || !implicit {
+        if !r.qualifier.is_empty() || !self.implicit_usings_apply(&usings) {
             return None;
         }
-        match lookup(&mut IMPLICIT_USINGS.iter().copied()).as_slice() {
+        match platform_lookup(platform, &path, IMPLICIT_USINGS.iter().copied()).as_slice() {
             [one] => Some(*one),
             _ => None,
         }
+    }
+
+    /// Whether the SDK's implicit usings count for a file with `usings`:
+    /// when nothing the file imports could declare the name instead, or when
+    /// the file imports none of their namespaces itself, which projects
+    /// without them nearly always do.
+    fn implicit_usings_apply(&self, usings: &[&str]) -> bool {
+        let platform = dotnet::platform();
+        let known = |ns: &str| platform.has_namespace(ns) || self.namespaces.contains(ns);
+        usings.iter().all(|u| known(u)) || !usings.iter().any(|u| IMPLICIT_USINGS.contains(u))
     }
 
     fn global_usings(&self) -> impl Iterator<Item = &String> + '_ {

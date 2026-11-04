@@ -137,6 +137,18 @@ pub(crate) fn platform() -> &'static Platform {
     })
 }
 
+/// Whether a type other than `System.Object` overrides `Equals(object)`.
+fn overrides_equals(t: &PlatformType) -> bool {
+    t.name != "System.Object"
+        && t.members.iter().any(|m| {
+            m.kind == "method"
+                && m.name == "Equals"
+                && !m.has("static")
+                && m.params.len() == 1
+                && m.params[0].ty == "System.Object"
+        })
+}
+
 impl Platform {
     fn decode(data: &[u8]) -> Option<Platform> {
         let mut json = Vec::new();
@@ -193,42 +205,36 @@ impl Platform {
     /// `Equals(object)`, or deriving from one that does, implements.
     pub(crate) fn equality_interfaces(&self) -> &std::collections::HashSet<String> {
         self.equality.get_or_init(|| {
-            let overrides = |t: &PlatformType| {
-                t.name != "System.Object"
-                    && t.members.iter().any(|m| {
-                        m.kind == "method"
-                            && m.name == "Equals"
-                            && !m.has("static")
-                            && m.params.len() == 1
-                            && m.params[0].ty == "System.Object"
-                    })
-            };
             let mut out = std::collections::HashSet::new();
             for t in self.types.values() {
-                if !matches!(t.kind.as_str(), "class" | "struct")
-                    || !self.base_chain(&t.name).into_iter().any(overrides)
+                if matches!(t.kind.as_str(), "class" | "struct")
+                    && self.base_chain(&t.name).into_iter().any(overrides_equals)
                 {
-                    continue;
-                }
-                let mut todo: Vec<&str> = vec![&t.name];
-                let mut seen: Vec<&str> = Vec::new();
-                while let Some(k) = todo.pop() {
-                    let k = definition(k);
-                    if seen.contains(&k) || seen.len() > 256 {
-                        continue;
-                    }
-                    seen.push(k);
-                    if let Some(x) = self.get(k) {
-                        if x.kind == "interface" {
-                            out.insert(x.name.clone());
-                        }
-                        todo.extend(x.base.as_deref());
-                        todo.extend(x.interfaces.iter().map(String::as_str));
-                    }
+                    self.add_interfaces(&t.name, &mut out);
                 }
             }
             out
         })
+    }
+
+    /// Every interface `name` implements, through its bases, added to `out`.
+    fn add_interfaces(&self, name: &str, out: &mut std::collections::HashSet<String>) {
+        let mut todo: Vec<&str> = vec![name];
+        let mut seen: Vec<&str> = Vec::new();
+        while let Some(k) = todo.pop() {
+            let k = definition(k);
+            if seen.contains(&k) || seen.len() > 256 {
+                continue;
+            }
+            seen.push(k);
+            if let Some(x) = self.get(k) {
+                if x.kind == "interface" {
+                    out.insert(x.name.clone());
+                }
+                todo.extend(x.base.as_deref());
+                todo.extend(x.interfaces.iter().map(String::as_str));
+            }
+        }
     }
 
     /// The type and extension method names a namespace declares.

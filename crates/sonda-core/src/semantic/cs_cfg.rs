@@ -33,6 +33,13 @@ pub(crate) enum Access {
     MaybeWrite,
 }
 
+/// `events`' work: a node to visit, and whether it may not be evaluated,
+/// or an event to emit.
+enum EventTask<'t> {
+    Visit(Node<'t>, bool),
+    Emit(DeclId, Access, Node<'t>),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Event<'t> {
     pub(crate) decl: DeclId,
@@ -238,286 +245,306 @@ impl<'t> Builder<'_, 't, '_> {
             }
             "break_statement" => self.block(Some(s), vec![t.brk.unwrap_or(next)]),
             "continue_statement" => self.block(Some(s), vec![t.cont.unwrap_or(next)]),
-            "goto_statement" => {
-                let label = named_children(s).first().map(|l| self.text(*l).to_string());
-                match label.filter(|_| {
-                    !self.text(s).starts_with("goto case")
-                        && !self.text(s).starts_with("goto default")
-                }) {
-                    Some(label) => {
-                        let i = self.block(Some(s), Vec::new());
-                        self.gotos.push((i, label));
-                        i
-                    }
-                    None => {
-                        self.failed = true;
-                        next
-                    }
-                }
-            }
-            "labeled_statement" => {
-                let children = named_children(s);
-                let (Some(label), Some(inner)) = (children.first(), children.get(1)) else {
-                    return next;
-                };
-                let label = self.text(*label).to_string();
-                let i = self.block(Some(s), Vec::new());
-                self.blocks[i].loop_statement = Some(s);
-                self.labels.insert(label, i);
-                let inner_entry = self.statement(*inner, next, t);
-                self.blocks[i].succ = vec![inner_entry];
-                i
-            }
-            "if_statement" => {
-                let Some(condition) = s.child_by_field_name("condition") else {
-                    return next;
-                };
-                let yes = s
-                    .child_by_field_name("consequence")
-                    .map_or(next, |c| self.statement(c, next, t));
-                let no = s
-                    .child_by_field_name("alternative")
-                    .map_or(next, |a| self.statement(a, next, t));
-                let i = self.simple(condition, next);
-                self.blocks[i].succ = vec![yes, no];
-                i
-            }
-            "while_statement" => {
-                let condition = s.child_by_field_name("condition");
-                let head = self.block(condition, Vec::new());
-                self.blocks[head].loop_statement = Some(s);
-                let body = s.child_by_field_name("body").map_or(head, |b| {
-                    self.statement(
-                        b,
-                        head,
-                        Targets {
-                            brk: Some(next),
-                            cont: Some(head),
-                        },
-                    )
-                });
-                if let Some(c) = condition {
-                    self.blocks[head].events = self.events(c);
-                    self.blocks[head].recurses = self.recurses(c);
-                }
-                self.blocks[head].succ = if condition.is_some_and(|c| self.always_true(c)) {
-                    vec![body]
-                } else {
-                    vec![body, next]
-                };
-                head
-            }
-            "do_statement" => {
-                let condition = s.child_by_field_name("condition");
-                let check = self.block(condition, Vec::new());
-                let body = s.child_by_field_name("body").map_or(check, |b| {
-                    self.statement(
-                        b,
-                        check,
-                        Targets {
-                            brk: Some(next),
-                            cont: Some(check),
-                        },
-                    )
-                });
-                self.blocks[check].loop_statement = Some(s);
-                if let Some(c) = condition {
-                    self.blocks[check].events = self.events(c);
-                }
-                self.blocks[check].succ = if condition.is_some_and(|c| self.always_true(c)) {
-                    vec![body]
-                } else {
-                    vec![body, next]
-                };
-                body
-            }
-            "for_statement" => {
-                let condition = s.child_by_field_name("condition");
-                let head = self.block(condition, Vec::new());
-                self.blocks[head].loop_statement = Some(s);
-                // The updates, in order, after each pass of the body.
-                let mut update_entry = head;
-                let mut cursor = s.walk();
-                let updates: Vec<Node<'t>> =
-                    s.children_by_field_name("update", &mut cursor).collect();
-                for u in updates.into_iter().rev() {
-                    update_entry = self.simple(u, update_entry);
-                }
-                let body = s.child_by_field_name("body").map_or(update_entry, |b| {
-                    self.statement(
-                        b,
-                        update_entry,
-                        Targets {
-                            brk: Some(next),
-                            cont: Some(update_entry),
-                        },
-                    )
-                });
-                if let Some(c) = condition {
-                    self.blocks[head].events = self.events(c);
-                }
-                let forever = condition.is_none_or(|c| self.always_true(c));
-                self.blocks[head].succ = if forever {
-                    vec![body]
-                } else {
-                    vec![body, next]
-                };
-                let mut cursor = s.walk();
-                let initializers: Vec<Node<'t>> = s
-                    .children_by_field_name("initializer", &mut cursor)
-                    .collect();
-                let mut entry = head;
-                for init in initializers.into_iter().rev() {
-                    entry = self.simple(init, entry);
-                }
-                entry
-            }
-            "foreach_statement" => {
-                // The collection is evaluated once; each pass writes the
-                // loop variable, then runs the body.
-                let head = self.block(Some(s), Vec::new());
-                self.blocks[head].loop_statement = Some(s);
-                let body = s.child_by_field_name("body").map_or(head, |b| {
-                    self.statement(
-                        b,
-                        head,
-                        Targets {
-                            brk: Some(next),
-                            cont: Some(head),
-                        },
-                    )
-                });
-                self.blocks[head].succ = vec![body, next];
-                if let Some(left) = s.child_by_field_name("left") {
-                    self.blocks[head].events = self.definitions(left);
-                }
-                match s.child_by_field_name("right") {
-                    Some(collection) => self.simple(collection, head),
-                    None => head,
-                }
-            }
-            "switch_statement" => {
-                let value = s.child_by_field_name("value");
-                let dispatch = self.block(value, Vec::new());
-                if let Some(v) = value {
-                    self.blocks[dispatch].events = self.events(v);
-                }
-                let sections = s
-                    .child_by_field_name("body")
-                    .map(named_children)
-                    .unwrap_or_default();
-                let mut entries = Vec::new();
-                let mut has_default = false;
-                for section in sections
-                    .into_iter()
-                    .filter(|x| x.kind() == "switch_section")
-                {
-                    let mut c = section.walk();
-                    has_default |= section.children(&mut c).any(|x| x.kind() == "default");
-                    let parts = named_children(section);
-                    let (labels, statements): (Vec<Node<'t>>, Vec<Node<'t>>) = parts
-                        .into_iter()
-                        .partition(|p| p.kind().ends_with("pattern") || p.kind() == "when_clause");
-                    let mut entry = next;
-                    for st in statements.into_iter().rev() {
-                        entry = self.statement(
-                            st,
-                            entry,
-                            Targets {
-                                brk: Some(next),
-                                cont: t.cont,
-                            },
-                        );
-                    }
-                    // Patterns may declare variables: `case Foo f:`.
-                    let label_block = self.block(Some(section), vec![entry]);
-                    for l in labels {
-                        let events = self.events(l);
-                        self.blocks[label_block].events.extend(events);
-                    }
-                    entries.push(label_block);
-                }
-                if !has_default {
-                    entries.push(next);
-                }
-                self.blocks[dispatch].succ = entries;
-                dispatch
-            }
-            "try_statement" => {
-                self.has_try = true;
-                let children = named_children(s);
-                let finally = children
-                    .iter()
-                    .find(|c| c.kind() == "finally_clause")
-                    .and_then(|f| named_children(*f).into_iter().next());
-                let finally_entry = finally.map(|f| self.statement(f, next, t));
-                let after = finally_entry.unwrap_or(next);
-                let mut handlers = Vec::new();
-                let catch_start = self.blocks.len();
-                for clause in children.iter().filter(|c| c.kind() == "catch_clause") {
-                    let body = clause
-                        .child_by_field_name("body")
-                        .map_or(after, |b| self.statement(b, after, t));
-                    let head = self.block(Some(*clause), vec![body]);
-                    let mut events = Vec::new();
-                    for part in named_children(*clause) {
-                        match part.kind() {
-                            "catch_declaration" => {
-                                if let Some(name) = part.child_by_field_name("name") {
-                                    events.extend(self.definitions(name));
-                                }
-                            }
-                            "catch_filter_clause" => events.extend(self.events(part)),
-                            _ => {}
-                        }
-                    }
-                    self.blocks[head].events = events;
-                    handlers.push(head);
-                }
-                let catch_end = self.blocks.len();
-                let try_start = self.blocks.len();
-                let body = s
-                    .child_by_field_name("body")
-                    .map_or(after, |b| self.statement(b, after, t));
-                let try_end = self.blocks.len();
-                // An exception can leave any block of the try for a handler or
-                // the finally, and any block of a handler for the finally.
-                for i in try_start..try_end {
-                    self.blocks[i].succ.extend(handlers.iter().copied());
-                    self.blocks[i].succ.extend(finally_entry);
-                }
-                if let Some(f) = finally_entry {
-                    for i in catch_start..catch_end {
-                        self.blocks[i].succ.push(f);
-                    }
-                }
-                body
-            }
+            "goto_statement" => self.goto(s, next),
+            "labeled_statement" => self.labeled(s, next, t),
+            "if_statement" => self.if_statement(s, next, t),
+            "while_statement" => self.while_loop(s, next),
+            "do_statement" => self.do_loop(s, next),
+            "for_statement" => self.for_loop(s, next),
+            "foreach_statement" => self.foreach_loop(s, next),
+            "switch_statement" => self.switch(s, next, t),
+            "try_statement" => self.try_statement(s, next, t),
             "using_statement" | "lock_statement" | "fixed_statement" | "checked_statement"
-            | "unsafe_statement" => {
-                let children = named_children(s);
-                let body = s
-                    .child_by_field_name("body")
-                    .or_else(|| children.iter().rev().find(|c| c.kind() == "block").copied());
-                let inner = body.map_or(next, |b| self.statement(b, next, t));
-                let head = self.block(Some(s), vec![inner]);
-                let mut events = Vec::new();
-                for c in children.into_iter().filter(|c| Some(*c) != body) {
-                    events.extend(self.events(c));
-                }
-                self.blocks[head].events = events;
-                head
-            }
-            // A local function runs when called; its captures are handled
-            // where they're read.
-            "local_function_statement" => {
-                let events = self.events(s);
-                let i = self.block(Some(s), vec![next]);
-                self.blocks[i].events = events;
-                i
-            }
+            | "unsafe_statement" => self.scoped_statement(s, next, t),
+            "local_function_statement" => self.local_function(s, next),
             _ => self.simple(s, next),
         }
+    }
+
+    fn goto(&mut self, s: Node<'t>, next: usize) -> usize {
+        let label = named_children(s).first().map(|l| self.text(*l).to_string());
+        match label.filter(|_| {
+            !self.text(s).starts_with("goto case") && !self.text(s).starts_with("goto default")
+        }) {
+            Some(label) => {
+                let i = self.block(Some(s), Vec::new());
+                self.gotos.push((i, label));
+                i
+            }
+            None => {
+                self.failed = true;
+                next
+            }
+        }
+    }
+
+    fn labeled(&mut self, s: Node<'t>, next: usize, t: Targets) -> usize {
+        let children = named_children(s);
+        let (Some(label), Some(inner)) = (children.first(), children.get(1)) else {
+            return next;
+        };
+        let label = self.text(*label).to_string();
+        let i = self.block(Some(s), Vec::new());
+        self.blocks[i].loop_statement = Some(s);
+        self.labels.insert(label, i);
+        let inner_entry = self.statement(*inner, next, t);
+        self.blocks[i].succ = vec![inner_entry];
+        i
+    }
+
+    fn if_statement(&mut self, s: Node<'t>, next: usize, t: Targets) -> usize {
+        let Some(condition) = s.child_by_field_name("condition") else {
+            return next;
+        };
+        let yes = s
+            .child_by_field_name("consequence")
+            .map_or(next, |c| self.statement(c, next, t));
+        let no = s
+            .child_by_field_name("alternative")
+            .map_or(next, |a| self.statement(a, next, t));
+        let i = self.simple(condition, next);
+        self.blocks[i].succ = vec![yes, no];
+        i
+    }
+
+    fn while_loop(&mut self, s: Node<'t>, next: usize) -> usize {
+        let condition = s.child_by_field_name("condition");
+        let head = self.block(condition, Vec::new());
+        self.blocks[head].loop_statement = Some(s);
+        let body = s.child_by_field_name("body").map_or(head, |b| {
+            self.statement(
+                b,
+                head,
+                Targets {
+                    brk: Some(next),
+                    cont: Some(head),
+                },
+            )
+        });
+        if let Some(c) = condition {
+            self.blocks[head].events = self.events(c);
+            self.blocks[head].recurses = self.recurses(c);
+        }
+        self.blocks[head].succ = if condition.is_some_and(|c| self.always_true(c)) {
+            vec![body]
+        } else {
+            vec![body, next]
+        };
+        head
+    }
+
+    fn do_loop(&mut self, s: Node<'t>, next: usize) -> usize {
+        let condition = s.child_by_field_name("condition");
+        let check = self.block(condition, Vec::new());
+        let body = s.child_by_field_name("body").map_or(check, |b| {
+            self.statement(
+                b,
+                check,
+                Targets {
+                    brk: Some(next),
+                    cont: Some(check),
+                },
+            )
+        });
+        self.blocks[check].loop_statement = Some(s);
+        if let Some(c) = condition {
+            self.blocks[check].events = self.events(c);
+        }
+        self.blocks[check].succ = if condition.is_some_and(|c| self.always_true(c)) {
+            vec![body]
+        } else {
+            vec![body, next]
+        };
+        body
+    }
+
+    fn for_loop(&mut self, s: Node<'t>, next: usize) -> usize {
+        let condition = s.child_by_field_name("condition");
+        let head = self.block(condition, Vec::new());
+        self.blocks[head].loop_statement = Some(s);
+        // The updates, in order, after each pass of the body.
+        let mut update_entry = head;
+        let mut cursor = s.walk();
+        let updates: Vec<Node<'t>> = s.children_by_field_name("update", &mut cursor).collect();
+        for u in updates.into_iter().rev() {
+            update_entry = self.simple(u, update_entry);
+        }
+        let body = s.child_by_field_name("body").map_or(update_entry, |b| {
+            self.statement(
+                b,
+                update_entry,
+                Targets {
+                    brk: Some(next),
+                    cont: Some(update_entry),
+                },
+            )
+        });
+        if let Some(c) = condition {
+            self.blocks[head].events = self.events(c);
+        }
+        let forever = condition.is_none_or(|c| self.always_true(c));
+        self.blocks[head].succ = if forever {
+            vec![body]
+        } else {
+            vec![body, next]
+        };
+        let mut cursor = s.walk();
+        let initializers: Vec<Node<'t>> = s
+            .children_by_field_name("initializer", &mut cursor)
+            .collect();
+        let mut entry = head;
+        for init in initializers.into_iter().rev() {
+            entry = self.simple(init, entry);
+        }
+        entry
+    }
+
+    fn foreach_loop(&mut self, s: Node<'t>, next: usize) -> usize {
+        // The collection is evaluated once; each pass writes the
+        // loop variable, then runs the body.
+        let head = self.block(Some(s), Vec::new());
+        self.blocks[head].loop_statement = Some(s);
+        let body = s.child_by_field_name("body").map_or(head, |b| {
+            self.statement(
+                b,
+                head,
+                Targets {
+                    brk: Some(next),
+                    cont: Some(head),
+                },
+            )
+        });
+        self.blocks[head].succ = vec![body, next];
+        if let Some(left) = s.child_by_field_name("left") {
+            self.blocks[head].events = self.definitions(left);
+        }
+        match s.child_by_field_name("right") {
+            Some(collection) => self.simple(collection, head),
+            None => head,
+        }
+    }
+
+    fn switch(&mut self, s: Node<'t>, next: usize, t: Targets) -> usize {
+        let value = s.child_by_field_name("value");
+        let dispatch = self.block(value, Vec::new());
+        if let Some(v) = value {
+            self.blocks[dispatch].events = self.events(v);
+        }
+        let sections = s
+            .child_by_field_name("body")
+            .map(named_children)
+            .unwrap_or_default();
+        let mut entries = Vec::new();
+        let mut has_default = false;
+        for section in sections
+            .into_iter()
+            .filter(|x| x.kind() == "switch_section")
+        {
+            let mut c = section.walk();
+            has_default |= section.children(&mut c).any(|x| x.kind() == "default");
+            let parts = named_children(section);
+            let (labels, statements): (Vec<Node<'t>>, Vec<Node<'t>>) = parts
+                .into_iter()
+                .partition(|p| p.kind().ends_with("pattern") || p.kind() == "when_clause");
+            let mut entry = next;
+            for st in statements.into_iter().rev() {
+                entry = self.statement(
+                    st,
+                    entry,
+                    Targets {
+                        brk: Some(next),
+                        cont: t.cont,
+                    },
+                );
+            }
+            // Patterns may declare variables: `case Foo f:`.
+            let label_block = self.block(Some(section), vec![entry]);
+            for l in labels {
+                let events = self.events(l);
+                self.blocks[label_block].events.extend(events);
+            }
+            entries.push(label_block);
+        }
+        if !has_default {
+            entries.push(next);
+        }
+        self.blocks[dispatch].succ = entries;
+        dispatch
+    }
+
+    fn try_statement(&mut self, s: Node<'t>, next: usize, t: Targets) -> usize {
+        self.has_try = true;
+        let children = named_children(s);
+        let finally = children
+            .iter()
+            .find(|c| c.kind() == "finally_clause")
+            .and_then(|f| named_children(*f).into_iter().next());
+        let finally_entry = finally.map(|f| self.statement(f, next, t));
+        let after = finally_entry.unwrap_or(next);
+        let mut handlers = Vec::new();
+        let catch_start = self.blocks.len();
+        for clause in children.iter().filter(|c| c.kind() == "catch_clause") {
+            let body = clause
+                .child_by_field_name("body")
+                .map_or(after, |b| self.statement(b, after, t));
+            let head = self.block(Some(*clause), vec![body]);
+            let mut events = Vec::new();
+            for part in named_children(*clause) {
+                match part.kind() {
+                    "catch_declaration" => {
+                        if let Some(name) = part.child_by_field_name("name") {
+                            events.extend(self.definitions(name));
+                        }
+                    }
+                    "catch_filter_clause" => events.extend(self.events(part)),
+                    _ => {}
+                }
+            }
+            self.blocks[head].events = events;
+            handlers.push(head);
+        }
+        let catch_end = self.blocks.len();
+        let try_start = self.blocks.len();
+        let body = s
+            .child_by_field_name("body")
+            .map_or(after, |b| self.statement(b, after, t));
+        let try_end = self.blocks.len();
+        // An exception can leave any block of the try for a handler or
+        // the finally, and any block of a handler for the finally.
+        for i in try_start..try_end {
+            self.blocks[i].succ.extend(handlers.iter().copied());
+            self.blocks[i].succ.extend(finally_entry);
+        }
+        if let Some(f) = finally_entry {
+            for i in catch_start..catch_end {
+                self.blocks[i].succ.push(f);
+            }
+        }
+        body
+    }
+
+    fn scoped_statement(&mut self, s: Node<'t>, next: usize, t: Targets) -> usize {
+        let children = named_children(s);
+        let body = s
+            .child_by_field_name("body")
+            .or_else(|| children.iter().rev().find(|c| c.kind() == "block").copied());
+        let inner = body.map_or(next, |b| self.statement(b, next, t));
+        let head = self.block(Some(s), vec![inner]);
+        let mut events = Vec::new();
+        for c in children.into_iter().filter(|c| Some(*c) != body) {
+            events.extend(self.events(c));
+        }
+        self.blocks[head].events = events;
+        head
+    }
+
+    /// A local function runs when called; its captures are handled
+    /// where they're read.
+    fn local_function(&mut self, s: Node<'t>, next: usize) -> usize {
+        let events = self.events(s);
+        let i = self.block(Some(s), vec![next]);
+        self.blocks[i].events = events;
+        i
     }
 
     fn always_true(&self, condition: Node) -> bool {
@@ -614,163 +641,207 @@ impl<'t> Builder<'_, 't, '_> {
     /// The reads and writes in `n`, in evaluation order. Walked with an
     /// explicit stack: expressions can nest thousands deep.
     fn events(&mut self, n: Node<'t>) -> Vec<Event<'t>> {
-        enum Task<'t> {
-            /// A node, and whether it may not be evaluated.
-            Visit(Node<'t>, bool),
-            Emit(DeclId, Access, Node<'t>),
-        }
         let mut out = Vec::new();
-        let mut stack = vec![Task::Visit(n, false)];
+        let mut stack = vec![EventTask::Visit(n, false)];
         while let Some(task) = stack.pop() {
-            let (x, maybe) = match task {
-                Task::Emit(decl, access, node) => {
-                    out.push(Event { decl, access, node });
-                    continue;
-                }
-                Task::Visit(x, maybe) => (x, maybe),
-            };
-            let write = if maybe {
-                Access::MaybeWrite
-            } else {
-                Access::Write
-            };
-            match x.kind() {
-                // Captured variables: read whenever the closure runs.
-                "lambda_expression"
-                | "anonymous_method_expression"
-                | "local_function_statement" => {
-                    let mut inner = vec![x];
-                    while let Some(y) = inner.pop() {
-                        if y.kind() == "identifier"
-                            && let Some(d) = self.decl(y)
-                        {
-                            self.escaped.insert(d);
-                            out.push(Event {
-                                decl: d,
-                                access: Access::Read,
-                                node: y,
-                            });
-                        }
-                        inner.extend(named_children(y));
-                    }
-                }
-                "assignment_expression" => {
-                    let left = x.child_by_field_name("left");
-                    let right = x.child_by_field_name("right");
-                    let op = x
-                        .child_by_field_name("operator")
-                        .map(|o| self.text(o))
-                        .unwrap_or("=");
-                    let compound = op != "=";
-                    // `x ??= y` writes only when x is null.
-                    let access = if op == "??=" {
-                        Access::MaybeWrite
-                    } else {
-                        write
-                    };
-                    match left.and_then(|l| self.decl(unparenthesized(l))) {
-                        Some(d) => {
-                            stack.push(Task::Emit(d, access, x));
-                            if compound {
-                                stack.push(Task::Emit(d, Access::Read, x));
-                            }
-                        }
-                        None => stack.extend(left.map(|l| Task::Visit(l, maybe))),
-                    }
-                    stack.extend(right.map(|r| Task::Visit(r, maybe || op == "??=")));
-                }
-                // Parts that may not run.
-                "binary_expression"
-                    if matches!(
-                        x.child_by_field_name("operator").map(|o| self.text(o)),
-                        Some("&&" | "||" | "??")
-                    ) =>
-                {
-                    stack.extend(x.child_by_field_name("right").map(|r| Task::Visit(r, true)));
-                    stack.extend(x.child_by_field_name("left").map(|l| Task::Visit(l, maybe)));
-                }
-                "conditional_expression"
-                | "switch_expression"
-                | "conditional_access_expression" => {
-                    let first = x
-                        .child_by_field_name("condition")
-                        .or_else(|| x.named_child(0));
-                    for child in named_children(x).into_iter().rev() {
-                        stack.push(Task::Visit(child, maybe || Some(child) != first));
-                    }
-                }
-                "prefix_unary_expression" | "postfix_unary_expression"
-                    if self.text(x).contains("++") || self.text(x).contains("--") =>
-                {
-                    match x.named_child(0).and_then(|o| self.decl(unparenthesized(o))) {
-                        Some(d) => {
-                            stack.push(Task::Emit(d, write, x));
-                            stack.push(Task::Emit(d, Access::Read, x));
-                        }
-                        None => stack.extend(x.named_child(0).map(|o| Task::Visit(o, maybe))),
-                    }
-                }
-                "argument" => {
-                    let t = self.text(x);
-                    let value = x.named_child(x.named_child_count().saturating_sub(1) as u32);
-                    let target = value.and_then(|v| self.decl(unparenthesized(v)));
-                    match (t.starts_with("out "), t.starts_with("ref "), target) {
-                        (true, _, Some(d)) => stack.push(Task::Emit(d, write, x)),
-                        (_, true, Some(d)) => {
-                            stack.push(Task::Emit(d, write, x));
-                            stack.push(Task::Emit(d, Access::Read, x));
-                        }
-                        _ => stack.extend(value.map(|v| Task::Visit(v, maybe))),
-                    }
-                }
-                "declaration_expression" | "declaration_pattern" => {
-                    if let Some(name) = x.child_by_field_name("name") {
-                        for e in self.definitions(name).into_iter().rev() {
-                            stack.push(Task::Emit(e.decl, write, x));
-                        }
-                    }
-                }
-                "variable_declarator" => {
-                    // The initializer runs, then the variable is written.
-                    if let Some(name) = x.child_by_field_name("name")
-                        && let Some(d) = self.decl(name)
-                        && x.named_child_count() > 1
-                    {
-                        stack.push(Task::Emit(d, write, x));
-                    }
-                    if x.named_child_count() > 1 {
-                        stack.extend(
-                            x.named_child(x.named_child_count() as u32 - 1)
-                                .map(|v| Task::Visit(v, maybe)),
-                        );
-                    }
-                }
-                "identifier" => {
-                    if let Some(d) = self.decl(x) {
-                        out.push(Event {
-                            decl: d,
-                            access: Access::Read,
-                            node: x,
-                        });
-                    }
-                }
-                "member_access_expression" if self.text(x).starts_with("this.") => {
-                    if let Some(d) = self.decl(x) {
-                        out.push(Event {
-                            decl: d,
-                            access: Access::Read,
-                            node: x,
-                        });
-                    }
-                }
-                _ => {
-                    for child in named_children(x).into_iter().rev() {
-                        stack.push(Task::Visit(child, maybe));
-                    }
-                }
+            match task {
+                EventTask::Emit(decl, access, node) => out.push(Event { decl, access, node }),
+                EventTask::Visit(x, maybe) => self.event_step(x, maybe, &mut stack, &mut out),
             }
         }
         out
+    }
+
+    /// The events of `x`, which may not be evaluated when `maybe`: pushed
+    /// to `stack` for later, or to `out` when they're due now.
+    fn event_step(
+        &mut self,
+        x: Node<'t>,
+        maybe: bool,
+        stack: &mut Vec<EventTask<'t>>,
+        out: &mut Vec<Event<'t>>,
+    ) {
+        let write = if maybe {
+            Access::MaybeWrite
+        } else {
+            Access::Write
+        };
+        match x.kind() {
+            // Captured variables: read whenever the closure runs.
+            "lambda_expression" | "anonymous_method_expression" | "local_function_statement" => {
+                self.captured_reads(x, out);
+            }
+            "assignment_expression" => self.assignment_events(x, maybe, write, stack),
+            // Parts that may not run.
+            "binary_expression"
+                if matches!(
+                    x.child_by_field_name("operator").map(|o| self.text(o)),
+                    Some("&&" | "||" | "??")
+                ) =>
+            {
+                stack.extend(
+                    x.child_by_field_name("right")
+                        .map(|r| EventTask::Visit(r, true)),
+                );
+                stack.extend(
+                    x.child_by_field_name("left")
+                        .map(|l| EventTask::Visit(l, maybe)),
+                );
+            }
+            "conditional_expression" | "switch_expression" | "conditional_access_expression" => {
+                let first = x
+                    .child_by_field_name("condition")
+                    .or_else(|| x.named_child(0));
+                for child in named_children(x).into_iter().rev() {
+                    stack.push(EventTask::Visit(child, maybe || Some(child) != first));
+                }
+            }
+            "prefix_unary_expression" | "postfix_unary_expression"
+                if self.text(x).contains("++") || self.text(x).contains("--") =>
+            {
+                self.increment_events(x, maybe, write, stack);
+            }
+            "argument" => self.argument_events(x, maybe, write, stack),
+            "declaration_expression" | "declaration_pattern" => {
+                if let Some(name) = x.child_by_field_name("name") {
+                    for e in self.definitions(name).into_iter().rev() {
+                        stack.push(EventTask::Emit(e.decl, write, x));
+                    }
+                }
+            }
+            "variable_declarator" => self.declarator_events(x, maybe, write, stack),
+            "identifier" => self.read_event(x, out),
+            "member_access_expression" if self.text(x).starts_with("this.") => {
+                self.read_event(x, out);
+            }
+            _ => {
+                for child in named_children(x).into_iter().rev() {
+                    stack.push(EventTask::Visit(child, maybe));
+                }
+            }
+        }
+    }
+
+    /// A read of the variable `x` names, if it names one.
+    fn read_event(&self, x: Node<'t>, out: &mut Vec<Event<'t>>) {
+        if let Some(d) = self.decl(x) {
+            out.push(Event {
+                decl: d,
+                access: Access::Read,
+                node: x,
+            });
+        }
+    }
+
+    /// Every variable a closure mentions: read, and escaped, whenever it runs.
+    fn captured_reads(&mut self, x: Node<'t>, out: &mut Vec<Event<'t>>) {
+        let mut inner = vec![x];
+        while let Some(y) = inner.pop() {
+            if y.kind() == "identifier"
+                && let Some(d) = self.decl(y)
+            {
+                self.escaped.insert(d);
+                out.push(Event {
+                    decl: d,
+                    access: Access::Read,
+                    node: y,
+                });
+            }
+            inner.extend(named_children(y));
+        }
+    }
+
+    /// The right side, then the write (and, for `+=` and the like, the read
+    /// before it). `x ??= y` writes only when x is null.
+    fn assignment_events(
+        &self,
+        x: Node<'t>,
+        maybe: bool,
+        write: Access,
+        stack: &mut Vec<EventTask<'t>>,
+    ) {
+        let left = x.child_by_field_name("left");
+        let right = x.child_by_field_name("right");
+        let op = x
+            .child_by_field_name("operator")
+            .map(|o| self.text(o))
+            .unwrap_or("=");
+        let compound = op != "=";
+        let access = if op == "??=" {
+            Access::MaybeWrite
+        } else {
+            write
+        };
+        match left.and_then(|l| self.decl(unparenthesized(l))) {
+            Some(d) => {
+                stack.push(EventTask::Emit(d, access, x));
+                if compound {
+                    stack.push(EventTask::Emit(d, Access::Read, x));
+                }
+            }
+            None => stack.extend(left.map(|l| EventTask::Visit(l, maybe))),
+        }
+        stack.extend(right.map(|r| EventTask::Visit(r, maybe || op == "??=")));
+    }
+
+    /// `x++`, `--x`: a read, then a write.
+    fn increment_events(
+        &self,
+        x: Node<'t>,
+        maybe: bool,
+        write: Access,
+        stack: &mut Vec<EventTask<'t>>,
+    ) {
+        match x.named_child(0).and_then(|o| self.decl(unparenthesized(o))) {
+            Some(d) => {
+                stack.push(EventTask::Emit(d, write, x));
+                stack.push(EventTask::Emit(d, Access::Read, x));
+            }
+            None => stack.extend(x.named_child(0).map(|o| EventTask::Visit(o, maybe))),
+        }
+    }
+
+    /// `out x` writes x; `ref x` reads it, then writes it.
+    fn argument_events(
+        &self,
+        x: Node<'t>,
+        maybe: bool,
+        write: Access,
+        stack: &mut Vec<EventTask<'t>>,
+    ) {
+        let t = self.text(x);
+        let value = x.named_child(x.named_child_count().saturating_sub(1) as u32);
+        let target = value.and_then(|v| self.decl(unparenthesized(v)));
+        match (t.starts_with("out "), t.starts_with("ref "), target) {
+            (true, _, Some(d)) => stack.push(EventTask::Emit(d, write, x)),
+            (_, true, Some(d)) => {
+                stack.push(EventTask::Emit(d, write, x));
+                stack.push(EventTask::Emit(d, Access::Read, x));
+            }
+            _ => stack.extend(value.map(|v| EventTask::Visit(v, maybe))),
+        }
+    }
+
+    /// The initializer runs, then the variable is written.
+    fn declarator_events(
+        &self,
+        x: Node<'t>,
+        maybe: bool,
+        write: Access,
+        stack: &mut Vec<EventTask<'t>>,
+    ) {
+        if x.named_child_count() <= 1 {
+            return;
+        }
+        if let Some(name) = x.child_by_field_name("name")
+            && let Some(d) = self.decl(name)
+        {
+            stack.push(EventTask::Emit(d, write, x));
+        }
+        stack.extend(
+            x.named_child(x.named_child_count() as u32 - 1)
+                .map(|v| EventTask::Visit(v, maybe)),
+        );
     }
 }
 
