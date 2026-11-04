@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from 'react-router'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { AnalysisPage, AnalysisQuery } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
@@ -11,10 +11,27 @@ const PAGE_SIZE = 50
 
 type GateFilter = 'all' | 'failed' | 'passed'
 
+/** Every project's analyses. A link for one project goes to its own Analyses tab instead. */
 export function AnalysesPage() {
+  const [params] = useSearchParams()
+  const project = params.get('project')
+  if (project) {
+    const rest = new URLSearchParams([...params].filter(([k]) => k !== 'project')).toString()
+    return <Navigate replace to={`/projects/${encodeURIComponent(project)}/analyses${rest ? `?${rest}` : ''}`} />
+  }
+  return <AnalysesScreen />
+}
+
+/** A project's Analyses tab: the same list, fixed to the project. */
+export function ProjectAnalysesPage() {
+  const { key = '' } = useParams()
+  return <AnalysesScreen project={key} />
+}
+
+function AnalysesScreen({ project: fixed }: { project?: string }) {
   const api = useApi()
   const [params, setParams] = useSearchParams()
-  const project = params.get('project') ?? ''
+  const project = fixed ?? params.get('project') ?? ''
   const gate = (['failed', 'passed'].includes(params.get('gate') ?? '') ? params.get('gate') : 'all') as GateFilter
   const offset = Math.max(0, Number(params.get('offset')) || 0)
   const query: AnalysisQuery = { project: project || undefined, gate: gate === 'all' ? undefined : gate, offset, limit: PAGE_SIZE }
@@ -33,7 +50,18 @@ export function AnalysesPage() {
     )
 
   return (
-    <AppShell crumbs={[{ label: 'Analyses', to: '/analyses' }]}>
+    <AppShell
+      crumbs={
+        fixed
+          ? [
+              { label: 'Projects', to: '/projects' },
+              { label: fixed, to: `/projects/${encodeURIComponent(fixed)}` },
+              { label: 'Analyses', to: `/projects/${encodeURIComponent(fixed)}/analyses` },
+            ]
+          : [{ label: 'Analyses', to: '/analyses' }]
+      }
+      project={fixed}
+    >
       <PageHeader
         title="Analyses"
         summary={
@@ -51,27 +79,29 @@ export function AnalysesPage() {
             { value: 'passed', label: 'Passing' },
           ]}
         />
-        <label className="flex items-center gap-2 text-[13px] text-fg-muted">
-          Project
-          <select value={project} onChange={(e) => set({ project: e.target.value, offset: null })} className="h-8 rounded-md bg-canvas px-2 text-[13px] text-fg edge">
-            <option value="">All projects</option>
-            {projects.state === 'ready' &&
-              projects.data.projects.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.key}
-                </option>
-              ))}
-          </select>
-        </label>
+        {!fixed && (
+          <label className="flex items-center gap-2 text-[13px] text-fg-muted">
+            Project
+            <select value={project} onChange={(e) => set({ project: e.target.value, offset: null })} className="h-8 rounded-md bg-canvas px-2 text-[13px] text-fg edge">
+              <option value="">All projects</option>
+              {projects.state === 'ready' &&
+                projects.data.projects.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.key}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
       </div>
       {page.state === 'loading' && <div aria-busy="true" className="h-[480px] rounded-xl bg-panel-2 edge" />}
       {page.state === 'error' && <p role="alert">Could not load analyses: {page.error.message}</p>}
-      {page.state === 'ready' && <AnalysisList page={page.data} onOffset={(o) => set({ offset: o ? String(o) : null })} />}
+      {page.state === 'ready' && <AnalysisList page={page.data} byProject={!fixed} onOffset={(o) => set({ offset: o ? String(o) : null })} />}
     </AppShell>
   )
 }
 
-function AnalysisList({ page, onOffset }: { page: AnalysisPage; onOffset: (offset: number) => void }) {
+function AnalysisList({ page, byProject, onOffset }: { page: AnalysisPage; /** Whether rows say which project: a project's own tab doesn't. */ byProject: boolean; onOffset: (offset: number) => void }) {
   if (page.items.length === 0) {
     return (
       <div className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
@@ -104,10 +134,11 @@ function AnalysisList({ page, onOffset }: { page: AnalysisPage; onOffset: (offse
               </span>
               <span className="flex min-w-0 flex-col leading-[1.3]">
                 <Link to={`/analyses/${a.id}`} className="font-semibold text-fg">
-                  {a.project}
+                  {byProject ? a.project : branchLabel(a)}
                 </Link>
                 <Mono className="text-[10.5px] text-fg-faint">
-                  {branchLabel(a)} · {a.sha.slice(0, 7)}
+                  {byProject ? `${branchLabel(a)} · ` : ''}
+                  {a.sha.slice(0, 7)}
                 </Mono>
                 {a.message && <span className="overflow-hidden text-xs text-ellipsis whitespace-nowrap text-fg-muted">{a.message}</span>}
               </span>

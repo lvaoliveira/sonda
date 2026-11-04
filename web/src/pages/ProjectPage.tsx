@@ -1,4 +1,3 @@
-import { Settings } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
@@ -50,13 +49,6 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
             <h1 className="m-0 text-[30px] leading-[1.1] font-semibold tracking-[-0.035em] break-words">{p.name ?? p.key}</h1>
             {p.name && <Mono className="text-xs text-fg-muted">{p.key}</Mono>}
           </div>
-          <Link
-            to={`${projectUrl}/settings`}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-[13px] text-[13px] font-medium text-fg no-underline edge-strong"
-          >
-            <Settings size={14} strokeWidth={2} aria-hidden="true" />
-            Settings
-          </Link>
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13.5px] text-fg-muted">
           <label className="flex items-center gap-2">

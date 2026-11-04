@@ -521,6 +521,26 @@ describe('Analyses', () => {
     expect(screen.queryByRole('region', { name: 'Pull requests' })).not.toBeInTheDocument()
   })
 
+  it('is a tab of the project, with only its analyses and no project filter', async () => {
+    const user = userEvent.setup()
+    renderAt('/projects/billing-service')
+    const nav = await screen.findByRole('navigation', { name: 'Project' })
+    // Settings is a tab, not a button beside the title.
+    expect(screen.getAllByRole('link', { name: 'Settings' })).toHaveLength(1)
+    await user.click(within(nav).getByRole('link', { name: 'Analyses' }))
+    const list = await screen.findByRole('list', { name: 'Analyses' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(list).queryByRole('link', { name: 'billing-service' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Blocking' })).toBeInTheDocument()
+  })
+
+  it('sends a link filtered to one project to that project’s tab', async () => {
+    renderAt('/analyses?project=billing-service&gate=passed')
+    expect(await screen.findByRole('navigation', { name: 'Project' })).toBeInTheDocument()
+    expect(within(await screen.findByRole('list', { name: 'Analyses' })).getAllByRole('listitem')).toHaveLength(1)
+  })
+
   it('is reached from the Overview and from a project', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')
