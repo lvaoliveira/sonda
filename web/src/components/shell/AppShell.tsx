@@ -99,6 +99,11 @@ function ProjectTabs({ project }: Readonly<{ project: string }>) {
   )
 }
 
+/** The deployment, and how many projects it has when the server says. */
+function orgLine(org: { deployment: string; projectCount: number | null }): string {
+  return org.projectCount == null ? org.deployment : `${org.deployment} · ${org.projectCount} projects`
+}
+
 export function AppShell({ crumbs, project, children }: Readonly<{ crumbs: Crumb[]; /** The project whose pages these are: shows its tabs. */ project?: string; children: ReactNode }>) {
   const data = useShell()
   const { signOut } = useSessionActions()
@@ -151,7 +156,7 @@ export function AppShell({ crumbs, project, children }: Readonly<{ crumbs: Crumb
           <span className="flex min-w-0 flex-1 flex-col leading-[1.2]">
             <span className="text-[13px] font-semibold">{data?.org.name ?? ' '}</span>
             <span className="text-[11px] text-fg-faint">
-              {data ? data.org.deployment + (data.org.projectCount != null ? ` · ${data.org.projectCount} projects` : '') : ' '}
+              {data ? orgLine(data.org) : ' '}
             </span>
           </span>
         </div>

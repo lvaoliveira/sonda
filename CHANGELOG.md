@@ -64,6 +64,15 @@ file, the report formats and the public library API.
 - On an analysis, the Introduced, Resolved and Warnings links in the
   summary scrolled nowhere: a section had no id to land on. They land on
   the section now, and outline it briefly.
+
+### Changed rule results
+
+- `js/nested-ternary` reports a ternary anywhere inside another, as
+  SonarQube does: in a call's argument, an operand or a template literal
+  (`` x ? `${n} ${n === 1 ? 'rule' : 'rules'}` : '' ``), not only directly
+  in it. A function, an object literal or a JSX container of its own still
+  separates them. On two TypeScript projects it now matches SonarQube's 50
+  findings exactly, where it found 37.
 - `js/void-operator` leaves `void` on a call alone, as `void save()` marks
   a floating promise as intended. SonarQube knows from the types that it's
   a promise; without them, the call is the sign of one.

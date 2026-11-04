@@ -4,7 +4,7 @@ import type { AnalysisPage, AnalysisQuery, AnalysisRow } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button, Segmented } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
-import { branchLabel, formatAge, formatNumber } from '@/lib/format'
+import { branchLabel, countOf, formatAge, formatNumber } from '@/lib/format'
 import { withQuery } from '@/lib/links'
 import { GATE } from '@/lib/visual'
 
@@ -66,7 +66,7 @@ function AnalysesScreen({ project: fixed }: Readonly<{ project?: string }>) {
       <PageHeader
         title="Analyses"
         summary={
-          page.state === 'ready' ? `${formatNumber(page.data.total)} ${page.data.total === 1 ? 'analysis' : 'analyses'} · newest first · every branch` : 'Loading…'
+          page.state === 'ready' ? `${countOf(page.data.total, 'analysis', 'analyses')} · newest first · every branch` : 'Loading…'
         }
       />
       <div className="flex flex-wrap items-center gap-4">
@@ -153,7 +153,7 @@ function AnalysisList({ page, byProject, onOffset }: Readonly<{ page: AnalysisPa
               </span>
               <Mono className="text-right text-xs text-fg-muted">{a.issues == null ? '—' : `${formatNumber(a.issues)} issues`}</Mono>
               <span className="text-right text-xs" style={{ color: a.warnings ? 'var(--sd-warn)' : 'var(--sd-faint)' }}>
-                {a.warnings ? `${a.warnings} ${a.warnings === 1 ? 'warning' : 'warnings'}` : '—'}
+                {a.warnings ? countOf(a.warnings, 'warning') : '—'}
               </span>
               <Mono className="text-right text-xs text-fg-faint">
                 <time dateTime={a.analyzedAt} title={new Date(a.analyzedAt).toUTCString()}>

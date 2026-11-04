@@ -7,7 +7,7 @@ import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { GateDot, GateStatus } from '@/components/sonda/status'
-import { formatAge, shortDate } from '@/lib/format'
+import { countOf, formatAge, shortDate } from '@/lib/format'
 import { projectUrl } from '@/lib/links'
 import { GATE } from '@/lib/visual'
 
@@ -313,7 +313,7 @@ function GateEditor({
     <Card
       id="gate-editor"
       title={gate ? `Edit ${gate.name}` : 'New gate'}
-      subtitle={gate ? `Its ${gate.projects.length} ${gate.projects.length === 1 ? 'project is' : 'projects are'} judged again when you save` : 'A gate on the server, which projects choose in their Settings'}
+      subtitle={gate ? `Its ${countOf(gate.projects.length, 'project is', 'projects are')} judged again when you save` : 'A gate on the server, which projects choose in their Settings'}
     >
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
