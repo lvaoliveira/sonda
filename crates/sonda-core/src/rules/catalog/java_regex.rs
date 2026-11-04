@@ -598,36 +598,8 @@ fn unescape_java(raw: &str) -> String {
             'r' => out.push('\r'),
             's' => out.push(' '),
             '"' | '\'' | '\\' => out.push(next),
-            'u' => {
-                while chars.get(i) == Some(&'u') {
-                    i += 1;
-                }
-                let digits: String = chars.iter().skip(i).take(4).collect();
-                match u32::from_str_radix(&digits, 16)
-                    .ok()
-                    .and_then(char::from_u32)
-                {
-                    Some(c) if digits.len() == 4 => {
-                        out.push(c);
-                        i += 4;
-                    }
-                    _ => out.push_str("\\u"),
-                }
-            }
-            '0'..='7' => {
-                let mut v = next.to_digit(8).unwrap_or(0);
-                let max = if next <= '3' { 2 } else { 1 };
-                for _ in 0..max {
-                    match chars.get(i).and_then(|c| c.to_digit(8)) {
-                        Some(d) => {
-                            v = v * 8 + d;
-                            i += 1;
-                        }
-                        None => break,
-                    }
-                }
-                out.push(char::from_u32(v).unwrap_or('\0'));
-            }
+            'u' => i = unicode_escape(&chars, i, &mut out),
+            '0'..='7' => i = octal_escape(&chars, i, next, &mut out),
             other => {
                 out.push('\\');
                 out.push(other);
@@ -635,6 +607,46 @@ fn unescape_java(raw: &str) -> String {
         }
     }
     out
+}
+
+/// `\\uhhhh` (any number of `u`s) from `i`, after the `\\u`, added to
+/// `out`; a bad one stays as written. Returns where it ends.
+fn unicode_escape(chars: &[char], mut i: usize, out: &mut String) -> usize {
+    while chars.get(i) == Some(&'u') {
+        i += 1;
+    }
+    let digits: String = chars.iter().skip(i).take(4).collect();
+    match u32::from_str_radix(&digits, 16)
+        .ok()
+        .and_then(char::from_u32)
+    {
+        Some(c) if digits.len() == 4 => {
+            out.push(c);
+            i + 4
+        }
+        _ => {
+            out.push_str("\\u");
+            i
+        }
+    }
+}
+
+/// An octal escape from `i`, after its first digit `first`: up to `\\377`.
+/// Returns where it ends.
+fn octal_escape(chars: &[char], mut i: usize, first: char, out: &mut String) -> usize {
+    let mut v = first.to_digit(8).unwrap_or(0);
+    let max = if first <= '3' { 2 } else { 1 };
+    for _ in 0..max {
+        match chars.get(i).and_then(|c| c.to_digit(8)) {
+            Some(d) => {
+                v = v * 8 + d;
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    out.push(char::from_u32(v).unwrap_or('\0'));
+    i
 }
 
 /// The value of a string expression whose text is fully known: a literal,

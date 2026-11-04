@@ -1550,47 +1550,14 @@ fn compares_one_variable_in_a_chain(if_statement: Node, src: &[u8]) -> bool {
     }) {
         return false;
     }
-    let tested = |cond: Node| -> Option<&[u8]> {
-        let inner = if cond.kind() == "parenthesized_expression" {
-            cond.named_child(0)?
-        } else {
-            cond
-        };
-        match inner.kind() {
-            "binary_expression"
-                if inner
-                    .child_by_field_name("operator")
-                    .is_some_and(|o| text(o, src) == b"==") =>
-            {
-                let (l, r) = (
-                    inner.child_by_field_name("left")?,
-                    inner.child_by_field_name("right")?,
-                );
-                if literal_kind(r).is_some() && l.kind() == "identifier" {
-                    Some(text(l, src))
-                } else if literal_kind(l).is_some() && r.kind() == "identifier" {
-                    Some(text(r, src))
-                } else {
-                    None
-                }
-            }
-            "method_invocation" if method_name(inner, src) == b"equals" => {
-                let arg = call_arguments(inner).first().copied()?;
-                let obj = inner.child_by_field_name("object")?;
-                if obj.kind() == "identifier" && literal_kind(arg).is_some() {
-                    Some(text(obj, src))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    };
     let mut links = 0;
     let mut variable: Option<&[u8]> = None;
     let mut cur = if_statement;
     loop {
-        let Some(v) = cur.child_by_field_name("condition").and_then(tested) else {
+        let Some(v) = cur
+            .child_by_field_name("condition")
+            .and_then(|c| tested_variable(c, src))
+        else {
             return false;
         };
         if variable.is_some_and(|x| x != v) {
@@ -1604,6 +1571,44 @@ fn compares_one_variable_in_a_chain(if_statement: Node, src: &[u8]) -> bool {
         }
     }
     links >= 3
+}
+
+/// The variable a condition compares to a literal: `x == 1`, `1 == x`,
+/// `x.equals("a")`.
+fn tested_variable<'s>(cond: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let inner = if cond.kind() == "parenthesized_expression" {
+        cond.named_child(0)?
+    } else {
+        cond
+    };
+    match inner.kind() {
+        "binary_expression"
+            if inner
+                .child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == b"==") =>
+        {
+            compared_to_literal(inner, src)
+        }
+        "method_invocation" if method_name(inner, src) == b"equals" => {
+            let arg = call_arguments(inner).first().copied()?;
+            let obj = inner.child_by_field_name("object")?;
+            (obj.kind() == "identifier" && literal_kind(arg).is_some()).then(|| text(obj, src))
+        }
+        _ => None,
+    }
+}
+
+/// The variable on one side of `==` when the other side is a literal.
+fn compared_to_literal<'s>(binary: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let l = binary.child_by_field_name("left")?;
+    let r = binary.child_by_field_name("right")?;
+    if literal_kind(r).is_some() && l.kind() == "identifier" {
+        Some(text(l, src))
+    } else if literal_kind(l).is_some() && r.kind() == "identifier" {
+        Some(text(r, src))
+    } else {
+        None
+    }
 }
 
 fn nests_min_and_max(call: Node, src: &[u8]) -> bool {

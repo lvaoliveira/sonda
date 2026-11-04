@@ -1397,33 +1397,44 @@ fn operands_are_identical(binary: Node, src: &[u8]) -> bool {
     ) {
         return false;
     }
-    // `false ^ true ^ false`: a boolean literal repeated along the chain.
-    if matches!(op, b"^" | b"&" | b"|" | b"&&" | b"||")
-        && binary
-            .parent()
-            .is_none_or(|p| !(p.kind() == "binary_expression" && operator_text(p, src) == op))
-    {
-        let mut operands = Vec::new();
-        let mut stack = vec![binary];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "binary_expression" && operator_text(n, src) == op {
-                stack.extend(n.child_by_field_name("left"));
-                stack.extend(n.child_by_field_name("right"));
-            } else if matches!(n.kind(), "true" | "false") {
-                operands.push(text(n, src));
-            }
-        }
-        operands.sort_unstable();
-        if operands.windows(2).any(|w| w[0] == w[1]) {
-            return true;
-        }
+    let boolean_operation = matches!(op, b"^" | b"&" | b"|" | b"&&" | b"||");
+    if boolean_operation && repeats_a_boolean_literal(binary, op, src) {
+        return true;
     }
     // `x != x` is how NaN is tested for.
     if matches!(op, b"==" | b"!=") && matches!(left.kind(), "identifier" | "field_access") {
         return false;
     }
-    // `false ^ false` and `true && true` are as redundant as any other pair.
-    let boolean_operation = matches!(op, b"^" | b"&" | b"|" | b"&&" | b"||");
+    same_plain_operands(left, right, boolean_operation, src)
+}
+
+/// `false ^ true ^ false`: a boolean literal repeated along the chain of
+/// `op` that `binary` heads.
+fn repeats_a_boolean_literal(binary: Node, op: &[u8], src: &[u8]) -> bool {
+    if binary
+        .parent()
+        .is_some_and(|p| p.kind() == "binary_expression" && operator_text(p, src) == op)
+    {
+        return false;
+    }
+    let mut operands = Vec::new();
+    let mut stack = vec![binary];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "binary_expression" && operator_text(n, src) == op {
+            stack.extend(n.child_by_field_name("left"));
+            stack.extend(n.child_by_field_name("right"));
+        } else if matches!(n.kind(), "true" | "false") {
+            operands.push(text(n, src));
+        }
+    }
+    operands.sort_unstable();
+    operands.windows(2).any(|w| w[0] == w[1])
+}
+
+/// The same operand on both sides, other than a literal (but `false ^
+/// false` and `true && true` are as redundant as any other pair), with no
+/// call, update or allocation that could make the two differ.
+fn same_plain_operands(left: Node, right: Node, boolean_operation: bool, src: &[u8]) -> bool {
     let literal = matches!(
         left.kind(),
         "true" | "false" if !boolean_operation

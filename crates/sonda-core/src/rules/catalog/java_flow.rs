@@ -538,32 +538,36 @@ fn declared_type_names(
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.as_ref().is_none_or(|(k, _)| *k != key) {
-            let mut names = HashSet::new();
-            let mut cursor = root.walk();
-            'walk: loop {
-                let n = cursor.node();
-                if matches!(
-                    n.kind(),
-                    "class_declaration"
-                        | "interface_declaration"
-                        | "record_declaration"
-                        | "enum_declaration"
-                ) {
-                    names.insert(name_text(n, src).to_vec());
-                }
-                if cursor.goto_first_child() {
-                    continue;
-                }
-                while !cursor.goto_next_sibling() {
-                    if !cursor.goto_parent() {
-                        break 'walk;
-                    }
-                }
-            }
-            *c = Some((key, names));
+            *c = Some((key, type_names(root, src)));
         }
         c.as_ref().is_some_and(|(_, names)| has(names))
     })
+}
+
+/// The names of the classes, interfaces, records and enums under `root`.
+fn type_names(root: Node, src: &[u8]) -> HashSet<Vec<u8>> {
+    let mut names = HashSet::new();
+    let mut cursor = root.walk();
+    loop {
+        let n = cursor.node();
+        if matches!(
+            n.kind(),
+            "class_declaration"
+                | "interface_declaration"
+                | "record_declaration"
+                | "enum_declaration"
+        ) {
+            names.insert(name_text(n, src).to_vec());
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return names;
+            }
+        }
+    }
 }
 
 pub(super) fn find_declared_type<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
@@ -595,41 +599,36 @@ pub(super) fn superclass_name<'s>(class: Node, src: &'s [u8]) -> Option<&'s [u8]
 
 // ---- flow
 
+/// The statements an unlabelled `break` inside them leaves.
+const BREAK_TARGETS: &[&str] = &[
+    "while_statement",
+    "do_statement",
+    "for_statement",
+    "enhanced_for_statement",
+    "switch_expression",
+    "switch_statement",
+];
+
+/// `System.exit(...)`.
+fn is_system_exit(n: Node, src: &[u8]) -> bool {
+    method_name(n, src) == b"exit"
+        && n.child_by_field_name("object")
+            .is_some_and(|o| text(o, src) == b"System")
+}
+
 fn can_exit(body: Node, src: &[u8]) -> bool {
     let mut stack = vec![(body, false)];
     while let Some((n, inner)) = stack.pop() {
         match n.kind() {
             "return_statement" | "throw_statement" => return true,
-            "break_statement" => {
-                if inner || n.named_child_count() > 0 {
-                    // a labelled break may leave this loop; an inner one is for the inner loop
-                    if n.named_child_count() > 0 {
-                        return true;
-                    }
-                } else {
-                    return true;
-                }
-            }
-            "method_invocation"
-                if method_name(n, src) == b"exit"
-                    && n.child_by_field_name("object")
-                        .is_some_and(|o| text(o, src) == b"System") =>
-            {
-                return true;
-            }
+            // A labelled break may leave this loop; an unlabelled one inside
+            // an inner loop or switch is for that one.
+            "break_statement" if !inner || n.named_child_count() > 0 => return true,
+            "method_invocation" if is_system_exit(n, src) => return true,
             "lambda_expression" | "class_declaration" | "class_body" => continue,
             _ => {}
         }
-        let nested = inner
-            || matches!(
-                n.kind(),
-                "while_statement"
-                    | "do_statement"
-                    | "for_statement"
-                    | "enhanced_for_statement"
-                    | "switch_expression"
-                    | "switch_statement"
-            );
+        let nested = inner || BREAK_TARGETS.contains(&n.kind());
         let mut cursor = n.walk();
         for c in n.named_children(&mut cursor) {
             stack.push((c, nested));
@@ -811,61 +810,90 @@ fn optional_is_read_without_a_check(call: Node, src: &[u8]) -> bool {
 fn null_variable_is_dereferenced<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let items = statements(block);
     for (i, decl) in items.iter().enumerate() {
-        if decl.kind() != "local_variable_declaration" {
-            continue;
-        }
-        let Some(declarator) = children_of_kind(*decl, "variable_declarator")
-            .into_iter()
-            .next()
-        else {
+        let Some(name) = null_initialized_name(*decl, src) else {
             continue;
         };
-        if !declarator
-            .child_by_field_name("value")
-            .is_some_and(|v| v.kind() == "null_literal")
-        {
-            continue;
-        }
-        let Some(name) = declarator.child_by_field_name("name").map(|n| text(n, src)) else {
-            continue;
-        };
-        for later in &items[i + 1..] {
-            let Some(first) =
-                find_node(*later, |n| n.kind() == "identifier" && text(n, src) == name)
-            else {
-                continue;
-            };
-            let parent = first.parent()?;
-            // the first mention in a loop or branch may follow an assignment further down
-            let nested = !matches!(
-                later.kind(),
-                "expression_statement" | "local_variable_declaration" | "return_statement"
-            );
-            let assigned_somewhere = items[i + 1..].iter().any(|s| {
-                find_node(*s, |n| {
-                    n.kind() == "assignment_expression"
-                        && n.child_by_field_name("left")
-                            .is_some_and(|l| l.kind() == "identifier" && text(l, src) == name)
-                })
-                .is_some()
-            });
-            if nested && assigned_somewhere {
-                return None;
-            }
-            let dereferenced = match parent.kind() {
-                "method_invocation" | "field_access" => {
-                    parent.child_by_field_name("object") == Some(first)
-                }
-                "array_access" => parent.child_by_field_name("array") == Some(first),
-                _ => false,
-            };
-            if dereferenced {
-                return Some(parent);
-            }
-            break;
+        match first_use(&items[i + 1..], name, src) {
+            FirstUse::Dereference(at) => return Some(at),
+            FirstUse::Unknown => return None,
+            FirstUse::Safe => {}
         }
     }
     None
+}
+
+/// The variable `T x = null;` declares (its first declarator).
+fn null_initialized_name<'s>(decl: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    if decl.kind() != "local_variable_declaration" {
+        return None;
+    }
+    let declarator = children_of_kind(decl, "variable_declarator")
+        .into_iter()
+        .next()?;
+    if !declarator
+        .child_by_field_name("value")
+        .is_some_and(|v| v.kind() == "null_literal")
+    {
+        return None;
+    }
+    declarator.child_by_field_name("name").map(|n| text(n, src))
+}
+
+/// What the first mention of a null variable does with it.
+enum FirstUse<'t> {
+    /// Dereferences it, at this node.
+    Dereference(Node<'t>),
+    /// Something else, or there's none.
+    Safe,
+    /// Can't tell: stop looking in this block.
+    Unknown,
+}
+
+fn first_use<'t>(later: &[Node<'t>], name: &[u8], src: &[u8]) -> FirstUse<'t> {
+    for statement in later {
+        let Some(first) = find_node(*statement, |n| {
+            n.kind() == "identifier" && text(n, src) == name
+        }) else {
+            continue;
+        };
+        let Some(parent) = first.parent() else {
+            return FirstUse::Unknown;
+        };
+        // The first mention in a loop or branch may follow an assignment
+        // further down.
+        let nested = !matches!(
+            statement.kind(),
+            "expression_statement" | "local_variable_declaration" | "return_statement"
+        );
+        if nested && assigned_in(later, name, src) {
+            return FirstUse::Unknown;
+        }
+        let dereferenced = match parent.kind() {
+            "method_invocation" | "field_access" => {
+                parent.child_by_field_name("object") == Some(first)
+            }
+            "array_access" => parent.child_by_field_name("array") == Some(first),
+            _ => false,
+        };
+        return if dereferenced {
+            FirstUse::Dereference(parent)
+        } else {
+            FirstUse::Safe
+        };
+    }
+    FirstUse::Safe
+}
+
+/// Whether any of `statements` assigns to the variable `name`.
+fn assigned_in(statements: &[Node], name: &[u8], src: &[u8]) -> bool {
+    statements.iter().any(|s| {
+        find_node(*s, |n| {
+            n.kind() == "assignment_expression"
+                && n.child_by_field_name("left")
+                    .is_some_and(|l| l.kind() == "identifier" && text(l, src) == name)
+        })
+        .is_some()
+    })
 }
 
 fn resource_is_never_closed<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
