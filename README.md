@@ -2,7 +2,7 @@
 
 Open-source static analysis and quality gates, in the spirit of SonarQube, as a single fast binary.
 
-sonda scans JavaScript/TypeScript, Python, Java, C/C++ and C# code for bugs, vulnerabilities and code smells. It measures size, complexity, duplication and coverage, and fails your CI build when **new code** does not meet your quality gate.
+sonda scans JavaScript/TypeScript, Python, Java, C/C++, C# and Rust code for bugs, vulnerabilities and code smells. It measures size, complexity, duplication and coverage, and fails your CI build when **new code** does not meet your quality gate.
 
 ```
 $ sonda scan . --new-code origin/main --coverage coverage/lcov.info
@@ -213,7 +213,7 @@ sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate t
 - [ ] Baseline file to accept existing issues without suppressing them line by line
 - [x] Server: store analyses, track trends, web dashboard, users and roles
 - [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md))
-- [ ] More languages (Go, Rust, C#, PHP, Ruby, Kotlin)
+- [ ] More languages (Go, PHP, Ruby, Kotlin)
 - [ ] Data-flow analysis for injection-style vulnerabilities
 
 Smaller deferred items, with why each waits, are in [docs/roadmap.md](docs/roadmap.md).
