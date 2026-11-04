@@ -560,7 +560,7 @@ function CreateUser({ onCreated, onError }: Readonly<{ onCreated: (username: str
         <label className="flex items-center gap-2 self-center text-[13px]">
           <input type="checkbox" checked={service} onChange={(e) => setService(e.target.checked)} className="accent-brand" />
           <span>
-            <span>Service user</span>
+            Service user
             <span className="block text-xs text-fg-faint">No password, can’t sign in: owns CI tokens.</span>
           </span>
         </label>
