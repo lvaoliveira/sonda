@@ -20,7 +20,7 @@ export async function copyText(text: string): Promise<boolean> {
   area.value = text
   area.setAttribute('readonly', '')
   Object.assign(area.style, { position: 'fixed', top: '0', left: '0', opacity: '0' })
-  document.body.appendChild(area)
+  document.body.append(area)
   area.select()
   try {
     return document.execCommand('copy')

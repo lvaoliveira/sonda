@@ -575,7 +575,7 @@ function mockPrompt(issues: IssueDetail[], total: number): string {
   const projects = [...new Set(issues.map((i) => i.project))].join(', ')
   const lines = [`# Fix ${issues.length} sonda ${issues.length === 1 ? 'issue' : 'issues'} in ${projects}`, '', 'sonda, a static analyzer, found these in the code. Fix each one.']
   if (total > issues.length) lines.push('', `These are ${issues.length} of the ${total} issues that match.`)
-  for (const file of [...new Set(issues.map((i) => i.file))].sort()) {
+  for (const file of [...new Set(issues.map((i) => i.file))].sort((a, b) => a.localeCompare(b))) {
     lines.push('', `## \`${file}\``)
     for (const i of issues.filter((x) => x.file === file).sort((a, b) => a.line - b.line)) lines.push('', `### Line ${i.line}: ${i.message}`, '', `\`${i.rule}\` · ${i.severity} ${i.category.replace('_', ' ')}`)
   }
