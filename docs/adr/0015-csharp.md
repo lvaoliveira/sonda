@@ -69,6 +69,24 @@ findings settle it:
   example show static members only. Counting nested types would add 107
   findings, nearly all properties named after another nested type.
 
+The other partial rules need what sonda doesn't have:
+
+- the project file: S3904, S3990, S3992, S4026 (generated assembly
+  attributes) and S6967 (a validation library such as FluentValidation
+  excuses an action);
+- the target framework: S6618 and S6966 recommend APIs newer than .NET
+  Standard 2.0 (ADR-0022);
+- taint or inter-procedural analysis: S2077, S5766;
+- generated code: S2333 (a `partial` another generator's part completes);
+- types outside the .NET packs: S6377 (`SignedXml` is a package's);
+- settings the documentation doesn't give: S2068's name patterns, S6418's
+  entropy threshold;
+- a definition the documentation doesn't settle: S2245 (which contexts need
+  a secure generator), S4261 (`ValueTask` and async streams, which TAP
+  names with Async but the text leaves out);
+- more work: S2930 (its tracked types and factories), S3925 (nine
+  serialization checks), S5856 (a .NET regex parser).
+
 ### Suppressions
 
 Code that SonarQube analyzed carries its suppressions: `#pragma warning
