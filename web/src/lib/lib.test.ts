@@ -4,7 +4,7 @@ import { queryIssues } from '@/api/mock/query'
 import type { IssueDetail } from '@/api/types'
 import { areaPoints, linePoints, ringDash, waffleCells } from './charts'
 import { isRepository, localServer, newFileUrl, newSecretUrl, parseRepository, projectKeyFor, serverProblem, workflowYaml } from './connect'
-import { compactCount, formatAge, formatEffort } from './format'
+import { compactCount, formatAge, formatEffort, trimTrailing } from './format'
 import { initials } from './identity'
 import { DEFAULT_FILTER, filterFromParams, issueSearchParams, toQuery } from './issues'
 import { languageLabel, projectScore, SEVERITY } from './visual'
@@ -247,5 +247,14 @@ describe('copying', () => {
     expect(document.querySelector('textarea')).toBeNull()
     document.execCommand = () => false
     expect(await copyText('x')).toBe(false)
+  })
+})
+
+describe('trimming', () => {
+  it('drops only trailing characters, however many', () => {
+    expect(trimTrailing('sonda-a--', '-')).toBe('sonda-a')
+    expect(trimTrailing('http://x/'.concat('/'.repeat(50_000)), '/')).toBe('http://x')
+    expect(trimTrailing('---', '-')).toBe('')
+    expect(trimTrailing('a-b', '-')).toBe('a-b')
   })
 })

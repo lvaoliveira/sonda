@@ -28,7 +28,7 @@ export function parseRepository(input: string): string | null {
   const text = input.trim()
   const path = text.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/(.+)$/i)?.[1] ?? text.match(/^git@github\.com:(.+)$/i)?.[1] ?? (text.includes(':') ? null : text)
   if (path === null) return null
-  const [owner = '', name = ''] = path.replace(/[?#].*$/, '').split('/')
+  const [owner = '', name = ''] = path.split(/[?#]/, 1)[0].split('/')
   const repository = `${owner}/${name.replace(/\.git$/, '')}`
   return isRepository(repository) ? repository : null
 }

@@ -41,14 +41,15 @@ TIERS = ("syntactic", "types", "dataflow")
 # Rule keys sonda leaves out on purpose, by SonarQube language key: why, and
 # the decision record that says what would change it. Listed in the summary
 # while they're still todo.
+CSHARP_ADR = "../adr/0015-csharp.md"
 KNOWN_GAPS = {
     "cs": {
         "S1944": ("Invalid casts: needs the values reaching a cast and types from other files.",
-                  "../adr/0015-csharp.md"),
+                  CSHARP_ADR),
         "S3220": ("Calls resolving to a `params` overload: needs C#'s overload resolution.",
-                  "../adr/0015-csharp.md"),
+                  CSHARP_ADR),
         "S6802": ("Lambdas in loops in Blazor markup: checks `.razor` files, which sonda doesn't parse.",
-                  "../adr/0015-csharp.md"),
+                  CSHARP_ADR),
     },
 }
 
@@ -99,6 +100,130 @@ def number(key):
     return (int(digits) if digits else 10**9, key)
 
 
+def rule_status(rule, exact, related):
+    """Where sonda stands on one SonarQube rule."""
+    if rule["status"] == "DEPRECATED":
+        return "deprecated"
+    if rule["isTemplate"]:
+        return "template"
+    if exact:
+        return "done"
+    if related:
+        return "partial"
+    return "todo"
+
+
+def language_rows(server, token, sonda, lang, sonda_langs, profile, expected):
+    """One row per SonarQube rule of `lang`. Records in `expected` the
+    standards SonarQube gives the keys each sonda rule covers exactly."""
+    rules = all_rules(server, token, languages=lang,
+                      f="severity,sysTags,status,isTemplate,scope")
+    active = {r["key"] for r in all_rules(server, token, languages=lang, f="name",
+                                          qprofile=profile, activation="true")} \
+        if profile else set()
+    live = [r["key"] for r in rules if r["status"] != "DEPRECATED"]
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        found = dict(zip(live, pool.map(lambda k: standards(server, token, k), live)))
+    rows = []
+    for r in sorted(rules, key=lambda r: number(r["key"])):
+        short = r["key"].split(":")[1]
+        exact = [s["id"] for s in sonda if sonda_langs & set(s["languages"])
+                 and any(x["key"] == short and x["exact"] for x in s["sonar"])]
+        related = [s["id"] for s in sonda if sonda_langs & set(s["languages"])
+                   and any(x["key"] == short and not x["exact"] for x in s["sonar"])]
+        cwe, owasp = found.get(r["key"], ([], []))
+        for rule in exact:
+            seen = expected.setdefault(rule, (set(), set()))
+            seen[0].update(cwe)
+            seen[1].update(owasp)
+        rows.append({
+            "key": r["key"],
+            "type": r["type"].lower(),
+            "severity": r["severity"].lower(),
+            "default_profile": "yes" if r["key"] in active else "no",
+            "scope": r.get("scope", "").lower(),
+            "tier": tier(r),
+            "status": rule_status(r, exact, related),
+            "sonda_rule": " ".join(exact or related),
+            "cwe": " ".join(cwe),
+            "owasp_2021": " ".join(owasp),
+        })
+    return rows
+
+
+def write_csv(out, lang, rows):
+    with open(os.path.join(out, f"{lang}.csv"), "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def summary_table(summary):
+    """The counts per language, as table rows."""
+    lines = []
+    for label, rows, _ in summary:
+        if rows is None:
+            lines.append(f"| {label} | not available on this SonarQube edition | | | | | |")
+            continue
+        live = [r for r in rows if r["status"] not in ("deprecated", "template")]
+        count = lambda pred: sum(1 for r in live if pred(r))
+        todo = lambda t: count(lambda r: r["status"] == "todo" and r["tier"] == t)
+        lines.append(f"| {label} | {len(live)} | {count(lambda r: r['status'] == 'done')} | "
+                     f"{count(lambda r: r['status'] == 'partial')} | {todo('syntactic')} | "
+                     f"{todo('types')} | {todo('dataflow')} |")
+    return lines
+
+
+def known_gaps(summary):
+    """Keys left out on purpose, while SonarQube still has them and sonda
+    still doesn't."""
+    gaps = []
+    for label, rows, lang in summary:
+        todo_keys = {r["key"].split(":")[-1] for r in rows or [] if r["status"] == "todo"}
+        for key, (why, link) in sorted(KNOWN_GAPS.get(lang, {}).items()):
+            if key in todo_keys:
+                gaps.append(f"| {label} | {key} | {why} [Why]({link}) |")
+    if not gaps:
+        return []
+    return [
+        "",
+        "## Known gaps",
+        "",
+        "Rules sonda leaves out on purpose, and the decision records that say what",
+        "would change that.",
+        "",
+        "| Language | Key | Reason |",
+        "|---|---|---|",
+        *gaps,
+    ]
+
+
+def standards_drift(sonda, expected):
+    """What sonda records against what SonarQube says."""
+    drift = []
+    for s in sonda:
+        # Rules with no exact key record standards of their own choosing.
+        if s["id"] not in expected:
+            continue
+        want = expected[s["id"]]
+        have = ({str(c) for c in s.get("cwe", [])}, set(s.get("owasp_2021", [])))
+        if have != want:
+            drift.append(f"| `{s['id']}` | {fmt(have)} | {fmt(want)} |")
+    lines = [
+        "",
+        "## Security standards",
+        "",
+        "CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with",
+        "SonarQube's for the keys each rule covers exactly. Rules without an exact key",
+        "aren't compared.",
+        "",
+    ]
+    if drift:
+        return lines + [f"{len(drift)} rules differ:", "",
+                        "| Rule | sonda | SonarQube |", "|---|---|---|", *drift]
+    return lines + ["All match."]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--server", required=True)
@@ -127,52 +252,9 @@ def main():
         if lang not in available:
             summary.append((label, None, lang))
             continue
-        rules = all_rules(args.server, token, languages=lang,
-                          f="severity,sysTags,status,isTemplate,scope")
-        active = {r["key"] for r in all_rules(args.server, token, languages=lang, f="name",
-                                              qprofile=profiles[lang], activation="true")} \
-            if lang in profiles else set()
-        live = [r["key"] for r in rules if r["status"] != "DEPRECATED"]
-        with concurrent.futures.ThreadPoolExecutor(8) as pool:
-            found = dict(zip(live, pool.map(lambda k: standards(args.server, token, k), live)))
-        rows = []
-        for r in sorted(rules, key=lambda r: number(r["key"])):
-            short = r["key"].split(":")[1]
-            exact = [s["id"] for s in sonda if sonda_langs & set(s["languages"])
-                     and any(x["key"] == short and x["exact"] for x in s["sonar"])]
-            related = [s["id"] for s in sonda if sonda_langs & set(s["languages"])
-                       and any(x["key"] == short and not x["exact"] for x in s["sonar"])]
-            if r["status"] == "DEPRECATED":
-                status = "deprecated"
-            elif r["isTemplate"]:
-                status = "template"
-            elif exact:
-                status = "done"
-            elif related:
-                status = "partial"
-            else:
-                status = "todo"
-            cwe, owasp = found.get(r["key"], ([], []))
-            for rule in exact:
-                seen = expected.setdefault(rule, (set(), set()))
-                seen[0].update(cwe)
-                seen[1].update(owasp)
-            rows.append({
-                "key": r["key"],
-                "type": r["type"].lower(),
-                "severity": r["severity"].lower(),
-                "default_profile": "yes" if r["key"] in active else "no",
-                "scope": r.get("scope", "").lower(),
-                "tier": tier(r),
-                "status": status,
-                "sonda_rule": " ".join(exact or related),
-                "cwe": " ".join(cwe),
-                "owasp_2021": " ".join(owasp),
-            })
-        with open(os.path.join(args.out, f"{lang}.csv"), "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
+        rows = language_rows(args.server, token, sonda, lang, sonda_langs,
+                             profiles.get(lang), expected)
+        write_csv(args.out, lang, rows)
         summary.append((label, rows, lang))
 
     lines = [
@@ -192,62 +274,12 @@ def main():
         "",
         "| Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |",
         "|---|---|---|---|---|---|---|",
+        *summary_table(summary),
+        *known_gaps(summary),
+        *standards_drift(sonda, expected),
+        "",
+        "Per-language details: the `.csv` files in this directory.",
     ]
-    for label, rows, _ in summary:
-        if rows is None:
-            lines.append(f"| {label} | not available on this SonarQube edition | | | | | |")
-            continue
-        live = [r for r in rows if r["status"] not in ("deprecated", "template")]
-        count = lambda pred: sum(1 for r in live if pred(r))
-        todo = lambda t: count(lambda r: r["status"] == "todo" and r["tier"] == t)
-        lines.append(f"| {label} | {len(live)} | {count(lambda r: r['status'] == 'done')} | "
-                     f"{count(lambda r: r['status'] == 'partial')} | {todo('syntactic')} | "
-                     f"{todo('types')} | {todo('dataflow')} |")
-    # Keys left out on purpose, while SonarQube still has them and sonda
-    # still doesn't.
-    gaps = []
-    for label, rows, lang in summary:
-        todo_keys = {r["key"].split(":")[-1] for r in rows or [] if r["status"] == "todo"}
-        for key, (why, link) in sorted(KNOWN_GAPS.get(lang, {}).items()):
-            if key in todo_keys:
-                gaps.append(f"| {label} | {key} | {why} [Why]({link}) |")
-    if gaps:
-        lines += [
-            "",
-            "## Known gaps",
-            "",
-            "Rules sonda leaves out on purpose, and the decision records that say what",
-            "would change that.",
-            "",
-            "| Language | Key | Reason |",
-            "|---|---|---|",
-            *gaps,
-        ]
-    # Standards drift: what sonda records against what SonarQube says.
-    drift = []
-    for s in sonda:
-        # Rules with no exact key record standards of their own choosing.
-        if s["id"] not in expected:
-            continue
-        want = expected[s["id"]]
-        have = ({str(c) for c in s.get("cwe", [])}, set(s.get("owasp_2021", [])))
-        if have != want:
-            drift.append(f"| `{s['id']}` | {fmt(have)} | {fmt(want)} |")
-    lines += [
-        "",
-        "## Security standards",
-        "",
-        "CWE ids and OWASP Top 10 2021 categories in sonda's catalog, compared with",
-        "SonarQube's for the keys each rule covers exactly. Rules without an exact key",
-        "aren't compared.",
-        "",
-    ]
-    if drift:
-        lines += [f"{len(drift)} rules differ:", "",
-                  "| Rule | sonda | SonarQube |", "|---|---|---|", *drift]
-    else:
-        lines.append("All match.")
-    lines += ["", "Per-language details: the `.csv` files in this directory."]
     with open(os.path.join(args.out, "README.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
     print("\n".join(lines[14:]))

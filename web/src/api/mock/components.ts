@@ -7,7 +7,7 @@ export function listComponents(project?: string): ComponentList {
   const components = PROJECT_LIST.projects
     .filter((p) => !project || p.key === project)
     .flatMap((p) => projectDetail(p.key)!.components.map((c) => ({ ...c, project: p.key })))
-  const owners = [...new Set(components.map((c) => c.owner).filter((o): o is string => o != null))].sort()
+  const owners = [...new Set(components.map((c) => c.owner).filter((o): o is string => o != null))].sort((a, b) => a.localeCompare(b))
   return { components, owners }
 }
 

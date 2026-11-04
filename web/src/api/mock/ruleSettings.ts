@@ -171,7 +171,7 @@ export function mockRuleSettings() {
       if (!p) throw new Error('not found')
       if (p.builtin || id === defaultId) throw new Error("sonda way and the default profile can't be deleted")
       const users = [...chosen.entries()].filter(([, v]) => v === id).map(([k]) => k)
-      if (users.length) throw new Error(`projects use this profile: ${users.sort().join(', ')}`)
+      if (users.length) throw new Error(`projects use this profile: ${users.sort((a, b) => a.localeCompare(b)).join(', ')}`)
       profiles.splice(profiles.indexOf(p), 1)
     },
     setProfileRule(id: number, rule: string, setting: ProjectRuleSetting, by: string, severity?: Severity | null, note?: string) {

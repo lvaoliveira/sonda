@@ -9,7 +9,7 @@ import { Button, Segmented } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { GateStatus } from '@/components/sonda/status'
 import { localServer, newFileUrl, newSecretUrl, parseRepository, projectKeyFor, type Runner, SECRET_NAME, serverProblem, WORKFLOW_PATH, workflowYaml } from '@/lib/connect'
-import { branchLabel } from '@/lib/format'
+import { branchLabel, trimTrailing } from '@/lib/format'
 import { copyText } from '@/lib/clipboard'
 
 /** How often Done checks for the first analysis. */
@@ -85,7 +85,7 @@ function Connect({ waiting }: { waiting: WaitingProject | null }) {
       if (!waiting) await api.createProject(projectKey, mainBranch.trim())
       const settings = await api.updateProjectSettings(projectKey, { githubRepository: repo })
       const created = await api.createToken({ name: `GitHub Actions (${repo})`, type: 'project_analysis', project: projectKey, expiresInDays: null })
-      setDone({ token: created.token, settings, runner, server: server.replace(/\/+$/, '') })
+      setDone({ token: created.token, settings, runner, server: trimTrailing(server, '/') })
     } catch (err) {
       setError((err as Error).message)
     }

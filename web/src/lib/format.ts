@@ -46,3 +46,10 @@ export function formatAge(iso: string, now = Date.now()): string {
 export function branchLabel(a: { branch: string; pullRequest: { number: number; base: string; head: string } | null }): string {
   return a.pullRequest ? `#${a.pullRequest.number} ${a.pullRequest.head} → ${a.pullRequest.base}` : a.branch
 }
+
+/** `s` without its trailing `char`s. A regex such as /-+$/ backtracks on a long run of them. */
+export function trimTrailing(s: string, char: string): string {
+  let end = s.length
+  while (end > 0 && s[end - 1] === char) end--
+  return s.slice(0, end)
+}
