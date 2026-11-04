@@ -95,6 +95,7 @@ describe('issue queries', () => {
       category: [],
       status: ['open', 'confirmed'],
       component: [],
+      language: [],
       file: '',
       assignee: ME,
       isNew: true,
@@ -114,6 +115,10 @@ describe('issue queries', () => {
     const result = filterFromParams(new URLSearchParams('new&cat=vulnerability&comp=services'))
     expect(result?.filter).toMatchObject({ isNew: true, category: ['vulnerability'], component: ['services'] })
     expect(result?.description).toBe('Showing new code · vulnerabilities · services — from the metric you clicked')
+    const csharp = filterFromParams(new URLSearchParams('lang=csharp'))
+    expect(csharp?.filter.language).toEqual(['csharp'])
+    expect(csharp?.description).toContain('C#')
+    expect(issueSearchParams(toQuery(csharp!.filter, '', 0)).get('language')).toBe('csharp')
   })
 
   it('ignores empty or unknown drill-down parameters', () => {

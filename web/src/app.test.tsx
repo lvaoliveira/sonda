@@ -45,6 +45,18 @@ describe('Issues', () => {
     for (const row of rows) expect(row).toHaveTextContent('Vulnerability')
   })
 
+  it('filters by language, counting each one', async () => {
+    const user = userEvent.setup()
+    renderAt('/issues')
+    const filters = await screen.findByRole('complementary', { name: 'Filters' })
+    const languages = within(filters).getByRole('group', { name: 'Language' })
+    const rust = within(languages).getByRole('checkbox', { name: /Rust/ })
+    expect(rust.closest('label')).toHaveTextContent('Rust2')
+    await user.click(rust)
+    await waitFor(() => expect(within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')).toHaveLength(2))
+    for (const row of within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')) expect(row).toHaveTextContent('.rs')
+  })
+
   it('copies an issue, or the list, as a prompt for an AI assistant', async () => {
     const user = userEvent.setup()
     renderAt('/issues')
@@ -307,7 +319,7 @@ describe('Projects', () => {
     await user.click(within(within(measures).getByText('Bugs').parentElement!).getByRole('link'))
     expect(await screen.findByText(/payments-platform on main/)).toBeInTheDocument()
     const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
-    const bugs = (await createMockApi(0).issues({ project: 'payments-platform', branch: 'main', severity: [], category: ['bug'], status: ['open', 'confirmed'], component: [], file: '', isNew: false, offset: 0, limit: 50 })).total
+    const bugs = (await createMockApi(0).issues({ project: 'payments-platform', branch: 'main', severity: [], category: ['bug'], status: ['open', 'confirmed'], component: [], language: [], file: '', isNew: false, offset: 0, limit: 50 })).total
     expect(rows).toHaveLength(Math.min(bugs, 50))
     expect(screen.getByRole('checkbox', { name: /Bug/ })).toBeChecked()
     // Clearing the drill-down keeps to the project.

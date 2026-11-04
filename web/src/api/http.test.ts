@@ -39,9 +39,9 @@ describe('the HTTP API client', () => {
   it("asks for a prompt with the list's filters or the chosen ids, and returns its Markdown", async () => {
     const { fn, calls } = fakeFetch(() => new Response('# Fix 2 sonda issues in shop\n', { headers: { 'Content-Type': 'text/markdown; charset=utf-8' } }))
     const api = createHttpApi('/api', fn)
-    const query = { project: 'shop', severity: [], category: ['bug' as const], status: [], component: [], file: '', isNew: false, offset: 100, limit: 50 }
+    const query = { project: 'shop', severity: [], category: ['bug' as const], status: [], component: [], language: ['csharp'], file: '', isNew: false, offset: 100, limit: 50 }
     expect(await api.issuesPrompt(query, [3, 5])).toBe('# Fix 2 sonda issues in shop\n')
-    expect(calls[0].url).toBe('/api/issues/prompt?project=shop&category=bug&limit=50&ids=3%2C5')
+    expect(calls[0].url).toBe('/api/issues/prompt?project=shop&category=bug&language=csharp&limit=50&ids=3%2C5')
   })
 
   it('sends an expired session back to sign-in', async () => {

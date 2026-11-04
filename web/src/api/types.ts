@@ -208,7 +208,7 @@ export type TriageStatus = Exclude<IssueStatus, 'fixed'>
 /** Statuses that need a reason, and leave the counts and the gate (ADR-0014). */
 export const DECIDED: readonly TriageStatus[] = ['accepted', 'false_positive']
 
-export type FacetKey = 'severity' | 'category' | 'status' | 'component'
+export type FacetKey = 'severity' | 'category' | 'status' | 'component' | 'language'
 
 /** Filters and paging for `issues()`. Empty lists match everything. */
 /** The most issues one prompt for an AI assistant carries, as the server limits it. */
@@ -226,6 +226,8 @@ export interface IssueQuery {
   component: string[]
   /** Any part of the path. */
   file: string
+  /** Languages as sonda names them: `csharp`, `typescript`, ... */
+  language: string[]
   assignee?: string
   isNew: boolean
   offset: number
