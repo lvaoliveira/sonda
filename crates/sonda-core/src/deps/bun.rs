@@ -94,50 +94,11 @@ fn strict_json(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
-    // Skips whitespace and comments from `i`; returns where they end.
-    let skip_blank = |mut i: usize| {
-        loop {
-            match (chars.get(i), chars.get(i + 1)) {
-                (Some(c), _) if c.is_whitespace() => i += 1,
-                (Some('/'), Some('/')) => {
-                    while chars.get(i).is_some_and(|&c| c != '\n') {
-                        i += 1;
-                    }
-                }
-                (Some('/'), Some('*')) => {
-                    i += 2;
-                    while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
-                        i += 1;
-                    }
-                    i = (i + 2).min(chars.len());
-                }
-                _ => return i,
-            }
-        }
-    };
     while i < chars.len() {
         match chars[i] {
-            '"' => {
-                // Copy the string, escapes included.
-                out.push('"');
-                i += 1;
-                while i < chars.len() {
-                    out.push(chars[i]);
-                    if chars[i] == '\\' {
-                        if let Some(&c) = chars.get(i + 1) {
-                            out.push(c);
-                        }
-                        i += 2;
-                        continue;
-                    }
-                    i += 1;
-                    if chars[i - 1] == '"' {
-                        break;
-                    }
-                }
-            }
-            ',' if matches!(chars.get(skip_blank(i + 1)), Some('}' | ']')) => i += 1,
-            '/' if matches!(chars.get(i + 1), Some('/' | '*')) => i = skip_blank(i),
+            '"' => i = copy_string(&chars, i, &mut out),
+            ',' if matches!(chars.get(skip_blank(&chars, i + 1)), Some('}' | ']')) => i += 1,
+            '/' if matches!(chars.get(i + 1), Some('/' | '*')) => i = skip_blank(&chars, i),
             c => {
                 out.push(c);
                 i += 1;
@@ -145,6 +106,50 @@ fn strict_json(text: &str) -> String {
         }
     }
     out
+}
+
+/// Skips whitespace and comments from `i`; returns where they end.
+fn skip_blank(chars: &[char], mut i: usize) -> usize {
+    loop {
+        match (chars.get(i), chars.get(i + 1)) {
+            (Some(c), _) if c.is_whitespace() => i += 1,
+            (Some('/'), Some('/')) => {
+                while chars.get(i).is_some_and(|&c| c != '\n') {
+                    i += 1;
+                }
+            }
+            (Some('/'), Some('*')) => {
+                i += 2;
+                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                    i += 1;
+                }
+                i = (i + 2).min(chars.len());
+            }
+            _ => return i,
+        }
+    }
+}
+
+/// Copies the string that starts at `i`, escapes included, to `out`;
+/// returns where it ends.
+fn copy_string(chars: &[char], mut i: usize, out: &mut String) -> usize {
+    out.push('"');
+    i += 1;
+    while i < chars.len() {
+        out.push(chars[i]);
+        if chars[i] == '\\' {
+            if let Some(&c) = chars.get(i + 1) {
+                out.push(c);
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+        if chars[i - 1] == '"' {
+            break;
+        }
+    }
+    i
 }
 
 #[cfg(test)]

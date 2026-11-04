@@ -147,73 +147,9 @@ impl Pep440 {
             Some((e, rest)) => (number(e)?, rest),
             None => (0, s),
         };
-        // The release: digits and dots, up to the first letter or separator.
-        let end = rest
-            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-            .unwrap_or(rest.len());
-        let (release_text, mut tail) = rest.split_at(end);
-        let release_text = release_text.trim_end_matches('.');
-        if end < rest.len() && rest[..end].ends_with('.') {
-            // `1.0.post1`, `1.0.dev1`: the dot belongs to the suffix.
-            tail = &rest[end - 1..];
-        }
-        let mut release: Vec<u64> = release_text.split('.').map(number).collect::<Option<_>>()?;
-        while release.len() > 1 && release.last() == Some(&0) {
-            release.pop();
-        }
-
-        let mut pre = None;
-        let mut post = None;
-        let mut dev = None;
-        while !tail.is_empty() {
-            // `1.0-1`: a dash and a number alone are a post-release.
-            let implicit_post = tail
-                .strip_prefix('-')
-                .filter(|r| r.starts_with(|c: char| c.is_ascii_digit()));
-            let t = tail.trim_start_matches(['.', '-', '_']);
-            let (kind, after) = match implicit_post {
-                Some(rest) => (Suffix::Post, rest),
-                None => suffix_kind(t)?,
-            };
-            let after = after.trim_start_matches(['.', '-', '_']);
-            let digits = after.bytes().take_while(u8::is_ascii_digit).count();
-            let n = if digits == 0 {
-                0
-            } else {
-                number(&after[..digits])?
-            };
-            tail = &after[digits..];
-            // In order: pre, post, dev; each at most once.
-            if matches!(kind, Suffix::Post) && dev.is_some() {
-                return None;
-            }
-            let slot = match kind {
-                Suffix::Pre(phase) if pre.is_none() && post.is_none() && dev.is_none() => {
-                    pre = Some((phase, n));
-                    continue;
-                }
-                Suffix::Post => &mut post,
-                Suffix::Dev => &mut dev,
-                Suffix::Pre(_) => return None,
-            };
-            if slot.is_some() {
-                return None;
-            }
-            *slot = Some(n);
-        }
-        let local = match local {
-            None => Vec::new(),
-            Some(l) => l
-                .split(['.', '-', '_'])
-                .map(|seg| match number(seg) {
-                    Some(n) => Some(LocalSegment::Numeric(n)),
-                    None if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_alphanumeric()) => {
-                        Some(LocalSegment::Alpha(seg.to_string()))
-                    }
-                    None => None,
-                })
-                .collect::<Option<_>>()?,
-        };
+        let (release, tail) = release_and_tail(rest)?;
+        let (pre, post, dev) = suffixes(tail)?;
+        let local = local_segments(local)?;
         Some(Pep440 {
             epoch,
             release,
@@ -227,6 +163,94 @@ impl Pep440 {
             local,
         })
     }
+}
+
+/// The release, digits and dots up to the first letter or separator,
+/// without trailing zeros; and what follows it.
+fn release_and_tail(rest: &str) -> Option<(Vec<u64>, &str)> {
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(rest.len());
+    let (release_text, mut tail) = rest.split_at(end);
+    let release_text = release_text.trim_end_matches('.');
+    if end < rest.len() && rest[..end].ends_with('.') {
+        // `1.0.post1`, `1.0.dev1`: the dot belongs to the suffix.
+        tail = &rest[end - 1..];
+    }
+    let mut release: Vec<u64> = release_text.split('.').map(number).collect::<Option<_>>()?;
+    while release.len() > 1 && release.last() == Some(&0) {
+        release.pop();
+    }
+    Some((release, tail))
+}
+
+/// A pre-release (phase, number), post and dev: in that order, each at most
+/// once.
+type Suffixes = (Option<(u8, u64)>, Option<u64>, Option<u64>);
+
+fn suffixes(mut tail: &str) -> Option<Suffixes> {
+    let mut pre = None;
+    let mut post = None;
+    let mut dev = None;
+    while !tail.is_empty() {
+        let (kind, n, rest) = next_suffix(tail)?;
+        tail = rest;
+        if matches!(kind, Suffix::Post) && dev.is_some() {
+            return None;
+        }
+        let slot = match kind {
+            Suffix::Pre(phase) if pre.is_none() && post.is_none() && dev.is_none() => {
+                pre = Some((phase, n));
+                continue;
+            }
+            Suffix::Post => &mut post,
+            Suffix::Dev => &mut dev,
+            Suffix::Pre(_) => return None,
+        };
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(n);
+    }
+    Some((pre, post, dev))
+}
+
+/// The suffix `tail` starts with, its number (0 when it has none) and the
+/// rest.
+fn next_suffix(tail: &str) -> Option<(Suffix, u64, &str)> {
+    // `1.0-1`: a dash and a number alone are a post-release.
+    let implicit_post = tail
+        .strip_prefix('-')
+        .filter(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+    let t = tail.trim_start_matches(['.', '-', '_']);
+    let (kind, after) = match implicit_post {
+        Some(rest) => (Suffix::Post, rest),
+        None => suffix_kind(t)?,
+    };
+    let after = after.trim_start_matches(['.', '-', '_']);
+    let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+    let n = if digits == 0 {
+        0
+    } else {
+        number(&after[..digits])?
+    };
+    Some((kind, n, &after[digits..]))
+}
+
+/// The local version's segments, after `+`: numbers, or letters and digits.
+fn local_segments(local: Option<&str>) -> Option<Vec<LocalSegment>> {
+    let Some(l) = local else {
+        return Some(Vec::new());
+    };
+    l.split(['.', '-', '_'])
+        .map(|seg| match number(seg) {
+            Some(n) => Some(LocalSegment::Numeric(n)),
+            None if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_alphanumeric()) => {
+                Some(LocalSegment::Alpha(seg.to_string()))
+            }
+            None => None,
+        })
+        .collect()
 }
 
 enum Suffix {

@@ -309,6 +309,69 @@ fn parse_dependencies(
     (dependencies, warnings)
 }
 
+/// The reference new code is measured against, if any, and why that one.
+fn new_code_reference(
+    opts: &ScanOptions,
+    cfg: &Config,
+    git_timeout: Duration,
+) -> Result<(Option<String>, Basis), Error> {
+    Ok(
+        match opts.new_code_ref.as_deref().unwrap_or(&cfg.scan.new_code) {
+            "none" => (
+                None,
+                Basis::WholeProject("new code is set to \"none\"".into()),
+            ),
+            "auto" => match git::auto_reference(
+                &opts.root,
+                &git::Ci::from_env(&|name| std::env::var(name).ok()),
+                git_timeout,
+            )? {
+                Auto::Found(r, basis) => (Some(r), basis),
+                Auto::Nothing(why) => (None, Basis::WholeProject(why)),
+            },
+            r => (Some(r.to_string()), Basis::Given(r.to_string())),
+        },
+    )
+}
+
+/// Each file's analysis, or the warning for why it has none: in this
+/// process or in workers, with the same warning text in both modes, so
+/// reports do not depend on the mode.
+fn analyze_all(
+    opts: &ScanOptions,
+    cfg: &Config,
+    rules: &RuleSet,
+    paths: &[Candidate],
+    max_bytes: u64,
+    timeout: Duration,
+) -> Result<Vec<Result<FileAnalysis, String>>, Error> {
+    let load = |c: &Candidate| load_source(c, max_bytes, &cfg.scan);
+    match &opts.isolation {
+        Isolation::InProcess => {
+            let threads = opts.jobs.map_or(0, NonZeroUsize::get); // 0: rayon's default
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .map_err(|e| Error::Internal(format!("thread pool: {e}")))?;
+            Ok(pool.install(|| {
+                paths
+                    .par_iter()
+                    .map(|c| {
+                        let src = load(c)?;
+                        let deadline = Instant::now() + timeout;
+                        analysis::analyze(&c.rel, c.lang, &src, rules, cfg, deadline)
+                            .map_err(|e| format!("{}: skipped, {e}", c.rel))
+                    })
+                    .collect()
+            }))
+        }
+        Isolation::Workers { program, sandbox } => {
+            WorkerPool::new(program, cfg, timeout, opts.jobs, *sandbox)?
+                .run(paths, |c| load(c).map(|src| (c.rel.as_str(), c.lang, src)))
+        }
+    }
+}
+
 /// Everything after file discovery. Output must not depend on the order of
 /// `paths` or `warnings`, which come from filesystem iteration.
 fn scan_files(
@@ -330,22 +393,7 @@ fn scan_files(
     let timeout = Duration::from_secs(cfg.scan.file_timeout_secs);
 
     let git_timeout = Duration::from_secs(cfg.scan.git_timeout_secs);
-    let (reference, new_code_basis) =
-        match opts.new_code_ref.as_deref().unwrap_or(&cfg.scan.new_code) {
-            "none" => (
-                None,
-                Basis::WholeProject("new code is set to \"none\"".into()),
-            ),
-            "auto" => match git::auto_reference(
-                root,
-                &git::Ci::from_env(&|name| std::env::var(name).ok()),
-                git_timeout,
-            )? {
-                Auto::Found(r, basis) => (Some(r), basis),
-                Auto::Nothing(why) => (None, Basis::WholeProject(why)),
-            },
-            r => (Some(r.to_string()), Basis::Given(r.to_string())),
-        };
+    let (reference, new_code_basis) = new_code_reference(opts, cfg, git_timeout)?;
     let new_code = match &reference {
         Some(r) => {
             let started = Instant::now();
@@ -360,32 +408,7 @@ fn scan_files(
     };
 
     let started = Instant::now();
-    let load = |c: &Candidate| load_source(c, max_bytes, &cfg.scan);
-    // Same warning text in both modes, so reports do not depend on the mode.
-    let results: Vec<Result<FileAnalysis, String>> = match &opts.isolation {
-        Isolation::InProcess => {
-            let threads = opts.jobs.map_or(0, NonZeroUsize::get); // 0: rayon's default
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .map_err(|e| Error::Internal(format!("thread pool: {e}")))?;
-            pool.install(|| {
-                paths
-                    .par_iter()
-                    .map(|c| {
-                        let src = load(c)?;
-                        let deadline = Instant::now() + timeout;
-                        analysis::analyze(&c.rel, c.lang, &src, rules, cfg, deadline)
-                            .map_err(|e| format!("{}: skipped, {e}", c.rel))
-                    })
-                    .collect()
-            })
-        }
-        Isolation::Workers { program, sandbox } => {
-            WorkerPool::new(program, cfg, timeout, opts.jobs, *sandbox)?
-                .run(&paths, |c| load(c).map(|src| (c.rel.as_str(), c.lang, src)))?
-        }
-    };
+    let results = analyze_all(opts, cfg, rules, &paths, max_bytes, timeout)?;
 
     let mut files = Vec::with_capacity(results.len());
     for r in results {

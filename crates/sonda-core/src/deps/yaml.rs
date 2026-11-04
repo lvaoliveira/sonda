@@ -72,25 +72,15 @@ pub(super) fn load_all(text: &str) -> Result<Vec<Node>, String> {
             .map_err(|e| format!("not valid YAML ({e})"))?;
         let done = match event {
             Event::Scalar(value, ..) => add(&mut stack, Node::Scalar(value))?,
-            Event::SequenceStart(..) | Event::MappingStart(..) => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(format!("nested deeper than {MAX_DEPTH} levels"));
-                }
-                if matches!(stack.last(), Some(Open::Map(_, None))) {
-                    return Err(format!("line {}: a key that isn't text", mark.line()));
-                }
-                stack.push(if matches!(event, Event::SequenceStart(..)) {
-                    Open::Seq(Vec::new())
-                } else {
-                    Open::Map(Vec::new(), None)
-                });
+            Event::SequenceStart(..) => {
+                open_container(&mut stack, Open::Seq(Vec::new()), mark.line())?;
                 None
             }
-            Event::SequenceEnd | Event::MappingEnd => match stack.pop() {
-                Some(Open::Seq(items)) => add(&mut stack, Node::Seq(items))?,
-                Some(Open::Map(entries, None)) => add(&mut stack, Node::Map(entries))?,
-                _ => return Err("not valid YAML (unbalanced)".into()),
-            },
+            Event::MappingStart(..) => {
+                open_container(&mut stack, Open::Map(Vec::new(), None), mark.line())?;
+                None
+            }
+            Event::SequenceEnd | Event::MappingEnd => close_container(&mut stack)?,
             Event::Alias(_) => {
                 return Err(format!(
                     "line {}: anchors and aliases aren't read in lockfiles",
@@ -109,6 +99,29 @@ pub(super) fn load_all(text: &str) -> Result<Vec<Node>, String> {
         if let Some(root) = done {
             documents.push(root);
         }
+    }
+}
+
+/// Opens a sequence or a map inside the innermost open container, as a map
+/// value or a sequence item: not as a key, and not past `MAX_DEPTH`.
+fn open_container(stack: &mut Vec<Open>, container: Open, line: usize) -> Result<(), String> {
+    if stack.len() >= MAX_DEPTH {
+        return Err(format!("nested deeper than {MAX_DEPTH} levels"));
+    }
+    if matches!(stack.last(), Some(Open::Map(_, None))) {
+        return Err(format!("line {line}: a key that isn't text"));
+    }
+    stack.push(container);
+    Ok(())
+}
+
+/// Closes the innermost open container; returns it when it was the
+/// document's root.
+fn close_container(stack: &mut Vec<Open>) -> Result<Option<Node>, String> {
+    match stack.pop() {
+        Some(Open::Seq(items)) => add(stack, Node::Seq(items)),
+        Some(Open::Map(entries, None)) => add(stack, Node::Map(entries)),
+        _ => Err("not valid YAML (unbalanced)".into()),
     }
 }
 

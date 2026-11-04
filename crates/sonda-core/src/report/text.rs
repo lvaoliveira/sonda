@@ -45,6 +45,18 @@ fn needs_escape(c: char) -> bool {
 
 pub fn render(r: &Report) -> String {
     let mut out = String::new();
+    write_issues(&mut out, r);
+    write_duplications(&mut out, r);
+    write_vulnerabilities(&mut out, r);
+    write_warnings(&mut out, r);
+    write_summary(&mut out, r);
+    write_dependencies(&mut out, r);
+    write_gate(&mut out, r);
+    out
+}
+
+/// Each issue, under its file's path; `*` marks new code.
+fn write_issues(out: &mut String, r: &Report) {
     let mut current_file = "";
     for i in &r.issues {
         if i.path != current_file {
@@ -67,7 +79,10 @@ pub fn render(r: &Report) -> String {
             terminal_safe(&i.message)
         );
     }
+}
 
+/// The duplicated blocks, each copy with its original.
+fn write_duplications(out: &mut String, r: &Report) {
     if !r.duplications.is_empty() {
         let _ = writeln!(out, "\nDuplicated blocks");
         for d in &r.duplications {
@@ -83,7 +98,10 @@ pub fn render(r: &Report) -> String {
             );
         }
     }
+}
 
+/// The dependencies with a known vulnerability, with their fix.
+fn write_vulnerabilities(out: &mut String, r: &Report) {
     if let Some(v) = r.vulnerabilities.filter(|v| !v.is_empty()) {
         let _ = writeln!(out, "\nVulnerable dependencies");
         for f in v {
@@ -103,14 +121,20 @@ pub fn render(r: &Report) -> String {
             );
         }
     }
+}
 
+/// What the scan warns about.
+fn write_warnings(out: &mut String, r: &Report) {
     if !r.warnings.is_empty() {
         let _ = writeln!(out, "\nWarnings");
         for w in r.warnings {
             let _ = writeln!(out, "  {}", terminal_safe(w));
         }
     }
+}
 
+/// The measures, new code's included.
+fn write_summary(out: &mut String, r: &Report) {
     let m = |k: Metric| r.measures.get(&k).copied().flatten();
     let n = |k: Metric| m(k).map_or("n/a".into(), |v| format!("{v}"));
     let pct = |k: Metric| m(k).map_or("n/a".into(), |v| format!("{v:.1}%"));
@@ -145,6 +169,17 @@ pub fn render(r: &Report) -> String {
         pct(Metric::NewCoverage),
         format_minutes(m(Metric::DebtMinutes).unwrap_or(0.0) as u64)
     );
+}
+
+/// How many dependencies, by ecosystem, and how many are vulnerable.
+fn write_dependencies(out: &mut String, r: &Report) {
+    let n = |k: Metric| {
+        r.measures
+            .get(&k)
+            .copied()
+            .flatten()
+            .map_or("n/a".to_string(), |v| format!("{v}"))
+    };
     if !r.dependencies.is_empty() {
         let mut line = dependency_summary(r.dependencies);
         if let Some(v) = r.vulnerabilities {
@@ -155,7 +190,10 @@ pub fn render(r: &Report) -> String {
         }
         let _ = writeln!(out, "  {line}");
     }
+}
 
+/// The quality gate, and each of its conditions.
+fn write_gate(out: &mut String, r: &Report) {
     let _ = writeln!(
         out,
         "\nQuality gate: {}",
@@ -183,7 +221,6 @@ pub fn render(r: &Report) -> String {
             c.condition.threshold
         );
     }
-    out
 }
 
 /// Formats technical debt like SonarQube: 8-hour days.

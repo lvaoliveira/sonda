@@ -45,79 +45,117 @@ impl Coverage {
             if let Some(sf) = line.strip_prefix("SF:") {
                 current = Some(resolve(relative_path(Path::new(sf), roots)));
                 by_name.clear();
-            } else if let Some(da) = line.strip_prefix("DA:") {
-                let (Some(file), Some((ln, rest))) = (&current, da.split_once(',')) else {
-                    continue;
-                };
-                let hits = rest.split(',').next().and_then(|h| h.parse::<u64>().ok());
-                if let (Ok(ln), Some(hits)) = (ln.parse::<usize>(), hits) {
-                    let entry = self.files.entry(file.clone()).or_default();
-                    let total = entry.entry(ln).or_insert(0);
-                    *total = total.saturating_add(hits);
-                }
-            } else if let Some(brda) = line.strip_prefix("BRDA:") {
-                let Some(file) = &current else { continue };
-                let parts: Vec<&str> = brda.splitn(4, ',').collect();
-                let [ln, block, branch, taken] = parts[..] else {
-                    continue;
-                };
-                let taken = if taken == "-" {
-                    Some(0)
-                } else {
-                    taken.parse::<u64>().ok()
-                };
-                if let (Ok(ln), Some(taken)) = (ln.parse::<usize>(), taken) {
-                    let entry = self.branches.entry(file.clone()).or_default();
-                    let total = entry
-                        .entry((ln, block.to_string(), branch.to_string()))
-                        .or_insert(0);
-                    *total = total.saturating_add(taken);
-                }
-            } else if let Some(fun) = line.strip_prefix("FN:") {
-                // `FN:<line>,<name>`, or lcov 2's `FN:<line>,<end line>,<name>`.
-                let Some(file) = &current else { continue };
-                let Some((ln, rest)) = fun.split_once(',') else {
-                    continue;
-                };
-                let name = match rest.split_once(',') {
-                    Some((end, name)) if end.parse::<usize>().is_ok() => name,
-                    _ => rest,
-                };
-                if let Ok(ln) = ln.parse::<usize>() {
-                    self.functions
-                        .entry(file.clone())
-                        .or_default()
-                        .entry((ln, name.to_string()))
-                        .or_insert(0);
-                    by_name.entry(name.to_string()).or_default().push_back(ln);
-                }
-            } else if let Some(fnda) = line.strip_prefix("FNDA:") {
-                let (Some(file), Some((hits, name))) = (&current, fnda.split_once(',')) else {
-                    continue;
-                };
-                // The next function of that name; extra calls go to the
-                // last one, and calls for a function without `FN` are
-                // dropped, since it has no line to show them on.
-                let Some(lines) = by_name.get_mut(name) else {
-                    continue;
-                };
-                let ln = if lines.len() > 1 {
-                    lines.pop_front()
-                } else {
-                    lines.front().copied()
-                };
-                if let (Some(ln), Ok(hits)) = (ln, hits.parse::<u64>())
-                    && let Some(calls) = self
-                        .functions
-                        .get_mut(file)
-                        .and_then(|f| f.get_mut(&(ln, name.to_string())))
-                {
-                    *calls = calls.saturating_add(hits);
-                }
             } else if line == "end_of_record" {
                 current = None;
                 by_name.clear();
+            } else if let Some(file) = &current {
+                self.add_record_line(file, line, &mut by_name);
             }
+        }
+    }
+
+    /// One line of `file`'s record, other than `SF:` and `end_of_record`.
+    fn add_record_line(
+        &mut self,
+        file: &str,
+        line: &str,
+        by_name: &mut HashMap<String, VecDeque<usize>>,
+    ) {
+        if let Some(da) = line.strip_prefix("DA:") {
+            self.add_line_hits(file, da);
+        } else if let Some(brda) = line.strip_prefix("BRDA:") {
+            self.add_branch(file, brda);
+        } else if let Some(fun) = line.strip_prefix("FN:") {
+            self.add_function(file, fun, by_name);
+        } else if let Some(fnda) = line.strip_prefix("FNDA:") {
+            self.add_function_calls(file, fnda, by_name);
+        }
+    }
+
+    /// `DA:<line>,<hits>[,<checksum>]`.
+    fn add_line_hits(&mut self, file: &str, da: &str) {
+        let Some((ln, rest)) = da.split_once(',') else {
+            return;
+        };
+        let hits = rest.split(',').next().and_then(|h| h.parse::<u64>().ok());
+        if let (Ok(ln), Some(hits)) = (ln.parse::<usize>(), hits) {
+            let entry = self.files.entry(file.to_string()).or_default();
+            let total = entry.entry(ln).or_insert(0);
+            *total = total.saturating_add(hits);
+        }
+    }
+
+    /// `BRDA:<line>,<block>,<branch>,<taken or ->`.
+    fn add_branch(&mut self, file: &str, brda: &str) {
+        let parts: Vec<&str> = brda.splitn(4, ',').collect();
+        let [ln, block, branch, taken] = parts[..] else {
+            return;
+        };
+        let taken = if taken == "-" {
+            Some(0)
+        } else {
+            taken.parse::<u64>().ok()
+        };
+        if let (Ok(ln), Some(taken)) = (ln.parse::<usize>(), taken) {
+            let entry = self.branches.entry(file.to_string()).or_default();
+            let total = entry
+                .entry((ln, block.to_string(), branch.to_string()))
+                .or_insert(0);
+            *total = total.saturating_add(taken);
+        }
+    }
+
+    /// `FN:<line>,<name>`, or lcov 2's `FN:<line>,<end line>,<name>`.
+    fn add_function(
+        &mut self,
+        file: &str,
+        fun: &str,
+        by_name: &mut HashMap<String, VecDeque<usize>>,
+    ) {
+        let Some((ln, rest)) = fun.split_once(',') else {
+            return;
+        };
+        let name = match rest.split_once(',') {
+            Some((end, name)) if end.parse::<usize>().is_ok() => name,
+            _ => rest,
+        };
+        if let Ok(ln) = ln.parse::<usize>() {
+            self.functions
+                .entry(file.to_string())
+                .or_default()
+                .entry((ln, name.to_string()))
+                .or_insert(0);
+            by_name.entry(name.to_string()).or_default().push_back(ln);
+        }
+    }
+
+    /// `FNDA:<hits>,<name>`, for the next function of that name; extra calls
+    /// go to the last one, and calls for a function without `FN` are
+    /// dropped, since it has no line to show them on.
+    fn add_function_calls(
+        &mut self,
+        file: &str,
+        fnda: &str,
+        by_name: &mut HashMap<String, VecDeque<usize>>,
+    ) {
+        let Some((hits, name)) = fnda.split_once(',') else {
+            return;
+        };
+        let Some(lines) = by_name.get_mut(name) else {
+            return;
+        };
+        let ln = if lines.len() > 1 {
+            lines.pop_front()
+        } else {
+            lines.front().copied()
+        };
+        if let (Some(ln), Ok(hits)) = (ln, hits.parse::<u64>())
+            && let Some(calls) = self
+                .functions
+                .get_mut(file)
+                .and_then(|f| f.get_mut(&(ln, name.to_string())))
+        {
+            *calls = calls.saturating_add(hits);
         }
     }
 }
