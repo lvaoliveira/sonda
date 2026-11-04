@@ -89,7 +89,7 @@ pub(super) static RULES: &[Rule] = &[
         category: Bug,
         severity: Major,
         effort_minutes: 2,
-        sonar: &[exact("S7456")],
+        sonar: &[related("S7456")],
         check: Check::Query {
             langs: RUST,
             query: METHOD_CALL,
@@ -350,7 +350,7 @@ pub(super) static RULES: &[Rule] = &[
 
 /// Whether two expressions are the same text, comments and whitespace aside.
 /// Iterative: a deeply nested expression must not overflow the stack.
-fn same_expression(a: Node, b: Node, src: &[u8]) -> bool {
+pub(super) fn same_expression(a: Node, b: Node, src: &[u8]) -> bool {
     let mut stack = vec![(a, b)];
     while let Some((a, b)) = stack.pop() {
         if a.kind() != b.kind() || a.child_count() != b.child_count() {
@@ -370,7 +370,7 @@ fn same_expression(a: Node, b: Node, src: &[u8]) -> bool {
 
 /// Whether evaluating the expression twice differs from evaluating it once or
 /// observes something: calls, macros, assignments and awaits.
-fn has_side_effects(expression: Node) -> bool {
+pub(super) fn has_side_effects(expression: Node) -> bool {
     let mut stack = vec![expression];
     while let Some(n) = stack.pop() {
         if matches!(
@@ -395,7 +395,7 @@ fn has_side_effects(expression: Node) -> bool {
 
 /// The same expression on both sides, with nothing in it that changes between
 /// the two evaluations.
-fn same_pure_expression(a: Node, b: Node, src: &[u8]) -> bool {
+pub(super) fn same_pure_expression(a: Node, b: Node, src: &[u8]) -> bool {
     same_expression(a, b, src) && !has_side_effects(a)
 }
 
@@ -444,7 +444,7 @@ fn has_identical_operands(node: Node, src: &[u8]) -> bool {
 
 /// The value of an integer literal: decimal, hexadecimal, octal or binary,
 /// with its underscores and type suffix removed.
-fn integer_value(literal: Node, src: &[u8]) -> Option<u128> {
+pub(super) fn integer_value(literal: Node, src: &[u8]) -> Option<u128> {
     if literal.kind() != "integer_literal" {
         return None;
     }
@@ -466,12 +466,12 @@ fn integer_value(literal: Node, src: &[u8]) -> Option<u128> {
     u128::from_str_radix(&digits[..end], radix).ok()
 }
 
-fn is_integer(literal: Node, src: &[u8], value: u128) -> bool {
+pub(super) fn is_integer(literal: Node, src: &[u8], value: u128) -> bool {
     integer_value(literal, src) == Some(value)
 }
 
 /// The arguments of a call, comments left out.
-fn arguments(call: Node) -> Vec<Node> {
+pub(super) fn arguments(call: Node) -> Vec<Node> {
     let Some(args) = call.child_by_field_name("arguments") else {
         return Vec::new();
     };
@@ -482,7 +482,7 @@ fn arguments(call: Node) -> Vec<Node> {
 }
 
 /// The method a call names: `skip` in `it.skip(0)`.
-fn method<'t>(call: Node<'t>) -> Option<Node<'t>> {
+pub(super) fn method<'t>(call: Node<'t>) -> Option<Node<'t>> {
     call.child_by_field_name("function")
         .filter(|f| f.kind() == "field_expression")?
         .child_by_field_name("field")
@@ -550,7 +550,7 @@ fn modulo_one(node: Node, src: &[u8]) -> bool {
 }
 
 /// A macro call named `name`, with any path in front of it.
-fn is_macro(node: Node, src: &[u8], name: &[u8]) -> bool {
+pub(super) fn is_macro(node: Node, src: &[u8], name: &[u8]) -> bool {
     node.kind() == "macro_invocation"
         && node.child_by_field_name("macro").is_some_and(|m| {
             let t = text(m, src);
@@ -592,7 +592,7 @@ fn path_tail(function: Node, src: &[u8]) -> Option<(String, String)> {
 }
 
 /// The generic arguments written on a path: `<u32>` in `MaybeUninit::<u32>::uninit`.
-fn type_arguments<'t>(function: Node<'t>) -> Option<Node<'t>> {
+pub(super) fn type_arguments<'t>(function: Node<'t>) -> Option<Node<'t>> {
     let f = if function.kind() == "generic_function" {
         return function.child_by_field_name("type_arguments");
     } else {
@@ -751,7 +751,7 @@ fn chain_without_else<'t>(node: Node<'t>, _src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// The statements of a block, comments and attributes left out.
-fn block_items(block: Node) -> Vec<Node> {
+pub(super) fn block_items(block: Node) -> Vec<Node> {
     let mut c = block.walk();
     block
         .named_children(&mut c)
@@ -780,18 +780,49 @@ fn let_and_return<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let attributed = declaration
         .prev_named_sibling()
         .is_some_and(|p| p.kind() == "attribute_item");
-    // Returning a temporary that borrows from a guard changes when the guard
-    // drops, which Clippy checks with types: skip what usually holds one.
-    let guard = [
-        &b".lock("[..],
-        b".borrow(",
-        b".borrow_mut(",
-        b".read(",
-        b".write(",
-    ]
-    .iter()
-    .any(|m| text(value, src).windows(m.len()).any(|w| w == *m));
-    (!attributed && !guard).then_some(*tail)
+    (!attributed && !may_hold_temporary(value)).then_some(*tail)
+}
+
+/// Whether the initializer may build a temporary that lives until the end of
+/// the statement: written inline as the block's value, it would live until
+/// after the block's locals drop, which can change the program or stop it
+/// compiling. Clippy tells by type; this skips the shapes that usually do:
+/// guards, borrows, `unsafe` blocks, macros, `.await` and long method chains.
+fn may_hold_temporary(value: Node) -> bool {
+    let mut stack = vec![value];
+    while let Some(n) = stack.pop() {
+        if matches!(
+            n.kind(),
+            "unsafe_block" | "reference_expression" | "macro_invocation" | "await_expression"
+        ) {
+            return true;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    // `a.b().c().d()`: each call's result is a temporary the next borrows.
+    let (mut chain, mut n) = (0, value);
+    loop {
+        match n.kind() {
+            "call_expression" => match n
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "field_expression")
+                .and_then(|f| f.child_by_field_name("value"))
+            {
+                Some(receiver) => {
+                    chain += 1;
+                    n = receiver;
+                }
+                None => break,
+            },
+            "try_expression" | "parenthesized_expression" => match n.named_child(0) {
+                Some(inner) => n = inner,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    chain >= 3
 }
 
 fn is_bool_match(node: Node, src: &[u8]) -> bool {
@@ -1020,9 +1051,26 @@ mod tests {
         assert!(!hit("rs/let-and-return", "let x: u8 = a;\nx"));
         assert!(!hit("rs/let-and-return", "let x = a;\nlog(x);\nx"));
         assert!(!hit("rs/let-and-return", "let x = a;\nx;"));
+        // What Clippy skips, by type: temporaries that would outlive the block's locals.
         assert!(!hit(
             "rs/let-and-return",
             "let x = m.lock().unwrap().len();\nx"
+        ));
+        assert!(!hit(
+            "rs/let-and-return",
+            "let s = unsafe { v.get_unchecked(1) };\ns"
+        ));
+        assert!(!hit(
+            "rs/let-and-return",
+            "let s = String::from_utf8_lossy(&b).into_owned();\ns"
+        ));
+        assert!(!hit(
+            "rs/let-and-return",
+            "let c = it.iter().copied().map(f).collect();\nc"
+        ));
+        assert!(hit(
+            "rs/let-and-return",
+            "let t = o.to_timestamp(d).context(e)?;\nt"
         ));
         assert!(!hit("rs/let-and-return", "let y = a;\nx"));
         assert!(!hit("rs/let-and-return", "#[allow(unused)]\nlet x = a;\nx"));

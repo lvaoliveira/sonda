@@ -132,6 +132,18 @@ fn keys(name: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// The rules Clippy doesn't apply to test code: printing and globbing are
+/// how tests are written.
+pub(crate) const TEST_EXEMPT: &[&str] = &["rs/wildcard-import", "rs/print-stdout"];
+
+/// Whether a file is test code by where it is: under a `tests` directory, or
+/// a module file named `tests.rs` or `test.rs`.
+pub(crate) fn is_test_file(path: &str) -> bool {
+    let mut parts: Vec<&str> = path.split(['/', '\\']).collect();
+    let file = parts.pop().unwrap_or_default();
+    parts.contains(&"tests") || matches!(file, "tests.rs" | "test.rs")
+}
+
 /// The `clippy::name`s in the text of an attribute that allows or expects.
 fn clippy_names(attribute: &str) -> Vec<&str> {
     let allows = ["allow", "expect"].iter().any(|a| {
@@ -259,6 +271,16 @@ mod tests {
             regions_of("#[cfg_attr(test, allow(clippy::eq_op))]\nfn a() {}\n").len(),
             1
         );
+    }
+
+    #[test]
+    fn test_files_are_found_by_where_they_are() {
+        assert!(is_test_file("tests/cli.rs"));
+        assert!(is_test_file("crate/tests/sub/a.rs"));
+        assert!(is_test_file("src/range_set/tests.rs"));
+        assert!(is_test_file("src\\tests\\a.rs"));
+        assert!(!is_test_file("src/attests.rs"));
+        assert!(!is_test_file("src/lib.rs"));
     }
 
     #[test]

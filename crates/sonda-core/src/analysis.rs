@@ -106,7 +106,11 @@ pub(crate) fn analyze(
         _ => Vec::new(),
     };
     if lang == Lang::Rust {
-        issues.retain(|i| !rules::NOT_ON_RUST.contains(&i.rule));
+        let test_file = crate::rust_suppress::is_test_file(path);
+        issues.retain(|i| {
+            !rules::NOT_ON_RUST.contains(&i.rule)
+                && !(test_file && crate::rust_suppress::TEST_EXEMPT.contains(&i.rule))
+        });
     }
     issues.retain(|i| {
         // A malformed suppression comment cannot suppress the report about itself.
