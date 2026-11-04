@@ -3049,26 +3049,26 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
 /// unpacking, so the name is only ever written.
 fn only_unpacking_targets(scope: Node, name: &[u8], src: &[u8]) -> bool {
     let mut cursor = scope.walk();
-    'walk: loop {
+    loop {
         let n = cursor.node();
-        if n.kind() == "identifier" && text(n, src) == name {
-            let target = n
-                .parent()
-                .is_some_and(|p| matches!(p.kind(), "pattern_list" | "tuple_pattern"));
-            if !target {
-                return false;
-            }
+        if n.kind() == "identifier" && text(n, src) == name && !is_unpacking_target(n) {
+            return false;
         }
         if cursor.goto_first_child() {
             continue;
         }
         while !cursor.goto_next_sibling() {
             if !cursor.goto_parent() || cursor.node().id() == scope.id() {
-                break 'walk;
+                return true;
             }
         }
     }
-    true
+}
+
+/// `a` in `a, b = ...` or `(a, b) = ...`.
+fn is_unpacking_target(n: Node) -> bool {
+    n.parent()
+        .is_some_and(|p| matches!(p.kind(), "pattern_list" | "tuple_pattern"))
 }
 
 fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
