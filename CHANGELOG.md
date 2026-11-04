@@ -7,6 +7,15 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Added
+
+- **Copy as prompt**, on an issue and on the Issues list (the selected
+  issues, or the first 50 matching): Markdown for an AI assistant such as
+  Claude Code, with each issue's code and each rule's description and
+  examples, and what to do and not do. The server writes it, at `GET
+  /api/issues/prompt` ([ADR-0025](docs/adr/0025-fixing-with-an-ai-assistant.md)).
+  `GET /api/issues` takes `ids`.
+
 ## [0.2.0] - 2026-11-03
 
 Connecting GitHub no longer takes a hand-made App: Administration creates

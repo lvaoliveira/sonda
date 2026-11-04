@@ -288,11 +288,12 @@ each project's main branch. Every filter is optional:
 | `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted`, `false_positive` or `fixed` |
 | `file` | Any part of the path |
 | `assignee`, `new=true` | Assigned to someone; on new code only |
+| `ids` | Comma-separated issue ids: these only |
 | `offset`, `limit` | Paging; `limit` is 1-200, default 50 |
 
 An unknown value or parameter is a `400`, so a typo never looks like "no
 issues". The answer holds `total`, the page of `items`, and `facets`: for
-severity, category, status and component, the count per value. Each facet
+project, severity, category, status and component, the count per value. Each facet
 ignores its own selection, so choosing *critical* still shows how many
 *major* issues there are. A component is a path's top-level directory, or
 `.` for files at the root.
@@ -307,6 +308,17 @@ ignores its own selection, so choosing *critical* still shows how many
 The server highlights with a small built-in lexer, not tree-sitter: it
 runs on uploaded code inside the server process, where sonda never runs its
 C parsers (ADR-0003 keeps them in sandboxed workers).
+
+### Fixing them with an AI assistant
+
+`GET /api/issues/prompt` takes the same filters and answers Markdown to
+hand to an AI assistant such as Claude Code: the first 50 matching issues
+(`limit` 1-50), by file, each with the code around it, then each rule's
+description and examples once. It asks the assistant to change only what
+each issue needs, not to silence rules, to run the tests, and to check with
+`sonda scan`. The Issues page copies it: **Copy as prompt** on an issue, or
+on the list for the selected issues or the first 50 matching
+([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md)).
 
 `PATCH /api/issues/{id}` with `{"status": "confirmed"}` and/or
 `{"assignee": "alice"}` (`""` unassigns) changes triage. A change needs the

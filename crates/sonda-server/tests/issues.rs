@@ -263,3 +263,52 @@ async fn triage_needs_authorization_and_is_audited() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn issues_come_as_a_prompt_for_an_ai_assistant() {
+    let Some((db, _dir)) = seeded().await else {
+        return;
+    };
+    let app = http::router(state(db.pool.clone()), None);
+
+    let (status, all) = common::get(app.clone(), "/api/issues/prompt?project=payments").await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert!(
+        all.starts_with("# Fix 3 sonda issues in payments\n"),
+        "{all}"
+    );
+    for part in [
+        "## `lib/b.py`",
+        "## `src/a.js`",
+        "### `py/no-eval`: ",
+        "## The rules",
+    ] {
+        assert!(all.contains(part), "{part:?} not in\n{all}");
+    }
+    // The code around each issue, its line marked.
+    assert!(all.contains("> 1 | eval(input())"), "{all}");
+
+    // The list's filters, and its new `ids`, choose the issues.
+    let (_, list) = get(&app, "/api/issues?project=payments&severity=critical").await;
+    let first = list["items"][0]["id"].as_i64().unwrap();
+    let (_, by_id) = get(&app, &format!("/api/issues?ids={first}")).await;
+    assert_eq!(by_id["total"], 1);
+    let (_, one) = common::get(app.clone(), &format!("/api/issues/prompt?ids={first}")).await;
+    assert!(
+        one.starts_with("# Fix 1 sonda issue in payments\n"),
+        "{one}"
+    );
+    let (_, few) = common::get(app.clone(), "/api/issues/prompt?project=payments&limit=1").await;
+    assert!(
+        few.contains("These are 1 of the 3 issues that match"),
+        "{few}"
+    );
+
+    for bad in ["/api/issues/prompt?limit=51", "/api/issues?ids=1,two"] {
+        assert_eq!(
+            common::get(app.clone(), bad).await.0,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
-import type { FacetKey, IssueDetail, IssuePage, IssuePatch, IssueSummary, TriageStatus } from '@/api/types'
+import { type FacetKey, type IssueDetail, type IssuePage, type IssuePatch, type IssueSummary, PROMPT_LIMIT, type TriageStatus } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { CodeViewer } from '@/components/sonda/CodeViewer'
 import { Button, Toast, type ToastMessage } from '@/components/sonda/controls'
@@ -166,6 +166,17 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
   const setStatus = (ids: number[], status: TriageStatus, reason?: string) =>
     apply(ids, { status, ...(reason && { reason }) }, `Marked ${STATUS_LABEL[status].toLowerCase()}`)
   const assignToMe = (ids: number[]) => me && apply(ids, { assignee: me }, 'Assigned to you')
+  /** The chosen issues (whatever their status), or the first PROMPT_LIMIT matching, as a prompt for an AI assistant (ADR-0025). */
+  const copyPrompt = async (ids?: number[]) => {
+    const query = toQuery(filter, me ?? '', 0)
+    try {
+      await navigator.clipboard.writeText(await api.issuesPrompt(ids ? { ...query, status: [] } : query, ids))
+      const n = ids?.length ?? Math.min(page?.total ?? 0, PROMPT_LIMIT)
+      setToast({ text: `Copied a prompt for ${n} ${n === 1 ? 'issue' : 'issues'}: paste it into your AI assistant` })
+    } catch (e) {
+      setToast({ text: `Not copied: ${(e as Error).message}` })
+    }
+  }
 
   // j/k move, a assigns to me, c confirms (not while typing).
   useEffect(() => {
@@ -223,6 +234,16 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
               {page.total === 0 ? 'No issues' : `${formatNumber(page.offset + 1)}–${formatNumber(last)} of ${formatNumber(page.total)}`}
             </span>
             <span className="flex-1" />
+            {page.total > 0 && (
+              <button
+                type="button"
+                onClick={() => void copyPrompt(checked.length > 0 ? checked : undefined)}
+                title={checked.length > 0 ? undefined : `The first ${PROMPT_LIMIT} of these, for an AI assistant such as Claude Code`}
+                className="h-[26px] cursor-pointer rounded-md border-0 bg-transparent px-2.5 text-xs edge-strong"
+              >
+                {checked.length > 0 ? `Copy ${checked.length} as prompt` : 'Copy as prompt'}
+              </button>
+            )}
             {checked.length > 0 && (
               <span className="flex items-center gap-1.5 text-[12.5px]">
                 <span className="text-fg-muted">{checked.length} selected</span>
@@ -311,6 +332,7 @@ function Issues({ me, project }: { me: string | null; project?: string }) {
             me={me}
             onStatus={(s, reason) => setStatus([selected.id], s, reason)}
             onAssign={() => assignToMe([selected.id])}
+            onCopyPrompt={() => void copyPrompt([selected.id])}
           />
         )}
       </div>
@@ -449,6 +471,7 @@ function IssueView({
   me,
   onStatus,
   onAssign,
+  onCopyPrompt,
   onBack,
 }: {
   /** On a phone, back to the list. */
@@ -458,6 +481,8 @@ function IssueView({
   me: string | null
   onStatus: (s: TriageStatus, reason?: string) => Promise<boolean>
   onAssign: () => void
+  /** Copies this issue as a prompt for the developer's AI assistant. */
+  onCopyPrompt: () => void
 }) {
   const api = useApi()
   const detail = useAsync(() => api.issue(id), [api, id, version])
@@ -545,6 +570,9 @@ function IssueView({
             False positive
           </Button>
           {issue.status !== 'open' && issue.status !== 'fixed' && <Button onClick={() => onStatus('open')}>Reopen</Button>}
+          <Button className="ml-auto" onClick={onCopyPrompt}>
+            Copy as prompt
+          </Button>
         </div>
         {decision && (
           <ReasonForm

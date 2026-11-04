@@ -61,7 +61,8 @@ const FILTERED: &str = "
       AND (cardinality($6::text[]) = 0 OR s.component = ANY($6))
       AND ($7::text IS NULL OR strpos(s.path, $7) > 0)
       AND ($8::text IS NULL OR s.assignee = $8)
-      AND (NOT $9 OR s.is_new)";
+      AND (NOT $9 OR s.is_new)
+      AND (cardinality($10::bigint[]) = 0 OR s.id = ANY($10))";
 
 const SEVERITY_RANK: &str =
     "array_position(ARRAY['blocker','critical','major','minor','info'], s.severity)";
@@ -82,6 +83,8 @@ pub struct ListQuery {
     /// Only issues on new code.
     #[serde(default)]
     new: bool,
+    /// Comma-separated issue ids: these only, such as those selected.
+    ids: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
 }
@@ -151,6 +154,7 @@ struct Filters {
     file: Option<String>,
     assignee: Option<String>,
     new: bool,
+    ids: Vec<i64>,
 }
 
 impl Filters {
@@ -165,10 +169,21 @@ impl Filters {
             file: q.file.filter(|f| !f.is_empty()),
             assignee: q.assignee.filter(|a| !a.is_empty()),
             new: q.new,
+            ids: q
+                .ids
+                .iter()
+                .flat_map(|r| r.split(','))
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|v| {
+                    v.parse()
+                        .map_err(|_| ApiError::BadRequest(format!("issue id {v:?} isn't a number")))
+                })
+                .collect::<Result<_, _>>()?,
         })
     }
 
-    /// Binds `scoped()` and `FILTERED` parameters ($1-$9) onto `query`.
+    /// Binds `scoped()` and `FILTERED` parameters ($1-$10) onto `query`.
     /// `except` binds an empty list for that facet instead.
     fn bind<'q, O>(
         &'q self,
@@ -193,6 +208,7 @@ impl Filters {
             .bind(&self.file)
             .bind(&self.assignee)
             .bind(self.new)
+            .bind(&self.ids)
     }
 }
 
@@ -221,6 +237,69 @@ fn list(
     Ok(values)
 }
 
+/// A page of the issues `filters` match, most severe first, and how many
+/// match in all.
+async fn matching(
+    pool: &PgPool,
+    filters: &Filters,
+    offset: i64,
+    limit: i64,
+) -> sqlx::Result<(Vec<IssueView>, i64)> {
+    let (scoped, columns) = (scoped(), view_columns());
+    let items_sql = format!(
+        "{scoped} SELECT {columns} {FILTERED}
+         ORDER BY {SEVERITY_RANK}, s.project_key, s.path, s.line, s.id
+         OFFSET $11 LIMIT $12"
+    );
+    let items: Vec<IssueView> = filters
+        .bind(sqlx::query_as(sqlx::AssertSqlSafe(items_sql)), None)
+        .bind(offset)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+    let (total,): (i64,) = filters
+        .bind(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "{scoped} SELECT count(*) {FILTERED}"
+            ))),
+            None,
+        )
+        .fetch_one(pool)
+        .await?;
+    Ok((items, total))
+}
+
+/// `GET /api/issues/prompt`: the issues the list's filters match (or
+/// `ids`), at most 50, as Markdown a developer hands to their AI assistant
+/// to fix them (ADR-0025). The rules' explanations come once, after the
+/// issues.
+pub async fn prompt(
+    axum::extract::State(state): axum::extract::State<State>,
+    Query(q): Query<ListQuery>,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    let limit = q.limit.unwrap_or(crate::prompt::MAX_ISSUES);
+    if !(1..=crate::prompt::MAX_ISSUES).contains(&limit) {
+        return Err(ApiError::BadRequest(format!(
+            "limit must be 1-{}",
+            crate::prompt::MAX_ISSUES
+        )));
+    }
+    let filters = Filters::parse(q)?;
+    let (items, total) = matching(&state.pool, &filters, 0, limit).await?;
+    let mut issues = Vec::with_capacity(items.len());
+    for issue in items {
+        let source = source_of(&state.pool, issue.id).await?;
+        issues.push((issue, source));
+    }
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/markdown; charset=utf-8",
+        )],
+        crate::prompt::render(&issues, total),
+    ))
+}
+
 pub async fn list_issues(
     axum::extract::State(state): axum::extract::State<State>,
     Query(q): Query<ListQuery>,
@@ -233,28 +312,8 @@ pub async fn list_issues(
         )));
     }
     let filters = Filters::parse(q)?;
-
-    let (scoped, columns) = (scoped(), view_columns());
-    let items_sql = format!(
-        "{scoped} SELECT {columns} {FILTERED}
-         ORDER BY {SEVERITY_RANK}, s.project_key, s.path, s.line, s.id
-         OFFSET $10 LIMIT $11"
-    );
-    let items: Vec<IssueView> = filters
-        .bind(sqlx::query_as(sqlx::AssertSqlSafe(items_sql)), None)
-        .bind(offset)
-        .bind(limit)
-        .fetch_all(&state.pool)
-        .await?;
-    let (total,): (i64,) = filters
-        .bind(
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "{scoped} SELECT count(*) {FILTERED}"
-            ))),
-            None,
-        )
-        .fetch_one(&state.pool)
-        .await?;
+    let (items, total) = matching(&state.pool, &filters, offset, limit).await?;
+    let scoped = scoped();
 
     let mut facets = BTreeMap::new();
     for (name, column) in [
@@ -331,9 +390,9 @@ async fn view(pool: &PgPool, id: i64) -> Result<IssueView, ApiError> {
         .ok_or(ApiError::NotFound)
 }
 
-async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
-    let issue = view(pool, id).await?;
-    let source: Option<String> = sqlx::query_scalar(
+/// The file an issue is in, as of the latest analysis that saw it.
+async fn source_of(pool: &PgPool, id: i64) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar(
         "SELECT src.content FROM issues i
          JOIN analysis_files f ON f.analysis_id = i.last_analysis_id AND f.path = i.path
          JOIN sources src ON src.sha256 = f.sha256
@@ -341,7 +400,12 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
     )
     .bind(id)
     .fetch_optional(pool)
-    .await?;
+    .await
+}
+
+async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
+    let issue = view(pool, id).await?;
+    let source = source_of(pool, id).await?;
     let lang = issue.language.as_deref().and_then(|l| {
         sonda_core::lang::ALL
             .iter()
