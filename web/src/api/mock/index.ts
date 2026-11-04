@@ -303,8 +303,8 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
     },
     deleteQualityGate: async (id) => {
       requireAdmin()
-      const using = usingGate(id)
-      if (using.length > 0) throw new Error(`projects use this gate: ${using.join(', ')}; choose another for them first`)
+      const users = usingGate(id)
+      if (users.length > 0) throw new Error(`projects use this gate: ${users.join(', ')}; choose another for them first`)
       const at = serverGates.findIndex((x) => x.id === id)
       if (at < 0) throw new Error('not found')
       serverGates.splice(at, 1)
