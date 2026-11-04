@@ -25,6 +25,7 @@ pub(crate) const JAVA: &[Lang] = &[Lang::Java];
 pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
 pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
 pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
+pub(crate) const RUST: &[Lang] = &[Lang::Rust];
 /// Every language but Rust, for the `common/` rules SonarQube has no Rust key for.
 pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::JavaScript,
