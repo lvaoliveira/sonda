@@ -789,54 +789,64 @@ fn tf_function_reads_a_global<'t>(decorated: Node<'t>, src: &[u8]) -> Option<Nod
         return None;
     }
     let body = function.child_by_field_name("body")?;
-    // Names the function itself binds.
-    let mut local: Vec<&[u8]> = Vec::new();
-    if let Some(params) = function.child_by_field_name("parameters") {
-        walk(params, &mut |n| {
-            if n.kind() == "identifier" {
-                local.push(text(n, src));
-            }
-            true
-        });
-    }
+    let local = bound_names(function, body, src);
+    let globals = module_variables(function, src);
+    let mut found = None;
     walk(body, &mut |n| {
-        match n.kind() {
-            "assignment" | "augmented_assignment" => {
-                if let Some(l) = n.child_by_field_name("left") {
-                    if l.kind() == "identifier" {
-                        local.push(text(l, src));
-                    } else {
-                        walk(l, &mut |c| {
-                            if c.kind() == "identifier" {
-                                local.push(text(c, src));
-                            }
-                            true
-                        });
-                    }
-                }
-            }
-            "for_statement" | "for_in_clause" | "as_pattern" => {
-                if let Some(l) = n
-                    .child_by_field_name("left")
-                    .or_else(|| n.child_by_field_name("alias"))
-                {
-                    walk(l, &mut |c| {
-                        if c.kind() == "identifier" {
-                            local.push(text(c, src));
-                        }
-                        true
-                    });
-                    if l.kind() == "identifier" {
-                        local.push(text(l, src));
-                    }
-                }
-            }
-            _ => {}
+        if found.is_some() {
+            return false;
+        }
+        if n.kind() == "identifier"
+            && globals.contains(&text(n, src))
+            && !local.contains(&text(n, src))
+            && is_read_by_name(n)
+        {
+            found = Some(n);
         }
         true
     });
-    // Module-level variables: assigned there, not constants, imports or defs.
-    let mut globals: Vec<&[u8]> = Vec::new();
+    found
+}
+
+/// `node` and the identifiers under it, as text.
+fn identifiers_in<'s>(node: Node, src: &'s [u8], out: &mut Vec<&'s [u8]>) {
+    if node.kind() == "identifier" {
+        out.push(text(node, src));
+    }
+    walk(node, &mut |c| {
+        if c.kind() == "identifier" {
+            out.push(text(c, src));
+        }
+        true
+    });
+}
+
+/// Names the function itself binds: its parameters, what it assigns, and
+/// its loop and `as` targets.
+fn bound_names<'s>(function: Node, body: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut local = Vec::new();
+    if let Some(params) = function.child_by_field_name("parameters") {
+        identifiers_in(params, src, &mut local);
+    }
+    walk(body, &mut |n| {
+        let target = match n.kind() {
+            "assignment" | "augmented_assignment" => n.child_by_field_name("left"),
+            "for_statement" | "for_in_clause" | "as_pattern" => n
+                .child_by_field_name("left")
+                .or_else(|| n.child_by_field_name("alias")),
+            _ => None,
+        };
+        if let Some(l) = target {
+            identifiers_in(l, src, &mut local);
+        }
+        true
+    });
+    local
+}
+
+/// Module-level variables: assigned there, not constants, imports or defs.
+fn module_variables<'s>(function: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut globals = Vec::new();
     for s in statements(root_of(function)) {
         if s.kind() != "expression_statement" {
             continue;
@@ -855,24 +865,15 @@ fn tf_function_reads_a_global<'t>(decorated: Node<'t>, src: &[u8]) -> Option<Nod
             }
         }
     }
-    let mut found = None;
-    walk(body, &mut |n| {
-        if found.is_some() {
-            return false;
-        }
-        if n.kind() == "identifier"
-            && globals.contains(&text(n, src))
-            && !local.contains(&text(n, src))
-            && n.parent().is_none_or(|p| {
-                !(p.kind() == "attribute" && p.child_by_field_name("attribute") == Some(n))
-                    && !(p.kind() == "keyword_argument" && p.child_by_field_name("name") == Some(n))
-            })
-        {
-            found = Some(n);
-        }
-        true
-    });
-    found
+    globals
+}
+
+/// An identifier that reads a variable: not an attribute's name, nor a keyword argument's.
+fn is_read_by_name(n: Node) -> bool {
+    n.parent().is_none_or(|p| {
+        !(p.kind() == "attribute" && p.child_by_field_name("attribute") == Some(n))
+            && !(p.kind() == "keyword_argument" && p.child_by_field_name("name") == Some(n))
+    })
 }
 
 // ---------------------------------------------------------------- Flask

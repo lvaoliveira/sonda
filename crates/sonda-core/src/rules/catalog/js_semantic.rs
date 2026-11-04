@@ -489,82 +489,101 @@ fn unused_private_fields<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let text = |n: Node| n.utf8_text(src).unwrap_or_default();
     let mut found = Vec::new();
     for &body in &m.classes {
-        // Private fields, and TypeScript `private` constructor parameters.
-        let mut fields: Vec<Node<'t>> = Vec::new();
-        let mut cursor = body.walk();
-        for member in body.named_children(&mut cursor) {
-            match member.kind() {
-                "public_field_definition" | "field_definition" => {
-                    let name = member
-                        .child_by_field_name("name")
-                        .or_else(|| member.child_by_field_name("property"));
-                    let mut c = member.walk();
-                    let children: Vec<Node> = member.children(&mut c).collect();
-                    let private = name.is_some_and(|n| n.kind() == "private_property_identifier")
-                        || children
-                            .iter()
-                            .any(|c| c.kind() == "accessibility_modifier" && text(*c) == "private");
-                    if private && !children.iter().any(|c| c.kind() == "decorator") {
-                        fields.extend(name);
-                    }
-                }
-                "method_definition" => {
-                    let is_constructor = member
-                        .child_by_field_name("name")
-                        .is_some_and(|n| text(n) == "constructor");
-                    if let Some(params) = member
-                        .child_by_field_name("parameters")
-                        .filter(|_| is_constructor)
-                    {
-                        let mut c = params.walk();
-                        for p in params.named_children(&mut c) {
-                            let mut pc = p.walk();
-                            let private = p.children(&mut pc).any(|c| {
-                                c.kind() == "accessibility_modifier" && text(c) == "private"
-                            });
-                            if let Some(name) = p
-                                .child_by_field_name("pattern")
-                                .filter(|n| private && n.kind() == "identifier")
-                            {
-                                fields.push(name);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+        let fields = private_members(body, src);
         if fields.is_empty() {
             continue;
         }
-        let own: HashSet<usize> = fields.iter().map(|f| f.id()).collect();
-        let mut used: HashSet<&str> = HashSet::new();
-        let mut c = body.walk();
-        'walk: loop {
-            let n = c.node();
-            if !own.contains(&n.id()) {
-                match n.kind() {
-                    "private_property_identifier"
-                    | "property_identifier"
-                    | "shorthand_property_identifier_pattern"
-                    | "string_fragment" => {
-                        used.insert(text(n));
-                    }
-                    _ => {}
-                }
-            }
-            if c.goto_first_child() {
-                continue;
-            }
-            while !c.goto_next_sibling() {
-                if !c.goto_parent() || c.node() == body {
-                    break 'walk;
-                }
-            }
-        }
+        let used = names_used(body, &fields, src);
         found.extend(fields.into_iter().filter(|f| !used.contains(text(*f))));
     }
     found
+}
+
+/// A class's private fields, and TypeScript `private` constructor parameters.
+fn private_members<'t>(body: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut fields = Vec::new();
+    let mut cursor = body.walk();
+    for member in body.named_children(&mut cursor) {
+        match member.kind() {
+            "public_field_definition" | "field_definition" => {
+                fields.extend(private_field(member, src))
+            }
+            "method_definition"
+                if member
+                    .child_by_field_name("name")
+                    .is_some_and(|n| n.utf8_text(src).unwrap_or_default() == "constructor") =>
+            {
+                fields.extend(private_parameters(member, src));
+            }
+            _ => {}
+        }
+    }
+    fields
+}
+
+fn is_private_modifier(n: Node, src: &[u8]) -> bool {
+    n.kind() == "accessibility_modifier" && n.utf8_text(src).unwrap_or_default() == "private"
+}
+
+/// The field's name, when it's private and not decorated.
+fn private_field<'t>(member: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let name = member
+        .child_by_field_name("name")
+        .or_else(|| member.child_by_field_name("property"))?;
+    let mut c = member.walk();
+    let children: Vec<Node> = member.children(&mut c).collect();
+    let private = name.kind() == "private_property_identifier"
+        || children.iter().any(|c| is_private_modifier(*c, src));
+    (private && !children.iter().any(|c| c.kind() == "decorator")).then_some(name)
+}
+
+/// A constructor's `private` parameters, by name.
+fn private_parameters<'t>(constructor: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(params) = constructor.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
+    let mut c = params.walk();
+    params
+        .named_children(&mut c)
+        .filter(|p| {
+            let mut pc = p.walk();
+            p.children(&mut pc).any(|c| is_private_modifier(c, src))
+        })
+        .filter_map(|p| {
+            p.child_by_field_name("pattern")
+                .filter(|n| n.kind() == "identifier")
+        })
+        .collect()
+}
+
+/// The property names the class body uses, outside the fields' own names.
+fn names_used<'s>(body: Node, fields: &[Node], src: &'s [u8]) -> HashSet<&'s str> {
+    let own: HashSet<usize> = fields.iter().map(|f| f.id()).collect();
+    let mut used = HashSet::new();
+    let mut c = body.walk();
+    'walk: loop {
+        let n = c.node();
+        if !own.contains(&n.id())
+            && matches!(
+                n.kind(),
+                "private_property_identifier"
+                    | "property_identifier"
+                    | "shorthand_property_identifier_pattern"
+                    | "string_fragment"
+            )
+        {
+            used.insert(n.utf8_text(src).unwrap_or_default());
+        }
+        if c.goto_first_child() {
+            continue;
+        }
+        while !c.goto_next_sibling() {
+            if !c.goto_parent() || c.node() == body {
+                break 'walk;
+            }
+        }
+    }
+    used
 }
 
 fn unused_locals<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
