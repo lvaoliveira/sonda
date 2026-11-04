@@ -55,6 +55,38 @@ The first batch reviewed its findings on five open-source projects
 (Newtonsoft.Json, Polly, AutoMapper, Serilog and MediatR, 2,646 files); the
 scan took under a second per project.
 
+Partial rules are re-audited against their documentation, every case,
+example and exception, and become `exact` when nothing documented is left
+out (`rules/catalog/cs_documented.rs`). Where the documentation reads two
+ways and the wider reading would add many findings to a default rule, the
+rule keeps the narrower one and stays `related` until SonarQube's own
+findings settle it:
+
+- **S818**: the title says literal suffixes, the text and example say `l`,
+  which reads as `1`. Upper-casing `f`, `d` and `m` too would add 551
+  findings on the corpus.
+- **S3218**: the title adds "type members" to static ones, the text and
+  example show static members only. Counting nested types would add 107
+  findings, nearly all properties named after another nested type.
+
+The other partial rules need what sonda doesn't have:
+
+- the project file: S3904, S3990, S3992, S4026 (generated assembly
+  attributes) and S6967 (a validation library such as FluentValidation
+  excuses an action);
+- the target framework: S6618 and S6966 recommend APIs newer than .NET
+  Standard 2.0 (ADR-0022);
+- taint or inter-procedural analysis: S2077, S5766;
+- generated code: S2333 (a `partial` another generator's part completes);
+- types outside the .NET packs: S6377 (`SignedXml` is a package's);
+- settings the documentation doesn't give: S2068's name patterns, S6418's
+  entropy threshold;
+- a definition the documentation doesn't settle: S2245 (which contexts need
+  a secure generator), S4261 (`ValueTask` and async streams, which TAP
+  names with Async but the text leaves out);
+- more work: S2930 (its tracked types and factories), S3925 (nine
+  serialization checks), S5856 (a .NET regex parser).
+
 ### Suppressions
 
 Code that SonarQube analyzed carries its suppressions: `#pragma warning

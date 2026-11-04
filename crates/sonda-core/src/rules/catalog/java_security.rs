@@ -1073,7 +1073,7 @@ pub(super) fn is_public_cleartext_url(string: Node, src: &[u8]) -> bool {
     !(is_private_host(&host) || is_namespace_host(&host))
 }
 
-fn is_private_host(host: &str) -> bool {
+pub(super) fn is_private_host(host: &str) -> bool {
     if matches!(host, "localhost" | "0.0.0.0") {
         return true;
     }
@@ -1108,7 +1108,7 @@ fn is_private_host(host: &str) -> bool {
         || (octets[0] == 169 && octets[1] == 254)
 }
 
-fn is_namespace_host(host: &str) -> bool {
+pub(super) fn is_namespace_host(host: &str) -> bool {
     host.ends_with("w3.org")
         || host.ends_with("xmlsoap.org")
         || host.ends_with("openxmlformats.org")
