@@ -126,6 +126,12 @@ pub(crate) struct Model<'t> {
     /// C#: what the file declares and imports, for expression types
     /// (`cs_infer`), read on first use.
     pub(crate) cs_context: std::cell::OnceCell<Option<cs_infer::Context<'t>>>,
+    /// The C# expression types `Infer::type_of` found, by node id: rules
+    /// that resolve calls type the same arguments again and again.
+    pub(crate) cs_types: std::cell::RefCell<std::collections::HashMap<usize, Option<cs_infer::Ty>>>,
+    /// The supertypes `Infer::supertypes` found, by type.
+    pub(crate) cs_supertypes:
+        std::cell::RefCell<std::collections::HashMap<cs_infer::Ty, Vec<cs_infer::Ty>>>,
 }
 
 impl<'t> Model<'t> {
@@ -146,6 +152,8 @@ impl<'t> Model<'t> {
             type_scopes: Vec::new(),
             ref_index: HashMap::new(),
             cs_context: std::cell::OnceCell::new(),
+            cs_types: std::cell::RefCell::default(),
+            cs_supertypes: std::cell::RefCell::default(),
         }
     }
 

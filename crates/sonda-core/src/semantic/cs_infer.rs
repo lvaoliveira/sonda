@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 /// A type: a platform one by key, or one this file declares.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Ty {
     Named {
         /// A platform key (`System.Collections.Generic.List`1`), or for a
@@ -1211,6 +1211,18 @@ impl<'m, 't> Infer<'m, 't> {
     /// their type arguments, nearest first and base classes before
     /// interfaces.
     pub(crate) fn supertypes(&self, ty: &Ty) -> Vec<Ty> {
+        if let Some(s) = self.m.cs_supertypes.borrow().get(ty) {
+            return s.clone();
+        }
+        let s = self.find_supertypes(ty);
+        self.m
+            .cs_supertypes
+            .borrow_mut()
+            .insert(ty.clone(), s.clone());
+        s
+    }
+
+    fn find_supertypes(&self, ty: &Ty) -> Vec<Ty> {
         let mut out: Vec<Ty> = Vec::new();
         let mut todo = std::collections::VecDeque::from([ty.clone()]);
         while let Some(t) = todo.pop_front() {
@@ -1503,7 +1515,12 @@ impl<'m, 't> Infer<'m, 't> {
 
     /// The type an expression evaluates to.
     pub(crate) fn type_of(&self, expr: Node) -> Option<Ty> {
-        self.typed(expr, 0)
+        if let Some(t) = self.m.cs_types.borrow().get(&expr.id()) {
+            return t.clone();
+        }
+        let t = self.typed(expr, 0);
+        self.m.cs_types.borrow_mut().insert(expr.id(), t.clone());
+        t
     }
 
     fn typed(&self, expr: Node, depth: u8) -> Option<Ty> {

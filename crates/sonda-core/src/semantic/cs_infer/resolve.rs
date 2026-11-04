@@ -116,6 +116,9 @@ pub(crate) struct Bound<'m, 't> {
     /// extension method's receiver is its first parameter, not an argument.
     pub(crate) targets: Vec<usize>,
     pub(crate) extension: bool,
+    /// How many other candidates without a `params` array also apply to
+    /// the arguments, which the chosen method wins over.
+    pub(crate) rivals: usize,
 }
 
 /// A method a call's name finds.
@@ -449,6 +452,10 @@ impl<'m, 't> Infer<'m, 't> {
                 .all(|j| i == j || self.better(&applicable[i], &applicable[j], args))
         })?;
         let (c, fit) = applicable.swap_remove(best);
+        let rivals = applicable
+            .iter()
+            .filter(|(o, _)| !o.params.last().is_some_and(|p| p.params))
+            .count();
         let Fit::Yes { targets, .. } = fit else {
             return None;
         };
@@ -457,6 +464,7 @@ impl<'m, 't> Infer<'m, 't> {
             method: c.found,
             params: c.params,
             targets,
+            rivals,
         })
     }
 
@@ -481,6 +489,7 @@ impl<'m, 't> Infer<'m, 't> {
             method: c.found,
             params: c.params,
             targets,
+            rivals: 0,
         })
     }
 
