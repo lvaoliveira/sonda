@@ -40835,7 +40835,7 @@ fn f(a: bool, b: bool) { if a { g(); } else if b { h(); } else if !a { i(); } }
 
 **`skip(0)` should not be used on iterators.** Skipping no elements returns the same iterator: the call is dead code, or the count is wrong.
 
-SonarQube: S7456
+SonarQube: S7456 (related)
 
 Noncompliant:
 

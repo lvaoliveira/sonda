@@ -19,6 +19,8 @@ file, the report formats and the public library API.
   `else if` chain without an `else`. `#[allow(clippy::lint)]`,
   `#[expect(...)]` and `#![allow(...)]` silence them, groups included, as
   they do there; `// NOSONAR` silences them here too.
+  Checked against Clippy on 66 crates, in a container
+  (`tools/clippy-oracle/`): 74% to 100% precision where the pattern occurs.
 - Rust: `.rs` files are parsed, with lines, functions, complexity and
   duplication measured, and `common/cognitive-complexity` and
   `common/too-many-parameters` run on them, as SonarQube's Rust rules
