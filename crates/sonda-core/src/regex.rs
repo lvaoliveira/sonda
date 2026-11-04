@@ -5,6 +5,8 @@
 //! The parser is recursive descent with a hard depth cap, so hostile input
 //! costs a skipped pattern, never a stack overflow.
 
+pub(crate) mod dotnet;
+
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 4000;
 const MAX_CHAR: u32 = 0x10_FFFF;

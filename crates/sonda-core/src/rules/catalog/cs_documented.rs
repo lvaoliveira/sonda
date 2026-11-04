@@ -7,7 +7,7 @@ use super::cs::{cs_has_modifier, same_code, unparenthesized};
 use super::cs_bugs::attribute_names;
 use super::cs_types::walk_tree;
 use super::java_security::text;
-use crate::semantic::cs_infer::{Conversion, Found, Infer, Ty, arguments};
+use crate::semantic::cs_infer::{Constant, Conversion, Found, Infer, Ty, arguments};
 use crate::semantic::{DeclKind, Model};
 use tree_sitter::Node;
 
@@ -1280,6 +1280,160 @@ pub(super) fn hardcoded_date_formats<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
     found
 }
 
+// ---------------------------------------------------- S5856
+
+const REGEX: &str = "System.Text.RegularExpressions.Regex";
+
+/// The `RegexOptions` that change how a pattern reads or what it may use.
+const EXPLICIT_CAPTURE: i128 = 4;
+const IGNORE_PATTERN_WHITESPACE: i128 = 32;
+const ECMASCRIPT: i128 = 256;
+const NON_BACKTRACKING: i128 = 1024;
+
+/// The `Regex` members that take a pattern.
+const PATTERN_TAKERS: &[&[u8]] = &[
+    b"Regex",
+    b"IsMatch",
+    b"Match",
+    b"Matches",
+    b"Replace",
+    b"Split",
+    b"Count",
+    b"EnumerateMatches",
+    b"EnumerateSplits",
+];
+
+/// A string constant, `+` concatenations of them included.
+fn string_constant(infer: &Infer, expr: Node) -> Option<String> {
+    if expr.kind() == "binary_expression" && expr.child_by_field_name("operator")?.kind() == "+" {
+        let left = string_constant(infer, expr.child_by_field_name("left")?)?;
+        return Some(left + &string_constant(infer, expr.child_by_field_name("right")?)?);
+    }
+    match infer.constant(expr, None)? {
+        Constant::Str(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// An options constant, `|` combinations of them included.
+fn flags_constant(infer: &Infer, expr: Node) -> Option<i128> {
+    match expr.kind() {
+        "binary_expression" if expr.child_by_field_name("operator")?.kind() == "|" => Some(
+            flags_constant(infer, expr.child_by_field_name("left")?)?
+                | flags_constant(infer, expr.child_by_field_name("right")?)?,
+        ),
+        "parenthesized_expression" => flags_constant(infer, expr.named_child(0)?),
+        _ => match infer.constant(expr, None)? {
+            Constant::Int(v) => Some(v),
+            _ => None,
+        },
+    }
+}
+
+/// Where a call puts its pattern and options. When the call binds, by
+/// its method; when it doesn't (an argument's type unknown), and it is
+/// made on the `Regex` type itself, by the overloads taking a pattern,
+/// should they all agree.
+fn pattern_arguments<'t>(
+    infer: &Infer<'_, 't>,
+    call: Node<'t>,
+) -> Option<(Node<'t>, Option<Node<'t>>)> {
+    let args = arguments(call);
+    if let Some(b) = infer.resolve_with(call, &args) {
+        if !matches!(&b.method, Found::Platform { declaring, .. } if declaring.name == REGEX) {
+            return None;
+        }
+        let argument = |name: &str| {
+            args.iter()
+                .zip(&b.targets)
+                .find(|(_, k)| b.params.get(**k).is_some_and(|p| p.name == name))
+                .map(|(a, _)| a.value)
+        };
+        return Some((argument("pattern")?, argument("options")));
+    }
+    let on_regex = match call.kind() {
+        "object_creation_expression" => call.child_by_field_name("type"),
+        _ => call
+            .child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("expression"))
+            .filter(|e| infer.type_of(*e).is_none()),
+    }
+    .and_then(|t| infer.written(t))
+    .is_some_and(|t| t.is(REGEX));
+    if !on_regex || args.iter().any(|a| a.name.is_some()) {
+        return None;
+    }
+    let lists: Vec<_> = infer
+        .candidate_params(call, args.len())
+        .into_iter()
+        .filter(|ps| ps.iter().take(args.len()).any(|p| p.name == "pattern"))
+        .collect();
+    let agreed = |name: &str| {
+        let mut at = lists
+            .iter()
+            .map(|ps| ps.iter().take(args.len()).position(|p| p.name == name));
+        let first = at.next()?;
+        at.all(|k| k == first).then_some(first)
+    };
+    let pattern = agreed("pattern")??;
+    let options = agreed("options")?;
+    Some((
+        args.get(pattern)?.value,
+        options.and_then(|k| args.get(k)).map(|a| a.value),
+    ))
+}
+
+/// Patterns passed to `Regex` that its parser rejects, and negative
+/// lookarounds with `RegexOptions.NonBacktracking`, which throw too.
+/// Patterns and options must be constants; under `ECMAScript` the syntax
+/// differs, so those aren't judged.
+pub(super) fn invalid_regexes<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    use crate::regex::dotnet::{Options, Verdict, check};
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    walk_tree(m, |call, _| {
+        if !matches!(
+            call.kind(),
+            "invocation_expression" | "object_creation_expression"
+        ) || !super::cs_inferred::call_name(call, src)
+            .is_some_and(|n| PATTERN_TAKERS.contains(&n))
+        {
+            return;
+        }
+        let Some((pattern, options)) = pattern_arguments(&infer, call) else {
+            return;
+        };
+        let Some(text) = string_constant(&infer, pattern) else {
+            return;
+        };
+        let options = match options {
+            Some(o) => match flags_constant(&infer, o) {
+                Some(v) => v,
+                None => return,
+            },
+            None => 0,
+        };
+        if options & ECMASCRIPT != 0 {
+            return;
+        }
+        let reading = Options {
+            x: options & IGNORE_PATTERN_WHITESPACE != 0,
+            n: options & EXPLICIT_CAPTURE != 0,
+        };
+        let rejected = match check(&text, reading) {
+            Verdict::Invalid => true,
+            Verdict::Valid(f) => f.negative_lookaround && options & NON_BACKTRACKING != 0,
+            Verdict::Unknown => false,
+        };
+        if rejected {
+            found.push(pattern);
+        }
+    });
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -1442,6 +1596,43 @@ mod tests {
             Console.WriteLine(s.ToString());\n\
             } }";
         assert_eq!(flagged("cs/hardcoded-date-format", src), [4, 7, 8]);
+    }
+
+    #[test]
+    fn invalid_regexes_as_documented() {
+        let src = "using System.Text.RegularExpressions;\nclass A { void Regexes(string input) {\n\
+            var regex = new Regex(\"[A\");\n\
+            var match = Regex.Match(input, \"[A\");\n\
+            var negativeLookahead = new Regex(\"a(?!b)\", RegexOptions.NonBacktracking);\n\
+            var negativeLookbehind = new Regex(\"(?<!a)b\", RegexOptions.NonBacktracking);\n\
+            var regex2 = new Regex(\"[A-Z]\");\n\
+            var match2 = Regex.Match(input, \"[A-Z]\");\n\
+            var negativeLookahead2 = new Regex(\"a(?!b)\");\n\
+            var negativeLookbehind2 = new Regex(\"(?<!a)b\");\n\
+            } }";
+        assert_eq!(flagged("cs/invalid-regex", src), [3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn invalid_regexes_read_as_dotnet() {
+        let src = "using System.Text.RegularExpressions;\nclass B { const string Open = \"(\";\n\
+            void F(string input, RegexOptions o) {\n\
+            _ = new Regex(@\"(?<open>\\()[^()]*(?<close-open>\\))\");\n\
+            _ = new Regex(@\"[a-z-[aeiou]]\\p{IsGreek}\");\n\
+            _ = Regex.IsMatch(input, pattern: Open + \"a\");\n\
+            _ = new Regex(\"a b # [ comment\", RegexOptions.IgnorePatternWhitespace | RegexOptions.IgnoreCase);\n\
+            _ = new Regex(@\"(a)\\1\", RegexOptions.ExplicitCapture);\n\
+            _ = new Regex(@\"\\1\", RegexOptions.ECMAScript);\n\
+            _ = new Regex(\"[A\", o);\n\
+            _ = new Regex(@\"(?=a)b\", RegexOptions.NonBacktracking);\n\
+            _ = Regex.Replace(input, \"a**\", \"b\");\n\
+            _ = new System.Text.RegularExpressions.Regex(@\"\\p{Alpha}\");\n\
+            _ = input.Replace(\"[A\", \"\");\n\
+            _ = Unknown.Where(u => Regex.IsMatch(u.Name, \"Method\\\\d(\"));\n\
+            _ = Unknown.Where(u => Regex.IsMatch(u.Name, \"Method\\\\d\"));\n\
+            } }";
+        // Options that aren't constants, and ECMAScript's syntax, aren't judged.
+        assert_eq!(flagged("cs/invalid-regex", src), [6, 8, 12, 13, 15]);
     }
 
     #[test]

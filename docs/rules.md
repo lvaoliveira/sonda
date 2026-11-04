@@ -37127,17 +37127,19 @@ class B : A { public override void Save(string path, bool force = false) { base.
 
 **Regular expressions should be syntactically valid.** An invalid pattern throws an ArgumentException when the Regex is created, often only on the code path that tests miss.
 
-SonarQube: S5856 (related)
+SonarQube: S5856
 
 Noncompliant:
 
 ```csharp
+using System.Text.RegularExpressions;
 class A { bool F(string s) { return Regex.IsMatch(s, "(ab"); } }
 ```
 
 Compliant:
 
 ```csharp
+using System.Text.RegularExpressions;
 class A { bool F(string s) { return Regex.IsMatch(s, "(ab)"); } }
 ```
 
