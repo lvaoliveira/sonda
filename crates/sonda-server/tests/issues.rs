@@ -116,6 +116,17 @@ async fn the_list_filters_paginates_and_counts_facets() {
     let (_, by_file) = get(&app, "/api/issues?file=b.py&component=lib,src").await;
     assert_eq!(rules(&by_file), ["py/no-eval"]);
 
+    // Languages, as sonda names them; a facet like the others.
+    assert_eq!(
+        all["facets"]["language"],
+        json!({ "javascript": 2, "python": 1 })
+    );
+    let (_, python) = get(&app, "/api/issues?language=python").await;
+    assert_eq!(rules(&python), ["py/no-eval"]);
+    assert_eq!(python["facets"]["language"], all["facets"]["language"]);
+    let (_, second_js) = get(&app, "/api/issues?language=javascript&limit=1&offset=1").await;
+    assert_eq!(rules(&second_js), ["js/no-var"]);
+
     // Fixed issues are a status like any other.
     let fixed_eval = [
         ("src/a.js", "var x = 1;\n"),
@@ -143,6 +154,7 @@ async fn the_list_filters_paginates_and_counts_facets() {
         "limit=500",
         "offset=-1",
         "colour=red",
+        "language=cobol",
     ] {
         let (status, _) = get(&app, &format!("/api/issues?{bad}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");

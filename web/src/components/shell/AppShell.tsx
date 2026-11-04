@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { Link, NavLink, useSearchParams } from 'react-router'
-import { useApi, useAsync } from '@/api/hooks'
+import { useShell } from '@/api/hooks'
 import { useSessionActions } from '@/api/session'
 import type { NavCounts } from '@/api/types'
 import { compactCount } from '@/lib/format'
@@ -100,11 +100,9 @@ function ProjectTabs({ project }: Readonly<{ project: string }>) {
 }
 
 export function AppShell({ crumbs, project, children }: Readonly<{ crumbs: Crumb[]; /** The project whose pages these are: shows its tabs. */ project?: string; children: ReactNode }>) {
-  const api = useApi()
-  const shell = useAsync(() => api.shell(), [api])
+  const data = useShell()
   const { signOut } = useSessionActions()
   const [theme, toggleTheme] = useTheme()
-  const data = shell.state === 'ready' ? shell.data : null
   // Every trail starts at the organization, named by the server.
   const trail: Crumb[] = [{ label: data?.org.name ?? '…', to: '/' }, ...crumbs]
   // Below 900px the sidebar is a drawer, opened from the header's menu button.

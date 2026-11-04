@@ -1,4 +1,5 @@
 import type { Category, IssueQuery, IssueStatus, Severity } from '@/api/types'
+import { languageLabel } from '@/lib/visual'
 
 /** What the Issues page filters by; the server does the filtering. */
 export interface IssueFilter {
@@ -9,6 +10,7 @@ export interface IssueFilter {
   category: Category[]
   status: IssueStatus[]
   component: string[]
+  language: string[]
   file: string
   mine: boolean
   isNew: boolean
@@ -20,6 +22,7 @@ export const DEFAULT_FILTER: IssueFilter = {
   category: [],
   status: ['open', 'confirmed'],
   component: [],
+  language: [],
   file: '',
   mine: false,
   isNew: false,
@@ -36,6 +39,7 @@ export function toQuery(f: IssueFilter, me: string, offset: number, limit = PAGE
     category: f.category,
     status: f.status,
     component: f.component,
+    language: f.language,
     file: f.file,
     assignee: f.mine ? me : undefined,
     isNew: f.isNew,
@@ -49,7 +53,7 @@ export function issueSearchParams(q: IssueQuery): URLSearchParams {
   const p = new URLSearchParams()
   if (q.project) p.set('project', q.project)
   if (q.branch) p.set('branch', q.branch)
-  for (const key of ['severity', 'category', 'status', 'component'] as const) {
+  for (const key of ['severity', 'category', 'status', 'component', 'language'] as const) {
     if (q[key].length > 0) p.set(key, q[key].join(','))
   }
   if (q.file) p.set('file', q.file)
@@ -68,7 +72,7 @@ const CATEGORY_PLURAL: Record<Category, string> = { bug: 'bugs', vulnerability: 
 /**
  * The filters a link carries in its query string, as drill-down links from
  * other screens send them: `project=`, `branch=`, `new`, `me`, `cat=`,
- * `sev=` (comma-separated), `comp=`, `file=`, combinable, and `issue=` to
+ * `sev=` (comma-separated), `comp=`, `lang=`, `file=`, combinable, and `issue=` to
  * open one of the results. Returns the filter, a description and the issue,
  * or null when there is nothing to apply. On a project's Issues tab,
  * `project` comes from the route instead of the query.
@@ -99,6 +103,11 @@ export function filterFromParams(params: URLSearchParams, routeProject?: string)
   if (comp) {
     filter.component = [comp]
     parts.push(comp)
+  }
+  const lang = params.get('lang')
+  if (lang) {
+    filter.language = [lang]
+    parts.push(languageLabel(lang))
   }
   const file = params.get('file')
   if (file) {

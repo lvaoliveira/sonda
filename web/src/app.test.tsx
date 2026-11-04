@@ -45,6 +45,18 @@ describe('Issues', () => {
     for (const row of rows) expect(row).toHaveTextContent('Vulnerability')
   })
 
+  it('filters by language, counting each one', async () => {
+    const user = userEvent.setup()
+    renderAt('/issues')
+    const filters = await screen.findByRole('complementary', { name: 'Filters' })
+    const languages = within(filters).getByRole('group', { name: 'Language' })
+    const rust = within(languages).getByRole('checkbox', { name: /Rust/ })
+    expect(rust.closest('label')).toHaveTextContent('Rust2')
+    await user.click(rust)
+    await waitFor(() => expect(within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')).toHaveLength(2))
+    for (const row of within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')) expect(row).toHaveTextContent('.rs')
+  })
+
   it('copies an issue, or the list, as a prompt for an AI assistant', async () => {
     const user = userEvent.setup()
     renderAt('/issues')
@@ -307,7 +319,7 @@ describe('Projects', () => {
     await user.click(within(within(measures).getByText('Bugs').parentElement!).getByRole('link'))
     expect(await screen.findByText(/payments-platform on main/)).toBeInTheDocument()
     const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
-    const bugs = (await createMockApi(0).issues({ project: 'payments-platform', branch: 'main', severity: [], category: ['bug'], status: ['open', 'confirmed'], component: [], file: '', isNew: false, offset: 0, limit: 50 })).total
+    const bugs = (await createMockApi(0).issues({ project: 'payments-platform', branch: 'main', severity: [], category: ['bug'], status: ['open', 'confirmed'], component: [], language: [], file: '', isNew: false, offset: 0, limit: 50 })).total
     expect(rows).toHaveLength(Math.min(bugs, 50))
     expect(screen.getByRole('checkbox', { name: /Bug/ })).toBeChecked()
     // Clearing the drill-down keeps to the project.
@@ -1290,6 +1302,26 @@ describe('Shell', () => {
     renderAt('/rules')
     const nav = await screen.findByRole('complementary', { name: 'Primary' })
     expect(await within(nav).findByTitle('Server version')).toHaveTextContent('0.1.0')
+  })
+
+  it('keeps the organization and version between pages, instead of flashing placeholders', async () => {
+    const user = userEvent.setup()
+    const base = createMockApi(0)
+    let calls = 0
+    // Only the first page's shell arrives: the next page shows what it had.
+    const api: SondaApi = { ...base, shell: () => (++calls === 1 ? base.shell() : new Promise(() => {})) }
+    renderAt('/rules', api)
+    let nav = await screen.findByRole('complementary', { name: 'Primary' })
+    expect(await within(nav).findByTitle('Server version')).toHaveTextContent('0.1.0')
+    await user.click(within(nav).getByRole('link', { name: /Issues/ }))
+    const trail = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    await within(trail).findByText('Issues')
+    expect(trail).toHaveTextContent('acme-corp')
+    nav = screen.getByRole('complementary', { name: 'Primary' })
+    expect(within(nav).getByTitle('Server version')).toHaveTextContent('0.1.0')
+    expect(nav).toHaveTextContent('self-hosted')
+    // It still asked for a fresh one.
+    expect(calls).toBeGreaterThan(1)
   })
 
   it('toggles and remembers the theme', async () => {

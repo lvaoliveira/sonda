@@ -13,7 +13,11 @@ export function queryIssues(all: IssueDetail[], q: IssueQuery): IssuePage {
   const facets = {} as IssuePage['facets']
   for (const key of FACETS) {
     const counts: Record<string, number> = {}
-    for (const i of all.filter((i) => matches(i, q, key))) counts[i[key]] = (counts[i[key]] ?? 0) + 1
+    for (const i of all.filter((i) => matches(i, q, key))) {
+      // An issue in a file without a language counts toward none.
+      const value = i[key]
+      if (value !== null) counts[value] = (counts[value] ?? 0) + 1
+    }
     facets[key] = counts
   }
   // Every project's, so the all-projects page can list them.
@@ -28,12 +32,12 @@ export function queryIssues(all: IssueDetail[], q: IssueQuery): IssuePage {
   }
 }
 
-const FACETS: FacetKey[] = ['severity', 'category', 'status', 'component']
+const FACETS: FacetKey[] = ['severity', 'category', 'status', 'component', 'language']
 
 function matches(i: IssueSummary, q: IssueQuery, ignore?: FacetKey): boolean {
   for (const key of FACETS) {
     const selected = q[key] as string[]
-    if (key !== ignore && selected.length > 0 && !selected.includes(i[key])) return false
+    if (key !== ignore && selected.length > 0 && !selected.includes(i[key] ?? '')) return false
   }
   if (q.project && i.project !== q.project) return false
   if (q.branch && i.branch !== q.branch) return false

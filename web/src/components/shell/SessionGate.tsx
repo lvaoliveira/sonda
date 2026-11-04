@@ -1,5 +1,5 @@
 import { type SubmitEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
-import { useApi, useAsync } from '@/api/hooks'
+import { forgetShell, useApi, useAsync } from '@/api/hooks'
 import { UNAUTHORIZED_EVENT } from '@/api/http'
 import { SessionContext, type SessionActions } from '@/api/session'
 import { AuthError } from '@/api/types'
@@ -16,7 +16,12 @@ export function SessionGate({ children }: Readonly<{ children: ReactNode }>) {
   const [check, setCheck] = useState(0)
   const [readOnly, setReadOnly] = useState(false)
   const session = useAsync(() => api.session(), [api, check])
-  const recheck = useCallback(() => setCheck((n) => n + 1), [])
+  // Signing in or out, or a session that expired, makes the shell someone
+  // else's.
+  const recheck = useCallback(() => {
+    forgetShell(api)
+    setCheck((n) => n + 1)
+  }, [api])
 
   // A request that finds the session expired sends the viewer back here.
   useEffect(() => {

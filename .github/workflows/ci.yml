@@ -21,7 +21,31 @@ env:
 # Third-party actions are pinned to full commit SHAs (tag in the comment);
 # Dependabot proposes updates.
 jobs:
+  # The parts a pull request changes (scripts/ci-changes.sh): jobs that test
+  # none of them skip, and a skipped job counts as passed for required
+  # checks. Pushes to main and changes to the workflows run everything, and
+  # so does every job if this one fails.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.parts.outputs.rust }}
+      web: ${{ steps.parts.outputs.web }}
+      docker: ${{ steps.parts.outputs.docker }}
+      scripts: ${{ steps.parts.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: parts
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: scripts/ci-changes.sh
+
   lint:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,31 +75,53 @@ jobs:
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked -- -D warnings
 
   test:
+    needs: changes
+    # A matrix job skipped as a whole doesn't report its checks by their
+    # matrix names, which the required checks are: it runs, skipping steps.
+    if: ${{ !cancelled() }}
+    env:
+      NEEDED: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # GitHub's hosted macOS runners are often short of capacity: a job that
+    # never gets one is cancelled after 15 minutes without running a step.
+    # It isn't a required check, and it doesn't fail the run; it still runs
+    # whenever a runner is free.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: env.NEEDED == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - if: env.NEEDED == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: env.NEEDED == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Bump when Cargo.toml's profiles change: the key hashes the
           # dependencies, not the profiles, so a stale build would be restored
           # and rebuilt on every run, never saved again.
           prefix-key: v1-rust
-      - run: cargo test --workspace --all-targets --all-features --locked
+      - if: env.NEEDED == 'true'
+        run: cargo test --workspace --all-targets --all-features --locked
       # --all-targets skips doctests; the library's examples must compile too.
-      - run: cargo test --workspace --doc --locked
+      - if: env.NEEDED == 'true'
+        run: cargo test --workspace --doc --locked
 
   # Each crate's own rust-version: the CLI and core library stay at 1.90;
   # the server needs 1.94 (sqlx 0.9) and ships as a Docker image anyway.
   msrv:
+    needs: changes
+    # A matrix job skipped as a whole doesn't report its checks by their
+    # matrix names, which the required checks are: it runs, skipping steps.
+    if: ${{ !cancelled() }}
+    env:
+      NEEDED: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -86,23 +132,29 @@ jobs:
             packages: -p sonda-server
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: env.NEEDED == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - if: env.NEEDED == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ matrix.toolchain }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: env.NEEDED == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Bump when Cargo.toml's profiles change: the key hashes the
           # dependencies, not the profiles, so a stale build would be restored
           # and rebuilt on every run, never saved again.
           prefix-key: v1-rust
-      - run: cargo check ${{ matrix.packages }} --all-targets --locked
+      - if: env.NEEDED == 'true'
+        run: cargo check ${{ matrix.packages }} --all-targets --locked
 
   # The server's database tests, against real PostgreSQL. Elsewhere they
   # skip; here SONDA_REQUIRE_DB_TESTS turns a missing database into a failure.
   server:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -136,6 +188,8 @@ jobs:
   # release's CLI uploads to the server built from this change. It is the
   # promise that a pipeline can keep its pinned CLI while the server upgrades.
   compat:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.scripts == 'true') }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -176,6 +230,8 @@ jobs:
   # everything is still there and served. The release publishes the CLI only
   # (the server image comes with M3), so the old server is built from its tag.
   upgrade:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.scripts == 'true') }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -224,6 +280,8 @@ jobs:
   # ADR-0005's acceptance check: the documented one command on a clean
   # machine gives a working server.
   docker:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.scripts == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -262,6 +320,8 @@ jobs:
 
   # The CLI for hosts without Rust: the image's `cli` target, installed.
   docker-cli:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.scripts == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -274,6 +334,8 @@ jobs:
       - run: scripts/check-languages.sh
 
   supply-chain:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -318,6 +380,8 @@ jobs:
           path: lcov.info
 
   web:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.web == 'true') }}
     runs-on: ubuntu-latest
     defaults:
       run:
