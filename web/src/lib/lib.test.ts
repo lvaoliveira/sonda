@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import issuesData from '@/api/mock/issues.json'
 import { queryIssues } from '@/api/mock/query'
 import type { IssueDetail } from '@/api/types'
@@ -8,6 +8,7 @@ import { compactCount, formatAge, formatEffort } from './format'
 import { initials } from './identity'
 import { DEFAULT_FILTER, filterFromParams, issueSearchParams, toQuery } from './issues'
 import { languageLabel, projectScore, SEVERITY } from './visual'
+import { copyText } from './clipboard'
 
 const issues = issuesData as IssueDetail[]
 const ME = 'Mara Okafor'
@@ -225,5 +226,26 @@ describe('connecting a repository', () => {
     expect(url.pathname).toBe('/acme/shop/new/release/2.x')
     expect(url.searchParams.get('filename')).toBe('.github/workflows/sonda.yml')
     expect(url.searchParams.get('value')).toBe('name: sonda\n')
+  })
+})
+
+describe('copying', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('falls back to the copy command where the Clipboard API is missing (plain HTTP)', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined })
+    const copied: string[] = []
+    const exec = vi.fn(() => {
+      copied.push(document.querySelector('textarea')?.value ?? '')
+      return true
+    })
+    document.execCommand = exec
+    expect(await copyText('the prompt')).toBe(true)
+    expect(exec).toHaveBeenCalledWith('copy')
+    expect(copied).toEqual(['the prompt'])
+    // Its text area is gone again.
+    expect(document.querySelector('textarea')).toBeNull()
+    document.execCommand = () => false
+    expect(await copyText('x')).toBe(false)
   })
 })

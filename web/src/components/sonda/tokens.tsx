@@ -2,6 +2,7 @@ import { type FormEvent, useState } from 'react'
 import type { ApiToken, CreatedToken, NewToken, TokenType } from '@/api/types'
 import { formatAge, shortDate } from '@/lib/format'
 import { TOKEN_TYPE } from '@/lib/visual'
+import { copyText } from '@/lib/clipboard'
 import { Button } from './controls'
 import { Mono } from './layout'
 
@@ -59,12 +60,8 @@ export function TokenGenerator({
     setBusy(false)
   }
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(created!.token)
-      setCopied(true)
-    } catch {
-      setError('Could not copy; select the token and copy it.')
-    }
+    if (await copyText(created!.token)) setCopied(true)
+    else setError('Could not copy; select the token and copy it.')
   }
 
   return (

@@ -61,6 +61,21 @@ describe('Issues', () => {
     expect(all).not.toBe(one)
   })
 
+  it("offers the prompt to copy by hand when the browser won't copy it (plain HTTP)", async () => {
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    document.execCommand = () => false
+    renderAt('/issues')
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    await user.click(await within(detail).findByRole('button', { name: 'Copy as prompt' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Copy the prompt' })
+    const text = within(dialog).getByRole('textbox', { name: 'Prompt' }) as HTMLTextAreaElement
+    expect(text.value).toMatch(/^# Fix 1 sonda issue in /)
+    expect(text).toHaveFocus()
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('changes status with an undo, through the API, and records it', async () => {
     const user = userEvent.setup()
     renderAt('/issues')
