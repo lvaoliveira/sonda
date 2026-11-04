@@ -1368,21 +1368,21 @@ describe('GitHub App', () => {
   })
 })
 
-describe('Connecting a repository', () => {
-  /** The mock with no projects analyzed yet, as on a new server. */
-  function emptyApi(admin = true): SondaApi {
-    const api = createMockApi(0)
-    const { overview, shell } = api
-    return {
-      ...api,
-      overview: async (scope, range) => {
-        const data = await overview!(scope, range)
-        return { ...data, summary: { ...data.summary, projects: 0 } }
-      },
-      shell: async () => ({ ...(await shell()), isAdmin: admin }),
-    }
+/** The mock with no projects analyzed yet, as on a new server. */
+function emptyApi(admin = true): SondaApi {
+  const api = createMockApi(0)
+  const { overview, shell } = api
+  return {
+    ...api,
+    overview: async (scope, range) => {
+      const data = await overview!(scope, range)
+      return { ...data, summary: { ...data.summary, projects: 0 } }
+    },
+    shell: async () => ({ ...(await shell()), isAdmin: admin }),
   }
+}
 
+describe('Connecting a repository', () => {
   it('creates the project, its token and the workflow from the empty Overview', async () => {
     const user = userEvent.setup()
     renderAt('/', emptyApi())

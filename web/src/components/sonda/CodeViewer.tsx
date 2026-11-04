@@ -20,7 +20,7 @@ export function CodeViewer({
 }>) {
   const s = SEVERITY[severity]
   return (
-    <div role="region" aria-label="Source code" className="overflow-auto bg-canvas py-2 font-mono text-[11.5px] leading-[1.85]">
+    <section aria-label="Source code" className="overflow-auto bg-canvas py-2 font-mono text-[11.5px] leading-[1.85]">
       {lines.map((line) => {
         const hot = highlighted.includes(line.number)
         return (
@@ -51,7 +51,7 @@ export function CodeViewer({
           </div>
         )
       })}
-    </div>
+    </section>
   )
 }
 

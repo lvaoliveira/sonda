@@ -15,7 +15,7 @@ export function Segmented<T extends string>({
   mono?: boolean
 }>) {
   return (
-    <div role="group" aria-label={label} className="flex rounded-[9px] bg-canvas p-[3px] edge">
+    <fieldset aria-label={label} className="m-0 flex min-w-0 rounded-[9px] border-0 bg-canvas p-[3px] edge">
       {options.map((o) => {
         const on = o.value === value
         return (
@@ -35,7 +35,7 @@ export function Segmented<T extends string>({
           </button>
         )
       })}
-    </div>
+    </fieldset>
   )
 }
 

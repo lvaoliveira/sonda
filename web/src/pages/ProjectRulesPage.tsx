@@ -39,7 +39,11 @@ const STATE_FILTER: RuleFilter<ProjectRule> = {
     { value: 'off', label: 'Off' },
     { value: 'changed', label: 'Not at default' },
   ],
-  test: (r, v) => (v === 'on' ? r.state.on : v === 'off' ? !r.state.on : r.state.setBy !== 'default' || r.state.severity !== null),
+  test: (r, v) => {
+    if (v === 'on') return r.state.on
+    if (v === 'off') return !r.state.on
+    return r.state.setBy !== 'default' || r.state.severity !== null
+  },
 }
 
 function Rules({ rules, isAdmin, profiles, reload }: Readonly<{ rules: ProjectRules; isAdmin: boolean; profiles: RuleProfileSummary[]; reload: () => void }>) {
@@ -66,10 +70,10 @@ function Rules({ rules, isAdmin, profiles, reload }: Readonly<{ rules: ProjectRu
       </PageHeader>
       {isAdmin && <ProfileChoice project={rules.project} current={rules.profile} profiles={profiles} reload={reload} />}
       {rules.profileApplied === false && (
-        <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+        <output className="block m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
           The latest scan of <Mono className="text-[12px]">{rules.mainBranch}</Mono> didn't apply these settings. They apply from the next{' '}
           <Mono className="text-[12px]">sonda scan --upload</Mono>; until then, rules turned on here may not have run.
-        </p>
+        </output>
       )}
       <RuleBrowser
         rules={rules.rules}
@@ -79,14 +83,14 @@ function Rules({ rules, isAdmin, profiles, reload }: Readonly<{ rules: ProjectRu
         sortLabel="sorted by findings here"
         extraFilter={STATE_FILTER}
         search={{ q, setQ }}
-        listTags={(r) => (
+        renderTags={(r) => (
           <>
             <span>·</span>
             <span style={{ color: r.state.on ? 'var(--sd-ok)' : 'var(--sd-faint)' }}>{r.state.on ? 'on' : 'off'}</span>
             {r.state.setBy !== 'default' && <span className="text-fg-faint">({shortSetBy(r)})</span>}
           </>
         )}
-        summary={(r) => (
+        renderSummary={(r) => (
           <>
             <span className="text-[12.5px] text-fg-muted">
               <Mono className="text-[11.5px] text-fg">{r.openIssues}</Mono> open issues here
@@ -103,7 +107,7 @@ function Rules({ rules, isAdmin, profiles, reload }: Readonly<{ rules: ProjectRu
             </Link>
           </>
         )}
-        panel={(r) => <InThisProject key={r.id} project={rules.project} rule={r} profile={rules.profile.name} isAdmin={isAdmin} reload={reload} />}
+        renderPanel={(r) => <InThisProject key={r.id} project={rules.project} rule={r} profile={rules.profile.name} isAdmin={isAdmin} reload={reload} />}
       />
       <RepositorySettings rules={rules} />
     </>
@@ -137,28 +141,7 @@ function InThisProject({ project, rule, profile, isAdmin, reload }: Readonly<{ p
   return (
     <section aria-label="In this project" className="flex flex-col gap-2">
       <h3 className="m-0 font-normal micro-label">In this project</h3>
-      <p className="m-0 text-[13px]">
-        <span className="font-semibold" style={{ color: s.on ? 'var(--sd-ok)' : 'var(--sd-faint)' }}>
-          {s.on ? 'On' : 'Off'}
-        </span>
-        <span className="text-fg-muted">
-          {' '}
-          · {s.setBy === 'profile' ? `${SET_BY_LABEL.profile}, ${profile}` : SET_BY_LABEL[s.setBy]}
-          {s.change && (
-            <>
-              {' '}
-              · by {s.change.changedBy}, {shortDate(s.change.changedAt)}
-              {s.change.note && <>: “{s.change.note}”</>}
-            </>
-          )}
-          {s.severity && (
-            <>
-              {' '}
-              · severity {s.severity} in {s.severityBy === 'profile' ? 'the profile' : 'sonda.toml'}
-            </>
-          )}
-        </span>
-      </p>
+      <RuleStateLine s={s} profile={profile} />
       {s.conflict && (
         <p role="note" className="m-0 text-xs text-warn">
           On on the server, but the latest scan didn't apply the server's settings, and the repository's sonda.toml leaves it off: it didn't run.
@@ -197,6 +180,34 @@ function InThisProject({ project, rule, profile, isAdmin, reload }: Readonly<{ p
         </p>
       )}
     </section>
+  )
+}
+
+/** Whether the rule runs here, who decided, and the severity it runs at. */
+function RuleStateLine({ s, profile }: Readonly<{ s: ProjectRule['state']; profile: string }>) {
+  return (
+    <p className="m-0 text-[13px]">
+      <span className="font-semibold" style={{ color: s.on ? 'var(--sd-ok)' : 'var(--sd-faint)' }}>
+        {s.on ? 'On' : 'Off'}
+      </span>
+      <span className="text-fg-muted">
+        {' '}
+        · {s.setBy === 'profile' ? `${SET_BY_LABEL.profile}, ${profile}` : SET_BY_LABEL[s.setBy]}
+        {s.change && (
+          <>
+            {' '}
+            · by {s.change.changedBy}, {shortDate(s.change.changedAt)}
+            {s.change.note && <>: “{s.change.note}”</>}
+          </>
+        )}
+        {s.severity && (
+          <>
+            {' '}
+            · severity {s.severity} in {s.severityBy === 'profile' ? 'the profile' : 'sonda.toml'}
+          </>
+        )}
+      </span>
+    </p>
   )
 }
 

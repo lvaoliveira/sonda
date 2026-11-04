@@ -44,9 +44,9 @@ export function GitHubAppCreatedPage() {
         </p>
       )}
       {code && state && !result && (
-        <p role="status" className="m-0 text-[13px] text-fg-muted">
+        <output className="block m-0 text-[13px] text-fg-muted">
           Connecting the App…
-        </p>
+        </output>
       )}
       {result && 'error' in result && (
         <p role="alert" className="m-0 text-[13px] text-crit">

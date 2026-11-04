@@ -7,7 +7,7 @@ import { Segmented } from '@/components/sonda/controls'
 import { Card, MetricGrid, Mono } from '@/components/sonda/layout'
 import { Sparkline } from '@/components/sonda/meters'
 import { SeverityGlyph } from '@/components/sonda/status'
-import { compactCount, formatDebt, formatNumber, shortDate } from '@/lib/format'
+import { compactCount, formatDebt, formatNumber, shortDate, signOf } from '@/lib/format'
 import { componentLabel, componentUrl, projectUrl } from '@/lib/links'
 import { SEVERITY, SEVERITY_ORDER, languageLabel } from '@/lib/visual'
 import { issuesUrl } from '@/lib/issues'
@@ -98,23 +98,24 @@ function Component({ c }: Readonly<{ c: ComponentDetail }>) {
         </div>
 
         <MetricGrid label="Issues" minCell={220}>
-          {tiles.map((t) => (
-            <div key={t.label} className="flex flex-col gap-1 bg-panel-2 px-4 py-3">
-              <span className="text-[12.5px] text-fg-muted">{t.label}</span>
-              <span className="font-mono text-[22px] leading-tight">
-                {t.to && t.value !== 0 ? (
-                  <Link to={t.to} className="text-fg">
-                    {typeof t.value === 'number' ? formatNumber(t.value) : t.value}
-                  </Link>
-                ) : typeof t.value === 'number' ? (
-                  formatNumber(t.value)
-                ) : (
-                  t.value
-                )}
-              </span>
-              <span className="text-xs text-fg-faint">{t.sub}</span>
-            </div>
-          ))}
+          {tiles.map((t) => {
+            const shown = typeof t.value === 'number' ? formatNumber(t.value) : t.value
+            return (
+              <div key={t.label} className="flex flex-col gap-1 bg-panel-2 px-4 py-3">
+                <span className="text-[12.5px] text-fg-muted">{t.label}</span>
+                <span className="font-mono text-[22px] leading-tight">
+                  {t.to && t.value !== 0 ? (
+                    <Link to={t.to} className="text-fg">
+                      {shown}
+                    </Link>
+                  ) : (
+                    shown
+                  )}
+                </span>
+                <span className="text-xs text-fg-faint">{t.sub}</span>
+              </div>
+            )
+          })}
         </MetricGrid>
 
         <div className="grid grid-cols-1 gap-5 min-[900px]:grid-cols-[minmax(0,1.3fr)_minmax(260px,1fr)]">
@@ -137,7 +138,7 @@ function Trend({ c }: Readonly<{ c: ComponentDetail }>) {
     <Card
       id="trend"
       title="Open issues · 8 weeks"
-      subtitle={`${change > 0 ? '+' : change < 0 ? '−' : ''}${Math.abs(change)} since ${shortDate(c.trend[0].date)}`}
+      subtitle={`${signOf(change)}${Math.abs(change)} since ${shortDate(c.trend[0].date)}`}
       aside={<Mono className="text-[13px]">{formatNumber(last)}</Mono>}
     >
       <Sparkline
@@ -177,12 +178,17 @@ function Owners({ c }: Readonly<{ c: ComponentDetail }>) {
 }
 
 type FileSort = 'issues' | 'lines' | 'path'
+type FileRow = ComponentDetail['fileList'][number]
+
+const FILE_ORDER: Record<FileSort, (a: FileRow, b: FileRow) => number> = {
+  issues: (a, b) => b.issues - a.issues || a.path.localeCompare(b.path),
+  lines: (a, b) => b.ncloc - a.ncloc || a.path.localeCompare(b.path),
+  path: (a, b) => a.path.localeCompare(b.path),
+}
 
 function Files({ c }: Readonly<{ c: ComponentDetail }>) {
   const [sort, setSort] = useState<FileSort>('issues')
-  const files = [...c.fileList].sort((a, b) =>
-    sort === 'issues' ? b.issues - a.issues || a.path.localeCompare(b.path) : sort === 'lines' ? b.ncloc - a.ncloc || a.path.localeCompare(b.path) : a.path.localeCompare(b.path),
-  )
+  const files = [...c.fileList].sort(FILE_ORDER[sort])
   const th = 'border-b border-line px-2 py-2 text-left font-normal'
   const td = 'border-b border-line px-2 py-[9px]'
   const prefix = c.path === '.' ? '' : `${c.path}/`

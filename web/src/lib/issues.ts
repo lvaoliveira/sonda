@@ -63,36 +63,32 @@ export function issueSearchParams(q: IssueQuery): URLSearchParams {
 const CATEGORIES: Category[] = ['bug', 'vulnerability', 'code_smell']
 const SEVERITIES: Severity[] = ['blocker', 'critical', 'major', 'minor', 'info']
 
+const CATEGORY_PLURAL: Record<Category, string> = { bug: 'bugs', vulnerability: 'vulnerabilities', code_smell: 'code smells' }
+
 /**
- * Drill-down links from other screens arrive as query parameters:
- * `project=`, `branch=`, `new`, `me`, `cat=`, `sev=` (comma-separated), `comp=`, `file=`,
- * combinable, and `issue=` to open one of the results. Returns the filter, a human description
- * and the issue, or null when there is nothing to apply.
- */
-/**
- * The filters a link carries in its query string. On a project's Issues
- * tab, `project` comes from the route instead of the query.
+ * The filters a link carries in its query string, as drill-down links from
+ * other screens send them: `project=`, `branch=`, `new`, `me`, `cat=`,
+ * `sev=` (comma-separated), `comp=`, `file=`, combinable, and `issue=` to
+ * open one of the results. Returns the filter, a description and the issue,
+ * or null when there is nothing to apply. On a project's Issues tab,
+ * `project` comes from the route instead of the query.
  */
 export function filterFromParams(params: URLSearchParams, routeProject?: string): { filter: IssueFilter; description: string; issue: number | null } | null {
   const filter: IssueFilter = { ...DEFAULT_FILTER }
   const parts: string[] = []
-  const project = routeProject ?? params.get('project')
-  if (project) {
-    filter.project = project
-    const branch = params.get('branch')
-    if (branch) filter.branch = branch
-    // On the project's own tab, its name is already on the page.
-    if (!routeProject) parts.push(branch ? `${project} on ${branch}` : project)
-    else if (branch) parts.push(`on ${branch}`)
+  const scope = projectScope(params, routeProject)
+  if (scope) {
+    Object.assign(filter, scope.filter)
+    if (scope.said) parts.push(scope.said)
   }
   if (params.has('new')) {
     filter.isNew = true
     parts.push('new code')
   }
   const cat = params.get('cat')
-  if (cat && (CATEGORIES as string[]).includes(cat)) {
-    filter.category = [cat as Category]
-    parts.push(cat === 'code_smell' ? 'code smells' : `${cat === 'bug' ? 'bugs' : 'vulnerabilities'}`)
+  if (isCategory(cat)) {
+    filter.category = [cat]
+    parts.push(CATEGORY_PLURAL[cat])
   }
   const sev = (params.get('sev') ?? '').split(',').filter((s): s is Severity => (SEVERITIES as string[]).includes(s))
   if (sev.length > 0) {
@@ -114,8 +110,27 @@ export function filterFromParams(params: URLSearchParams, routeProject?: string)
     parts.push('assigned to you')
   }
   if (parts.length === 0) return null
+  return { filter, description: `Showing ${parts.join(' · ')} — from the metric you clicked`, issue: issueParam(params) }
+}
+
+function isCategory(value: string | null): value is Category {
+  return value !== null && (CATEGORIES as string[]).includes(value)
+}
+
+/** The project and branch a link names, and how the description says them. */
+function projectScope(params: URLSearchParams, routeProject?: string): { filter: Pick<IssueFilter, 'project' | 'branch'>; said: string } | null {
+  const project = routeProject ?? params.get('project')
+  if (!project) return null
+  const branch = params.get('branch')
+  // On the project's own tab, its name is already on the page.
+  const said = [routeProject ? null : project, branch && `on ${branch}`].filter(Boolean).join(' ')
+  return { filter: branch ? { project, branch } : { project }, said }
+}
+
+/** The issue a link opens, when it names a valid one. */
+function issueParam(params: URLSearchParams): number | null {
   const issue = Number(params.get('issue'))
-  return { filter, description: `Showing ${parts.join(' · ')} — from the metric you clicked`, issue: Number.isInteger(issue) && issue > 0 ? issue : null }
+  return Number.isInteger(issue) && issue > 0 ? issue : null
 }
 
 /**

@@ -42,6 +42,9 @@ file, the report formats and the public library API.
 - `js/find-for-existence` no longer takes `key && items.find(...)` for a
   test of whether something was found: the right of `&&` is its value,
   tested only when the whole expression is.
+- `js/handler-on-plain-element` and `js/click-without-keyboard` leave
+  alone an `aria-hidden` element (a backdrop that closes a menu) and a
+  table row, whose role is interactive, as SonarQube does.
 
 
 ## [0.2.0] - 2026-11-03

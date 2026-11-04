@@ -211,6 +211,8 @@ function gateSummary(conditions: ProjectDetail['gate']['conditions']): string {
   return parts.join(' · ')
 }
 
+const RATING_SHORT = { reliability: 'Rel', security: 'Sec', maintainability: 'Mnt' } as const
+
 function Gate({ p }: Readonly<{ p: ProjectDetail }>) {
   return (
     <Card
@@ -301,7 +303,7 @@ function Measures({ p, reload }: Readonly<{ p: ProjectDetail; reload: () => void
           {(['reliability', 'security', 'maintainability'] as const).map((r) => (
             <span key={r} className="flex items-center gap-1.5">
               <PipMeter level={p.ratings[r]} label={r[0].toUpperCase() + r.slice(1)} width={3} />
-              {r === 'maintainability' ? 'Mnt' : r === 'reliability' ? 'Rel' : 'Sec'}
+              {RATING_SHORT[r]}
             </span>
           ))}
         </span>
