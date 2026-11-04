@@ -58,65 +58,15 @@ pub async fn run(config: Config) -> Result<()> {
     let metrics = std::sync::Arc::new(observability::Metrics::default());
     if let Some(base_url) = config.advisory_sync {
         tracing::info!(source = %base_url, "syncing advisories daily");
-        let pool = pool.clone();
-        let metrics = metrics.clone();
-        tokio::spawn(async move {
-            loop {
-                match advisory_sync::sync_once(&pool, &base_url).await {
-                    Ok(s) => {
-                        tracing::info!(
-                            read = s.read,
-                            imported = s.imported,
-                            errors = s.errors,
-                            first_errors = ?s.first_errors,
-                            "synced advisories"
-                        );
-                        metrics.record_advisory_sync(Some(&s));
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "advisory sync failed; retrying later");
-                        metrics.record_advisory_sync(None);
-                    }
-                }
-                tokio::time::sleep(advisory_sync::INTERVAL).await;
-            }
-        });
+        spawn_advisory_sync(pool.clone(), base_url, metrics.clone());
     }
-    {
-        let pool = pool.clone();
-        tokio::spawn(async move {
-            loop {
-                match pull_requests::remove_stale(&pool).await {
-                    Ok(0) => {}
-                    Ok(n) => {
-                        tracing::info!(pull_requests = n, "removed stale pull request analyses")
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "removing stale pull requests failed; retrying later")
-                    }
-                }
-                tokio::time::sleep(pull_requests::CLEANUP_INTERVAL).await;
-            }
-        });
-    }
+    spawn_pull_request_cleanup(pool.clone());
     if let Some(days) = config.thin_analyses_after_days {
         tracing::info!(
             days,
             "thinning branch analyses older than that to one a day"
         );
-        let pool = pool.clone();
-        tokio::spawn(async move {
-            loop {
-                match retention::thin(&pool, days).await {
-                    Ok(0) => {}
-                    Ok(n) => tracing::info!(analyses = n, "thinned old analyses"),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "thinning old analyses failed; retrying later")
-                    }
-                }
-                tokio::time::sleep(retention::INTERVAL).await;
-            }
-        });
+        spawn_retention(pool.clone(), days);
     }
     let reads_require_auth = !config.listen.ip().is_loopback();
     if reads_require_auth {
@@ -132,20 +82,8 @@ pub async fn run(config: Config) -> Result<()> {
     if let Some(app) = github.app() {
         tracing::info!(app = ?app, "decorating pull requests on GitHub");
     }
-    {
-        // Always running: an App created from the web app starts it posting.
-        let (pool, github, public_url) = (pool.clone(), github.clone(), config.public_url.clone());
-        tokio::spawn(async move {
-            loop {
-                if let Some(app) = github.app()
-                    && let Err(e) = decorations::post_due(&pool, &app, public_url.as_deref()).await
-                {
-                    tracing::warn!(error = %e, "posting pull request decorations failed; retrying later");
-                }
-                tokio::time::sleep(decorations::INTERVAL).await;
-            }
-        });
-    }
+    // Always running: an App created from the web app starts it posting.
+    spawn_decorations(pool.clone(), github.clone(), config.public_url.clone());
     let cookie = if config.plain_http {
         tracing::warn!(
             "SONDA_PLAIN_HTTP: signing in over plain HTTP, so anyone who can see this \
@@ -216,4 +154,82 @@ async fn shutdown() {
         () = terminate => {}
     }
     tracing::info!("shutting down");
+}
+
+/// Imports advisories from `base_url` now, then every `advisory_sync::INTERVAL`.
+fn spawn_advisory_sync(
+    pool: sqlx::PgPool,
+    base_url: String,
+    metrics: std::sync::Arc<observability::Metrics>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match advisory_sync::sync_once(&pool, &base_url).await {
+                Ok(s) => {
+                    tracing::info!(
+                        read = s.read,
+                        imported = s.imported,
+                        errors = s.errors,
+                        first_errors = ?s.first_errors,
+                        "synced advisories"
+                    );
+                    metrics.record_advisory_sync(Some(&s));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "advisory sync failed; retrying later");
+                    metrics.record_advisory_sync(None);
+                }
+            }
+            tokio::time::sleep(advisory_sync::INTERVAL).await;
+        }
+    });
+}
+
+fn spawn_pull_request_cleanup(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        loop {
+            match pull_requests::remove_stale(&pool).await {
+                Ok(0) => {}
+                Ok(n) => {
+                    tracing::info!(pull_requests = n, "removed stale pull request analyses")
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "removing stale pull requests failed; retrying later")
+                }
+            }
+            tokio::time::sleep(pull_requests::CLEANUP_INTERVAL).await;
+        }
+    });
+}
+
+fn spawn_retention(pool: sqlx::PgPool, days: i32) {
+    tokio::spawn(async move {
+        loop {
+            match retention::thin(&pool, days).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(analyses = n, "thinned old analyses"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "thinning old analyses failed; retrying later")
+                }
+            }
+            tokio::time::sleep(retention::INTERVAL).await;
+        }
+    });
+}
+
+fn spawn_decorations(
+    pool: sqlx::PgPool,
+    github: std::sync::Arc<github_app::Connection>,
+    public_url: Option<String>,
+) {
+    tokio::spawn(async move {
+        loop {
+            if let Some(app) = github.app()
+                && let Err(e) = decorations::post_due(&pool, &app, public_url.as_deref()).await
+            {
+                tracing::warn!(error = %e, "posting pull request decorations failed; retrying later");
+            }
+            tokio::time::sleep(decorations::INTERVAL).await;
+        }
+    });
 }

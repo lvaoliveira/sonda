@@ -221,107 +221,7 @@ fn build(rows: &[Row], servers: &[ServerRow]) -> Gates {
     let mut custom = 0;
     let mut gates: Vec<(u8, usize, Gate)> = groups
         .into_iter()
-        .filter_map(|(k, current)| {
-            let server = match &k {
-                Key::Server(id) => Some(servers.iter().find(|g| g.0 == *id)?),
-                Key::Toml(_) => None,
-            };
-            let is_default = k == default;
-            let template = match server {
-                Some(g) => json!({ "conditions": g.2 }),
-                None => current[0].3.clone(),
-            };
-            let conditions = template["conditions"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|c| {
-                    let metric = c["metric"].as_str().unwrap_or_default();
-                    let count = |status: &str| {
-                        current
-                            .iter()
-                            .filter(|r| {
-                                r.3["conditions"]
-                                    .as_array()
-                                    .into_iter()
-                                    .flatten()
-                                    .any(|x| x["metric"] == metric && x["status"] == status)
-                            })
-                            .count()
-                    };
-                    GateCondition {
-                        label: condition_label(c),
-                        metric: metric.to_string(),
-                        op: c["op"].as_str().unwrap_or_default().to_string(),
-                        threshold: c["threshold"].as_f64().unwrap_or_default(),
-                        failing: count("error"),
-                        no_data: count("no_data"),
-                    }
-                })
-                .collect();
-            let projects: Vec<GateProject> = current
-                .iter()
-                .map(|r| GateProject {
-                    project: r.1.clone(),
-                    state: gate_state(r.4, &r.3),
-                    analyzed_at: rfc3339(r.2),
-                })
-                .collect();
-            let members: Vec<&str> = current.iter().map(|r| r.1.as_str()).collect();
-            let history: Vec<&Row> = rows
-                .iter()
-                .filter(|r| members.contains(&r.1.as_str()) && key(&r.3) == k)
-                .take(EVALUATIONS)
-                .collect();
-            let passed = history.iter().filter(|r| r.4).count();
-            let mut failures: BTreeMap<String, usize> = BTreeMap::new();
-            for r in &history {
-                for c in r.3["conditions"].as_array().into_iter().flatten() {
-                    if c["status"] == "error" {
-                        *failures.entry(condition_label(c)).or_default() += 1;
-                    }
-                }
-            }
-            let most_common_failure = failures
-                .into_iter()
-                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
-                .map(|(label, _)| label);
-            let gate = Gate {
-                id: match &k {
-                    Key::Server(id) => format!("server-{id}"),
-                    Key::Toml(sig) => gate_id(sig),
-                },
-                name: server.map(|g| g.1.clone()).unwrap_or_default(),
-                is_default,
-                server: server.map(|g| ServerGate {
-                    id: g.0,
-                    changed_by: g.3.clone(),
-                    changed_at: rfc3339(g.4),
-                }),
-                conditions,
-                projects,
-                pass_rate: (!history.is_empty()).then(|| (passed * 100 / history.len()) as u32),
-                evaluations: history
-                    .iter()
-                    .map(|r| Evaluation {
-                        analysis: r.0,
-                        project: r.1.clone(),
-                        state: gate_state(r.4, &r.3),
-                        analyzed_at: rfc3339(r.2),
-                    })
-                    .collect(),
-                most_common_failure,
-            };
-            // The default first, then server gates, then other sonda.toml ones.
-            let rank = if is_default {
-                0
-            } else if server.is_some() {
-                1
-            } else {
-                2
-            };
-            Some((rank, current.len(), gate))
-        })
+        .filter_map(|(k, current)| gate_of(k, &current, rows, servers, &default))
         .collect();
     gates.sort_by(|a, b| {
         a.0.cmp(&b.0)
@@ -347,6 +247,129 @@ fn build(rows: &[Row], servers: &[ServerRow]) -> Gates {
         gates,
         metrics: metrics(),
     }
+}
+
+/// The gate of the projects `current` that `k` groups, ranked: the default
+/// first, then server gates, then other sonda.toml ones. `None` for a
+/// server gate that no longer exists.
+fn gate_of(
+    k: Key,
+    current: &[&Row],
+    rows: &[Row],
+    servers: &[ServerRow],
+    default: &Key,
+) -> Option<(u8, usize, Gate)> {
+    let server = match &k {
+        Key::Server(id) => Some(servers.iter().find(|g| g.0 == *id)?),
+        Key::Toml(_) => None,
+    };
+    let is_default = k == *default;
+    let template = match server {
+        Some(g) => json!({ "conditions": g.2 }),
+        None => current[0].3.clone(),
+    };
+    let conditions = gate_conditions(&template, current);
+    let projects: Vec<GateProject> = current
+        .iter()
+        .map(|r| GateProject {
+            project: r.1.clone(),
+            state: gate_state(r.4, &r.3),
+            analyzed_at: rfc3339(r.2),
+        })
+        .collect();
+    let members: Vec<&str> = current.iter().map(|r| r.1.as_str()).collect();
+    let history: Vec<&Row> = rows
+        .iter()
+        .filter(|r| members.contains(&r.1.as_str()) && key(&r.3) == k)
+        .take(EVALUATIONS)
+        .collect();
+    let passed = history.iter().filter(|r| r.4).count();
+    let most_common_failure = most_common_failure(&history);
+    let gate = Gate {
+        id: match &k {
+            Key::Server(id) => format!("server-{id}"),
+            Key::Toml(sig) => gate_id(sig),
+        },
+        name: server.map(|g| g.1.clone()).unwrap_or_default(),
+        is_default,
+        server: server.map(|g| ServerGate {
+            id: g.0,
+            changed_by: g.3.clone(),
+            changed_at: rfc3339(g.4),
+        }),
+        conditions,
+        projects,
+        pass_rate: (!history.is_empty()).then(|| (passed * 100 / history.len()) as u32),
+        evaluations: history
+            .iter()
+            .map(|r| Evaluation {
+                analysis: r.0,
+                project: r.1.clone(),
+                state: gate_state(r.4, &r.3),
+                analyzed_at: rfc3339(r.2),
+            })
+            .collect(),
+        most_common_failure,
+    };
+    // The default first, then server gates, then other sonda.toml ones.
+    let rank = if is_default {
+        0
+    } else if server.is_some() {
+        1
+    } else {
+        2
+    };
+    Some((rank, current.len(), gate))
+}
+
+/// The gate's conditions, each with how many of `current` fail it or have
+/// no data for it.
+fn gate_conditions(template: &Value, current: &[&Row]) -> Vec<GateCondition> {
+    template["conditions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let metric = c["metric"].as_str().unwrap_or_default();
+            let count = |status: &str| {
+                current
+                    .iter()
+                    .filter(|r| {
+                        r.3["conditions"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|x| x["metric"] == metric && x["status"] == status)
+                    })
+                    .count()
+            };
+            GateCondition {
+                label: condition_label(c),
+                metric: metric.to_string(),
+                op: c["op"].as_str().unwrap_or_default().to_string(),
+                threshold: c["threshold"].as_f64().unwrap_or_default(),
+                failing: count("error"),
+                no_data: count("no_data"),
+            }
+        })
+        .collect()
+}
+
+/// The condition that failed most often in `history`, the first label on a
+/// tie.
+fn most_common_failure(history: &[&Row]) -> Option<String> {
+    let mut failures: BTreeMap<String, usize> = BTreeMap::new();
+    for r in history {
+        for c in r.3["conditions"].as_array().into_iter().flatten() {
+            if c["status"] == "error" {
+                *failures.entry(condition_label(c)).or_default() += 1;
+            }
+        }
+    }
+    failures
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(label, _)| label)
 }
 
 #[cfg(test)]

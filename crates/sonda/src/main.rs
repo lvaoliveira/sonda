@@ -294,65 +294,77 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-fn scan(args: ScanArgs) -> Result<ExitCode> {
-    // Checked before scanning, so a wrong URL or token fails fast. The
-    // environment is read here, not by clap, so that SONDA_SERVER alone
-    // doesn't turn a plain scan into an upload.
-    let upload = if args.upload {
-        let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
-        let server = match args.server.clone() {
-            Some(s) => s,
-            None => env("SONDA_SERVER")
-                .and_then(|v| v.into_string().ok())
-                .context("--upload needs --server or SONDA_SERVER")?,
-        };
-        upload::Target {
-            server,
-            project: args.project.clone().unwrap_or_default(),
-            branch: args.branch.clone().unwrap_or_default(),
-            commit: args.commit.clone().unwrap_or_default(),
-            project_version: args.project_version.clone(),
-            token_file: args
-                .token_file
-                .clone()
-                .or_else(|| env("SONDA_TOKEN_FILE").map(PathBuf::from)),
-            pull_request: args.pull_request,
-            pull_request_base: args.pull_request_base.clone(),
-        }
-        .check()?
-    } else {
-        None
+/// Where `sonda scan --upload` sends the report, checked before scanning so
+/// a wrong URL or token fails fast; `None` without `--upload`. The
+/// environment is read here, not by clap, so that SONDA_SERVER alone doesn't
+/// turn a plain scan into an upload.
+fn upload_target(args: &ScanArgs) -> Result<Option<upload::Checked>> {
+    if !args.upload {
+        return Ok(None);
+    }
+    let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    let server = match args.server.clone() {
+        Some(s) => s,
+        None => env("SONDA_SERVER")
+            .and_then(|v| v.into_string().ok())
+            .context("--upload needs --server or SONDA_SERVER")?,
     };
+    upload::Target {
+        server,
+        project: args.project.clone().unwrap_or_default(),
+        branch: args.branch.clone().unwrap_or_default(),
+        commit: args.commit.clone().unwrap_or_default(),
+        project_version: args.project_version.clone(),
+        token_file: args
+            .token_file
+            .clone()
+            .or_else(|| env("SONDA_TOKEN_FILE").map(PathBuf::from)),
+        pull_request: args.pull_request,
+        pull_request_base: args.pull_request_base.clone(),
+    }
+    .check()
+}
+
+/// Applies the server's rule profile over `rules`, where it sets a rule, and
+/// says what it applied; `None` when the server has no profiles.
+fn apply_server_rules(
+    target: &upload::Checked,
+    rules: &mut config::RulesConfig,
+) -> Result<Option<report::AppliedProfile>> {
+    let Some(server) = target.fetch_rules()? else {
+        eprintln!(
+            "sonda: {} has no rule profiles; scanning with sonda.toml alone",
+            target.server()
+        );
+        return Ok(None);
+    };
+    let unknown = server.apply(rules);
+    eprintln!("sonda: rule profile {} on the server", server.describe());
+    if !unknown.is_empty() {
+        eprintln!(
+            "sonda: skipped rules this sonda doesn't know (the server is newer): {}",
+            unknown
+                .iter()
+                .map(|r| sonda_core::report::terminal_safe(r).into_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(Some(server.applied()))
+}
+
+fn scan(args: ScanArgs) -> Result<ExitCode> {
+    let upload = upload_target(&args)?;
     let started = std::time::Instant::now();
     let mut cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
     // An uploading scan applies the server's rule settings, where they set a
     // rule, over sonda.toml's (ADR-0018). The report keeps sonda.toml's own,
     // so the server can show both.
     let toml_rules = cfg.rules.clone();
-    let mut applied = None;
-    if let Some(target) = &upload {
-        match target.fetch_rules()? {
-            Some(server) => {
-                let unknown = server.apply(&mut cfg.rules);
-                eprintln!("sonda: rule profile {} on the server", server.describe());
-                if !unknown.is_empty() {
-                    eprintln!(
-                        "sonda: skipped rules this sonda doesn't know (the server is newer): {}",
-                        unknown
-                            .iter()
-                            .map(|r| sonda_core::report::terminal_safe(r).into_owned())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                }
-                applied = Some(server.applied());
-            }
-            None => eprintln!(
-                "sonda: {} has no rule profiles; scanning with sonda.toml alone",
-                target.server()
-            ),
-        }
-    }
+    let applied = match &upload {
+        Some(target) => apply_server_rules(target, &mut cfg.rules)?,
+        None => None,
+    };
     let isolation = if args.no_isolation {
         Isolation::InProcess
     } else {
@@ -480,119 +492,133 @@ fn rfc3339(secs: u64) -> String {
 }
 
 fn list_rules(format: RulesFormat) -> String {
-    let langs = |r: &rules::Rule| {
-        let mut names: Vec<&str> = r.langs().iter().map(|l| l.name()).collect();
-        names.dedup();
-        names.join(", ")
-    };
-    let mut out = String::new();
     match format {
-        RulesFormat::Text => {
-            for r in RULES.iter() {
-                let _ = writeln!(
-                    out,
-                    "{:<32} {:<9} {:<14} {}{}",
-                    r.id,
-                    r.severity.as_str(),
-                    r.category.label(),
-                    r.name,
-                    if r.on_by_default() {
-                        ""
-                    } else {
-                        " (off by default)"
-                    }
-                );
+        RulesFormat::Text => rules_text(),
+        RulesFormat::Markdown => rules_markdown(),
+        RulesFormat::Json => rules_json(),
+    }
+}
+
+/// A rule's languages, by name, each once.
+fn rule_languages(r: &rules::Rule) -> Vec<&'static str> {
+    let mut names: Vec<&str> = r.langs().iter().map(|l| l.name()).collect();
+    names.dedup();
+    names
+}
+
+fn rules_text() -> String {
+    let mut out = String::new();
+    for r in RULES.iter() {
+        let _ = writeln!(
+            out,
+            "{:<32} {:<9} {:<14} {}{}",
+            r.id,
+            r.severity.as_str(),
+            r.category.label(),
+            r.name,
+            if r.on_by_default() {
+                ""
+            } else {
+                " (off by default)"
             }
-        }
-        RulesFormat::Markdown => {
-            let _ = writeln!(
-                out,
-                "# Rules\n\nGenerated by `sonda rules --format markdown`. Rules marked \
-                 *off* run only when `rules.enabled` in sonda.toml lists them.\n"
-            );
-            let _ = writeln!(out, "| Rule | Type | Severity | Languages | Default |");
-            let _ = writeln!(out, "|---|---|---|---|---|");
-            for r in RULES.iter() {
-                let _ = writeln!(
-                    out,
-                    "| [`{}`](#{}) | {} | {} | {} | {} |",
-                    r.id,
-                    r.id.replace('/', ""),
-                    r.category.label(),
-                    r.severity.as_str(),
-                    langs(r),
-                    if r.on_by_default() { "on" } else { "*off*" }
-                );
-            }
-            for r in RULES.iter() {
-                let _ = writeln!(out, "\n## {}\n\n**{}.** {}", r.id, r.name, r.description);
-                if !r.on_by_default() {
-                    let _ = writeln!(
-                        out,
-                        "\nOff by default: add `\"{}\"` to `rules.enabled` to run it.",
-                        r.id
-                    );
-                }
-                if !r.sonar.is_empty() {
-                    let refs: Vec<String> = r
-                        .sonar
-                        .iter()
-                        .map(|s| format!("{}{}", s.key, if s.exact { "" } else { " (related)" }))
-                        .collect();
-                    let _ = writeln!(out, "\nSonarQube: {}", refs.join(", "));
-                }
-                let standards = r.standards();
-                if !standards.cwe.is_empty() || !standards.owasp_2021.is_empty() {
-                    let refs: Vec<String> = standards
-                        .cwe
-                        .iter()
-                        .map(|c| {
-                            format!("[CWE-{c}](https://cwe.mitre.org/data/definitions/{c}.html)")
-                        })
-                        .chain(rules::Edition::ALL.iter().flat_map(|&e| {
-                            standards.owasp(e).iter().map(move |o| {
-                                format!("OWASP {}:{} {}", o.id(), e.year(), o.title())
-                            })
-                        }))
-                        .collect();
-                    let _ = writeln!(out, "\nStandards: {}", refs.join(", "));
-                }
-                if let Some(ex) = &r.example {
-                    let lang = ex.lang.name();
-                    let _ = writeln!(
-                        out,
-                        "\nNoncompliant:\n\n```{lang}\n{}\n```\n\nCompliant:\n\n```{lang}\n{}\n```",
-                        ex.bad.trim_end(),
-                        ex.good.trim_end()
-                    );
-                }
-            }
-        }
-        RulesFormat::Json => {
-            let rules: Vec<serde_json::Value> = RULES
-                .iter()
-                .map(|r| {
-                    let mut langs: Vec<&str> = r.langs().iter().map(|l| l.name()).collect();
-                    langs.dedup();
-                    serde_json::json!({
-                        "id": r.id,
-                        "name": r.name,
-                        "languages": langs,
-                        "category": r.category.as_str(),
-                        "severity": r.severity.as_str(),
-                        "on_by_default": r.on_by_default(),
-                        "cwe": r.standards().cwe,
-                        "owasp_2025": r.standards().owasp_2025.iter().map(|o| o.id()).collect::<Vec<_>>(),
-                        "owasp_2021": r.standards().owasp_2021.iter().map(|o| o.id()).collect::<Vec<_>>(),
-                        "sonar": r.sonar.iter().map(|s| serde_json::json!({ "key": s.key, "exact": s.exact })).collect::<Vec<_>>(),
-                    })
-                })
-                .collect();
-            // Cannot fail: built from plain JSON values.
-            out = serde_json::to_string_pretty(&rules).expect("rules serialize") + "\n";
-        }
+        );
     }
     out
+}
+
+/// docs/rules.md: a table of every rule, then a section for each.
+fn rules_markdown() -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Rules\n\nGenerated by `sonda rules --format markdown`. Rules marked \
+         *off* run only when `rules.enabled` in sonda.toml lists them.\n"
+    );
+    let _ = writeln!(out, "| Rule | Type | Severity | Languages | Default |");
+    let _ = writeln!(out, "|---|---|---|---|---|");
+    for r in RULES.iter() {
+        let _ = writeln!(
+            out,
+            "| [`{}`](#{}) | {} | {} | {} | {} |",
+            r.id,
+            r.id.replace('/', ""),
+            r.category.label(),
+            r.severity.as_str(),
+            rule_languages(r).join(", "),
+            if r.on_by_default() { "on" } else { "*off*" }
+        );
+    }
+    for r in RULES.iter() {
+        rule_section(&mut out, r);
+    }
+    out
+}
+
+/// A rule's section in docs/rules.md: what it finds, its SonarQube keys and
+/// standards, and its example.
+fn rule_section(out: &mut String, r: &rules::Rule) {
+    let _ = writeln!(out, "\n## {}\n\n**{}.** {}", r.id, r.name, r.description);
+    if !r.on_by_default() {
+        let _ = writeln!(
+            out,
+            "\nOff by default: add `\"{}\"` to `rules.enabled` to run it.",
+            r.id
+        );
+    }
+    if !r.sonar.is_empty() {
+        let refs: Vec<String> = r
+            .sonar
+            .iter()
+            .map(|s| format!("{}{}", s.key, if s.exact { "" } else { " (related)" }))
+            .collect();
+        let _ = writeln!(out, "\nSonarQube: {}", refs.join(", "));
+    }
+    let standards = r.standards();
+    if !standards.cwe.is_empty() || !standards.owasp_2021.is_empty() {
+        let refs: Vec<String> = standards
+            .cwe
+            .iter()
+            .map(|c| format!("[CWE-{c}](https://cwe.mitre.org/data/definitions/{c}.html)"))
+            .chain(rules::Edition::ALL.iter().flat_map(|&e| {
+                standards
+                    .owasp(e)
+                    .iter()
+                    .map(move |o| format!("OWASP {}:{} {}", o.id(), e.year(), o.title()))
+            }))
+            .collect();
+        let _ = writeln!(out, "\nStandards: {}", refs.join(", "));
+    }
+    if let Some(ex) = &r.example {
+        let lang = ex.lang.name();
+        let _ = writeln!(
+            out,
+            "\nNoncompliant:\n\n```{lang}\n{}\n```\n\nCompliant:\n\n```{lang}\n{}\n```",
+            ex.bad.trim_end(),
+            ex.good.trim_end()
+        );
+    }
+}
+
+fn rules_json() -> String {
+    let rules: Vec<serde_json::Value> = RULES
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "languages": rule_languages(r),
+                "category": r.category.as_str(),
+                "severity": r.severity.as_str(),
+                "on_by_default": r.on_by_default(),
+                "cwe": r.standards().cwe,
+                "owasp_2025": r.standards().owasp_2025.iter().map(|o| o.id()).collect::<Vec<_>>(),
+                "owasp_2021": r.standards().owasp_2021.iter().map(|o| o.id()).collect::<Vec<_>>(),
+                "sonar": r.sonar.iter().map(|s| serde_json::json!({ "key": s.key, "exact": s.exact })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    // Cannot fail: built from plain JSON values.
+    serde_json::to_string_pretty(&rules).expect("rules serialize") + "\n"
 }
 
 #[cfg(test)]

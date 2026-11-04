@@ -383,6 +383,65 @@ async fn latest_scans(
 /// the profile applied).
 type ScanRow = (i64, String, f64, Option<Value>, Option<Value>);
 
+/// Changes between consecutive analyses that recorded settings, grouped by
+/// analysis so the newest analysis comes first, each in rule order.
+fn toml_changes(history: &[ScanRow]) -> Vec<TomlChange> {
+    let mut by_analysis: Vec<Vec<TomlChange>> = Vec::new();
+    let mut previous: Option<Toml> = None;
+    for (id, sha, at, value, _) in history {
+        let Some(t) = value
+            .clone()
+            .and_then(|v| serde_json::from_value::<Toml>(v).ok())
+        else {
+            continue;
+        };
+        if let Some(p) = &previous {
+            by_analysis.push(changes_between(p, &t, |rule, change| TomlChange {
+                analysis_id: *id,
+                sha: sha.clone(),
+                at: rfc3339(*at),
+                rule: rule.to_string(),
+                change,
+            }));
+        }
+        previous = Some(t);
+    }
+    by_analysis.into_iter().rev().flatten().collect()
+}
+
+/// What changed from `p` to `t`, each change made by `change`.
+fn changes_between(
+    p: &Toml,
+    t: &Toml,
+    change: impl Fn(&str, &'static str) -> TomlChange,
+) -> Vec<TomlChange> {
+    let mut changes: Vec<TomlChange> = Vec::new();
+    changes.extend(
+        t.disabled
+            .difference(&p.disabled)
+            .map(|r| change(r, "disabled")),
+    );
+    changes.extend(
+        p.disabled
+            .difference(&t.disabled)
+            .map(|r| change(r, "re-enabled")),
+    );
+    changes.extend(
+        t.enabled
+            .difference(&p.enabled)
+            .map(|r| change(r, "enabled")),
+    );
+    changes.extend(p.enabled.difference(&t.enabled).map(|r| change(r, "unset")));
+    let rules: BTreeSet<&String> = t.severity.keys().chain(p.severity.keys()).collect();
+    changes.extend(
+        rules
+            .into_iter()
+            .filter(|r| t.severity.get(*r) != p.severity.get(*r))
+            .map(|r| change(r, "severity")),
+    );
+    changes
+}
+
 /// `GET /api/projects/{key}/rules`: the rules for the project's languages,
 /// each with its state there and what set it, and its findings.
 pub async fn get_project(
@@ -476,51 +535,7 @@ pub async fn get_project(
         })
         .collect();
 
-    // Changes between consecutive analyses that recorded settings, grouped
-    // by analysis so the newest analysis comes first, each in rule order.
-    let mut by_analysis: Vec<Vec<TomlChange>> = Vec::new();
-    let mut previous: Option<Toml> = None;
-    for (id, sha, at, value, _) in &history {
-        let Some(t) = value
-            .clone()
-            .and_then(|v| serde_json::from_value::<Toml>(v).ok())
-        else {
-            continue;
-        };
-        if let Some(p) = &previous {
-            let mut changes = Vec::new();
-            let mut push = |rule: &str, change: &'static str| {
-                changes.push(TomlChange {
-                    analysis_id: *id,
-                    sha: sha.clone(),
-                    at: rfc3339(*at),
-                    rule: rule.to_string(),
-                    change,
-                });
-            };
-            for r in t.disabled.difference(&p.disabled) {
-                push(r, "disabled");
-            }
-            for r in p.disabled.difference(&t.disabled) {
-                push(r, "re-enabled");
-            }
-            for r in t.enabled.difference(&p.enabled) {
-                push(r, "enabled");
-            }
-            for r in p.enabled.difference(&t.enabled) {
-                push(r, "unset");
-            }
-            let rules: BTreeSet<&String> = t.severity.keys().chain(p.severity.keys()).collect();
-            for r in rules {
-                if t.severity.get(r) != p.severity.get(r) {
-                    push(r, "severity");
-                }
-            }
-            by_analysis.push(changes);
-        }
-        previous = Some(t);
-    }
-    let toml_changes = by_analysis.into_iter().rev().flatten().collect();
+    let toml_changes = toml_changes(&history);
     Ok(Json(ProjectRules {
         project: key,
         main_branch,

@@ -174,6 +174,49 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     Option::<T>::deserialize(d).map(Some)
 }
 
+/// A text setting the patch sets, trimmed, and none when empty.
+fn trimmed(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The name after the patch: unchanged when it leaves the name out.
+fn patched_name(
+    value: Option<Option<String>>,
+    old: &Option<String>,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = value else {
+        return Ok(old.clone());
+    };
+    let name = trimmed(value);
+    if name.as_ref().is_some_and(|n| n.chars().count() > 100) {
+        return Err(ApiError::Unprocessable(
+            "a project name is at most 100 characters".into(),
+        ));
+    }
+    Ok(name)
+}
+
+/// The repository after the patch: unchanged when it leaves it out.
+fn patched_repository(
+    value: Option<Option<String>>,
+    old: &Option<String>,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = value else {
+        return Ok(old.clone());
+    };
+    let repository = trimmed(value);
+    if let Some(r) = &repository
+        && !sonda_core::upload::is_repository(r)
+    {
+        return Err(ApiError::Unprocessable(format!(
+            "{r:?} is not a GitHub repository: use owner/name"
+        )));
+    }
+    Ok(repository)
+}
+
 /// `PATCH /api/projects/{key}/settings`, admins only. Changing the main
 /// branch changes what every screen counts at once, and starts the new
 /// code period over on it (ADR-0011): from its first analysis, or its
@@ -187,18 +230,7 @@ pub async fn patch(
 ) -> Result<Json<Settings>, ApiError> {
     let pool = &state.pool;
     let (id, old_name, old_main) = project(pool, &key).await?;
-    let name = match patch.name {
-        None => old_name.clone(),
-        Some(n) => {
-            let n = n.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
-            if n.as_ref().is_some_and(|n| n.chars().count() > 100) {
-                return Err(ApiError::Unprocessable(
-                    "a project name is at most 100 characters".into(),
-                ));
-            }
-            n
-        }
-    };
+    let name = patched_name(patch.name, &old_name)?;
     let old_gate = gate_of(pool, id).await?;
     let gate = match patch.quality_gate {
         None => old_gate.clone(),
@@ -212,20 +244,7 @@ pub async fn patch(
         ),
     };
     let old_repository = repository_of(pool, id).await?;
-    let repository = match patch.github_repository {
-        None => old_repository.clone(),
-        Some(r) => {
-            let r = r.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
-            if let Some(r) = &r
-                && !sonda_core::upload::is_repository(r)
-            {
-                return Err(ApiError::Unprocessable(format!(
-                    "{r:?} is not a GitHub repository: use owner/name"
-                )));
-            }
-            r
-        }
-    };
+    let repository = patched_repository(patch.github_repository, &old_repository)?;
     let main = patch.main_branch.unwrap_or_else(|| old_main.clone());
     if main != old_main {
         let analyzed: bool = sqlx::query_scalar(
