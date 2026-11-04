@@ -211,6 +211,9 @@ export const DECIDED: readonly TriageStatus[] = ['accepted', 'false_positive']
 export type FacetKey = 'severity' | 'category' | 'status' | 'component'
 
 /** Filters and paging for `issues()`. Empty lists match everything. */
+/** The most issues one prompt for an AI assistant carries, as the server limits it. */
+export const PROMPT_LIMIT = 50
+
 export interface IssueQuery {
   /** A project key; all projects when absent. */
   project?: string
@@ -1148,6 +1151,11 @@ export interface SondaApi {
   analysis(id: number): Promise<AnalysisDetail>
   issues(query: IssueQuery): Promise<IssuePage>
   issue(id: number): Promise<IssueDetail>
+  /**
+   * The issues `query` matches, or only `ids` among them, at most
+   * PROMPT_LIMIT, as Markdown for the developer's AI assistant (ADR-0025).
+   */
+  issuesPrompt(query: IssueQuery, ids?: number[]): Promise<string>
   updateIssue(id: number, patch: IssuePatch): Promise<IssueDetail>
   rules(): Promise<RuleCatalog>
   /** Every rule whose state differs from its default for the project, and what set it. */

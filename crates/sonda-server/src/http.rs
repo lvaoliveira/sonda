@@ -80,6 +80,7 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         .route("/rule-profiles", get(profiles::list))
         .route("/rule-profiles/{id}", get(profiles::get))
         .route("/issues", get(issues::list_issues))
+        .route("/issues/prompt", get(issues::prompt))
         .route("/issues/{id}", get(issues::get_issue))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

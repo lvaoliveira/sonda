@@ -45,6 +45,22 @@ describe('Issues', () => {
     for (const row of rows) expect(row).toHaveTextContent('Vulnerability')
   })
 
+  it('copies an issue, or the list, as a prompt for an AI assistant', async () => {
+    const user = userEvent.setup()
+    renderAt('/issues')
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    await user.click(await within(detail).findByRole('button', { name: 'Copy as prompt' }))
+    expect(await screen.findByText(/Copied a prompt for 1 issue: paste it into your AI assistant/)).toBeInTheDocument()
+    const one = await navigator.clipboard.readText()
+    expect(one).toMatch(/^# Fix 1 sonda issue in /)
+    expect(one).toContain('## The rules')
+
+    await user.click(within(screen.getByRole('region', { name: 'Issue list' })).getByRole('button', { name: 'Copy as prompt' }))
+    const all = await navigator.clipboard.readText()
+    expect(all).toMatch(/^# Fix \d+ sonda issues in /)
+    expect(all).not.toBe(one)
+  })
+
   it('changes status with an undo, through the API, and records it', async () => {
     const user = userEvent.setup()
     renderAt('/issues')

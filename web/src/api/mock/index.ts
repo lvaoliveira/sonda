@@ -1,4 +1,4 @@
-import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type GitHubApp, type GitHubInstallation, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
+import { AuthError, DECIDED, type Drill, type DrillMetric, type IssueDetail, type IssuePatch, MIN_PASSWORD_LENGTH, type DeletedProject, type GateConditionInput, type GitHubApp, type GitHubInstallation, PROMPT_LIMIT, type ProjectSettingChange, type QualityGate, type ProjectSettings, type RuleCatalog, type Session, type Shell, type SondaApi, type User, type UserRow } from '../types'
 import { initials } from '@/lib/identity'
 import issuesData from './issues.json'
 import { DRILLS, overview } from './overview'
@@ -501,6 +501,12 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       guard()
       return wait(findIssue(id))
     },
+    issuesPrompt: async (query, ids) => {
+      guard()
+      const page = queryIssues(counted(), { ...query, offset: 0, limit: counted().length })
+      const chosen = ids?.length ? page.items.filter((i) => ids.includes(i.id)) : page.items
+      return wait(mockPrompt(chosen.slice(0, PROMPT_LIMIT).map((i) => findIssue(i.id)), ids?.length ? chosen.length : page.total))
+    },
     updateIssue: async (id, patch) => wait(update(id, patch)),
     rules: async () => {
       guard()
@@ -561,4 +567,19 @@ export function createMockApi(latency = 250, options: MockOptions = {}): SondaAp
       await wait(null)
     },
   }
+}
+
+/** The server's prompt (crates/sonda-server/src/prompt.rs), in its shape: by file, then each rule once. */
+function mockPrompt(issues: IssueDetail[], total: number): string {
+  if (issues.length === 0) return "No sonda issues match, so there's nothing to fix.\n"
+  const projects = [...new Set(issues.map((i) => i.project))].join(', ')
+  const lines = [`# Fix ${issues.length} sonda ${issues.length === 1 ? 'issue' : 'issues'} in ${projects}`, '', 'sonda, a static analyzer, found these in the code. Fix each one.']
+  if (total > issues.length) lines.push('', `These are ${issues.length} of the ${total} issues that match.`)
+  for (const file of [...new Set(issues.map((i) => i.file))].sort()) {
+    lines.push('', `## \`${file}\``)
+    for (const i of issues.filter((x) => x.file === file).sort((a, b) => a.line - b.line)) lines.push('', `### Line ${i.line}: ${i.message}`, '', `\`${i.rule}\` · ${i.severity} ${i.category.replace('_', ' ')}`)
+  }
+  lines.push('', '## The rules')
+  for (const i of issues.filter((x, n) => issues.findIndex((y) => y.rule === x.rule) === n)) lines.push('', `### \`${i.rule}\`: ${i.ruleName ?? i.rule}`, '', i.ruleDescription ?? '')
+  return lines.join('\n') + '\n'
 }

@@ -30,6 +30,7 @@ pub mod overview;
 pub mod profiles;
 pub mod project_settings;
 pub mod projects;
+pub mod prompt;
 pub mod pull_requests;
 pub mod quality_gates;
 pub mod retention;

@@ -1,6 +1,6 @@
 import { issueSearchParams } from '@/lib/issues'
 import { initials } from '@/lib/identity'
-import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type ProjectSettings, type DeletedProject, type GitHubApp, type GitHubAppManifest, type GitHubInstallation, type RuleProfileDetail, type RuleProfileSummary, type GateList, type SavedGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
+import { AuthError, type AnalysisDetail, type ApiToken, type CreatedToken, type AnalysisPage, type ComponentDetail, type ComponentList, type CoverageList, type DependencyList, type FileCoverage, type DependencyReview, type NewCodePeriod, type Drill, type IssueDetail, type IssuePage, PROMPT_LIMIT, type Overview, type ProjectDetail, type ProjectList, type ProjectRules, type ProjectSettings, type DeletedProject, type GitHubApp, type GitHubAppManifest, type GitHubInstallation, type RuleProfileDetail, type RuleProfileSummary, type GateList, type SavedGate, type RuleCatalog, type Security, type SecurityReview, type Session, type Shell, type SondaApi, type User, type UserRow } from './types'
 
 /** Fired when a request finds the session missing or expired. */
 export const UNAUTHORIZED_EVENT = 'sonda:unauthorized'
@@ -30,7 +30,10 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
       const error = (await response.json().catch(() => null)) as { error?: string } | null
       throw new Error(error?.error ?? `${response.status} ${response.statusText}`)
     }
-    return (response.status === 204 ? undefined : await response.json()) as T
+    if (response.status === 204) return undefined as T
+    // A prompt is Markdown, not JSON.
+    if ((response.headers.get('Content-Type') ?? '').startsWith('text/')) return (await response.text()) as T
+    return (await response.json()) as T
   }
 
   return {
@@ -121,6 +124,12 @@ export function createHttpApi(base = '/api', fetchFn: typeof fetch = (...args) =
     createProject: (key, mainBranch) => call<{ key: string }>('POST', '/projects', { key, mainBranch }),
     project: (key, branch) => call<ProjectDetail>('GET', `/projects/${encodeURIComponent(key)}${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`),
     issues: (query) => call<IssuePage>('GET', `/issues?${issueSearchParams(query)}`),
+    issuesPrompt: (query, ids) => {
+      const params = issueSearchParams({ ...query, offset: 0, limit: PROMPT_LIMIT })
+      params.delete('offset')
+      if (ids?.length) params.set('ids', ids.join(','))
+      return call<string>('GET', `/issues/prompt?${params}`)
+    },
     issue: (id) => call<IssueDetail>('GET', `/issues/${id}`),
     updateIssue: (id, patch) => call<IssueDetail>('PATCH', `/issues/${id}`, patch),
     rules: () => call<RuleCatalog>('GET', '/rules'),
