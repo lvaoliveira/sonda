@@ -40359,20 +40359,23 @@ class A { bool F(Money a, Money b) => a.Equals(b); }
 
 ## cs/undisposed-local
 
-**Disposable objects created in a method should be disposed.** A stream, connection or client that is neither disposed, returned nor handed to someone else keeps its file handle or socket until the garbage collector finalizes it.
+**IDisposables should be disposed.** A FileStream, reader, writer, socket client, WebClient or image kept in a private field or a local and never disposed holds its file handle, socket or unmanaged memory until the garbage collector finalizes it.
 
-SonarQube: S2930 (related)
+SonarQube: S2930
 
 Noncompliant:
 
 ```csharp
-class A { string F(string p) { var reader = new StreamReader(p); return reader.ReadToEnd(); } }
+using System.IO;
+class ResourceHolder { private FileStream fs; public void OpenResource(string path) { this.fs = new FileStream(path, FileMode.Open); } }
 ```
 
 Compliant:
 
 ```csharp
-class A { string F(string p) { using var reader = new StreamReader(p); return reader.ReadToEnd(); } }
+using System;
+using System.IO;
+class ResourceHolder : IDisposable { private FileStream fs; public void OpenResource(string path) { this.fs = new FileStream(path, FileMode.Open); } public void Dispose() { this.fs.Dispose(); } }
 ```
 
 ## cs/recursive-generic-inheritance

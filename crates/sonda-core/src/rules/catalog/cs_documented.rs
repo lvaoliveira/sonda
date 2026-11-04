@@ -1434,6 +1434,204 @@ pub(super) fn invalid_regexes<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     found
 }
 
+// ---------------------------------------------------- S2930
+
+/// The types SonarQube documents tracking, by key.
+const TRACKED_DISPOSABLES: &[&str] = &[
+    "FluentAssertions.Execution.AssertionScope",
+    "System.Drawing.Bitmap",
+    "System.Drawing.Image",
+    "System.IO.FileStream",
+    "System.IO.StreamReader",
+    "System.IO.StreamWriter",
+    "System.Net.Sockets.TcpClient",
+    "System.Net.Sockets.UdpClient",
+    "System.Net.WebClient",
+];
+
+/// Whether a file imports a namespace.
+fn imports(root: Node, namespace: &[u8], src: &[u8]) -> bool {
+    root.named_children(&mut root.walk()).any(|c| {
+        c.kind() == "using_directive"
+            && c.named_child(c.named_child_count().saturating_sub(1) as u32)
+                .is_some_and(|n| text(n, src) == namespace)
+    })
+}
+
+/// Whether a written type is one the documentation tracks. System.Drawing
+/// and FluentAssertions come in packages, not the platform's packs: their
+/// types are told by name, in a file that imports their namespace.
+fn tracked_type(infer: &Infer, root: Node, ty: Node, src: &[u8]) -> bool {
+    if let Some(t) = infer.written(ty) {
+        return t.key().is_some_and(|k| TRACKED_DISPOSABLES.contains(&k));
+    }
+    let written = text(ty, src);
+    TRACKED_DISPOSABLES.iter().any(|k| {
+        let (ns, name) = k.rsplit_once('.').unwrap_or(("", k));
+        written == k.as_bytes() || written == name.as_bytes() && imports(root, ns.as_bytes(), src)
+    })
+}
+
+/// The documented factories: `File.Create`, `File.Open`, `Image.FromFile`,
+/// `Image.FromStream`.
+fn tracked_factory(infer: &Infer, root: Node, call: Node, src: &[u8]) -> bool {
+    let Some(function) = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_access_expression")
+    else {
+        return false;
+    };
+    let (Some(owner), Some(name)) = (
+        function.child_by_field_name("expression"),
+        function.child_by_field_name("name").map(|n| text(n, src)),
+    ) else {
+        return false;
+    };
+    match name {
+        b"Create" | b"Open" => infer.written(owner).is_some_and(|t| t.is("System.IO.File")),
+        b"FromFile" | b"FromStream" => {
+            tracked_type(infer, root, owner, src)
+                && matches!(super::cs::simple_name(owner, src), b"Image")
+        }
+        _ => false,
+    }
+}
+
+/// A new tracked object: `new FileStream(...)` or a documented factory.
+fn creates_tracked(infer: &Infer, root: Node, value: Node, src: &[u8]) -> bool {
+    match value.kind() {
+        "object_creation_expression" => value
+            .child_by_field_name("type")
+            .is_some_and(|t| tracked_type(infer, root, t, src)),
+        "invocation_expression" => tracked_factory(infer, root, value, src),
+        _ => false,
+    }
+}
+
+/// Whether an object is created from another disposable one, such as a
+/// reader over a stream, which disposing the stream takes care of. An
+/// argument whose type doesn't resolve may be one.
+fn wraps_disposable(infer: &Infer, value: Node) -> bool {
+    arguments(value).iter().any(|a| {
+        infer.type_of(a.value).is_none_or(|t| {
+            infer
+                .supertypes(&t)
+                .iter()
+                .any(|s| s.is("System.IDisposable") || s.is("System.IAsyncDisposable"))
+        })
+    })
+}
+
+/// Whether one of these uses disposes, closes, aliases, returns or passes
+/// the object on.
+fn any_released(uses: &[Node], src: &[u8]) -> bool {
+    uses.iter().any(|u| {
+        matches!(
+            super::cs_flow::released(*u, src),
+            super::cs_flow::Fate::Released
+        )
+    })
+}
+
+/// Private fields and local variables of the documented types, created with
+/// `new` or a documented factory, that nothing disposes, closes, aliases,
+/// returns or passes on. Locals declared with `using`, and those created
+/// from another disposable object, are left alone, as documented.
+pub(super) fn undisposed_resources<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let (Some(root), Some(infer)) = (m.root, Infer::new(m, src)) else {
+        return Vec::new();
+    };
+    let mut uses: Vec<Vec<Node<'t>>> = vec![Vec::new(); m.decls.len()];
+    for r in &m.refs {
+        if let Some(d) = r.decl {
+            uses[d].push(r.node);
+        }
+    }
+    let mut found = Vec::new();
+    for (i, d) in m.decls.iter().enumerate() {
+        let Some(declarator) = d.declarator.filter(|x| x.kind() == "variable_declarator") else {
+            continue;
+        };
+        let initial = (declarator.named_child_count() > 1)
+            .then(|| declarator.named_child(declarator.named_child_count() as u32 - 1))
+            .flatten();
+        match d.kind {
+            DeclKind::Let => {
+                let Some(value) = initial.filter(|v| creates_tracked(&infer, root, *v, src)) else {
+                    continue;
+                };
+                // `using var x = ...`, `using (var x = ...)`.
+                let statement = declarator.parent().and_then(|v| v.parent());
+                let using = statement.is_none_or(|s| {
+                    s.kind() != "local_declaration_statement"
+                        || s.children(&mut s.walk()).any(|c| c.kind() == "using")
+                });
+                if !using && !wraps_disposable(&infer, value) && !any_released(&uses[i], src) {
+                    found.push(d.node);
+                }
+            }
+            DeclKind::Field => {
+                let Some(declaration) = declarator.parent().and_then(|v| v.parent()) else {
+                    continue;
+                };
+                let private = !["public", "protected", "internal"]
+                    .iter()
+                    .any(|w| cs_has_modifier(declaration, w, src));
+                let typed = d.ty.is_some_and(|t| tracked_type(&infer, root, t, src));
+                let Some(class) = declaration
+                    .parent()
+                    .filter(|p| p.kind() == "declaration_list")
+                else {
+                    continue;
+                };
+                if !private || !typed {
+                    continue;
+                }
+                // Its uses: the name alone, or `this.name`.
+                let name = d.name.as_bytes();
+                let mut occurrences = Vec::new();
+                let mut stack = vec![class];
+                while let Some(n) = stack.pop() {
+                    stack.extend(n.named_children(&mut n.walk()));
+                    if n.kind() != "identifier" || text(n, src) != name || n.id() == d.node.id() {
+                        continue;
+                    }
+                    let this = n.parent().filter(|p| {
+                        p.kind() == "member_access_expression"
+                            && p.child_by_field_name("name") == Some(n)
+                            && p.child_by_field_name("expression")
+                                .is_some_and(|e| text(e, src) == b"this")
+                    });
+                    match this {
+                        Some(access) => occurrences.push(access),
+                        None if m.decl_of(n).is_some_and(|x| std::ptr::eq(x, d)) => {
+                            occurrences.push(n)
+                        }
+                        None => {}
+                    }
+                }
+                // Created: by its initializer, or by an assignment.
+                let created = initial.is_some_and(|v| creates_tracked(&infer, root, v, src))
+                    || occurrences.iter().any(|o| {
+                        o.parent()
+                            .filter(|a| {
+                                a.kind() == "assignment_expression"
+                                    && a.child_by_field_name("left") == Some(*o)
+                            })
+                            .and_then(|a| a.child_by_field_name("right"))
+                            .is_some_and(|v| creates_tracked(&infer, root, v, src))
+                    });
+                if created && !any_released(&occurrences, src) {
+                    found.push(d.node);
+                }
+            }
+            _ => {}
+        }
+    }
+    found.sort_by_key(|n| n.start_byte());
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -1649,5 +1847,27 @@ mod tests {
         // Not Primary: the semantic model doesn't declare a primary
         // constructor's parameters yet.
         assert_eq!(flagged("cs/controller-mixed-responsibilities", src), [2]);
+    }
+
+    #[test]
+    fn disposables_as_documented() {
+        let src = "using System;\nusing System.IO;\nusing System.Text;\nusing System.Drawing;\n\
+            public class ResourceHolder {\n\
+            private FileStream fs;\n\
+            private FileStream closed;\n\
+            public StreamWriter Shared;\n\
+            public void OpenResource(string path) { this.fs = new FileStream(path, FileMode.Open); closed = File.Open(path, FileMode.Open); }\n\
+            public void Close() { closed.Dispose(); }\n\
+            public void WriteToFile(string path, string text) {\n\
+            var fs = new FileStream(path, FileMode.Open);\n\
+            var bytes = Encoding.UTF8.GetBytes(text);\n\
+            fs.Write(bytes, 0, bytes.Length);\n\
+            }\n\
+            public Stream Returned(string path) { var fs = new FileStream(path, FileMode.Open); return fs; }\n\
+            public void ReadFromStream(Stream s) { var sr = new StreamReader(s); }\n\
+            public void Image(string p) { var img = System.Drawing.Image.FromFile(p); var bmp = new Bitmap(p); }\n\
+            public void Kept(string p) { using var fs = new FileStream(p, FileMode.Open); var ms = new MemoryStream(); }\n\
+            }";
+        assert_eq!(flagged("cs/undisposed-local", src), [6, 12, 18, 18]);
     }
 }

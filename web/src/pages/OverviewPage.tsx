@@ -734,16 +734,13 @@ function Recent({ data }: Readonly<{ data: Overview }>) {
                   {a.note}
                 </span>
                 {a.progress != null && (
-                  <span
-                    role="progressbar"
+                  // The track and the fill are the browser's own parts: -webkit- in Chrome and Safari, -moz- in Firefox.
+                  <progress
                     aria-label={`${a.project} analysis progress`}
-                    aria-valuenow={a.progress}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    className="h-[3px] overflow-hidden rounded-sm bg-pip-off"
-                  >
-                    <span className="block h-full rounded-sm bg-info" style={{ width: `${a.progress}%` }} />
-                  </span>
+                    value={a.progress}
+                    max={100}
+                    className="block h-[3px] w-full appearance-none overflow-hidden rounded-sm border-0 bg-pip-off [&::-moz-progress-bar]:rounded-sm [&::-moz-progress-bar]:bg-info [&::-webkit-progress-bar]:bg-pip-off [&::-webkit-progress-value]:rounded-sm [&::-webkit-progress-value]:bg-info"
+                  />
                 )}
               </span>
               <Mono className="text-[11px] text-fg-muted">{a.duration ?? '—'}</Mono>
