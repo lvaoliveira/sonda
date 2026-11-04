@@ -16,7 +16,9 @@ everything() {
   exit 0
 }
 
-[ "${EVENT:-}" = pull_request ] && [ -n "${BASE:-}" ] || everything
+if [ "${EVENT:-}" != pull_request ] || [ -z "${BASE:-}" ]; then
+  everything
+fi
 files=$(git diff --name-only "$BASE"...HEAD) || everything
 
 rust=false web=false docker=false scripts=false
