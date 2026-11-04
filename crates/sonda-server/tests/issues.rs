@@ -154,11 +154,48 @@ async fn the_list_filters_paginates_and_counts_facets() {
         "limit=500",
         "offset=-1",
         "colour=red",
-        "language=cobol",
+        "language=Python",
     ] {
         let (status, _) = get(&app, &format!("/api/issues?{bad}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
+}
+
+/// A newer CLI's upload, with a file in a language this server doesn't
+/// read: stored with a warning, its code shown plain.
+#[tokio::test]
+async fn a_language_this_server_does_not_know_is_stored_with_a_warning() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = upload_json(dir.path(), &[("src/a.js", "var x = 1;\n")], "main");
+    body["report"]["files"][0]["language"] = "cobol".into();
+    let (status, summary) = upload(&db, &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{summary}");
+    let app = http::router(state(db.pool.clone()), None);
+
+    let id = summary["analysis_id"].as_i64().unwrap();
+    let (_, analysis) = get(&app, &format!("/api/analyses/{id}")).await;
+    let warnings = analysis["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("1 file in cobol, which this sonda server")),
+        "{warnings:?}"
+    );
+
+    let (status, cobol) = get(&app, "/api/issues?language=cobol").await;
+    assert_eq!(status, StatusCode::OK, "{cobol}");
+    assert_eq!(cobol["total"], 1);
+    let issue_id = cobol["items"][0]["id"].as_i64().unwrap();
+    let (_, issue) = get(&app, &format!("/api/issues/{issue_id}")).await;
+    assert_eq!(
+        issue["code"][0]["tokens"],
+        json!([{ "text": "var x = 1;", "role": "plain" }])
+    );
 }
 
 #[tokio::test]

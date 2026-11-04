@@ -245,7 +245,7 @@ pub async fn get_file_coverage(
     let total = source.lines().count();
     let mut lines = match lang {
         Some(lang) => highlight::highlight(lang, &source, 1, MAX_LINES),
-        None => Vec::new(),
+        None => highlight::plain(&source, 1, MAX_LINES),
     };
     // Not the empty "line" after a final line break.
     lines.truncate(total);

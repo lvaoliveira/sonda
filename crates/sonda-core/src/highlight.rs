@@ -73,6 +73,38 @@ pub fn highlight(lang: Lang, src: &str, first: usize, last: usize) -> Vec<Line> 
     lines
 }
 
+/// Lines `first..=last` of `src` as [`highlight`] gives them, one plain
+/// token each: for a language this build doesn't know (a newer CLI's
+/// upload).
+pub fn plain(src: &str, first: usize, last: usize) -> Vec<Line> {
+    let segments: Vec<&str> = src.split('\n').collect();
+    let count = segments.len();
+    segments
+        .into_iter()
+        .enumerate()
+        .map(|(k, text)| (k + 1, text))
+        .skip(first.saturating_sub(1))
+        .take_while(|&(number, _)| number <= last)
+        .map(|(number, text)| {
+            // A `\r` ends a line only right before `\n`.
+            let text = if number < count {
+                text.strip_suffix('\r').unwrap_or(text)
+            } else {
+                text
+            };
+            let tokens = if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![Token {
+                    text: text.to_string(),
+                    role: Role::Plain,
+                }]
+            };
+            Line { number, tokens }
+        })
+        .collect()
+}
+
 /// Drops the `\r` of a `\r\n` line ending, which belongs to no line.
 fn strip_carriage_return(tokens: &mut Vec<Token>) {
     if let Some(t) = tokens.last_mut()
@@ -649,6 +681,27 @@ mod tests {
         );
         assert!(lines[1].tokens.is_empty());
         assert!(highlight(Lang::Java, "a\n", 5, 9).is_empty());
+    }
+
+    #[test]
+    fn plain_lines_match_the_highlighted_ones() {
+        let src = "a = 1\r\n\n  b\r";
+        for (first, last) in [(1, 99), (2, 3), (5, 9)] {
+            let plain = plain(src, first, last);
+            let colored = highlight(Lang::Python, src, first, last);
+            assert_eq!(
+                plain.iter().map(|l| l.number).collect::<Vec<_>>(),
+                colored.iter().map(|l| l.number).collect::<Vec<_>>(),
+            );
+            for (p, c) in plain.iter().zip(&colored) {
+                let text: String = c.tokens.iter().map(|t| t.text.as_str()).collect();
+                assert_eq!(
+                    p.tokens.iter().map(|t| t.text.as_str()).collect::<String>(),
+                    text
+                );
+                assert!(p.tokens.iter().all(|t| t.role == Role::Plain));
+            }
+        }
     }
 
     proptest! {

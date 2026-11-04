@@ -58,6 +58,10 @@ file, the report formats and the public library API.
   examples, and what to do and not do. The server writes it, at `GET
   /api/issues/prompt` ([ADR-0025](docs/adr/0025-fixing-with-an-ai-assistant.md)).
   `GET /api/issues` takes `ids`.
+- The server takes an upload with files in a language it doesn't read,
+  as a newer CLI sends, instead of refusing the whole analysis. The files
+  and their issues are stored, their code is shown without highlighting,
+  and the analysis gets a warning to upgrade the server.
 
 ### Fixed
 
