@@ -114,52 +114,55 @@ pub(super) fn culture_dependent_calls<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node
             return;
         };
         let arg_types: Option<Vec<Ty>> = args.iter().map(|a| infer.type_of(*a)).collect();
-        let states_culture = |types: &[Ty]| {
-            types.iter().any(|t| {
-                t.is("System.Globalization.CultureInfo")
-                    || t.is("System.StringComparison")
-                    || t.is("System.IFormatProvider")
-                    || t.is("System.Globalization.CompareOptions")
-            })
-        };
-        let dependent = match name {
-            b"ToLower" | b"ToUpper" => on.is(STRING) && args.is_empty(),
-            b"CompareTo" => on.is(STRING) && args.len() == 1,
-            b"IndexOf" | b"LastIndexOf" => {
-                on.is(STRING)
-                    && arg_types.as_ref().is_some_and(|t| {
-                        t.first().is_some_and(|f| f.is(STRING)) && !states_culture(t)
-                    })
-            }
-            // `string.Compare(a, b)`, static on String.
-            b"Compare" => {
-                on.is(STRING)
-                    && arg_types
-                        .as_ref()
-                        .is_some_and(|t| t.len() >= 2 && !states_culture(t))
-            }
-            b"ToString" => {
-                [
-                    "System.Single",
-                    "System.Double",
-                    "System.DateTime",
-                    "System.DateTimeOffset",
-                ]
-                .iter()
-                .any(|k| on.is(k))
-                    && arg_types.as_ref().is_some_and(|t| match t.as_slice() {
-                        [] => true,
-                        [format] => format.is(STRING),
-                        _ => false,
-                    })
-            }
-            _ => false,
-        };
-        if dependent && !in_test(ancestors, src) {
+        if culture_dependent(name, on, &args, arg_types.as_deref()) && !in_test(ancestors, src) {
             found.push(call);
         }
     });
     found
+}
+
+/// Whether a call of `name` on `on` reads the current culture: no
+/// argument states one, nor a comparison or format provider.
+fn culture_dependent(name: &[u8], on: &Ty, args: &[Node], arg_types: Option<&[Ty]>) -> bool {
+    match name {
+        b"ToLower" | b"ToUpper" => on.is(STRING) && args.is_empty(),
+        b"CompareTo" => on.is(STRING) && args.len() == 1,
+        b"IndexOf" | b"LastIndexOf" => {
+            on.is(STRING)
+                && arg_types
+                    .is_some_and(|t| t.first().is_some_and(|f| f.is(STRING)) && !states_culture(t))
+        }
+        // `string.Compare(a, b)`, static on String.
+        b"Compare" => {
+            on.is(STRING) && arg_types.is_some_and(|t| t.len() >= 2 && !states_culture(t))
+        }
+        b"ToString" => {
+            [
+                "System.Single",
+                "System.Double",
+                "System.DateTime",
+                "System.DateTimeOffset",
+            ]
+            .iter()
+            .any(|k| on.is(k))
+                && arg_types.is_some_and(|t| match t {
+                    [] => true,
+                    [format] => format.is(STRING),
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether an argument states a culture, a comparison or a format provider.
+fn states_culture(types: &[Ty]) -> bool {
+    types.iter().any(|t| {
+        t.is("System.Globalization.CultureInfo")
+            || t.is("System.StringComparison")
+            || t.is("System.IFormatProvider")
+            || t.is("System.Globalization.CompareOptions")
+    })
 }
 
 // ---------------------------------------------------- S1858
@@ -195,52 +198,62 @@ pub(super) fn redundant_to_string<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>
         let Some(parent) = ancestors.last() else {
             return;
         };
-        let concatenated = parent.kind() == "binary_expression"
-            && parent
-                .child_by_field_name("operator")
-                .is_some_and(|o| text(o, src) == b"+")
-            && ["left", "right"].iter().any(|f| {
-                parent
-                    .child_by_field_name(f)
-                    // Another `x.ToString()` is only a string while it stays.
-                    .filter(|o| {
-                        *o != call && !matches!(member_call(*o, src), Some((b"ToString", _, _)))
-                    })
-                    .and_then(|o| infer.type_of(o))
-                    .is_some_and(|t| t.is(STRING))
-            });
-        // `string.Format(format, x.ToString())`: an argument after the format.
-        let formatted = parent.kind() == "argument"
-            && ancestors.len() >= 3
-            && ancestors[ancestors.len() - 3].kind() == "invocation_expression"
-            && {
-                let format_call = ancestors[ancestors.len() - 3];
-                let list = ancestors[ancestors.len() - 2];
-                let position = list
-                    .named_children(&mut list.walk())
-                    .filter(|a| a.kind() == "argument")
-                    .position(|a| a == *parent);
-                let first_is_provider = cs_call_arguments(format_call)
-                    .first()
-                    .and_then(|a| infer.type_of(*a))
-                    .is_some_and(|t| {
-                        t.is("System.IFormatProvider") || t.is("System.Globalization.CultureInfo")
-                    });
-                let format_at = usize::from(first_is_provider);
-                position.is_some_and(|p| p > format_at)
-                    && infer.call(format_call).is_some_and(|c| {
-                        !c.extension
-                            && c.methods.iter().all(|f| {
-                                matches!(f, Found::Platform { declaring, member, .. }
-                                    if declaring.name == STRING && member.name == "Format")
-                            })
-                    })
-            };
-        if concatenated || formatted {
+        if concatenated_with_string(&infer, *parent, call, src)
+            || formatted_argument(&infer, ancestors, *parent)
+        {
             found.push(call);
         }
     });
     found
+}
+
+/// `"a" + x.ToString()`: the other operand is a string, which converts x
+/// anyway. Another `x.ToString()` is only a string while it stays.
+fn concatenated_with_string(infer: &Infer, parent: Node, call: Node, src: &[u8]) -> bool {
+    parent.kind() == "binary_expression"
+        && parent
+            .child_by_field_name("operator")
+            .is_some_and(|o| text(o, src) == b"+")
+        && ["left", "right"].iter().any(|f| {
+            parent
+                .child_by_field_name(f)
+                .filter(|o| {
+                    *o != call && !matches!(member_call(*o, src), Some((b"ToString", _, _)))
+                })
+                .and_then(|o| infer.type_of(o))
+                .is_some_and(|t| t.is(STRING))
+        })
+}
+
+/// `string.Format(format, x.ToString())`: an argument after the format.
+fn formatted_argument(infer: &Infer, ancestors: &[Node], parent: Node) -> bool {
+    if parent.kind() != "argument"
+        || ancestors.len() < 3
+        || ancestors[ancestors.len() - 3].kind() != "invocation_expression"
+    {
+        return false;
+    }
+    let format_call = ancestors[ancestors.len() - 3];
+    let list = ancestors[ancestors.len() - 2];
+    let position = list
+        .named_children(&mut list.walk())
+        .filter(|a| a.kind() == "argument")
+        .position(|a| a == parent);
+    let first_is_provider = cs_call_arguments(format_call)
+        .first()
+        .and_then(|a| infer.type_of(*a))
+        .is_some_and(|t| {
+            t.is("System.IFormatProvider") || t.is("System.Globalization.CultureInfo")
+        });
+    let format_at = usize::from(first_is_provider);
+    position.is_some_and(|p| p > format_at)
+        && infer.call(format_call).is_some_and(|c| {
+            !c.extension
+                && c.methods.iter().all(|f| {
+                    matches!(f, Found::Platform { declaring, member, .. }
+                        if declaring.name == STRING && member.name == "Format")
+                })
+        })
 }
 
 // ---------------------------------------------------- S4462
@@ -254,71 +267,82 @@ pub(super) fn blocking_on_tasks<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> 
     let Some(infer) = Infer::new(m, src) else {
         return Vec::new();
     };
-    // `Task.Run(...)` and `Task.Factory.StartNew(...)`, through `.GetAwaiter()`.
-    let started = |mut task: Node| {
-        if task.kind() == "invocation_expression"
-            && let Some((b"GetAwaiter", inner, _)) = member_call(task, src)
-        {
-            task = inner;
-        }
-        task.kind() == "invocation_expression"
-            && task.child_by_field_name("function").is_some_and(|f| {
-                let t = text(f, src);
-                t.ends_with(b"Task.Run") || t.ends_with(b"Task.Factory.StartNew")
-            })
-    };
     let mut found = Vec::new();
     walk_tree(m, |node, ancestors| {
         let blocks = match node.kind() {
-            "member_access_expression" => {
-                let invoked = ancestors.last().is_some_and(|p| {
-                    p.kind() == "invocation_expression" && p.child_by_field_name("function") == Some(node)
-                });
-                !invoked
-                    && node
-                        .child_by_field_name("name")
-                        .is_some_and(|n| text(n, src) == b"Result")
-                    && node.child_by_field_name("expression").is_some_and(|r| {
-                        !started(r) && infer.type_of(r).is_some_and(|t| t.is(TASK_OF))
-                    })
-            }
-            "invocation_expression" => match member_call(node, src) {
-                Some((b"Wait", r, _)) => !started(r) && infer.type_of(r).is_some_and(|t| is_task(&t)),
-                Some((b"GetResult", r, _)) => {
-                    matches!(member_call(r, src), Some((b"GetAwaiter", task, a)) if a.is_empty()
-                        && !started(task)
-                        && infer.type_of(task).is_some_and(|t| is_task(&t)))
-                }
-                Some((b"WaitAny" | b"WaitAll", _, _)) => infer.call(node).is_some_and(|c| {
-                    c.methods
-                        .iter()
-                        .all(|f| matches!(f, Found::Platform { declaring, .. } if declaring.name == TASK))
-                }),
-                Some((b"Sleep", _, _)) => {
-                    enclosing_function(ancestors).is_some_and(|f| is_async(f, src))
-                        && infer.call(node).is_some_and(|c| {
-                            c.methods.iter().all(|f| {
-                                matches!(f, Found::Platform { declaring, .. } if declaring.name == "System.Threading.Thread")
-                            })
-                        })
-                }
-                _ => false,
-            },
+            "member_access_expression" => blocking_result(&infer, node, ancestors, src),
+            "invocation_expression" => blocking_call(&infer, node, ancestors, src),
             _ => false,
         };
-        if !blocks || in_test(ancestors, src) {
-            return;
-        }
-        let main = ancestors.iter().any(|a| {
-            a.kind() == "method_declaration"
-                && a.child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == b"Main")
-        });
-        if !main {
+        if blocks && !in_test(ancestors, src) && !in_main(ancestors, src) {
             found.push(node);
         }
     });
     found
+}
+
+/// `Task.Run(...)` and `Task.Factory.StartNew(...)`, through `.GetAwaiter()`.
+fn started_task(mut task: Node, src: &[u8]) -> bool {
+    if task.kind() == "invocation_expression"
+        && let Some((b"GetAwaiter", inner, _)) = member_call(task, src)
+    {
+        task = inner;
+    }
+    task.kind() == "invocation_expression"
+        && task.child_by_field_name("function").is_some_and(|f| {
+            let t = text(f, src);
+            t.ends_with(b"Task.Run") || t.ends_with(b"Task.Factory.StartNew")
+        })
+}
+
+/// `task.Result`, not invoked, on a `Task<T>` it didn't just start.
+fn blocking_result(infer: &Infer, node: Node, ancestors: &[Node], src: &[u8]) -> bool {
+    let invoked = ancestors.last().is_some_and(|p| {
+        p.kind() == "invocation_expression" && p.child_by_field_name("function") == Some(node)
+    });
+    !invoked
+        && node
+            .child_by_field_name("name")
+            .is_some_and(|n| text(n, src) == b"Result")
+        && node.child_by_field_name("expression").is_some_and(|r| {
+            !started_task(r, src) && infer.type_of(r).is_some_and(|t| t.is(TASK_OF))
+        })
+}
+
+/// `task.Wait()`, `task.GetAwaiter().GetResult()`, `Task.WaitAny/WaitAll`,
+/// and `Thread.Sleep` in an async function.
+fn blocking_call(infer: &Infer, node: Node, ancestors: &[Node], src: &[u8]) -> bool {
+    match member_call(node, src) {
+        Some((b"Wait", r, _)) => !started_task(r, src) && infer.type_of(r).is_some_and(|t| is_task(&t)),
+        Some((b"GetResult", r, _)) => {
+            matches!(member_call(r, src), Some((b"GetAwaiter", task, a)) if a.is_empty()
+                && !started_task(task, src)
+                && infer.type_of(task).is_some_and(|t| is_task(&t)))
+        }
+        Some((b"WaitAny" | b"WaitAll", _, _)) => infer.call(node).is_some_and(|c| {
+            c.methods
+                .iter()
+                .all(|f| matches!(f, Found::Platform { declaring, .. } if declaring.name == TASK))
+        }),
+        Some((b"Sleep", _, _)) => {
+            enclosing_function(ancestors).is_some_and(|f| is_async(f, src))
+                && infer.call(node).is_some_and(|c| {
+                    c.methods.iter().all(|f| {
+                        matches!(f, Found::Platform { declaring, .. } if declaring.name == "System.Threading.Thread")
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether the code is in a method named `Main`.
+fn in_main(ancestors: &[Node], src: &[u8]) -> bool {
+    ancestors.iter().any(|a| {
+        a.kind() == "method_declaration"
+            && a.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"Main")
+    })
 }
 
 // ---------------------------------------------------- S6966
@@ -378,13 +402,8 @@ pub(super) fn sync_calls_in_async<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>
         {
             return;
         }
-        // `x.Load(...)`, or `Load(...)` on the type it's written in.
-        let (name, args) = match member_call(call, src) {
-            Some((name, _, args)) => (name, args),
-            None => match call.child_by_field_name("function") {
-                Some(f) if f.kind() == "identifier" => (text(f, src), cs_call_arguments(call)),
-                _ => return,
-            },
+        let Some((name, args)) = called_name(call, src) else {
+            return;
         };
         if name.ends_with(b"Async") {
             return;
@@ -395,45 +414,71 @@ pub(super) fn sync_calls_in_async<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>
         let Some(receiver) = c.receiver.clone().or_else(|| infer.enclosing_type(call)) else {
             return;
         };
-        let receiver = &receiver;
         if DATA_READER_METHODS.contains(&name)
             && infer
-                .supertypes(receiver)
+                .supertypes(&receiver)
                 .iter()
                 .any(|t| t.is("System.Data.Common.DbDataReader"))
         {
             return;
         }
-        let name = String::from_utf8_lossy(name);
-        let awaitable: Vec<Found> = infer
-            .members(receiver, &format!("{name}Async"), Some(args.len()))
-            .into_iter()
-            .filter(|f| match f {
-                Found::Platform { member, .. } => member.has("ns20"),
-                Found::Local(_) => true,
-            })
-            .collect();
-        // Every overload the call may be has an awaitable version.
-        let covered = c.methods.iter().all(|sync| {
-            let Some(params) = parameter_types(sync, src) else {
-                return false;
-            };
-            awaitable.iter().any(|a| {
-                parameter_types(a, src).is_some_and(|mut p| {
-                    if p.len() == params.len() + 1
-                        && p.last().is_some_and(|t| t.ends_with("CancellationToken"))
-                    {
-                        p.pop();
-                    }
-                    p == params
-                })
-            })
-        });
-        if !awaitable.is_empty() && covered {
+        let awaitable = awaitable_versions(&infer, &receiver, name, args.len());
+        if !awaitable.is_empty() && every_overload_awaitable(&c.methods, &awaitable, src) {
             found.push(call);
         }
     });
     found
+}
+
+/// `x.Load(...)`, or `Load(...)` on the type it's written in: the name and
+/// the arguments.
+fn called_name<'t, 's>(call: Node<'t>, src: &'s [u8]) -> Option<(&'s [u8], Vec<Node<'t>>)> {
+    match member_call(call, src) {
+        Some((name, _, args)) => Some((name, args)),
+        None => call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "identifier")
+            .map(|f| (text(f, src), cs_call_arguments(call))),
+    }
+}
+
+/// The `{name}Async` methods `receiver` has for `arguments` arguments, on
+/// every target for platform ones.
+fn awaitable_versions<'m, 't>(
+    infer: &Infer<'m, 't>,
+    receiver: &Ty,
+    name: &[u8],
+    arguments: usize,
+) -> Vec<Found<'m, 't>> {
+    let name = String::from_utf8_lossy(name);
+    infer
+        .members(receiver, &format!("{name}Async"), Some(arguments))
+        .into_iter()
+        .filter(|f| match f {
+            Found::Platform { member, .. } => member.has("ns20"),
+            Found::Local(_) => true,
+        })
+        .collect()
+}
+
+/// Whether every overload the call may be has an awaitable version taking
+/// the same parameters, or those and a CancellationToken.
+fn every_overload_awaitable(methods: &[Found], awaitable: &[Found], src: &[u8]) -> bool {
+    methods.iter().all(|sync| {
+        let Some(params) = parameter_types(sync, src) else {
+            return false;
+        };
+        awaitable.iter().any(|a| {
+            parameter_types(a, src).is_some_and(|mut p| {
+                if p.len() == params.len() + 1
+                    && p.last().is_some_and(|t| t.ends_with("CancellationToken"))
+                {
+                    p.pop();
+                }
+                p == params
+            })
+        })
+    })
 }
 
 // ---------------------------------------------------- S1905
@@ -470,56 +515,72 @@ fn context_type(infer: &Infer, node: Node, ancestors: &[Node], src: &[u8]) -> Op
             infer.type_of(parent.child_by_field_name("left")?)
         }
         "return_statement" | "arrow_expression_clause" => {
-            let owner = if parent.kind() == "arrow_expression_clause" {
-                up.next()?
-            } else {
-                up.find(|a| {
-                    matches!(
-                        a.kind(),
-                        "method_declaration"
-                            | "local_function_statement"
-                            | "accessor_declaration"
-                            | "operator_declaration"
-                            | "conversion_operator_declaration"
-                            | "lambda_expression"
-                            | "anonymous_method_expression"
-                    )
-                })?
-            };
-            let owner = if owner.kind() == "accessor_declaration" {
-                // A getter returns its property's type.
-                if !text(owner, src).trim_ascii_start().starts_with(b"get") {
-                    return None;
-                }
-                ancestors
-                    .iter()
-                    .rev()
-                    .find(|a| matches!(a.kind(), "property_declaration" | "indexer_declaration"))
-                    .copied()?
-            } else {
-                owner
-            };
-            if is_async(owner, src)
-                || !matches!(
-                    owner.kind(),
-                    "method_declaration"
-                        | "local_function_statement"
-                        | "property_declaration"
-                        | "indexer_declaration"
-                        | "operator_declaration"
-                        | "conversion_operator_declaration"
-                )
-            {
-                return None;
-            }
-            infer.written(
-                owner
-                    .child_by_field_name("returns")
-                    .or_else(|| owner.child_by_field_name("type"))?,
-            )
+            returned_type(infer, parent, &mut up, ancestors, src)
         }
         _ => None,
     }
+}
+
+/// The type a `return` (or an `=>` body) returns into: the declared
+/// return type of what it's in, unless that's async.
+fn returned_type<'t>(
+    infer: &Infer,
+    parent: Node<'t>,
+    up: &mut impl Iterator<Item = Node<'t>>,
+    ancestors: &[Node<'t>],
+    src: &[u8],
+) -> Option<Ty> {
+    let owner = if parent.kind() == "arrow_expression_clause" {
+        up.next()?
+    } else {
+        up.find(|a| {
+            matches!(
+                a.kind(),
+                "method_declaration"
+                    | "local_function_statement"
+                    | "accessor_declaration"
+                    | "operator_declaration"
+                    | "conversion_operator_declaration"
+                    | "lambda_expression"
+                    | "anonymous_method_expression"
+            )
+        })?
+    };
+    let owner = if owner.kind() == "accessor_declaration" {
+        getter_owner(owner, ancestors, src)?
+    } else {
+        owner
+    };
+    if is_async(owner, src)
+        || !matches!(
+            owner.kind(),
+            "method_declaration"
+                | "local_function_statement"
+                | "property_declaration"
+                | "indexer_declaration"
+                | "operator_declaration"
+                | "conversion_operator_declaration"
+        )
+    {
+        return None;
+    }
+    infer.written(
+        owner
+            .child_by_field_name("returns")
+            .or_else(|| owner.child_by_field_name("type"))?,
+    )
+}
+
+/// A getter returns its property's (or indexer's) type: that declaration.
+fn getter_owner<'t>(accessor: Node, ancestors: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    if !text(accessor, src).trim_ascii_start().starts_with(b"get") {
+        return None;
+    }
+    ancestors
+        .iter()
+        .rev()
+        .find(|a| matches!(a.kind(), "property_declaration" | "indexer_declaration"))
+        .copied()
 }
 
 /// Casts that change nothing. To the type the value already has, anywhere,
@@ -534,66 +595,81 @@ pub(super) fn redundant_casts<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     };
     let mut found = Vec::new();
     walk_tree(m, |cast, ancestors| {
-        if cast.kind() != "cast_expression" {
-            return;
-        }
-        let (Some(ty), Some(value)) = (
-            cast.child_by_field_name("type"),
-            cast.child_by_field_name("value"),
-        ) else {
-            return;
-        };
-        let inner = unparenthesized(value);
-        if matches!(inner.kind(), "default_expression" | "null_literal") {
-            return;
-        }
-        let (Some(target), Some(source)) = (infer.written(ty), infer.type_of(value)) else {
-            return;
-        };
-        let redundant = match infer.conversion(&source, &target) {
-            Some(Conversion::Identity) => {
-                let rounds = (target.is("System.Single") || target.is("System.Double"))
-                    && !matches!(
-                        inner.kind(),
-                        "identifier"
-                            | "member_access_expression"
-                            | "real_literal"
-                            | "integer_literal"
-                    );
-                !rounds
-            }
-            Some(Conversion::Implicit) => {
-                context_type(&infer, cast, ancestors, src).as_ref() == Some(&target)
-            }
-            _ => false,
-        };
-        if redundant {
+        if cast.kind() == "cast_expression" && cast_is_redundant(&infer, cast, ancestors, src) {
             found.push(cast);
         }
     });
+    redundant_sequence_casts(m, &infer, src, &mut found);
+    found
+}
+
+/// A cast to the type the value already has (but not one that rounds a
+/// computed float), or to the type its context converts it to anyway.
+fn cast_is_redundant(infer: &Infer, cast: Node, ancestors: &[Node], src: &[u8]) -> bool {
+    let (Some(ty), Some(value)) = (
+        cast.child_by_field_name("type"),
+        cast.child_by_field_name("value"),
+    ) else {
+        return false;
+    };
+    let inner = unparenthesized(value);
+    if matches!(inner.kind(), "default_expression" | "null_literal") {
+        return false;
+    }
+    let (Some(target), Some(source)) = (infer.written(ty), infer.type_of(value)) else {
+        return false;
+    };
+    match infer.conversion(&source, &target) {
+        Some(Conversion::Identity) => {
+            let rounds = (target.is("System.Single") || target.is("System.Double"))
+                && !matches!(
+                    inner.kind(),
+                    "identifier" | "member_access_expression" | "real_literal" | "integer_literal"
+                );
+            !rounds
+        }
+        Some(Conversion::Implicit) => {
+            context_type(infer, cast, ancestors, src).as_ref() == Some(&target)
+        }
+        _ => false,
+    }
+}
+
+/// `xs.Cast<T>()` on a sequence of T, and `xs.OfType<T>()` when T is a
+/// value type (OfType drops nulls, which only those have none of).
+fn redundant_sequence_casts<'t>(
+    m: &Model<'t>,
+    infer: &Infer,
+    src: &[u8],
+    found: &mut Vec<Node<'t>>,
+) {
     for (call, receiver) in enumerable_calls(m, src, &[("Cast", 0), ("OfType", 0)]) {
         let Some((name, _, _)) = member_call(call, src) else {
             continue;
         };
-        let target = call
-            .child_by_field_name("function")
-            .and_then(|f| f.child_by_field_name("name"))
-            .filter(|g| g.kind() == "generic_name")
-            .and_then(|g| g.named_child(1))
-            .filter(|args| args.named_child_count() == 1)
-            .and_then(|args| args.named_child(0))
-            .and_then(|t| infer.written(t));
-        let (Some(target), Some(element)) = (target, infer.element_type(&receiver)) else {
+        let (Some(target), Some(element)) = (
+            sequence_cast_target(infer, call),
+            infer.element_type(&receiver),
+        ) else {
             continue;
         };
-        // OfType drops nulls, which only a value type has none of.
         let keeps_all = name == b"Cast"
             || (infer.value_type(&target) == Some(true) && !target.is("System.Nullable`1"));
         if target == element && keeps_all {
             found.push(call);
         }
     }
-    found
+}
+
+/// The `T` of `.Cast<T>()` or `.OfType<T>()`.
+fn sequence_cast_target(infer: &Infer, call: Node) -> Option<Ty> {
+    call.child_by_field_name("function")
+        .and_then(|f| f.child_by_field_name("name"))
+        .filter(|g| g.kind() == "generic_name")
+        .and_then(|g| g.named_child(1))
+        .filter(|args| args.named_child_count() == 1)
+        .and_then(|args| args.named_child(0))
+        .and_then(|t| infer.written(t))
 }
 
 // ---------------------------------------------------- S3217
@@ -863,88 +939,114 @@ pub(super) fn value_task_misuse<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> 
         return Vec::new();
     };
     let mut found = Vec::new();
-    // Per variable: its uses, in source order.
+    for (d, names) in local_uses(m) {
+        // Typing a variable costs more than looking at how it's used.
+        if !names
+            .iter()
+            .any(|n| matches!(task_use(*n, src), TaskUse::Consumed { .. }))
+            || !value_task_variable(&infer, m, d)
+        {
+            continue;
+        }
+        let Some((consumed, unchecked_reads)) = classify_uses(m.decls[d].node, &names, src) else {
+            continue;
+        };
+        found.extend(unchecked_reads);
+        consumed_twice(&consumed, &mut found);
+    }
+    fresh_value_task_reads(m, &infer, src, &mut found);
+    found.sort_by_key(|n| n.start_byte());
+    found.dedup();
+    found
+}
+
+/// Per local or parameter: its uses, in source order.
+fn local_uses<'t>(m: &Model<'t>) -> std::collections::HashMap<usize, Vec<Node<'t>>> {
     let mut uses: std::collections::HashMap<usize, Vec<Node<'t>>> =
         std::collections::HashMap::new();
     for r in &m.refs {
         let Some(d) = r.decl else {
             continue;
         };
-        let decl = &m.decls[d];
-        if !matches!(decl.kind, DeclKind::Let | DeclKind::Param) {
+        if matches!(m.decls[d].kind, DeclKind::Let | DeclKind::Param) {
+            uses.entry(d).or_default().push(r.node);
+        }
+    }
+    uses
+}
+
+/// Whether the variable `d` holds a ValueTask and nothing writes it again.
+fn value_task_variable(infer: &Infer, m: &Model, d: usize) -> bool {
+    let decl = &m.decls[d];
+    let ty = infer.type_of(decl.node).or_else(|| {
+        decl.ty
+            .filter(|t| t.kind() != "implicit_type")
+            .and_then(|t| infer.written(t))
+    });
+    ty.is_some_and(|ty| is_value_task(&ty)) && !m.refs.iter().any(|r| r.decl == Some(d) && r.write)
+}
+
+/// A ValueTask variable's consuming reads outside loops, and its blocking
+/// reads before anything checks it's done; None when it escapes.
+fn classify_uses<'t>(
+    declared: Node<'t>,
+    names: &[Node<'t>],
+    src: &[u8],
+) -> Option<(Vec<Node<'t>>, Vec<Node<'t>>)> {
+    let mut consumed: Vec<Node<'t>> = Vec::new();
+    let mut checked = false;
+    let mut unchecked_reads: Vec<Node<'t>> = Vec::new();
+    for &name in names {
+        if name == declared {
             continue;
         }
-        uses.entry(d).or_default().push(r.node);
+        match task_use(name, src) {
+            TaskUse::Escapes => return None,
+            TaskUse::Checked => checked = true,
+            TaskUse::Consumed { at, blocking } => {
+                if blocking && !checked {
+                    unchecked_reads.push(at);
+                }
+                if !in_loop_within(name, declared) {
+                    consumed.push(at);
+                }
+            }
+        }
     }
-    for (d, names) in uses {
-        let decl = &m.decls[d];
-        // Typing a variable costs more than looking at how it's used.
-        if !names
+    Some((consumed, unchecked_reads))
+}
+
+/// Whether a loop inside the variable's scope, the one `declared` names,
+/// runs `n`.
+fn in_loop_within(n: Node, declared: Node) -> bool {
+    let mut x = n.parent();
+    while let Some(p) = x {
+        if p.start_byte() <= declared.start_byte() && declared.end_byte() <= p.end_byte() {
+            return false;
+        }
+        if LOOPS.contains(&p.kind()) {
+            return true;
+        }
+        x = p.parent();
+    }
+    false
+}
+
+/// Each read after one that may run with it: a ValueTask is consumed once.
+fn consumed_twice<'t>(consumed: &[Node<'t>], found: &mut Vec<Node<'t>>) {
+    for (i, later) in consumed.iter().enumerate().skip(1) {
+        if consumed[..i]
             .iter()
-            .any(|n| matches!(task_use(*n, src), TaskUse::Consumed { .. }))
+            .any(|earlier| !exclusive(*earlier, *later))
+            && !found.contains(later)
         {
-            continue;
-        }
-        let Some(ty) = infer.type_of(decl.node).or_else(|| {
-            decl.ty
-                .filter(|t| t.kind() != "implicit_type")
-                .and_then(|t| infer.written(t))
-        }) else {
-            continue;
-        };
-        if !is_value_task(&ty) || m.refs.iter().any(|r| r.decl == Some(d) && r.write) {
-            continue;
-        }
-        let in_loop = |n: Node| {
-            let mut x = n.parent();
-            while let Some(p) = x {
-                if p.start_byte() <= decl.node.start_byte() && decl.node.end_byte() <= p.end_byte()
-                {
-                    return false;
-                }
-                if LOOPS.contains(&p.kind()) {
-                    return true;
-                }
-                x = p.parent();
-            }
-            false
-        };
-        let mut consumed: Vec<Node<'t>> = Vec::new();
-        let mut checked = false;
-        let mut escapes = false;
-        let mut unchecked_reads: Vec<Node<'t>> = Vec::new();
-        for name in names {
-            if name == decl.node {
-                continue;
-            }
-            match task_use(name, src) {
-                TaskUse::Escapes => escapes = true,
-                TaskUse::Checked => checked = true,
-                TaskUse::Consumed { at, blocking } => {
-                    if blocking && !checked {
-                        unchecked_reads.push(at);
-                    }
-                    if !in_loop(name) {
-                        consumed.push(at);
-                    }
-                }
-            }
-        }
-        if escapes {
-            continue;
-        }
-        found.extend(unchecked_reads);
-        for (i, later) in consumed.iter().enumerate().skip(1) {
-            if consumed[..i]
-                .iter()
-                .any(|earlier| !exclusive(*earlier, *later))
-                && !found.contains(later)
-            {
-                found.push(*later);
-            }
+            found.push(*later);
         }
     }
-    // `GetAsync().Result`: a ValueTask a call just returned isn't known done.
+}
+
+/// `GetAsync().Result`: a ValueTask a call just returned isn't known done.
+fn fresh_value_task_reads<'t>(m: &Model<'t>, infer: &Infer, src: &[u8], found: &mut Vec<Node<'t>>) {
     walk_tree(m, |access, _| {
         if access.kind() != "member_access_expression" {
             return;
@@ -969,9 +1071,6 @@ pub(super) fn value_task_misuse<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> 
             found.push(at);
         }
     });
-    found.sort_by_key(|n| n.start_byte());
-    found.dedup();
-    found
 }
 
 // ---------------------------------------------------- S1312
@@ -1069,16 +1168,8 @@ pub(super) fn reference_equality_where_equals_overridden<'t>(
             || !node
                 .child_by_field_name("operator")
                 .is_some_and(|o| matches!(text(o, src), b"==" | b"!="))
+            || in_overridden_equals(ancestors, src)
         {
-            return;
-        }
-        let in_equals = ancestors.iter().any(|a| {
-            a.kind() == "method_declaration"
-                && a.child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == b"Equals")
-                && cs_has_modifier(*a, "override", src)
-        });
-        if in_equals {
             return;
         }
         let (Some(left), Some(right)) = (
@@ -1087,37 +1178,58 @@ pub(super) fn reference_equality_where_equals_overridden<'t>(
         ) else {
             return;
         };
-        let excluded = |o: Node| {
-            let o = unparenthesized(o);
-            matches!(o.kind(), "null_literal" | "default_expression")
-                || (o.kind() == "cast_expression"
-                    && o.child_by_field_name("type")
-                        .is_some_and(|t| infer.written(t).is_some_and(|t| t.is("System.Object"))))
-        };
-        if excluded(left) || excluded(right) {
+        if compares_to_nothing(&infer, left) || compares_to_nothing(&infer, right) {
             return;
         }
         let (Some(a), Some(b)) = (infer.type_of(left), infer.type_of(right)) else {
             return;
         };
-        let reference = |t: &Ty| {
-            infer.value_type(t) == Some(false)
-                && !infer.supertypes(t).iter().any(|s| s.is("System.Type"))
-                && !infer.has_equality_operator(t)
-        };
-        if !reference(&a) || !reference(&b) {
-            return;
-        }
-        let value_like = |t: &Ty| match infer.interface(t) {
-            Some(true) => infer.implemented_with_equals(t),
-            Some(false) => infer.overrides_equals(t) == Some(true),
-            None => false,
-        };
-        if value_like(&a) || value_like(&b) {
+        if plain_reference(&infer, &a)
+            && plain_reference(&infer, &b)
+            && (value_like(&infer, &a) || value_like(&infer, &b))
+        {
             found.push(node);
         }
     });
     found
+}
+
+/// Whether the code is in an `Equals` override, which compares references
+/// on purpose.
+fn in_overridden_equals(ancestors: &[Node], src: &[u8]) -> bool {
+    ancestors.iter().any(|a| {
+        a.kind() == "method_declaration"
+            && a.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"Equals")
+            && cs_has_modifier(*a, "override", src)
+    })
+}
+
+/// `null`, `default`, or a value cast to object: a reference test that
+/// says so.
+fn compares_to_nothing(infer: &Infer, o: Node) -> bool {
+    let o = unparenthesized(o);
+    matches!(o.kind(), "null_literal" | "default_expression")
+        || (o.kind() == "cast_expression"
+            && o.child_by_field_name("type")
+                .is_some_and(|t| infer.written(t).is_some_and(|t| t.is("System.Object"))))
+}
+
+/// A reference type with no `==` of its own, other than a `Type`.
+fn plain_reference(infer: &Infer, t: &Ty) -> bool {
+    infer.value_type(t) == Some(false)
+        && !infer.supertypes(t).iter().any(|s| s.is("System.Type"))
+        && !infer.has_equality_operator(t)
+}
+
+/// A type compared by value: it overrides `Equals`, or, for an interface,
+/// is implemented by a type that does.
+fn value_like(infer: &Infer, t: &Ty) -> bool {
+    match infer.interface(t) {
+        Some(true) => infer.implemented_with_equals(t),
+        Some(false) => infer.overrides_equals(t) == Some(true),
+        None => false,
+    }
 }
 
 // ---------------------------------------------------- S2325
@@ -1150,76 +1262,96 @@ const INSTANCE_ENTRY_POINTS: &[&str] = &[
 /// an instance member of its type, a primary constructor parameter, or a
 /// member it inherits. Unknown names in a type with bases that don't all
 /// resolve count as used, as do inherited members it can't tell apart.
-fn uses_instance(
-    m: &Model,
-    infer: &Infer,
-    member: Node,
-    owner: &Ty,
-    primary: &[&[u8]],
-    by_position: &[usize],
-    src: &[u8],
-) -> bool {
-    let body = text(member, src);
-    if count_word(body, b"this") > 0 || count_word(body, b"base") > 0 {
-        return true;
+/// What `could_be_static` knows about a type, to tell whether a member of
+/// it uses the instance.
+struct InstanceUses<'a, 'm, 't> {
+    m: &'a Model<'t>,
+    infer: &'a Infer<'m, 't>,
+    owner: &'a Ty,
+    /// The type's primary constructor's parameters.
+    primary: &'a [&'a [u8]],
+    /// The model's references, by index, in source order.
+    by_position: &'a [usize],
+    src: &'a [u8],
+}
+
+impl InstanceUses<'_, '_, '_> {
+    /// Whether `member` uses the instance: `this` or `base`, or an
+    /// instance member of the type, its bases or its primary constructor.
+    fn uses_instance(&self, member: Node) -> bool {
+        let body = text(member, self.src);
+        count_word(body, b"this") > 0
+            || count_word(body, b"base") > 0
+            || self.refs_use_instance(member)
+            || self.generic_call_uses_instance(member)
     }
-    let inherited = |name: &str| infer.inherited_instance_member(owner, name) != Some(false);
-    let instance = |scope, name: &str| {
-        m.decls_named(scope, name).iter().any(|&d| {
-            let d = &m.decls[d];
+
+    fn inherited(&self, name: &str) -> bool {
+        self.infer.inherited_instance_member(self.owner, name) != Some(false)
+    }
+
+    /// Whether `scope` declares an instance field, property or method
+    /// named `name`.
+    fn instance(&self, scope: usize, name: &str) -> bool {
+        self.m.decls_named(scope, name).iter().any(|&d| {
+            let d = &self.m.decls[d];
             matches!(
                 d.kind,
                 DeclKind::Field | DeclKind::Property | DeclKind::Method
             ) && !d.is_static
         })
-    };
-    let first = by_position.partition_point(|&i| m.refs[i].node.start_byte() < member.start_byte());
-    let inside = by_position[first..]
-        .iter()
-        .map(|&i| &m.refs[i])
-        .take_while(|r| r.node.start_byte() < member.end_byte());
-    for r in inside {
-        match r.decl {
-            Some(d) => {
-                let d = &m.decls[d];
-                if m.scopes[d.scope].kind == crate::semantic::ScopeKind::Type
-                    && instance(d.scope, &r.name)
-                {
-                    return true;
-                }
-            }
-            None => {
-                if primary.contains(&r.name.as_bytes()) || inherited(&r.name) {
-                    return true;
-                }
-            }
-        }
     }
-    // `Process<T>(x)`: a generic method's name isn't recorded as a reference.
-    let mut stack = vec![member];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "generic_name"
-            && n.parent().is_some_and(|p| {
-                p.kind() == "invocation_expression" && p.child_by_field_name("function") == Some(n)
+
+    /// Whether a reference inside `member` names an instance member.
+    fn refs_use_instance(&self, member: Node) -> bool {
+        let m = self.m;
+        let first = self
+            .by_position
+            .partition_point(|&i| m.refs[i].node.start_byte() < member.start_byte());
+        self.by_position[first..]
+            .iter()
+            .map(|&i| &m.refs[i])
+            .take_while(|r| r.node.start_byte() < member.end_byte())
+            .any(|r| match r.decl {
+                Some(d) => {
+                    let d = &m.decls[d];
+                    m.scopes[d.scope].kind == crate::semantic::ScopeKind::Type
+                        && self.instance(d.scope, &r.name)
+                }
+                None => self.primary.contains(&r.name.as_bytes()) || self.inherited(&r.name),
             })
-            && let Some(name) = n.named_child(0)
-        {
-            let name = std::str::from_utf8(text(name, src)).unwrap_or_default();
-            let scope = m
-                .type_scopes
-                .iter()
-                .filter(|(t, _)| {
-                    t.start_byte() <= member.start_byte() && member.end_byte() <= t.end_byte()
-                })
-                .max_by_key(|(t, _)| t.start_byte())
-                .map(|(_, s)| *s);
-            if scope.is_some_and(|s| instance(s, name)) || inherited(name) {
-                return true;
-            }
-        }
-        stack.extend(n.named_children(&mut n.walk()));
     }
-    false
+
+    /// `Process<T>(x)`: a generic method's name isn't recorded as a
+    /// reference.
+    fn generic_call_uses_instance(&self, member: Node) -> bool {
+        let mut stack = vec![member];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "generic_name"
+                && n.parent().is_some_and(|p| {
+                    p.kind() == "invocation_expression"
+                        && p.child_by_field_name("function") == Some(n)
+                })
+                && let Some(name) = n.named_child(0)
+            {
+                let name = std::str::from_utf8(text(name, self.src)).unwrap_or_default();
+                let scope = self
+                    .m
+                    .type_scopes
+                    .iter()
+                    .filter(|(t, _)| {
+                        t.start_byte() <= member.start_byte() && member.end_byte() <= t.end_byte()
+                    })
+                    .max_by_key(|(t, _)| t.start_byte())
+                    .map(|(_, s)| *s);
+                if scope.is_some_and(|s| self.instance(s, name)) || self.inherited(name) {
+                    return true;
+                }
+            }
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+        false
+    }
 }
 
 /// Methods and properties that use no instance data, of any accessibility,
@@ -1238,16 +1370,7 @@ pub(super) fn could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let mut by_position: Vec<usize> = (0..m.refs.len()).collect();
     by_position.sort_by_key(|&i| m.refs[i].node.start_byte());
     for (declaration, _) in &m.type_scopes {
-        if !matches!(
-            declaration.kind(),
-            "class_declaration"
-                | "struct_declaration"
-                | "record_declaration"
-                | "record_struct_declaration"
-        ) || ["partial", "static"]
-            .iter()
-            .any(|w| cs_has_modifier(*declaration, w, src))
-        {
+        if !checked_type(*declaration, src) {
             continue;
         }
         let (Some(name), Some(body)) = (
@@ -1269,57 +1392,106 @@ pub(super) fn could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             .supertypes(&owner)
             .iter()
             .any(|s| INSTANCE_ENTRY_POINTS.iter().any(|k| s.is(k)));
-        let primary: Vec<&[u8]> = declaration
-            .named_children(&mut declaration.walk())
-            .filter(|c| c.kind() == "parameter_list")
-            .flat_map(|l| l.named_children(&mut l.walk()).collect::<Vec<_>>())
-            .filter_map(|p| p.child_by_field_name("name"))
-            .map(|n| text(n, src))
-            .collect();
+        let primary = primary_parameters(*declaration, src);
+        let uses = InstanceUses {
+            m,
+            infer: &infer,
+            owner: &owner,
+            primary: &primary,
+            by_position: &by_position,
+            src,
+        };
         for member in body.named_children(&mut body.walk()) {
             let Some(member_name) = member.child_by_field_name("name") else {
                 continue;
             };
-            let has_body = match member.kind() {
-                "method_declaration" => member.child_by_field_name("body").is_some(),
-                "property_declaration" => {
-                    member
-                        .child_by_field_name("value")
-                        .is_some_and(|v| v.kind() == "arrow_expression_clause")
-                        || member.child_by_field_name("accessors").is_some_and(|list| {
-                            let accessors: Vec<Node> =
-                                list.named_children(&mut list.walk()).collect();
-                            !accessors.is_empty()
-                                && accessors.iter().all(|a| {
-                                    a.child_by_field_name("body").is_some()
-                                        && !text(*a, src).trim_ascii_start().starts_with(b"init")
-                                })
-                        })
-                }
-                _ => continue,
+            let Some(has_body) = has_own_body(member, src) else {
+                continue;
             };
-            let public = cs_has_modifier(member, "public", src);
-            let label = std::str::from_utf8(text(member_name, src)).unwrap_or_default();
-            let eligible = has_body
-                && ![
-                    "static", "virtual", "abstract", "override", "extern", "partial", "new",
-                ]
-                .iter()
-                .any(|w| cs_has_modifier(member, w, src))
-                && attribute_names(member, src).is_empty()
-                && !member
-                    .named_children(&mut member.walk())
-                    .any(|c| c.kind() == "explicit_interface_specifier")
-                && !APPLICATION_EVENTS.contains(&label.as_bytes())
-                && !(public && entry_points)
-                && !(member.kind() == "method_declaration" && is_test_method(member, src))
-                && !(public && infer.interface_declares(&owner, label) != Some(false));
-            if eligible && !uses_instance(m, &infer, member, &owner, &primary, &by_position, src) {
+            if has_body
+                && may_be_static(&infer, &owner, member, member_name, entry_points, src)
+                && !uses.uses_instance(member)
+            {
                 found.push(member_name);
             }
         }
     }
     found
+}
+
+/// A class, struct or record that isn't partial or static.
+fn checked_type(declaration: Node, src: &[u8]) -> bool {
+    matches!(
+        declaration.kind(),
+        "class_declaration"
+            | "struct_declaration"
+            | "record_declaration"
+            | "record_struct_declaration"
+    ) && !["partial", "static"]
+        .iter()
+        .any(|w| cs_has_modifier(declaration, w, src))
+}
+
+/// The names of a type's primary constructor's parameters.
+fn primary_parameters<'s>(declaration: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    declaration
+        .named_children(&mut declaration.walk())
+        .filter(|c| c.kind() == "parameter_list")
+        .flat_map(|l| l.named_children(&mut l.walk()).collect::<Vec<_>>())
+        .filter_map(|p| p.child_by_field_name("name"))
+        .map(|n| text(n, src))
+        .collect()
+}
+
+/// Whether a method or a property has a body of its own (not an `init`
+/// accessor's); None for other members.
+fn has_own_body(member: Node, src: &[u8]) -> Option<bool> {
+    match member.kind() {
+        "method_declaration" => Some(member.child_by_field_name("body").is_some()),
+        "property_declaration" => Some(
+            member
+                .child_by_field_name("value")
+                .is_some_and(|v| v.kind() == "arrow_expression_clause")
+                || member.child_by_field_name("accessors").is_some_and(|list| {
+                    let accessors: Vec<Node> = list.named_children(&mut list.walk()).collect();
+                    !accessors.is_empty()
+                        && accessors.iter().all(|a| {
+                            a.child_by_field_name("body").is_some()
+                                && !text(*a, src).trim_ascii_start().starts_with(b"init")
+                        })
+                }),
+        ),
+        _ => None,
+    }
+}
+
+/// Whether nothing about the member's declaration ties it to the
+/// instance: no modifier that does, no attribute, not an explicit
+/// interface member, an application event, a test, or a public member an
+/// entry point or an interface declares.
+fn may_be_static(
+    infer: &Infer,
+    owner: &Ty,
+    member: Node,
+    member_name: Node,
+    entry_points: bool,
+    src: &[u8],
+) -> bool {
+    let public = cs_has_modifier(member, "public", src);
+    let label = std::str::from_utf8(text(member_name, src)).unwrap_or_default();
+    ![
+        "static", "virtual", "abstract", "override", "extern", "partial", "new",
+    ]
+    .iter()
+    .any(|w| cs_has_modifier(member, w, src))
+        && attribute_names(member, src).is_empty()
+        && !member
+            .named_children(&mut member.walk())
+            .any(|c| c.kind() == "explicit_interface_specifier")
+        && !APPLICATION_EVENTS.contains(&label.as_bytes())
+        && !(public && entry_points)
+        && !(member.kind() == "method_declaration" && is_test_method(member, src))
+        && !(public && infer.interface_declares(owner, label) != Some(false))
 }
 
 // ---------------------------------------------------- S3242
@@ -1427,44 +1599,65 @@ fn resolve_reaches(infer: &Infer, ty: &Ty, uses: &[Reach]) -> Option<(Vec<Resolv
                 Resolved::Elements(infer.element_type(ty)?)
             }
             Reach::Member(name, arguments, byte) => {
-                let found = infer.members(ty, name, *arguments);
-                if found.is_empty() {
-                    let n = (*arguments)?;
-                    let methods = infer.extension_methods(ty, name, n, *byte);
-                    if methods.is_empty() {
-                        return None;
-                    }
-                    specific = true;
-                    let mut ptrs: Vec<_> = methods.into_iter().map(|m| m as *const _).collect();
-                    ptrs.sort();
-                    Resolved::Extensions(ptrs)
-                } else {
-                    let mut signatures = Vec::new();
-                    for f in &found {
-                        match f {
-                            Found::Platform {
-                                declaring, member, ..
-                            } => {
-                                if member.has("static") {
-                                    return None;
-                                }
-                                specific |= declaring.name != "System.Object";
-                            }
-                            Found::Local(d) => {
-                                if d.is_static {
-                                    return None;
-                                }
-                                specific = true;
-                            }
-                        }
-                        signatures.push(infer.signature(f)?);
-                    }
-                    Resolved::Members(signatures)
-                }
+                resolve_member(infer, ty, name, *arguments, *byte, &mut specific)?
             }
         });
     }
     Some((out, specific))
+}
+
+/// What `p.name` (with `arguments` arguments) resolves to on `ty`: its
+/// instance members, or the extension methods that apply; None when it's
+/// static or nothing. `specific` is set when it needs more than Object's.
+fn resolve_member(
+    infer: &Infer,
+    ty: &Ty,
+    name: &str,
+    arguments: Option<usize>,
+    byte: usize,
+    specific: &mut bool,
+) -> Option<Resolved> {
+    let found = infer.members(ty, name, arguments);
+    if !found.is_empty() {
+        return member_signatures(infer, &found, specific).map(Resolved::Members);
+    }
+    let methods = infer.extension_methods(ty, name, arguments?, byte);
+    if methods.is_empty() {
+        return None;
+    }
+    *specific = true;
+    let mut ptrs: Vec<_> = methods.into_iter().map(|m| m as *const _).collect();
+    ptrs.sort();
+    Some(Resolved::Extensions(ptrs))
+}
+
+/// The signatures of instance members `found`; None if one is static.
+fn member_signatures(
+    infer: &Infer,
+    found: &[Found],
+    specific: &mut bool,
+) -> Option<Vec<(Vec<Ty>, Ty)>> {
+    let mut signatures = Vec::new();
+    for f in found {
+        match f {
+            Found::Platform {
+                declaring, member, ..
+            } => {
+                if member.has("static") {
+                    return None;
+                }
+                *specific |= declaring.name != "System.Object";
+            }
+            Found::Local(d) => {
+                if d.is_static {
+                    return None;
+                }
+                *specific = true;
+            }
+        }
+        signatures.push(infer.signature(f)?);
+    }
+    Some(signatures)
 }
 
 /// Parameters declared with a type whose base class or interface has every
@@ -1483,99 +1676,117 @@ pub(super) fn parameters_with_base_types<'t>(m: &Model<'t>, src: &[u8]) -> Vec<N
         return Vec::new();
     };
     let mut found = Vec::new();
-    let mut by_decl: Vec<Vec<usize>> = vec![Vec::new(); m.decls.len()];
-    for (i, r) in m.refs.iter().enumerate() {
-        if let Some(d) = r.decl {
-            by_decl[d].push(i);
-        }
-    }
+    let by_decl = refs_by_decl(m);
     for f in &m.functions {
-        let method = f.node;
-        if method.kind() != "method_declaration"
-            || method.child_by_field_name("body").is_none()
-            || [
-                "override", "virtual", "abstract", "extern", "partial", "new",
-            ]
-            .iter()
-            .any(|w| cs_has_modifier(method, w, src))
-            || method
-                .named_children(&mut method.walk())
-                .any(|c| c.kind() == "explicit_interface_specifier")
-        {
-            continue;
-        }
-        let Some(name) = method.child_by_field_name("name") else {
-            continue;
-        };
-        let label = std::str::from_utf8(text(name, src)).unwrap_or_default();
-        let Some(owner) = infer.enclosing_type(name) else {
-            continue;
-        };
-        let public = cs_has_modifier(method, "public", src);
-        if public
-            && (infer.interface_declares(&owner, label) != Some(false)
-                || infer
-                    .supertypes(&owner)
-                    .iter()
-                    .any(|s| INSTANCE_ENTRY_POINTS.iter().any(|k| s.is(k))))
-        {
-            continue;
-        }
-        let overloaded = m
-            .scopes
-            .get(f.scope)
-            .and_then(|s| s.parent)
-            .is_some_and(|scope| m.decls_named(scope, label).len() > 1);
-        if overloaded {
+        if !checked_method(&infer, m, f.node, f.scope, src) {
             continue;
         }
         for decls in &f.params {
             let [param] = decls[..] else {
                 continue;
             };
-            let decl = &m.decls[param];
-            let Some(written) = decl.ty else {
-                continue;
-            };
-            // A `params` array is declared on the list itself; attributes
-            // such as [DynamicallyAccessedMembers] may only fit this type.
-            let Some(declaring) = decl.declarator.filter(|d| d.kind() == "parameter") else {
-                continue;
-            };
-            if ["ref", "out", "in", "this", "scoped"]
-                .iter()
-                .any(|w| cs_has_modifier(declaring, w, src))
-                || declaring
-                    .named_children(&mut declaring.walk())
-                    .any(|c| c.kind() == "attribute_list")
-            {
-                continue;
-            }
-            let Some(uses) = reaches(m, param, &by_decl[param], src) else {
-                continue;
-            };
-            let Some(ty) = infer.written(written) else {
-                continue;
-            };
-            if infer.value_type(&ty) != Some(false) || !infer.complete(&ty) {
-                continue;
-            }
-            let Some((own, true)) = resolve_reaches(&infer, &ty, &uses) else {
-                continue;
-            };
-            let general = infer.supertypes(&ty).into_iter().skip(1).any(|base| {
-                !base.is("System.Object")
-                    && !base.is("System.ValueType")
-                    && resolve_reaches(&infer, &base, &uses).is_some_and(|(theirs, specific)| {
-                        specific && same_resolution(&theirs, &own)
-                    })
-            });
-            if general {
-                found.push(written);
-            }
+            found.extend(too_specific(&infer, m, param, &by_decl[param], src));
         }
     }
     found
+}
+
+/// The references to each declaration, by index into `m.refs`.
+fn refs_by_decl(m: &Model) -> Vec<Vec<usize>> {
+    let mut by_decl: Vec<Vec<usize>> = vec![Vec::new(); m.decls.len()];
+    for (i, r) in m.refs.iter().enumerate() {
+        if let Some(d) = r.decl {
+            by_decl[d].push(i);
+        }
+    }
+    by_decl
+}
+
+/// Whether a method's parameters are checked: a method with a body whose
+/// signature is its own to choose: not an override, an interface's or an
+/// entry point's, nor overloaded.
+fn checked_method(infer: &Infer, m: &Model, method: Node, scope: usize, src: &[u8]) -> bool {
+    if method.kind() != "method_declaration"
+        || method.child_by_field_name("body").is_none()
+        || [
+            "override", "virtual", "abstract", "extern", "partial", "new",
+        ]
+        .iter()
+        .any(|w| cs_has_modifier(method, w, src))
+        || method
+            .named_children(&mut method.walk())
+            .any(|c| c.kind() == "explicit_interface_specifier")
+    {
+        return false;
+    }
+    let Some(name) = method.child_by_field_name("name") else {
+        return false;
+    };
+    let label = std::str::from_utf8(text(name, src)).unwrap_or_default();
+    let Some(owner) = infer.enclosing_type(name) else {
+        return false;
+    };
+    let public = cs_has_modifier(method, "public", src);
+    if public
+        && (infer.interface_declares(&owner, label) != Some(false)
+            || infer
+                .supertypes(&owner)
+                .iter()
+                .any(|s| INSTANCE_ENTRY_POINTS.iter().any(|k| s.is(k))))
+    {
+        return false;
+    }
+    let overloaded = m
+        .scopes
+        .get(scope)
+        .and_then(|s| s.parent)
+        .is_some_and(|scope| m.decls_named(scope, label).len() > 1);
+    !overloaded
+}
+
+/// The type written for parameter `param`, when a base type of it (other
+/// than Object or ValueType) would do for every use the method makes.
+fn too_specific<'t>(
+    infer: &Infer,
+    m: &Model<'t>,
+    param: usize,
+    refs: &[usize],
+    src: &[u8],
+) -> Option<Node<'t>> {
+    let decl = &m.decls[param];
+    let written = decl.ty?;
+    if !plain_parameter(decl.declarator?, src) {
+        return None;
+    }
+    let uses = reaches(m, param, refs, src)?;
+    let ty = infer.written(written)?;
+    if infer.value_type(&ty) != Some(false) || !infer.complete(&ty) {
+        return None;
+    }
+    let Some((own, true)) = resolve_reaches(infer, &ty, &uses) else {
+        return None;
+    };
+    let general = infer.supertypes(&ty).into_iter().skip(1).any(|base| {
+        !base.is("System.Object")
+            && !base.is("System.ValueType")
+            && resolve_reaches(infer, &base, &uses)
+                .is_some_and(|(theirs, specific)| specific && same_resolution(&theirs, &own))
+    });
+    general.then_some(written)
+}
+
+/// A parameter declared on its own (a `params` array is declared on the
+/// list itself), without `ref`, `out`, `in`, `this` or `scoped`, and
+/// without attributes such as [DynamicallyAccessedMembers], which may only
+/// fit this type.
+fn plain_parameter(declaring: Node, src: &[u8]) -> bool {
+    declaring.kind() == "parameter"
+        && !["ref", "out", "in", "this", "scoped"]
+            .iter()
+            .any(|w| cs_has_modifier(declaring, w, src))
+        && !declaring
+            .named_children(&mut declaring.walk())
+            .any(|c| c.kind() == "attribute_list")
 }
 
 // ---------------------------------------------------- overloads (step 3)
@@ -1815,51 +2026,69 @@ pub(super) fn default_values_passed<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'
                     .any(|p| defaults(p))
         },
         |infer, call, args, b| {
-            let redundant: Vec<bool> = args
-                .iter()
-                .zip(&b.targets)
-                .map(|(a, &t)| {
-                    let p = &b.params[t];
-                    a.modifier.is_none()
-                        && p.optional
-                        && !p.attributed
-                        && p.default.as_ref().is_some_and(|d| {
-                            infer
-                                .constant(a.value, p.ty.as_ref())
-                                .is_some_and(|c| c.same(d))
-                        })
-                })
-                .collect();
-            // Positional arguments go from the end: each with those after it.
-            let mut trailing = true;
-            for i in (0..args.len()).rev() {
-                if !redundant[i] {
-                    trailing &= args[i].name.is_some();
-                    continue;
-                }
-                if args[i].name.is_none() && !trailing {
-                    continue;
-                }
-                let rest: Vec<Arg> = args
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, a)| {
-                        let with_it = args[i].name.is_none() && a.name.is_none() && *j > i;
-                        *j != i && !(with_it && redundant[*j])
-                    })
-                    .map(|(_, a)| *a)
-                    .collect();
-                let same = infer
-                    .resolve_instead(call, &rest)
-                    .is_some_and(|r| same_method(&r.method, &b.method));
-                if same {
-                    found.push(args[i].node);
-                }
-            }
+            let redundant = redundant_arguments(infer, &args, &b);
+            droppable_defaults(infer, call, &args, &b, &redundant, &mut found);
         },
     );
     found.sort_by_key(|n| n.start_byte());
     found
+}
+
+/// Per argument: whether it passes, positionally or by name, the default
+/// its optional parameter has anyway.
+fn redundant_arguments(infer: &Infer, args: &[Arg], b: &Bound) -> Vec<bool> {
+    args.iter()
+        .zip(&b.targets)
+        .map(|(a, &t)| {
+            let p = &b.params[t];
+            a.modifier.is_none()
+                && p.optional
+                && !p.attributed
+                && p.default.as_ref().is_some_and(|d| {
+                    infer
+                        .constant(a.value, p.ty.as_ref())
+                        .is_some_and(|c| c.same(d))
+                })
+        })
+        .collect()
+}
+
+/// The redundant arguments the call can leave out and still bind to the
+/// same method. Positional arguments go from the end: each with those
+/// after it.
+fn droppable_defaults<'t>(
+    infer: &Infer,
+    call: Node<'t>,
+    args: &[Arg<'t>],
+    b: &Bound,
+    redundant: &[bool],
+    found: &mut Vec<Node<'t>>,
+) {
+    let mut trailing = true;
+    for i in (0..args.len()).rev() {
+        if !redundant[i] {
+            trailing &= args[i].name.is_some();
+            continue;
+        }
+        if args[i].name.is_none() && !trailing {
+            continue;
+        }
+        let rest: Vec<Arg> = args
+            .iter()
+            .enumerate()
+            .filter(|(j, a)| {
+                let with_it = args[i].name.is_none() && a.name.is_none() && *j > i;
+                *j != i && !(with_it && redundant[*j])
+            })
+            .map(|(_, a)| *a)
+            .collect();
+        let same = infer
+            .resolve_instead(call, &rest)
+            .is_some_and(|r| same_method(&r.method, &b.method));
+        if same {
+            found.push(args[i].node);
+        }
+    }
 }
 
 // ---------------------------------------------------- S4005
@@ -1887,36 +2116,44 @@ pub(super) fn string_uri_arguments<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t
             let p = &b.params[k];
             p.ty.as_ref().is_some_and(|t| t.is(STRING)) && names_uri(p.name)
         };
-        let key = |p: &Param| (p.ty.clone(), p.modifier.map(str::to_string));
-        let replaced = b.targets.iter().copied().filter(|&k| uri_at(k)).any(|k| {
-            infer.overloads(&b.method).iter().any(|o| {
-                let obsolete =
-                    matches!(o, Found::Platform { member, .. } if member.has("Obsolete"));
-                if same_method(o, &b.method)
-                    || obsolete
-                    || !on_every_target(o)
-                    || infer.is_static(o) != infer.is_static(&b.method)
-                {
-                    return false;
-                }
-                infer.params(o).is_some_and(|ps| {
-                    ps.len() == b.params.len()
-                        && ps.iter().zip(&b.params).enumerate().all(|(i, (x, y))| {
-                            if i == k {
-                                x.ty.as_ref().is_some_and(|t| t.is("System.Uri"))
-                                    && x.modifier == y.modifier
-                            } else {
-                                key(x) == key(y)
-                            }
-                        })
-                })
-            })
-        });
-        if replaced {
+        if b.targets
+            .iter()
+            .copied()
+            .filter(|&k| uri_at(k))
+            .any(|k| has_uri_overload(infer, &b, k))
+        {
             found.push(call);
         }
     });
     found
+}
+
+/// Whether an overload of the bound method, current on every target and
+/// static alike, takes a `Uri` for parameter `k` and the same otherwise.
+fn has_uri_overload<'m, 't>(infer: &Infer<'m, 't>, b: &Bound<'m, 't>, k: usize) -> bool {
+    infer.overloads(&b.method).iter().any(|o| {
+        let obsolete = matches!(o, Found::Platform { member, .. } if member.has("Obsolete"));
+        !same_method(o, &b.method)
+            && !obsolete
+            && on_every_target(o)
+            && infer.is_static(o) == infer.is_static(&b.method)
+            && infer
+                .params(o)
+                .is_some_and(|ps| takes_uri_at(&ps, &b.params, k))
+    })
+}
+
+/// Whether `ps` are `params` with a `Uri` for parameter `k`.
+fn takes_uri_at(ps: &[Param], params: &[Param], k: usize) -> bool {
+    let key = |p: &Param| (p.ty.clone(), p.modifier.map(str::to_string));
+    ps.len() == params.len()
+        && ps.iter().zip(params).enumerate().all(|(i, (x, y))| {
+            if i == k {
+                x.ty.as_ref().is_some_and(|t| t.is("System.Uri")) && x.modifier == y.modifier
+            } else {
+                key(x) == key(y)
+            }
+        })
 }
 
 // ---------------------------------------------------- S4056
@@ -1945,8 +2182,9 @@ const PROVIDER_IGNORED: &[(&str, &str, &[&str])] = &[
 /// Calls of a member that has an overload taking the same parameters plus
 /// an `IFormatProvider` or `CultureInfo`, made without one. Constructors
 /// too, as the documentation says members.
+const PROVIDERS: &[&str] = &["System.IFormatProvider", "System.Globalization.CultureInfo"];
+
 pub(super) fn format_provider_overloads<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    const PROVIDERS: &[&str] = &["System.IFormatProvider", "System.Globalization.CultureInfo"];
     static NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
     let local = method_names(m);
     let names = overload_names(PROVIDERS, &NAMES);
@@ -1954,60 +2192,63 @@ pub(super) fn format_provider_overloads<'t>(m: &Model<'t>, src: &[u8]) -> Vec<No
     let wanted = |_: &Infer, call: Node, _: &[Arg]| may_have_overload(call, src, names, &local);
     resolved_calls(m, src, true, wanted, |infer, call, args, b| {
         if !on_every_target(&b.method)
-            || b.params.iter().any(|p| {
-                p.ty.as_ref()
-                    .is_some_and(|t| PROVIDERS.iter().any(|k| t.is(k)))
-            })
+            || b.params
+                .iter()
+                .any(|p| p.ty.as_ref().is_some_and(takes_provider))
+            || provider_ignored(infer, &args, &b)
         {
             return;
         }
-        if let Found::Platform {
-            declaring, member, ..
-        } = &b.method
-        {
-            let types: Vec<&str> = member.params.iter().map(|p| p.ty.as_str()).collect();
-            let ignored = PROVIDER_IGNORED.iter().any(|(t, n, ps)| {
-                declaring.name == *t && member.name == *n && (ps.is_empty() || types == *ps)
-            });
-            if ignored {
-                return;
-            }
-            let arg_type = || args.first().and_then(|a| infer.type_of(a.value));
-            match (
-                declaring.name.as_str(),
-                member.name.as_str(),
-                types.as_slice(),
-            ) {
-                // Used only when the value is IConvertible or IFormattable.
-                ("System.Convert", "ToString", ["System.Object"]) => {
-                    let formats = arg_type().is_some_and(|t| {
-                        infer
-                            .supertypes(&t)
-                            .iter()
-                            .any(|s| s.is("System.IConvertible") || s.is("System.IFormattable"))
-                    });
-                    if !formats {
-                        return;
-                    }
-                }
-                // Ignored for custom formats: report standard ones only.
-                ("System.TimeSpan", "ToString", ["System.String"]) => {
-                    let standard = args
-                        .first()
-                        .and_then(|a| infer.constant(a.value, None))
-                        .is_some_and(|c| matches!(c, Constant::Str(f) if f.chars().count() == 1));
-                    if !standard {
-                        return;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if overload_with_one_more(infer, &b, |t| PROVIDERS.iter().any(|k| t.is(k))) {
+        if overload_with_one_more(infer, &b, takes_provider) {
             found.push(call);
         }
     });
     found
+}
+
+fn takes_provider(t: &Ty) -> bool {
+    PROVIDERS.iter().any(|k| t.is(k))
+}
+
+/// Whether a platform method's provider overload doesn't matter here:
+/// one the rule ignores, `Convert.ToString(object)` of a value that's
+/// neither IConvertible nor IFormattable, or `TimeSpan.ToString` with a
+/// custom format.
+fn provider_ignored(infer: &Infer, args: &[Arg], b: &Bound) -> bool {
+    let Found::Platform {
+        declaring, member, ..
+    } = &b.method
+    else {
+        return false;
+    };
+    let types: Vec<&str> = member.params.iter().map(|p| p.ty.as_str()).collect();
+    if PROVIDER_IGNORED.iter().any(|(t, n, ps)| {
+        declaring.name == *t && member.name == *n && (ps.is_empty() || types == *ps)
+    }) {
+        return true;
+    }
+    match (
+        declaring.name.as_str(),
+        member.name.as_str(),
+        types.as_slice(),
+    ) {
+        // Used only when the value is IConvertible or IFormattable.
+        ("System.Convert", "ToString", ["System.Object"]) => !args
+            .first()
+            .and_then(|a| infer.type_of(a.value))
+            .is_some_and(|t| {
+                infer
+                    .supertypes(&t)
+                    .iter()
+                    .any(|s| s.is("System.IConvertible") || s.is("System.IFormattable"))
+            }),
+        // Ignored for custom formats: report standard ones only.
+        ("System.TimeSpan", "ToString", ["System.String"]) => !args
+            .first()
+            .and_then(|a| infer.constant(a.value, None))
+            .is_some_and(|c| matches!(c, Constant::Str(f) if f.chars().count() == 1)),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------- S4058
@@ -2213,104 +2454,134 @@ pub(super) fn localizable_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t
         return Vec::new();
     };
     let mut found = Vec::new();
-    walk_tree(m, |node, ancestors| {
-        match node.kind() {
-            "invocation_expression" | "object_creation_expression" => {
-                let args = arguments(node);
-                if !args.iter().any(|a| is_string_literal(a.value)) || in_test(ancestors, src) {
-                    return;
-                }
-                let Some(b) = infer.resolve_with(node, &args) else {
-                    return;
-                };
-                let console = matches!(&b.method, Found::Platform { declaring, member, .. }
-                    if declaring.name == "System.Console" && matches!(member.name.as_str(), "Write" | "WriteLine"));
-                let marked = |i: usize| match &b.method {
-                    Found::Platform { member, .. } => member
-                        .params
-                        .get(i)
-                        .is_some_and(|p| p.tags.iter().any(|t| t == "Localizable")),
-                    Found::Local(d) => d
-                        .declarator
-                        .and_then(|m| m.child_by_field_name("parameters"))
-                        .and_then(|l| {
-                            l.named_children(&mut l.walk())
-                                .filter(|p| p.kind() == "parameter")
-                                .nth(i)
-                        })
-                        .is_some_and(|p| localizable(p, src)),
-                };
-                for (a, &t) in args.iter().zip(&b.targets) {
-                    let p = &b.params[t];
-                    let shown = names_text(p.name)
-                        || marked(t)
-                        || console && matches!(p.name, "value" | "format");
-                    if is_string_literal(a.value) && shown {
-                        found.push(a.value);
-                    }
-                }
-            }
-            "assignment_expression" => {
-                let (Some(left), Some(right)) = (
-                    node.child_by_field_name("left"),
-                    node.child_by_field_name("right"),
-                ) else {
-                    return;
-                };
-                if !is_string_literal(right) || in_test(ancestors, src) {
-                    return;
-                }
-                // `x.Text = ...`, `Text = ...` in a member or an initializer.
-                let (owner, name) = match left.kind() {
-                    "member_access_expression" => {
-                        let Some(name) = left.child_by_field_name("name") else {
-                            return;
-                        };
-                        let receiver = left
-                            .child_by_field_name("expression")
-                            .and_then(|e| infer.type_of(e));
-                        (receiver, name)
-                    }
-                    "identifier" => {
-                        let owner = match node.parent() {
-                            Some(p) if p.kind() == "initializer_expression" => p
-                                .parent()
-                                .filter(|c| c.kind() == "object_creation_expression")
-                                .and_then(|c| infer.type_of(c)),
-                            _ => infer.enclosing_type(node),
-                        };
-                        (owner, left)
-                    }
-                    _ => return,
-                };
-                let Some(owner) = owner else {
-                    return;
-                };
-                let property = infer
-                    .members(
-                        &owner,
-                        std::str::from_utf8(text(name, src)).unwrap_or(""),
-                        None,
-                    )
-                    .into_iter()
-                    .find_map(|f| match f {
-                        Found::Platform { member, .. } if member.kind == "property" => {
-                            Some(names_text(&member.name) || member.has("Localizable"))
-                        }
-                        Found::Local(d) if d.kind == DeclKind::Property => Some(
-                            names_text(&d.name)
-                                || d.declarator.is_some_and(|p| localizable(p, src)),
-                        ),
-                        _ => None,
-                    });
-                if property == Some(true) {
-                    found.push(right);
-                }
-            }
-            _ => {}
+    walk_tree(m, |node, ancestors| match node.kind() {
+        "invocation_expression" | "object_creation_expression" => {
+            localizable_arguments(&infer, node, ancestors, src, &mut found);
         }
+        "assignment_expression" => localizable_assignment(&infer, node, ancestors, src, &mut found),
+        _ => {}
     });
     found
+}
+
+/// The string literals a call passes to a parameter that shows text: one
+/// named like text, marked `[Localizable]`, or `Console.Write`'s `value`
+/// and `format`.
+fn localizable_arguments<'t>(
+    infer: &Infer,
+    node: Node<'t>,
+    ancestors: &[Node<'t>],
+    src: &[u8],
+    found: &mut Vec<Node<'t>>,
+) {
+    let args = arguments(node);
+    if !args.iter().any(|a| is_string_literal(a.value)) || in_test(ancestors, src) {
+        return;
+    }
+    let Some(b) = infer.resolve_with(node, &args) else {
+        return;
+    };
+    let console = matches!(&b.method, Found::Platform { declaring, member, .. }
+        if declaring.name == "System.Console" && matches!(member.name.as_str(), "Write" | "WriteLine"));
+    for (a, &t) in args.iter().zip(&b.targets) {
+        let p = &b.params[t];
+        let shown = names_text(p.name)
+            || parameter_marked(&b, t, src)
+            || console && matches!(p.name, "value" | "format");
+        if is_string_literal(a.value) && shown {
+            found.push(a.value);
+        }
+    }
+}
+
+/// Whether the bound method's parameter `i` is `[Localizable(true)]`.
+fn parameter_marked(b: &Bound, i: usize, src: &[u8]) -> bool {
+    match &b.method {
+        Found::Platform { member, .. } => member
+            .params
+            .get(i)
+            .is_some_and(|p| p.tags.iter().any(|t| t == "Localizable")),
+        Found::Local(d) => d
+            .declarator
+            .and_then(|m| m.child_by_field_name("parameters"))
+            .and_then(|l| {
+                l.named_children(&mut l.walk())
+                    .filter(|p| p.kind() == "parameter")
+                    .nth(i)
+            })
+            .is_some_and(|p| localizable(p, src)),
+    }
+}
+
+/// A string literal assigned to a property that shows text.
+fn localizable_assignment<'t>(
+    infer: &Infer,
+    node: Node<'t>,
+    ancestors: &[Node<'t>],
+    src: &[u8],
+    found: &mut Vec<Node<'t>>,
+) {
+    let (Some(left), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("right"),
+    ) else {
+        return;
+    };
+    if !is_string_literal(right) || in_test(ancestors, src) {
+        return;
+    }
+    if let Some((owner, name)) = assigned_member(infer, node, left)
+        && localizable_property(infer, &owner, name, src)
+    {
+        found.push(right);
+    }
+}
+
+/// The type whose member an assignment's `left` names, and the name: `x.Text
+/// = ...`, or `Text = ...` in a member or an object initializer.
+fn assigned_member<'t>(infer: &Infer, node: Node, left: Node<'t>) -> Option<(Ty, Node<'t>)> {
+    match left.kind() {
+        "member_access_expression" => {
+            let name = left.child_by_field_name("name")?;
+            let receiver = left
+                .child_by_field_name("expression")
+                .and_then(|e| infer.type_of(e))?;
+            Some((receiver, name))
+        }
+        "identifier" => {
+            let owner = match node.parent() {
+                Some(p) if p.kind() == "initializer_expression" => p
+                    .parent()
+                    .filter(|c| c.kind() == "object_creation_expression")
+                    .and_then(|c| infer.type_of(c)),
+                _ => infer.enclosing_type(node),
+            }?;
+            Some((owner, left))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `owner`'s property `name` shows text: named like text, or
+/// marked `[Localizable(true)]`.
+fn localizable_property(infer: &Infer, owner: &Ty, name: Node, src: &[u8]) -> bool {
+    infer
+        .members(
+            owner,
+            std::str::from_utf8(text(name, src)).unwrap_or(""),
+            None,
+        )
+        .into_iter()
+        .find_map(|f| match f {
+            Found::Platform { member, .. } if member.kind == "property" => {
+                Some(names_text(&member.name) || member.has("Localizable"))
+            }
+            Found::Local(d) if d.kind == DeclKind::Property => {
+                Some(names_text(&d.name) || d.declarator.is_some_and(|p| localizable(p, src)))
+            }
+            _ => None,
+        })
+        == Some(true)
 }
 
 // ---------------------------------------------------- S3220
