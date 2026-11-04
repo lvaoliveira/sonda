@@ -15,7 +15,7 @@ export function DrillDrawer({
   footer,
   onClose,
   children,
-}: {
+}: Readonly<{
   eyebrow: string
   title: string
   subtitle?: string
@@ -24,7 +24,7 @@ export function DrillDrawer({
   footer?: ReactNode
   onClose: () => void
   children: ReactNode
-}) {
+}>) {
   const panel = useRef<HTMLElement>(null)
 
   useEffect(() => {

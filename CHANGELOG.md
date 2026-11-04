@@ -9,6 +9,13 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Rust: `.rs` files are parsed, with lines, functions, complexity and
+  duplication measured, and `common/cognitive-complexity` and
+  `common/too-many-parameters` run on them, as SonarQube's Rust rules
+  include their keys. On sonda's own code the measures agree with
+  SonarQube's to within 0.1% (lines, functions, cognitive complexity) and
+  0.3% (cyclomatic). No Rust-specific rules yet:
+  [ADR-0026](docs/adr/0026-rust.md) has the plan for SonarQube's 85.
 - A project's **Analyses** tab lists its analyses, newest first, with the
   gate filter and paging of the global list. A link to `/analyses?project=`
   goes there. The project page's Settings button is gone: Settings is a tab.
@@ -29,6 +36,12 @@ file, the report formats and the public library API.
 - On an analysis, the Introduced, Resolved and Warnings links in the
   summary scrolled nowhere: a section had no id to land on. They land on
   the section now, and outline it briefly.
+- `js/void-operator` leaves `void` on a call alone, as `void save()` marks
+  a floating promise as intended. SonarQube knows from the types that it's
+  a promise; without them, the call is the sign of one.
+- `js/find-for-existence` no longer takes `key && items.find(...)` for a
+  test of whether something was found: the right of `&&` is its value,
+  tested only when the whole expression is.
 
 
 ## [0.2.0] - 2026-11-03

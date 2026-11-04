@@ -1,0 +1,22 @@
+use std::collections::HashMap;
+
+/// A counter.
+struct Counter<'a> {
+    names: &'a [&'a str],
+}
+
+impl<'a> Counter<'a> {
+    fn count(&self, text: &str) -> usize {
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        for word in text.split(' ') {
+            match word {
+                "" => continue,
+                w if self.names.contains(&w) => *seen.entry(w).or_default() += 1,
+                _ => {}
+            }
+        }
+        let raw = r#"a "quoted" word"#;
+        /* a /* nested */ comment */
+        seen.len() + raw.len()
+    }
+}

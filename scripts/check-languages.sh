@@ -18,6 +18,7 @@ printf 'export const C = () => <p>{1}</p>\n' > a.tsx
 printf 'def f(a):\n    return len(a)\n' > a.py
 printf 'class A { int f(String a) { return a.length(); } }\n' > A.java
 printf 'class A { int F(string a) => a.Length; }\n' > A.cs
+printf 'fn f(a: &str) -> usize { a.len() }\n' > a.rs
 printf 'int f(const char *a) { return a[0]; }\n' > a.c
 printf 'int f(const char *a) { return a[0]; }\n' > a.cpp
 # Exit 1 is a failing gate, not an error.
@@ -36,8 +37,8 @@ if jq -e '[.warnings[] | select(test("sandbox"))] | length > 0' report.json > /d
   exit 1
 fi
 analyzed=$(jq '.files | length' report.json)
-if [ "$analyzed" -ne 8 ]; then
-  echo "check-languages: $analyzed of 8 files analyzed" >&2
+if [ "$analyzed" -ne 9 ]; then
+  echo "check-languages: $analyzed of 9 files analyzed" >&2
   jq -r '.files[].path, .warnings[]' report.json >&2
   exit 1
 fi

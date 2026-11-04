@@ -11,13 +11,13 @@ export function CodeViewer({
   severity,
   noteLine,
   note,
-}: {
+}: Readonly<{
   lines: CodeLine[]
   highlighted: number[]
   severity: Severity
   noteLine: number
   note: string
-}) {
+}>) {
   const s = SEVERITY[severity]
   return (
     <div role="region" aria-label="Source code" className="overflow-auto bg-canvas py-2 font-mono text-[11.5px] leading-[1.85]">
@@ -37,11 +37,7 @@ export function CodeViewer({
                 {line.number}
               </span>
               <span className="pr-5 whitespace-pre">
-                {line.tokens.map((t, i) => (
-                  <span key={i} style={{ color: ROLE_COLOR[t.role] }}>
-                    {t.text}
-                  </span>
-                ))}
+                <Tokens tokens={line.tokens} />
               </span>
             </div>
             {line.number === noteLine && (
@@ -57,4 +53,18 @@ export function CodeViewer({
       })}
     </div>
   )
+}
+
+/** A line's highlighted tokens; each is keyed by where it starts in the line. */
+export function Tokens({ tokens }: Readonly<{ tokens: CodeLine['tokens'] }>) {
+  let at = 0
+  return tokens.map((t) => {
+    const start = at
+    at += t.text.length
+    return (
+      <span key={start} style={{ color: ROLE_COLOR[t.role] }}>
+        {t.text}
+      </span>
+    )
+  })
 }

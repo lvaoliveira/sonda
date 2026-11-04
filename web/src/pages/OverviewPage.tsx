@@ -47,7 +47,7 @@ function OverviewNotYet() {
   )
 }
 
-function OverviewScreen({ load, canDrill }: { load: NonNullable<SondaApi['overview']>; canDrill: boolean }) {
+function OverviewScreen({ load, canDrill }: Readonly<{ load: NonNullable<SondaApi['overview']>; canDrill: boolean }>) {
   const navigate = useNavigate()
   const [scope, setScope] = useState<Scope>('all')
   const [range, setRange] = useState<Range>('90d')
@@ -153,7 +153,7 @@ function Empty() {
   )
 }
 
-function ErrorState({ message, retry }: { message: string; retry: () => void }) {
+function ErrorState({ message, retry }: Readonly<{ message: string; retry: () => void }>) {
   return (
     <div role="alert" className="flex max-w-[720px] gap-3.5 rounded-xl bg-crit-soft px-5 py-[18px]" style={{ boxShadow: 'inset 0 0 0 1px color-mix(in oklch, var(--sd-crit) 35%, transparent)' }}>
       <span aria-hidden="true" className="grid size-6 flex-none place-items-center rounded-full bg-crit text-[13px] font-bold text-canvas">
@@ -178,13 +178,13 @@ function Live({
   scopeName,
   onDrill,
   active,
-}: {
+}: Readonly<{
   data: Overview
   range: Range
   scopeName: string
   onDrill: (m: DrillMetric) => void
   active: DrillMetric | null
-}) {
+}>) {
   // Each row pairs a wide card with a narrow one. Side by side when the
   // page area fits both (a container query, so the sidebar counts), else
   // stacked at full width: never a card next to an empty half.
@@ -200,7 +200,7 @@ function Live({
           const on = active === k.metric
           // The color says how the value stands; the delta, where it's heading.
           const tone = k.tone === 'neutral' ? 'var(--sd-muted)' : `var(--sd-${k.tone})`
-          const steady = k.series.length < 2 || k.series[0] === k.series[k.series.length - 1]
+          const steady = k.series.length < 2 || k.series[0] === k.series.at(-1)
           const trend = steady ? 'var(--sd-faint)' : k.improving ? 'var(--sd-ok)' : 'var(--sd-crit)'
           return (
             <button
@@ -246,7 +246,7 @@ function Live({
   )
 }
 
-function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string; onDrill: (m: DrillMetric) => void }) {
+function Focus({ data, scopeName, onDrill }: Readonly<{ data: Overview; scopeName: string; onDrill: (m: DrillMetric) => void }>) {
   const navigate = useNavigate()
   const emphasis = { muted: 'var(--sd-muted)', strong: 'var(--sd-text)', faint: 'var(--sd-faint)' }
   return (
@@ -283,7 +283,7 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
                 <span className="text-[13px] text-fg-muted">{f.body}</span>
                 <span className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-[10.5px] text-fg-faint">
                   {f.trail.map((t, i) => (
-                    <span key={i} className="flex items-center gap-1.5">
+                    <span key={`${t.emphasis}|${t.text}`} className="flex items-center gap-1.5">
                       {i > 0 && <span>{t.emphasis === 'faint' || f.trail[i - 1].emphasis === t.emphasis ? '·' : '›'}</span>}
                       <span style={{ color: emphasis[t.emphasis] }}>{t.text}</span>
                     </span>
@@ -311,11 +311,12 @@ function Focus({ data, scopeName, onDrill }: { data: Overview; scopeName: string
 /** ", driven up by X, held back by Y", from the best and worst dimensions with data. */
 function healthDrivers(dimensions: Overview['health']['dimensions']): string {
   const rated = dimensions.filter((d) => d.score != null).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-  if (rated.length < 2 || rated[0].score === rated[rated.length - 1].score) return ''
-  return ` · driven up by ${rated[0].label.toLowerCase()}, held back by ${rated[rated.length - 1].label.toLowerCase()}`
+  const [best, worst] = [rated[0], rated.at(-1)]
+  if (!worst || rated.length < 2 || best.score === worst.score) return ''
+  return ` · driven up by ${best.label.toLowerCase()}, held back by ${worst.label.toLowerCase()}`
 }
 
-function Health({ data, rangeLong, onDrill }: { data: Overview; rangeLong: string; onDrill: (m: DrillMetric) => void }) {
+function Health({ data, rangeLong, onDrill }: Readonly<{ data: Overview; rangeLong: string; onDrill: (m: DrillMetric) => void }>) {
   return (
     <Card id="health" title="Code health" aside={data.health.delta && <span className="text-[12.5px] text-fg-muted">{rangeLong}</span>}>
       <div className="flex flex-col gap-2.5">
@@ -349,7 +350,7 @@ function Health({ data, rangeLong, onDrill }: { data: Overview; rangeLong: strin
   )
 }
 
-function IssueFlow({ flow, range }: { flow: FlowBucket[]; range: Range }) {
+function IssueFlow({ flow, range }: Readonly<{ flow: FlowBucket[]; range: Range }>) {
   const [hover, setHover] = useState<number | null>(null)
   // `|| 1` keeps an empty or flat history (no issues yet) from dividing by zero.
   const maxBar = Math.max(...flow.map((d) => Math.max(d.introduced, d.resolved))) * 1.15 || 1
@@ -389,7 +390,7 @@ function IssueFlow({ flow, range }: { flow: FlowBucket[]; range: Range }) {
     >
       <div
         role="img"
-        aria-label={`Issue flow: ${formatNumber(introduced)} introduced and ${formatNumber(resolved)} resolved; ${formatNumber(flow[flow.length - 1].open)} open now`}
+        aria-label={`Issue flow: ${formatNumber(introduced)} introduced and ${formatNumber(resolved)} resolved; ${formatNumber(flow.at(-1)!.open)} open now`}
         className="relative mt-1 h-[220px]"
         onMouseLeave={() => setHover(null)}
       >
@@ -450,7 +451,7 @@ function IssueFlow({ flow, range }: { flow: FlowBucket[]; range: Range }) {
   )
 }
 
-function TipRow({ label, value, color }: { label: string; value: string; color: string }) {
+function TipRow({ label, value, color }: Readonly<{ label: string; value: string; color: string }>) {
   return (
     <span className="flex justify-between gap-4">
       <span className="text-fg-muted">{label}</span>
@@ -461,7 +462,7 @@ function TipRow({ label, value, color }: { label: string; value: string; color: 
   )
 }
 
-function Legend({ swatch, children }: { swatch: ReactNode; children: string }) {
+function Legend({ swatch, children }: Readonly<{ swatch: ReactNode; children: string }>) {
   return (
     <span className="flex items-center gap-1.5">
       {swatch}
@@ -470,14 +471,16 @@ function Legend({ swatch, children }: { swatch: ReactNode; children: string }) {
   )
 }
 
-function Severities({ data, onDrill }: { data: Overview; onDrill: (m: DrillMetric) => void }) {
+function Severities({ data, onDrill }: Readonly<{ data: Overview; onDrill: (m: DrillMetric) => void }>) {
   const total = data.severities.reduce((a, s) => a + s.open, 0)
-  const cells = waffleCells(data.severities)
+  // Cells come grouped by severity: each is its severity's first, second...
+  const severities = waffleCells(data.severities)
+  const cells = severities.map((severity, i) => ({ severity, key: `${severity}-${i - severities.indexOf(severity)}` }))
   return (
     <Card id="sev" title="Open by severity" aside={<Mono className="text-[11.5px] text-fg-muted">{formatNumber(total)}</Mono>}>
       <div aria-hidden="true" className="grid grid-cols-[repeat(20,1fr)] gap-[3px]">
-        {cells.map((s, i) => (
-          <span key={i} className="aspect-square rounded-[2px]" style={{ background: SEVERITY[s].color }} />
+        {cells.map(({ severity, key }) => (
+          <span key={key} className="aspect-square rounded-[2px]" style={{ background: SEVERITY[severity].color }} />
         ))}
       </div>
       <div className="flex flex-col">
@@ -502,7 +505,7 @@ function Severities({ data, onDrill }: { data: Overview; onDrill: (m: DrillMetri
   )
 }
 
-function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: number }) {
+function ProjectTable({ projects, total }: Readonly<{ projects: ProjectHealth[]; total: number }>) {
   // The first monorepo starts expanded, to show that components exist.
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const first = projects.find((p) => p.components?.length)
@@ -512,7 +515,7 @@ function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: n
   const row = (p: ProjectHealth, child: boolean) => {
     const score = projectScore([p.reliability, p.security, p.maintainability], p.coverage)
     const first = p.trend[0]
-    const last = p.trend[p.trend.length - 1]
+    const last = p.trend.at(-1)!
     const open = !!expanded[p.name]
     const toggle = () => p.components && setExpanded((e) => ({ ...e, [p.name]: !e[p.name] }))
     return (
@@ -628,7 +631,7 @@ function ProjectTable({ projects, total }: { projects: ProjectHealth[]; total: n
   )
 }
 
-function GateHistory({ history }: { history: Overview['gateHistory'] }) {
+function GateHistory({ history }: Readonly<{ history: Overview['gateHistory'] }>) {
   const worst = Math.max(...history.failing.map((f) => f.failures))
   return (
     <Card
@@ -666,7 +669,7 @@ function GateHistory({ history }: { history: Overview['gateHistory'] }) {
       </div>
       <div className="flex justify-between font-mono text-[9.5px] text-fg-faint">
         <span>{shortDate(history.days[0].date)}</span>
-        <span>{shortDate(history.days[history.days.length - 1].date)}</span>
+        <span>{shortDate(history.days.at(-1)!.date)}</span>
       </div>
       <div className="flex flex-col gap-0.5 border-t border-line pt-3">
         <span className="mb-1 text-[12.5px] text-fg-muted">Most-failed conditions</span>
@@ -685,7 +688,7 @@ function GateHistory({ history }: { history: Overview['gateHistory'] }) {
   )
 }
 
-function Recent({ data }: { data: Overview }) {
+function Recent({ data }: Readonly<{ data: Overview }>) {
   return (
     <Card
       id="ra"
@@ -747,7 +750,7 @@ function Recent({ data }: { data: Overview }) {
   )
 }
 
-function Drawer({ metric, scope, onClose }: { metric: DrillMetric; scope: Scope; onClose: () => void }) {
+function Drawer({ metric, scope, onClose }: Readonly<{ metric: DrillMetric; scope: Scope; onClose: () => void }>) {
   const api = useApi()
   const navigate = useNavigate()
   const drill = useAsync(() => (api.drill ? api.drill(metric, scope) : Promise.reject(new Error('not available'))), [api, metric, scope])

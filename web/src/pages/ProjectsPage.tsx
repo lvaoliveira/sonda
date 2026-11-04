@@ -42,7 +42,7 @@ function matchesGate(gate: GateState, filter: GateFilter): boolean {
   return filter === 'all' || (filter === 'failed' ? gate === 'failed' : gate !== 'failed')
 }
 
-function Projects({ list, isAdmin }: { list: ProjectList; isAdmin: boolean }) {
+function Projects({ list, isAdmin }: Readonly<{ list: ProjectList; isAdmin: boolean }>) {
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
   const gate = (params.get('gate') ?? 'all') as GateFilter
@@ -120,7 +120,7 @@ function Projects({ list, isAdmin }: { list: ProjectList; isAdmin: boolean }) {
           </div>
         )}
         <label className="ml-auto flex items-center gap-2 text-[13px] text-fg-muted">
-          Sort
+          <span>Sort</span>
           <select
             value={sort}
             onChange={(e) => set('sort', e.target.value, 'score')}
@@ -160,7 +160,7 @@ function Projects({ list, isAdmin }: { list: ProjectList; isAdmin: boolean }) {
   )
 }
 
-function ProjectTable({ rows, total }: { rows: ProjectRow[]; total: number }) {
+function ProjectTable({ rows, total }: Readonly<{ rows: ProjectRow[]; total: number }>) {
   const navigate = useNavigate()
   const th = 'border-b border-line px-2 py-2 text-left font-normal'
   const td = 'border-b border-line px-2 py-[11px]'

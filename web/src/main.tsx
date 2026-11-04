@@ -24,10 +24,9 @@ async function chooseApi(): Promise<SondaApi> {
   return createHttpApi()
 }
 
-void chooseApi().then((api) =>
-  createRoot(root).render(
-    <StrictMode>
-      <App api={api} />
-    </StrictMode>,
-  ),
+const api = await chooseApi()
+createRoot(root).render(
+  <StrictMode>
+    <App api={api} />
+  </StrictMode>,
 )

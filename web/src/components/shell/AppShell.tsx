@@ -67,7 +67,7 @@ export interface Crumb {
 }
 
 /** A project's own pages: shown as tabs on each of them, so moving between them never leaves the project. */
-function ProjectTabs({ project }: { project: string }) {
+function ProjectTabs({ project }: Readonly<{ project: string }>) {
   const base = `/projects/${encodeURIComponent(project)}`
   // A branch's pages stay on that branch; analyses, rules and settings are the project's.
   const branch = useSearchParams()[0].get('branch')
@@ -99,7 +99,7 @@ function ProjectTabs({ project }: { project: string }) {
   )
 }
 
-export function AppShell({ crumbs, project, children }: { crumbs: Crumb[]; /** The project whose pages these are: shows its tabs. */ project?: string; children: ReactNode }) {
+export function AppShell({ crumbs, project, children }: Readonly<{ crumbs: Crumb[]; /** The project whose pages these are: shows its tabs. */ project?: string; children: ReactNode }>) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
   const { signOut } = useSessionActions()
@@ -221,7 +221,7 @@ export function AppShell({ crumbs, project, children }: { crumbs: Crumb[]; /** T
               {trail.map((c, i) => {
                 const last = i === trail.length - 1
                 return (
-                  <span key={i} className="flex min-w-0 items-center gap-2" style={{ flex: last ? '0 1 auto' : '0 4 auto' }}>
+                  <span key={`${c.to ?? ''}|${c.label}`} className="flex min-w-0 items-center gap-2" style={{ flex: last ? '0 1 auto' : '0 4 auto' }}>
                     {i > 0 && (
                       <span aria-hidden="true" className="text-line-strong">
                         /

@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type SubmitEvent, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { ProjectSettingChange, ProjectSettings, ProjectSettingsPatch } from '@/api/types'
@@ -38,7 +38,7 @@ export function ProjectSettingsPage() {
   )
 }
 
-function Settings({ settings, isAdmin, save }: { settings: ProjectSettings; isAdmin: boolean; save: (patch: ProjectSettingsPatch) => Promise<void> }) {
+function Settings({ settings, isAdmin, save }: Readonly<{ settings: ProjectSettings; isAdmin: boolean; save: (patch: ProjectSettingsPatch) => Promise<void> }>) {
   return (
     <>
       <PageHeader
@@ -78,14 +78,14 @@ function Settings({ settings, isAdmin, save }: { settings: ProjectSettings; isAd
 }
 
 /** Deleting the project (ADR-0017): permanent, confirmed by typing its key. */
-function DangerZone({ settings }: { settings: ProjectSettings }) {
+function DangerZone({ settings }: Readonly<{ settings: ProjectSettings }>) {
   const api = useApi()
   const navigate = useNavigate()
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const analyses = settings.branches.reduce((n, b) => n + b.analyses, 0)
-  const submit = async (e: FormEvent) => {
+  const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     setError(null)
@@ -133,7 +133,7 @@ function describe(c: ProjectSettingChange) {
 }
 
 /** The gate the server judges the project by (ADR-0017): its sonda.toml's, or a server gate. */
-function QualityGateSetting({ settings, isAdmin, save }: SettingProps) {
+function QualityGateSetting({ settings, isAdmin, save }: Readonly<SettingProps>) {
   const api = useApi()
   const gates = useAsync(() => api.gates(), [api])
   const server = gates.state === 'ready' ? gates.data.gates.filter((g) => g.server) : []
@@ -141,7 +141,7 @@ function QualityGateSetting({ settings, isAdmin, save }: SettingProps) {
   const [choice, setChoice] = useState(current === null ? '' : String(current))
   const { busy, error, run } = useSave(save)
   const chosen = choice === '' ? null : Number(choice)
-  const submit = (e: FormEvent) => {
+  const submit = (e: SubmitEvent) => {
     e.preventDefault()
     void run({ qualityGate: chosen })
   }
@@ -185,11 +185,11 @@ function QualityGateSetting({ settings, isAdmin, save }: SettingProps) {
 }
 
 /** The GitHub repository whose pull requests sonda decorates (ADR-0021). */
-function GithubSetting({ settings, isAdmin, save }: SettingProps) {
+function GithubSetting({ settings, isAdmin, save }: Readonly<SettingProps>) {
   const [repository, setRepository] = useState(settings.githubRepository ?? '')
   const { busy, error, run } = useSave(save)
   const changed = repository.trim() !== (settings.githubRepository ?? '')
-  const submit = (e: FormEvent) => {
+  const submit = (e: SubmitEvent) => {
     e.preventDefault()
     void run({ githubRepository: repository.trim() || null })
   }
@@ -245,7 +245,7 @@ function useSave(save: (patch: ProjectSettingsPatch) => Promise<void>) {
   return { busy, error, run }
 }
 
-function SaveError({ error }: { error: string | null }) {
+function SaveError({ error }: Readonly<{ error: string | null }>) {
   return (
     error && (
       <p role="alert" className="m-0 text-xs text-crit">
@@ -257,11 +257,11 @@ function SaveError({ error }: { error: string | null }) {
 
 type SettingProps = { settings: ProjectSettings; isAdmin: boolean; save: (patch: ProjectSettingsPatch) => Promise<void> }
 
-function NameSetting({ settings, isAdmin, save }: SettingProps) {
+function NameSetting({ settings, isAdmin, save }: Readonly<SettingProps>) {
   const [name, setName] = useState(settings.name ?? '')
   const { busy, error, run } = useSave(save)
   const changed = name.trim() !== (settings.name ?? '')
-  const submit = (e: FormEvent) => {
+  const submit = (e: SubmitEvent) => {
     e.preventDefault()
     void run({ name: name.trim() || null })
   }
@@ -294,10 +294,10 @@ function NameSetting({ settings, isAdmin, save }: SettingProps) {
   )
 }
 
-function MainBranchSetting({ settings, isAdmin, save }: SettingProps) {
+function MainBranchSetting({ settings, isAdmin, save }: Readonly<SettingProps>) {
   const [branch, setBranch] = useState(settings.mainBranch)
   const { busy, error, run } = useSave(save)
-  const submit = (e: FormEvent) => {
+  const submit = (e: SubmitEvent) => {
     e.preventDefault()
     void run({ mainBranch: branch })
   }

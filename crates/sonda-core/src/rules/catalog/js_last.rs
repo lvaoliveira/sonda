@@ -857,6 +857,8 @@ struct Ref<'t> {
     node: Node<'t>,
     parent: Option<Node<'t>>,
     grandparent: Option<Node<'t>>,
+    /// Kept as the walk passes it: `Node::parent` costs the tree's depth.
+    great_grandparent: Option<Node<'t>>,
 }
 
 /// The identifiers under `node` that read or write a variable, with the
@@ -865,8 +867,19 @@ fn references<'t>(node: Node<'t>) -> Vec<Ref<'t>> {
     let mut out = Vec::new();
     // Above `node`: asked for at most once, and only if a reference needs it.
     let mut above: Option<Option<Node<'t>>> = None;
-    let mut above = || *above.get_or_insert_with(|| node.parent());
-    let mut consider = |n: Node<'t>, parent: Option<Node<'t>>, grandparent: Option<Node<'t>>| {
+    let mut above_above: Option<Option<Node<'t>>> = None;
+    let mut above = |levels: usize| match levels {
+        1 => *above.get_or_insert_with(|| node.parent()),
+        _ => *above_above.get_or_insert_with(|| {
+            above
+                .get_or_insert_with(|| node.parent())
+                .and_then(|p| p.parent())
+        }),
+    };
+    let mut consider = |n: Node<'t>,
+                        parent: Option<Node<'t>>,
+                        grandparent: Option<Node<'t>>,
+                        great_grandparent: Option<Node<'t>>| {
         if !matches!(n.kind(), "identifier" | "shorthand_property_identifier") {
             return;
         }
@@ -880,19 +893,25 @@ fn references<'t>(node: Node<'t>) -> Vec<Ref<'t>> {
                 node: n,
                 parent,
                 grandparent,
+                great_grandparent,
             });
         }
     };
     if matches!(node.kind(), "identifier" | "shorthand_property_identifier") {
-        let parent = above();
-        consider(node, parent, parent.and_then(|p| p.parent()));
+        let (parent, grandparent) = (above(1), above(2));
+        consider(
+            node,
+            parent,
+            grandparent,
+            grandparent.and_then(|g| g.parent()),
+        );
     }
     walk_with_ancestors(node, &mut |n, ancestors| {
-        let grandparent = match ancestors.len() {
-            1 => above(),
-            k => Some(ancestors[k - 2]),
-        };
-        consider(n, ancestors.last().copied(), grandparent);
+        let k = ancestors.len();
+        let up = |levels: usize| k.checked_sub(levels).map(|i| ancestors[i]);
+        let grandparent = up(2).or_else(|| above(1));
+        let great_grandparent = up(3).or_else(|| above(if k == 2 { 1 } else { 2 }));
+        consider(n, ancestors.last().copied(), grandparent, great_grandparent);
         true
     });
     out
@@ -2374,9 +2393,19 @@ fn is_truthiness_test(id: Ref) -> bool {
             )
         }),
         "ternary_expression" => p.child_by_field_name("condition") == Some(id.node),
-        "binary_expression" => p
-            .child_by_field_name("operator")
-            .is_some_and(|o| matches!(o.kind(), "&&" | "||")),
+        // `a && b` tests `a`; it yields `b`, so `b` is tested only when the
+        // whole expression is, as in `if (a && b)`.
+        "binary_expression" => {
+            p.child_by_field_name("operator")
+                .is_some_and(|o| matches!(o.kind(), "&&" | "||"))
+                && (p.child_by_field_name("left") == Some(id.node)
+                    || is_truthiness_test(Ref {
+                        node: p,
+                        parent: id.grandparent,
+                        grandparent: id.great_grandparent,
+                        great_grandparent: None,
+                    }))
+        }
         _ => false,
     }
 }
@@ -2392,10 +2421,12 @@ fn find_result_only_tested(call: Node, src: &[u8]) -> bool {
         return false;
     };
     // `if (items.find(...))` and `!items.find(...)`.
+    let grandparent = parent.parent();
     if is_truthiness_test(Ref {
         node: call,
         parent: Some(parent),
-        grandparent: parent.parent(),
+        grandparent,
+        great_grandparent: grandparent.and_then(|g| g.parent()),
     }) {
         return true;
     }
@@ -2417,4 +2448,30 @@ fn find_result_only_tested(call: Node, src: &[u8]) -> bool {
         .filter(|r| text(r.node, src) == text(name, src) && r.node != name)
         .collect();
     !uses.is_empty() && uses.iter().all(|u| is_truthiness_test(*u))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::analyze;
+    use crate::analysis::tests::far_deadline;
+    use crate::config::Config;
+    use crate::lang::Lang;
+    use crate::rules::RuleSet;
+
+    fn flagged(rule: &str, src: &str) -> Vec<usize> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let file = analyze("t", Lang::JavaScript, src, &rules, &cfg, far_deadline()).unwrap();
+        file.issues
+            .iter()
+            .filter(|i| i.rule == rule)
+            .map(|i| i.line)
+            .collect()
+    }
+
+    #[test]
+    fn find_on_the_right_of_and_is_its_value() {
+        let src = "function f(key, items) {\n  const d = key && items.find((x) => x.key === key);\n  if (d) return d.name;\n  if (key && items.find((x) => x.ok)) return 1;\n  return ok || items.find((x) => x.ok);\n}";
+        assert_eq!(flagged("js/find-for-existence", src), [4]);
+    }
 }

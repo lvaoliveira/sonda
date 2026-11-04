@@ -21,7 +21,7 @@ export function ComponentsPage() {
   )
 }
 
-function Components({ list }: { list: ComponentList }) {
+function Components({ list }: Readonly<{ list: ComponentList }>) {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
@@ -75,7 +75,7 @@ function Components({ list }: { list: ComponentList }) {
       </PageHeader>
       <div className="flex flex-wrap items-center gap-4 text-[13px] text-fg-muted">
         <label className="flex items-center gap-2">
-          Project
+          <span>Project</span>
           <select aria-label="Project" value={project} onChange={(e) => set('project', e.target.value)} className="h-8 rounded-md bg-canvas px-2 text-[13px] text-fg edge">
             <option value="">All projects</option>
             {projects.map((p) => (
@@ -86,7 +86,7 @@ function Components({ list }: { list: ComponentList }) {
           </select>
         </label>
         <label className="flex items-center gap-2">
-          Owner
+          <span>Owner</span>
           <select aria-label="Owner" value={owner} onChange={(e) => set('owner', e.target.value)} className="h-8 rounded-md bg-canvas px-2 text-[13px] text-fg edge">
             <option value="">Anyone</option>
             {list.owners.map((o) => (

@@ -41,6 +41,10 @@ pub(crate) const JAVA_COMPONENT_NOT_SCANNED: &str = "java/component-not-scanned"
 pub(crate) const CS_PARTIAL_METHOD_NOT_IMPLEMENTED: &str = "cs/partial-method-not-implemented";
 pub(crate) const CS_NEUTRAL_RESOURCES_LANGUAGE: &str = "cs/neutral-resources-language";
 pub(crate) const COMMENTED_OUT_CODE: &str = "common/commented-out-code";
+/// The `common/` rules on by default that SonarQube has no Rust key for. By
+/// ADR-0007 a rule runs by default only where its default profile has the
+/// key, so these skip Rust ([ADR-0026](../../../../docs/adr/0026-rust.md)).
+pub(crate) const NOT_ON_RUST: &[&str] = &[FUNCTION_LENGTH, TODO_COMMENT, COMMENTED_OUT_CODE];
 
 /// Extra check on the node captured as `@match`.
 #[derive(Clone, Copy)]
@@ -152,7 +156,7 @@ impl Rule {
     /// The languages it checks. A structural rule's are in its id's
     /// prefix; `common/` rules check every language.
     pub fn langs(&self) -> &'static [Lang] {
-        use crate::lang::{ALL, CSHARP, JAVA, JS_TS, PYTHON};
+        use crate::lang::{ALL, CSHARP, JAVA, JS_TS, NOT_RUST, PYTHON};
         match self.check {
             Check::Query { langs, .. } | Check::Semantic { langs, .. } => langs,
             Check::Structural => match self.id.split('/').next() {
@@ -160,6 +164,7 @@ impl Rule {
                 Some("java") => JAVA,
                 Some("py") => PYTHON,
                 Some("js") => JS_TS,
+                _ if NOT_ON_RUST.contains(&self.id) => NOT_RUST,
                 _ => ALL,
             },
         }
@@ -387,6 +392,10 @@ mod tests {
         assert_eq!(langs("cs/deep-inheritance"), [Lang::CSharp]);
         assert_eq!(langs("java/package-info-missing"), [Lang::Java]);
         assert_eq!(langs("common/file-length"), crate::lang::ALL);
+        // Rust has no SonarQube key for these, so they don't run there.
+        assert!(!langs("common/function-length").contains(&Lang::Rust));
+        assert!(langs("common/cognitive-complexity").contains(&Lang::Rust));
+        assert!(langs("common/too-many-parameters").contains(&Lang::Rust));
         for r in RULES
             .iter()
             .filter(|r| matches!(r.check, Check::Structural))

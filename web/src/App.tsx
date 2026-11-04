@@ -24,7 +24,7 @@ import { ConnectPage } from '@/pages/ConnectPage'
 import { RulesPage } from '@/pages/RulesPage'
 import { SecurityPage } from '@/pages/SecurityPage'
 
-export function App({ api }: { api: SondaApi }) {
+export function App({ api }: Readonly<{ api: SondaApi }>) {
   return (
     <ApiProvider api={api}>
       <BrowserRouter>

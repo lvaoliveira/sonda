@@ -42,7 +42,7 @@ const STATE_FILTER: RuleFilter<ProjectRule> = {
   test: (r, v) => (v === 'on' ? r.state.on : v === 'off' ? !r.state.on : r.state.setBy !== 'default' || r.state.severity !== null),
 }
 
-function Rules({ rules, isAdmin, profiles, reload }: { rules: ProjectRules; isAdmin: boolean; profiles: RuleProfileSummary[]; reload: () => void }) {
+function Rules({ rules, isAdmin, profiles, reload }: Readonly<{ rules: ProjectRules; isAdmin: boolean; profiles: RuleProfileSummary[]; reload: () => void }>) {
   const [q, setQ] = useState('')
   const count = useCallback((r: ProjectRule) => r.openIssues + r.hiddenIssues, [])
   const languages = useMemo(
@@ -115,7 +115,7 @@ function shortSetBy(r: ProjectRule): string {
 }
 
 /** The rule's state here, and for admins, enabling or disabling it for this project. */
-function InThisProject({ project, rule, profile, isAdmin, reload }: { project: string; rule: ProjectRule; profile: string; isAdmin: boolean; reload: () => void }) {
+function InThisProject({ project, rule, profile, isAdmin, reload }: Readonly<{ project: string; rule: ProjectRule; profile: string; isAdmin: boolean; reload: () => void }>) {
   const api = useApi()
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -201,7 +201,7 @@ function InThisProject({ project, rule, profile, isAdmin, reload }: { project: s
 }
 
 /** Admins choose the project's rule profile, or the default. */
-function ProfileChoice({ project, current, profiles, reload }: { project: string; current: ProjectRules['profile']; profiles: RuleProfileSummary[]; reload: () => void }) {
+function ProfileChoice({ project, current, profiles, reload }: Readonly<{ project: string; current: ProjectRules['profile']; profiles: RuleProfileSummary[]; reload: () => void }>) {
   const api = useApi()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -247,7 +247,7 @@ function ProfileChoice({ project, current, profiles, reload }: { project: string
 }
 
 /** The repository's own settings, from its sonda.toml, and when they changed. */
-function RepositorySettings({ rules }: { rules: ProjectRules }) {
+function RepositorySettings({ rules }: Readonly<{ rules: ProjectRules }>) {
   const toml = rules.sondaToml
   const n = toml ? Object.keys(toml.severity).length : 0
   return (

@@ -104,6 +104,9 @@ pub(crate) fn analyze(
     } else {
         Vec::new()
     };
+    if lang == Lang::Rust {
+        issues.retain(|i| !rules::NOT_ON_RUST.contains(&i.rule));
+    }
     issues.retain(|i| {
         // A malformed suppression comment cannot suppress the report about itself.
         i.rule == rules::NOSONAR_COMMENT
@@ -1584,13 +1587,17 @@ fn measure_functions(
 
     walk(root, |node| {
         // is_named: keyword tokens such as `function` share their text with node kinds.
-        if !node.is_named() || !syn.functions.contains(&node.kind()) {
+        let closure = syn.closures.contains(&node.kind());
+        if !node.is_named() || !(closure || syn.functions.contains(&node.kind())) {
             return true;
         }
-        metrics.functions += 1;
+        if closure {
+            return true;
+        }
         let c = complexity(node, syn, ctx.src.as_bytes());
         metrics.complexity += c.cyclomatic;
         metrics.cognitive_complexity += c.cognitive;
+        metrics.functions += 1;
 
         let name = function_name(node, ctx);
         let anchor = name_node(node).unwrap_or(node);
@@ -1795,7 +1802,7 @@ struct Complexity {
 
 /// Cyclomatic complexity plus an approximation of SonarSource's cognitive
 /// complexity: +1 per branch/loop/catch/ternary (plus the nesting depth),
-/// +1 per else/elif, +1 per run of the same boolean operator. Nested
+/// +1 per else/elif (Rust's `if` is an expression), +1 per run of the same boolean operator. Nested
 /// functions are skipped; they are measured separately.
 ///
 /// Iterative on purpose: syntax trees from untrusted input can be nested
@@ -1856,7 +1863,12 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         if self.syn.functions.contains(&kind) {
             return;
         }
-        if kind == "if_statement" {
+        if self.syn.closures.contains(&kind) {
+            // Part of the enclosing function, one level deeper.
+            self.c.cyclomatic += 1;
+            return self.children(node, nesting + 1, None);
+        }
+        if matches!(kind, "if_statement" | "if_expression") {
             return self.stack.push(Step::If(node, nesting, false));
         }
         if self.syn.branches.contains(&kind) {
@@ -1869,7 +1881,10 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
             return self.children(node, nesting + 1, None);
         }
         if self.syn.cases.contains(&kind)
-            && !is_default_case(node.utf8_text(self.src).unwrap_or(""))
+            && !is_default_case(
+                node.utf8_text(self.src).unwrap_or(""),
+                self.syn.wildcard_arm_is_default,
+            )
         {
             self.c.cyclomatic += 1;
         }
@@ -1910,14 +1925,14 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
     fn visit_else(&mut self, node: Node<'t>, nesting: u32) {
         match node.kind() {
             // Java: `else if` is an if_statement directly in the alternative field.
-            "if_statement" => self.stack.push(Step::If(node, nesting, true)),
+            "if_statement" | "if_expression" => self.stack.push(Step::If(node, nesting, true)),
             "elif_clause" => {
                 self.c.cyclomatic += 1;
                 self.c.cognitive += 1;
                 self.children(node, nesting + 1, None);
             }
             "else_clause" => match only_named_child(node) {
-                Some(inner) if inner.kind() == "if_statement" => {
+                Some(inner) if matches!(inner.kind(), "if_statement" | "if_expression") => {
                     self.stack.push(Step::If(inner, nesting, true))
                 }
                 _ => {
@@ -1933,12 +1948,14 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
     }
 }
 
-/// `default:`, or C#'s discard arm `_ => ...` in a switch expression.
-fn is_default_case(text: &str) -> bool {
+/// `default:`, or, where `wildcard` says so, C#'s discard arm `_ => ...` in a
+/// switch expression.
+fn is_default_case(text: &str, wildcard: bool) -> bool {
     text.starts_with("default")
-        || text
-            .strip_prefix('_')
-            .is_some_and(|rest| rest.trim_start().starts_with("=>"))
+        || (wildcard
+            && text
+                .strip_prefix('_')
+                .is_some_and(|rest| rest.trim_start().starts_with("=>")))
 }
 
 fn only_named_child(node: Node) -> Option<Node> {
@@ -1999,6 +2016,7 @@ fn raw_function_name<'s>(node: Node, ctx: &Ctx<'s>) -> &'s str {
             .child_by_field_name("name")
             .or_else(|| p.child_by_field_name("key")),
         "assignment_expression" => p.child_by_field_name("left"),
+        "let_declaration" => p.child_by_field_name("pattern"),
         _ => None,
     });
     named_by.map_or("<anonymous>", |n| ctx.text(n))
@@ -2583,6 +2601,59 @@ pub(crate) mod tests {
         let a = run(Lang::CSharp, src);
         let hit = rules_hit(&a);
         assert!(hit.contains(&rules::TOO_MANY_PARAMETERS), "{hit:?}");
+    }
+
+    #[test]
+    fn rust_functions_and_complexity() {
+        let src = "fn f(a: i32, b: bool) -> i32 {\n    if a > 1 && b { return 1; } else if a > 0 { return 2; }\n    for x in xs { }\n    loop { break; }\n    match a { 1 => 1, 2 => 2, _ => 0 }\n}\nimpl A { fn g(&self) { } }\n";
+        let a = run(Lang::Rust, src);
+        assert_eq!(a.metrics.functions, 2);
+        // f: 1 + if + && + else-if + for + three arms (the wildcard counts, as SonarQube counts it); g: 1
+        assert_eq!(a.metrics.complexity, 8 + 1);
+        // if +1, && +1, else-if +1, for +1, loop +1, match +1; a `loop` has no
+        // condition, so it adds nothing to the cyclomatic count
+        assert_eq!(a.metrics.cognitive_complexity, 6);
+    }
+
+    #[test]
+    fn rust_closures_belong_to_their_function_one_level_deeper() {
+        let src = "fn main() {\n    let h = |x: bool| { if x { 1 } else { 2 } };\n}\n";
+        let a = run(Lang::Rust, src);
+        assert_eq!(a.metrics.functions, 1);
+        // main 1 + the closure + the if
+        assert_eq!(a.metrics.complexity, 3);
+        // the if is nested once by the closure (+2), and its else +1
+        assert_eq!(a.metrics.cognitive_complexity, 3);
+    }
+
+    #[test]
+    fn rust_skips_the_common_rules_sonarqube_has_no_rust_key_for() {
+        let long = "    g();\n".repeat(85);
+        let src = format!(
+            "// TODO: split this\nfn f(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8) {{\n{long}}}\n"
+        );
+        let a = run(Lang::Rust, &src);
+        let hit = rules_hit(&a);
+        assert!(hit.contains(&rules::TOO_MANY_PARAMETERS), "{hit:?}");
+        assert!(!hit.contains(&rules::FUNCTION_LENGTH), "{hit:?}");
+        assert!(!hit.contains(&rules::TODO_COMMENT), "{hit:?}");
+        // Another language still gets them.
+        let js = format!("// TODO: split this\nfunction f() {{\n{long}}}\n");
+        let a = run(Lang::JavaScript, &js);
+        let hit = rules_hit(&a);
+        assert!(hit.contains(&rules::FUNCTION_LENGTH), "{hit:?}");
+        assert!(hit.contains(&rules::TODO_COMMENT), "{hit:?}");
+    }
+
+    #[test]
+    fn rust_parameters_and_closure_names() {
+        let src = "fn f(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8) { }\nfn main() { let add = |x, y| x + y; }\n";
+        let a = run(Lang::Rust, src);
+        let hit = rules_hit(&a);
+        assert!(hit.contains(&rules::TOO_MANY_PARAMETERS), "{hit:?}");
+        // A closure adds to complexity but isn't a function: f 1, main 1, the closure 1.
+        assert_eq!(a.metrics.functions, 2);
+        assert_eq!(a.metrics.complexity, 3);
     }
 
     #[test]
