@@ -462,74 +462,88 @@ impl Parser {
     }
 
     fn quantified(&mut self, atom: Node) -> Result<Node, ParseError> {
-        let mut node = atom;
+        if self.flags.verbose {
+            self.skip_verbose();
+        }
+        let Some((min, max, braces)) = self.quantifier()? else {
+            return Ok(atom);
+        };
+        self.check_repeatable(&atom)?;
+        let mode = self.repeat_mode();
+        self.count()?;
+        let node = Node::Repeat {
+            inner: Box::new(atom),
+            min,
+            max,
+            mode,
+            braces,
+        };
+        self.no_further_quantifier()?;
+        Ok(node)
+    }
+
+    /// The quantifier here, consumed: (min, max, written in braces); None
+    /// when there's none.
+    fn quantifier(&mut self) -> Result<Option<(u32, Option<u32>, bool)>, ParseError> {
+        let unbraced = |p: &mut Parser, min, max| {
+            p.pos += 1;
+            Ok(Some((min, max, false)))
+        };
+        match self.peek() {
+            Some('*') => unbraced(self, 0, None),
+            Some('+') => unbraced(self, 1, None),
+            Some('?') => unbraced(self, 0, Some(1)),
+            Some('{') => match self.braces()? {
+                Some((min, max)) => Ok(Some((min, max, true))),
+                None if self.java => err("Illegal repetition"),
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    /// Whether `node` can take the quantifier just read: not an assertion
+    /// or nothing, and not a greedy repeat unless a lazy or possessive mark
+    /// follows (`a**` and `a+*` are "multiple repeat" in Python).
+    fn check_repeatable(&self, node: &Node) -> Result<(), ParseError> {
+        if matches!(node, Node::Assertion(_) | Node::Empty) {
+            return err("nothing to repeat");
+        }
+        if let Node::Repeat { mode, .. } = node
+            && *mode == Mode::Greedy
+            && !matches!(self.peek(), Some('?' | '+'))
         {
-            if self.flags.verbose {
-                self.skip_verbose();
-            }
-            let (min, max, braces) = match self.peek() {
-                Some('*') => {
-                    self.pos += 1;
-                    (0, None, false)
-                }
-                Some('+') => {
-                    self.pos += 1;
-                    (1, None, false)
-                }
-                Some('?') => {
-                    self.pos += 1;
-                    (0, Some(1), false)
-                }
-                Some('{') => match self.braces()? {
-                    Some((min, max)) => (min, max, true),
-                    None if self.java => return err("Illegal repetition"),
-                    None => return Ok(node),
-                },
-                _ => return Ok(node),
-            };
-            if matches!(node, Node::Assertion(_) | Node::Look { .. } | Node::Empty)
-                && !matches!(node, Node::Look { .. })
-            {
-                return err("nothing to repeat");
-            }
-            if matches!(node, Node::Repeat { .. }) && !matches!(self.peek(), Some('?' | '+')) {
-                // `a**` and `a+*` are "multiple repeat" in Python.
-                if let Node::Repeat { mode, .. } = &node
-                    && *mode == Mode::Greedy
-                {
-                    return err("multiple repeat");
-                }
-            }
-            let mode = if self.eat('?') {
-                Mode::Lazy
-            } else if self.eat('+') {
-                Mode::Possessive
-            } else {
-                Mode::Greedy
-            };
-            self.count()?;
-            node = Node::Repeat {
-                inner: Box::new(node),
-                min,
-                max,
-                mode,
-                braces,
-            };
-            // a quantifier applied to a repeat is only valid after lazy
-            // or possessive marks, which were just consumed: a further
-            // quantifier is a "multiple repeat"
-            if matches!(self.peek(), Some('*' | '+' | '?')) {
+            return err("multiple repeat");
+        }
+        Ok(())
+    }
+
+    /// The lazy (`?`) or possessive (`+`) mark after a quantifier, consumed.
+    fn repeat_mode(&mut self) -> Mode {
+        if self.eat('?') {
+            Mode::Lazy
+        } else if self.eat('+') {
+            Mode::Possessive
+        } else {
+            Mode::Greedy
+        }
+    }
+
+    /// A quantifier applied to a repeat is only valid after lazy or
+    /// possessive marks, which were just consumed: a further quantifier is a
+    /// "multiple repeat". A brace that isn't one stays unread.
+    fn no_further_quantifier(&mut self) -> Result<(), ParseError> {
+        if matches!(self.peek(), Some('*' | '+' | '?')) {
+            return err("multiple repeat");
+        }
+        if self.peek() == Some('{') {
+            let save = self.pos;
+            if self.braces()?.is_some() {
                 return err("multiple repeat");
             }
-            if self.peek() == Some('{') {
-                let save = self.pos;
-                if self.braces()?.is_some() {
-                    return err("multiple repeat");
-                }
-                self.pos = save;
-            }
-            Ok(node)
+            self.pos = save;
         }
+        Ok(())
     }
 
     /// Reads `{m}`, `{m,}`, `{,n}`, `{m,n}`; None (and no input consumed)
@@ -758,25 +772,10 @@ impl Parser {
                     on = false;
                     self.pos += 1;
                 }
-                Some(c @ ('a' | 'i' | 'L' | 'm' | 's' | 'u' | 'x' | 'd' | 'U'))
-                    if (if self.java {
-                        !matches!(c, 'a' | 'L')
-                    } else {
-                        !matches!(c, 'd' | 'U')
-                    }) =>
-                {
+                Some(c) if self.flag_letter_allowed(c) => {
                     self.pos += 1;
                     any = true;
-                    match c {
-                        'i' => changed.ignore_case = on,
-                        'm' => changed.multiline = on,
-                        's' => changed.dot_all = on,
-                        'x' => changed.verbose = on,
-                        'a' => changed.ascii = on,
-                        'u' if self.java => changed.unicode_case = on,
-                        'U' if self.java => changed.unicode_class = on,
-                        _ => {}
-                    }
+                    self.set_flag(&mut changed, c, on);
                 }
                 Some(')') if on => {
                     self.pos += 1;
@@ -791,15 +790,46 @@ impl Parser {
                     if !any {
                         return err("missing flag");
                     }
-                    let saved = self.flags;
-                    self.flags = changed;
-                    let result = self.group_body_open(GroupKind::Scoped, 0);
-                    self.flags = saved;
-                    return result.map(Some);
+                    return self.scoped_flags_group(changed).map(Some);
                 }
                 _ => return err("unknown extension"),
             }
         }
+    }
+
+    /// Whether `c` is an inline flag letter in this flavor: `aiLmsux` in
+    /// Python, `dimsuxU` in Java.
+    fn flag_letter_allowed(&self, c: char) -> bool {
+        match c {
+            'a' | 'L' => !self.java,
+            'd' | 'U' => self.java,
+            'i' | 'm' | 's' | 'u' | 'x' => true,
+            _ => false,
+        }
+    }
+
+    /// Turns the flag `c` on or off in `flags`; flags the parse doesn't
+    /// depend on are accepted and ignored.
+    fn set_flag(&self, flags: &mut Flags, c: char, on: bool) {
+        match c {
+            'i' => flags.ignore_case = on,
+            'm' => flags.multiline = on,
+            's' => flags.dot_all = on,
+            'x' => flags.verbose = on,
+            'a' => flags.ascii = on,
+            'u' if self.java => flags.unicode_case = on,
+            'U' if self.java => flags.unicode_class = on,
+            _ => {}
+        }
+    }
+
+    /// `(?flags:...)`: the group, parsed with `flags`, which end with it.
+    fn scoped_flags_group(&mut self, flags: Flags) -> Result<Node, ParseError> {
+        let saved = self.flags;
+        self.flags = flags;
+        let result = self.group_body_open(GroupKind::Scoped, 0);
+        self.flags = saved;
+        result
     }
 
     fn look(&mut self, ahead: bool, negative: bool) -> Result<Node, ParseError> {
@@ -846,43 +876,52 @@ impl Parser {
                 break;
             }
             first = false;
-            let lo = if c == '\\' {
-                match self.class_escape()? {
-                    ClassItem::Char(ch) => ch,
-                    shorthand => {
-                        if self.peek() == Some('-') && self.chars.get(self.pos + 1) != Some(&']') {
-                            return err("bad character range");
-                        }
-                        items.push(shorthand);
-                        continue;
-                    }
-                }
-            } else {
-                c
-            };
-            if self.peek() == Some('-') && self.chars.get(self.pos + 1).is_some_and(|n| *n != ']') {
-                self.pos += 1;
-                let Some(h) = self.peek() else {
-                    return err("unterminated character set");
-                };
-                self.pos += 1;
-                let hi = if h == '\\' {
-                    match self.class_escape()? {
-                        ClassItem::Char(ch) => ch,
-                        _ => return err("bad character range"),
-                    }
-                } else {
-                    h
-                };
-                if hi < lo {
-                    return err("bad character range");
-                }
-                items.push(ClassItem::Range(lo, hi));
-            } else {
-                items.push(ClassItem::Char(lo));
-            }
+            items.push(self.class_item(c)?);
         }
         Ok(Node::Class { negated, items })
+    }
+
+    /// The item of a class that starts with `c`, just consumed: a
+    /// character, a range or a shorthand such as `\\d`.
+    fn class_item(&mut self, c: char) -> Result<ClassItem, ParseError> {
+        let lo = if c == '\\' {
+            match self.class_escape()? {
+                ClassItem::Char(ch) => ch,
+                shorthand => {
+                    if self.peek() == Some('-') && self.chars.get(self.pos + 1) != Some(&']') {
+                        return err("bad character range");
+                    }
+                    return Ok(shorthand);
+                }
+            }
+        } else {
+            c
+        };
+        if self.peek() == Some('-') && self.chars.get(self.pos + 1).is_some_and(|n| *n != ']') {
+            self.pos += 1;
+            let hi = self.range_end()?;
+            if hi < lo {
+                return err("bad character range");
+            }
+            Ok(ClassItem::Range(lo, hi))
+        } else {
+            Ok(ClassItem::Char(lo))
+        }
+    }
+
+    /// The character a range ends with, after its `-`.
+    fn range_end(&mut self) -> Result<char, ParseError> {
+        let Some(h) = self.peek() else {
+            return err("unterminated character set");
+        };
+        self.pos += 1;
+        if h != '\\' {
+            return Ok(h);
+        }
+        match self.class_escape()? {
+            ClassItem::Char(ch) => Ok(ch),
+            _ => err("bad character range"),
+        }
     }
 
     fn class_escape(&mut self) -> Result<ClassItem, ParseError> {
@@ -965,47 +1004,53 @@ impl Parser {
             'Z' => Node::Assertion(Assertion::EndAbs),
             'b' => Node::Assertion(Assertion::WordBoundary),
             'B' => Node::Assertion(Assertion::NotWordBoundary),
-            '0' => {
-                let mut v = 0;
-                let mut digits = 1;
-                while digits < 3 {
-                    match self.peek().and_then(|d| d.to_digit(8)) {
-                        Some(d) => {
-                            v = v * 8 + d;
-                            self.pos += 1;
-                            digits += 1;
-                        }
-                        None => break,
-                    }
-                }
-                if digits > 1 {
-                    Node::Octal(char::from_u32(v).unwrap_or('\0'))
-                } else {
-                    Node::Char('\0')
-                }
-            }
-            '1'..='9' => {
-                let mut n = c.to_digit(10).unwrap_or(0) as usize;
-                // three octal digits starting 0-3 are an octal escape
-                let rest: Vec<char> = self.chars[self.pos..].iter().take(2).copied().collect();
-                if c <= '3' && rest.len() == 2 && rest.iter().all(|d| ('0'..='7').contains(d)) {
-                    let v = c.to_digit(8).unwrap_or(0) * 64
-                        + rest[0].to_digit(8).unwrap_or(0) * 8
-                        + rest[1].to_digit(8).unwrap_or(0);
-                    self.pos += 2;
-                    return Ok(Node::Octal(char::from_u32(v).unwrap_or('\0')));
-                }
-                if self.peek().is_some_and(|d| d.is_ascii_digit()) {
-                    n = n * 10 + self.peek().and_then(|d| d.to_digit(10)).unwrap_or(0) as usize;
-                    self.pos += 1;
-                }
-                if n > self.groups {
-                    return err("invalid group reference");
-                }
-                Node::BackrefIndex(n)
-            }
+            '0' => self.zero_escape(),
+            '1'..='9' => self.numeric_escape(c)?,
             c => Node::Char(self.simple_escape(c, false)?),
         })
+    }
+
+    /// `\0`, and up to two more octal digits after it.
+    fn zero_escape(&mut self) -> Node {
+        let mut v = 0;
+        let mut digits = 1;
+        while digits < 3 {
+            match self.peek().and_then(|d| d.to_digit(8)) {
+                Some(d) => {
+                    v = v * 8 + d;
+                    self.pos += 1;
+                    digits += 1;
+                }
+                None => break,
+            }
+        }
+        if digits > 1 {
+            Node::Octal(char::from_u32(v).unwrap_or('\0'))
+        } else {
+            Node::Char('\0')
+        }
+    }
+
+    /// `\1` to `\99`, after its first digit `c`: a backreference, or an
+    /// octal escape when it's three octal digits starting 0-3.
+    fn numeric_escape(&mut self, c: char) -> Result<Node, ParseError> {
+        let mut n = c.to_digit(10).unwrap_or(0) as usize;
+        let rest: Vec<char> = self.chars[self.pos..].iter().take(2).copied().collect();
+        if c <= '3' && rest.len() == 2 && rest.iter().all(|d| ('0'..='7').contains(d)) {
+            let v = c.to_digit(8).unwrap_or(0) * 64
+                + rest[0].to_digit(8).unwrap_or(0) * 8
+                + rest[1].to_digit(8).unwrap_or(0);
+            self.pos += 2;
+            return Ok(Node::Octal(char::from_u32(v).unwrap_or('\0')));
+        }
+        if self.peek().is_some_and(|d| d.is_ascii_digit()) {
+            n = n * 10 + self.peek().and_then(|d| d.to_digit(10)).unwrap_or(0) as usize;
+            self.pos += 1;
+        }
+        if n > self.groups {
+            return err("invalid group reference");
+        }
+        Ok(Node::BackrefIndex(n))
     }
 }
 
@@ -1087,64 +1132,77 @@ impl Parser {
                     negated: c == 'P',
                 }
             }
-            'Q' => {
-                let mut items = Vec::new();
-                while self.pos < self.chars.len() && !self.looking_at("\\E") {
-                    items.push(Node::Char(self.chars[self.pos]));
-                    self.pos += 1;
-                }
-                if self.looking_at("\\E") {
-                    self.pos += 2;
-                }
-                match items.len() {
-                    0 => Node::Empty,
-                    1 => items.pop().unwrap_or(Node::Empty),
-                    _ => Node::Concat(items),
-                }
-            }
+            'Q' => self.java_quoted(),
             'E' => Node::Empty,
-            'k' => {
-                if !self.eat('<') {
-                    return err("\\k is not followed by '<' for named capturing group");
-                }
-                let name = self.java_group_name()?;
-                if !self.names.contains(&name) {
-                    return err("named capturing group does not exist");
-                }
-                Node::BackrefName(name)
-            }
-            '0' => {
-                let mut v = 0;
-                let mut digits = 0;
-                while digits < 3 {
-                    match self.peek().and_then(|d| d.to_digit(8)) {
-                        Some(d) if digits < 2 || v < 32 => {
-                            v = v * 8 + d;
-                            self.pos += 1;
-                            digits += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                if digits == 0 {
-                    return err("Illegal octal escape sequence");
-                }
-                Node::Octal(char::from_u32(v).unwrap_or('\0'))
-            }
-            '1'..='9' => {
-                let mut n = c.to_digit(10).unwrap_or(0) as usize;
-                while let Some(d) = self.peek().and_then(|d| d.to_digit(10)) {
-                    let next = n * 10 + d as usize;
-                    if next > self.groups {
-                        break;
-                    }
-                    n = next;
-                    self.pos += 1;
-                }
-                Node::BackrefIndex(n)
-            }
+            'k' => self.java_named_backref()?,
+            '0' => self.java_octal()?,
+            '1'..='9' => self.java_backref(c),
             _ => Node::Char(self.java_char_escape(c)?),
         })
+    }
+
+    /// `\\Q...\\E`: everything up to `\\E`, or the end, taken literally.
+    fn java_quoted(&mut self) -> Node {
+        let mut items = Vec::new();
+        while self.pos < self.chars.len() && !self.looking_at("\\E") {
+            items.push(Node::Char(self.chars[self.pos]));
+            self.pos += 1;
+        }
+        if self.looking_at("\\E") {
+            self.pos += 2;
+        }
+        match items.len() {
+            0 => Node::Empty,
+            1 => items.pop().unwrap_or(Node::Empty),
+            _ => Node::Concat(items),
+        }
+    }
+
+    /// `\\k<name>`, naming a group defined before it.
+    fn java_named_backref(&mut self) -> Result<Node, ParseError> {
+        if !self.eat('<') {
+            return err("\\k is not followed by '<' for named capturing group");
+        }
+        let name = self.java_group_name()?;
+        if !self.names.contains(&name) {
+            return err("named capturing group does not exist");
+        }
+        Ok(Node::BackrefName(name))
+    }
+
+    /// `\\0` and one to three octal digits, up to `\\0377`.
+    fn java_octal(&mut self) -> Result<Node, ParseError> {
+        let mut v = 0;
+        let mut digits = 0;
+        while digits < 3 {
+            match self.peek().and_then(|d| d.to_digit(8)) {
+                Some(d) if digits < 2 || v < 32 => {
+                    v = v * 8 + d;
+                    self.pos += 1;
+                    digits += 1;
+                }
+                _ => break,
+            }
+        }
+        if digits == 0 {
+            return err("Illegal octal escape sequence");
+        }
+        Ok(Node::Octal(char::from_u32(v).unwrap_or('\0')))
+    }
+
+    /// A backreference after its first digit `c`: as many more digits as
+    /// still name a group defined before it.
+    fn java_backref(&mut self, c: char) -> Node {
+        let mut n = c.to_digit(10).unwrap_or(0) as usize;
+        while let Some(d) = self.peek().and_then(|d| d.to_digit(10)) {
+            let next = n * 10 + d as usize;
+            if next > self.groups {
+                break;
+            }
+            n = next;
+            self.pos += 1;
+        }
+        Node::BackrefIndex(n)
     }
 
     fn java_property_name(&mut self) -> Result<String, ParseError> {
@@ -1177,53 +1235,61 @@ impl Parser {
             'f' => '\u{c}',
             'a' => '\u{7}',
             'e' => '\u{1b}',
-            'x' => {
-                if self.eat('{') {
-                    let start = self.pos;
-                    while self.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
-                        self.pos += 1;
-                    }
-                    let digits: String = self.chars[start..self.pos].iter().collect();
-                    if !self.eat('}') || digits.is_empty() {
-                        return err("Unclosed hexadecimal escape sequence");
-                    }
-                    match u32::from_str_radix(&digits, 16)
-                        .ok()
-                        .and_then(char::from_u32)
-                    {
-                        Some(ch) => ch,
-                        None => return err("Hexadecimal codepoint is too big"),
-                    }
-                } else {
-                    self.hex(2)?
-                }
-            }
+            'x' => self.java_hex()?,
             'u' => self.hex(4)?,
-            'c' => {
-                let Some(x) = self.peek() else {
-                    return err("Illegal control escape sequence");
-                };
-                self.pos += 1;
-                if !('@'..='_').contains(&x) {
-                    self.bad_controls += 1;
-                }
-                char::from_u32((x as u32) ^ 64).unwrap_or('\0')
-            }
-            'N' => {
-                if !self.eat('{') {
-                    return err("Illegal/unsupported escape sequence");
-                }
-                while self.peek().is_some_and(|d| d != '}') {
-                    self.pos += 1;
-                }
-                if !self.eat('}') {
-                    return err("Unclosed character name escape sequence");
-                }
-                '\u{fffd}'
-            }
+            'c' => self.java_control()?,
+            'N' => self.java_named_char()?,
             c if c.is_ascii_alphabetic() => return err("Illegal/unsupported escape sequence"),
             c => c,
         })
+    }
+
+    /// `\\xhh` or `\\x{h...h}`.
+    fn java_hex(&mut self) -> Result<char, ParseError> {
+        if !self.eat('{') {
+            return self.hex(2);
+        }
+        let start = self.pos;
+        while self.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
+            self.pos += 1;
+        }
+        let digits: String = self.chars[start..self.pos].iter().collect();
+        if !self.eat('}') || digits.is_empty() {
+            return err("Unclosed hexadecimal escape sequence");
+        }
+        match u32::from_str_radix(&digits, 16)
+            .ok()
+            .and_then(char::from_u32)
+        {
+            Some(ch) => Ok(ch),
+            None => err("Hexadecimal codepoint is too big"),
+        }
+    }
+
+    /// `\\cX`: the control character, counting an `X` outside `@` to `_`.
+    fn java_control(&mut self) -> Result<char, ParseError> {
+        let Some(x) = self.peek() else {
+            return err("Illegal control escape sequence");
+        };
+        self.pos += 1;
+        if !('@'..='_').contains(&x) {
+            self.bad_controls += 1;
+        }
+        Ok(char::from_u32((x as u32) ^ 64).unwrap_or('\0'))
+    }
+
+    /// `\\N{name}`: a character this parser doesn't need to know.
+    fn java_named_char(&mut self) -> Result<char, ParseError> {
+        if !self.eat('{') {
+            return err("Illegal/unsupported escape sequence");
+        }
+        while self.peek().is_some_and(|d| d != '}') {
+            self.pos += 1;
+        }
+        if !self.eat('}') {
+            return err("Unclosed character name escape sequence");
+        }
+        Ok('\u{fffd}')
     }
 
     fn java_class(&mut self) -> Result<Node, ParseError> {
@@ -1262,43 +1328,7 @@ impl Parser {
                     self.pos += 1;
                     parts.push(Vec::new());
                 }
-                _ => {
-                    let lo = if c == '\\' {
-                        match self.java_class_escape()? {
-                            Escaped::Char(ch) => ch,
-                            Escaped::Items(items) => {
-                                parts[current].extend(items);
-                                continue;
-                            }
-                        }
-                    } else {
-                        c
-                    };
-                    let range_follows = self.peek() == Some('-')
-                        && self
-                            .chars
-                            .get(self.pos + 1)
-                            .is_some_and(|n| *n != ']' && *n != '[');
-                    if range_follows {
-                        self.pos += 1;
-                        let h = self.peek().unwrap_or(']');
-                        self.pos += 1;
-                        let hi = if h == '\\' {
-                            match self.java_class_escape()? {
-                                Escaped::Char(ch) => ch,
-                                Escaped::Items(_) => return err("Illegal character range"),
-                            }
-                        } else {
-                            h
-                        };
-                        if hi < lo {
-                            return err("Illegal character range");
-                        }
-                        parts[current].push(ClassItem::Range(lo, hi));
-                    } else {
-                        parts[current].push(ClassItem::Char(lo));
-                    }
-                }
+                _ => self.java_class_member(c, &mut parts[current])?,
             }
         }
         self.depth -= 1;
@@ -1308,6 +1338,51 @@ impl Parser {
             vec![ClassItem::Intersect(parts)]
         };
         Ok((negated, items))
+    }
+
+    /// The class member that starts with `c`, just consumed, added to
+    /// `part`: a character, a range, or what an escape stands for.
+    fn java_class_member(&mut self, c: char, part: &mut Vec<ClassItem>) -> Result<(), ParseError> {
+        let lo = if c == '\\' {
+            match self.java_class_escape()? {
+                Escaped::Char(ch) => ch,
+                Escaped::Items(items) => {
+                    part.extend(items);
+                    return Ok(());
+                }
+            }
+        } else {
+            c
+        };
+        let range_follows = self.peek() == Some('-')
+            && self
+                .chars
+                .get(self.pos + 1)
+                .is_some_and(|n| *n != ']' && *n != '[');
+        if !range_follows {
+            part.push(ClassItem::Char(lo));
+            return Ok(());
+        }
+        self.pos += 1;
+        let hi = self.java_range_end()?;
+        if hi < lo {
+            return err("Illegal character range");
+        }
+        part.push(ClassItem::Range(lo, hi));
+        Ok(())
+    }
+
+    /// The character a range ends with, after its `-`.
+    fn java_range_end(&mut self) -> Result<char, ParseError> {
+        let h = self.peek().unwrap_or(']');
+        self.pos += 1;
+        if h != '\\' {
+            return Ok(h);
+        }
+        match self.java_class_escape()? {
+            Escaped::Char(ch) => Ok(ch),
+            Escaped::Items(_) => err("Illegal character range"),
+        }
     }
 
     fn java_class_escape(&mut self) -> Result<Escaped, ParseError> {
@@ -1445,49 +1520,57 @@ impl Parser {
                 None if self.flags.unicode => return err("Invalid escape"),
                 None => 'x',
             },
-            'u' => {
-                if self.flags.unicode && self.eat('{') {
-                    let start = self.pos;
-                    while self.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
-                        self.pos += 1;
-                    }
-                    let digits: String = self.chars[start..self.pos].iter().collect();
-                    if !self.eat('}') || digits.is_empty() {
-                        return err("Invalid Unicode escape");
-                    }
-                    match u32::from_str_radix(&digits, 16)
-                        .ok()
-                        .and_then(char::from_u32)
-                    {
-                        Some(ch) => ch,
-                        None => return err("Invalid Unicode escape"),
-                    }
-                } else {
-                    match self.try_hex(4) {
-                        // A surrogate half: the pair is not tracked.
-                        Some(v) => char::from_u32(v).unwrap_or('\u{fffd}'),
-                        None if self.flags.unicode => return err("Invalid Unicode escape"),
-                        None => 'u',
-                    }
-                }
-            }
-            'c' => match self.peek().filter(char::is_ascii_alphabetic) {
-                Some(letter) => {
-                    self.pos += 1;
-                    char::from_u32(letter as u32 % 32).unwrap_or('\0')
-                }
-                None if self.flags.unicode => return err("Invalid unicode escape"),
-                None => {
-                    // `\c` alone is a literal backslash, then the c.
-                    self.pos -= 1;
-                    '\\'
-                }
-            },
+            'u' => self.js_unicode()?,
+            'c' => self.js_control()?,
             c if self.flags.unicode && !"^$\\.*+?()[]{}|/".contains(c) => {
                 return err("Invalid escape");
             }
             c => c,
         })
+    }
+
+    /// `\\uhhhh`, or `\\u{h...h}` with the `u` flag; without it, a bad one is
+    /// the letter.
+    fn js_unicode(&mut self) -> Result<char, ParseError> {
+        if self.flags.unicode && self.eat('{') {
+            let start = self.pos;
+            while self.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
+                self.pos += 1;
+            }
+            let digits: String = self.chars[start..self.pos].iter().collect();
+            if !self.eat('}') || digits.is_empty() {
+                return err("Invalid Unicode escape");
+            }
+            return match u32::from_str_radix(&digits, 16)
+                .ok()
+                .and_then(char::from_u32)
+            {
+                Some(ch) => Ok(ch),
+                None => err("Invalid Unicode escape"),
+            };
+        }
+        match self.try_hex(4) {
+            // A surrogate half: the pair is not tracked.
+            Some(v) => Ok(char::from_u32(v).unwrap_or('\u{fffd}')),
+            None if self.flags.unicode => err("Invalid Unicode escape"),
+            None => Ok('u'),
+        }
+    }
+
+    /// `\\cX`, a control character; without the `u` flag, `\\c` before
+    /// anything but a letter is a literal backslash, then the c.
+    fn js_control(&mut self) -> Result<char, ParseError> {
+        match self.peek().filter(char::is_ascii_alphabetic) {
+            Some(letter) => {
+                self.pos += 1;
+                Ok(char::from_u32(letter as u32 % 32).unwrap_or('\0'))
+            }
+            None if self.flags.unicode => err("Invalid unicode escape"),
+            None => {
+                self.pos -= 1;
+                Ok('\\')
+            }
+        }
     }
 
     fn js_property(&mut self) -> Result<String, ParseError> {
@@ -1527,39 +1610,46 @@ impl Parser {
                     negated: c == 'P',
                 }
             }
-            '1'..='9' => {
-                let mut n = c.to_digit(10).unwrap_or(0) as usize;
-                let save = self.pos;
-                while let Some(d) = self.peek().and_then(|d| d.to_digit(10)) {
-                    n = n * 10 + d as usize;
-                    self.pos += 1;
-                }
-                if n <= self.total_groups {
-                    Node::BackrefIndex(n)
-                } else if self.flags.unicode {
-                    return err("Invalid escape");
-                } else {
-                    // Legacy octal escape, or just the digit.
-                    self.pos = save;
-                    match c.to_digit(8) {
-                        Some(mut v) => {
-                            for _ in 0..2 {
-                                match self.peek().and_then(|d| d.to_digit(8)) {
-                                    Some(d) if v * 8 + d <= 0o377 => {
-                                        v = v * 8 + d;
-                                        self.pos += 1;
-                                    }
-                                    _ => break,
-                                }
-                            }
-                            Node::Octal(char::from_u32(v).unwrap_or('\0'))
-                        }
-                        None => Node::Char(c),
-                    }
-                }
-            }
+            '1'..='9' => self.js_numeric_escape(c)?,
             c => Node::Char(self.js_char(c)?),
         })
+    }
+
+    /// `\\1` and on, after its first digit `c`: a backreference when there's
+    /// a group with that number; else, without the `u` flag, a legacy octal
+    /// escape or just the digit.
+    fn js_numeric_escape(&mut self, c: char) -> Result<Node, ParseError> {
+        let mut n = c.to_digit(10).unwrap_or(0) as usize;
+        let save = self.pos;
+        while let Some(d) = self.peek().and_then(|d| d.to_digit(10)) {
+            n = n * 10 + d as usize;
+            self.pos += 1;
+        }
+        if n <= self.total_groups {
+            return Ok(Node::BackrefIndex(n));
+        }
+        if self.flags.unicode {
+            return err("Invalid escape");
+        }
+        self.pos = save;
+        Ok(self.js_legacy_octal(c))
+    }
+
+    /// Up to `\\377`, after its first digit `c`; an 8 or a 9 is just itself.
+    fn js_legacy_octal(&mut self, c: char) -> Node {
+        let Some(mut v) = c.to_digit(8) else {
+            return Node::Char(c);
+        };
+        for _ in 0..2 {
+            match self.peek().and_then(|d| d.to_digit(8)) {
+                Some(d) if v * 8 + d <= 0o377 => {
+                    v = v * 8 + d;
+                    self.pos += 1;
+                }
+                _ => break,
+            }
+        }
+        Node::Octal(char::from_u32(v).unwrap_or('\0'))
     }
 
     fn js_class(&mut self) -> Result<Node, ParseError> {
@@ -1573,49 +1663,61 @@ impl Parser {
             if c == ']' {
                 break;
             }
-            let lo = if c == '\\' {
-                match self.js_class_escape()? {
-                    ClassItem::Char(ch) => ch,
-                    other => {
-                        items.push(other);
-                        continue;
-                    }
-                }
-            } else {
-                c
-            };
-            if self.peek() == Some('-') && self.chars.get(self.pos + 1).is_some_and(|n| *n != ']') {
-                self.pos += 1;
-                let Some(h) = self.peek() else {
-                    return err("Unterminated character class");
-                };
-                self.pos += 1;
-                let hi = if h == '\\' {
-                    self.js_class_escape()?
-                } else {
-                    ClassItem::Char(h)
-                };
-                match hi {
-                    ClassItem::Char(hi) => {
-                        if hi < lo {
-                            return err("Range out of order in character class");
-                        }
-                        items.push(ClassItem::Range(lo, hi));
-                    }
-                    other => {
-                        if self.flags.unicode {
-                            return err("Invalid character class");
-                        }
-                        items.push(ClassItem::Char(lo));
-                        items.push(ClassItem::Char('-'));
-                        items.push(other);
-                    }
-                }
-            } else {
-                items.push(ClassItem::Char(lo));
-            }
+            self.js_class_member(c, &mut items)?;
         }
         Ok(Node::Class { negated, items })
+    }
+
+    /// The class member that starts with `c`, just consumed, added to
+    /// `items`. Without the `u` flag, a range to a shorthand (`[a-\\d]`) is
+    /// its three parts.
+    fn js_class_member(&mut self, c: char, items: &mut Vec<ClassItem>) -> Result<(), ParseError> {
+        let lo = if c == '\\' {
+            match self.js_class_escape()? {
+                ClassItem::Char(ch) => ch,
+                other => {
+                    items.push(other);
+                    return Ok(());
+                }
+            }
+        } else {
+            c
+        };
+        if !(self.peek() == Some('-') && self.chars.get(self.pos + 1).is_some_and(|n| *n != ']')) {
+            items.push(ClassItem::Char(lo));
+            return Ok(());
+        }
+        self.pos += 1;
+        match self.js_range_end()? {
+            ClassItem::Char(hi) => {
+                if hi < lo {
+                    return err("Range out of order in character class");
+                }
+                items.push(ClassItem::Range(lo, hi));
+            }
+            other => {
+                if self.flags.unicode {
+                    return err("Invalid character class");
+                }
+                items.push(ClassItem::Char(lo));
+                items.push(ClassItem::Char('-'));
+                items.push(other);
+            }
+        }
+        Ok(())
+    }
+
+    /// What a range ends with, after its `-`: a character, or a shorthand.
+    fn js_range_end(&mut self) -> Result<ClassItem, ParseError> {
+        let Some(h) = self.peek() else {
+            return err("Unterminated character class");
+        };
+        self.pos += 1;
+        if h == '\\' {
+            self.js_class_escape()
+        } else {
+            Ok(ClassItem::Char(h))
+        }
     }
 
     fn js_class_escape(&mut self) -> Result<ClassItem, ParseError> {

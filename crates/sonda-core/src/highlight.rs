@@ -38,39 +38,65 @@ pub struct Line {
 /// exactly that line's text, without its line ending (`\n` or `\r\n`).
 pub fn highlight(lang: Lang, src: &str, first: usize, last: usize) -> Vec<Line> {
     let syntax = Syntax::of(lang);
-    let in_range = |n: usize| n >= first && n <= last;
-    let mut lines = Vec::new();
-    let mut current = Line {
-        number: 1,
-        tokens: Vec::new(),
+    let mut lines = Lines {
+        first,
+        last,
+        done: Vec::new(),
+        current: Line {
+            number: 1,
+            tokens: Vec::new(),
+        },
     };
     let mut i = 0;
-    while i < src.len() && current.number <= last {
+    while i < src.len() && lines.current.number <= last {
         let (len, role) = next_token(&syntax, &src[i..]);
-        // Tokens may span lines (block comments, strings): split them.
-        let mut parts = src[i..i + len].split('\n').peekable();
-        while let Some(part) = parts.next() {
-            if in_range(current.number) && !part.is_empty() {
-                push(&mut current.tokens, part, role);
-            }
-            if parts.peek().is_some() {
-                strip_carriage_return(&mut current.tokens);
-                let next = Line {
-                    number: current.number + 1,
-                    tokens: Vec::new(),
-                };
-                let done = std::mem::replace(&mut current, next);
-                if in_range(done.number) {
-                    lines.push(done);
-                }
-            }
-        }
+        lines.add(&src[i..i + len], role);
         i += len;
     }
-    if i >= src.len() && in_range(current.number) {
-        lines.push(current);
+    if i >= src.len() && lines.in_range(lines.current.number) {
+        lines.done.push(lines.current);
     }
-    lines
+    lines.done
+}
+
+/// The lines `highlight` keeps, `first..=last`, and the one being read.
+struct Lines {
+    first: usize,
+    last: usize,
+    done: Vec<Line>,
+    current: Line,
+}
+
+impl Lines {
+    fn in_range(&self, n: usize) -> bool {
+        n >= self.first && n <= self.last
+    }
+
+    /// Adds a token; one that spans lines (block comments, strings) is
+    /// split at each line break.
+    fn add(&mut self, text: &str, role: Role) {
+        let mut parts = text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            if self.in_range(self.current.number) && !part.is_empty() {
+                push(&mut self.current.tokens, part, role);
+            }
+            if parts.peek().is_some() {
+                self.end_line();
+            }
+        }
+    }
+
+    fn end_line(&mut self) {
+        strip_carriage_return(&mut self.current.tokens);
+        let next = Line {
+            number: self.current.number + 1,
+            tokens: Vec::new(),
+        };
+        let done = std::mem::replace(&mut self.current, next);
+        if self.in_range(done.number) {
+            self.done.push(done);
+        }
+    }
 }
 
 /// Lines `first..=last` of `src` as [`highlight`] gives them, one plain
@@ -136,28 +162,10 @@ fn next_token(syntax: &Syntax, s: &str) -> (usize, Role) {
     {
         return token;
     }
-    if let Some(start) = syntax.line_comment.iter().find(|c| s.starts_with(**c)) {
-        let end = s[start.len()..]
-            .find('\n')
-            .map_or(s.len(), |n| start.len() + n);
-        return (end, Role::Comment);
-    }
-    if syntax.block_comments && s.starts_with("/*") {
-        let end = s[2..].find("*/").map_or(s.len(), |n| n + 4);
-        return (end, Role::Comment);
-    }
-    if syntax.triple_quotes {
-        for q in ["\"\"\"", "'''"] {
-            if s.starts_with(q) {
-                let end = s[3..].find(q).map_or(s.len(), |n| n + 6);
-                return (end, Role::String);
-            }
-        }
+    if let Some(token) = comment_token(syntax, s).or_else(|| quoted_token(syntax, s)) {
+        return token;
     }
     let c = s.chars().next().unwrap_or(' ');
-    if c == '"' || c == '\'' || (c == '`' && syntax.backticks) {
-        return (string_end(s, c), Role::String);
-    }
     if c.is_ascii_digit() {
         let end = s
             .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '_'))
@@ -168,15 +176,7 @@ fn next_token(syntax: &Syntax, s: &str) -> (usize, Role) {
         let end = s
             .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '$'))
             .unwrap_or(s.len());
-        let word = &s[..end];
-        let role = if syntax.keywords.contains(&word) {
-            Role::Keyword
-        } else if syntax.types.contains(&word) || word.starts_with(char::is_uppercase) {
-            Role::Type
-        } else {
-            Role::Plain
-        };
-        return (end, role);
+        return (end, word_role(syntax, &s[..end]));
     }
     if c.is_whitespace() {
         let end = s
@@ -186,6 +186,45 @@ fn next_token(syntax: &Syntax, s: &str) -> (usize, Role) {
         return (end.max(c.len_utf8()), Role::Plain);
     }
     (c.len_utf8(), Role::Punct)
+}
+
+/// A line or block comment at the start of `s`.
+fn comment_token(syntax: &Syntax, s: &str) -> Option<(usize, Role)> {
+    if let Some(start) = syntax.line_comment.iter().find(|c| s.starts_with(**c)) {
+        let end = s[start.len()..]
+            .find('\n')
+            .map_or(s.len(), |n| start.len() + n);
+        return Some((end, Role::Comment));
+    }
+    if syntax.block_comments && s.starts_with("/*") {
+        let end = s[2..].find("*/").map_or(s.len(), |n| n + 4);
+        return Some((end, Role::Comment));
+    }
+    None
+}
+
+/// A string at the start of `s`: triple-quoted, quoted, or a template.
+fn quoted_token(syntax: &Syntax, s: &str) -> Option<(usize, Role)> {
+    if syntax.triple_quotes
+        && let Some(q) = ["\"\"\"", "'''"].into_iter().find(|q| s.starts_with(q))
+    {
+        let end = s[3..].find(q).map_or(s.len(), |n| n + 6);
+        return Some((end, Role::String));
+    }
+    let c = s.chars().next()?;
+    (c == '"' || c == '\'' || (c == '`' && syntax.backticks))
+        .then(|| (string_end(s, c), Role::String))
+}
+
+/// A keyword, a type (a known one, or any capitalized word), or plain.
+fn word_role(syntax: &Syntax, word: &str) -> Role {
+    if syntax.keywords.contains(&word) {
+        Role::Keyword
+    } else if syntax.types.contains(&word) || word.starts_with(char::is_uppercase) {
+        Role::Type
+    } else {
+        Role::Plain
+    }
 }
 
 /// End of a string starting with `quote`: after the closing quote, or at
@@ -210,47 +249,60 @@ fn string_end(s: &str, quote: char) -> usize {
 /// None for everything else, which the shared rules lex.
 fn rust_token(s: &str) -> Option<(usize, Role)> {
     if s.starts_with("/*") {
-        let (mut depth, mut i) = (0usize, 0usize);
-        while i < s.len() {
-            if s[i..].starts_with("/*") {
-                depth += 1;
-                i += 2;
-            } else if s[i..].starts_with("*/") {
-                depth -= 1;
-                i += 2;
-                if depth == 0 {
-                    return Some((i, Role::Comment));
-                }
-            } else {
-                i += s[i..].chars().next().map_or(1, char::len_utf8);
+        return Some((nested_comment_end(s), Role::Comment));
+    }
+    raw_string(s).or_else(|| lifetime(s))
+}
+
+/// The end of the block comment `s` starts with, comments nested in it
+/// included; the end of `s` when it's left open.
+fn nested_comment_end(s: &str) -> usize {
+    let (mut depth, mut i) = (0usize, 0usize);
+    while i < s.len() {
+        if s[i..].starts_with("/*") {
+            depth += 1;
+            i += 2;
+        } else if s[i..].starts_with("*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
             }
-        }
-        return Some((s.len(), Role::Comment));
-    }
-    let after_prefix = s.strip_prefix("br").or_else(|| s.strip_prefix('r'));
-    if let Some(rest) = after_prefix {
-        let hashes = rest.bytes().take_while(|&b| b == b'#').count();
-        if rest[hashes..].starts_with('"') {
-            let close = format!("\"{}", "#".repeat(hashes));
-            let body = hashes + 1;
-            let end = rest[body..]
-                .find(&close)
-                .map_or(rest.len(), |n| body + n + close.len());
-            return Some((s.len() - rest.len() + end, Role::String));
+        } else {
+            i += s[i..].chars().next().map_or(1, char::len_utf8);
         }
     }
-    if let Some(rest) = s.strip_prefix('\'') {
-        let mut chars = rest.chars();
-        let first = chars.next()?;
-        if first != '\\' && chars.next() != Some('\'') {
-            // `'a`, `'static`: a lifetime or a loop label.
-            let end = rest
-                .find(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
-                .unwrap_or(rest.len());
-            return Some((1 + end.max(first.len_utf8()), Role::Type));
-        }
+    s.len()
+}
+
+/// A raw string at the start of `s`: `r"…"`, `r#"…"#`, `br"…"`.
+fn raw_string(s: &str) -> Option<(usize, Role)> {
+    let rest = s.strip_prefix("br").or_else(|| s.strip_prefix('r'))?;
+    let hashes = rest.bytes().take_while(|&b| b == b'#').count();
+    if !rest[hashes..].starts_with('"') {
+        return None;
     }
-    None
+    let close = format!("\"{}", "#".repeat(hashes));
+    let body = hashes + 1;
+    let end = rest[body..]
+        .find(&close)
+        .map_or(rest.len(), |n| body + n + close.len());
+    Some((s.len() - rest.len() + end, Role::String))
+}
+
+/// A lifetime or a loop label at the start of `s` (`'a`, `'static`), as
+/// opposed to a char literal.
+fn lifetime(s: &str) -> Option<(usize, Role)> {
+    let rest = s.strip_prefix('\'')?;
+    let mut chars = rest.chars();
+    let first = chars.next()?;
+    if first == '\\' || chars.next() == Some('\'') {
+        return None;
+    }
+    let end = rest
+        .find(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .unwrap_or(rest.len());
+    Some((1 + end.max(first.len_utf8()), Role::Type))
 }
 
 struct Syntax {
