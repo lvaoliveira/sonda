@@ -37,7 +37,7 @@ export function ProjectPage() {
   )
 }
 
-function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
+function Project({ p, reload }: Readonly<{ p: ProjectDetail; reload: () => void }>) {
   const navigate = useNavigate()
   const lines = p.languages.reduce((sum, l) => sum + l.ncloc, 0)
   const projectUrl = `/projects/${encodeURIComponent(p.key)}`
@@ -96,7 +96,7 @@ function Project({ p, reload }: { p: ProjectDetail; reload: () => void }) {
 }
 
 /** The project's rules at a glance (ADR-0016, ADR-0018), linking to its Rules page. */
-function RulesSummary({ project }: { project: string }) {
+function RulesSummary({ project }: Readonly<{ project: string }>) {
   const api = useApi()
   const rules = useAsync(() => api.projectRules(project), [api, project])
   const url = `/projects/${encodeURIComponent(project)}/rules`
@@ -152,7 +152,7 @@ function RulesSummary({ project }: { project: string }) {
   )
 }
 
-function Dependencies({ p }: { p: ProjectDetail }) {
+function Dependencies({ p }: Readonly<{ p: ProjectDetail }>) {
   const d = p.dependencies
   const url = dependenciesUrl(p.key, p.branch, p.mainBranch)
   return (
@@ -199,19 +199,24 @@ function Dependencies({ p }: { p: ProjectDetail }) {
   )
 }
 
-function Gate({ p }: { p: ProjectDetail }) {
-  const failing = p.gate.conditions.filter((c) => c.status === 'error').length
-  const noData = p.gate.conditions.filter((c) => c.status === 'no_data').length
-  const ignored = p.gate.conditions.filter((c) => c.status === 'ignored').length
+/** The gate card's subtitle: how many of its conditions fail, and which can't say. */
+function gateSummary(conditions: ProjectDetail['gate']['conditions']): string {
+  if (conditions.length === 0) return 'The gate has no conditions'
+  const count = (status: string) => conditions.filter((c) => c.status === status).length
+  const parts = [`${count('error')} of ${conditions.length} conditions failing`]
+  const noData = count('no_data')
+  if (noData) parts.push(`${noData} without data`)
+  const ignored = count('ignored')
+  if (ignored) parts.push(`${ignored} ignored`)
+  return parts.join(' · ')
+}
+
+function Gate({ p }: Readonly<{ p: ProjectDetail }>) {
   return (
     <Card
       id="gate"
       title={<GateStatus state={p.gate.state} className="text-base" />}
-      subtitle={
-        p.gate.conditions.length === 0
-          ? 'The gate has no conditions'
-          : `${failing} of ${p.gate.conditions.length} conditions failing${noData ? ` · ${noData} without data` : ''}${ignored ? ` · ${ignored} ignored` : ''}`
-      }
+      subtitle={gateSummary(p.gate.conditions)}
       aside={<GateSource serverGate={p.gate.serverGate} />}
     >
       <GateConditions conditions={p.gate.conditions} />
@@ -221,7 +226,28 @@ function Gate({ p }: { p: ProjectDetail }) {
 
 type Scope = 'overall' | 'newCode'
 
-function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
+/** What a coverage percentage is of. */
+function coverageOf(scope: Scope, fromScan: boolean): string {
+  if (fromScan) return 'on lines the scan changed'
+  return scope === 'newCode' ? 'on changed lines' : 'of code lines'
+}
+
+/** The measures card's subtitle: the lines its numbers count, and since when for new code. */
+function measuresSubtitle(p: ProjectDetail, scope: Scope, lines: number): string {
+  if (scope !== 'newCode') return `${formatNumber(lines)} lines of code`
+  const period = p.newCodePeriod
+  if (period) return `${formatNumber(lines)} new lines since ${shortDate(period.analyzedAt)} (${periodSource(period)})`
+  const reference = p.analysis.newCodeReference
+  return reference ? `${formatNumber(lines)} new lines since ${reference}` : `${formatNumber(lines)} new lines`
+}
+
+/** Where a new code period starts from. */
+function periodSource(period: NewCodePeriod): string {
+  if (period.reset) return 'set by an admin'
+  return period.version ? `version ${period.version}` : 'the first analysis'
+}
+
+function Measures({ p, reload }: Readonly<{ p: ProjectDetail; reload: () => void }>) {
   const [scope, setScope] = useState<Scope>('overall')
   const m: MeasureSet = p.measures[scope]
   const issues = (more: Record<string, string | boolean> = {}) => issuesUrl(p.key, { branch: p.branch, new: scope === 'newCode', ...more })
@@ -229,7 +255,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
   const pct = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}%`)
   const period = p.newCodePeriod
   // Without per-line data, the server keeps the scan's own values for these.
-  const fromScan = (metric: string) => scope === 'newCode' && period != null && period.fromScan.includes(metric)
+  const fromScan = (metric: string) => scope === 'newCode' && period?.fromScan.includes(metric) === true
   const tiles: { label: string; value: string; sub: string; to?: string; color?: string }[] = [
     { label: 'Bugs', value: count(m.bugs), sub: 'Reliability', to: issues({ cat: 'bug' }) },
     { label: 'Vulnerabilities', value: count(m.vulnerabilities), sub: 'Security', to: issues({ cat: 'vulnerability' }) },
@@ -237,7 +263,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
     {
       label: 'Coverage',
       value: pct(m.coverage),
-      sub: m.coverage == null ? 'No coverage uploaded' : fromScan('new_coverage') ? 'on lines the scan changed' : scope === 'newCode' ? 'on changed lines' : 'of code lines',
+      sub: m.coverage == null ? 'No coverage uploaded' : coverageOf(scope, fromScan('new_coverage')),
       color: m.coverage == null ? undefined : coverageColor(m.coverage),
       to: coverageUrl(p.key, p.branch, p.mainBranch),
     },
@@ -248,13 +274,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
     <Card
       id="measures"
       title="Measures"
-      subtitle={
-        scope === 'newCode'
-          ? period
-            ? `${formatNumber(m.lines ?? 0)} new lines since ${shortDate(period.analyzedAt)} (${period.reset ? 'set by an admin' : period.version ? `version ${period.version}` : 'the first analysis'})`
-            : `${formatNumber(m.lines ?? 0)} new lines${p.analysis.newCodeReference ? ` since ${p.analysis.newCodeReference}` : ''}`
-          : `${formatNumber(m.lines ?? 0)} lines of code`
-      }
+      subtitle={measuresSubtitle(p, scope, m.lines ?? 0)}
       aside={
         <Segmented
           label="Measures"
@@ -309,7 +329,7 @@ function Measures({ p, reload }: { p: ProjectDetail; reload: () => void }) {
 }
 
 /** Where the main branch's new code starts, and for admins, moving it (ADR-0011). */
-function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCodePeriod; reload: () => void }) {
+function NewCodeStart({ p, period, reload }: Readonly<{ p: ProjectDetail; period: NewCodePeriod; reload: () => void }>) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
   const isAdmin = shell.state === 'ready' && shell.data.isAdmin
@@ -377,7 +397,7 @@ function NewCodeStart({ p, period, reload }: { p: ProjectDetail; period: NewCode
 }
 
 /** The project's pull requests, apart from its branches (ADR-0021). */
-function PullRequests({ p }: { p: ProjectDetail }) {
+function PullRequests({ p }: Readonly<{ p: ProjectDetail }>) {
   return (
     <Card id="pull-requests" title="Pull requests" subtitle={`${p.pullRequests.length} analyzed in the last 30 days, most recent first`}>
       <ul aria-label="Pull requests" className="m-0 flex list-none flex-col p-0">
@@ -405,9 +425,9 @@ function PullRequests({ p }: { p: ProjectDetail }) {
   )
 }
 
-function History({ history, branch }: { history: ProjectHistoryPoint[]; branch: string }) {
+function History({ history, branch }: Readonly<{ history: ProjectHistoryPoint[]; branch: string }>) {
   const series = (pick: (h: ProjectHistoryPoint) => number | null) => history.map(pick).filter((v): v is number => v != null)
-  const last = history[history.length - 1]
+  const last = history.at(-1)!
   const lines: { label: string; values: number[]; value: string; worseUp: boolean }[] = [
     { label: 'Issues', values: series((h) => h.issues), value: last.issues == null ? '—' : formatNumber(last.issues), worseUp: true },
     { label: 'Coverage', values: series((h) => h.coverage), value: last.coverage == null ? '—' : `${last.coverage.toFixed(1)}%`, worseUp: false },
@@ -419,7 +439,7 @@ function History({ history, branch }: { history: ProjectHistoryPoint[]; branch: 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-4">
         {lines.map((l) => {
           const first = l.values[0]
-          const end = l.values[l.values.length - 1]
+          const end = l.values.at(-1)!
           const worse = l.values.length > 1 && (l.worseUp ? end > first : end < first)
           return (
             <div key={l.label} className="flex flex-col gap-1.5">
@@ -462,7 +482,7 @@ function History({ history, branch }: { history: ProjectHistoryPoint[]; branch: 
   )
 }
 
-function Components({ p }: { p: ProjectDetail }) {
+function Components({ p }: Readonly<{ p: ProjectDetail }>) {
   const th = 'border-b border-line px-2 py-2 text-left font-normal'
   const td = 'border-b border-line px-2 py-[10px]'
   const issuesIn = (path: string) =>

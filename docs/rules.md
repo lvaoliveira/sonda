@@ -8398,13 +8398,13 @@ SonarQube: S3735
 Noncompliant:
 
 ```javascript
-void fetchData();
+const done = void callback;
 ```
 
 Compliant:
 
 ```javascript
-fetchData().catch(report);
+const done = undefined;
 ```
 
 ## js/index-of-positive

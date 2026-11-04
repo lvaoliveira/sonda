@@ -7,13 +7,13 @@ export function ReasonForm({
   prompt,
   onSubmit,
   onCancel,
-}: {
+}: Readonly<{
   verb: string
   prompt: string
   /** Resolves true once saved. */
   onSubmit: (reason: string) => Promise<boolean>
   onCancel: () => void
-}) {
+}>) {
   const id = useId()
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)

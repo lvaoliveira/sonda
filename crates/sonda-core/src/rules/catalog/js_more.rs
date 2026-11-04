@@ -488,8 +488,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "void fetchData();",
-            good: "fetchData().catch(report);",
+            bad: "const done = void callback;",
+            good: "const done = undefined;",
         }),
     },
     Rule {
@@ -1466,8 +1466,10 @@ fn passes_a_this_argument(call: Node, src: &[u8]) -> bool {
 }
 
 fn void_is_not_void_zero(unary: Node, src: &[u8]) -> bool {
-    // `void (async () => {})()` marks a floating promise as intended;
-    // SonarQube leaves an immediately invoked function alone.
+    // `void save()` marks a floating promise as intended. SonarQube leaves
+    // `void` on a promise alone, which it knows from the types; without
+    // them, a call (or `new`) is the operand that returns one, and
+    // `void` on a call that doesn't has no reason to be written.
     let Some(argument) = unary.child_by_field_name("argument") else {
         return false;
     };
@@ -1478,11 +1480,7 @@ fn void_is_not_void_zero(unary: Node, src: &[u8]) -> bool {
             None => break,
         }
     }
-    text(argument, src) != b"0"
-        && !(inner.kind() == "call_expression"
-            && inner
-                .child_by_field_name("function")
-                .is_some_and(|f| f.kind() == "parenthesized_expression"))
+    text(argument, src) != b"0" && !matches!(inner.kind(), "call_expression" | "new_expression")
 }
 
 fn checks_index_of_for_positive(binary: Node, src: &[u8]) -> bool {
@@ -1845,7 +1843,7 @@ mod tests {
 
     #[test]
     fn expressions() {
-        let src = "const a = user && user.name;\nconst b = user.profile && user.profile.name;\nconst c = user && other.name;\nconst d = x != null ? x : 'd';\nconst e = x == null ? 'd' : x;\nconst f = x != null ? y : 'd';\nconst g = items.sort();\nconst h = [...items].sort();\nlist.push(1);\nlist.push(2);\nother.push(3);\nlist.map(function (x) { return this.f(x); }, this);\nlist.map((x) => x);\n_.map(list, fn, this);\nvoid fetchData();\nvoid 0;\nconst n = 1_00_000;\nconst o = 100_000;\nconst p = 0xFF_FF;\nconst q = node._reactInternals;";
+        let src = "const a = user && user.name;\nconst b = user.profile && user.profile.name;\nconst c = user && other.name;\nconst d = x != null ? x : 'd';\nconst e = x == null ? 'd' : x;\nconst f = x != null ? y : 'd';\nconst g = items.sort();\nconst h = [...items].sort();\nlist.push(1);\nlist.push(2);\nother.push(3);\nlist.map(function (x) { return this.f(x); }, this);\nlist.map((x) => x);\n_.map(list, fn, this);\nconst v = void ready;\nvoid 0;\nconst n = 1_00_000;\nconst o = 100_000;\nconst p = 0xFF_FF;\nconst q = node._reactInternals;";
         assert_eq!(flagged("js/optional-chaining-preferred", JS, src), [1, 2]);
         let more = "const a = !meta || !meta.enabled;\nconst b = last && last.end === h;\nconst c = !prices || !prices[hour];\nconst d = p != null && p.usePrice != null;\nconst e = a && other.name;\nconst f = !a || b.c;";
         assert_eq!(
@@ -1859,6 +1857,12 @@ mod tests {
         assert_eq!(flagged("js/void-operator", JS, src), [15]);
         assert_eq!(flagged("js/numeric-separator-grouping", JS, src), [17]);
         assert_eq!(flagged("js/internal-api", JS, src), [20]);
+    }
+
+    #[test]
+    fn void_on_a_floating_promise() {
+        let src = "void save();\nvoid api.signOut().finally(done);\nvoid (async () => {})();\nvoid new Worker(url);\nconst v = void ready;";
+        assert_eq!(flagged("js/void-operator", JS, src), [5]);
     }
 
     #[test]

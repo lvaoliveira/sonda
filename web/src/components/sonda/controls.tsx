@@ -7,13 +7,13 @@ export function Segmented<T extends string>({
   value,
   onChange,
   mono = false,
-}: {
+}: Readonly<{
   label: string
   options: { value: T; label: string }[]
   value: T
   onChange: (value: T) => void
   mono?: boolean
-}) {
+}>) {
   return (
     <div role="group" aria-label={label} className="flex rounded-[9px] bg-canvas p-[3px] edge">
       {options.map((o) => {
@@ -40,7 +40,7 @@ export function Segmented<T extends string>({
 }
 
 /** A filter chip: accent-tinted when pressed. */
-export function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
+export function Chip({ on, onClick, children }: Readonly<{ on: boolean; onClick: () => void; children: ReactNode }>) {
   return (
     <button
       type="button"
@@ -65,14 +65,14 @@ export function Button({
   children,
   className = '',
   type = 'button',
-}: {
+}: Readonly<{
   primary?: boolean
   disabled?: boolean
   onClick?: () => void
   children: ReactNode
   className?: string
   type?: 'button' | 'submit'
-}) {
+}>) {
   return (
     <button
       type={type}
@@ -93,7 +93,7 @@ export interface ToastMessage {
 }
 
 /** A bottom-center toast with optional Undo; disappears after 4 seconds. */
-export function Toast({ toast, onDone }: { toast: ToastMessage | null; onDone: () => void }) {
+export function Toast({ toast, onDone }: Readonly<{ toast: ToastMessage | null; onDone: () => void }>) {
   useEffect(() => {
     if (!toast) return
     const timer = setTimeout(onDone, 4000)

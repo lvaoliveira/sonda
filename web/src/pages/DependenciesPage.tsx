@@ -43,16 +43,16 @@ export function DependenciesPage() {
   )
 }
 
-function Dependencies({ d: loaded }: { d: DependencyList }) {
+/** The list with dependency `name`'s `advisory` reviewed as `review`. */
+function withReview(d: DependencyList, name: string, advisory: string, review: DependencyReview): DependencyList {
+  const reviewed = (r: DependencyRow) => ({ ...r, advisories: r.advisories.map((a) => (a.id === advisory ? { ...a, review } : a)) })
+  return { ...d, dependencies: d.dependencies.map((r) => (r.name === name ? reviewed(r) : r)) }
+}
+
+function Dependencies({ d: loaded }: Readonly<{ d: DependencyList }>) {
   // Reviews update this copy in place, so the page doesn't reload.
   const [d, setD] = useState(loaded)
-  const onReview = (name: string, advisory: string, review: DependencyReview) =>
-    setD((old) => ({
-      ...old,
-      dependencies: old.dependencies.map((r) =>
-        r.name !== name ? r : { ...r, advisories: r.advisories.map((a) => (a.id === advisory ? { ...a, review } : a)) },
-      ),
-    }))
+  const onReview = (name: string, advisory: string, review: DependencyReview) => setD((old) => withReview(old, name, advisory, review))
   const vulnerable = d.dependencies.filter((r) => r.advisories.some((a) => a.review?.status !== 'accepted')).length
   const [q, setQ] = useState('')
   const [ecosystem, setEcosystem] = useState('all')
@@ -214,7 +214,7 @@ function Dependencies({ d: loaded }: { d: DependencyList }) {
   )
 }
 
-function Tile({ label, value, note, alarm = false }: { label: string; value: number; note: string; alarm?: boolean }) {
+function Tile({ label, value, note, alarm = false }: Readonly<{ label: string; value: number; note: string; alarm?: boolean }>) {
   return (
     <div className="flex flex-col gap-1 bg-panel-2 px-4 py-3">
       <span className="text-[12.5px] text-fg-muted">{label}</span>
@@ -226,7 +226,7 @@ function Tile({ label, value, note, alarm = false }: { label: string; value: num
   )
 }
 
-function Changes({ d }: { d: DependencyList }) {
+function Changes({ d }: Readonly<{ d: DependencyList }>) {
   const c = d.changes
   const total = c ? c.added.length + c.removed.length + c.updated.length : 0
   return (
@@ -260,7 +260,7 @@ function Changes({ d }: { d: DependencyList }) {
 }
 
 /** Where vulnerability data comes from, and whether there is any. */
-function AdvisoryData({ d }: { d: DependencyList }) {
+function AdvisoryData({ d }: Readonly<{ d: DependencyList }>) {
   if (!d.advisoryData) {
     return (
       <p role="note" className="m-0 rounded-xl bg-panel-2 px-4 py-3 text-[13px] text-fg-muted edge">
@@ -278,7 +278,7 @@ function AdvisoryData({ d }: { d: DependencyList }) {
 }
 
 /** Every known vulnerability in the project's packages, most severe first; accepted ones last. */
-function Vulnerabilities({ d, onReview }: { d: DependencyList; onReview: (name: string, advisory: string, review: DependencyReview) => void }) {
+function Vulnerabilities({ d, onReview }: Readonly<{ d: DependencyList; onReview: (name: string, advisory: string, review: DependencyReview) => void }>) {
   const accepted = (a: DependencyRow['advisories'][number]) => a.review?.status === 'accepted'
   const rows: { dep: DependencyRow; a: DependencyRow['advisories'][number] }[] = d.dependencies
     .flatMap((dep) => dep.advisories.map((a) => ({ dep, a })))
@@ -314,18 +314,20 @@ function Finding({
   dep,
   a,
   onReview,
-}: {
+}: Readonly<{
   project: string
   dep: DependencyRow
   a: DependencyRow['advisories'][number]
   onReview: (r: DependencyReview) => void
-}) {
+}>) {
   const api = useApi()
   const [accepting, setAccepting] = useState(false)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const status = a.review?.status ?? 'open'
+  // Who decided, once someone has.
+  const decided = status === 'open' ? null : a.review
   const set = async (next: DependencyReview['status'], why?: string) => {
     setBusy(true)
     setError(null)
@@ -364,10 +366,10 @@ function Finding({
           {a.score != null && <span> · CVSS {a.score.toFixed(1)}</span>}
           <span> · {a.source}</span>
         </span>
-        {a.review && a.review.status !== 'open' && (
+        {decided && (
           <span className="text-xs text-fg-muted">
-            {REVIEW_LABEL[a.review.status]} by {a.review.reviewedBy}, {formatAge(a.review.reviewedAt)} ago
-            {a.review.reason && <>: “{a.review.reason}”</>}
+            {REVIEW_LABEL[decided.status]} by {decided.reviewedBy}, {formatAge(decided.reviewedAt)} ago
+            {decided.reason && <>: “{decided.reason}”</>}
           </span>
         )}
         {accepting && (

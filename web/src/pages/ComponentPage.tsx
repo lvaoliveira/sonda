@@ -44,7 +44,7 @@ export function ComponentPage() {
   )
 }
 
-function Component({ c }: { c: ComponentDetail }) {
+function Component({ c }: Readonly<{ c: ComponentDetail }>) {
   const issues = (more: Record<string, string | boolean> = {}) => issuesUrl(c.project, { branch: c.branch, comp: c.path, ...more })
   const severities = SEVERITY_ORDER.filter((s) => c.issues.bySeverity[s])
     .slice(0, 2)
@@ -127,10 +127,10 @@ function Component({ c }: { c: ComponentDetail }) {
   )
 }
 
-function Trend({ c }: { c: ComponentDetail }) {
+function Trend({ c }: Readonly<{ c: ComponentDetail }>) {
   const series = c.trend.map((t) => t.open)
   const first = series[0]
-  const last = series[series.length - 1]
+  const last = series.at(-1)!
   const change = last - first
   const worse = change > 0
   return (
@@ -149,13 +149,13 @@ function Trend({ c }: { c: ComponentDetail }) {
       />
       <div className="flex justify-between font-mono text-[9.5px] text-fg-faint">
         <span>{shortDate(c.trend[0].date)}</span>
-        <span>{shortDate(c.trend[c.trend.length - 1].date)}</span>
+        <span>{shortDate(c.trend.at(-1)!.date)}</span>
       </div>
     </Card>
   )
 }
 
-function Owners({ c }: { c: ComponentDetail }) {
+function Owners({ c }: Readonly<{ c: ComponentDetail }>) {
   return (
     <Card id="owners" title="Owners" subtitle="From the CODEOWNERS file uploaded with the analysis">
       {c.owners.length === 0 ? (
@@ -178,7 +178,7 @@ function Owners({ c }: { c: ComponentDetail }) {
 
 type FileSort = 'issues' | 'lines' | 'path'
 
-function Files({ c }: { c: ComponentDetail }) {
+function Files({ c }: Readonly<{ c: ComponentDetail }>) {
   const [sort, setSort] = useState<FileSort>('issues')
   const files = [...c.fileList].sort((a, b) =>
     sort === 'issues' ? b.issues - a.issues || a.path.localeCompare(b.path) : sort === 'lines' ? b.ncloc - a.ncloc || a.path.localeCompare(b.path) : a.path.localeCompare(b.path),

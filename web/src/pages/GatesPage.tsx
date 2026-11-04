@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { type FormEvent, useState } from 'react'
+import { type SubmitEvent, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { GateConditionInput, GateList, GateMetric, QualityGate } from '@/api/types'
@@ -26,7 +26,7 @@ export function GatesPage() {
 /** What the page shows beside the list: a gate, or the editor. */
 type Editing = { gate: QualityGate | null; from: QualityGate | null } | null
 
-function Gates({ list, isAdmin, reload }: { list: GateList; isAdmin: boolean; reload: () => void }) {
+function Gates({ list, isAdmin, reload }: Readonly<{ list: GateList; isAdmin: boolean; reload: () => void }>) {
   const { gates, metrics } = list
   const location = useLocation()
   const [selected, setSelected] = useState(() => location.hash.slice(1))
@@ -107,7 +107,10 @@ function Gates({ list, isAdmin, reload }: { list: GateList; isAdmin: boolean; re
               onCancel={() => setEditing(null)}
             />
           ) : (
-            gate && <GateDetail gate={gate} isAdmin={isAdmin} onEdit={() => setEditing({ gate, from: gate })} onDeleted={() => (setSelected(''), reload())} />
+            gate && <GateDetail gate={gate} isAdmin={isAdmin} onEdit={() => setEditing({ gate, from: gate })} onDeleted={() => {
+              setSelected('')
+              reload()
+            }} />
           )}
         </div>
       )}
@@ -115,7 +118,7 @@ function Gates({ list, isAdmin, reload }: { list: GateList; isAdmin: boolean; re
   )
 }
 
-function GateDetail({ gate, isAdmin, onEdit, onDeleted }: { gate: QualityGate; isAdmin: boolean; onEdit: () => void; onDeleted: () => void }) {
+function GateDetail({ gate, isAdmin, onEdit, onDeleted }: Readonly<{ gate: QualityGate; isAdmin: boolean; onEdit: () => void; onDeleted: () => void }>) {
   const api = useApi()
   const [error, setError] = useState<string | null>(null)
   const total = gate.projects.length
@@ -259,6 +262,13 @@ function GateDetail({ gate, isAdmin, onEdit, onDeleted }: { gate: QualityGate; i
 }
 
 /** Creating a server gate, or editing one (ADR-0017): a name and sonda.toml's conditions. */
+const NEW_CONDITION: GateConditionInput = { metric: 'new_bugs', op: 'gt', threshold: 0 }
+
+/** A condition being edited, with a key that stays with it when another is removed. */
+type ConditionRow = GateConditionInput & { key: number }
+let conditionKeys = 0
+const conditionRow = (c: GateConditionInput): ConditionRow => ({ ...c, key: conditionKeys++ })
+
 function GateEditor({
   gate,
   from,
@@ -266,28 +276,30 @@ function GateEditor({
   metrics,
   onSaved,
   onCancel,
-}: {
+}: Readonly<{
   gate: QualityGate | null
   from: QualityGate | null
   gates: QualityGate[]
   metrics: GateMetric[]
   onSaved: (id: number) => void
   onCancel: () => void
-}) {
+}>) {
   const api = useApi()
-  const conditionsOf = (g: QualityGate | null): GateConditionInput[] =>
-    g ? g.conditions.map(({ metric, op, threshold }) => ({ metric, op, threshold })) : [{ metric: 'new_bugs', op: 'gt', threshold: 0 }]
+  const conditionsOf = (g: QualityGate | null): ConditionRow[] =>
+    (g ? g.conditions : [NEW_CONDITION]).map(({ metric, op, threshold }) => conditionRow({ metric, op, threshold }))
   const [name, setName] = useState(gate?.name ?? '')
   const [conditions, setConditions] = useState(() => conditionsOf(from))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const set = (i: number, patch: Partial<GateConditionInput>) => setConditions((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)))
-  const submit = async (e: FormEvent) => {
+  const remove = (key: number) => setConditions((cs) => cs.filter((c) => c.key !== key))
+  const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
     setError(null)
     try {
-      const saved = gate?.server ? await api.updateQualityGate(gate.server.id, name, conditions) : await api.createQualityGate(name, conditions)
+      const inputs = conditions.map(({ metric, op, threshold }) => ({ metric, op, threshold }))
+      const saved = gate?.server ? await api.updateQualityGate(gate.server.id, name, inputs) : await api.createQualityGate(name, inputs)
       onSaved(saved.id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -306,7 +318,7 @@ function GateEditor({
           <input aria-label="Gate name" placeholder="Name, such as Strict" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} className={`${control} w-[260px] max-w-full`} />
           {!gate && (
             <label className="flex items-center gap-2 text-[13px] text-fg-muted">
-              Start from
+              <span>Start from</span>
               <select
                 aria-label="Start from"
                 value={from?.id ?? ''}
@@ -327,7 +339,7 @@ function GateEditor({
           {conditions.map((c, i) => {
             const metric = metrics.find((m) => m.id === c.metric)
             return (
-              <li key={i} className="flex flex-wrap items-center gap-2 border-t border-line py-2.5 text-[13px] first:border-t-0 first:pt-0">
+              <li key={c.key} className="flex flex-wrap items-center gap-2 border-t border-line py-2.5 text-[13px] first:border-t-0 first:pt-0">
                 <span className="text-fg-muted">Fails when</span>
                 <select aria-label={`Metric ${i + 1}`} value={c.metric} onChange={(e) => set(i, { metric: e.target.value })} className={`${control} w-[220px] max-w-full`}>
                   {metrics.map((m) => (
@@ -354,7 +366,7 @@ function GateEditor({
                   type="button"
                   aria-label={`Remove condition ${i + 1}`}
                   title="Remove"
-                  onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}
+                  onClick={() => remove(c.key)}
                   disabled={conditions.length === 1}
                   className="grid size-8 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-fg-muted edge-strong disabled:cursor-default disabled:opacity-45"
                 >
@@ -365,7 +377,7 @@ function GateEditor({
           })}
         </ul>
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => setConditions((cs) => [...cs, { metric: 'new_bugs', op: 'gt', threshold: 0 }])}>Add a condition</Button>
+          <Button onClick={() => setConditions((cs) => [...cs, conditionRow(NEW_CONDITION)])}>Add a condition</Button>
           <span className="flex-1" />
           <Button onClick={onCancel}>Cancel</Button>
           <Button type="submit" primary disabled={busy || !name.trim()}>
