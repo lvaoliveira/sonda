@@ -21,6 +21,13 @@ file, the report formats and the public library API.
   /api/issues/prompt` ([ADR-0025](docs/adr/0025-fixing-with-an-ai-assistant.md)).
   `GET /api/issues` takes `ids`.
 
+### Fixed
+
+- On an analysis, the Introduced, Resolved and Warnings links in the
+  summary scrolled nowhere: a section had no id to land on. They land on
+  the section now, and outline it briefly.
+
+
 ## [0.2.0] - 2026-11-03
 
 Connecting GitHub no longer takes a hand-made App: Administration creates

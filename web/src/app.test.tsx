@@ -521,6 +521,19 @@ describe('Analyses', () => {
     expect(screen.queryByRole('region', { name: 'Pull requests' })).not.toBeInTheDocument()
   })
 
+  it('links each summary tile to the section it counts', async () => {
+    const user = userEvent.setup()
+    renderAt('/analyses')
+    await user.click(within(await screen.findByRole('list', { name: 'Analyses' })).getAllByRole('link', { name: 'payments-platform' })[0])
+    const summary = await screen.findByRole('region', { name: 'Summary' })
+    const anchors = within(summary)
+      .getAllByRole('link')
+      .map((l) => l.getAttribute('href'))
+      .filter((h): h is string => !!h?.startsWith('#'))
+    expect(anchors).toEqual(expect.arrayContaining(['#introduced', '#fixed', '#warnings']))
+    for (const href of anchors) expect(document.getElementById(href.slice(1)), href).not.toBeNull()
+  })
+
   it('is reached from the Overview and from a project', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')

@@ -201,3 +201,26 @@
     }
   }
 }
+
+/* A link to a section (#fixed, #warnings, ...) says where it landed: on a big screen the page doesn't scroll, so nothing else would. */
+section[id]:target {
+  scroll-margin-top: 16px;
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+  border-radius: 12px;
+  animation: sd-target 1.8s ease-out;
+}
+@keyframes sd-target {
+  0%,
+  35% {
+    outline-color: var(--sd-accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  section[id]:target {
+    outline-color: var(--sd-accent);
+  }
+}
