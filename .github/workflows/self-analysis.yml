@@ -6,9 +6,8 @@ name: Self-analysis
 # repository is public, so no code from a pull request may run there.
 # `workflow_run` runs this file as it is on main, on main's commit.
 #
-# sonda analyzes the web app and the scripts (it has no Rust analyzer);
-# SonarQube analyzes those and the Rust crates, with coverage from CI's
-# `coverage` job and the web app's tests.
+# Both analyze the web app, the scripts and the Rust crates, SonarQube with
+# coverage from CI's `coverage` job and the web app's tests.
 on:
   workflow_run:
     workflows: [CI]
@@ -18,16 +17,18 @@ on:
 
 permissions: {}
 
-# The latest commit wins; an older analysis has nothing to add.
-concurrency:
-  group: self-analysis
-  cancel-in-progress: true
-
 jobs:
   analyze:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    # The latest commit wins; an older analysis has nothing to add. On the
+    # job, not the workflow: every CI run on main that ends, cancelled or
+    # failed too, starts this workflow, and at the workflow level even the
+    # runs this job skips cancelled the analysis in progress.
+    concurrency:
+      group: self-analysis
+      cancel-in-progress: true
     runs-on: [self-hosted, sonda]
     timeout-minutes: 45
     permissions:
