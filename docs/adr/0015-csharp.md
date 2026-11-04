@@ -84,8 +84,8 @@ The other partial rules need what sonda doesn't have:
 - a definition the documentation doesn't settle: S2245 (which contexts need
   a secure generator), S4261 (`ValueTask` and async streams, which TAP
   names with Async but the text leaves out);
-- more work: S2930 (its tracked types and factories), S3925 (nine
-  serialization checks), S5856 (a .NET regex parser).
+- more work: S3925 (nine serialization checks, and which projects are
+  test projects), S5856 (a .NET regex parser).
 
 ### Suppressions
 

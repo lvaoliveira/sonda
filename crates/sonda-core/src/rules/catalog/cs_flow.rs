@@ -27,22 +27,23 @@ pub(super) static RULES: &[Rule] = &[
     // ---- Bugs ----
     Rule {
         id: "cs/undisposed-local",
-        name: "Disposable objects created in a method should be disposed",
-        description: "A stream, connection or client that is neither disposed, returned nor handed to \
-                      someone else keeps its file handle or socket until the garbage collector finalizes it.",
-        message: "Dispose of this object, ideally with a using declaration.",
+        name: "IDisposables should be disposed",
+        description: "A FileStream, reader, writer, socket client, WebClient or image kept in a private field or \
+                      a local and never disposed holds its file handle, socket or unmanaged memory until the \
+                      garbage collector finalizes it.",
+        message: "Dispose of this object, with a using declaration or in Dispose.",
         category: Bug,
         severity: Blocker,
         effort_minutes: 5,
-        sonar: &[related("S2930")],
+        sonar: &[exact("S2930")],
         check: Check::Semantic {
             langs: CSHARP,
-            find: undisposed_locals,
+            find: super::cs_documented::undisposed_resources,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string F(string p) { var reader = new StreamReader(p); return reader.ReadToEnd(); } }",
-            good: "class A { string F(string p) { using var reader = new StreamReader(p); return reader.ReadToEnd(); } }",
+            bad: "using System.IO;\nclass ResourceHolder { private FileStream fs; public void OpenResource(string path) { this.fs = new FileStream(path, FileMode.Open); } }",
+            good: "using System;\nusing System.IO;\nclass ResourceHolder : IDisposable { private FileStream fs; public void OpenResource(string path) { this.fs = new FileStream(path, FileMode.Open); } public void Dispose() { this.fs.Dispose(); } }",
         }),
     },
     Rule {
@@ -217,42 +218,15 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- disposables
 
-/// The types SonarQube documents for this rule: they hold a file handle,
-/// a socket or native memory.
-const DISPOSABLES: &[&[u8]] = &[
-    b"FileStream",
-    b"StreamReader",
-    b"StreamWriter",
-    b"BinaryReader",
-    b"BinaryWriter",
-    b"WebClient",
-    b"Socket",
-    b"TcpClient",
-    b"TcpListener",
-    b"UdpClient",
-    b"Image",
-    b"Bitmap",
-];
-
-const OPENERS: &[&[u8]] = &[
-    b"File.Open",
-    b"File.OpenRead",
-    b"File.OpenWrite",
-    b"File.Create",
-    b"File.OpenText",
-    b"File.CreateText",
-    b"File.AppendText",
-];
-
 /// What happens to a local at one of its uses.
-enum Fate {
+pub(super) enum Fate {
     Released,
     Used,
 }
 
 /// Whether a use of a local disposes of it or hands it on: `x.Dispose()`,
 /// `return x`, `F(x)`, `field = x`, `new T(x)`, `using (x)`.
-fn released(name: Node, src: &[u8]) -> Fate {
+pub(super) fn released(name: Node, src: &[u8]) -> Fate {
     let Some(parent) = name.parent() else {
         return Fate::Used;
     };
@@ -290,58 +264,6 @@ fn released(name: Node, src: &[u8]) -> Fate {
         "variable_declarator" => Fate::Released,
         _ => Fate::Used,
     }
-}
-
-fn undisposed_locals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let mut uses: Vec<Vec<Node<'t>>> = vec![Vec::new(); m.decls.len()];
-    for r in &m.refs {
-        if let Some(d) = r.decl {
-            uses[d].push(r.node);
-        }
-    }
-    m.decls
-        .iter()
-        .enumerate()
-        .filter(|(i, d)| {
-            let Some(declarator) = d
-                .declarator
-                .filter(|x| d.kind == DeclKind::Let && x.kind() == "variable_declarator")
-            else {
-                return false;
-            };
-            let Some(value) = (declarator.named_child_count() > 1)
-                .then(|| declarator.named_child(declarator.named_child_count() as u32 - 1))
-                .flatten()
-            else {
-                return false;
-            };
-            let creates = match value.kind() {
-                "object_creation_expression" => value
-                    .child_by_field_name("type")
-                    .is_some_and(|t| DISPOSABLES.contains(&simple_name(t, src))),
-                "invocation_expression" => value
-                    .child_by_field_name("function")
-                    .is_some_and(|f| OPENERS.contains(&text(f, src))),
-                _ => false,
-            };
-            if !creates {
-                return false;
-            }
-            // `using var x = ...` and `using (var x = ...)`.
-            let statement = declarator.parent().and_then(|v| v.parent());
-            if statement.is_none_or(|s| {
-                s.kind() != "local_declaration_statement"
-                    || text(s, src).starts_with(b"using")
-                    || text(s, src).starts_with(b"await using")
-            }) {
-                return false;
-            }
-            !uses[*i]
-                .iter()
-                .any(|u| matches!(released(*u, src), Fate::Released))
-        })
-        .map(|(_, d)| d.node)
-        .collect()
 }
 
 // ---------------------------------------------------- StringBuilder
@@ -493,7 +415,8 @@ mod tests {
         let src = class(
             "string F(string p) {\nvar r1 = new StreamReader(p);\nvar r2 = new StreamReader(p);\nr2.Dispose();\nusing var r3 = new StreamReader(p);\nvar r4 = File.OpenRead(p);\nvar r5 = new StreamReader(p);\nvar r6 = new StreamReader(p);\nKeep(r6);\nvar ms = new MemoryStream();\nvar cts = new CancellationTokenSource();\nvar sb = new StringBuilder();\nsb.Append(p).Append(p);\nvar sb2 = new StringBuilder();\nsb2.Append(p);\nUse(sb2.ToString());\nvar sb3 = new StringBuilder();\nsb3.AppendLine(p);\nKeep(sb3);\nreturn r5.ReadToEnd() + r4.Length;\n}",
         );
-        assert_eq!(flagged("cs/undisposed-local", &src), [4, 8, 9]);
+        // File.OpenRead isn't among the documented factories.
+        assert_eq!(flagged("cs/undisposed-local", &src), [4, 9]);
         assert_eq!(flagged("cs/string-builder-never-read", &src), [14]);
     }
 
