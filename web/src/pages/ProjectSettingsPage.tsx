@@ -15,7 +15,8 @@ export function ProjectSettingsPage() {
   const data = useAsync(() => Promise.all([api.projectSettings(key), api.shell()]), [api, key])
   // Each save answers with the settings as they now are, which the crumbs show too.
   const [saved, setSaved] = useState<ProjectSettings | null>(null)
-  const settings = saved?.key === key ? saved : data.state === 'ready' ? data.data[0] : null
+  const loaded = data.state === 'ready' ? data.data[0] : null
+  const settings = saved?.key === key ? saved : loaded
   return (
     <AppShell
       project={key}
@@ -200,9 +201,9 @@ function GithubSetting({ settings, isAdmin, save }: Readonly<SettingProps>) {
         annotations on new issues and one summary comment; uploads from any other repository post nothing.
       </p>
       {!settings.githubApp && (
-        <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+        <output className="block m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
           This server has no GitHub App, so nothing is posted yet. An admin creates one under <Link to="/admin#github">Administration</Link>.
-        </p>
+        </output>
       )}
       {isAdmin ? (
         <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
@@ -327,10 +328,10 @@ function MainBranchSetting({ settings, isAdmin, save }: Readonly<SettingProps>) 
             </Button>
           </div>
           {branch !== settings.mainBranch && (
-            <p role="status" className="m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
+            <output className="block m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
               Every screen counts <Mono className="text-[12px]">{branch}</Mono> instead of <Mono className="text-[12px]">{settings.mainBranch}</Mono> at once. New
               code starts over on it, from its first analysis (or its current version's), and a start set on {settings.mainBranch} no longer applies.
-            </p>
+            </output>
           )}
         </form>
       ) : (

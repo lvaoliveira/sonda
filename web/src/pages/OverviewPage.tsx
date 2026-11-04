@@ -201,7 +201,7 @@ function Live({
           // The color says how the value stands; the delta, where it's heading.
           const tone = k.tone === 'neutral' ? 'var(--sd-muted)' : `var(--sd-${k.tone})`
           const steady = k.series.length < 2 || k.series[0] === k.series.at(-1)
-          const trend = steady ? 'var(--sd-faint)' : k.improving ? 'var(--sd-ok)' : 'var(--sd-crit)'
+          const trend = trendColor(steady, k.improving)
           return (
             <button
               key={k.metric}
@@ -306,6 +306,12 @@ function Focus({ data, scopeName, onDrill }: Readonly<{ data: Overview; scopeNam
       </div>
     </Card>
   )
+}
+
+/** A KPI's delta: faint while steady, else whether it's heading the right way. */
+function trendColor(steady: boolean, improving: boolean): string {
+  if (steady) return 'var(--sd-faint)'
+  return improving ? 'var(--sd-ok)' : 'var(--sd-crit)'
 }
 
 /** ", driven up by X, held back by Y", from the best and worst dimensions with data. */
@@ -529,7 +535,7 @@ function ProjectTable({ projects, total }: Readonly<{ projects: ProjectHealth[];
         <td className="border-b border-line px-5 py-[11px]">
           <span className="flex items-center gap-2.5" style={{ paddingLeft: child ? 20 : 0 }}>
             <span aria-hidden="true" className="w-2.5 text-[9px] text-fg-faint">
-              {p.components ? (open ? '▾' : '▸') : ''}
+              {p.components && (open ? '▾' : '▸')}
             </span>
             <span className="flex min-w-0 flex-col leading-[1.3]">
               <span className="flex items-baseline gap-2">
@@ -705,7 +711,7 @@ function Recent({ data }: Readonly<{ data: Overview }>) {
       <div className="relative overflow-x-auto">
         {data.recent.map((a) => {
           const g = GATE[a.state]
-          const noteColor = a.state === 'failed' ? 'var(--sd-crit)' : a.state === 'partial' ? 'var(--sd-warn)' : a.state === 'running' ? 'var(--sd-info)' : 'var(--sd-muted)'
+          const noteColor = a.state === 'passed' ? 'var(--sd-muted)' : g.color
           return (
             <div
               key={a.sha}

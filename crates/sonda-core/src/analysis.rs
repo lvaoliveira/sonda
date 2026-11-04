@@ -99,10 +99,11 @@ pub(crate) fn analyze(
     let mut suppressions: HashMap<usize, Suppression> = HashMap::new();
     // C#'s `#pragma warning disable S1234` regions and `[SuppressMessage]`
     // attributes silence SonarQube keys.
-    let pragmas = if lang == Lang::CSharp {
-        suppressed_regions(src, root)
-    } else {
-        Vec::new()
+    let pragmas = match lang {
+        Lang::CSharp => suppressed_regions(src, root),
+        // Rust's `#[allow(clippy::...)]`, which silences SonarQube's Clippy-based rules.
+        Lang::Rust => crate::rust_suppress::regions(src, root),
+        _ => Vec::new(),
     };
     if lang == Lang::Rust {
         issues.retain(|i| !rules::NOT_ON_RUST.contains(&i.rule));
@@ -994,117 +995,151 @@ fn scan_js_files(ctx: &Ctx, lang: Lang, root: Node, rules: &RuleSet, issues: &mu
     let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
-    let strip_ext = |s: &str| {
-        for ext in [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"] {
-            if let Some(base) = s.strip_suffix(ext) {
-                return base.to_string();
-            }
-        }
-        s.to_string()
-    };
     if let Some(rule) = rules.get(rules::JS_MODULE_IMPORTS_ITSELF) {
-        let mut stack = vec![root];
-        while let Some(n) = stack.pop() {
-            let source = match n.kind() {
-                "import_statement" | "export_statement" => n.child_by_field_name("source"),
-                "call_expression"
-                    if n.child_by_field_name("function")
-                        .is_some_and(|f| ctx.text(f) == "require") =>
-                {
-                    n.child_by_field_name("arguments")
-                        .and_then(|a| a.named_child(0))
-                        .filter(|a| a.kind() == "string")
-                }
-                _ => None,
-            };
-            if let Some(source) = source {
-                let t = ctx.text(source);
-                let spec = t.get(1..t.len().saturating_sub(1)).unwrap_or("");
-                if let Some(rest) = spec.strip_prefix("./")
-                    && strip_ext(rest) == stem
-                {
-                    let msg = "Remove this import: the module imports itself.".to_string();
-                    issues.push(ctx.issue(rule, source, msg, rule.rule.effort_minutes));
-                }
-            }
-            let mut c = n.walk();
-            let kids: Vec<Node> = n.named_children(&mut c).collect();
-            stack.extend(kids);
-        }
+        module_imports_itself(ctx, root, stem, rule, issues);
     }
     if let Some(rule) = rules.get(rules::JS_DEFAULT_EXPORT_NAME)
         && stem != "index"
     {
-        let norm = |s: &str| {
-            s.chars()
-                .filter(|c| !matches!(c, '-' | '_' | '.'))
-                .collect::<String>()
-                .to_lowercase()
-        };
-        for export in children.iter().filter(|n| n.kind() == "export_statement") {
-            let mut c = export.walk();
-            if !export.children(&mut c).any(|k| k.kind() == "default") {
-                continue;
-            }
-            let named = export
-                .child_by_field_name("declaration")
-                .and_then(|d| d.child_by_field_name("name"))
-                .or_else(|| {
-                    export
-                        .child_by_field_name("value")
-                        .filter(|v| v.kind() == "identifier")
-                });
-            if let Some(name) = named
-                && norm(ctx.text(name)) != norm(stem)
-            {
-                let msg = format!("Rename the file or the default export {}.", ctx.text(name));
-                issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
-            }
-        }
+        default_export_name(ctx, &children, stem, rule, issues);
     }
     let is_test_file = stem.ends_with(".test")
         || stem.ends_with(".spec")
         || path.contains("/__tests__/")
         || path.starts_with("__tests__/");
-    if is_test_file && let Some(rule) = rules.get(rules::JS_TEST_FILE_WITHOUT_TESTS) {
-        let mut has_test = false;
-        let mut stack = vec![root];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "call_expression" {
-                let mut f = n.child_by_field_name("function");
-                while let Some(m) = f.filter(|m| m.kind() == "member_expression") {
-                    f = m.child_by_field_name("object");
-                }
-                if f.is_some_and(|f| matches!(ctx.text(f), "it" | "test" | "specify")) {
-                    has_test = true;
-                    break;
-                }
-            }
-            let mut c = n.walk();
-            let kids: Vec<Node> = n.named_children(&mut c).collect();
-            stack.extend(kids);
-        }
-        if !has_test {
-            let at = children.first().copied().unwrap_or(root);
-            let msg = "Add a test case to this file, or delete it.".to_string();
-            issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
-        }
+    if is_test_file
+        && let Some(rule) = rules.get(rules::JS_TEST_FILE_WITHOUT_TESTS)
+        && !has_test_case(ctx, root)
+    {
+        let at = children.first().copied().unwrap_or(root);
+        let msg = "Add a test case to this file, or delete it.".to_string();
+        issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
     }
     if let Some(rule) = rules.get(rules::JS_LICENSE_HEADER) {
-        let first = children
+        license_header(ctx, root, &children, rule, issues);
+    }
+}
+
+/// The nodes under `root`, in no particular order.
+fn descendants(root: Node) -> impl Iterator<Item = Node> {
+    let mut stack = vec![root];
+    std::iter::from_fn(move || {
+        let n = stack.pop()?;
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+        Some(n)
+    })
+}
+
+fn module_imports_itself(
+    ctx: &Ctx,
+    root: Node,
+    stem: &str,
+    rule: &ActiveRule,
+    issues: &mut Vec<Issue>,
+) {
+    let strip_ext = |s: &str| {
+        [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]
             .iter()
-            .find(|n| n.kind() != "hash_bang_line" && n.kind() != "hashbang_comment");
-        let has_header = first.is_some_and(|n| {
-            n.kind() == "comment" && {
-                let t = ctx.text(*n).to_lowercase();
-                t.contains("copyright") || t.contains("license")
+            .find_map(|ext| s.strip_suffix(ext))
+            .unwrap_or(s)
+            .to_string()
+    };
+    for n in descendants(root) {
+        let source = match n.kind() {
+            "import_statement" | "export_statement" => n.child_by_field_name("source"),
+            "call_expression"
+                if n.child_by_field_name("function")
+                    .is_some_and(|f| ctx.text(f) == "require") =>
+            {
+                n.child_by_field_name("arguments")
+                    .and_then(|a| a.named_child(0))
+                    .filter(|a| a.kind() == "string")
             }
-        });
-        if !has_header {
-            let at = first.copied().unwrap_or(root);
-            let msg = "Add a copyright or license header to this file.".to_string();
-            issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
+            _ => None,
+        };
+        let Some(source) = source else { continue };
+        let t = ctx.text(source);
+        let spec = t.get(1..t.len().saturating_sub(1)).unwrap_or("");
+        if spec
+            .strip_prefix("./")
+            .is_some_and(|rest| strip_ext(rest) == stem)
+        {
+            let msg = "Remove this import: the module imports itself.".to_string();
+            issues.push(ctx.issue(rule, source, msg, rule.rule.effort_minutes));
         }
+    }
+}
+
+fn default_export_name(
+    ctx: &Ctx,
+    children: &[Node],
+    stem: &str,
+    rule: &ActiveRule,
+    issues: &mut Vec<Issue>,
+) {
+    let norm = |s: &str| {
+        s.chars()
+            .filter(|c| !matches!(c, '-' | '_' | '.'))
+            .collect::<String>()
+            .to_lowercase()
+    };
+    for export in children.iter().filter(|n| n.kind() == "export_statement") {
+        let mut c = export.walk();
+        if !export.children(&mut c).any(|k| k.kind() == "default") {
+            continue;
+        }
+        let named = export
+            .child_by_field_name("declaration")
+            .and_then(|d| d.child_by_field_name("name"))
+            .or_else(|| {
+                export
+                    .child_by_field_name("value")
+                    .filter(|v| v.kind() == "identifier")
+            });
+        if let Some(name) = named
+            && norm(ctx.text(name)) != norm(stem)
+        {
+            let msg = format!("Rename the file or the default export {}.", ctx.text(name));
+            issues.push(ctx.issue(rule, name, msg, rule.rule.effort_minutes));
+        }
+    }
+}
+
+/// Whether the file calls `it`, `test` or `specify`, as `it.each(...)` too.
+fn has_test_case(ctx: &Ctx, root: Node) -> bool {
+    descendants(root).any(|n| {
+        if n.kind() != "call_expression" {
+            return false;
+        }
+        let mut f = n.child_by_field_name("function");
+        while let Some(m) = f.filter(|m| m.kind() == "member_expression") {
+            f = m.child_by_field_name("object");
+        }
+        f.is_some_and(|f| matches!(ctx.text(f), "it" | "test" | "specify"))
+    })
+}
+
+fn license_header(
+    ctx: &Ctx,
+    root: Node,
+    children: &[Node],
+    rule: &ActiveRule,
+    issues: &mut Vec<Issue>,
+) {
+    let first = children
+        .iter()
+        .find(|n| n.kind() != "hash_bang_line" && n.kind() != "hashbang_comment");
+    let has_header = first.is_some_and(|n| {
+        n.kind() == "comment" && {
+            let t = ctx.text(*n).to_lowercase();
+            t.contains("copyright") || t.contains("license")
+        }
+    });
+    if !has_header {
+        let at = first.copied().unwrap_or(root);
+        let msg = "Add a copyright or license header to this file.".to_string();
+        issues.push(ctx.issue(rule, at, msg, rule.rule.effort_minutes));
     }
 }
 
@@ -2103,6 +2138,27 @@ pub(crate) struct SuppressedRegion {
     key: Option<String>,
     start: usize,
     end: usize,
+}
+
+impl SuppressedRegion {
+    pub(crate) fn new(key: Option<String>, start: usize, end: usize) -> Self {
+        Self { key, start, end }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start(&self) -> usize {
+        self.start
+    }
+
+    #[cfg(test)]
+    pub(crate) fn end(&self) -> usize {
+        self.end
+    }
 }
 
 /// The fact kind a C# file's suppressed regions travel under, for issues the

@@ -965,8 +965,11 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if body.kind() != "statement_block" {
         return None;
     }
-    // (a) A value overwritten by the next statement before anyone reads it.
-    let mut found = None;
+    overwritten_before_read(body, src).or_else(|| written_never_read(function, body, src))
+}
+
+/// (a) A value overwritten by the next statement before anyone reads it.
+fn overwritten_before_read<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut blocks = vec![body];
     walk(body, &mut |n| {
         if is_function_kind(n.kind()) {
@@ -977,62 +980,89 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         }
         true
     });
-    for block in blocks {
-        for w in named(block).windows(2) {
-            let (first, second) = (w[0], w[1]);
-            let (name, value_end) = match first.kind() {
-                "expression_statement" => {
-                    let Some(a) = first
-                        .named_child(0)
-                        .filter(|a| a.kind() == "assignment_expression")
-                    else {
-                        continue;
-                    };
-                    match a.child_by_field_name("left") {
-                        Some(l) if l.kind() == "identifier" => (text(l, src), a),
-                        _ => continue,
-                    }
-                }
-                "lexical_declaration" | "variable_declaration" => {
-                    let decls = named(first);
-                    let [d] = decls.as_slice() else { continue };
-                    match (
-                        d.child_by_field_name("name"),
-                        d.child_by_field_name("value"),
-                    ) {
-                        (Some(n), Some(_)) if n.kind() == "identifier" => (text(n, src), *d),
-                        _ => continue,
-                    }
-                }
-                _ => continue,
-            };
-            if second.kind() != "expression_statement" {
-                continue;
-            }
-            let Some(next) = second
+    blocks.into_iter().find_map(|block| {
+        named(block).windows(2).find_map(|w| {
+            let name = assigned_name(w[0], src)?;
+            overwrites_unread(w[1], name, src).then_some(w[0])
+        })
+    })
+}
+
+/// The variable a statement gives a value: `a = ...`, or `let a = ...` alone.
+fn assigned_name<'s>(statement: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    match statement.kind() {
+        "expression_statement" => {
+            let a = statement
                 .named_child(0)
-                .filter(|a| a.kind() == "assignment_expression")
-            else {
-                continue;
-            };
-            let overwrites = next
+                .filter(|a| a.kind() == "assignment_expression")?;
+            let l = a
                 .child_by_field_name("left")
-                .is_some_and(|l| l.kind() == "identifier" && text(l, src) == name);
-            let reads = next
-                .child_by_field_name("right")
-                .is_some_and(|r| references(r).iter().any(|i| text(i.node, src) == name));
-            let _ = value_end;
-            if overwrites && !reads {
-                found = Some(first);
-                break;
-            }
+                .filter(|l| l.kind() == "identifier")?;
+            Some(text(l, src))
         }
-        if found.is_some() {
-            return found;
+        "lexical_declaration" | "variable_declaration" => {
+            let decls = named(statement);
+            let [d] = decls.as_slice() else { return None };
+            d.child_by_field_name("value")?;
+            let n = d
+                .child_by_field_name("name")
+                .filter(|n| n.kind() == "identifier")?;
+            Some(text(n, src))
         }
+        _ => None,
     }
-    // (b) A local that is written and never read.
-    let mut locals: Vec<(&[u8], Node)> = Vec::new();
+}
+
+/// Whether `statement` assigns `name` again without reading it.
+fn overwrites_unread(statement: Node, name: &[u8], src: &[u8]) -> bool {
+    if statement.kind() != "expression_statement" {
+        return false;
+    }
+    let Some(next) = statement
+        .named_child(0)
+        .filter(|a| a.kind() == "assignment_expression")
+    else {
+        return false;
+    };
+    let overwrites = next
+        .child_by_field_name("left")
+        .is_some_and(|l| l.kind() == "identifier" && text(l, src) == name);
+    let reads = next
+        .child_by_field_name("right")
+        .is_some_and(|r| references(r).iter().any(|i| text(i.node, src) == name));
+    overwrites && !reads
+}
+
+/// (b) A local that is written and never read.
+fn written_never_read<'t>(function: Node<'t>, body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let refs = references(body);
+    declared_locals(body, src)
+        .into_iter()
+        .find_map(|(name, declarator)| {
+            if name.starts_with(b"_") {
+                return None;
+            }
+            let same = |r: &&Ref| text(r.node, src) == name;
+            let read = refs.iter().filter(same).any(|r| {
+                !(is_declaration_name(*r)
+                    || is_assignment_target(*r)
+                        && r.parent.is_some_and(|p| p.kind() != "update_expression"))
+            });
+            // A closure may read it later: the name directly under a nested
+            // function, as an arrow function's body.
+            let captured = refs.iter().filter(same).any(|r| {
+                r.node.start_byte() > body.start_byte()
+                    && r.parent
+                        .is_some_and(|p| is_function_kind(p.kind()) && p.id() != function.id())
+            });
+            (!read && !captured).then_some(declarator)
+        })
+}
+
+/// The names a function body declares with a value, outside nested
+/// functions, `for` heads and exports, each with its declarator.
+fn declared_locals<'t, 's>(body: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Node<'t>)> {
+    let mut locals = Vec::new();
     walk(body, &mut |n| {
         if is_function_kind(n.kind()) {
             return false;
@@ -1040,60 +1070,40 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         if n.kind() == "variable_declarator"
             && let Some(pattern) = n.child_by_field_name("name")
             && n.child_by_field_name("value").is_some()
-            && n.parent()
-                .is_some_and(|d| matches!(d.kind(), "lexical_declaration" | "variable_declaration"))
-            && !n.parent().and_then(|d| d.parent()).is_some_and(|g| {
-                matches!(
-                    g.kind(),
-                    "for_statement" | "for_in_statement" | "export_statement"
-                )
-            })
+            && is_plain_declaration(n)
+            && !has_rest(pattern)
         {
-            // `const { a, ...rest } = x` keeps its siblings of a rest on purpose.
             let mut names = Vec::new();
-            let has_rest = {
-                let mut found = false;
-                walk(pattern, &mut |c| {
-                    found |= c.kind() == "rest_pattern";
-                    true
-                });
-                found
-            };
-            if !has_rest {
-                pattern_names(pattern, src, &mut names);
-                for name in names {
-                    locals.push((name, n));
-                }
-            }
+            pattern_names(pattern, src, &mut names);
+            locals.extend(names.into_iter().map(|name| (name, n)));
         }
         true
     });
-    let refs = references(body);
-    locals.into_iter().find_map(|(name, declarator)| {
-        if name.starts_with(b"_") {
-            return None;
-        }
-        let mut read = false;
-        for r in refs.iter().filter(|r| text(r.node, src) == name) {
-            if is_declaration_name(*r)
-                || is_assignment_target(*r)
-                    && r.parent.is_some_and(|p| p.kind() != "update_expression")
-            {
-                continue;
-            }
-            read = true;
-            break;
-        }
-        // A closure may read it later: the name directly under a nested
-        // function, as an arrow function's body.
-        let captured = refs.iter().any(|r| {
-            text(r.node, src) == name
-                && r.node.start_byte() > body.start_byte()
-                && r.parent
-                    .is_some_and(|p| is_function_kind(p.kind()) && p.id() != function.id())
-        });
-        (!read && !captured).then_some(declarator)
-    })
+    locals
+}
+
+/// A declarator of a `let`, `const` or `var` that isn't a `for` head or exported.
+fn is_plain_declaration(declarator: Node) -> bool {
+    let Some(d) = declarator.parent() else {
+        return false;
+    };
+    matches!(d.kind(), "lexical_declaration" | "variable_declaration")
+        && !d.parent().is_some_and(|g| {
+            matches!(
+                g.kind(),
+                "for_statement" | "for_in_statement" | "export_statement"
+            )
+        })
+}
+
+/// `const { a, ...rest } = x` keeps its siblings of a rest on purpose.
+fn has_rest(pattern: Node) -> bool {
+    let mut found = false;
+    walk(pattern, &mut |c| {
+        found |= c.kind() == "rest_pattern";
+        true
+    });
+    found
 }
 
 fn enclosing_function_of(node: Node) -> Option<Node> {

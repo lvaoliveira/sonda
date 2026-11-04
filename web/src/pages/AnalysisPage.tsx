@@ -49,10 +49,58 @@ function severitySummary(c: AnalysisChanges): string {
 }
 
 function Analysis({ a }: Readonly<{ a: AnalysisDetail }>) {
-  const skipped = a.warnings.filter((w) => w.includes(': skipped')).length
   // A pull request's analyses are listed on the project page, not among its branches.
   const projectLink = a.pullRequest ? `/projects/${encodeURIComponent(a.project)}#pull-requests` : projectUrl(a.project, a.branch, a.mainBranch)
-  const tiles: { label: string; value: string; sub: string; color?: string; href?: string }[] = [
+  const tiles = summaryTiles(a, projectLink)
+  return (
+    <>
+      <AnalysisHeader a={a} projectLink={projectLink} />
+
+      <MetricGrid label="Summary" minCell={170}>
+        {tiles.map((t) => (
+          <div key={t.label} className="flex flex-col gap-1 bg-panel-2 px-4 py-3">
+            <span className="text-[12.5px] text-fg-muted">{t.label}</span>
+            <span className="font-mono text-[22px] leading-tight" style={{ color: t.color }}>
+              <TileValue value={t.value} href={t.href} color={t.color} />
+            </span>
+            <span className="text-xs text-fg-faint">{t.sub}</span>
+          </div>
+        ))}
+      </MetricGrid>
+
+      <div className="grid grid-cols-1 gap-5 min-[1000px]:grid-cols-[minmax(320px,1fr)_minmax(0,1.4fr)]">
+        <Card
+          id="result"
+          title={<GateStatus state={a.gate.state} className="text-base" />}
+          subtitle={`${a.gate.conditions.filter((c) => c.status === 'error').length} of ${a.gate.conditions.length} conditions failing`}
+          aside={<GateSource serverGate={a.gate.serverGate} />}
+        >
+          <GateConditions conditions={a.gate.conditions} />
+        </Card>
+        <Measures a={a} />
+      </div>
+
+      {a.warnings.length > 0 && <Warnings warnings={a.warnings} />}
+
+      <ChangeList
+        id="introduced"
+        title={a.baseline ? 'Baseline issues' : 'Introduced'}
+        subtitle={a.baseline ? 'Everything the first analysis of this branch found' : 'First seen in this analysis'}
+        changes={a.introduced}
+        a={a}
+        empty="No new issues."
+      />
+      {!a.baseline && <ChangeList id="fixed" title="Resolved" subtitle="No longer found by this analysis" changes={a.fixed} a={a} empty="Nothing was resolved." />}
+    </>
+  )
+}
+
+type Tile = { label: string; value: string; sub: string; color?: string; href?: string }
+
+/** The summary's tiles: what was analyzed, what changed, and how complete it is. */
+function summaryTiles(a: AnalysisDetail, projectLink: string): Tile[] {
+  const skipped = a.warnings.filter((w) => w.includes(': skipped')).length
+  return [
     { label: 'Files analyzed', value: formatNumber(a.files), sub: skipped ? `${skipped} skipped` : a.languages.map((l) => languageLabel(l.id)).join(', ') },
     a.baseline
       ? { label: 'Baseline', value: formatNumber(a.introduced.total), sub: 'issues found by the first analysis', href: '#introduced' }
@@ -73,94 +121,52 @@ function Analysis({ a }: Readonly<{ a: AnalysisDetail }>) {
       href: a.warnings.length ? '#warnings' : undefined,
     },
   ]
+}
+
+/** The commit, where it's from, and its neighbors on the branch. */
+function AnalysisHeader({ a, projectLink }: Readonly<{ a: AnalysisDetail; projectLink: string }>) {
   const at = new Date(a.analyzedAt)
   return (
-    <>
-      <div className="flex flex-col gap-2">
-        <span className="micro-label">Analysis · {a.project}</span>
-        <h1 className="m-0 font-mono text-[26px] leading-[1.15] font-semibold tracking-[-0.02em]">{a.sha.slice(0, 12)}</h1>
-        {a.message && <p className="m-0 text-[15px] text-fg">{a.message}</p>}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px] text-fg-muted">
-          <Link to={projectLink} className="font-mono text-[12.5px]">
-            {a.pullRequest ? `pull request ${branchLabel(a)}` : a.branch}
-          </Link>
-          <time dateTime={a.analyzedAt}>
-            {at.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' })} UTC
-          </time>
-          <span>sonda {a.toolVersion}</span>
-          {a.duration && <span>scanned in {a.duration}</span>}
-          <span>uploaded by {a.uploadedBy}</span>
-          {a.newCodeReference && <span>new code since {a.newCodeReference}</span>}
-          {a.decoration && <DecorationState d={a.decoration} />}
-          <span className="ml-auto flex gap-3 text-[13px]">
-            {a.previous ? <Link to={`/analyses/${a.previous.id}`}>← {a.previous.sha.slice(0, 7)}</Link> : <span className="text-fg-faint">first on {branchLabel(a)}</span>}
-            {a.next ? <Link to={`/analyses/${a.next.id}`}>{a.next.sha.slice(0, 7)} →</Link> : <span className="text-fg-faint">latest</span>}
-          </span>
-        </div>
+    <div className="flex flex-col gap-2">
+      <span className="micro-label">Analysis · {a.project}</span>
+      <h1 className="m-0 font-mono text-[26px] leading-[1.15] font-semibold tracking-[-0.02em]">{a.sha.slice(0, 12)}</h1>
+      {a.message && <p className="m-0 text-[15px] text-fg">{a.message}</p>}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px] text-fg-muted">
+        <Link to={projectLink} className="font-mono text-[12.5px]">
+          {a.pullRequest ? `pull request ${branchLabel(a)}` : a.branch}
+        </Link>
+        <time dateTime={a.analyzedAt}>
+          {at.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' })} UTC
+        </time>
+        <span>sonda {a.toolVersion}</span>
+        {a.duration && <span>scanned in {a.duration}</span>}
+        <span>uploaded by {a.uploadedBy}</span>
+        {a.newCodeReference && <span>new code since {a.newCodeReference}</span>}
+        {a.decoration && <DecorationState d={a.decoration} />}
+        <span className="ml-auto flex gap-3 text-[13px]">
+          {a.previous ? <Link to={`/analyses/${a.previous.id}`}>← {a.previous.sha.slice(0, 7)}</Link> : <span className="text-fg-faint">first on {branchLabel(a)}</span>}
+          {a.next ? <Link to={`/analyses/${a.next.id}`}>{a.next.sha.slice(0, 7)} →</Link> : <span className="text-fg-faint">latest</span>}
+        </span>
       </div>
+    </div>
+  )
+}
 
-      <MetricGrid label="Summary" minCell={170}>
-        {tiles.map((t) => (
-          <div key={t.label} className="flex flex-col gap-1 bg-panel-2 px-4 py-3">
-            <span className="text-[12.5px] text-fg-muted">{t.label}</span>
-            <span className="font-mono text-[22px] leading-tight" style={{ color: t.color }}>
-              {t.href ? (
-                t.href.startsWith('#') ? (
-                  <a href={t.href} style={{ color: t.color ?? 'var(--sd-text)' }}>
-                    {t.value}
-                  </a>
-                ) : (
-                  <Link to={t.href} style={{ color: t.color ?? 'var(--sd-text)' }}>
-                    {t.value}
-                  </Link>
-                )
-              ) : (
-                t.value
-              )}
-            </span>
-            <span className="text-xs text-fg-faint">{t.sub}</span>
-          </div>
-        ))}
-      </MetricGrid>
-
-      <div className="grid grid-cols-1 gap-5 min-[1000px]:grid-cols-[minmax(320px,1fr)_minmax(0,1.4fr)]">
-        <Card
-          id="result"
-          title={<GateStatus state={a.gate.state} className="text-base" />}
-          subtitle={`${a.gate.conditions.filter((c) => c.status === 'error').length} of ${a.gate.conditions.length} conditions failing`}
-          aside={<GateSource serverGate={a.gate.serverGate} />}
-        >
-          <GateConditions conditions={a.gate.conditions} />
-        </Card>
-        <Measures a={a} />
-      </div>
-
-      {a.warnings.length > 0 && (
-        <Card id="warnings" title="Warnings" subtitle="What the analysis couldn't fully cover; these files' results are missing or partial">
-          <ul className="m-0 flex list-none flex-col p-0">
-            {a.warnings.map((w) => {
-              const [file, ...rest] = w.split(': ')
-              return (
-                <li key={w} className="flex flex-col gap-0.5 border-t border-line py-2 first:border-t-0">
-                  <Mono className="text-[12px] text-fg">{file}</Mono>
-                  <span className="text-[13px] text-warn">{rest.join(': ') || w}</span>
-                </li>
-              )
-            })}
-          </ul>
-        </Card>
-      )}
-
-      <ChangeList
-        id="introduced"
-        title={a.baseline ? 'Baseline issues' : 'Introduced'}
-        subtitle={a.baseline ? 'Everything the first analysis of this branch found' : 'First seen in this analysis'}
-        changes={a.introduced}
-        a={a}
-        empty="No new issues."
-      />
-      {!a.baseline && <ChangeList id="fixed" title="Resolved" subtitle="No longer found by this analysis" changes={a.fixed} a={a} empty="Nothing was resolved." />}
-    </>
+function Warnings({ warnings }: Readonly<{ warnings: string[] }>) {
+  return (
+    <Card id="warnings" title="Warnings" subtitle="What the analysis couldn't fully cover; these files' results are missing or partial">
+      <ul className="m-0 flex list-none flex-col p-0">
+        {warnings.map((w) => {
+          const [file, ...rest] = w.split(': ')
+          return (
+            <li key={w} className="flex flex-col gap-0.5 border-t border-line py-2 first:border-t-0">
+              <Mono className="text-[12px] text-fg">{file}</Mono>
+              <span className="text-[13px] text-warn">{rest.join(': ') || w}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </Card>
   )
 }
 
@@ -266,6 +272,14 @@ function ChangeList({
   )
 }
 
+const DECORATION_TONE: Record<Decoration['state'], string> = {
+  posted: 'text-ok',
+  pending: 'text-fg-muted',
+  superseded: 'text-fg-muted',
+  failed: 'text-warn',
+  not_posted: 'text-warn',
+}
+
 const DECORATION: Record<Decoration['state'], string> = {
   posted: 'posted on GitHub',
   pending: 'waiting to post on GitHub',
@@ -274,11 +288,28 @@ const DECORATION: Record<Decoration['state'], string> = {
   superseded: 'not posted on GitHub: a newer analysis was',
 }
 
+/** A summary tile's value, linking to its section on this page or to another page. */
+function TileValue({ value, href, color }: Readonly<{ value: string; href?: string; color?: string }>) {
+  if (!href) return value
+  const style = { color: color ?? 'var(--sd-text)' }
+  if (href.startsWith('#')) {
+    return (
+      <a href={href} style={style}>
+        {value}
+      </a>
+    )
+  }
+  return (
+    <Link to={href} style={style}>
+      {value}
+    </Link>
+  )
+}
+
 /** Whether the pull request's decoration reached GitHub, and if not, why (ADR-0021). */
 function DecorationState({ d }: Readonly<{ d: Decoration }>) {
-  const tone = d.state === 'posted' ? 'text-ok' : d.state === 'pending' || d.state === 'superseded' ? 'text-fg-muted' : 'text-warn'
   return (
-    <span className={tone} title={d.lastError ?? undefined}>
+    <span className={DECORATION_TONE[d.state]} title={d.lastError ?? undefined}>
       {DECORATION[d.state]}
       {d.state === 'pending' && d.attempts > 0 && ` (attempt ${d.attempts})`}
       {d.lastError && d.state !== 'posted' && d.state !== 'superseded' && `: ${d.lastError}`}

@@ -78,30 +78,86 @@ export function CoveragePage() {
   )
 }
 
+/** The entries listed in directory `prefix`: matching files when searching, else its files and directories. */
+type LineCounts = { covered: number; uncovered: number }
+
+function listEntries(files: CoverageFile[], prefix: string, q: string, sort: Sort, gapsOnly: boolean): Entry[] {
+  const inDir = files.filter((f) => f.path.startsWith(prefix))
+  const needle = q.trim().toLowerCase()
+  // Searching lists matching files from the whole subtree, flat.
+  const rows: Entry[] = needle
+    ? inDir.filter((f) => f.path.toLowerCase().includes(needle)).map((f) => fileEntry(f, f.path.slice(prefix.length)))
+    : group(inDir, prefix)
+  const filtered = gapsOnly ? rows.filter((e) => e.uncovered > 0) : rows
+  const name = (a: Entry, b: Entry) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)
+  // Entries without data sort last: there's nothing to improve there yet.
+  const low = (e: Entry) => pctOf(e) ?? 101
+  const order: Record<Sort, (a: Entry, b: Entry) => number> = {
+    name,
+    lowest: (a, b) => low(a) - low(b) || b.uncovered - a.uncovered || name(a, b),
+    uncovered: (a, b) => b.uncovered - a.uncovered || low(a) - low(b) || name(a, b),
+  }
+  return filtered.sort(order[sort])
+}
+
+function NoCoverage() {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
+      <span className="font-semibold">No coverage per file in this analysis</span>
+      <span className="text-[13px] text-fg-muted">
+        Run the tests with an LCOV reporter (Istanbul, c8 and vitest’s <Mono className="text-xs">--coverage</Mono>, coverage.py’s{' '}
+        <Mono className="text-xs">coverage lcov</Mono>, llvm-cov or lcov), scan with <Mono className="text-xs">sonda scan --coverage lcov.info</Mono> and upload the
+        report. Reports from older sonda versions carry coverage per project only.
+      </span>
+    </div>
+  )
+}
+
+function CoverageTotals({ c, withData, total }: Readonly<{ c: CoverageList; withData: CoverageFile[]; total: LineCounts }>) {
+  const branches = c.files.reduce((t, f) => add(t, f.branches), ZERO)
+  const functions = c.files.reduce((t, f) => add(t, f.functions), ZERO)
+  return (
+    <MetricGrid label="Coverage totals" minCell={170}>
+      <Tile label="Line coverage" value={c.coverage == null ? '—' : `${c.coverage.toFixed(1)}%`} note="of the lines the coverage reports list" color={c.coverage == null ? undefined : coverageColor(c.coverage)} />
+      <Tile label="Covered lines" value={formatNumber(total.covered)} note={`of ${formatNumber(total.covered + total.uncovered)} coverable`} />
+      <CountTile label="Branch coverage" counts={branches} what="branches taken" />
+      <CountTile label="Function coverage" counts={functions} what="functions called" />
+      <Tile label="Uncovered lines" value={formatNumber(total.uncovered)} note={`in ${withData.filter((f) => (f.uncovered ?? 0) > 0).length} files`} color={total.uncovered > 0 ? 'var(--sd-crit)' : undefined} />
+      <Tile label="Files without data" value={formatNumber(c.files.length - withData.length)} note={`of ${formatNumber(c.files.length)} analyzed`} />
+    </MetricGrid>
+  )
+}
+
+/** The directory being listed, each level a link but the current one. */
+function DirectoryTrail({ project, branch, parts }: Readonly<{ project: string; branch?: string; parts: string[] }>) {
+  return (
+    <nav aria-label="Directory" className="flex flex-wrap items-baseline gap-1 font-mono text-[14px]">
+      {parts.length === 0 ? (
+        <span>All files</span>
+      ) : (
+        <Link to={coverageUrl(project, branch)}>All files</Link>
+      )}
+      {parts.map((part, i) => {
+        const to = parts.slice(0, i + 1).join('/')
+        return (
+          <span key={to} className="flex gap-1">
+            <span className="text-fg-faint">/</span>
+            {i === parts.length - 1 ? <span>{part}</span> : <Link to={coverageUrl(project, branch, undefined, to)}>{part}</Link>}
+          </span>
+        )
+      })}
+    </nav>
+  )
+}
+
 function Coverage({ c, branch, dir }: Readonly<{ c: CoverageList; branch?: string; dir: string }>) {
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<Sort>('uncovered')
   const [gapsOnly, setGapsOnly] = useState(false)
   const withData = c.files.filter((f) => f.covered != null)
   const total = withData.reduce((t, f) => ({ covered: t.covered + (f.covered ?? 0), uncovered: t.uncovered + (f.uncovered ?? 0) }), { covered: 0, uncovered: 0 })
-  const branches = c.files.reduce((t, f) => add(t, f.branches), ZERO)
-  const functions = c.files.reduce((t, f) => add(t, f.functions), ZERO)
   const prefix = dir ? `${dir}/` : ''
-  const entries = useMemo(() => {
-    const inDir = c.files.filter((f) => f.path.startsWith(prefix))
-    const needle = q.trim().toLowerCase()
-    // Searching lists matching files from the whole subtree, flat.
-    const rows: Entry[] = needle
-      ? inDir.filter((f) => f.path.toLowerCase().includes(needle)).map((f) => fileEntry(f, f.path.slice(prefix.length)))
-      : group(inDir, prefix)
-    const filtered = gapsOnly ? rows.filter((e) => e.uncovered > 0) : rows
-    const name = (a: Entry, b: Entry) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)
-    // Entries without data sort last: there's nothing to improve there yet.
-    const low = (e: Entry) => pctOf(e) ?? 101
-    return filtered.sort((a, b) =>
-      sort === 'name' ? name(a, b) : sort === 'lowest' ? low(a) - low(b) || b.uncovered - a.uncovered || name(a, b) : b.uncovered - a.uncovered || low(a) - low(b) || name(a, b),
-    )
-  }, [c.files, prefix, q, sort, gapsOnly])
+  const entries = useMemo(() => listEntries(c.files, prefix, q, sort, gapsOnly), [c.files, prefix, q, sort, gapsOnly])
   const here = group(c.files.filter((f) => f.path.startsWith(prefix)), '').reduce(
     (t, e) => ({ covered: t.covered + e.covered, uncovered: t.uncovered + e.uncovered }),
     { covered: 0, uncovered: 0 },
@@ -124,45 +180,16 @@ function Coverage({ c, branch, dir }: Readonly<{ c: CoverageList; branch?: strin
         }
       />
       {withData.length === 0 ? (
-        <div className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
-          <span className="font-semibold">No coverage per file in this analysis</span>
-          <span className="text-[13px] text-fg-muted">
-            Run the tests with an LCOV reporter (Istanbul, c8 and vitest’s <Mono className="text-xs">--coverage</Mono>, coverage.py’s{' '}
-            <Mono className="text-xs">coverage lcov</Mono>, llvm-cov or lcov), scan with <Mono className="text-xs">sonda scan --coverage lcov.info</Mono> and upload the
-            report. Reports from older sonda versions carry coverage per project only.
-          </span>
-        </div>
+        <NoCoverage />
       ) : (
         <>
-          <MetricGrid label="Coverage totals" minCell={170}>
-            <Tile label="Line coverage" value={c.coverage == null ? '—' : `${c.coverage.toFixed(1)}%`} note="of the lines the coverage reports list" color={c.coverage == null ? undefined : coverageColor(c.coverage)} />
-            <Tile label="Covered lines" value={formatNumber(total.covered)} note={`of ${formatNumber(total.covered + total.uncovered)} coverable`} />
-            <CountTile label="Branch coverage" counts={branches} what="branches taken" />
-            <CountTile label="Function coverage" counts={functions} what="functions called" />
-            <Tile label="Uncovered lines" value={formatNumber(total.uncovered)} note={`in ${withData.filter((f) => (f.uncovered ?? 0) > 0).length} files`} color={total.uncovered > 0 ? 'var(--sd-crit)' : undefined} />
-            <Tile label="Files without data" value={formatNumber(c.files.length - withData.length)} note={`of ${formatNumber(c.files.length)} analyzed`} />
-          </MetricGrid>
+          <CoverageTotals c={c} withData={withData} total={total} />
 
           <Card
             id="files"
             padded={false}
             title={
-              <nav aria-label="Directory" className="flex flex-wrap items-baseline gap-1 font-mono text-[14px]">
-                {parts.length === 0 ? (
-                  <span>All files</span>
-                ) : (
-                  <Link to={coverageUrl(c.project, branch)}>All files</Link>
-                )}
-                {parts.map((part, i) => {
-                  const to = parts.slice(0, i + 1).join('/')
-                  return (
-                    <span key={to} className="flex gap-1">
-                      <span className="text-fg-faint">/</span>
-                      {i === parts.length - 1 ? <span>{part}</span> : <Link to={coverageUrl(c.project, branch, undefined, to)}>{part}</Link>}
-                    </span>
-                  )
-                })}
-              </nav>
+              <DirectoryTrail project={c.project} branch={branch} parts={parts} />
             }
             subtitle={
               dir
@@ -357,9 +384,27 @@ export function FileCoveragePage() {
   )
 }
 
+/** A file's line coverage, or why it has none. */
+function linesCovered(f: FileCoverage, pct: number | null, covered: number, coverable: number): string {
+  if (f.covered == null) return 'not in the coverage reports'
+  if (pct == null) return 'no coverable lines'
+  return `${pct.toFixed(1)}% · ${formatNumber(covered)} of ${formatNumber(coverable)} lines covered`
+}
+
+type LineState = 'covered' | 'uncovered'
+
+const LINE_MARK: Record<LineState, { color: string; glyph: string }> = {
+  covered: { color: 'var(--sd-ok)', glyph: '✓' },
+  uncovered: { color: 'var(--sd-crit)', glyph: '✗' },
+}
+
 function FileView({ f }: Readonly<{ f: FileCoverage }>) {
   const covered = useMemo(() => new Set(f.covered ?? []), [f.covered])
   const uncovered = useMemo(() => new Set(f.uncovered ?? []), [f.uncovered])
+  const lineState = (n: number): LineState | undefined => {
+    if (uncovered.has(n)) return 'uncovered'
+    return covered.has(n) ? 'covered' : undefined
+  }
   const branchAt = useMemo(() => new Map((f.branches ?? []).map((b) => [b.line, b])), [f.branches])
   const uncalledAt = useMemo(() => {
     const at = new Map<number, string[]>()
@@ -382,7 +427,7 @@ function FileView({ f }: Readonly<{ f: FileCoverage }>) {
   // Both, in order, to step through.
   const gaps = useMemo(() => [...blocks, ...partial].sort((a, b) => a - b), [blocks, partial])
   const [at, setAt] = useState(-1)
-  const source = useRef<HTMLDivElement>(null)
+  const source = useRef<HTMLElement>(null)
   const go = (i: number) => {
     setAt(i)
     source.current?.querySelector(`[data-line="${gaps[i]}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
@@ -400,11 +445,7 @@ function FileView({ f }: Readonly<{ f: FileCoverage }>) {
         summary={
           <>
             <Mono className="text-xs">{f.path}</Mono> · {f.branch} ·{' '}
-            {f.covered == null
-              ? 'not in the coverage reports'
-              : pct == null
-                ? 'no coverable lines'
-                : `${pct.toFixed(1)}% · ${formatNumber(covered.size)} of ${formatNumber(n)} lines covered`}
+            {linesCovered(f, pct, covered.size, n)}
             {count(branchesTaken, 'branches taken')}
             {count(functionsCalled, 'functions called')}
           </>
@@ -439,10 +480,10 @@ function FileView({ f }: Readonly<{ f: FileCoverage }>) {
           {f.functions && <Legend color="var(--sd-crit)" glyph="ƒ" label="Function never called" />}
           <span>Unmarked lines aren’t coverable (comments, declarations, blank lines).</span>
         </div>
-        <div ref={source} role="region" aria-label="Source code with coverage" className="overflow-auto bg-canvas py-2 font-mono text-[11.5px] leading-[1.85]">
+        <section ref={source} aria-label="Source code with coverage" className="overflow-auto bg-canvas py-2 font-mono text-[11.5px] leading-[1.85]">
           {f.lines.map((line) => {
-            const state = uncovered.has(line.number) ? 'uncovered' : covered.has(line.number) ? 'covered' : undefined
-            const color = state === 'uncovered' ? 'var(--sd-crit)' : state === 'covered' ? 'var(--sd-ok)' : 'transparent'
+            const state = lineState(line.number)
+            const color = state ? LINE_MARK[state].color : 'transparent'
             return (
               <div
                 key={line.number}
@@ -462,7 +503,7 @@ function FileView({ f }: Readonly<{ f: FileCoverage }>) {
                   style={{ color }}
                   aria-label={state}
                 >
-                  {state === 'uncovered' ? '✗' : state === 'covered' ? '✓' : ''}
+                  {state && LINE_MARK[state].glyph}
                 </span>
                 <span className="pr-5 whitespace-pre">
                   <Tokens tokens={line.tokens} />
@@ -472,7 +513,7 @@ function FileView({ f }: Readonly<{ f: FileCoverage }>) {
             )
           })}
           {f.lines.length === 0 && <p className="m-0 px-5 py-2 font-sans text-[13px] text-fg-faint">This file’s language can’t be shown.</p>}
-        </div>
+        </section>
         {f.truncated && <p className="m-0 border-t border-line px-5 py-3 text-xs text-fg-faint">The file is longer; only its first {formatNumber(f.lines.length)} lines are shown.</p>}
       </Card>
     </>

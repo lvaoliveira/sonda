@@ -8,7 +8,7 @@ import { Card, MetricGrid, Mono, PageHeader } from '@/components/sonda/layout'
 import { Sparkline } from '@/components/sonda/meters'
 import { SeverityGlyph } from '@/components/sonda/status'
 import { ReasonForm } from '@/components/sonda/triage'
-import { formatAge, formatNumber, shortDate } from '@/lib/format'
+import { formatAge, formatNumber, shortDate, signOf } from '@/lib/format'
 import { componentLabel, componentUrl, cweUrl, dependenciesUrl, projectUrl } from '@/lib/links'
 import { DECISION_PROMPT, SEVERITY, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
 import { issuesUrl } from '@/lib/issues'
@@ -378,7 +378,7 @@ function Trend({ s }: Readonly<{ s: Security }>) {
       aside={
         <Mono className="text-[12.5px]">
           <span style={{ color: better ? 'var(--sd-ok)' : 'var(--sd-crit)' }}>
-            {change > 0 ? '+' : change < 0 ? '−' : ''}
+            {signOf(change)}
             {Math.abs(change)}%
           </span>
         </Mono>
@@ -573,7 +573,6 @@ function OwaspTop10({ s }: Readonly<{ s: Security }>) {
 
 function VulnerableDependencies({ s }: Readonly<{ s: Security }>) {
   const d = s.dependencies
-  const severities = (['blocker', 'critical', 'major', 'minor'] as const).filter((sev) => d.bySeverity[sev])
   return (
     <Card
       id="vulnerable-dependencies"
@@ -585,56 +584,63 @@ function VulnerableDependencies({ s }: Readonly<{ s: Security }>) {
           : 'No advisory data imported yet'
       }
     >
-      {!d.advisoryData ? (
+      {d.advisoryData ? (
+        <DependencyFindings d={d} />
+      ) : (
         <p className="m-0 text-[13px] text-fg-muted">
           Packages can’t be shown as vulnerable until advisories are imported: turn on the daily sync (SONDA_ADVISORY_SYNC) or run{' '}
           <Mono className="text-xs text-fg">sonda-server advisories import</Mono>.
         </p>
-      ) : d.top.length === 0 ? (
-        <p className="m-0 text-[13px] text-fg-faint">No open known vulnerabilities.</p>
-      ) : (
-        <>
-          <p className="m-0 mb-3 flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-fg-muted">
-            <span>
-              <Mono className="text-fg">{formatNumber(d.vulnerablePackages)}</Mono> vulnerable {d.vulnerablePackages === 1 ? 'package' : 'packages'} in{' '}
-              <Mono className="text-fg">{d.projectsAffected}</Mono> {d.projectsAffected === 1 ? 'project' : 'projects'}
-            </span>
-            {severities.map((sev) => (
-              <span key={sev} className="inline-flex items-center gap-1.5">
-                <SeverityGlyph severity={sev} />
-                <span className="font-mono" style={{ color: SEVERITY[sev].color }}>
-                  {d.bySeverity[sev]}
-                </span>{' '}
-                {SEVERITY[sev].label.toLowerCase()}
-              </span>
-            ))}
-          </p>
-          <ul className="m-0 list-none p-0">
-            {d.top.map((f) => (
-              <li key={`${f.project}${f.package}${f.advisory}`} className="grid grid-cols-[16px_minmax(0,1fr)_auto] items-baseline gap-3 border-t border-line py-2 text-[13px]">
-                <SeverityGlyph severity={f.severity} />
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span>{f.summary}</span>
-                  <span className="text-xs text-fg-faint">
-                    <Link to={dependenciesUrl(f.project)} className="text-fg-muted">
-                      {f.project}
-                    </Link>
-                    {' › '}
-                    <Mono className="text-[11.5px]">
-                      {f.package} {f.version}
-                    </Mono>{' '}
-                    ·{' '}
-                    <a href={f.url} target="_blank" rel="noreferrer" className="font-mono text-[11px]">
-                      {f.advisory}
-                    </a>
-                  </span>
-                </span>
-                <span className="text-right text-xs whitespace-nowrap text-fg-muted">{f.fixedIn ? `fixed in ${f.fixedIn}` : 'no fix yet'}</span>
-              </li>
-            ))}
-          </ul>
-        </>
       )}
     </Card>
+  )
+}
+
+/** What the imported advisories found in the projects' dependencies. */
+function DependencyFindings({ d }: Readonly<{ d: Security['dependencies'] }>) {
+  const severities = (['blocker', 'critical', 'major', 'minor'] as const).filter((sev) => d.bySeverity[sev])
+  if (d.top.length === 0) return <p className="m-0 text-[13px] text-fg-faint">No open known vulnerabilities.</p>
+  return (
+    <>
+      <p className="m-0 mb-3 flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-fg-muted">
+        <span>
+          <Mono className="text-fg">{formatNumber(d.vulnerablePackages)}</Mono> vulnerable {d.vulnerablePackages === 1 ? 'package' : 'packages'} in{' '}
+          <Mono className="text-fg">{d.projectsAffected}</Mono> {d.projectsAffected === 1 ? 'project' : 'projects'}
+        </span>
+        {severities.map((sev) => (
+          <span key={sev} className="inline-flex items-center gap-1.5">
+            <SeverityGlyph severity={sev} />
+            <span className="font-mono" style={{ color: SEVERITY[sev].color }}>
+              {d.bySeverity[sev]}
+            </span>{' '}
+            {SEVERITY[sev].label.toLowerCase()}
+          </span>
+        ))}
+      </p>
+      <ul className="m-0 list-none p-0">
+        {d.top.map((f) => (
+          <li key={`${f.project}${f.package}${f.advisory}`} className="grid grid-cols-[16px_minmax(0,1fr)_auto] items-baseline gap-3 border-t border-line py-2 text-[13px]">
+            <SeverityGlyph severity={f.severity} />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span>{f.summary}</span>
+              <span className="text-xs text-fg-faint">
+                <Link to={dependenciesUrl(f.project)} className="text-fg-muted">
+                  {f.project}
+                </Link>
+                {' › '}
+                <Mono className="text-[11.5px]">
+                  {f.package} {f.version}
+                </Mono>{' '}
+                ·{' '}
+                <a href={f.url} target="_blank" rel="noreferrer" className="font-mono text-[11px]">
+                  {f.advisory}
+                </a>
+              </span>
+            </span>
+            <span className="text-right text-xs whitespace-nowrap text-fg-muted">{f.fixedIn ? `fixed in ${f.fixedIn}` : 'no fix yet'}</span>
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }

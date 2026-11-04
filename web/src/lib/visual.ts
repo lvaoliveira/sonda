@@ -83,17 +83,23 @@ export const DECISION_PROMPT = {
   false_positive: { verb: 'Mark false positive', prompt: 'Why is this not a real problem?' },
 } as const
 
+/** Good from `ok` up, a warning from `warn` up, critical below. */
+export function bandColor(value: number, ok: number, warn: number): string {
+  if (value >= ok) return 'var(--sd-ok)'
+  return value >= warn ? 'var(--sd-warn)' : 'var(--sd-crit)'
+}
+
 /** Level 4–5 is good, 3 is a warning, 1–2 is critical. */
 export function levelColor(level: Level): string {
-  return level >= 4 ? 'var(--sd-ok)' : level === 3 ? 'var(--sd-warn)' : 'var(--sd-crit)'
+  return bandColor(level, 4, 3)
 }
 
 export function coverageColor(pct: number): string {
-  return pct >= 80 ? 'var(--sd-ok)' : pct >= 60 ? 'var(--sd-warn)' : 'var(--sd-crit)'
+  return bandColor(pct, 80, 60)
 }
 
 export function scoreColor(score: number): string {
-  return score >= 75 ? 'var(--sd-ok)' : score >= 60 ? 'var(--sd-warn)' : 'var(--sd-crit)'
+  return bandColor(score, 75, 60)
 }
 
 /** The design's project score: ratings weigh 70%, coverage 30%. */
