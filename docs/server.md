@@ -11,7 +11,8 @@ as `admin`.
 
 ## Quick start (Docker Compose)
 
-From a checkout of a release (or of `main`, for what's next):
+[install.md](install.md) is the short version, with the CLI too. From a
+checkout of a release (or of `main`, for what's next):
 
 ```sh
 git clone --branch v0.2.0 https://github.com/lvaoliveira/sonda.git && cd sonda

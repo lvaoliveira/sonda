@@ -49,13 +49,7 @@ curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
 install -m 755 sonda-$v-$arch-linux ~/.local/bin/sonda
 ```
 
-From source, with Rust:
-
-```sh
-cargo install --path crates/sonda
-```
-
-Without Rust, on Linux, `scripts/install-cli.sh` builds the same static binary from the checkout in Docker and installs it to `~/.local/bin`.
+[docs/install.md](docs/install.md) covers the rest: macOS and Windows (from source), CI, the server, verifying a release, upgrading and uninstalling.
 
 ## Usage
 
@@ -100,7 +94,8 @@ Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an err
 - users with roles.
 
 It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
-[docs/server.md](docs/server.md).
+[docs/install.md](docs/install.md#the-server) to install it and
+[docs/server.md](docs/server.md) for the rest.
 
 ### GitHub Actions
 
