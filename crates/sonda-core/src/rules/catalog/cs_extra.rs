@@ -962,6 +962,12 @@ fn joins_sql_without_space(node: Node, src: &[u8]) -> bool {
         .split(|b| !b.is_ascii_alphanumeric() && *b != b'_')
         .chain(after.split(|b| !b.is_ascii_alphanumeric() && *b != b'_'))
         .collect();
+    reads_as_sql(&words)
+}
+
+/// Whether these lowercase words make a SQL statement: a pair that starts
+/// one, or three of its keywords.
+fn reads_as_sql(words: &[&[u8]]) -> bool {
     words.contains(&&b"select"[..]) && words.contains(&&b"from"[..])
         || words.contains(&&b"update"[..]) && words.contains(&&b"set"[..])
         || words.contains(&&b"insert"[..]) && words.contains(&&b"into"[..])
