@@ -99,13 +99,28 @@ fn is_zero(n: &u32) -> bool {
 
 fn main() -> Res<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.len() < 3 || args.len() % 2 == 0 {
+    if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("usage: sonda-netref OUT LABEL DIR [LABEL DIR]...".into());
     }
-    let mut types: BTreeMap<String, TypeEntry> = BTreeMap::new();
-    let mut baseline: BTreeMap<String, TypeEntry> = BTreeMap::new();
+    let (packs, mut types, baseline) = read_packs(&args[1..])?;
+    tag_baseline(&mut types, &baseline);
+    let summary = Summary {
+        packs,
+        types: types.into_values().collect(),
+    };
+    write_summary(&args[0], &summary)
+}
+
+/// Types by name.
+type Types = BTreeMap<String, TypeEntry>;
+
+/// The packs' labels, their types, and the baseline's (a label starting
+/// with `baseline:`).
+fn read_packs(pairs: &[String]) -> Res<(Vec<String>, Types, Types)> {
+    let mut types = Types::new();
+    let mut baseline = Types::new();
     let mut packs = Vec::new();
-    for pair in args[1..].chunks(2) {
+    for pair in pairs.chunks(2) {
         packs.push(pair[0].clone());
         let into = if pair[0].starts_with("baseline:") {
             &mut baseline
@@ -121,10 +136,19 @@ fn main() -> Res<()> {
             extract(&dll, into).map_err(|e| format!("{}: {e}", dll.display()))?;
         }
     }
-    let signature = |t: &TypeEntry, m: &Member| {
-        let params: Vec<&str> = m.p.iter().map(|p| p.t.as_str()).collect();
-        format!("{}|{}|{}|{}|{}", t.n, m.k, m.n, m.g, params.join(","))
-    };
+    Ok((packs, types, baseline))
+}
+
+/// A member's identity across packs: its type, kind, name, arity and
+/// parameter types.
+fn signature(t: &TypeEntry, m: &Member) -> String {
+    let params: Vec<&str> = m.p.iter().map(|p| p.t.as_str()).collect();
+    format!("{}|{}|{}|{}|{}", t.n, m.k, m.n, m.g, params.join(","))
+}
+
+/// Tags "ns20" the members the baseline also declares, and keeps only the
+/// parameter defaults it agrees on.
+fn tag_baseline(types: &mut Types, baseline: &Types) {
     let common: std::collections::HashSet<String> = baseline
         .values()
         .flat_map(|t| t.m.iter().map(move |m| signature(t, m)))
@@ -143,23 +167,28 @@ fn main() -> Res<()> {
                 m.a.push("ns20");
             }
             if let Some(older) = baseline_defaults.get(&sig) {
-                for (p, d) in m.p.iter_mut().zip(older) {
-                    if *d != p.d {
-                        p.d = None;
-                    }
-                }
+                drop_changed_defaults(m, older);
             }
         }
     }
-    let summary = Summary {
-        packs,
-        types: types.into_values().collect(),
-    };
-    let json = serde_json::to_vec(&summary)?;
+}
+
+/// Drops the default values that differ from the baseline's for the same member.
+fn drop_changed_defaults(m: &mut Member, older: &[Option<String>]) {
+    for (p, d) in m.p.iter_mut().zip(older) {
+        if *d != p.d {
+            p.d = None;
+        }
+    }
+}
+
+/// Writes the summary as deflated JSON.
+fn write_summary(out_path: &str, summary: &Summary) -> Res<()> {
+    let json = serde_json::to_vec(summary)?;
     let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
     z.write_all(&json)?;
     let out = z.finish()?;
-    std::fs::write(&args[0], &out)?;
+    std::fs::write(out_path, &out)?;
     eprintln!(
         "{} types, {} members: {} bytes of JSON, {} deflated",
         summary.types.len(),
@@ -261,7 +290,8 @@ impl Reader<'_, '_> {
                 ",".repeat((shape.rank as usize).saturating_sub(1))
             )),
             Type::GenericInst { def, args, .. } => {
-                let args: Vec<String> = args.iter().map(|a| self.type_name(a)).collect::<Res<_>>()?;
+                let args: Vec<String> =
+                    args.iter().map(|a| self.type_name(a)).collect::<Res<_>>()?;
                 Ok(format!("{}<{}>", self.token_name(*def)?, args.join(",")))
             }
             _ => Ok(String::new()),
@@ -272,10 +302,12 @@ impl Reader<'_, '_> {
     fn attribute_type(&self, row: &CustomAttributeRow) -> Res<String> {
         let ctor = row.constructor;
         match ctor.table() {
-            Some(TableId::MethodDef) => match self.md.tables().type_of_method(Rid::new(ctor.rid()))? {
-                Some(t) => self.type_def_name(t.get()),
-                None => Ok(String::new()),
-            },
+            Some(TableId::MethodDef) => {
+                match self.md.tables().type_of_method(Rid::new(ctor.rid()))? {
+                    Some(t) => self.type_def_name(t.get()),
+                    None => Ok(String::new()),
+                }
+            }
             Some(TableId::MemberRef) => {
                 let m: MemberRefRow = self.md.tables().member_ref(ctor.rid())?;
                 self.token_name(m.class)
@@ -317,14 +349,32 @@ const ATTRIBUTES: &[(&str, &str)] = &[
     ("System.FlagsAttribute", "Flags"),
     ("System.ObsoleteAttribute", "Obsolete"),
     ("System.Diagnostics.Contracts.PureAttribute", "Pure"),
-    ("System.Runtime.CompilerServices.ExtensionAttribute", "Extension"),
+    (
+        "System.Runtime.CompilerServices.ExtensionAttribute",
+        "Extension",
+    ),
     ("System.ParamArrayAttribute", "params"),
     ("System.ComponentModel.LocalizableAttribute", "Localizable"),
-    ("System.Diagnostics.CodeAnalysis.StringSyntaxAttribute", "syntax"),
-    ("System.Runtime.CompilerServices.CallerMemberNameAttribute", "caller"),
-    ("System.Runtime.CompilerServices.CallerFilePathAttribute", "caller"),
-    ("System.Runtime.CompilerServices.CallerLineNumberAttribute", "caller"),
-    ("System.Runtime.CompilerServices.CallerArgumentExpressionAttribute", "caller"),
+    (
+        "System.Diagnostics.CodeAnalysis.StringSyntaxAttribute",
+        "syntax",
+    ),
+    (
+        "System.Runtime.CompilerServices.CallerMemberNameAttribute",
+        "caller",
+    ),
+    (
+        "System.Runtime.CompilerServices.CallerFilePathAttribute",
+        "caller",
+    ),
+    (
+        "System.Runtime.CompilerServices.CallerLineNumberAttribute",
+        "caller",
+    ),
+    (
+        "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute",
+        "caller",
+    ),
 ];
 
 fn strip_arity(name: &str) -> &str {
@@ -373,33 +423,10 @@ fn extract(path: &Path, types: &mut BTreeMap<String, TypeEntry>) -> Res<()> {
         } else {
             Some(r.token_name(row.extends)?)
         };
-        let kind = if row.is_interface() {
-            "interface"
-        } else {
-            match base.as_deref() {
-                Some("System.Enum") => "enum",
-                Some("System.ValueType") if name != "System.Enum" => "struct",
-                Some("System.MulticastDelegate") => "delegate",
-                _ => "class",
-            }
-        };
-        let token = Token::new(TableId::TypeDef, rid);
-        let mut a = Vec::new();
-        let (abstract_, sealed) = (row.flags & 0x80 != 0, row.flags & 0x100 != 0);
-        if !row.is_interface() {
-            match (abstract_, sealed) {
-                (true, true) => a.push("static"),
-                (true, false) => a.push("abstract"),
-                (false, true) if kind == "class" => a.push("sealed"),
-                _ => {}
-            }
-        }
-        a.extend(r.tags(token)?);
-        let mut interfaces = Vec::new();
-        for i in t.interface_impls(Rid::new(rid))? {
-            let ii: InterfaceImplRow = t.interface_impl(i)?;
-            interfaces.push(r.token_name(ii.interface)?);
-        }
+        let kind = type_kind(&row, base.as_deref(), &name);
+        let mut a = type_modifiers(&row, kind);
+        a.extend(r.tags(Token::new(TableId::TypeDef, rid))?);
+        let interfaces = interfaces_of(&r, rid)?;
         let members = members(&r, rid)?;
         types.insert(
             name.clone(),
@@ -414,6 +441,46 @@ fn extract(path: &Path, types: &mut BTreeMap<String, TypeEntry>) -> Res<()> {
         );
     }
     Ok(())
+}
+
+/// "interface", "enum", "struct", "delegate" or "class".
+fn type_kind(row: &TypeDefRow, base: Option<&str>, name: &str) -> &'static str {
+    if row.is_interface() {
+        return "interface";
+    }
+    match base {
+        Some("System.Enum") => "enum",
+        Some("System.ValueType") if name != "System.Enum" => "struct",
+        Some("System.MulticastDelegate") => "delegate",
+        _ => "class",
+    }
+}
+
+/// "static" (abstract and sealed), "abstract", or "sealed" for a class.
+fn type_modifiers(row: &TypeDefRow, kind: &str) -> Vec<&'static str> {
+    let mut a = Vec::new();
+    if row.is_interface() {
+        return a;
+    }
+    let (abstract_, sealed) = (row.flags & 0x80 != 0, row.flags & 0x100 != 0);
+    match (abstract_, sealed) {
+        (true, true) => a.push("static"),
+        (true, false) => a.push("abstract"),
+        (false, true) if kind == "class" => a.push("sealed"),
+        _ => {}
+    }
+    a
+}
+
+/// The interfaces a type implements, by name.
+fn interfaces_of(r: &Reader, rid: u32) -> Res<Vec<String>> {
+    let t = r.md.tables();
+    let mut interfaces = Vec::new();
+    for i in t.interface_impls(Rid::new(rid))? {
+        let ii: InterfaceImplRow = t.interface_impl(i)?;
+        interfaces.push(r.token_name(ii.interface)?);
+    }
+    Ok(interfaces)
 }
 
 fn outer_visible(r: &Reader, rid: u32) -> Res<bool> {
@@ -433,8 +500,17 @@ fn outer_visible(r: &Reader, rid: u32) -> Res<bool> {
 }
 
 fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
-    let t = r.md.tables();
     let mut out = Vec::new();
+    method_members(r, type_rid, &mut out)?;
+    property_members(r, type_rid, &mut out)?;
+    field_members(r, type_rid, &mut out)?;
+    event_members(r, type_rid, &mut out)?;
+    Ok(out)
+}
+
+/// The visible methods, constructors and operators.
+fn method_members(r: &Reader, type_rid: u32, out: &mut Vec<Member>) -> Res<()> {
+    let t = r.md.tables();
     for rid in t.method_range(Rid::new(type_rid))? {
         let m: MethodDefRow = t.method_def(rid)?;
         let (visible, protected) = member_access(m.flags);
@@ -455,7 +531,11 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
         out.push(Member {
             k: kind,
             v: None,
-            n: if kind == "constructor" { String::new() } else { name },
+            n: if kind == "constructor" {
+                String::new()
+            } else {
+                name
+            },
             t: if kind == "constructor" {
                 String::new()
             } else {
@@ -466,33 +546,20 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
             a,
         });
     }
+    Ok(())
+}
+
+/// The properties with a visible accessor.
+fn property_members(r: &Reader, type_rid: u32, out: &mut Vec<Member>) -> Res<()> {
+    let t = r.md.tables();
     if let Some(map) = t.property_map_of(Rid::new(type_rid))? {
         for rid in t.property_range(map)? {
             let p: PropertyRow = t.property(rid)?;
             let sig = PropertySig::parse(r.md.blobs().get(p.type_signature)?)?;
             let token = Token::new(TableId::Property, rid);
-            let mut a: Vec<&'static str> = Vec::new();
-            let mut visible = false;
-            let mut flags = 0u16;
-            for s in t.semantics_for(token)? {
-                let sem: MethodSemanticsRow = t.method_semantics(s)?;
-                let acc: MethodDefRow = t.method_def(sem.method.get())?;
-                let (v, _) = member_access(acc.flags);
-                if !v {
-                    continue;
-                }
-                visible = true;
-                flags = acc.flags;
-                match sem.semantics {
-                    0x2 => a.push("get"),
-                    0x1 if is_init(&r, acc)? => a.push("init"),
-                    0x1 => a.push("set"),
-                    _ => {}
-                }
-            }
-            if !visible {
+            let Some((a, flags)) = property_accessors(r, token)? else {
                 continue;
-            }
+            };
             let (_, protected) = member_access(flags);
             let mut all = method_flags(flags, protected);
             all.extend(a);
@@ -519,6 +586,38 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
             });
         }
     }
+    Ok(())
+}
+
+/// A property's visible accessors ("get", "set", "init") and the last
+/// one's flags; None when none is visible.
+fn property_accessors(r: &Reader, token: Token) -> Res<Option<(Vec<&'static str>, u16)>> {
+    let t = r.md.tables();
+    let mut a: Vec<&'static str> = Vec::new();
+    let mut visible = false;
+    let mut flags = 0u16;
+    for s in t.semantics_for(token)? {
+        let sem: MethodSemanticsRow = t.method_semantics(s)?;
+        let acc: MethodDefRow = t.method_def(sem.method.get())?;
+        let (v, _) = member_access(acc.flags);
+        if !v {
+            continue;
+        }
+        visible = true;
+        flags = acc.flags;
+        match sem.semantics {
+            0x2 => a.push("get"),
+            0x1 if is_init(r, acc)? => a.push("init"),
+            0x1 => a.push("set"),
+            _ => {}
+        }
+    }
+    Ok(visible.then_some((a, flags)))
+}
+
+/// The visible fields, other than an enum's storage.
+fn field_members(r: &Reader, type_rid: u32, out: &mut Vec<Member>) -> Res<()> {
+    let t = r.md.tables();
     for rid in t.field_range(Rid::new(type_rid))? {
         let f: FieldRow = t.field(rid)?;
         let (visible, protected) = member_access(f.flags);
@@ -556,6 +655,12 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
             v,
         });
     }
+    Ok(())
+}
+
+/// The events with a visible `add` accessor.
+fn event_members(r: &Reader, type_rid: u32, out: &mut Vec<Member>) -> Res<()> {
+    let t = r.md.tables();
     if let Some(map) = t.event_map_of(Rid::new(type_rid))? {
         for rid in t.event_range(map)? {
             let e: EventRow = t.event(rid)?;
@@ -584,7 +689,7 @@ fn members(r: &Reader, type_rid: u32) -> Res<Vec<Member>> {
             });
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 fn method_flags(flags: u16, protected: bool) -> Vec<&'static str> {
@@ -623,54 +728,72 @@ fn params(r: &Reader, method: u32, sig: &MethodSig) -> Res<Vec<ParamEntry>> {
             Ok(ParamEntry {
                 t: r.type_name(&p.type_)?,
                 n: String::new(),
-                a: if p.by_ref { vec!["ref".to_string()] } else { Vec::new() },
+                a: if p.by_ref {
+                    vec!["ref".to_string()]
+                } else {
+                    Vec::new()
+                },
                 d: None,
             })
         })
         .collect::<Res<_>>()?;
     for rid in t.param_range(Rid::new(method))? {
         let p: ParamRow = t.param(rid)?;
-        let Some(entry) = (p.sequence as usize).checked_sub(1).and_then(|i| out.get_mut(i)) else {
-            continue;
-        };
-        entry.n = r.str(p.name);
-        if entry.a.first().is_some_and(|x| x == "ref") {
-            if p.flags & 0x2 != 0 {
-                entry.a[0] = "out".to_string();
-            } else if p.flags & 0x1 != 0 {
-                entry.a[0] = "in".to_string();
-            }
-        }
-        if p.flags & 0x1010 != 0 {
-            entry.a.push("optional".to_string());
-        }
-        if p.flags & 0x1000 != 0 {
-            entry.d = t
-                .constant_of(Token::new(TableId::Param, rid))?
-                .and_then(|c| constant(r, c));
-        }
-        for (name, blob) in r.attributes(Token::new(TableId::Param, rid))? {
-            match name.as_str() {
-                "System.ParamArrayAttribute" => entry.a.push("params".to_string()),
-                "System.ComponentModel.LocalizableAttribute" if blob.get(2) == Some(&1) => {
-                    entry.a.push("Localizable".to_string())
-                }
-                "System.Runtime.CompilerServices.CallerMemberNameAttribute"
-                | "System.Runtime.CompilerServices.CallerFilePathAttribute"
-                | "System.Runtime.CompilerServices.CallerLineNumberAttribute"
-                | "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" => {
-                    entry.a.push("caller".to_string())
-                }
-                "System.Diagnostics.CodeAnalysis.StringSyntaxAttribute" => {
-                    if let Some(s) = ser_string(&blob[2.min(blob.len())..]) {
-                        entry.a.push(format!("syntax:{s}"));
-                    }
-                }
-                _ => {}
-            }
+        if let Some(entry) = (p.sequence as usize)
+            .checked_sub(1)
+            .and_then(|i| out.get_mut(i))
+        {
+            apply_param_row(r, rid, &p, entry)?;
         }
     }
     Ok(out)
+}
+
+/// What a Param row adds to its parameter: its name, `out` or `in` for a
+/// by-ref one, "optional" and its default, and its attributes' tags.
+fn apply_param_row(r: &Reader, rid: u32, p: &ParamRow, entry: &mut ParamEntry) -> Res<()> {
+    let t = r.md.tables();
+    entry.n = r.str(p.name);
+    if entry.a.first().is_some_and(|x| x == "ref") {
+        if p.flags & 0x2 != 0 {
+            entry.a[0] = "out".to_string();
+        } else if p.flags & 0x1 != 0 {
+            entry.a[0] = "in".to_string();
+        }
+    }
+    if p.flags & 0x1010 != 0 {
+        entry.a.push("optional".to_string());
+    }
+    if p.flags & 0x1000 != 0 {
+        entry.d = t
+            .constant_of(Token::new(TableId::Param, rid))?
+            .and_then(|c| constant(r, c));
+    }
+    for (name, blob) in r.attributes(Token::new(TableId::Param, rid))? {
+        entry.a.extend(param_attribute_tag(&name, &blob));
+    }
+    Ok(())
+}
+
+/// The tag a parameter attribute gives: `params`, `Localizable(true)`, a
+/// caller-information attribute, or a `StringSyntax`.
+fn param_attribute_tag(name: &str, blob: &[u8]) -> Option<String> {
+    match name {
+        "System.ParamArrayAttribute" => Some("params".to_string()),
+        "System.ComponentModel.LocalizableAttribute" if blob.get(2) == Some(&1) => {
+            Some("Localizable".to_string())
+        }
+        "System.Runtime.CompilerServices.CallerMemberNameAttribute"
+        | "System.Runtime.CompilerServices.CallerFilePathAttribute"
+        | "System.Runtime.CompilerServices.CallerLineNumberAttribute"
+        | "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute" => {
+            Some("caller".to_string())
+        }
+        "System.Diagnostics.CodeAnalysis.StringSyntaxAttribute" => {
+            ser_string(&blob[2.min(blob.len())..]).map(|s| format!("syntax:{s}"))
+        }
+        _ => None,
+    }
 }
 
 /// A constant's value (ECMA-335 II.22.9): "true" or "false", an integer,
