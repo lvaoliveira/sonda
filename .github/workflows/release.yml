@@ -107,7 +107,8 @@ jobs:
           mkdir "$RUNNER_TEMP/locks"
           cp Cargo.lock "$RUNNER_TEMP/locks/"
           "$RUNNER_TEMP/bin/sonda" sbom "$RUNNER_TEMP/locks" --output "$RUNNER_TEMP/sbom.cdx.json"
-          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 100' "$RUNNER_TEMP/sbom.cdx.json" > /dev/null
+          # attest-sbom takes a CycloneDX BOM only with a serial number.
+          jq -e '.bomFormat == "CycloneDX" and (.serialNumber | type == "string") and (.components | length) > 100' "$RUNNER_TEMP/sbom.cdx.json" > /dev/null
       - name: Name it
         if: github.event_name == 'push'
         id: files

@@ -83,6 +83,9 @@ pub fn cyclonedx(project: &str, deps: &[Dependency], timestamp: &str) -> String 
         "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
+        // Optional in CycloneDX, but GitHub's attestations refuse a BOM
+        // without one.
+        "serialNumber": serial_number(&content_digest(project, &packages, timestamp)),
         "version": 1,
         "metadata": {
             "timestamp": timestamp,
@@ -103,17 +106,41 @@ pub fn cyclonedx(project: &str, deps: &[Dependency], timestamp: &str) -> String 
 /// The project's own `bom-ref`; purls (every other ref) start with `pkg:`.
 const PROJECT_REF: &str = "project";
 
-pub fn spdx(project: &str, deps: &[Dependency], timestamp: &str) -> String {
-    let packages = packages(deps);
-    // Unique per document, and the same for the same content.
+/// Unique per document, and the same for the same content.
+fn content_digest(project: &str, packages: &[Package], timestamp: &str) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(project.as_bytes());
     hash.update(timestamp.as_bytes());
-    for p in &packages {
+    for p in packages {
         hash.update(p.dep.purl.as_bytes());
         hash.update([0]);
     }
-    let digest: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    hash.finalize().into()
+}
+
+/// A `urn:uuid:` from a digest: a version 8 UUID, RFC 9562's for custom
+/// ones, since it comes from a hash rather than randomness.
+fn serial_number(digest: &[u8; 32]) -> String {
+    let mut b: [u8; 16] = digest[..16].try_into().expect("16 of 32 bytes");
+    b[6] = (b[6] & 0x0f) | 0x80;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex: String = b.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "urn:uuid:{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+pub fn spdx(project: &str, deps: &[Dependency], timestamp: &str) -> String {
+    let packages = packages(deps);
+    let digest: String = content_digest(project, &packages, timestamp)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let mut spdx_packages = vec![json!({
         "SPDXID": "SPDXRef-Project",
         "name": project,
@@ -365,6 +392,30 @@ mod tests {
             doc["dependencies"][0]["dependsOn"],
             json!(["pkg:npm/%40babel/core@1.0.0", "pkg:npm/left-pad@1.0.0"])
         );
+    }
+
+    #[test]
+    fn cyclonedx_has_a_deterministic_serial_number() {
+        let serial = |timestamp| {
+            let doc: Value = serde_json::from_str(&cyclonedx("app", &sample(), timestamp)).unwrap();
+            doc["serialNumber"].as_str().unwrap().to_string()
+        };
+        let a = serial("2026-10-30T12:00:00Z");
+        assert_eq!(a, serial("2026-10-30T12:00:00Z"));
+        assert_ne!(a, serial("2026-10-31T12:00:00Z"));
+        // The schema's pattern, and version 8 with RFC 9562's variant.
+        let uuid = a.strip_prefix("urn:uuid:").unwrap();
+        let groups: Vec<&str> = uuid.split('-').collect();
+        assert_eq!(
+            groups.iter().map(|g| g.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
+        );
+        assert!(
+            uuid.chars()
+                .all(|c| c == '-' || matches!(c, '0'..='9' | 'a'..='f'))
+        );
+        assert!(groups[2].starts_with('8'));
+        assert!(matches!(groups[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'));
     }
 
     #[test]
