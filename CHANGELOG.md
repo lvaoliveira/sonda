@@ -7,8 +7,29 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-05
+
+sonda reads Rust: lines, functions, complexity and duplication, and 35
+rules from SonarQube's Rust set, checked against Clippy. **Copy as
+prompt** hands issues to an AI assistant to fix, with their code and
+rules. Connecting GitHub no longer takes a hand-made App: Administration
+creates it with GitHub's App manifest flow, its key stored encrypted under
+the new `SONDA_SECRET_KEY`. Releases now publish the server image to
+`ghcr.io/lvaoliveira/sonda`, with build provenance and an SBOM for every
+artifact. Old branch analyses are thinned, CI holds each server to the
+last release's CLI and data, and [docs/stability.md](docs/stability.md)
+says what 1.0 will promise. **Upgrading:** rerun
+`scripts/setup-server.sh`, which creates `secrets/secret_key`.
+
 ### Added
 
+- Rust: `.rs` files are parsed, with lines, functions, complexity and
+  duplication measured, and `common/cognitive-complexity` and
+  `common/too-many-parameters` run on them, as SonarQube's Rust rules
+  include their keys. On sonda's own code the measures agree with
+  SonarQube's to within 0.1% (lines, functions, cognitive complexity) and
+  0.3% (cyclomatic). [ADR-0026](docs/adr/0026-rust.md) has the
+  plan for the rest of SonarQube's 85 Rust rules.
 - Rust rules, from SonarQube's Rust set, which is Clippy's lints under
   its own keys: self-assignment, identical operands, a condition repeated in
   an `if`/`else if` chain, `skip(0)`, `step_by(0)`, `splitn` with a limit of
@@ -37,13 +58,6 @@ file, the report formats and the public library API.
   unreadable literal and `print!`/`println!`. Measured against Clippy: 82% to
   100% precision on the ones that occur in 51 crates. Test code and test
   files are exempt from the wildcard and print rules, as in Clippy.
-- Rust: `.rs` files are parsed, with lines, functions, complexity and
-  duplication measured, and `common/cognitive-complexity` and
-  `common/too-many-parameters` run on them, as SonarQube's Rust rules
-  include their keys. On sonda's own code the measures agree with
-  SonarQube's to within 0.1% (lines, functions, cognitive complexity) and
-  0.3% (cyclomatic). No Rust-specific rules yet:
-  [ADR-0026](docs/adr/0026-rust.md) has the plan for SonarQube's 85.
 - A project's **Analyses** tab lists its analyses, newest first, with the
   gate filter and paging of the global list. A link to `/analyses?project=`
   goes there. The project page's Settings button is gone: Settings is a tab.
@@ -62,45 +76,6 @@ file, the report formats and the public library API.
   as a newer CLI sends, instead of refusing the whole analysis. The files
   and their issues are stored, their code is shown without highlighting,
   and the analysis gets a warning to upgrade the server.
-
-### Fixed
-
-- On an analysis, the Introduced, Resolved and Warnings links in the
-  summary scrolled nowhere: a section had no id to land on. They land on
-  the section now, and outline it briefly.
-
-### Changed rule results
-
-- `js/nested-ternary` reports a ternary anywhere inside another, as
-  SonarQube does: in a call's argument, an operand or a template literal
-  (`` x ? `${n} ${n === 1 ? 'rule' : 'rules'}` : '' ``), not only directly
-  in it. A function, an object literal or a JSX container of its own still
-  separates them. On two TypeScript projects it now matches SonarQube's 50
-  findings exactly, where it found 37.
-- `js/void-operator` leaves `void` on a call alone, as `void save()` marks
-  a floating promise as intended. SonarQube knows from the types that it's
-  a promise; without them, the call is the sign of one.
-- `js/find-for-existence` no longer takes `key && items.find(...)` for a
-  test of whether something was found: the right of `&&` is its value,
-  tested only when the whole expression is.
-- `js/handler-on-plain-element` and `js/click-without-keyboard` leave
-  alone an `aria-hidden` element (a backdrop that closes a menu) and a
-  table row, whose role is interactive, as SonarQube does.
-
-
-## [0.2.0] - 2026-11-03
-
-Connecting GitHub no longer takes a hand-made App: Administration creates
-it with GitHub's App manifest flow, its key stored encrypted under the new
-`SONDA_SECRET_KEY`. Releases now publish the server image to
-`ghcr.io/lvaoliveira/sonda`, with build provenance and an SBOM for every
-artifact. Old branch analyses are thinned, CI holds each server to the last
-release's CLI and data, and [docs/stability.md](docs/stability.md) says
-what 1.0 will promise. **Upgrading:** rerun `scripts/setup-server.sh`, which
-creates `secrets/secret_key`.
-
-### Added
-
 - Releases attest where each binary and the server image were built (build
   provenance) and carry an SBOM for each, attested too and attached to the
   release. [SECURITY.md](SECURITY.md#verifying-a-release) says how to verify
@@ -156,6 +131,30 @@ creates `secrets/secret_key`.
   TLS contexts, `dict()` literals); commented-out code is found by parsing
   the comment, once per block; and a file declaring a Latin-1 coding is
   analyzed instead of skipped.
+
+### Fixed
+
+- On an analysis, the Introduced, Resolved and Warnings links in the
+  summary scrolled nowhere: a section had no id to land on. They land on
+  the section now, and outline it briefly.
+
+### Changed rule results
+
+- `js/nested-ternary` reports a ternary anywhere inside another, as
+  SonarQube does: in a call's argument, an operand or a template literal
+  (`` x ? `${n} ${n === 1 ? 'rule' : 'rules'}` : '' ``), not only directly
+  in it. A function, an object literal or a JSX container of its own still
+  separates them. On two TypeScript projects it now matches SonarQube's 50
+  findings exactly, where it found 37.
+- `js/void-operator` leaves `void` on a call alone, as `void save()` marks
+  a floating promise as intended. SonarQube knows from the types that it's
+  a promise; without them, the call is the sign of one.
+- `js/find-for-existence` no longer takes `key && items.find(...)` for a
+  test of whether something was found: the right of `&&` is its value,
+  tested only when the whole expression is.
+- `js/handler-on-plain-element` and `js/click-without-keyboard` leave
+  alone an `aria-hidden` element (a backdrop that closes a menu) and a
+  table row, whose role is interactive, as SonarQube does.
 
 ## [0.1.0] - 2026-11-02
 
