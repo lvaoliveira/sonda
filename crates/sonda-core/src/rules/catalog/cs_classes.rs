@@ -676,90 +676,11 @@ fn variance_possible<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
         let Some(list) = type_parameters(declaration) else {
             return;
         };
-        let mut c = list.walk();
-        let candidates: Vec<Node<'t>> = list
-            .named_children(&mut c)
-            .filter(|p| {
-                p.kind() == "type_parameter"
-                    && !matches!(
-                        text(*p, src).split(|b| *b == b' ').next(),
-                        Some(b"in" | b"out")
-                    )
-            })
-            .collect();
-        for candidate in candidates {
+        for candidate in variance_candidates(list, src) {
             let t = name_of(candidate, src);
-            let mut uses: Vec<Use> = Vec::new();
-            let classify = |ty: Node, output: bool, uses: &mut Vec<Use>| {
-                let n = count_word(text(ty, src), t);
-                if n == 0 {
-                    return;
-                }
-                let bare = text(ty, src) == t;
-                uses.push(match (bare, output) {
-                    (true, true) => Use::Output,
-                    (true, false) => Use::Input,
-                    _ => Use::Other,
-                });
-                for _ in 1..n {
-                    uses.push(Use::Other);
-                }
-            };
+            let (uses, counted) = candidate_uses(declaration, t, src);
             // Every mention of T outside these signature positions makes it
             // invariant: base interfaces, constraints, nested generics.
-            let mut counted = 0;
-            let signatures: Vec<Node<'t>> = if declaration.kind() == "delegate_declaration" {
-                vec![declaration]
-            } else {
-                members(declaration)
-            };
-            for member in &signatures {
-                match member.kind() {
-                    "method_declaration" | "delegate_declaration" => {
-                        if *member != declaration && type_parameters(*member).is_some() {
-                            uses.push(Use::Other);
-                        }
-                        let result = member
-                            .child_by_field_name("returns")
-                            .or_else(|| member.child_by_field_name("type"));
-                        if let Some(r) = result {
-                            classify(r, true, &mut uses);
-                            counted += count_word(text(r, src), t);
-                        }
-                        for p in params(*member, src) {
-                            let Some(ty) = p.ty else { continue };
-                            counted += count_word(text(ty, src), t);
-                            if p.modifiers.windows(3).any(|w| w == b"ref" || w == b"out")
-                                || contains_ignoring_case(&p.modifiers, b"in ")
-                            {
-                                if count_word(text(ty, src), t) > 0 {
-                                    uses.push(Use::Other);
-                                }
-                            } else {
-                                classify(ty, false, &mut uses);
-                            }
-                        }
-                    }
-                    "property_declaration" => {
-                        if let Some(ty) = member.child_by_field_name("type") {
-                            let settable =
-                                member.child_by_field_name("accessors").is_some_and(|a| {
-                                    count_word(text(a, src), b"set") > 0
-                                        || count_word(text(a, src), b"init") > 0
-                                });
-                            counted += count_word(text(ty, src), t);
-                            if settable {
-                                if count_word(text(ty, src), t) > 0 {
-                                    uses.push(Use::Other);
-                                }
-                            } else {
-                                classify(ty, true, &mut uses);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
             let total = count_word(text(declaration, src), t).saturating_sub(1);
             if total == 0 || counted != total {
                 continue;
@@ -772,35 +693,147 @@ fn variance_possible<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     found
 }
 
+/// The type parameters not already marked `in` or `out`.
+fn variance_candidates<'t>(list: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut c = list.walk();
+    list.named_children(&mut c)
+        .filter(|p| {
+            p.kind() == "type_parameter"
+                && !matches!(
+                    text(*p, src).split(|b| *b == b' ').next(),
+                    Some(b"in" | b"out")
+                )
+        })
+        .collect()
+}
+
+/// How the member signatures of `declaration` use the type parameter `t`,
+/// and how many mentions of it they hold.
+fn candidate_uses(declaration: Node, t: &[u8], src: &[u8]) -> (Vec<Use>, usize) {
+    let mut uses: Vec<Use> = Vec::new();
+    let mut counted = 0;
+    let signatures: Vec<Node> = if declaration.kind() == "delegate_declaration" {
+        vec![declaration]
+    } else {
+        members(declaration)
+    };
+    for member in &signatures {
+        counted += match member.kind() {
+            "method_declaration" | "delegate_declaration" => {
+                method_uses(*member, declaration, t, src, &mut uses)
+            }
+            "property_declaration" => property_uses(*member, t, src, &mut uses),
+            _ => 0,
+        };
+    }
+    (uses, counted)
+}
+
+/// Each mention of `t` in `ty`: an output or an input when `ty` is `t`
+/// itself, else neither.
+fn classify_use(ty: Node, t: &[u8], output: bool, src: &[u8], uses: &mut Vec<Use>) {
+    let n = count_word(text(ty, src), t);
+    if n == 0 {
+        return;
+    }
+    let bare = text(ty, src) == t;
+    uses.push(match (bare, output) {
+        (true, true) => Use::Output,
+        (true, false) => Use::Input,
+        _ => Use::Other,
+    });
+    for _ in 1..n {
+        uses.push(Use::Other);
+    }
+}
+
+/// A method's (or the delegate's) uses of `t`: its result is an output,
+/// a plain parameter an input; `ref`, `out` and `in` parameters, and a
+/// generic method, are neither. Returns the mentions it holds.
+fn method_uses(
+    member: Node,
+    declaration: Node,
+    t: &[u8],
+    src: &[u8],
+    uses: &mut Vec<Use>,
+) -> usize {
+    let mut counted = 0;
+    if member != declaration && type_parameters(member).is_some() {
+        uses.push(Use::Other);
+    }
+    let result = member
+        .child_by_field_name("returns")
+        .or_else(|| member.child_by_field_name("type"));
+    if let Some(r) = result {
+        classify_use(r, t, true, src, uses);
+        counted += count_word(text(r, src), t);
+    }
+    for p in params(member, src) {
+        let Some(ty) = p.ty else { continue };
+        counted += count_word(text(ty, src), t);
+        if p.modifiers.windows(3).any(|w| w == b"ref" || w == b"out")
+            || contains_ignoring_case(&p.modifiers, b"in ")
+        {
+            if count_word(text(ty, src), t) > 0 {
+                uses.push(Use::Other);
+            }
+        } else {
+            classify_use(ty, t, false, src, uses);
+        }
+    }
+    counted
+}
+
+/// A property's use of `t`: an output when it's read-only, else neither.
+/// Returns the mentions it holds.
+fn property_uses(member: Node, t: &[u8], src: &[u8], uses: &mut Vec<Use>) -> usize {
+    let Some(ty) = member.child_by_field_name("type") else {
+        return 0;
+    };
+    let settable = member.child_by_field_name("accessors").is_some_and(|a| {
+        count_word(text(a, src), b"set") > 0 || count_word(text(a, src), b"init") > 0
+    });
+    if !settable {
+        classify_use(ty, t, true, src, uses);
+    } else if count_word(text(ty, src), t) > 0 {
+        uses.push(Use::Other);
+    }
+    count_word(text(ty, src), t)
+}
+
 fn static_only_used_nested<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let by_decl = refs_by_decl(m);
     m.decls
         .iter()
         .enumerate()
         .filter(|(i, d)| {
-            if d.kind != DeclKind::Method || !d.is_static || by_decl[*i].is_empty() {
-                return false;
-            }
-            if !d.declarator.is_some_and(|method| is_private(method, src)) {
-                return false;
-            }
-            by_decl[*i].iter().all(|r| {
-                // The type the reference is written in.
-                let mut scope = m.refs[*r].scope;
-                loop {
-                    if m.scopes[scope].kind == ScopeKind::Type {
-                        break;
-                    }
-                    match m.scopes[scope].parent {
-                        Some(p) => scope = p,
-                        None => return false,
-                    }
-                }
-                scope != d.scope && m.within(scope, d.scope)
-            })
+            d.kind == DeclKind::Method
+                && d.is_static
+                && !by_decl[*i].is_empty()
+                && d.declarator.is_some_and(|method| is_private(method, src))
+                && used_only_nested(m, d.scope, &by_decl[*i])
         })
         .map(|(_, d)| d.node)
         .collect()
+}
+
+/// The type scope `scope` is in.
+fn type_scope_of(m: &Model, mut scope: ScopeId) -> Option<ScopeId> {
+    loop {
+        if m.scopes[scope].kind == ScopeKind::Type {
+            return Some(scope);
+        }
+        scope = m.scopes[scope].parent?;
+    }
+}
+
+/// Whether every reference in `refs` is written in a type nested in the
+/// one that declares the method, `declaring`.
+fn used_only_nested(m: &Model, declaring: ScopeId, refs: &[usize]) -> bool {
+    refs.iter().all(|r| {
+        type_scope_of(m, m.refs[*r].scope)
+            .is_some_and(|scope| scope != declaring && m.within(scope, declaring))
+    })
 }
 
 /// A parameter list's types, as written.
@@ -883,141 +916,171 @@ fn controller_responsibilities<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             .iter()
             .any(|(_, n)| *n == b"ApiController")
     }) {
-        // Injected services: fields assigned from constructor parameters.
-        // A primary constructor's aren't declarations of the semantic model.
-        let ctor_params: Vec<&[u8]> = members(class)
-            .into_iter()
-            .filter(|x| x.kind() == "constructor_declaration")
-            .flat_map(|c| {
-                params(c, src)
-                    .into_iter()
-                    .map(|p| text(p.name, src))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let ctor_params = constructor_params(class, src);
         if ctor_params.is_empty() {
             continue;
         }
-        // Services most controllers need say nothing about responsibilities.
-        let basic = |d: &DeclId| {
-            m.decls[*d].ty.is_some_and(|t| {
-                matches!(
-                    simple_name(t, src),
-                    b"ILogger"
-                        | b"IMediator"
-                        | b"IMapper"
-                        | b"IConfiguration"
-                        | b"IBus"
-                        | b"IMessageBus"
-                )
-            })
-        };
-        let deps: Vec<DeclId> = m
-            .decls
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| {
-                d.kind == DeclKind::Field
-                    && !d.is_static
-                    && d.declarator.is_some_and(|x| {
-                        class.start_byte() <= x.start_byte() && x.end_byte() <= class.end_byte()
-                    })
-            })
-            .filter(|(i, _)| {
-                by_decl[*i].iter().any(|r| {
-                    let n = m.refs[*r].node;
-                    m.refs[*r].write
-                        && n.parent()
-                            .and_then(|p| {
-                                if p.kind() == "member_access_expression" {
-                                    p.parent()
-                                } else {
-                                    Some(p)
-                                }
-                            })
-                            .and_then(|a| a.child_by_field_name("right"))
-                            .is_some_and(|v| ctor_params.contains(&text(v, src)))
-                })
-            })
-            .map(|(i, _)| i)
-            .filter(|d| !basic(d))
-            .collect();
+        let deps = injected_dependencies(m, class, &by_decl, &ctor_params, src);
         if deps.len() < 2 {
             continue;
         }
-        // Per method scope, the dependencies it uses, then private helpers'
-        // folded into the actions that call them.
-        let mut uses: HashMap<ScopeId, Vec<DeclId>> = HashMap::new();
-        let mut calls: HashMap<ScopeId, Vec<ScopeId>> = HashMap::new();
-        let method_scope: HashMap<DeclId, ScopeId> = m
-            .functions
-            .iter()
-            .filter_map(|f| {
-                let name = f.node.child_by_field_name("name")?;
-                let d = m.decls.iter().position(|d| d.node == name)?;
-                Some((d, f.scope))
-            })
-            .collect();
-        for r in &m.refs {
-            let (Some(d), Some(member)) = (r.decl, member_scope(m, r.scope)) else {
-                continue;
-            };
-            if deps.contains(&d) {
-                uses.entry(member).or_default().push(d);
-            } else if let Some(callee) = method_scope.get(&d) {
-                calls.entry(member).or_default().push(*callee);
-            }
-        }
-        let actions: Vec<(Node<'t>, ScopeId)> = methods(class)
-            .into_iter()
-            .filter(|x| cs_has_modifier(*x, "public", src) && !cs_has_modifier(*x, "static", src))
-            .filter_map(|x| {
-                m.functions
-                    .iter()
-                    .find(|f| f.node == x)
-                    .map(|f| (x, f.scope))
-            })
-            .collect();
-        let mut sets: Vec<Vec<DeclId>> = actions
-            .iter()
-            .map(|(_, scope)| {
-                let mut set = Vec::new();
-                let mut todo = vec![*scope];
-                let mut seen = Vec::new();
-                while let Some(s) = todo.pop() {
-                    if seen.contains(&s) || seen.len() > 64 {
-                        continue;
-                    }
-                    seen.push(s);
-                    set.extend(uses.get(&s).into_iter().flatten().copied());
-                    todo.extend(calls.get(&s).into_iter().flatten().copied());
-                }
-                set.sort_unstable();
-                set.dedup();
-                set
-            })
-            .collect();
-        sets.retain(|s| !s.is_empty());
-        // Group actions that share a service; more than one group: mixed.
-        let mut groups: Vec<Vec<DeclId>> = Vec::new();
-        for s in sets {
-            let (mut joined, rest): (Vec<Vec<DeclId>>, Vec<Vec<DeclId>>) = groups
-                .into_iter()
-                .partition(|g| g.iter().any(|d| s.contains(d)));
-            let mut merged = s;
-            for g in joined.drain(..) {
-                merged.extend(g);
-            }
-            merged.sort_unstable();
-            merged.dedup();
-            groups = rest;
-            groups.push(merged);
-        }
-        if groups.len() > 1 {
+        let (uses, calls) = dependency_uses(m, &deps);
+        let sets = action_dependency_sets(m, class, &uses, &calls, src);
+        if responsibility_groups(sets) > 1 {
             found.extend(class.child_by_field_name("name"));
         }
     }
     found
+}
+
+/// The names of the constructors' parameters. A primary constructor's
+/// aren't declarations of the semantic model.
+fn constructor_params<'s>(class: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    members(class)
+        .into_iter()
+        .filter(|x| x.kind() == "constructor_declaration")
+        .flat_map(|c| {
+            params(c, src)
+                .into_iter()
+                .map(|p| text(p.name, src))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Injected services: the class's instance fields assigned from
+/// constructor parameters. Services most controllers need (a logger, a
+/// mapper, ...) say nothing about responsibilities.
+fn injected_dependencies(
+    m: &Model,
+    class: Node,
+    by_decl: &[Vec<usize>],
+    ctor_params: &[&[u8]],
+    src: &[u8],
+) -> Vec<DeclId> {
+    let basic = |d: &DeclId| {
+        m.decls[*d].ty.is_some_and(|t| {
+            matches!(
+                simple_name(t, src),
+                b"ILogger"
+                    | b"IMediator"
+                    | b"IMapper"
+                    | b"IConfiguration"
+                    | b"IBus"
+                    | b"IMessageBus"
+            )
+        })
+    };
+    m.decls
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| {
+            d.kind == DeclKind::Field
+                && !d.is_static
+                && d.declarator.is_some_and(|x| {
+                    class.start_byte() <= x.start_byte() && x.end_byte() <= class.end_byte()
+                })
+        })
+        .filter(|(i, _)| {
+            by_decl[*i].iter().any(|r| {
+                let n = m.refs[*r].node;
+                m.refs[*r].write
+                    && n.parent()
+                        .and_then(|p| {
+                            if p.kind() == "member_access_expression" {
+                                p.parent()
+                            } else {
+                                Some(p)
+                            }
+                        })
+                        .and_then(|a| a.child_by_field_name("right"))
+                        .is_some_and(|v| ctor_params.contains(&text(v, src)))
+            })
+        })
+        .map(|(i, _)| i)
+        .filter(|d| !basic(d))
+        .collect()
+}
+
+/// Per method scope, the dependencies it uses and the methods it calls.
+type ScopeUses = HashMap<ScopeId, Vec<DeclId>>;
+type ScopeCalls = HashMap<ScopeId, Vec<ScopeId>>;
+
+fn dependency_uses(m: &Model, deps: &[DeclId]) -> (ScopeUses, ScopeCalls) {
+    let mut uses = ScopeUses::new();
+    let mut calls = ScopeCalls::new();
+    let method_scope: HashMap<DeclId, ScopeId> = m
+        .functions
+        .iter()
+        .filter_map(|f| {
+            let name = f.node.child_by_field_name("name")?;
+            let d = m.decls.iter().position(|d| d.node == name)?;
+            Some((d, f.scope))
+        })
+        .collect();
+    for r in &m.refs {
+        let (Some(d), Some(member)) = (r.decl, member_scope(m, r.scope)) else {
+            continue;
+        };
+        if deps.contains(&d) {
+            uses.entry(member).or_default().push(d);
+        } else if let Some(callee) = method_scope.get(&d) {
+            calls.entry(member).or_default().push(*callee);
+        }
+    }
+    (uses, calls)
+}
+
+/// For each public action, the dependencies it uses, its private helpers'
+/// folded in; the actions that use none left out.
+fn action_dependency_sets(
+    m: &Model,
+    class: Node,
+    uses: &ScopeUses,
+    calls: &ScopeCalls,
+    src: &[u8],
+) -> Vec<Vec<DeclId>> {
+    methods(class)
+        .into_iter()
+        .filter(|x| cs_has_modifier(*x, "public", src) && !cs_has_modifier(*x, "static", src))
+        .filter_map(|x| m.functions.iter().find(|f| f.node == x).map(|f| f.scope))
+        .map(|scope| {
+            let mut set = Vec::new();
+            let mut todo = vec![scope];
+            let mut seen = Vec::new();
+            while let Some(s) = todo.pop() {
+                if seen.contains(&s) || seen.len() > 64 {
+                    continue;
+                }
+                seen.push(s);
+                set.extend(uses.get(&s).into_iter().flatten().copied());
+                todo.extend(calls.get(&s).into_iter().flatten().copied());
+            }
+            set.sort_unstable();
+            set.dedup();
+            set
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// How many groups of actions share no service with each other.
+fn responsibility_groups(sets: Vec<Vec<DeclId>>) -> usize {
+    let mut groups: Vec<Vec<DeclId>> = Vec::new();
+    for s in sets {
+        let (mut joined, rest): (Vec<Vec<DeclId>>, Vec<Vec<DeclId>>) = groups
+            .into_iter()
+            .partition(|g| g.iter().any(|d| s.contains(d)));
+        let mut merged = s;
+        for g in joined.drain(..) {
+            merged.extend(g);
+        }
+        merged.sort_unstable();
+        merged.dedup();
+        groups = rest;
+        groups.push(merged);
+    }
+    groups.len()
 }
 
 #[cfg(test)]
