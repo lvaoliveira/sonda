@@ -1216,17 +1216,9 @@ fn string_repeated_often<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     loop {
         let n = cursor.node();
         // Attribute arguments are often the same on purpose: [Category("Slow")].
-        if n.kind() == "attribute_list" {
-            if !cursor.goto_next_sibling() {
-                while !cursor.goto_next_sibling() {
-                    if !cursor.goto_parent() {
-                        return smallest(&counts);
-                    }
-                }
-            }
-            continue;
-        }
-        if matches!(n.kind(), "string_literal" | "verbatim_string_literal")
+        let attributes = n.kind() == "attribute_list";
+        if !attributes
+            && matches!(n.kind(), "string_literal" | "verbatim_string_literal")
             && let Some(value) = cs_string_value(n, src).filter(|v| v.len() >= 10)
         {
             counts
@@ -1234,15 +1226,23 @@ fn string_repeated_often<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
                 .and_modify(|e| e.0 += 1)
                 .or_insert((1, n));
         }
-        if cursor.goto_first_child() {
+        if !attributes && cursor.goto_first_child() {
             continue;
         }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return smallest(&counts);
-            }
+        if !next_node(&mut cursor) {
+            return smallest(&counts);
         }
     }
+}
+
+/// Moves the cursor to the next node that isn't below it; false at the end.
+fn next_node(cursor: &mut tree_sitter::TreeCursor) -> bool {
+    while !cursor.goto_next_sibling() {
+        if !cursor.goto_parent() {
+            return false;
+        }
+    }
+    true
 }
 
 /// The first literal (by position) that occurs three times or more.

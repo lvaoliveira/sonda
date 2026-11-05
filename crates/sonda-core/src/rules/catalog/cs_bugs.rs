@@ -820,43 +820,12 @@ fn self_referencing_accessor<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<
         return None;
     }
     let name = text(property.child_by_field_name("name")?, src);
-    let is_self = |n: Node| {
-        let t = text(n, src);
-        t == name || t.strip_prefix(b"this.") == Some(name)
-    };
-    let returns_self = |body: Node<'t>| -> Option<Node<'t>> {
-        match body.kind() {
-            "arrow_expression_clause" => operand(body).filter(|e| is_self(*e)),
-            "block" => {
-                let stmts = cs_statements(body);
-                match stmts.as_slice() {
-                    [s] if s.kind() == "return_statement" => operand(*s).filter(|e| is_self(*e)),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    };
-    let assigns_self = |body: Node<'t>| -> Option<Node<'t>> {
-        let expr = match body.kind() {
-            "arrow_expression_clause" => operand(body)?,
-            "block" => match cs_statements(body).as_slice() {
-                [s] if s.kind() == "expression_statement" => operand(*s)?,
-                _ => return None,
-            },
-            _ => return None,
-        };
-        (expr.kind() == "assignment_expression"
-            && operator_text(expr, src) == b"="
-            && expr.child_by_field_name("left").is_some_and(is_self))
-        .then_some(expr)
-    };
     // `int P => P;`. The same field holds an initializer (`= 5`).
     if let Some(value) = property
         .child_by_field_name("value")
         .filter(|v| v.kind() == "arrow_expression_clause")
     {
-        return returns_self(value);
+        return returns_self(value, name, src);
     }
     let accessors = property.child_by_field_name("accessors")?;
     let mut cursor = accessors.walk();
@@ -867,11 +836,47 @@ fn self_referencing_accessor<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<
     list.into_iter().find_map(|accessor| {
         let body = accessor.child_by_field_name("body")?;
         match accessor.child_by_field_name("name").map(|k| text(k, src)) {
-            Some(b"get") => returns_self(body),
-            Some(b"set" | b"init") => assigns_self(body),
+            Some(b"get") => returns_self(body, name, src),
+            Some(b"set" | b"init") => assigns_self(body, name, src),
             _ => None,
         }
     })
+}
+
+/// `P` or `this.P`.
+fn is_self(n: Node, name: &[u8], src: &[u8]) -> bool {
+    let t = text(n, src);
+    t == name || t.strip_prefix(b"this.") == Some(name)
+}
+
+/// A getter body that only returns the property itself.
+fn returns_self<'t>(body: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    match body.kind() {
+        "arrow_expression_clause" => operand(body).filter(|e| is_self(*e, name, src)),
+        "block" => match cs_statements(body).as_slice() {
+            [s] if s.kind() == "return_statement" => operand(*s).filter(|e| is_self(*e, name, src)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A setter body that only assigns the property itself.
+fn assigns_self<'t>(body: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    let expr = match body.kind() {
+        "arrow_expression_clause" => operand(body)?,
+        "block" => match cs_statements(body).as_slice() {
+            [s] if s.kind() == "expression_statement" => operand(*s)?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    (expr.kind() == "assignment_expression"
+        && operator_text(expr, src) == b"="
+        && expr
+            .child_by_field_name("left")
+            .is_some_and(|l| is_self(l, name, src)))
+    .then_some(expr)
 }
 
 fn condition_false_at_start<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1105,49 +1110,24 @@ fn is_instance_thread_static(field: Node, src: &[u8]) -> bool {
 }
 
 fn returns_disposed<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let returns_one_of = |scope: Node<'t>, names: &[&[u8]]| {
-        find_in_scope(scope, CS_SCOPE_STOPS, |n| {
-            n.kind() == "return_statement"
-                && operand(n)
-                    .is_some_and(|e| e.kind() == "identifier" && names.contains(&text(e, src)))
-        })
-    };
-    let names_of = |declaration: Node| -> Vec<&[u8]> {
-        let mut cursor = declaration.walk();
-        declaration
-            .named_children(&mut cursor)
-            .filter(|d| d.kind() == "variable_declarator")
-            .filter_map(|d| d.child_by_field_name("name").map(|n| text(n, src)))
-            .collect()
-    };
     if node.kind() == "using_statement" {
         let mut cursor = node.walk();
         let declaration = node
             .named_children(&mut cursor)
             .find(|c| c.kind() == "variable_declaration")?;
-        return returns_one_of(node.child_by_field_name("body")?, &names_of(declaration));
+        return returns_one_of(
+            node.child_by_field_name("body")?,
+            &declarator_names(declaration, src),
+            src,
+        );
     }
     // `using var x = ...;` disposes x when the block ends.
     let stmts = cs_statements(node);
     for (i, stmt) in stmts.iter().enumerate() {
-        if stmt.kind() != "local_declaration_statement" {
-            continue;
-        }
-        let mut cursor = stmt.walk();
-        let is_using = stmt
-            .children(&mut cursor)
-            .any(|c| !c.is_named() && text(c, src) == b"using");
-        if !is_using {
-            continue;
-        }
-        let mut cursor = stmt.walk();
-        let Some(declaration) = stmt
-            .named_children(&mut cursor)
-            .find(|c| c.kind() == "variable_declaration")
-        else {
+        let Some(declaration) = using_declaration(*stmt, src) else {
             continue;
         };
-        let names = names_of(declaration);
+        let names = declarator_names(declaration, src);
         for later in &stmts[i + 1..] {
             if later.kind() == "return_statement"
                 && operand(*later)
@@ -1155,12 +1135,47 @@ fn returns_disposed<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             {
                 return Some(*later);
             }
-            if let Some(r) = returns_one_of(*later, &names) {
+            if let Some(r) = returns_one_of(*later, &names, src) {
                 return Some(r);
             }
         }
     }
     None
+}
+
+/// A `return` of one of `names` in `scope`.
+fn returns_one_of<'t>(scope: Node<'t>, names: &[&[u8]], src: &[u8]) -> Option<Node<'t>> {
+    find_in_scope(scope, CS_SCOPE_STOPS, |n| {
+        n.kind() == "return_statement"
+            && operand(n).is_some_and(|e| e.kind() == "identifier" && names.contains(&text(e, src)))
+    })
+}
+
+/// The names a variable declaration declares.
+fn declarator_names<'s>(declaration: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut cursor = declaration.walk();
+    declaration
+        .named_children(&mut cursor)
+        .filter(|d| d.kind() == "variable_declarator")
+        .filter_map(|d| d.child_by_field_name("name").map(|n| text(n, src)))
+        .collect()
+}
+
+/// The declaration of `using var x = ...;`.
+fn using_declaration<'t>(stmt: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if stmt.kind() != "local_declaration_statement" {
+        return None;
+    }
+    let mut cursor = stmt.walk();
+    let is_using = stmt
+        .children(&mut cursor)
+        .any(|c| !c.is_named() && text(c, src) == b"using");
+    if !is_using {
+        return None;
+    }
+    let mut cursor = stmt.walk();
+    stmt.named_children(&mut cursor)
+        .find(|c| c.kind() == "variable_declaration")
 }
 
 fn base_object_call<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

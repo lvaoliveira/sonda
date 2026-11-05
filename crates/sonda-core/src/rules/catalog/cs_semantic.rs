@@ -348,7 +348,6 @@ fn integer_division(m: &Model, e: Node, src: &[u8]) -> bool {
 }
 
 fn integer_division_into_float<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let floating = |t: Option<Node>| t.is_some_and(|t| FLOATING.contains(&simple_name(t, src)));
     let mut found = Vec::new();
     walk_tree(m, |node, _| match node.kind() {
         // double d = a / b;
@@ -357,7 +356,7 @@ fn integer_division_into_float<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             if let Some(value) = (node.named_child_count() > 1)
                 .then(|| node.named_child(node.named_child_count() as u32 - 1))
                 .flatten()
-                && floating(declared)
+                && is_floating(declared, src)
                 && integer_division(m, value, src)
             {
                 found.push(value);
@@ -368,45 +367,54 @@ fn integer_division_into_float<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             if let (Some(left), Some(right)) = (
                 node.child_by_field_name("left"),
                 node.child_by_field_name("right"),
-            ) && floating(type_of_name(m, left))
+            ) && is_floating(type_of_name(m, left), src)
                 && integer_division(m, right, src)
             {
                 found.push(right);
             }
         }
-        // Method(a / b) to a floating-point parameter of a method declared here.
-        "invocation_expression" => {
-            let Some(target) = node
-                .child_by_field_name("function")
-                .filter(|f| f.kind() == "identifier")
-                .and_then(|f| m.decl_of(f))
-                .filter(|d| {
-                    d.kind == DeclKind::Method && m.decls_named(d.scope, &d.name).len() == 1
-                })
-            else {
-                return;
-            };
-            let Some(params) = target
-                .declarator
-                .and_then(|d| d.child_by_field_name("parameters"))
-            else {
-                return;
-            };
-            let mut c = params.walk();
-            let types: Vec<Option<Node>> = params
-                .named_children(&mut c)
-                .filter(|p| p.kind() == "parameter")
-                .map(|p| p.child_by_field_name("type"))
-                .collect();
-            for (arg, ty) in cs_call_arguments(node).into_iter().zip(types) {
-                if floating(ty) && integer_division(m, arg, src) {
-                    found.push(arg);
-                }
-            }
-        }
+        "invocation_expression" => division_into_float_param(m, node, src, &mut found),
         _ => {}
     });
     found
+}
+
+fn is_floating(t: Option<Node>, src: &[u8]) -> bool {
+    t.is_some_and(|t| FLOATING.contains(&simple_name(t, src)))
+}
+
+/// Method(a / b) to a floating-point parameter of a method declared here.
+fn division_into_float_param<'t>(
+    m: &Model<'t>,
+    node: Node<'t>,
+    src: &[u8],
+    found: &mut Vec<Node<'t>>,
+) {
+    let Some(target) = node
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "identifier")
+        .and_then(|f| m.decl_of(f))
+        .filter(|d| d.kind == DeclKind::Method && m.decls_named(d.scope, &d.name).len() == 1)
+    else {
+        return;
+    };
+    let Some(params) = target
+        .declarator
+        .and_then(|d| d.child_by_field_name("parameters"))
+    else {
+        return;
+    };
+    let mut c = params.walk();
+    let types: Vec<Option<Node>> = params
+        .named_children(&mut c)
+        .filter(|p| p.kind() == "parameter")
+        .map(|p| p.child_by_field_name("type"))
+        .collect();
+    for (arg, ty) in cs_call_arguments(node).into_iter().zip(types) {
+        if is_floating(ty, src) && integer_division(m, arg, src) {
+            found.push(arg);
+        }
+    }
 }
 
 fn unpaired_begin_invoke<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
@@ -466,15 +474,6 @@ fn non_short_circuit_logic<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
 }
 
 fn redundant_boolean_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let literal =
-        |n: Option<Node>| n.is_some_and(|n| unparenthesized(n).kind() == "boolean_literal");
-    // A plain bool: a literal, a comparison or logic, or a name declared bool.
-    let plain_bool = |n: Node| {
-        let n = unparenthesized(n);
-        n.kind() == "boolean_literal"
-            || is_boolean_expression(n, src)
-            || type_is(m, n, src, &[b"bool"])
-    };
     matching(
         m,
         &[
@@ -482,45 +481,59 @@ fn redundant_boolean_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             "conditional_expression",
             "prefix_unary_expression",
         ],
-        |node, ancestors| {
-            match node.kind() {
-                "conditional_expression" => {
-                    let (Some(yes), Some(no)) = (
-                        node.child_by_field_name("consequence"),
-                        node.child_by_field_name("alternative"),
-                    ) else {
-                        return false;
-                    };
-                    // `c ? true : false`, or `c ? true : x` with x a plain bool.
-                    (literal(Some(yes)) && plain_bool(no)) || (literal(Some(no)) && plain_bool(yes))
-                }
-                "binary_expression" => {
-                    let (Some(left), Some(right)) = (
-                        node.child_by_field_name("left"),
-                        node.child_by_field_name("right"),
-                    ) else {
-                        return false;
-                    };
-                    // tree-sitter-c-sharp reads `x is true || y` as `x is (true || y)`.
-                    if ancestors
-                        .last()
-                        .is_some_and(|p| p.kind() == "constant_pattern")
-                    {
-                        return false;
-                    }
-                    match operator_text(node, src) {
-                        b"&&" | b"||" => literal(Some(left)) || literal(Some(right)),
-                        b"==" | b"!=" => {
-                            (literal(Some(left)) && plain_bool(right))
-                                || (literal(Some(right)) && plain_bool(left))
-                        }
-                        _ => false,
-                    }
-                }
-                _ => text(node, src).starts_with(b"!") && literal(node.named_child(0)),
-            }
+        |node, ancestors| match node.kind() {
+            "conditional_expression" => redundant_conditional(m, node, src),
+            "binary_expression" => redundant_binary(m, node, ancestors, src),
+            _ => text(node, src).starts_with(b"!") && is_bool_literal(node.named_child(0)),
         },
     )
+}
+
+fn is_bool_literal(n: Option<Node>) -> bool {
+    n.is_some_and(|n| unparenthesized(n).kind() == "boolean_literal")
+}
+
+/// A plain bool: a literal, a comparison or logic, or a name declared bool.
+fn plain_bool(m: &Model, n: Node, src: &[u8]) -> bool {
+    let n = unparenthesized(n);
+    n.kind() == "boolean_literal" || is_boolean_expression(n, src) || type_is(m, n, src, &[b"bool"])
+}
+
+/// `c ? true : false`, or `c ? true : x` with x a plain bool.
+fn redundant_conditional(m: &Model, node: Node, src: &[u8]) -> bool {
+    let (Some(yes), Some(no)) = (
+        node.child_by_field_name("consequence"),
+        node.child_by_field_name("alternative"),
+    ) else {
+        return false;
+    };
+    (is_bool_literal(Some(yes)) && plain_bool(m, no, src))
+        || (is_bool_literal(Some(no)) && plain_bool(m, yes, src))
+}
+
+/// `x && true`, `x || false`, `x == true` with x a plain bool.
+fn redundant_binary(m: &Model, node: Node, ancestors: &[Node], src: &[u8]) -> bool {
+    let (Some(left), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    // tree-sitter-c-sharp reads `x is true || y` as `x is (true || y)`.
+    if ancestors
+        .last()
+        .is_some_and(|p| p.kind() == "constant_pattern")
+    {
+        return false;
+    }
+    match operator_text(node, src) {
+        b"&&" | b"||" => is_bool_literal(Some(left)) || is_bool_literal(Some(right)),
+        b"==" | b"!=" => {
+            (is_bool_literal(Some(left)) && plain_bool(m, right, src))
+                || (is_bool_literal(Some(right)) && plain_bool(m, left, src))
+        }
+        _ => false,
+    }
 }
 
 /// `x => x == y` with x not used on the other side.
@@ -688,81 +701,92 @@ fn loops_simplifiable<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
         {
             return;
         }
-        let exits = |n: Node| {
-            find_in_scope(n, super::cs::CS_SCOPE_STOPS, |x| {
-                matches!(
-                    x.kind(),
-                    "break_statement"
-                        | "return_statement"
-                        | "yield_statement"
-                        | "continue_statement"
-                        | "await_expression"
-                        | "goto_statement"
-                )
-            })
-            .is_some()
-        };
-        let statements = cs_statements(body);
         let name = text(variable, src);
-        // Filtering: the whole body is an `if` without else, testing the
-        // element, and declaring nothing the body needs (`out var`, `is T t`).
-        let filters = |condition: Node| {
-            count_word(text(condition, src), name) > 0
-                && find_in_scope(condition, super::cs::CS_SCOPE_STOPS, |n| {
-                    matches!(
-                        n.kind(),
-                        "declaration_expression" | "declaration_pattern" | "recursive_pattern"
-                    )
-                })
-                .is_none()
-        };
-        if let [statement] = statements.as_slice()
-            && statement.kind() == "if_statement"
-            && statement.child_by_field_name("alternative").is_none()
-            && statement
-                .child_by_field_name("condition")
-                .is_some_and(filters)
-            && !exits(*statement)
-        {
-            found.push(*statement);
-            return;
-        }
-        // Selecting: the element is only used through one member.
-        let mut member: Option<&[u8]> = None;
-        let mut only_member = true;
-        let mut used = false;
-        let mut stack = vec![body];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "identifier" && text(n, src) == name {
-                used = true;
-                let access = n
-                    .parent()
-                    .filter(|p| {
-                        p.kind() == "member_access_expression"
-                            && p.child_by_field_name("expression") == Some(n)
-                    })
-                    .and_then(|p| p.child_by_field_name("name"))
-                    .map(|x| text(x, src));
-                match (access, member) {
-                    (Some(a), None) => member = Some(a),
-                    (Some(a), Some(b)) if a == b => {}
-                    _ => only_member = false,
-                }
-                continue;
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
-        }
-        // A call `x.M()` uses x, not just a value of it.
-        let called = member.is_some_and(|mb| {
-            let pattern: Vec<u8> = [name, b".", mb, b"("].concat();
-            text(body, src).windows(pattern.len()).any(|w| w == pattern)
-        });
-        if used && only_member && member.is_some() && !called && !exits(body) {
+        if let Some(statement) = filtering_if(body, name, src) {
+            found.push(statement);
+        } else if selects_one_member(body, name, src) {
             found.push(variable);
         }
     });
     found
+}
+
+/// Whether `n` leaves the loop or the function, or waits.
+fn exits_loop(n: Node) -> bool {
+    find_in_scope(n, super::cs::CS_SCOPE_STOPS, |x| {
+        matches!(
+            x.kind(),
+            "break_statement"
+                | "return_statement"
+                | "yield_statement"
+                | "continue_statement"
+                | "await_expression"
+                | "goto_statement"
+        )
+    })
+    .is_some()
+}
+
+/// Filtering: the whole body is an `if` without else, testing the element,
+/// and declaring nothing the body needs (`out var`, `is T t`).
+fn filtering_if<'t>(body: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    let filters = |condition: Node| {
+        count_word(text(condition, src), name) > 0
+            && find_in_scope(condition, super::cs::CS_SCOPE_STOPS, |n| {
+                matches!(
+                    n.kind(),
+                    "declaration_expression" | "declaration_pattern" | "recursive_pattern"
+                )
+            })
+            .is_none()
+    };
+    let statements = cs_statements(body);
+    let [statement] = statements.as_slice() else {
+        return None;
+    };
+    (statement.kind() == "if_statement"
+        && statement.child_by_field_name("alternative").is_none()
+        && statement
+            .child_by_field_name("condition")
+            .is_some_and(filters)
+        && !exits_loop(*statement))
+    .then_some(*statement)
+}
+
+/// Selecting: the element is only used through one member, not one it
+/// calls (a call `x.M()` uses x, not just a value of it).
+fn selects_one_member(body: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut member: Option<&[u8]> = None;
+    let mut only_member = true;
+    let mut used = false;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && text(n, src) == name {
+            used = true;
+            let access = n
+                .parent()
+                .filter(|p| {
+                    p.kind() == "member_access_expression"
+                        && p.child_by_field_name("expression") == Some(n)
+                })
+                .and_then(|p| p.child_by_field_name("name"))
+                .map(|x| text(x, src));
+            match (access, member) {
+                (Some(a), None) => member = Some(a),
+                (Some(a), Some(b)) if a == b => {}
+                _ => only_member = false,
+            }
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    let Some(mb) = member else {
+        return false;
+    };
+    let pattern: Vec<u8> = [name, b".", mb, b"("].concat();
+    let called = text(body, src).windows(pattern.len()).any(|w| w == pattern);
+    used && only_member && !called && !exits_loop(body)
 }
 
 const LINQ_CHAIN: &[&[u8]] = &[
@@ -816,74 +840,86 @@ fn lambda_body(call: Node) -> Option<Node> {
 fn linq_simplifiable<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     matching(m, &["invocation_expression"], |call, _| {
         let name = method_name(call, src);
-        let args = cs_call_arguments(call).len();
         let inner = receiver(call).filter(|r| r.kind() == "invocation_expression");
         let inner_name = inner.map_or(&b""[..], |i| method_name(i, src));
-        // Where(p).First() is First(p).
-        if PREDICATE_TAKERS.contains(&name)
-            && args == 0
-            && inner_name == b"Where"
-            && inner.is_some_and(|i| cs_call_arguments(i).len() == 1)
-        {
-            return true;
-        }
-        // Select(x => x as T) then a null check: OfType<T>().
-        if inner_name == b"Select"
-            && inner
-                .and_then(lambda_body)
-                .is_some_and(|b| b.kind() == "as_expression")
-            && lambda_body(call).is_some_and(|b| {
-                let t = text(b, src);
-                t.windows(7).any(|w| w == b"!= null") || t.windows(11).any(|w| w == b"is not null")
-            })
-        {
-            return true;
-        }
-        // Where(x => x is T) then a cast: OfType<T>().
-        if name == b"Select"
-            && inner_name == b"Where"
-            && inner
-                .and_then(lambda_body)
-                .is_some_and(|b| matches!(b.kind(), "is_expression" | "is_pattern_expression"))
-            && lambda_body(call)
-                .is_some_and(|b| matches!(b.kind(), "cast_expression" | "as_expression"))
-        {
-            return true;
-        }
-        // Count() on a collection with a Count or Length property.
-        if name == b"Count"
-            && args == 0
-            && receiver(call)
-                .and_then(|r| type_of_name(m, r))
-                .is_some_and(|t| {
-                    t.kind() == "array_type"
-                        || [
-                            &b"List"[..],
-                            b"IList",
-                            b"ICollection",
-                            b"IReadOnlyCollection",
-                            b"IReadOnlyList",
-                            b"HashSet",
-                            b"Dictionary",
-                            b"IDictionary",
-                            b"Queue",
-                            b"Stack",
-                            b"Collection",
-                        ]
-                        .iter()
-                        .any(|n| is_generic(t, n, src))
-                })
-        {
-            return true;
-        }
-        // ToList() or ToArray() in the middle of a query.
-        LINQ_CHAIN.contains(&name)
-            && matches!(inner_name, b"ToList" | b"ToArray")
-            && inner.is_some_and(|i| cs_call_arguments(i).is_empty())
-            && inner.and_then(receiver).is_some_and(|r| {
-                r.kind() == "invocation_expression" && LINQ_CHAIN.contains(&method_name(r, src))
-            })
+        where_then_first(call, name, inner, inner_name)
+            || select_as_then_null_check(call, inner, inner_name, src)
+            || where_is_then_cast(call, name, inner, inner_name)
+            || count_of_a_collection(m, call, name, src)
+            || materialized_mid_query(name, inner, inner_name, src)
     })
+}
+
+/// Where(p).First() is First(p).
+fn where_then_first(call: Node, name: &[u8], inner: Option<Node>, inner_name: &[u8]) -> bool {
+    PREDICATE_TAKERS.contains(&name)
+        && cs_call_arguments(call).is_empty()
+        && inner_name == b"Where"
+        && inner.is_some_and(|i| cs_call_arguments(i).len() == 1)
+}
+
+/// Select(x => x as T) then a null check: OfType<T>().
+fn select_as_then_null_check(
+    call: Node,
+    inner: Option<Node>,
+    inner_name: &[u8],
+    src: &[u8],
+) -> bool {
+    inner_name == b"Select"
+        && inner
+            .and_then(lambda_body)
+            .is_some_and(|b| b.kind() == "as_expression")
+        && lambda_body(call).is_some_and(|b| {
+            let t = text(b, src);
+            t.windows(7).any(|w| w == b"!= null") || t.windows(11).any(|w| w == b"is not null")
+        })
+}
+
+/// Where(x => x is T) then a cast: OfType<T>().
+fn where_is_then_cast(call: Node, name: &[u8], inner: Option<Node>, inner_name: &[u8]) -> bool {
+    name == b"Select"
+        && inner_name == b"Where"
+        && inner
+            .and_then(lambda_body)
+            .is_some_and(|b| matches!(b.kind(), "is_expression" | "is_pattern_expression"))
+        && lambda_body(call)
+            .is_some_and(|b| matches!(b.kind(), "cast_expression" | "as_expression"))
+}
+
+/// Count() on a collection with a Count or Length property.
+fn count_of_a_collection(m: &Model, call: Node, name: &[u8], src: &[u8]) -> bool {
+    name == b"Count"
+        && cs_call_arguments(call).is_empty()
+        && receiver(call)
+            .and_then(|r| type_of_name(m, r))
+            .is_some_and(|t| {
+                t.kind() == "array_type"
+                    || [
+                        &b"List"[..],
+                        b"IList",
+                        b"ICollection",
+                        b"IReadOnlyCollection",
+                        b"IReadOnlyList",
+                        b"HashSet",
+                        b"Dictionary",
+                        b"IDictionary",
+                        b"Queue",
+                        b"Stack",
+                        b"Collection",
+                    ]
+                    .iter()
+                    .any(|n| is_generic(t, n, src))
+            })
+}
+
+/// ToList() or ToArray() in the middle of a query.
+fn materialized_mid_query(name: &[u8], inner: Option<Node>, inner_name: &[u8], src: &[u8]) -> bool {
+    LINQ_CHAIN.contains(&name)
+        && matches!(inner_name, b"ToList" | b"ToArray")
+        && inner.is_some_and(|i| cs_call_arguments(i).is_empty())
+        && inner.and_then(receiver).is_some_and(|r| {
+            r.kind() == "invocation_expression" && LINQ_CHAIN.contains(&method_name(r, src))
+        })
 }
 
 /// Types SonarQube names as having weak identity, and reflection types

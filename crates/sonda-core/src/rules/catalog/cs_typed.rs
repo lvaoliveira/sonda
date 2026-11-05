@@ -594,58 +594,77 @@ fn constraint_type(constraint: &[u8]) -> Option<&'static [u8]> {
 }
 
 fn route_parameter_type_mismatch<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // {name:constraint} pairs from the class's [Route] templates.
-    let mut constrained: Vec<(Vec<u8>, &'static [u8])> = Vec::new();
-    for (attribute, name) in attribute_names(class, src) {
-        if !matches!(name, b"Route" | b"RouteAttribute") {
-            continue;
-        }
-        for (_, value) in attribute_arguments(attribute) {
-            let template = text(value, src);
-            for segment in template.split(|b| *b == b'{').skip(1) {
-                let inside = segment.split(|b| *b == b'}').next().unwrap_or_default();
-                let mut parts = inside.split(|b| *b == b':');
-                // `{*rest}` is a catch-all parameter named rest.
-                let param = parts.next().unwrap_or_default();
-                let param = param
-                    .strip_prefix(b"**")
-                    .or_else(|| param.strip_prefix(b"*"))
-                    .unwrap_or(param);
-                if let Some(ty) = parts
-                    .next()
-                    .and_then(|c| constraint_type(c.strip_suffix(b"?").unwrap_or(c)))
-                {
-                    constrained.push((param.to_ascii_lowercase(), ty));
-                }
-            }
-        }
-    }
+    let constrained = route_constraints(class, src);
     if constrained.is_empty() {
         return None;
     }
     members(class)
         .into_iter()
         .filter(|m| m.kind() == "property_declaration")
-        .find_map(|p| {
-            if !attribute_names(p, src)
-                .iter()
-                .any(|(_, n)| matches!(*n, b"Parameter" | b"ParameterAttribute"))
-            {
-                return None;
-            }
-            let name = text(p.child_by_field_name("name")?, src).to_ascii_lowercase();
-            let ty = p.child_by_field_name("type")?;
-            let declared = normalized_type(text(ty, src));
-            let declared = declared.strip_suffix(b"?").unwrap_or(&declared);
-            let declared = declared
-                .strip_prefix(b"Nullable<")
-                .and_then(|d| d.strip_suffix(b">"))
-                .unwrap_or(declared);
-            constrained
-                .iter()
-                .any(|(param, expected)| *param == name && declared != *expected)
-                .then_some(ty)
-        })
+        .find_map(|p| mismatched_parameter(p, &constrained, src))
+}
+
+/// A route parameter, lowercase, and the type its constraint asks for.
+type RouteConstraint = (Vec<u8>, &'static [u8]);
+
+/// The `{name:constraint}` pairs of the class's [Route] templates.
+fn route_constraints(class: Node, src: &[u8]) -> Vec<RouteConstraint> {
+    let mut constrained = Vec::new();
+    for (attribute, name) in attribute_names(class, src) {
+        if !matches!(name, b"Route" | b"RouteAttribute") {
+            continue;
+        }
+        for (_, value) in attribute_arguments(attribute) {
+            template_constraints(text(value, src), &mut constrained);
+        }
+    }
+    constrained
+}
+
+fn template_constraints(template: &[u8], out: &mut Vec<RouteConstraint>) {
+    for segment in template.split(|b| *b == b'{').skip(1) {
+        let inside = segment.split(|b| *b == b'}').next().unwrap_or_default();
+        let mut parts = inside.split(|b| *b == b':');
+        // `{*rest}` is a catch-all parameter named rest.
+        let param = parts.next().unwrap_or_default();
+        let param = param
+            .strip_prefix(b"**")
+            .or_else(|| param.strip_prefix(b"*"))
+            .unwrap_or(param);
+        if let Some(ty) = parts
+            .next()
+            .and_then(|c| constraint_type(c.strip_suffix(b"?").unwrap_or(c)))
+        {
+            out.push((param.to_ascii_lowercase(), ty));
+        }
+    }
+}
+
+/// A [Parameter] property whose type isn't the one its route constraint
+/// asks for: its type.
+fn mismatched_parameter<'t>(
+    p: Node<'t>,
+    constrained: &[RouteConstraint],
+    src: &[u8],
+) -> Option<Node<'t>> {
+    if !attribute_names(p, src)
+        .iter()
+        .any(|(_, n)| matches!(*n, b"Parameter" | b"ParameterAttribute"))
+    {
+        return None;
+    }
+    let name = text(p.child_by_field_name("name")?, src).to_ascii_lowercase();
+    let ty = p.child_by_field_name("type")?;
+    let declared = normalized_type(text(ty, src));
+    let declared = declared.strip_suffix(b"?").unwrap_or(&declared);
+    let declared = declared
+        .strip_prefix(b"Nullable<")
+        .and_then(|d| d.strip_suffix(b">"))
+        .unwrap_or(declared);
+    constrained
+        .iter()
+        .any(|(param, expected)| *param == name && declared != *expected)
+        .then_some(ty)
 }
 
 fn ignores_read_count<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
