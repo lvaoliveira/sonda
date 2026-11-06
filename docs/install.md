@@ -7,27 +7,22 @@ history, triage and quality gates in one place.
 ## Quick start
 
 **1. Install the CLI.** Each release has a binary for Linux (x86_64 and
-arm64), macOS (Apple Silicon) and Windows (x86_64). Download yours and
-check it against the release's checksums.
+arm64), macOS (Apple Silicon) and Windows (x86_64).
 
-Linux:
+Linux and macOS:
 
 ```sh
-v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
-grep " $f\$" SHA256SUMS | sha256sum -c - &&
-  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh | sh
 ```
 
-macOS:
+The script picks the binary for your system, checks it against the
+release's checksums, and installs it in `~/.local/bin`. To read it before
+it runs, download it first:
 
 ```sh
-v=0.2.1 f=sonda-0.2.1-aarch64-macos
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
-grep " $f\$" SHA256SUMS | shasum -a 256 -c - &&
-  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh
+less install.sh
+sh install.sh
 ```
 
 Windows, in PowerShell:
@@ -47,7 +42,8 @@ if ($sums.Count -ne 1 -or ($sums[0].Line -split '\s+')[0] -ine (Get-FileHash $f 
 }
 ```
 
-On Windows, open a new terminal afterwards, so it sees the new `Path`.
+On Windows, open a new terminal afterwards, so it sees the new `Path`. To
+install by hand on Linux or macOS, see [Without the script](#without-the-script).
 Elsewhere (Intel Macs, Windows on Arm, other systems), [build it from
 source](#from-source).
 
@@ -89,13 +85,56 @@ as a CI check.
 
 ## Installing the CLI
 
+### The install script
+
+`install.sh` works out the release's name for your system (`x86_64-linux`,
+`aarch64-linux` or `aarch64-macos`, including under Rosetta), downloads
+it and `SHA256SUMS` over HTTPS, and installs only when the binary matches
+its line there. When [GitHub's CLI](https://cli.github.com/) is installed
+and signed in, it verifies the binary's attestation too, and refuses one
+that doesn't verify. It never uses `sudo` and never edits your shell's
+startup files: when the directory isn't on `PATH`, it says what to add.
+
+```sh
+sh install.sh --version 0.2.1        # a given release (default: the script's own)
+sh install.sh --dir /usr/local/bin   # another directory (yours to write to)
+```
+
+`SONDA_VERSION` and `SONDA_INSTALL_DIR` do the same, and
+`SONDA_DOWNLOAD_URL` points it at a mirror of the releases. Each release
+attaches its own copy, with its version filled in, and attests it like the
+binaries: `gh attestation verify install.sh --repo lvaoliveira/sonda`.
+
+### Without the script
+
+On Linux:
+
+```sh
+v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
+grep " $f\$" SHA256SUMS | sha256sum -c - &&
+  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+```
+
+On macOS:
+
+```sh
+v=0.2.1 f=sonda-0.2.1-aarch64-macos
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
+grep " $f\$" SHA256SUMS | shasum -a 256 -c - &&
+  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+```
+
 ### Checking a download
 
-The quick start checks each download against the release's `SHA256SUMS`,
-matching the file's own line, so it fails if the file isn't listed, and
-installs only when the check passes. That says the download is intact, not who built it, since the checksums come
-from the same place. Each binary also carries a signed build attestation
-that does: verify it with the [GitHub CLI](https://cli.github.com/) before
+The script and the commands above check each download against the
+release's `SHA256SUMS`, matching the file's own line, so they fail if the
+file isn't listed, and install only when the check passes. That says the
+download is intact, not who built it, since the checksums come from the
+same place. Each binary also carries a signed build attestation that does:
+verify it with the [GitHub CLI](https://cli.github.com/) before
 installing.
 
 ```sh
@@ -122,8 +161,8 @@ Windows the parsers run without one: a file crafted to exploit a parser bug
 would run with your privileges. Read [SECURITY.md](../SECURITY.md) before
 scanning code you don't trust on Windows.
 
-To install somewhere else, such as `/usr/local/bin` for every user, change
-the last line of the Linux or macOS commands.
+To install somewhere else, such as `/usr/local/bin` for every user, pass
+the script `--dir`, or change the last line of the commands above.
 
 ### From source
 
