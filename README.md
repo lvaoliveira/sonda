@@ -49,7 +49,7 @@ curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
 install -m 755 sonda-$v-$arch-linux ~/.local/bin/sonda
 ```
 
-[docs/install.md](docs/install.md) covers the rest: macOS and Windows (from source), CI, the server, verifying a release, upgrading and uninstalling.
+[docs/install.md](docs/install.md) covers the rest: macOS and Windows, building from source, CI, the server, verifying a release, upgrading and uninstalling.
 
 ## Usage
 

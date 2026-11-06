@@ -6,23 +6,44 @@ history, triage and quality gates in one place.
 
 ## Quick start
 
-**1. Install the CLI.** On Linux (x86_64 or arm64), download the release
-binary and check it:
+**1. Install the CLI.** Each release has a binary for Linux (x86_64 and
+arm64), macOS (Apple Silicon) and Windows (x86_64). Download yours and
+check it against the release's checksums.
+
+Linux:
 
 ```sh
-v=0.2.0 arch=$(uname -m)    # x86_64 or aarch64
-f=sonda-$v-$arch-linux
+v=0.2.0 f=sonda-0.2.0-$(uname -m)-linux    # x86_64 or aarch64
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
 curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | sha256sum -c -
 mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 ```
 
-On macOS or Windows, build it with [Rust](https://rustup.rs) 1.90 or newer
-(a few minutes; prebuilt binaries are planned):
+macOS:
 
 ```sh
-cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.0 sonda
+v=0.2.0 f=sonda-0.2.0-aarch64-macos
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
+curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c -
+mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 ```
+
+Windows, in PowerShell:
+
+```powershell
+$v = "0.2.0"; $f = "sonda-$v-x86_64-windows.exe"
+$url = "https://github.com/lvaoliveira/sonda/releases/download/v$v"
+Invoke-WebRequest "$url/$f" -OutFile $f; Invoke-WebRequest "$url/SHA256SUMS" -OutFile SHA256SUMS
+$sum = (Select-String -Path SHA256SUMS -Pattern " $([regex]::Escape($f))$").Line
+if (-not $sum -or $sum.Split(" ")[0] -ne (Get-FileHash $f).Hash) { throw "$f doesn't match SHA256SUMS" }
+$dir = "$env:LOCALAPPDATA\Programs\sonda"; New-Item -ItemType Directory -Force $dir | Out-Null
+Move-Item -Force $f "$dir\sonda.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$dir", "User")
+```
+
+On Windows, open a new terminal afterwards, so it sees the new `Path`.
+Elsewhere (Intel Macs, Windows on Arm, other systems), [build it from
+source](#from-source).
 
 **2. Scan a project:**
 
@@ -45,14 +66,11 @@ as a CI check.
 
 ## Installing the CLI
 
-### Linux
+### Checking a download
 
-The release binaries are static, with no dependencies. The quick start's
-commands download one and check it against the release's `SHA256SUMS`: the
-`grep` makes sure the file checked is the one downloaded, and fails if it
-isn't listed.
-
-The checksum says the download is intact, not who built it, since it comes
+The quick start checks each download against the release's `SHA256SUMS`,
+matching the file's own line, so it fails if the file isn't listed. That
+says the download is intact, not who built it, since the checksums come
 from the same place. Each binary also carries a signed build attestation
 that does: verify it with the [GitHub CLI](https://cli.github.com/) before
 installing.
@@ -61,18 +79,37 @@ installing.
 gh attestation verify $f --repo lvaoliveira/sonda
 ```
 
+The binaries aren't signed by Apple or Microsoft yet. A download from a
+browser is marked as such, and then:
+
+- **macOS** refuses to run it, saying Apple can't check it for malicious
+  software. After checking it, clear the mark:
+  `xattr -d com.apple.quarantine sonda-0.2.0-aarch64-macos`. A `curl`
+  download, as in the quick start, isn't marked.
+- **Windows** SmartScreen may warn about it. A download with PowerShell, as
+  in the quick start, isn't marked.
+
+### Where it runs, and the sandbox
+
+The Linux binaries are static, with no dependencies, and so is the Windows
+one's C runtime. On Linux and macOS each parser runs in a sandbox. On
+Windows the parsers run without one: a file crafted to exploit a parser bug
+would run with your privileges. Read [SECURITY.md](../SECURITY.md) before
+scanning code you don't trust on Windows.
+
 To install somewhere else, such as `/usr/local/bin` for every user, change
-the `install` line.
+the last line of the Linux or macOS commands.
 
-### macOS and Windows
+### From source
 
-There's no prebuilt binary for these yet, so `cargo install` builds one. To
-build from a clone instead: `cargo install --path crates/sonda`.
+On a platform without a release binary, build it with
+[Rust](https://rustup.rs) 1.90 or newer. It takes a few minutes:
 
-On Windows, the parsers run without a sandbox: a file crafted to exploit a
-parser bug would run with your privileges. On Linux and macOS each parser
-runs sandboxed. Read [SECURITY.md](../SECURITY.md) before scanning code you
-don't trust on Windows.
+```sh
+cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.0 sonda
+```
+
+From a clone instead: `cargo install --path crates/sonda`.
 
 ### Linux, from a clone without Rust
 
@@ -104,16 +141,19 @@ GitHub's code scanning as SARIF.
 
 ### If `sonda` isn't found
 
-The shell looks for commands in the directories of `PATH`, and some systems
-leave `~/.local/bin` out. Check with `echo "$PATH"`, and if it's missing,
-add it to your shell's startup file (`~/.bashrc`, `~/.zshrc`):
+The shell looks for commands in the directories of `PATH`, and some
+systems, macOS among them, leave `~/.local/bin` out. Check with
+`echo "$PATH"`, and if it's missing, add it to your shell's startup file
+(`~/.zshrc` on macOS, `~/.bashrc` on most Linux systems):
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Then open a new terminal. `cargo install` puts `sonda` in `~/.cargo/bin`,
-which rustup adds to `PATH` itself.
+Then open a new terminal. On Windows, the quick start adds sonda's folder
+to your user `Path`; a terminal opened before that doesn't see it.
+`cargo install` puts `sonda` in `~/.cargo/bin`, which rustup adds to `PATH`
+itself.
 
 ## Adding the server
 
@@ -181,7 +221,8 @@ other machines need HTTPS either way.
 
 ## Uninstalling
 
-- **The CLI:** delete `~/.local/bin/sonda`, or `cargo uninstall sonda`.
+- **The CLI:** delete `~/.local/bin/sonda` (on Windows,
+  `%LOCALAPPDATA%\Programs\sonda`), or `cargo uninstall sonda`.
 - **The server:** `docker compose down` stops it and keeps the data;
   `docker compose down -v` also deletes the database. Then delete the
   clone, `secrets/` included.
