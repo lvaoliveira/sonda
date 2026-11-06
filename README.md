@@ -40,13 +40,13 @@ Quality gate: FAILED
 
 ## Install
 
-On Linux, download the CLI from the [latest release](https://github.com/lvaoliveira/sonda/releases/latest), a static binary for x86_64 or arm64, and check it against the release's `SHA256SUMS`:
+Each [release](https://github.com/lvaoliveira/sonda/releases/latest) has a CLI binary for Linux (x86_64, arm64), macOS (Apple Silicon) and Windows (x86_64). On Linux:
 
 ```sh
-v=0.2.0 arch=x86_64   # or aarch64
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/sonda-$v-$arch-linux
-curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | sha256sum -c --ignore-missing
-install -m 755 sonda-$v-$arch-linux ~/.local/bin/sonda
+v=0.2.0 f=sonda-0.2.0-$(uname -m)-linux    # x86_64 or aarch64
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
+curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | sha256sum -c -
+mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 ```
 
 [docs/install.md](docs/install.md) covers the rest: macOS and Windows, building from source, CI, the server, verifying a release, upgrading and uninstalling.
