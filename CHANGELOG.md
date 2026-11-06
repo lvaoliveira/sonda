@@ -7,22 +7,14 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
-### Fixed
-
-- `scripts/setup-server.sh` refuses to start a clone whose Compose project
-  name another install on the same machine already uses. It took over that
-  install's containers and database, then restarted forever, unable to open
-  a database created with the other install's password. It also refuses a
-  database volume that exists without the `secrets/db_password` it was
-  created with, and says how to get past each.
-
 ## [0.2.1] - 2026-11-06
 
 The CLI now comes as a binary for macOS and Windows too, an install script
 puts it in place on Linux and macOS, and
 [docs/install.md](docs/install.md) is one guide to installing it and the
 server. The CLI and the server are unchanged from 0.2.0: there's nothing
-to upgrade on a server.
+to upgrade on a server, and `scripts/setup-server.sh` now refuses to take
+over another install on the same machine.
 
 ### Added
 
@@ -39,6 +31,15 @@ to upgrade on a server.
   platform, checking a download, building from source, CI, the server, and
   upgrading. `docs/server.md` says how to run a second server on one
   machine.
+
+### Fixed
+
+- `scripts/setup-server.sh` refuses to start a clone whose Compose project
+  name another install on the same machine already uses. It took over that
+  install's containers and database, then restarted forever, unable to open
+  a database created with the other install's password. It also refuses a
+  database volume that exists without the `secrets/db_password` it was
+  created with, and says how to get past each.
 
 ## [0.2.0] - 2026-11-05
 
