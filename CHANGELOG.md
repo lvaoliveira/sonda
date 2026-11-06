@@ -7,6 +7,15 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/setup-server.sh` refuses to start a clone whose Compose project
+  name another install on the same machine already uses. It took over that
+  install's containers and database, then restarted forever, unable to open
+  a database created with the other install's password. It also refuses a
+  database volume that exists without the `secrets/db_password` it was
+  created with, and says how to get past each.
+
 ## [0.2.1] - 2026-11-06
 
 The CLI now comes as a binary for macOS and Windows too, an install script

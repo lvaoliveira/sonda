@@ -98,6 +98,11 @@ docker compose ps    # sonda-test-sonda-1 and sonda-test-db-1
 
 `.env`'s `COMPOSE_PROJECT_NAME` wins over the file's `name:`, so every
 `docker compose` command in that clone acts on its own containers.
+`scripts/setup-server.sh` refuses to start a clone whose project name
+another install on the machine already uses, and one whose database volume
+exists while its `secrets/db_password` doesn't: that database was created
+with another install's password, and the server would restart forever,
+unable to open it.
 
 ## Uploading analyses
 

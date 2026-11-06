@@ -121,6 +121,25 @@ set_() {
   mv .env.new .env
 }
 
+# Another install on this machine owns this Compose project name (compose.yaml
+# names it sonda): starting here would replace its containers and reuse its
+# database, whose password is in that install's secrets.
+docker info >/dev/null 2>&1 || die "Docker isn't running"
+project=${COMPOSE_PROJECT_NAME:-$(get COMPOSE_PROJECT_NAME)}
+project=${project:-$(sed -n 's/^name: *//p' compose.yaml)}
+here=$(pwd) here_resolved=$(pwd -P)
+other=$(docker ps -a --filter "label=com.docker.compose.project=$project" \
+  --format '{{.Label "com.docker.compose.project.working_dir"}}' |
+  grep -v -x -F -e "$here" -e "$here_resolved" | head -n 1)
+[ -z "$other" ] ||
+  die "the Compose project $project belongs to another install, in $other: starting here would replace its containers. Give this one its own name and port: echo COMPOSE_PROJECT_NAME=sonda-test >> .env, then rerun with --port 9400 (docs/server.md, \"A second server on one machine\"). If you moved this install from there, stop its containers first, keeping its data: docker compose -p $project down."
+# A database the project already has was created with the password in the
+# secrets/db_password it was started with; a new one wouldn't open it.
+volume=${project}_pgdata
+if [ ! -s secrets/db_password ] && docker volume inspect "$volume" >/dev/null 2>&1; then
+  die "the database volume $volume exists, but secrets/db_password doesn't: the database has another install's password. Copy that install's secrets/ here, or use another COMPOSE_PROJECT_NAME; docker volume rm $volume deletes the database instead."
+fi
+
 # Secrets, created once. The directory's mode keeps other users out; the
 # files are readable because the containers read them as non-root users.
 mkdir -p secrets
