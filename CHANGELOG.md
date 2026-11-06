@@ -7,6 +7,16 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Changed
+
+- When the install directory isn't on `PATH`, `install.sh` prints the two
+  commands that add it for the user's shell (zsh, bash, fish or another,
+  from `$SHELL`): one for new terminals, one for this one. It still never
+  edits startup files itself.
+- The guides clone a release with `--depth 1` (a few megabytes instead of
+  hundreds), and upgrade with `git fetch origin tag v<next>`, which works
+  in such a clone and fetches only the new release.
+
 ## [0.2.1] - 2026-11-06
 
 The CLI now comes as a binary for macOS and Windows too, an install script
