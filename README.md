@@ -94,7 +94,7 @@ Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an err
 - users with roles.
 
 It runs with Docker Compose, as a `sonda` container plus PostgreSQL. See
-[docs/install.md](docs/install.md#the-server) to install it and
+[docs/install.md](docs/install.md#adding-the-server) to install it and
 [docs/server.md](docs/server.md) for the rest.
 
 ### GitHub Actions
