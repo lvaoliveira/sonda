@@ -16,8 +16,10 @@ curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install
 ```
 
 The script picks the binary for your system, checks it against the
-release's checksums, and installs it in `~/.local/bin`. To read it before
-it runs, download it first:
+release's checksums, and installs it in `~/.local/bin`. If that directory
+isn't on your `PATH` (macOS leaves it out), it prints two commands for your
+shell: run them, and `sonda` is found in this terminal and in new ones. To
+read the script before it runs, download it first:
 
 ```sh
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh
@@ -93,7 +95,8 @@ it and `SHA256SUMS` over HTTPS, and installs only when the binary matches
 its line there. When [GitHub's CLI](https://cli.github.com/) is installed
 and signed in, it verifies the binary's attestation too, and refuses one
 that doesn't verify. It never uses `sudo` and never edits your shell's
-startup files: when the directory isn't on `PATH`, it says what to add.
+startup files: when the directory isn't on `PATH`, it prints the commands
+that add it, for zsh, bash, fish or another shell (from `$SHELL`).
 
 ```sh
 sh install.sh --version 0.2.1        # a given release (default: the script's own)
@@ -213,13 +216,15 @@ GitHub's code scanning as SARIF.
 The shell looks for commands in the directories of `PATH`, and some
 systems, macOS among them, leave `~/.local/bin` out. Check with
 `echo "$PATH"`, and if it's missing, add it to your shell's startup file
-(`~/.zshrc` on macOS, `~/.bashrc` on most Linux systems):
+(`~/.zshrc` for zsh, macOS's default; `~/.bashrc` for bash on Linux,
+`~/.bash_profile` on macOS), and to this terminal:
 
 ```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Then open a new terminal. On Windows, the quick start adds sonda's folder
+In fish, `fish_add_path "$HOME/.local/bin"` does both. On Windows, the quick start adds sonda's folder
 to your user `Path`; a terminal opened before that doesn't see it.
 `cargo install` puts `sonda` in `~/.cargo/bin`, which rustup adds to `PATH`
 itself.
@@ -234,9 +239,13 @@ It needs Docker with Compose v2, `git` and `openssl`, on an amd64 or arm64
 machine. From a clone of the release:
 
 ```sh
-git clone --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
+git clone --depth 1 --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 ```
+
+`--depth 1` fetches the release without the project's history, a few
+megabytes instead of hundreds. Git warns that the tag "is not a commit" and
+that you're in "detached HEAD": both are normal when cloning a release tag.
 
 The script creates the secrets in `secrets/`, starts the server and its
 database, and waits until they're healthy. If this machine already runs a

@@ -38,14 +38,17 @@ release() { # VERSION MODE
 }
 
 # install.sh with the fake releases, gh unable to check attestations (no
-# signed-in account), and the install directory off PATH.
+# signed-in account), and the install directory off PATH, in a home of its
+# own ($tmp) with $login_shell as the user's shell.
+login_shell=/bin/sh
 run() { # SCRIPT [ARGS]
   s=$1
   shift
-  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$tmp/gh" \
+  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$tmp/gh" HOME="$tmp" SHELL="$login_shell" \
     SONDA_DOWNLOAD_URL="file://$tmp/releases" SONDA_INSTALL_DIR="$tmp/bin" \
     sh "$s" "$@" > "$tmp/out" 2>&1
 }
+has() { grep -q -F -e "$1" "$tmp/out"; } # TEXT: in the last run's output
 fails=0
 pass() { echo "ok: $1"; }
 fail() { echo "FAILED: $1" >&2; sed 's/^/  /' "$tmp/out" >&2; fails=$((fails + 1)); }
@@ -55,6 +58,26 @@ release 9.9.1 good
 if run "$script" --version 9.9.1 && installed 9.9.1 && grep -q "isn't on your PATH" "$tmp/out"; then
   pass "installs a checked download, and says the directory isn't on PATH"
 else fail "a good download"; fi
+
+# The commands for the user's shell, which the user can paste as printed.
+case $(uname -s) in Darwin) bashrc=.bash_profile ;; *) bashrc=.bashrc ;; esac
+for case in "/bin/zsh .zshrc" "/usr/local/bin/bash $bashrc" "/bin/sh .profile"; do
+  login_shell=${case% *} rc=${case#* }
+  if run "$script" --version 9.9.1 &&
+    has "echo 'export PATH=\"\$HOME/bin:\$PATH\"' >> ~/$rc" && has "  export PATH=\"\$HOME/bin:\$PATH\""; then
+    pass "prints the commands to put the directory on PATH for ${login_shell##*/}"
+  else fail "the PATH commands for ${login_shell##*/}"; fi
+done
+login_shell=/usr/bin/fish
+if run "$script" --version 9.9.1 && has "fish_add_path \"\$HOME/bin\""; then
+  pass "prints fish_add_path for fish"
+else fail "the PATH command for fish"; fi
+login_shell=/bin/zsh
+if run "$script" --version 9.9.1 --dir "$tmp/it's" && [ -x "$tmp/it's/sonda" ] &&
+  has "add it in your shell's startup file" && ! has "echo '"; then
+  pass "prints no command for a directory with a quote in its name"
+else fail "a directory with a quote"; fi
+login_shell=/bin/sh
 
 release 9.9.2 good
 if run "$script" --version v9.9.2 && installed 9.9.2; then

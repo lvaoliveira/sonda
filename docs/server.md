@@ -15,7 +15,7 @@ as `admin`.
 checkout of a release (or of `main`, for what's next):
 
 ```sh
-git clone --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
+git clone --depth 1 --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 open http://127.0.0.1:9000     # sign in as admin, password in secrets/admin_password
 ```
@@ -35,7 +35,7 @@ digest, not a tag: a digest is what you tested.
 It creates the secrets below once, then builds this checkout (or pulls the
 image) and starts it,
 waiting until it's healthy. It's safe to rerun, so upgrading is
-`git fetch --tags && git checkout v<next> && scripts/setup-server.sh` (back up
+`git fetch origin tag v<next> && git checkout v<next> && scripts/setup-server.sh` (back up
 first: there's no downgrade). Its options are kept in `.env`, so
 later runs need none:
 
@@ -1294,9 +1294,11 @@ a database's size is.
    newer one has migrated.
 2. Read the release's section in the [changelog](../CHANGELOG.md). It says
    when an upgrade needs anything more than the steps here.
-3. Upgrade: `git fetch --tags && git checkout v<next> && scripts/setup-server.sh`,
+3. Upgrade: `git fetch origin tag v<next> && git checkout v<next> && scripts/setup-server.sh`,
    or, without Docker, build the new `sonda-server` and restart it. The
-   server migrates its database as it starts, then serves.
+   server migrates its database as it starts, then serves. Fetching only
+   the new tag keeps a `--depth 1` clone small; `git fetch --tags` would
+   download the whole history.
 4. Upgrade the CLI in your pipelines when you like: a server accepts the
    previous minor version's CLI and the current one
    ([stability.md](stability.md#compatibility-window)). Upgrade the server

@@ -8,7 +8,8 @@
 # It picks the binary for this system, checks it against the release's
 # SHA256SUMS (and its attestation, when `gh` is installed and signed in),
 # and installs it only if that passes. It never uses sudo and never edits
-# shell startup files: when the directory isn't on PATH, it says what to add.
+# shell startup files: when the directory isn't on PATH, it prints the
+# commands that add it, for the user's shell.
 # (scripts/install-cli.sh, by contrast, builds the CLI from a checkout.)
 #
 #   --version V   install this release, such as 0.2.1 (default: this
@@ -159,12 +160,41 @@ main() {
 
   case ":$PATH:" in
     *":$dir:"*) ;;
-    *)
-      say "$dir isn't on your PATH. Add this to your shell's startup file"
-      say "(~/.zshrc on macOS, ~/.bashrc on most Linux systems), then open a new terminal:"
-      printf "\n  export PATH=\"%s:\$PATH\"\n\n" "$dir" >&2
+    *) path_hint "$dir" ;;
+  esac
+}
+
+# What to run to put DIR on PATH, for the user's shell ($SHELL): one command
+# keeps it for new terminals, the other applies it to this one. It only
+# prints them: the user runs them, or adds DIR their own way.
+path_hint() { # DIR
+  case $1 in
+    *[\'\"\\\`\$]*)
+      say "$1 isn't on your PATH: add it in your shell's startup file, then open a new terminal."
+      return
       ;;
   esac
+  case $1 in
+    "$HOME"/*) shown="\$HOME/${1#"$HOME"/}" ;;
+    *) shown=$1 ;;
+  esac
+  say "$1 isn't on your PATH yet. To add it, run:"
+  case ${SHELL##*/} in
+    fish)
+      printf '\n  fish_add_path "%s"\n\n' "$shown" >&2
+      return
+      ;;
+    zsh) rc='.zshrc' ;;
+    bash)
+      # macOS's Terminal starts bash as a login shell, which reads
+      # ~/.bash_profile, not ~/.bashrc.
+      if [ "$(uname -s)" = Darwin ]; then rc='.bash_profile'; else rc='.bashrc'; fi
+      ;;
+    *) rc='.profile' ;;
+  esac
+  line="export PATH=\"$shown:\$PATH\""
+  printf "\n  echo '%s' >> ~/%s\n  %s\n\n" "$line" "$rc" "$line" >&2
+  say "The first keeps it for new terminals, the second applies it to this one."
 }
 
 main "$@"
