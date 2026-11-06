@@ -326,6 +326,9 @@ jobs:
         with:
           persist-credentials: false
       - run: shellcheck scripts/*.sh
+      # The install script, against a fake release (the release workflow
+      # tries the published one).
+      - run: scripts/test-install.sh
       - run: scripts/install-cli.sh
       # Every language parses in the sandbox; strace names a call it misses.
       - run: sudo apt-get install -y -qq strace > /dev/null

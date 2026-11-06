@@ -40,17 +40,13 @@ Quality gate: FAILED
 
 ## Install
 
-Each [release](https://github.com/lvaoliveira/sonda/releases/latest) has a CLI binary for Linux (x86_64, arm64), macOS (Apple Silicon) and Windows (x86_64). On Linux:
+Each [release](https://github.com/lvaoliveira/sonda/releases/latest) has a CLI binary for Linux (x86_64, arm64), macOS (Apple Silicon) and Windows (x86_64). On Linux and macOS, the install script picks yours, checks it against the release's checksums and installs it in `~/.local/bin`:
 
 ```sh
-v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
-grep " $f\$" SHA256SUMS | sha256sum -c - &&
-  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh | sh
 ```
 
-[docs/install.md](docs/install.md) covers the rest: macOS and Windows, building from source, CI, the server, verifying a release, upgrading and uninstalling.
+[docs/install.md](docs/install.md) covers the rest: Windows, installing by hand, building from source, CI, the server, verifying a release, upgrading and uninstalling.
 
 ## Usage
 

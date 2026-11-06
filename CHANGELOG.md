@@ -9,10 +9,11 @@ file, the report formats and the public library API.
 
 ## [0.2.1] - 2026-11-06
 
-The CLI now comes as a binary for macOS and Windows too, and
+The CLI now comes as a binary for macOS and Windows too, an install script
+puts it in place on Linux and macOS, and
 [docs/install.md](docs/install.md) is one guide to installing it and the
-server. The CLI and the server are unchanged from 0.2.0: there's nothing to
-upgrade on a server.
+server. The CLI and the server are unchanged from 0.2.0: there's nothing
+to upgrade on a server.
 
 ### Added
 
@@ -20,6 +21,11 @@ upgrade on a server.
   Linux's: built natively with the same Rust, each checked to parse every
   language (macOS's in its sandbox), attested, and with an SBOM. They aren't
   signed by Apple or Microsoft yet.
+- An install script for Linux and macOS, attached to each release:
+  `curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh | sh`.
+  It picks the binary for the system, installs it only when it matches
+  `SHA256SUMS` (and its attestation, when `gh` is signed in), and never
+  uses `sudo` or edits shell startup files.
 - [docs/install.md](docs/install.md): a quick start to a first scan on each
   platform, checking a download, building from source, CI, the server, and
   upgrading. `docs/server.md` says how to run a second server on one

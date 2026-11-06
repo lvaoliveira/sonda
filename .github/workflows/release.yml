@@ -20,6 +20,9 @@ name: Release
 # artifact was built from), attested too and attached to the release. SECURITY.md
 # says how to verify them.
 #
+# scripts/install.sh is attached too, with the release's version filled in,
+# attested and in SHA256SUMS; once published, it's tried on each platform.
+#
 # A pull request that changes what a release is made of runs the same
 # builds and checks, without creating or publishing anything.
 on:
@@ -30,6 +33,7 @@ on:
       - .github/workflows/release.yml
       - Dockerfile
       - scripts/install-cli.sh
+      - scripts/install.sh
       - scripts/check-languages.sh
 
 permissions: {}
@@ -248,6 +252,43 @@ jobs:
           sum "$sbom" > "$sbom.sha256"
           gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" "$sbom" "$sbom.sha256" --repo "$GITHUB_REPOSITORY"
 
+
+  # The install script, with this release's version filled in, so the
+  # latest release's (releases/latest/download/install.sh) installs it.
+  install-script:
+    needs: draft
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fill in the version
+        id: script
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          sed "s/^release_version=''\$/release_version='$version'/" scripts/install.sh > "$RUNNER_TEMP/install.sh"
+          if ! grep -qx "release_version='$version'" "$RUNNER_TEMP/install.sh"; then
+            echo "::error::scripts/install.sh has no release_version='' line to fill in"
+            exit 1
+          fi
+          echo "path=$RUNNER_TEMP/install.sh" >> "$GITHUB_OUTPUT"
+      - name: Attest where it was built
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.script.outputs.path }}
+      - name: Attach it, with its checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          sha256sum install.sh > install.sh.sha256
+          gh release upload "$GITHUB_REF_NAME" install.sh install.sh.sha256 --repo "$GITHUB_REPOSITORY"
+
   image:
     needs: draft
     if: ${{ !failure() && !cancelled() }}
@@ -396,7 +437,7 @@ jobs:
           push-to-registry: true
 
   publish:
-    needs: [cli, cli-native, image-tag]
+    needs: [cli, cli-native, install-script, image-tag]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -411,3 +452,29 @@ jobs:
           cat sums/*.sha256 > SHA256SUMS
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY"
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  # The published script, as the docs run it, installs this release on each
+  # platform with a binary but Windows. A failure here comes after
+  # publishing: fix the script and release again.
+  try-install:
+    needs: publish
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: It installs this release, checked
+        env:
+          # So the script verifies the attestation too.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh" |
+            sh -s -- --dir "$RUNNER_TEMP/bin" 2> "$RUNNER_TEMP/log" || { cat "$RUNNER_TEMP/log"; exit 1; }
+          cat "$RUNNER_TEMP/log"
+          grep -q "attestation OK" "$RUNNER_TEMP/log"
+          "$RUNNER_TEMP/bin/sonda" --version | grep -qw -- "${GITHUB_REF_NAME#v}"
