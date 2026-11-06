@@ -13,7 +13,7 @@ check it against the release's checksums.
 Linux:
 
 ```sh
-v=0.2.0 f=sonda-0.2.0-$(uname -m)-linux    # x86_64 or aarch64
+v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
 curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | sha256sum -c -
 mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
@@ -22,7 +22,7 @@ mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 macOS:
 
 ```sh
-v=0.2.0 f=sonda-0.2.0-aarch64-macos
+v=0.2.1 f=sonda-0.2.1-aarch64-macos
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
 curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c -
 mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
@@ -31,7 +31,7 @@ mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 Windows, in PowerShell:
 
 ```powershell
-$v = "0.2.0"; $f = "sonda-$v-x86_64-windows.exe"
+$v = "0.2.1"; $f = "sonda-$v-x86_64-windows.exe"
 $url = "https://github.com/lvaoliveira/sonda/releases/download/v$v"
 Invoke-WebRequest "$url/$f" -OutFile $f; Invoke-WebRequest "$url/SHA256SUMS" -OutFile SHA256SUMS
 $sum = (Select-String -Path SHA256SUMS -Pattern " $([regex]::Escape($f))$").Line
@@ -84,7 +84,7 @@ browser is marked as such, and then:
 
 - **macOS** refuses to run it, saying Apple can't check it for malicious
   software. After checking it, clear the mark:
-  `xattr -d com.apple.quarantine sonda-0.2.0-aarch64-macos`. A `curl`
+  `xattr -d com.apple.quarantine sonda-0.2.1-aarch64-macos`. A `curl`
   download, as in the quick start, isn't marked.
 - **Windows** SmartScreen may warn about it. A download with PowerShell, as
   in the quick start, isn't marked.
@@ -106,7 +106,7 @@ On a platform without a release binary, build it with
 [Rust](https://rustup.rs) 1.90 or newer. It takes a few minutes:
 
 ```sh
-cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.0 sonda
+cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.1 sonda
 ```
 
 From a clone instead: `cargo install --path crates/sonda`.
@@ -127,7 +127,7 @@ Download the release binary rather than building it on each run:
     fetch-depth: 0            # sonda needs the base branch or the pushed range
 - name: Install sonda
   run: |
-    v=0.2.0 f=sonda-0.2.0-x86_64-linux
+    v=0.2.1 f=sonda-0.2.1-x86_64-linux
     cd "$RUNNER_TEMP"
     curl -fsSLO "https://github.com/lvaoliveira/sonda/releases/download/v$v/$f"
     curl -fsSL "https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS" | grep " $f\$" | sha256sum -c -
@@ -165,7 +165,7 @@ It needs Docker with Compose v2, `git` and `openssl`, on an amd64 or arm64
 machine. From a clone of the release:
 
 ```sh
-git clone --branch v0.2.0 https://github.com/lvaoliveira/sonda.git && cd sonda
+git clone --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 ```
 

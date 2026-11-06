@@ -43,7 +43,7 @@ Quality gate: FAILED
 Each [release](https://github.com/lvaoliveira/sonda/releases/latest) has a CLI binary for Linux (x86_64, arm64), macOS (Apple Silicon) and Windows (x86_64). On Linux:
 
 ```sh
-v=0.2.0 f=sonda-0.2.0-$(uname -m)-linux    # x86_64 or aarch64
+v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
 curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | sha256sum -c -
 mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
