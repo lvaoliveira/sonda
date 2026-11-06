@@ -239,7 +239,9 @@ scripts/setup-server.sh
 ```
 
 The script creates the secrets in `secrets/`, starts the server and its
-database, and waits until they're healthy. Open http://127.0.0.1:9000 and
+database, and waits until they're healthy. If this machine already runs a
+sonda server, give the new one its own name and port first: see
+[A second server on one machine](server.md#a-second-server-on-one-machine). Open http://127.0.0.1:9000 and
 sign in as `admin`, with the password in `secrets/admin_password`. Change
 it under Account.
 
