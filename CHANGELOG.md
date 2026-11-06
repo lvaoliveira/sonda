@@ -23,6 +23,10 @@ says what 1.0 will promise. **Upgrading:** rerun
 
 ### Added
 
+- Release binaries for macOS (Apple Silicon) and Windows (x86_64), beside
+  Linux's: built natively with the same Rust, each checked to parse every
+  language (macOS's in its sandbox), attested, and with an SBOM. They aren't
+  signed by Apple or Microsoft yet.
 - Rust: `.rs` files are parsed, with lines, functions, complexity and
   duplication measured, and `common/cognitive-complexity` and
   `common/too-many-parameters` run on them, as SonarQube's Rust rules

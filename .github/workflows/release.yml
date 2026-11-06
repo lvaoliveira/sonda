@@ -2,10 +2,13 @@ name: Release
 
 # A `v*` tag publishes a GitHub Release (docs/release-1.0.md, M0): the CLI as
 # static Linux binaries from the image's `cli` target, built on each
-# architecture's own runner, each checked to parse every language in its
-# sandbox and to report the tag's version, with SHA-256 checksums; the notes
-# are the tag's CHANGELOG section. The release stays a draft until every
-# binary is attached, so a failed build never publishes half a release.
+# architecture's own runner, and as macOS (Apple Silicon) and Windows
+# (x86_64) binaries built natively with the same Rust, each checked to parse
+# every language in its sandbox and to report the tag's version, with
+# SHA-256 checksums; the notes are the tag's CHANGELOG section. The release
+# stays a draft until every binary is attached, so a failed build never
+# publishes half a release. A macOS job that never gets a runner (GitHub's
+# are often short) fails the same way: rerun it.
 #
 # The server image goes to GHCR as ghcr.io/<owner>/sonda:<version>, one build
 # per architecture on its own runner, merged into one multi-arch tag once
@@ -142,6 +145,108 @@ jobs:
           sha256sum "$name" > "$name.sha256"
           sha256sum "$name.cdx.json" > "$name.cdx.json.sha256"
           gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" "$name.cdx.json" "$name.cdx.json.sha256" --repo "$GITHUB_REPOSITORY"
+
+  # The CLI on macOS (Apple Silicon) and Windows (x86_64): built on their own
+  # runners with the Rust the Linux binaries use, checked the same way, and
+  # named, attested and attached like them.
+  cli-native:
+    needs: draft
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            platform: aarch64-macos
+            exe: ""
+          - runner: windows-latest
+            platform: x86_64-windows
+            exe: .exe
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      EXE: ${{ matrix.exe }}
+      # Windows: the C runtime linked in, so the binary needs no Visual C++
+      # redistributable installed.
+      RUSTFLAGS: ${{ matrix.exe == '.exe' && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build it with the Linux binaries' Rust
+        run: |
+          # The Dockerfile's cli-build stage pins it; Dependabot keeps it current.
+          rust=$(sed -n 's/^FROM rust:\([0-9.]*\)-alpine.*/\1/p' Dockerfile)
+          rustup toolchain install "$rust" --profile minimal --no-self-update
+          cargo "+$rust" build --release --locked -p sonda
+          # A Unix-style path, which check-languages.sh needs on Windows too.
+          bin="$(cd "$RUNNER_TEMP" && pwd)/bin"
+          mkdir -p "$bin"
+          cp "target/release/sonda$EXE" "$bin/"
+          echo "SONDA=$bin/sonda$EXE" >> "$GITHUB_ENV"
+      - run: scripts/check-languages.sh "$SONDA"
+      # check-languages.sh takes the sandbox on trust where it can't start;
+      # macOS has one, so the shipped binary must start it.
+      - name: Its sandbox starts
+        if: runner.os == 'macOS'
+        run: '"$SONDA" scan scripts --sandbox require --no-gate -o /dev/null'
+      - name: It reports the version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if ! "$SONDA" --version | grep -qw -- "$version"; then
+            echo "::error::the binary doesn't report version $version"
+            exit 1
+          fi
+      - name: It writes its SBOM
+        run: |
+          mkdir "$RUNNER_TEMP/locks"
+          cp Cargo.lock "$RUNNER_TEMP/locks/"
+          "$SONDA" sbom "$RUNNER_TEMP/locks" --output "$RUNNER_TEMP/sbom.cdx.json"
+          # attest-sbom takes a CycloneDX BOM only with a serial number.
+          jq -e '.bomFormat == "CycloneDX" and (.serialNumber | type == "string") and (.components | length) > 100' "$RUNNER_TEMP/sbom.cdx.json" > /dev/null
+      - name: Name it
+        if: github.event_name == 'push'
+        id: files
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          base="sonda-$version-$PLATFORM"
+          cp "$SONDA" "$RUNNER_TEMP/$base$EXE"
+          mv "$RUNNER_TEMP/sbom.cdx.json" "$RUNNER_TEMP/$base.cdx.json"
+          echo "path=$RUNNER_TEMP/$base$EXE" >> "$GITHUB_OUTPUT"
+          echo "sbom=$RUNNER_TEMP/$base.cdx.json" >> "$GITHUB_OUTPUT"
+      - name: Attest where it was built
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.files.outputs.path }}
+      - name: Attest its SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ steps.files.outputs.path }}
+          sbom-path: ${{ steps.files.outputs.sbom }}
+      - name: Attach it, with its checksums
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.files.outputs.path }}
+          SBOM: ${{ steps.files.outputs.sbom }}
+        run: |
+          cd "$RUNNER_TEMP"
+          # Written by hand: Windows' sha256sum marks binary files with `*`,
+          # and SHA256SUMS keeps the Linux lines' two-space form.
+          sum() { printf '%s  %s\n' "$(sha256sum < "$1" | cut -d' ' -f1)" "$1"; }
+          name=$(basename "$NAME") sbom=$(basename "$SBOM")
+          sum "$name" > "$name.sha256"
+          sum "$sbom" > "$sbom.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" "$sbom" "$sbom.sha256" --repo "$GITHUB_REPOSITORY"
 
   image:
     needs: draft
@@ -291,7 +396,7 @@ jobs:
           push-to-registry: true
 
   publish:
-    needs: [cli, image-tag]
+    needs: [cli, cli-native, image-tag]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

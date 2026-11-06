@@ -27,8 +27,9 @@ gh attestation verify oci://ghcr.io/lvaoliveira/sonda@sha256:<digest> --repo lva
 
 The checksums in the release's `SHA256SUMS` only say the download is intact;
 the attestation says who built it. The SBOMs are also attached to the
-release: `sonda-<version>-<arch>-linux.cdx.json` for each binary (its locked
-crates) and `sonda-<version>-image.cdx.json` for the image (the server's
+release: `sonda-<version>-<platform>.cdx.json` for each binary (its locked
+crates; the platforms are `x86_64-linux`, `aarch64-linux`, `aarch64-macos`
+and `x86_64-windows`, whose binary ends in `.exe`) and `sonda-<version>-image.cdx.json` for the image (the server's
 crates and the web app's packages).
 
 ## Threat model

@@ -39,8 +39,9 @@ below holds, with the [exit criteria](#exit-criteria) at the end.
 - **Should Connect's tokens expire?** It creates analysis tokens with no
   expiry, so CI doesn't stop on a date. Proposed: keep that, and show each
   token's last use on Account → Tokens so unused ones get revoked.
-- **Which platforms get release binaries?** Proposed: Linux x86_64 and
+- **Which platforms get release binaries?** Decided: Linux x86_64 and
   arm64 (static), macOS arm64, Windows x86_64: the ones CI already tests.
+  0.2.0 is the first release with all four.
 
 ## M0: 0.1.0
 
