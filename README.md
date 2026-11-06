@@ -45,8 +45,9 @@ Each [release](https://github.com/lvaoliveira/sonda/releases/latest) has a CLI b
 ```sh
 v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
-curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | sha256sum -c -
-mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
+grep " $f\$" SHA256SUMS | sha256sum -c - &&
+  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 ```
 
 [docs/install.md](docs/install.md) covers the rest: macOS and Windows, building from source, CI, the server, verifying a release, upgrading and uninstalling.
