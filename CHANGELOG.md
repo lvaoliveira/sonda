@@ -7,6 +7,24 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-06
+
+The CLI now comes as a binary for macOS and Windows too, and
+[docs/install.md](docs/install.md) is one guide to installing it and the
+server. The CLI and the server are unchanged from 0.2.0: there's nothing to
+upgrade on a server.
+
+### Added
+
+- Release binaries for macOS (Apple Silicon) and Windows (x86_64), beside
+  Linux's: built natively with the same Rust, each checked to parse every
+  language (macOS's in its sandbox), attested, and with an SBOM. They aren't
+  signed by Apple or Microsoft yet.
+- [docs/install.md](docs/install.md): a quick start to a first scan on each
+  platform, checking a download, building from source, CI, the server, and
+  upgrading. `docs/server.md` says how to run a second server on one
+  machine.
+
 ## [0.2.0] - 2026-11-05
 
 sonda reads Rust: lines, functions, complexity and duplication, and 35
@@ -23,10 +41,6 @@ says what 1.0 will promise. **Upgrading:** rerun
 
 ### Added
 
-- Release binaries for macOS (Apple Silicon) and Windows (x86_64), beside
-  Linux's: built natively with the same Rust, each checked to parse every
-  language (macOS's in its sandbox), attested, and with an SBOM. They aren't
-  signed by Apple or Microsoft yet.
 - Rust: `.rs` files are parsed, with lines, functions, complexity and
   duplication measured, and `common/cognitive-complexity` and
   `common/too-many-parameters` run on them, as SonarQube's Rust rules

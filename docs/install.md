@@ -13,32 +13,38 @@ check it against the release's checksums.
 Linux:
 
 ```sh
-v=0.2.0 f=sonda-0.2.0-$(uname -m)-linux    # x86_64 or aarch64
+v=0.2.1 f=sonda-0.2.1-$(uname -m)-linux    # x86_64 or aarch64
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
-curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | sha256sum -c -
-mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
+grep " $f\$" SHA256SUMS | sha256sum -c - &&
+  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 ```
 
 macOS:
 
 ```sh
-v=0.2.0 f=sonda-0.2.0-aarch64-macos
+v=0.2.1 f=sonda-0.2.1-aarch64-macos
 curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/$f
-curl -fsSL https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c -
-mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
+curl -fsSLO https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS
+grep " $f\$" SHA256SUMS | shasum -a 256 -c - &&
+  mkdir -p ~/.local/bin && install -m 755 $f ~/.local/bin/sonda
 ```
 
 Windows, in PowerShell:
 
 ```powershell
-$v = "0.2.0"; $f = "sonda-$v-x86_64-windows.exe"
+$v = "0.2.1"; $f = "sonda-$v-x86_64-windows.exe"
 $url = "https://github.com/lvaoliveira/sonda/releases/download/v$v"
 Invoke-WebRequest "$url/$f" -OutFile $f; Invoke-WebRequest "$url/SHA256SUMS" -OutFile SHA256SUMS
-$sum = (Select-String -Path SHA256SUMS -Pattern " $([regex]::Escape($f))$").Line
-if (-not $sum -or $sum.Split(" ")[0] -ne (Get-FileHash $f).Hash) { throw "$f doesn't match SHA256SUMS" }
-$dir = "$env:LOCALAPPDATA\Programs\sonda"; New-Item -ItemType Directory -Force $dir | Out-Null
-Move-Item -Force $f "$dir\sonda.exe"
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$dir", "User")
+$sums = @(Select-String -Path SHA256SUMS -Pattern " $([regex]::Escape($f))$")
+if ($sums.Count -ne 1 -or ($sums[0].Line -split '\s+')[0] -ine (Get-FileHash $f -Algorithm SHA256).Hash) {
+  Write-Error "$f doesn't match its line in SHA256SUMS: not installed"
+} else {
+  $dir = "$env:LOCALAPPDATA\Programs\sonda"; New-Item -ItemType Directory -Force $dir | Out-Null
+  Move-Item -Force $f "$dir\sonda.exe"
+  $entries = @([Environment]::GetEnvironmentVariable("Path", "User") -split ";" | Where-Object { $_ })
+  if ($dir -notin $entries) { [Environment]::SetEnvironmentVariable("Path", (($entries + $dir) -join ";"), "User") }
+}
 ```
 
 On Windows, open a new terminal afterwards, so it sees the new `Path`.
@@ -50,6 +56,23 @@ source](#from-source).
 ```sh
 cd your-project
 sonda scan .
+```
+
+For example, on a small TypeScript folder:
+
+```text
+clipboard.ts
+    26:12   MAJOR     Code smell     js/deprecated-api                Use the replacement.
+
+Summary (new code = changes since the merge base with origin/main, marked *)
+  Files 10 · Lines of code 728 · Functions 110 · Complexity 207
+  Bugs 0 (0 new) · Vulnerabilities 0 (0 new) · Code smells 1 (0 new)
+  Duplication 0.0% · Coverage n/a (new code n/a) · Debt 10min
+
+Quality gate: PASSED
+  ✓ fails if new_bugs > 0 (actual: 0)
+  ✓ fails if new_vulnerabilities > 0 (actual: 0)
+  – fails if new_coverage < 80 (actual: no data, ignored: fewer than 20 new lines)
 ```
 
 It lists the issues by file, then a summary (lines of code, bugs,
@@ -69,8 +92,8 @@ as a CI check.
 ### Checking a download
 
 The quick start checks each download against the release's `SHA256SUMS`,
-matching the file's own line, so it fails if the file isn't listed. That
-says the download is intact, not who built it, since the checksums come
+matching the file's own line, so it fails if the file isn't listed, and
+installs only when the check passes. That says the download is intact, not who built it, since the checksums come
 from the same place. Each binary also carries a signed build attestation
 that does: verify it with the [GitHub CLI](https://cli.github.com/) before
 installing.
@@ -82,10 +105,12 @@ gh attestation verify $f --repo lvaoliveira/sonda
 The binaries aren't signed by Apple or Microsoft yet. A download from a
 browser is marked as such, and then:
 
-- **macOS** refuses to run it, saying Apple can't check it for malicious
-  software. After checking it, clear the mark:
-  `xattr -d com.apple.quarantine sonda-0.2.0-aarch64-macos`. A `curl`
-  download, as in the quick start, isn't marked.
+- **macOS** blocks it the first time it runs, saying Apple can't check it
+  for malicious software. Check the download first (its checksum and
+  attestation, above), then open System Settings → Privacy & Security,
+  where macOS lists the blocked program with **Allow Anyway**. Run it
+  again and confirm. A `curl` download, as in the quick start, isn't
+  marked.
 - **Windows** SmartScreen may warn about it. A download with PowerShell, as
   in the quick start, isn't marked.
 
@@ -106,7 +131,7 @@ On a platform without a release binary, build it with
 [Rust](https://rustup.rs) 1.90 or newer. It takes a few minutes:
 
 ```sh
-cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.0 sonda
+cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.1 sonda
 ```
 
 From a clone instead: `cargo install --path crates/sonda`.
@@ -126,13 +151,18 @@ Download the release binary rather than building it on each run:
   with:
     fetch-depth: 0            # sonda needs the base branch or the pushed range
 - name: Install sonda
+  env:
+    GH_TOKEN: ${{ github.token }}   # for gh attestation verify
   run: |
-    v=0.2.0 f=sonda-0.2.0-x86_64-linux
+    v=0.2.1 f=sonda-0.2.1-x86_64-linux
     cd "$RUNNER_TEMP"
     curl -fsSLO "https://github.com/lvaoliveira/sonda/releases/download/v$v/$f"
-    curl -fsSL "https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS" | grep " $f\$" | sha256sum -c -
-    install -m 755 "$f" sonda
-    echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+    curl -fsSLO "https://github.com/lvaoliveira/sonda/releases/download/v$v/SHA256SUMS"
+    grep " $f\$" SHA256SUMS | sha256sum -c -
+    gh attestation verify "$f" --repo lvaoliveira/sonda
+    mkdir -p "$RUNNER_TEMP/bin"
+    install -m 755 "$f" "$RUNNER_TEMP/bin/sonda"
+    echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 - run: sonda scan .
 ```
 
@@ -165,7 +195,7 @@ It needs Docker with Compose v2, `git` and `openssl`, on an amd64 or arm64
 machine. From a clone of the release:
 
 ```sh
-git clone --branch v0.2.0 https://github.com/lvaoliveira/sonda.git && cd sonda
+git clone --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 ```
 
