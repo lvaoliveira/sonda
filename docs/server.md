@@ -11,7 +11,8 @@ as `admin`.
 
 ## Quick start (Docker Compose)
 
-From a checkout of a release (or of `main`, for what's next):
+[install.md](install.md) is the short version, with the CLI too. From a
+checkout of a release (or of `main`, for what's next):
 
 ```sh
 git clone --branch v0.2.0 https://github.com/lvaoliveira/sonda.git && cd sonda
@@ -81,6 +82,22 @@ export SONDA_TOKEN_FILE=secrets/sonda_token   # or --token-file, or SONDA_TOKEN
 
 Stop with `docker compose down`. Data lives in the `pgdata` volume, so it
 survives restarts and upgrades. `docker compose down -v` deletes it.
+
+### A second server on one machine
+
+`compose.yaml` names the Compose project `sonda`, so a second clone on the
+same machine, such as one to try a release candidate, would take over the
+first one's containers. Give the second one its own project name and port
+before running the script:
+
+```sh
+printf 'COMPOSE_PROJECT_NAME=sonda-test\n' >> .env
+scripts/setup-server.sh --port 9400
+docker compose ps    # sonda-test-sonda-1 and sonda-test-db-1
+```
+
+`.env`'s `COMPOSE_PROJECT_NAME` wins over the file's `name:`, so every
+`docker compose` command in that clone acts on its own containers.
 
 ## Uploading analyses
 
