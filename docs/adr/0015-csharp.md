@@ -1,6 +1,10 @@
 # ADR-0015: C# support
 
-- Status: **proposed**
+- Status: **accepted; built** (2026-11-07). The grammar, metrics, rules,
+  suppressions, the semantic model with its control-flow graph, and the
+  project-level rules; S1944 and S6802 wait, as Consequences says.
+  Recorded as accepted when the 1.0 plan checked each ADR's status against
+  what's built.
 - Date: 2026-10-31
 
 ## Context

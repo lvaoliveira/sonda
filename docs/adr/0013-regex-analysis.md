@@ -1,6 +1,10 @@
 # ADR-0013: Analysis of regular expressions
 
-- Status: **proposed**
+- Status: **accepted; built** (2026-11-07). R1 to R3 for Python, Java and
+  JavaScript/TypeScript, with 78 rules, among them catastrophic (S5852) and
+  polynomial (S8786) backtracking; and the .NET dialect for C#'s invalid
+  patterns (S5856). Recorded as accepted when the 1.0 plan checked each
+  ADR's status against what's built.
 - Date: 2026-10-31
 
 ## Context

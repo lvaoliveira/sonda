@@ -93,17 +93,18 @@ in CI.
 
 ## M3: release hardening
 
-- [ ] Release binaries for the platforms decided above, built and tested in
+- [x] Release binaries for the platforms decided above, built and tested in
       CI (the sandbox check in `docker-cli` on each Linux one).
-- [ ] The server image published to GHCR per release, pinned by digest in
+- [x] The server image published to GHCR per release, pinned by digest in
       the docs, as [ADR-0005](adr/0005-sonda-server.md) intended.
-- [ ] Build provenance attestations for binaries and image, and an SBOM of
+- [x] Build provenance attestations for binaries and image, and an SBOM of
       each (sonda writes CycloneDX already).
-- [ ] The release workflow checks every binary runs a scan in every
+- [x] The release workflow checks every binary runs a scan in every
       language before publishing.
 
 **Done when** a release publishes all of it from a tag, with nothing done
-by hand.
+by hand. Done: 0.2.0 published the image, attestations and SBOMs, and
+0.2.1 the macOS and Windows binaries, each from its tag.
 
 ## M4: proven in real use
 
@@ -156,13 +157,15 @@ fixed or written up as accepted risks.
       an issue on a pull request's latest analysis re-posts its check and
       comment. Without it, the pull request keeps showing what was
       accepted.
-- [ ] Every ADR's status matches what's built (C# shipped while
-      [ADR-0015](adr/0015-csharp.md) is still "proposed"; also 0013, 0020).
+- [x] Every ADR's status matches what's built: C#
+      ([ADR-0015](adr/0015-csharp.md)), regex analysis (0013) and
+      cross-file declarations (0020) were built but still "proposed".
 - [ ] Pages no longer flicker on every navigation (the roadmap's `useAsync`
       cache).
-- [ ] Each roadmap item marked as before or after 1.0 (most are after:
-      GitLab and Bitbucket, single sign-on, AI auto-fix, teams, the health
-      trend, regex analysis, the rest of the semantic rules).
+- [x] Each roadmap item marked as before or after 1.0, in the roadmap's
+      [table](roadmap.md#before-or-after-10). Most are after; the private
+      CA, Safari, page flicker and decoration following triage are before.
+      Regex analysis, listed here as after, turned out to be built.
 
 **Done when** these are merged and the roadmap says what comes after 1.0.
 
