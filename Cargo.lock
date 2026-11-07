@@ -1631,6 +1631,7 @@ dependencies = [
  "anyhow",
  "clap",
  "flate2",
+ "rustls",
  "serde_json",
  "sonda-core",
  "tempfile",

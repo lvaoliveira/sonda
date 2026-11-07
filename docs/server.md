@@ -1114,8 +1114,17 @@ volume and survive upgrades, so devices keep trusting it. **Treat that
 volume like a password:** a device that trusts this root trusts any
 certificate it signs, for any name.
 
-Uploads stay on `127.0.0.1`: the CLI trusts only public authorities, so it
-refuses this certificate. Decorations' links point at the HTTPS address
+To upload from another machine, give the CLI the same root with
+`--ca-cert` (or `SONDA_CA_CERT`): it then trusts that authority, and only
+that one, for the upload.
+
+```sh
+sonda scan . --upload --server https://192.168.1.10:9443 --ca-cert caddy-root.crt \
+  --project my-app --branch main --commit "$(git rev-parse HEAD)"
+```
+
+Without it, the CLI trusts public authorities only, refuses this
+certificate, and says to pass `--ca-cert`. Decorations' links point at the HTTPS address
 unless `--public-url` says otherwise. `sonda upload` refuses plain
 HTTP to anything but localhost, so the token never crosses the network
 unencrypted.

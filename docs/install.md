@@ -287,7 +287,9 @@ network until you choose how:
 
 Sign-in works only over HTTPS or on `localhost`, unless `--lan` is on. The
 CLI sends a token over plain HTTP only to `localhost`, so uploads from
-other machines need HTTPS either way.
+other machines need HTTPS either way. With `--https`, pass the CLI the
+server's `caddy-root.crt` with `--ca-cert`
+([HTTPS on a LAN address](server.md#https-on-a-lan-address)).
 
 ## Upgrading
 

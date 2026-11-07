@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 use ureq::http::Uri;
+use ureq::tls::{PemItem, RootCerts, TlsConfig};
 
 /// A report bigger than this is not one sonda wrote.
 const MAX_REPORT_BYTES: u64 = 256 << 20;
@@ -24,6 +25,8 @@ const MAX_ERROR_BYTES: u64 = 4 << 10;
 const MAX_ANSWER_BYTES: u64 = 64 << 10;
 /// A profile lists at most every rule, with a severity each.
 const MAX_PROFILE_BYTES: u64 = 1 << 20;
+/// A bundle of root certificates, generously.
+const MAX_CA_CERT_BYTES: u64 = 1 << 20;
 
 #[derive(Args)]
 pub struct UploadArgs {
@@ -54,6 +57,12 @@ pub struct UploadArgs {
     /// other users and in CI logs.
     #[arg(long, value_name = "FILE", env = "SONDA_TOKEN_FILE")]
     token_file: Option<PathBuf>,
+    /// PEM file of the certificate authorities to trust for the server, such
+    /// as caddy-root.crt from `setup-server.sh --https`. They replace the
+    /// public authorities for this upload, so the token goes only to a
+    /// server they certify.
+    #[arg(long, value_name = "FILE", env = "SONDA_CA_CERT")]
+    ca_cert: Option<PathBuf>,
     /// The pull request the analysis belongs to, outside GitHub Actions
     /// (where it's read from the event); --branch is its head branch.
     #[arg(long, value_name = "NUMBER", requires = "pull_request_base")]
@@ -74,6 +83,7 @@ pub fn run(args: UploadArgs) -> Result<ExitCode> {
         commit: args.commit,
         project_version: args.project_version,
         token_file: args.token_file,
+        ca_cert: args.ca_cert,
         pull_request: args.pull_request,
         pull_request_base: args.pull_request_base,
     }
@@ -98,6 +108,8 @@ pub struct Target {
     pub commit: String,
     pub project_version: Option<String>,
     pub token_file: Option<PathBuf>,
+    /// `--ca-cert`: the authorities to trust instead of the public ones.
+    pub ca_cert: Option<PathBuf>,
     /// `--pull-request` and `--pull-request-base`, which clap requires
     /// together.
     pub pull_request: Option<u64>,
@@ -108,6 +120,8 @@ pub struct Target {
 pub struct Checked {
     url: String,
     token: String,
+    /// Mozilla's roots, or only `--ca-cert`'s.
+    roots: RootCerts,
     server: String,
     meta: Meta,
 }
@@ -208,8 +222,9 @@ impl ServerRules {
     }
 }
 
-fn agent(timeout: Duration) -> ureq::Agent {
+fn agent(timeout: Duration, roots: &RootCerts) -> ureq::Agent {
     ureq::Agent::config_builder()
+        .tls_config(TlsConfig::builder().root_certs(roots.clone()).build())
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_global(Some(timeout))
         // A redirect would carry the token somewhere the user did not name.
@@ -248,6 +263,10 @@ impl Target {
         };
         let url = endpoint(&self.server)?;
         let token = token(self.token_file.as_deref())?;
+        let roots = match &self.ca_cert {
+            Some(path) => ca_roots(path)?,
+            None => RootCerts::WebPki,
+        };
         let meta = Meta {
             project: self.project,
             branch: self.branch,
@@ -259,6 +278,7 @@ impl Target {
         Ok(Some(Checked {
             url,
             token,
+            roots,
             server: self.server,
             meta,
         }))
@@ -274,10 +294,11 @@ impl Checked {
         // (`validate_meta`).
         let base = self.url.trim_end_matches("/analyses");
         let url = format!("{base}/projects/{}/rule-profile", self.meta.project);
-        let mut response = agent(Duration::from_secs(30))
+        let mut response = agent(Duration::from_secs(30), &self.roots)
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .call()
+            .map_err(|e| self.explain(e))
             .with_context(|| format!("fetching the project's rule settings from {url}"))?;
         let status = response.status();
         if status == 404 {
@@ -311,6 +332,12 @@ impl Checked {
         &self.server
     }
 
+    /// A connection error, with what to do when it's the certificate's
+    /// authority that isn't trusted.
+    fn explain(&self, error: ureq::Error) -> anyhow::Error {
+        explain(error, matches!(self.roots, RootCerts::Specific(_)))
+    }
+
     /// Sends `report` (JSON) and the sources under `root`. `scan_duration`
     /// is how long the scan took, when this process ran it.
     /// Returns whether the server's gate passed, when its answer says
@@ -321,9 +348,11 @@ impl Checked {
         root: &Path,
         scan_duration: Option<Duration>,
     ) -> Result<Option<bool>> {
+        let custom_roots = matches!(self.roots, RootCerts::Specific(_));
         let Checked {
             url,
             token,
+            roots,
             server,
             meta,
         } = self;
@@ -334,12 +363,13 @@ impl Checked {
         let post = |upload: &upload::Upload| -> Result<ureq::http::Response<ureq::Body>> {
             let body = gzip(&serde_json::to_vec(upload)?)?;
             tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
-            agent(Duration::from_secs(300))
+            agent(Duration::from_secs(300), &roots)
                 .post(&url)
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .header("Content-Encoding", "gzip")
                 .send(&body[..])
+                .map_err(|e| explain(e, custom_roots))
                 .with_context(|| format!("sending to {url}"))
         };
         let error_text = |response: &mut ureq::http::Response<ureq::Body>| {
@@ -482,6 +512,83 @@ fn endpoint(server: &str) -> Result<String> {
     Ok(format!("{}/api/analyses", server.trim_end_matches('/')))
 }
 
+/// The certificate authorities in a PEM file, to trust instead of the public
+/// ones. Each must parse as a root, since ureq would skip one that doesn't
+/// and every connection would then fail as untrusted, which hides the cause;
+/// a private key in the file is refused, as it was never meant to be shared.
+fn ca_roots(path: &Path) -> Result<RootCerts> {
+    let read = || {
+        format!(
+            "reading the certificate authorities from {}",
+            path.display()
+        )
+    };
+    let pem = read_capped(path, MAX_CA_CERT_BYTES).with_context(read)?;
+    let mut certs = Vec::new();
+    for item in ureq::tls::parse_pem(&pem) {
+        match item.with_context(read)? {
+            PemItem::Certificate(cert) => certs.push(cert),
+            PemItem::PrivateKey(_) => bail!(
+                "{} holds a private key: pass only the authority's certificate, \
+                 and keep its key where it was",
+                path.display()
+            ),
+            _ => {}
+        }
+    }
+    if certs.is_empty() {
+        bail!(
+            "{} holds no PEM certificate (-----BEGIN CERTIFICATE-----)",
+            path.display()
+        );
+    }
+    let mut store = rustls::RootCertStore::empty();
+    for (i, cert) in certs.iter().enumerate() {
+        store
+            .add(rustls::pki_types::CertificateDer::from(cert.der()))
+            .with_context(|| {
+                format!(
+                    "certificate {} in {} isn't a valid authority",
+                    i + 1,
+                    path.display()
+                )
+            })?;
+    }
+    Ok(RootCerts::new_with_certs(&certs))
+}
+
+/// A connection error, with a hint when the server's certificate comes from
+/// an authority this upload doesn't trust.
+fn explain(error: ureq::Error, custom_roots: bool) -> anyhow::Error {
+    use rustls::{CertificateError, Error as Tls};
+    let unknown_issuer = |tls: &Tls| {
+        matches!(
+            tls,
+            Tls::InvalidCertificate(CertificateError::UnknownIssuer)
+        )
+    };
+    // During the handshake, ureq reports rustls's error inside an I/O error.
+    let untrusted = match &error {
+        ureq::Error::Rustls(tls) => unknown_issuer(tls),
+        ureq::Error::Io(io) => io
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<Tls>())
+            .is_some_and(unknown_issuer),
+        _ => false,
+    };
+    let error = anyhow::Error::new(error);
+    match (untrusted, custom_roots) {
+        (false, _) => error,
+        (true, false) => error.context(
+            "the server's certificate isn't from a public authority; if it's your own, \
+             such as Caddy's from `setup-server.sh --https`, pass its root with --ca-cert",
+        ),
+        (true, true) => {
+            error.context("the server's certificate isn't signed by the --ca-cert authorities")
+        }
+    }
+}
+
 fn token(file: Option<&Path>) -> Result<String> {
     // As the server does: never guess which of two tokens is meant.
     if file.is_some() && std::env::var_os("SONDA_TOKEN").is_some() {
@@ -521,6 +628,154 @@ fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tls")
+            .join(name)
+    }
+
+    /// A TLS server on 127.0.0.1 with `server.crt` (signed by `ca.crt`),
+    /// answering one request with 404, as a server without rule profiles
+    /// answers `fetch_rules`.
+    fn tls_server() -> String {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let chain = vec![CertificateDer::from_pem_file(fixture("server.crt")).unwrap()];
+        let key = PrivateKeyDer::from_pem_file(fixture("server.key")).unwrap();
+        let config = Arc::new(
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(chain, key)
+                .unwrap(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let Ok((socket, _)) = listener.accept() else {
+                return;
+            };
+            let connection = rustls::ServerConnection::new(config).unwrap();
+            let mut stream = rustls::StreamOwned::new(connection, socket);
+            let mut request = Vec::new();
+            let mut byte = [0];
+            // A refused handshake ends here, as a read error.
+            while !request.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(1) => request.push(byte[0]),
+                    _ => return,
+                }
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            stream.conn.send_close_notify();
+            let _ = stream.flush();
+        });
+        format!("https://{address}")
+    }
+
+    fn checked(server: String, ca_cert: Option<PathBuf>, dir: &Path) -> Checked {
+        let token_file = dir.join("token");
+        std::fs::write(&token_file, "0123456789abcdef0123456789abcdef").unwrap();
+        Target {
+            server,
+            project: "app".into(),
+            branch: "main".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            project_version: None,
+            token_file: Some(token_file),
+            ca_cert,
+            // Named, so a CI run's own pull request isn't read from the environment.
+            pull_request: Some(1),
+            pull_request_base: Some("main".into()),
+        }
+        .check()
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_server_certified_by_the_ca_cert_authority_is_trusted() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = checked(tls_server(), Some(fixture("ca.crt")), dir.path());
+        assert!(target.fetch_rules().unwrap().is_none());
+    }
+
+    #[test]
+    fn without_ca_cert_a_private_authority_is_refused_with_a_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = checked(tls_server(), None, dir.path())
+            .fetch_rules()
+            .err()
+            .expect("refused");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("pass its root with --ca-cert"),
+            "{message}"
+        );
+        assert!(message.contains("UnknownIssuer"), "{message}");
+    }
+
+    #[test]
+    fn another_authority_than_the_servers_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = checked(tls_server(), Some(fixture("other-ca.crt")), dir.path());
+        let message = format!("{:#}", target.fetch_rules().err().expect("refused"));
+        assert!(
+            message.contains("isn't signed by the --ca-cert authorities"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_bundle_trusts_each_of_its_authorities() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle.pem");
+        let mut pem = std::fs::read(fixture("other-ca.crt")).unwrap();
+        pem.extend(std::fs::read(fixture("ca.crt")).unwrap());
+        std::fs::write(&bundle, pem).unwrap();
+        let target = checked(tls_server(), Some(bundle), dir.path());
+        assert!(target.fetch_rules().unwrap().is_none());
+    }
+
+    #[test]
+    fn ca_cert_files_that_trust_nothing_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, text: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let cases = [
+            (write("empty.pem", ""), "holds no PEM certificate"),
+            (
+                write("text.pem", "not a certificate\n"),
+                "holds no PEM certificate",
+            ),
+            (fixture("server.key"), "holds a private key"),
+            (
+                write(
+                    "junk.pem",
+                    "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+                ),
+                "isn't a valid authority",
+            ),
+            (dir.path().join("missing.pem"), "reading"),
+        ];
+        for (path, expected) in cases {
+            let message = format!("{:#}", ca_roots(&path).unwrap_err());
+            assert!(message.contains(expected), "{}: {message}", path.display());
+        }
+        // A certificate and a key together are refused too: the key is the point.
+        let both = dir.path().join("both.pem");
+        let mut pem = std::fs::read(fixture("ca.crt")).unwrap();
+        pem.extend(std::fs::read(fixture("server.key")).unwrap());
+        std::fs::write(&both, pem).unwrap();
+        assert!(format!("{:#}", ca_roots(&both).unwrap_err()).contains("private key"));
+    }
 
     #[test]
     fn https_and_local_http_are_accepted() {
