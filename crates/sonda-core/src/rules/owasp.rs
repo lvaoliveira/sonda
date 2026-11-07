@@ -98,6 +98,7 @@ pub(crate) mod y2021 {
     pub(crate) const A05: Owasp = Owasp::new(Edition::Y2021, 5);
     pub(crate) const A07: Owasp = Owasp::new(Edition::Y2021, 7);
     pub(crate) const A08: Owasp = Owasp::new(Edition::Y2021, 8);
+    pub(crate) const A10: Owasp = Owasp::new(Edition::Y2021, 10);
 }
 
 /// The CWEs each 2025 category covers, A01 to A10, from each category's

@@ -4,7 +4,7 @@
 //! reports where these differ from SonarQube's.
 
 use crate::rules::Owasp;
-use crate::rules::owasp::y2021::{A01, A02, A03, A04, A05, A07, A08};
+use crate::rules::owasp::y2021::{A01, A02, A03, A04, A05, A07, A08, A10};
 
 /// (rule id, CWE ids, OWASP Top 10 2021 categories), in catalog order. The
 /// 2025 categories are derived from the CWE ids.
@@ -223,6 +223,12 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("cs/hardcoded-credential", &[259, 798], &[A07]),
     ("cs/sql-built-dynamically", &[89, 943], &[A03]),
     ("cs/sql-injection", &[89, 943], &[A03]),
+    ("cs/command-injection", &[78, 88], &[A03]),
+    ("cs/path-injection", &[22], &[A01]),
+    ("cs/open-redirect", &[601], &[A01]),
+    ("cs/ssrf", &[918], &[A10]),
+    ("cs/xpath-injection", &[643], &[A03]),
+    ("cs/ldap-injection", &[90], &[A03]),
     ("cs/cookie-not-secure", &[311, 315, 614], &[A04, A05]),
     ("cs/cookie-not-httponly", &[1004], &[A05]),
     ("cs/custom-crypto", &[327], &[A02]),

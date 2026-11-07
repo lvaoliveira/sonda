@@ -16,7 +16,7 @@ breaking that promise.
 | [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
 | [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
 | [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
-| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 is built (`cs/sql-injection`); the rest are new rules, in phases ([ADR-0027](adr/0027-taint-analysis.md)), and the shape rules cover injection meanwhile. |
+| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 is built (seven C# rules, `cs/sql-injection` and its kin); the rest are new rules, in phases ([ADR-0027](adr/0027-taint-analysis.md)), and the shape rules cover injection meanwhile. |
 | [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
 | [More lockfile formats](#dependencies-sbom-and-known-vulnerabilities) | after | Adds ecosystems; the SBOM formats don't change. |
 | [AI auto-fix](#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests) | after | Copy as prompt covers fixing with an assistant today ([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md)). |
@@ -135,10 +135,10 @@ own groundwork, smallest first:
    command or a path, as SonarQube's commercial editions do (S3649, S2076,
    S2083 and others), in
    [ADR-0027](adr/0027-taint-analysis.md): sources, sinks and sanitizers as
-   data, then phases from one C# function (T1, built: `cs/sql-injection`)
+   data, then phases from one C# function (T1, built: seven rules, from
+   `cs/sql-injection` to `cs/ldap-injection`)
    to JavaScript (T2), across functions (T3) and across files (T4), with
-   the path shown on each issue (built for T1). Next: the other C# sinks,
-   then T3.
+   the path shown on each issue (built for T1). Next: T3.
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry
