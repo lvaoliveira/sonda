@@ -152,11 +152,10 @@ fixed or written up as accepted risks.
 
 ## M6: what the product still needs
 
-- [ ] Pull request decoration follows triage
+- [x] Pull request decoration follows triage
       ([ADR-0021](adr/0021-pull-request-decoration.md), part 3): accepting
       an issue on a pull request's latest analysis re-posts its check and
-      comment. Without it, the pull request keeps showing what was
-      accepted.
+      comment, and so does a dependency decision that changes its gate.
 - [x] Every ADR's status matches what's built: C#
       ([ADR-0015](adr/0015-csharp.md)), regex analysis (0013) and
       cross-file declarations (0020) were built but still "proposed".

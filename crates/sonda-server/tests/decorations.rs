@@ -347,6 +347,220 @@ async fn pull_requests_get_a_check_and_one_comment_on_github() {
     assert_eq!(decoration(latest).await["state"], "posted");
 }
 
+#[tokio::test]
+async fn triage_on_a_pull_request_posts_its_check_again_without_a_scan() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let Some(key) = generate_key() else {
+        eprintln!("skipped: needs openssl to make a GitHub App key");
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let github: Github = Arc::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(axum::serve(listener, fake_github(github.clone())).into_future());
+    let app_client = Arc::new(App::new("123".into(), &key, api.clone()).unwrap());
+    github.lock().unwrap().public_key = app_client.public_key();
+    let mut state = state_with(db.pool.clone(), true);
+    state.github = Arc::new(Connection::new(Some(app_client.clone()), None, api, None));
+    let server = http::router(state, None);
+    create_user(&db, "ada", "admin").await;
+    let ada = sign_in(&server, "ada", PASSWORD).await.unwrap();
+    // Uploads with the shared token, as CI does; everything else as Ada.
+    let request = |method: &str, path: &str, body: Value| {
+        let builder = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        let builder = if path == "/api/analyses" {
+            builder.header(header::AUTHORIZATION, format!("Bearer {}", common::TOKEN))
+        } else {
+            builder
+                .header(header::COOKIE, &ada)
+                .header("sonda-csrf", "1")
+        };
+        builder
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    };
+    let post_due =
+        || decorations::post_due(&db.pool, &app_client, Some("https://sonda.example.com"));
+    let state_of = |analysis: i64| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT state FROM decorations WHERE analysis_id = $1")
+                .bind(analysis)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let last_run = || github.lock().unwrap().check_runs.last().cloned().unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let clean = [("a.js", "const a = 1;\nexport { a };\n")];
+    let eval = [
+        ("a.js", "const a = 1;\nexport { a };\n"),
+        ("b.js", "eval(input);\n"),
+    ];
+    send(
+        &server,
+        request(
+            "POST",
+            "/api/analyses",
+            upload_json_for(dir.path(), &clean, "shop", "main"),
+        ),
+    )
+    .await;
+    let (status, settings) = send(
+        &server,
+        request(
+            "PATCH",
+            "/api/projects/shop/settings",
+            json!({"githubRepository": "acme/shop"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    let (_, answer) = send(
+        &server,
+        request("POST", "/api/analyses", pull_request(&eval, "acme/shop")),
+    )
+    .await;
+    let analysis = answer["analysis_id"].as_i64().unwrap();
+    assert_eq!(post_due().await.unwrap(), 1);
+    assert_eq!(last_run()["conclusion"], "failure");
+    let issue: i64 =
+        sqlx::query_scalar("SELECT id FROM issues WHERE branch = 'pr:12' AND path = 'b.js'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    let triage = |body: Value| {
+        send(
+            &server,
+            request("PATCH", &format!("/api/issues/{issue}"), body),
+        )
+    };
+
+    // Confirming or assigning it shows nothing new on GitHub: not queued.
+    let (status, _) = triage(json!({"status": "confirmed"})).await;
+    assert_eq!(status, StatusCode::OK);
+    triage(json!({"assignee": "ada"})).await;
+    assert_eq!(state_of(analysis).await.as_deref(), Some("posted"));
+
+    // Accepting it, with no new scan: the check goes green, without its
+    // annotation, and the same comment is edited.
+    let (status, _) =
+        triage(json!({"status": "accepted", "reason": "input is a constant here"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state_of(analysis).await.as_deref(), Some("pending"));
+    assert_eq!(post_due().await.unwrap(), 1);
+    let run = last_run();
+    assert_eq!(run["conclusion"], "success", "{run}");
+    assert_eq!(run["output"]["annotations"], json!([]));
+    assert_eq!(github.lock().unwrap().comments.len(), 1);
+
+    // Reopening it turns the check red again.
+    triage(json!({"status": "open"})).await;
+    assert_eq!(post_due().await.unwrap(), 1);
+    assert_eq!(last_run()["conclusion"], "failure");
+    assert_eq!(github.lock().unwrap().check_runs.len(), 3);
+
+    // A branch's issue isn't a pull request's: deciding it posts nothing.
+    send(
+        &server,
+        request(
+            "POST",
+            "/api/analyses",
+            upload_json_for(dir.path(), &eval, "shop", "main"),
+        ),
+    )
+    .await;
+    let branch_issue: i64 =
+        sqlx::query_scalar("SELECT id FROM issues WHERE branch = 'main' AND path = 'b.js'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    send(
+        &server,
+        request(
+            "PATCH",
+            &format!("/api/issues/{branch_issue}"),
+            json!({"status": "accepted", "reason": "fine"}),
+        ),
+    )
+    .await;
+    assert_eq!(post_due().await.unwrap(), 0);
+}
+
+/// A decision on a vulnerable dependency re-judges every gate of the
+/// project: the pull requests whose gate changed are posted again, and only
+/// those (ADR-0021).
+#[tokio::test]
+async fn pull_requests_whose_gate_changed_are_queued_again() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let eval = [("b.js", "eval(input);\n")];
+    common::upload(&db, &upload_json_for(dir.path(), &eval, "shop", "main")).await;
+    let mut ids = Vec::new();
+    for number in [12, 13, 14] {
+        let mut body = pull_request(&eval, "acme/shop");
+        body["pull_request"]["number"] = json!(number);
+        let (_, answer) = common::upload(&db, &body).await;
+        ids.push(answer["analysis_id"].as_i64().unwrap());
+    }
+    // 12 and 13 were decorated; 14 never was, as no App was configured then.
+    for id in &ids[..2] {
+        sqlx::query("INSERT INTO decorations (analysis_id, state) VALUES ($1, 'posted')")
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+    let project: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE key = 'shop'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE projects SET github_repository = 'acme/shop' WHERE id = $1")
+        .bind(project)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let before = decorations::pull_request_gates(&db.pool, project)
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 3, "the latest analysis of each pull request");
+    // What re-judging the gates does: 12's and 14's change, 13's doesn't.
+    for id in [ids[0], ids[2]] {
+        sqlx::query("UPDATE analyses SET gate = jsonb_set(gate, '{passed}', 'true') WHERE id = $1")
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+    let queued = decorations::requeue_changed(&db.pool, project, &before)
+        .await
+        .unwrap();
+    assert_eq!(queued, 1);
+    let states: Vec<(i64, String)> =
+        sqlx::query_as("SELECT analysis_id, state FROM decorations ORDER BY analysis_id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        states,
+        [
+            (ids[0], "pending".to_string()),
+            (ids[1], "posted".to_string())
+        ]
+    );
+}
+
 #[test]
 fn the_apps_jwt_is_signed_with_its_key_in_either_pem_format() {
     let Some(pkcs) = generate_key() else {

@@ -549,6 +549,11 @@ pub async fn patch_issue(
         .status
         .as_ref()
         .is_some_and(|s| *s != old_status || reason.is_some());
+    // Deciding an issue, or reopening a decided one, changes the counts, the
+    // gate and the annotations; confirming or assigning it doesn't.
+    let decision_changed = patch.status.as_ref().is_some_and(|new| {
+        DECIDED.contains(&new.as_str()) != DECIDED.contains(&old_status.as_str())
+    });
     if let Some(new) = patch.status.filter(|_| status_changed) {
         sqlx::query("UPDATE issues SET status = $2::issue_status, reason = $3 WHERE id = $1")
             .bind(id)
@@ -578,12 +583,30 @@ pub async fn patch_issue(
     tx.commit().await?;
     // Decided issues leave the counts, so the branch's gate may change.
     if status_changed {
-        let (project, branch): (i64, String) =
-            sqlx::query_as("SELECT project_id, branch FROM issues WHERE id = $1")
-                .bind(id)
-                .fetch_one(&state.pool)
-                .await?;
+        let (project, branch, present): (i64, String, bool) = sqlx::query_as(
+            "SELECT project_id, branch, fixed_analysis_id IS NULL FROM issues WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
         crate::new_code::recount(&state.pool, project, &branch).await?;
+        // On a pull request, its check and comment follow, without a scan
+        // (ADR-0021): an issue still there is in its latest analysis.
+        if decision_changed
+            && present
+            && state.github.app().is_some()
+            && sonda_core::upload::is_pull_request_branch(&branch)
+        {
+            let latest: i64 = sqlx::query_scalar(
+                "SELECT id FROM analyses WHERE project_id = $1 AND branch = $2
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(project)
+            .bind(&branch)
+            .fetch_one(&state.pool)
+            .await?;
+            crate::decorations::requeue(&state.pool, latest).await?;
+        }
     }
     Ok(Json(detail(&state.pool, id).await?))
 }
