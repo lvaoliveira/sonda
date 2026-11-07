@@ -137,8 +137,8 @@ own groundwork, smallest first:
    [ADR-0027](adr/0027-taint-analysis.md): sources, sinks and sanitizers as
    data, then phases from one C# function (T1, built: `cs/sql-injection`)
    to JavaScript (T2), across functions (T3) and across files (T4), with
-   the path shown on each issue. Next: the server and web app showing
-   paths, the other C# sinks, then T3.
+   the path shown on each issue (built for T1). Next: the other C# sinks,
+   then T3.
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry

@@ -419,7 +419,233 @@
         ]
       }
     ],
-    "history": []
+    "history": [],
+    "flow": [
+      {
+        "message": "request parameter `customerID`",
+        "line": 86,
+        "column": 48,
+        "endLine": 86,
+        "endColumn": 58,
+        "code": {
+          "number": 86,
+          "tokens": [
+            {
+              "text": "func",
+              "role": "keyword"
+            },
+            {
+              "text": " (",
+              "role": "punct"
+            },
+            {
+              "text": "r",
+              "role": "plain"
+            },
+            {
+              "text": " *",
+              "role": "punct"
+            },
+            {
+              "text": "Repo",
+              "role": "type"
+            },
+            {
+              "text": ") ",
+              "role": "punct"
+            },
+            {
+              "text": "FindByCustomer",
+              "role": "type"
+            },
+            {
+              "text": "(",
+              "role": "punct"
+            },
+            {
+              "text": "ctx",
+              "role": "plain"
+            },
+            {
+              "text": " ",
+              "role": "punct"
+            },
+            {
+              "text": "context",
+              "role": "plain"
+            },
+            {
+              "text": ".",
+              "role": "punct"
+            },
+            {
+              "text": "Context",
+              "role": "type"
+            },
+            {
+              "text": ", ",
+              "role": "punct"
+            },
+            {
+              "text": "customerID",
+              "role": "plain"
+            },
+            {
+              "text": ", ",
+              "role": "punct"
+            },
+            {
+              "text": "status",
+              "role": "plain"
+            },
+            {
+              "text": " ",
+              "role": "punct"
+            },
+            {
+              "text": "string",
+              "role": "keyword"
+            },
+            {
+              "text": ") ([]",
+              "role": "punct"
+            },
+            {
+              "text": "Order",
+              "role": "type"
+            },
+            {
+              "text": ", ",
+              "role": "punct"
+            },
+            {
+              "text": "error",
+              "role": "keyword"
+            },
+            {
+              "text": ") {",
+              "role": "punct"
+            }
+          ]
+        }
+      },
+      {
+        "message": "concatenated into `query`",
+        "line": 88,
+        "column": 5,
+        "endLine": 88,
+        "endColumn": 10,
+        "code": {
+          "number": 88,
+          "tokens": [
+            {
+              "text": "    ",
+              "role": "punct"
+            },
+            {
+              "text": "query",
+              "role": "plain"
+            },
+            {
+              "text": " := ",
+              "role": "punct"
+            },
+            {
+              "text": "\"SELECT id, total_cents, status FROM orders WHERE customer_id = '\"",
+              "role": "string"
+            },
+            {
+              "text": " + ",
+              "role": "punct"
+            },
+            {
+              "text": "customerID",
+              "role": "plain"
+            },
+            {
+              "text": " + ",
+              "role": "punct"
+            },
+            {
+              "text": "\"'\"",
+              "role": "string"
+            }
+          ]
+        }
+      },
+      {
+        "message": "passed to `QueryContext`",
+        "line": 92,
+        "column": 18,
+        "endLine": 92,
+        "endColumn": 48,
+        "code": {
+          "number": 92,
+          "tokens": [
+            {
+              "text": "    ",
+              "role": "punct"
+            },
+            {
+              "text": "rows",
+              "role": "plain"
+            },
+            {
+              "text": ", ",
+              "role": "punct"
+            },
+            {
+              "text": "err",
+              "role": "keyword"
+            },
+            {
+              "text": " := ",
+              "role": "punct"
+            },
+            {
+              "text": "r",
+              "role": "plain"
+            },
+            {
+              "text": ".",
+              "role": "punct"
+            },
+            {
+              "text": "db",
+              "role": "plain"
+            },
+            {
+              "text": ".",
+              "role": "punct"
+            },
+            {
+              "text": "QueryContext",
+              "role": "type"
+            },
+            {
+              "text": "(",
+              "role": "punct"
+            },
+            {
+              "text": "ctx",
+              "role": "plain"
+            },
+            {
+              "text": ", ",
+              "role": "punct"
+            },
+            {
+              "text": "query",
+              "role": "plain"
+            },
+            {
+              "text": ")",
+              "role": "punct"
+            }
+          ]
+        }
+      }
+    ]
   },
   {
     "id": 6,

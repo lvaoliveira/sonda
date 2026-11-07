@@ -288,6 +288,20 @@ export interface IssueDetail extends IssueSummary {
   /** The code around the issue, as of the latest analysis that saw it. */
   code: CodeLine[]
   history: IssueEvent[]
+  /** A taint finding's path (ADR-0027), from the source to the issue; empty or absent for other issues. */
+  flow?: FlowStep[]
+}
+
+/** One step of a taint finding's path: what happened to the value, and where. */
+export interface FlowStep {
+  /** Names in backticks: "concatenated into `q`". */
+  message: string
+  line: number
+  column: number
+  endLine: number
+  endColumn: number
+  /** The step's line, highlighted; null without the file's source. */
+  code: CodeLine | null
 }
 
 export interface IssuePatch {

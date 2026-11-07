@@ -24,7 +24,11 @@ file, the report formats and the public library API.
 - A taint finding's path: `flow` on the issue in the JSON report (each step
   a `message` and a span, from the source to the sink), and `codeFlows` in
   SARIF, which GitHub code scanning shows step by step. Other issues have
-  no `flow`, and a server ignores it until it shows paths.
+  no `flow`.
+- The server stores a taint finding's path with the issue (migration 0028),
+  replaced by each analysis, and the issue page shows it under **How the
+  value gets here**: each step, its line, and that line's code. `GET
+  /api/issues/{id}` returns it as `flow`.
 
 - Pull request decorations follow triage without a new scan: accepting an
   issue on a pull request, marking it a false positive, or reopening it,

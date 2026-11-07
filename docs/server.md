@@ -338,7 +338,14 @@ no language.
 - its triage history;
 - the code around the issue, up to 80 lines, as of the latest analysis
   that saw it. Each line is a list of `{text, role}` tokens, so the browser
-  needs no highlighter.
+  needs no highlighter;
+- for a taint finding ([ADR-0027](adr/0027-taint-analysis.md)), its `flow`:
+  the path the value took, from the source to the issue, each step a
+  `message`, its span (`line`, `column`, `endLine`, `endColumn`) and its
+  line of `code`, highlighted the same way. The latest analysis's path
+  replaces the one before; an issue without one has `[]`. An upload's path
+  is checked like its issues: at most 20 steps, positions from 1, short
+  messages.
 
 The server highlights with a small built-in lexer, not tree-sitter: it
 runs on uploaded code inside the server process, where sonda never runs its

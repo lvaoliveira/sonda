@@ -137,6 +137,26 @@ describe('Issues', () => {
     expect(await within(detail).findByLabelText('Location')).toHaveTextContent(/^src\/main\/java\/com\/acme\/billing\/config\/StripeConfig\.java:\d+/)
   })
 
+  it('shows a taint finding\'s path, step by step with its code', async () => {
+    renderAt('/issues?project=payments-platform&branch=main&sev=critical&issue=1')
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    const path = await within(detail).findByRole('list', { name: 'Path' })
+    const steps = within(path).getAllByRole('listitem')
+    expect(steps).toHaveLength(3)
+    expect(steps[0]).toHaveTextContent('request parameter customerID')
+    expect(steps[0]).toHaveTextContent('line 86')
+    expect(within(steps[0]).getByText('customerID', { selector: 'code' })).toBeInTheDocument()
+    expect(steps[1]).toHaveTextContent(`query := "SELECT id, total_cents, status FROM orders`)
+    expect(steps[2]).toHaveTextContent('passed to QueryContext')
+  })
+
+  it('shows no path for an issue without one', async () => {
+    renderAt('/issues?project=billing-service&branch=main&sev=blocker&issue=6')
+    const detail = await screen.findByRole('article', { name: 'Issue detail' })
+    await within(detail).findByLabelText('Location')
+    expect(within(detail).queryByRole('list', { name: 'Path' })).toBeNull()
+  })
+
   it('offers no "assign to me" without a name', async () => {
     const api = createMockApi(0)
     const shell = api.shell
