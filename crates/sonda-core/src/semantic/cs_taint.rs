@@ -21,6 +21,7 @@
 
 use super::cs_cfg::{self, Access, Cfg, ENTRY};
 use super::cs_infer::{Found, Infer, Ty};
+use super::taint::{Finding, SinkKind, Step, cap};
 use super::{DeclId, DeclKind, Model};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -31,40 +32,11 @@ use tree_sitter::Node;
 /// point; past either, the function reports nothing.
 const MAX_TRACKED: usize = 512;
 const MAX_ROUNDS: usize = 512;
-/// The most steps a path keeps: its first and its last half.
-pub(crate) const MAX_STEPS: usize = 10;
 /// How deep an expression is followed for its taint.
 const MAX_EXPR_NODES: usize = 4096;
 
-/// One step of a path: where, and what happened to the value there.
-#[derive(Clone, Debug)]
-pub(crate) struct Step<'t> {
-    pub(crate) node: Node<'t>,
-    pub(crate) message: String,
-}
-
-/// A source reaching a sink: the sink's expression, and the path, which
-/// ends at the sink.
-#[derive(Debug)]
-pub(crate) struct Finding<'t> {
-    pub(crate) sink: Node<'t>,
-    pub(crate) steps: Vec<Step<'t>>,
-}
-
 type Path<'t> = Vec<Step<'t>>;
 type State<'t> = BTreeMap<DeclId, Path<'t>>;
-
-/// What a sink is for; a sanitizer clears taint for its own kind only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SinkKind {
-    Sql,
-    Command,
-    Path,
-    Redirect,
-    Ssrf,
-    XPath,
-    Ldap,
-}
 
 // ---------------------------------------------------------------- tables
 
@@ -2114,17 +2086,6 @@ fn same_keys(a: &State, b: &State) -> bool {
     a.len() == b.len() && a.keys().eq(b.keys())
 }
 
-/// A long path keeps its first and last steps.
-fn cap(steps: Vec<Step>) -> Vec<Step> {
-    if steps.len() <= MAX_STEPS {
-        return steps;
-    }
-    let half = MAX_STEPS / 2;
-    let mut kept: Vec<Step> = steps[..half].to_vec();
-    kept.extend_from_slice(&steps[steps.len() - half..]);
-    kept
-}
-
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -2404,9 +2365,12 @@ mod tests {
         let found = issues(&src);
         assert_eq!(found.len(), 1);
         let steps = flow(&found[0]);
-        assert_eq!(steps.len(), super::MAX_STEPS);
+        assert_eq!(steps.len(), crate::semantic::taint::MAX_STEPS);
         assert_eq!(steps[0], "request parameter `v0`");
-        assert_eq!(steps[super::MAX_STEPS - 1], "passed to `SqlCommand`");
+        assert_eq!(
+            steps[crate::semantic::taint::MAX_STEPS - 1],
+            "passed to `SqlCommand`"
+        );
     }
 
     #[test]

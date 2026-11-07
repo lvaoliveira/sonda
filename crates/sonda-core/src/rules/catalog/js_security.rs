@@ -593,6 +593,120 @@ pub(super) static RULES: &[Rule] = &[
             good: "import 'aws-cdk-lib';\nnew iam.PolicyStatement({ principals: [new iam.AccountPrincipal(id)], actions });",
         }),
     },
+    Rule {
+        id: "js/sql-injection",
+        name: "SQL queries should not be built from a request's values",
+        description: "A value from the request (a query string, a body field, a route parameter, a header) that reaches a query's text lets whoever sends the request change what the query does. Pass it as a parameter, or use a tagged template that does. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this query from the request's values; pass them as parameters.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S3649")],
+        check: Check::Taint {
+            langs: JS_TS,
+            find: sql_injection,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.get('/orders', (req, res) => { const q = \"SELECT * FROM orders WHERE id = '\" + req.query.id + \"'\"; db.query(q); });",
+            good: "app.get('/orders', (req, res) => { db.query('SELECT * FROM orders WHERE id = ?', [req.query.id]); });",
+        }),
+    },
+    Rule {
+        id: "js/command-injection",
+        name: "OS commands should not be built from a request's values",
+        description: "A value from the request that reaches a command lets whoever sends it run, or add to, a command on the server. Run a fixed program with `execFile` or `spawn`, passing the value as one of its arguments. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this command from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2076")],
+        check: Check::Taint {
+            langs: JS_TS,
+            find: command_injection,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const { exec } = require('child_process'); app.get('/ping', (req, res) => { exec('ping -c 1 ' + req.query.host); });",
+            good: "const { execFile } = require('child_process'); app.get('/ping', (req, res) => { execFile('ping', ['-c', '1', req.query.host]); });",
+        }),
+    },
+    Rule {
+        id: "js/path-injection",
+        name: "File paths should not be built from a request's values",
+        description: "A value from the request that reaches a file path can name any file the server can read or write, with `../` or an absolute path. Keep only its file name, with `path.basename`, or check the resolved path stays under its directory. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this file path from the request's values.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S2083")],
+        check: Check::Taint {
+            langs: JS_TS,
+            find: path_injection,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const fs = require('fs'); app.get('/file', (req, res) => { fs.readFile('/srv/files/' + req.query.name, (e, d) => res.send(d)); });",
+            good: "const fs = require('fs'); const path = require('path'); app.get('/file', (req, res) => { fs.readFile('/srv/files/' + path.basename(req.query.name), (e, d) => res.send(d)); });",
+        }),
+    },
+    Rule {
+        id: "js/open-redirect",
+        name: "Redirects should not go to a URL from the request",
+        description: "A redirect to a URL the request chose sends users wherever its sender likes, with this site's name on the link: phishing's favorite step. Redirect to a path on this site, or check the URL against the ones allowed. The issue shows the path the value took (ADR-0027).",
+        message: "Don't redirect to a URL taken from the request; check it first.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S5146")],
+        check: Check::Taint {
+            langs: JS_TS,
+            find: open_redirect,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.get('/login', (req, res) => { res.redirect(req.query.next); });",
+            good: "app.get('/login', (req, res) => { res.redirect('/home/' + req.query.next); });",
+        }),
+    },
+    Rule {
+        id: "js/ssrf",
+        name: "Server-side requests should not go to a URL from the request",
+        description: "A request the server makes to a URL its caller chose can reach what only the server can: internal services, cloud metadata endpoints, the local network. Fix the host, and put only the request's values in the path or query. The issue shows the path the value took (ADR-0027).",
+        message: "Don't let the request choose where this server-side request goes.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S5144")],
+        check: Check::Taint {
+            langs: JS_TS,
+            find: ssrf,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "const axios = require('axios'); app.get('/proxy', async (req, res) => { const r = await axios.get(req.query.url); res.send(r.data); });",
+            good: "const axios = require('axios'); app.get('/user', async (req, res) => { const r = await axios.get('https://api.example.com/users/' + req.query.id); res.send(r.data); });",
+        }),
+    },
+    Rule {
+        id: "js/code-injection",
+        name: "Code should not be built from a request's values",
+        description: "A value from the request that reaches `eval`, `new Function` or the `vm` module runs as code on the server, with its permissions. Parse the value as data instead, with `JSON.parse` or a parser for what it should be. The issue shows the path the value took (ADR-0027).",
+        message: "Don't run code built from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S5334")],
+        check: Check::Taint {
+            langs: JS_TS,
+            find: code_injection,
+        },
+        example: Some(Example {
+            lang: Lang::JavaScript,
+            bad: "app.post('/calc', (req, res) => { res.send(String(eval(req.body.expr))); });",
+            good: "app.post('/calc', (req, res) => { res.send(String(JSON.parse(req.body.expr))); });",
+        }),
+    },
 ];
 
 // ---------------------------------------------------- filters
@@ -1350,3 +1464,21 @@ const m = { authorizationType: AuthorizationType.NONE, b: { authorizationType: '
         assert_eq!(flagged("cdk/api-method-without-auth", TS, src), [11, 11]);
     }
 }
+
+macro_rules! js_taint_rule_fn {
+    ($name:ident, $kind:ident) => {
+        /// A request's value reaching this kind of sink (ADR-0027, T2).
+        fn $name<'t>(
+            m: &crate::semantic::Model<'t>,
+            src: &[u8],
+        ) -> Vec<crate::semantic::taint::Finding<'t>> {
+            crate::semantic::js_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
+        }
+    };
+}
+js_taint_rule_fn!(sql_injection, Sql);
+js_taint_rule_fn!(command_injection, Command);
+js_taint_rule_fn!(path_injection, Path);
+js_taint_rule_fn!(open_redirect, Redirect);
+js_taint_rule_fn!(ssrf, Ssrf);
+js_taint_rule_fn!(code_injection, Code);

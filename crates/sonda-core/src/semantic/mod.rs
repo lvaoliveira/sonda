@@ -13,6 +13,8 @@ pub(crate) mod cs_infer;
 pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
 mod js;
+pub(crate) mod js_taint;
+pub(crate) mod taint;
 
 use crate::lang::Lang;
 use std::collections::HashMap;
@@ -229,6 +231,12 @@ impl<'t> Model<'t> {
             }
             scope = self.scopes[scope].parent?;
         }
+    }
+
+    /// The id of the declaration a name refers to, for a node recorded as
+    /// a reference.
+    pub(crate) fn decl_id_of(&self, name: Node) -> Option<DeclId> {
+        self.refs[*self.ref_index.get(&name.id())?].decl
     }
 
     /// The declaration a name refers to, for a node recorded as a reference.

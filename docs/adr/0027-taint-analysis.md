@@ -5,7 +5,9 @@
   `cs/path-injection`, `cs/open-redirect`, `cs/ssrf`, `cs/xpath-injection`
   and `cs/ldap-injection`, with the path in the JSON report and SARIF,
   stored by the server and shown on the issue page. T3 built: through the
-  functions of the same file. T2 and T4 are next.
+  functions of the same file. T2 built, for JavaScript and TypeScript:
+  `js/sql-injection`, `js/command-injection`, `js/path-injection`,
+  `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 is next.
 - Date: 2026-11-07
 
 ## Context
@@ -189,6 +191,78 @@ reassigned to a safe value later in the function. That's rare in the code
 taint rules care about, and a control-flow graph for JavaScript (ADR-0008's
 S2) replaces it when it's built, without changing the rules.
 
+As built (2026-11-07):
+
+- **The file is one fixed point.** Variables are the scopes' declarations,
+  so one handler's never mix with another's, and a callback sees its
+  handler's: `db.connect(() => db.query(q))` is a flow. A variable keeps
+  the first path that reached it.
+- **Sources** are a request's members (`query`, `body`, `params`,
+  `headers`, `cookies`, `url`, `path`, `file`, Next.js's `nextUrl`) and
+  methods (`get`, `header`, `json`), in a handler: a function passed to a
+  route (`app.get('/x', fn)`, `router.use(fn)`), one whose first parameter
+  is `req` or `ctx` (Express's and Koa's controllers, defined apart from
+  their routes, Strapi's, Next.js's `getServerSideProps`), or `request`
+  next to a response or typed as a request, a Next.js route handler
+  (`export async function GET(request, { params })`), and NestJS's and
+  routing-controllers' decorated parameters (`@Query('id') id`). Koa's
+  `ctx.request` is a request too, and destructuring reads its members:
+  `({ query }, res) =>`, `const { body: { name } } = req`.
+- **Sinks resolve through imports**, the way C#'s resolve by type: `exec`
+  is `child_process`'s whatever it's called here (`import { exec as run }`,
+  `const cp = require('node:child_process')`, `require('child_process').exec`),
+  and `axios.create()` is axios. Globals count when nothing in the file
+  declares them (`fetch`, `eval`). A response's methods are sinks on a
+  handler's parameters (`res.redirect`, `res.sendFile`, `ctx.redirect`,
+  a `Location` header). SQL has no import to resolve by, since the client
+  is usually built elsewhere: `query`, `execute`, `run`, `all` and `get`
+  are sinks when the text the value was built into reads as SQL, and the
+  raw ones (`$queryRawUnsafe`, `whereRaw`, `knex.raw`) always. A tagged
+  template (`` sql`… ${id}` ``) passes its values apart.
+- **`js/code-injection`** (S5334) is JavaScript's own sink: `eval`,
+  `new Function`, `vm.runIn…Context`, and a string to `setTimeout`. XPath
+  and LDAP have no JavaScript rule: neither is common in Node code.
+- **Sanitizers and checks**, as T1's, plus what JavaScript code does:
+  - a number, or an unknown call's result, isn't tainted, nor is an object
+    literal or the request object itself;
+  - `path.basename` for paths; for URLs, text of the program's own that
+    ends the host before the value (`` `${base}/groups/${slug}` ``,
+    `./callback?`), a URL object's parts after its host
+    (`to.pathname = x`), and `x.replace(/^\/share/, '/s')`;
+  - for every sink, an allowlist that checks the value itself
+    (`['asc', 'desc'].includes(order)`, `allowed.has(new URL(u).hostname)`,
+    and a ternary on one), a pattern that matches a whole value
+    (`/^[\w-]+$/.test(x)`, or an imported name like `themeNamePattern`),
+    and equality with a literal, in the branch where it's equal.
+
+Measured on OWASP Juice Shop, NodeGoat and seven applications (Ghost,
+NodeBB, Directus, Strapi, Outline, Payload and Immich):
+
+- **The deliberate vulnerabilities are found:** NodeGoat's three `eval`s,
+  its open redirect and its SSRF; Juice Shop's SQL injections in its login
+  and search, its SSRF, the two path traversals in its code-review routes,
+  and nine in the deliberately vulnerable variants it ships as data. Not
+  found: those outside these rules (NoSQL injection, a template's layout),
+  a stored value read back (second-order), and its redirect challenge,
+  whose allowlist check is named like one and is wrong by design.
+- **The seven applications:** the first version reported 19 issues. Ten
+  were checks or fixed hosts, which the choices above cover and the tests
+  now reproduce, and one was Payload's `req.payload`, its own instance
+  rather than a request's body (hapi's name, dropped). Nine remain, and on
+  review none is exploitable:
+  - two redirect to an ActivityPub object's own URL, which is the feature;
+  - three redirect to the request's own path, which its route matched; one
+    of them strips its leading slashes by reassigning the variable, which a
+    flow-insensitive analysis doesn't see;
+  - two are checked in another file: a redirect URI validated by a service
+    before it throws, and a version its route takes as digits only. T4
+    sees the first;
+  - two are in a codemod's test fixtures.
+- **Recall in real files:** one line per sink kind, planted in a real
+  handler of eight of the applications, was found 48 times out of 48.
+- **Cost:** scan times grow by 2% at most (Ghost, the largest: 18.2 s
+  to 18.5 s).
+
 ### T3: across functions, within one file
 
 Each function gets a **summary**: which parameters flow to its return value,
@@ -246,8 +320,10 @@ doesn't read `node_modules` or NuGet packages.
 Each sink kind is a new rule, with SonarQube's taint key as its exact
 equivalent: `cs/sql-injection` (S3649), `cs/command-injection` (S2076),
 `cs/path-injection` (S2083), `cs/open-redirect` (S5146), `cs/ssrf` (S5144),
-`cs/xpath-injection` (S2091), `cs/ldap-injection` (S2078), then the same for
-`js/`. Cross-site scripting (S5131) waits for a model of the templating
+`cs/xpath-injection` (S2091), `cs/ldap-injection` (S2078), then for
+JavaScript and TypeScript `js/sql-injection`, `js/command-injection`,
+`js/path-injection`, `js/open-redirect`, `js/ssrf` and `js/code-injection`
+(S5334). Cross-site scripting (S5131) waits for a model of the templating
 engines, which is larger than the others.
 
 The shape rules (`*/sql-built-dynamically`, the command and `eval` rules)
