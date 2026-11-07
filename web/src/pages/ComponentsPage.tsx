@@ -14,7 +14,7 @@ export function ComponentsPage() {
   const list = useAsync(() => api.components(), [api])
   return (
     <AppShell crumbs={[{ label: 'Components', to: '/components' }]}>
-      {list.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {list.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {list.state === 'error' && <p role="alert">Could not load components: {list.error.message}</p>}
       {list.state === 'ready' && <Components list={list.data} />}
     </AppShell>

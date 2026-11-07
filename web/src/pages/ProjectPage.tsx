@@ -22,7 +22,7 @@ export function ProjectPage() {
   const name = detail.state === 'ready' ? detail.data.name : null
   return (
     <AppShell project={key} crumbs={[{ label: 'Projects', to: '/projects' }, { label: name ?? key, to: `/projects/${encodeURIComponent(key)}` }]}>
-      {detail.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {detail.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {detail.state === 'error' && (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
           <span className="font-semibold">Could not load {key}</span>
@@ -127,7 +127,7 @@ function RulesSummary({ project }: Readonly<{ project: string }>) {
         )
       }
     >
-      {rules.state === 'loading' && <div aria-busy="true" className="h-8 rounded-md bg-panel-2" />}
+      {rules.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-8 rounded-md bg-panel-2" />}
       {rules.state === 'error' && <p role="alert" className="m-0 text-[13px]">Could not load the rules: {rules.error.message}</p>}
       {r && (
         <div className="flex flex-col gap-2">
