@@ -1,15 +1,18 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useId, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { ProjectRuleSetting, Rule, RuleCatalog, RuleProfileDetail, RuleProfileSummary, Severity } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
+import { Drawer, DrawerActions, Field } from '@/components/sonda/Drawer'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { RuleBrowser, type RuleFilter, RuleSearch } from '@/components/sonda/RuleBrowser'
 import { countOf, shortDate } from '@/lib/format'
 import { SEVERITY, SEVERITY_ORDER } from '@/lib/visual'
 
 const input = 'h-8 rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge'
+/** A drawer's form control: full width, a little taller. */
+const field = 'h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] text-fg edge-strong'
 
 /** Rule profiles (ADR-0018): named sets of rules, one of them the default, that scans apply. Admins manage them; members read. */
 export function QualityProfilesPage() {
@@ -27,6 +30,7 @@ export function QualityProfilesPage() {
 
 function Profiles({ profiles, catalog, isAdmin, reload }: Readonly<{ profiles: RuleProfileSummary[]; catalog: RuleCatalog; isAdmin: boolean; reload: () => void }>) {
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [creating, setCreating] = useState(false)
   const selected = profiles.find((p) => p.id === selectedId) ?? profiles[0]
   const def = profiles.find((p) => p.isDefault)
   return (
@@ -39,11 +43,24 @@ function Profiles({ profiles, catalog, isAdmin, reload }: Readonly<{ profiles: R
             upload apply a project's profile; where it sets a rule, it wins over the repository's sonda.toml.
           </>
         }
-      />
-      {isAdmin && <NewProfile profiles={profiles} onCreated={(id) => {
+      >
+        {isAdmin && (
+          <Button primary onClick={() => setCreating(true)}>
+            New profile
+          </Button>
+        )}
+      </PageHeader>
+      {creating && (
+        <NewProfile
+          profiles={profiles}
+          onCreated={(id) => {
+            setCreating(false)
             setSelectedId(id)
             reload()
-          }} />}
+          }}
+          onClose={() => setCreating(false)}
+        />
+      )}
       <div className="grid grid-cols-1 gap-5 min-[1100px]:grid-cols-[minmax(240px,0.35fr)_minmax(0,1fr)]">
         <ul aria-label="Profiles" className="m-0 flex list-none flex-col gap-px self-start overflow-hidden rounded-xl bg-line p-0" style={{ boxShadow: '0 0 0 1px var(--sd-line)' }}>
           {profiles.map((p) => {
@@ -77,58 +94,60 @@ function Profiles({ profiles, catalog, isAdmin, reload }: Readonly<{ profiles: R
   )
 }
 
-/** Admins create a profile, empty or as a copy. */
-function NewProfile({ profiles, onCreated }: Readonly<{ profiles: RuleProfileSummary[]; onCreated: (id: number) => void }>) {
+/** Admins create a profile, empty or as a copy, in a drawer. */
+function NewProfile({ profiles, onCreated, onClose }: Readonly<{ profiles: RuleProfileSummary[]; onCreated: (id: number) => void; onClose: () => void }>) {
   const api = useApi()
+  const formId = useId()
   const [name, setName] = useState('')
   const [from, setFrom] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   return (
-    <form
-      className="flex flex-wrap items-end gap-2"
-      onSubmit={async (e) => {
-        e.preventDefault()
-        setBusy(true)
-        setError(null)
-        try {
-          const created = await api.createRuleProfile(name.trim(), from ? Number(from) : undefined)
-          setName('')
-          setFrom('')
-          onCreated(created.id)
-        } catch (err) {
-          setError(err instanceof Error ? err.message : String(err))
-        } finally {
-          setBusy(false)
-        }
-      }}
+    <Drawer
+      eyebrow="Quality profiles"
+      title="New profile"
+      subtitle="Projects choose it in their Settings, or it becomes the default."
+      onClose={onClose}
+      footer={<DrawerActions form={formId} submit="Create" busy={busy ? 'Creating…' : undefined} disabled={!name.trim()} onCancel={onClose} />}
     >
-      <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        <span>New profile</span>
-        <input aria-label="New profile name" placeholder="Name, such as Strict" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} className={`${input} w-[220px]`} />
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-fg-muted">
-        <span>Starting from</span>
-        <select aria-label="Copy from" value={from} onChange={(e) => setFrom(e.target.value)} className={input}>
-          <option value="">The catalog’s defaults</option>
-          {profiles
-            .filter((p) => !p.builtin)
-            .map((p) => (
-              <option key={p.id} value={p.id}>
-                A copy of {p.name}
-              </option>
-            ))}
-        </select>
-      </label>
-      <Button type="submit" primary disabled={busy || !name.trim()}>
-        Create
-      </Button>
-      {error && (
-        <span role="alert" className="basis-full text-xs text-crit">
-          {error}
-        </span>
-      )}
-    </form>
+      <form
+        id={formId}
+        className="flex flex-col gap-4"
+        onSubmit={async (e) => {
+          e.preventDefault()
+          setBusy(true)
+          setError(null)
+          try {
+            const created = await api.createRuleProfile(name.trim(), from ? Number(from) : undefined)
+            onCreated(created.id)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : String(err))
+            setBusy(false)
+          }
+        }}
+      >
+        <Field label="Name">
+          <input placeholder="Such as Strict" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} className={field} />
+        </Field>
+        <Field label="Starting from">
+          <select value={from} onChange={(e) => setFrom(e.target.value)} className={field}>
+            <option value="">The catalog’s defaults</option>
+            {profiles
+              .filter((p) => !p.builtin)
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  A copy of {p.name}
+                </option>
+              ))}
+          </select>
+        </Field>
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
+      </form>
+    </Drawer>
   )
 }
 

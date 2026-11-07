@@ -248,10 +248,11 @@ they own, CI ones included.
 
 **CI tokens belong to a service user.** So that a pipeline doesn't stop
 when a person leaves, an admin creates a **service user** such as `ci`
-(Add a user → Service user) and generates the pipelines' tokens for it on
-the Admin page: choose the owner, then the type,
-project and expiry. The token acts as `ci`, uploads show
-`ci (token shop)`, and the token lists say which admin generated it.
+(Administration → Users → **Add user**, then **Service user**) and
+generates the pipelines' tokens for it under Administration → Tokens →
+**Generate token**: choose the owner, then the type, project and expiry.
+The token acts as `ci`, uploads show `ci (token shop)`, and the token
+lists say which admin generated it.
 
 | Type | Prefix | Can |
 |---|---|---|
@@ -556,9 +557,9 @@ see a key, so a forgotten pipeline would bring a deleted project back,
 empty. Instead, uploads to it are a `403` saying who deleted it and when,
 and `sonda scan --upload` fails before scanning, when it fetches the
 project's rule settings. A project analysis token for the key can't be
-generated either. An admin allows the key again on the Administration
-page, which lists every deleted project with who deleted it and when; the
-next upload then starts a new project.
+generated either. An admin allows the key again under Administration →
+Deleted projects, which lists every deleted project with who deleted it
+and when; the next upload then starts a new project.
 
 | Endpoint | |
 |---|---|

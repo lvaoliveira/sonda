@@ -703,7 +703,7 @@ describe('Quality gates', () => {
     const api = createMockApi(0)
     renderAt('/gates', api)
     await user.click(await screen.findByRole('button', { name: 'New gate' }))
-    const editor = screen.getByRole('region', { name: 'New gate' })
+    const editor = screen.getByRole('dialog', { name: 'New gate' })
     // It starts from the selected gate's conditions.
     expect(within(within(editor).getByRole('list', { name: 'Conditions' })).getAllByRole('listitem')).toHaveLength(4)
     await user.selectOptions(within(editor).getByRole('combobox', { name: 'Start from' }), '')
@@ -714,6 +714,7 @@ describe('Quality gates', () => {
     await user.type(within(editor).getByRole('spinbutton', { name: 'Threshold 1' }), '90')
     await user.click(within(editor).getByRole('button', { name: 'Create' }))
     const strict = await screen.findByRole('region', { name: 'Strict' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(strict).toHaveTextContent('On the server · changed by mara')
     expect(strict).toHaveTextContent('Coverage < 90%')
     expect(screen.getByRole('region', { name: 'Assigned to' })).toHaveTextContent('No project uses it yet')
@@ -755,25 +756,27 @@ describe('Quality gates', () => {
 })
 
 describe('Tokens', () => {
-  it('generates a token, shows its secret once, and revokes it', async () => {
+  it('generates a token in a drawer, shows its secret once, and revokes it', async () => {
     const user = userEvent.setup()
     renderAt('/account')
     const card = await screen.findByRole('region', { name: 'Tokens' })
+    await user.click(within(card).getByRole('button', { name: 'Generate token' }))
+    const drawer = screen.getByRole('dialog', { name: 'Generate a token' })
     // Project analysis is the default type, with 30 days preselected.
-    expect(within(card).getByRole('combobox', { name: 'Expires in' })).toHaveValue('30')
-    await user.type(within(card).getByRole('textbox', { name: 'Name' }), 'ci-billing')
-    await user.type(within(card).getByRole('textbox', { name: 'Project key' }), 'billing-service')
-    await user.click(within(card).getByRole('button', { name: 'Generate' }))
-    const shown = await within(card).findByRole('status')
-    expect(shown).toHaveTextContent('Copy “ci-billing” now: it won’t be shown again.')
-    expect(shown).toHaveTextContent(/sonda_p_[a-z2-7]{52}/)
+    expect(within(drawer).getByRole('combobox', { name: 'Expires in' })).toHaveValue('30')
+    await user.type(within(drawer).getByRole('textbox', { name: 'Name' }), 'ci-billing')
+    await user.type(within(drawer).getByRole('textbox', { name: 'Project key' }), 'billing-service')
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
+    const shown = await screen.findByRole('dialog', { name: 'Copy “ci-billing”' })
+    expect(shown).toHaveTextContent('It won’t be shown again.')
+    expect(within(shown).getByRole('status', { name: 'New token' })).toHaveTextContent(/^sonda_p_[a-z2-7]{52}$/)
     const row = await within(card).findByRole('row', { name: 'Token ci-billing' })
     expect(row).toHaveTextContent('Project analysis')
     expect(row).toHaveTextContent('billing-service')
     // The list never shows the secret, only its first characters.
     expect(row.textContent).not.toMatch(/sonda_p_[a-z2-7]{52}/)
-    await user.click(within(card).getByRole('button', { name: 'Done' }))
-    expect(within(card).queryByRole('status')).not.toBeInTheDocument()
+    await user.click(within(shown).getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     await user.click(within(row).getByRole('button', { name: 'Revoke' }))
     await waitFor(() => expect(within(card).getByRole('row', { name: 'Token ci-billing' })).toHaveTextContent('Revoked'))
   })
@@ -782,46 +785,54 @@ describe('Tokens', () => {
     const user = userEvent.setup()
     renderAt('/account')
     const card = await screen.findByRole('region', { name: 'Tokens' })
-    await user.selectOptions(within(card).getByRole('combobox', { name: 'Type' }), 'user')
-    expect(within(card).queryByRole('textbox', { name: 'Project key' })).not.toBeInTheDocument()
-    expect(within(card).getByText(/Acts as you/)).toBeInTheDocument()
-    await user.selectOptions(within(card).getByRole('combobox', { name: 'Expires in' }), 'none')
-    await user.type(within(card).getByRole('textbox', { name: 'Name' }), 'scripts-forever')
-    await user.click(within(card).getByRole('button', { name: 'Generate' }))
+    await user.click(within(card).getByRole('button', { name: 'Generate token' }))
+    const drawer = screen.getByRole('dialog', { name: 'Generate a token' })
+    await user.selectOptions(within(drawer).getByRole('combobox', { name: /Type/ }), 'user')
+    expect(within(drawer).queryByRole('textbox', { name: 'Project key' })).not.toBeInTheDocument()
+    expect(within(drawer).getByText(/Acts as you/)).toBeInTheDocument()
+    await user.selectOptions(within(drawer).getByRole('combobox', { name: 'Expires in' }), 'none')
+    await user.type(within(drawer).getByRole('textbox', { name: 'Name' }), 'scripts-forever')
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
     expect(await within(card).findByRole('row', { name: 'Token scripts-forever' })).toHaveTextContent('No expiry')
   })
 
   it('lets admins see and revoke everyone’s tokens', async () => {
     const user = userEvent.setup()
-    renderAt('/admin')
-    const card = await screen.findByRole('region', { name: 'Tokens' })
-    const row = await within(card).findByRole('row', { name: 'Token ci-payments' })
+    renderAt('/admin/tokens')
+    expect(await screen.findByRole('heading', { level: 1, name: 'Tokens' })).toBeInTheDocument()
+    const row = await screen.findByRole('row', { name: 'Token ci-payments' })
     expect(row).toHaveTextContent('mara')
-    expect(within(card).getByRole('row', { name: 'Token old-script' })).toHaveTextContent('Expired')
+    expect(screen.getByRole('row', { name: 'Token old-script' })).toHaveTextContent('Expired')
     await user.click(within(row).getByRole('button', { name: 'Revoke' }))
-    await waitFor(() => expect(within(card).getByRole('row', { name: 'Token ci-payments' })).toHaveTextContent('Revoked'))
+    await waitFor(() => expect(screen.getByRole('row', { name: 'Token ci-payments' })).toHaveTextContent('Revoked'))
   })
 
   it('lets admins generate a token for another user, such as a CI service user', async () => {
     const user = userEvent.setup()
-    renderAt('/admin')
-    const card = await screen.findByRole('region', { name: 'Tokens' })
-    const generate = within(card).getByRole('button', { name: 'Generate' })
-    await user.type(within(card).getByLabelText('Name'), 'ci-shop')
-    await user.type(within(card).getByLabelText('Project key'), 'shop')
+    renderAt('/admin/tokens')
+    const open = async () => {
+      await user.click(await screen.findByRole('button', { name: 'Generate token' }))
+      const drawer = screen.getByRole('dialog', { name: 'Generate a token' })
+      await user.type(within(drawer).getByLabelText('Name'), 'ci-shop')
+      await user.type(within(drawer).getByLabelText('Project key'), 'shop')
+      return drawer
+    }
+    let drawer = await open()
     // Whose it is must be chosen.
-    expect(generate).toBeDisabled()
-    await user.selectOptions(within(card).getByLabelText('Owner'), 'dev')
-    await user.click(generate)
-    expect(await within(card).findByRole('status')).toHaveTextContent('Copy “ci-shop” for dev now')
-    const row = await within(card).findByRole('row', { name: 'Token ci-shop' })
+    expect(within(drawer).getByRole('button', { name: 'Generate' })).toBeDisabled()
+    await user.selectOptions(within(drawer).getByLabelText('Owner'), 'dev')
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
+    const shown = await screen.findByRole('dialog', { name: 'Copy “ci-shop”' })
+    expect(shown).toHaveTextContent('For dev. It won’t be shown again.')
+    const row = await screen.findByRole('row', { name: 'Token ci-shop' })
     expect(row).toHaveTextContent('dev')
     expect(row).toHaveTextContent('generated by mara')
-    // The same name again for the same owner is refused.
-    await user.type(within(card).getByLabelText('Name'), 'ci-shop')
-    await user.type(within(card).getByLabelText('Project key'), 'shop')
-    await user.click(generate)
-    expect(await within(card).findByRole('alert')).toHaveTextContent('dev already has a token with this name')
+    await user.click(within(shown).getByRole('button', { name: 'Done' }))
+    // The same name again for the same owner is refused, in the drawer.
+    drawer = await open()
+    await user.selectOptions(within(drawer).getByLabelText('Owner'), 'dev')
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('dev already has a token with this name')
   })
 })
 
@@ -861,15 +872,21 @@ describe('Signing in', () => {
 })
 
 describe('Users', () => {
-  it('lets an admin add users and refuses to remove the last admin', async () => {
+  it('lets an admin add users in a drawer and refuses to remove the last admin', async () => {
     const user = userEvent.setup()
     renderAt('/admin')
     expect(await screen.findByRole('cell', { name: /Dev Patel/ })).toBeInTheDocument()
-    await user.type(screen.getByLabelText('Username'), 'bob')
-    await user.type(screen.getByLabelText('Display name'), 'Bob Builder')
-    await user.type(screen.getByLabelText('Initial password'), 'a long enough one')
     await user.click(screen.getByRole('button', { name: 'Add user' }))
+    const drawer = screen.getByRole('dialog', { name: 'Add a user' })
+    await user.type(within(drawer).getByLabelText('Username'), 'bob')
+    await user.type(within(drawer).getByLabelText('Display name'), 'Bob Builder')
+    // A typed password stays hidden.
+    expect(within(drawer).getByLabelText('Initial password')).toHaveAttribute('type', 'password')
+    await user.type(within(drawer).getByLabelText('Initial password'), 'a long enough one')
+    await user.click(within(drawer).getByRole('button', { name: 'Add user' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Created bob')
+    // Its password was typed here, so there's nothing to show again.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(await screen.findByRole('cell', { name: /Bob Builder/ })).toBeInTheDocument()
     // Mara is the only admin: demoting her is refused, and says why.
     await user.selectOptions(screen.getByLabelText('Role of mara'), 'member')
@@ -880,20 +897,92 @@ describe('Users', () => {
     const user = userEvent.setup()
     renderAt('/admin')
     await screen.findByRole('cell', { name: /Dev Patel/ })
-    await user.type(screen.getByLabelText('Username'), 'ci')
-    await user.type(screen.getByLabelText('Display name'), 'CI pipelines')
-    await user.click(screen.getByRole('checkbox', { name: /Service user/ }))
-    expect(screen.queryByLabelText('Initial password')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Role')).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Add user' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Created ci, a service user')
+    const drawer = screen.getByRole('dialog', { name: 'Add a user' })
+    await user.type(within(drawer).getByLabelText('Username'), 'ci')
+    await user.type(within(drawer).getByLabelText('Display name'), 'CI pipelines')
+    await user.click(within(drawer).getByRole('checkbox', { name: /Service user/ }))
+    expect(within(drawer).queryByLabelText('Initial password')).not.toBeInTheDocument()
+    expect(within(drawer).getByLabelText('Role')).toBeDisabled()
+    await user.click(within(drawer).getByRole('button', { name: 'Add user' }))
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('Created ci, a service user. Generate its CI tokens under Tokens.')
     const row = (await screen.findByRole('cell', { name: /CI pipelines/ })).closest('tr')!
     expect(row).toHaveTextContent('Service user · can’t sign in')
     expect(within(row).getByRole('button', { name: 'Set password' })).toBeInTheDocument()
     // Admins have to be able to sign in.
     expect(within(row).getByRole('option', { name: 'Admin' })).toBeDisabled()
-    const tokens = screen.getByRole('region', { name: 'Tokens' })
-    expect(within(within(tokens).getByLabelText('Owner')).getByRole('option', { name: 'ci' })).toBeInTheDocument()
+    // The notice leads to the Tokens tab, where it can own a token.
+    await user.click(within(status).getByRole('link', { name: 'Tokens' }))
+    await user.click(await screen.findByRole('button', { name: 'Generate token' }))
+    const tokens = screen.getByRole('dialog', { name: 'Generate a token' })
+    await waitFor(() => expect(within(within(tokens).getByLabelText('Owner')).getByRole('option', { name: 'ci' })).toBeInTheDocument())
+  })
+
+  it('generates an initial password, and shows it once more after adding the user', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi(0)
+    const created = vi.spyOn(api, 'createUser')
+    renderAt('/admin', api)
+    await user.click(await screen.findByRole('button', { name: 'Add user' }))
+    const drawer = screen.getByRole('dialog', { name: 'Add a user' })
+    await user.type(within(drawer).getByLabelText('Username'), 'bob')
+    await user.type(within(drawer).getByLabelText('Display name'), 'Bob Builder')
+    const field = within(drawer).getByLabelText('Initial password')
+    expect(within(drawer).getByRole('button', { name: 'Add user' })).toBeDisabled()
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
+    // Shown, so it can be copied, and long enough.
+    expect(field).toHaveAttribute('type', 'text')
+    const password = (field as HTMLInputElement).value
+    expect(password).toMatch(/^[A-HJ-NP-Za-km-z2-9]{5}(-[A-HJ-NP-Za-km-z2-9]{5}){3}$/)
+    // Generating again replaces it.
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
+    expect((field as HTMLInputElement).value).not.toBe(password)
+    const final = (field as HTMLInputElement).value
+    await user.click(within(drawer).getByRole('button', { name: 'Add user' }))
+    expect(created).toHaveBeenCalledWith({ username: 'bob', displayName: 'Bob Builder', role: 'member', password: final })
+    const added = await screen.findByRole('dialog', { name: 'Added bob' })
+    expect(within(added).getByRole('status', { name: 'Password for bob' })).toHaveTextContent(final)
+    expect(screen.getByText(/^Created bob\./)).toBeInTheDocument()
+    await user.click(within(added).getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(await screen.findByRole('cell', { name: /Bob Builder/ })).toBeInTheDocument()
+  })
+
+  it('hides a generated password again once it is edited by hand', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin')
+    await user.click(await screen.findByRole('button', { name: 'Add user' }))
+    const drawer = screen.getByRole('dialog', { name: 'Add a user' })
+    await user.click(within(drawer).getByRole('button', { name: 'Generate' }))
+    const field = within(drawer).getByLabelText('Initial password')
+    expect(field).toHaveAttribute('type', 'text')
+    await user.type(field, 'x')
+    expect(field).toHaveAttribute('type', 'password')
+  })
+
+  it('splits administration into tabs, each its own address', async () => {
+    const user = userEvent.setup()
+    renderAt('/admin')
+    const tabs = await screen.findByRole('navigation', { name: 'Administration' })
+    expect(within(tabs).getAllByRole('link').map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['Users', '/admin'],
+      ['Tokens', '/admin/tokens'],
+      ['GitHub', '/admin/github'],
+      ['Deleted projects', '/admin/deleted-projects'],
+    ])
+    expect(within(tabs).getByRole('link', { name: 'Users' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('heading', { level: 1, name: 'Users' })).toBeInTheDocument()
+    await user.click(within(tabs).getByRole('link', { name: 'GitHub' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'GitHub' })).toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Administration' })).getByRole('link', { name: 'GitHub' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByRole('table', { name: 'Users' })).not.toBeInTheDocument()
+  })
+
+  it('sends the old section links to their tabs', async () => {
+    renderAt('/admin#github')
+    expect(await screen.findByRole('heading', { level: 1, name: 'GitHub' })).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: 'GitHub App' })).toBeInTheDocument()
   })
 
   it('keeps administration from members', async () => {
@@ -903,6 +992,7 @@ describe('Users', () => {
     await user.type(screen.getByLabelText('Password'), MOCK_PASSWORD)
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(await screen.findByText('Admins only.')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Administration' })).not.toBeInTheDocument()
   })
 
   it('changes your own password', async () => {
@@ -1176,6 +1266,7 @@ describe('Project settings', () => {
     await expect(api.createToken({ name: 'ci', type: 'project_analysis', project: 'mobile-bff', expiresInDays: 30 })).rejects.toThrow('"mobile-bff" was deleted by mara')
 
     await user.click(within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Administration/ }))
+    await user.click(within(await screen.findByRole('navigation', { name: 'Administration' })).getByRole('link', { name: 'Deleted projects' }))
     const list = await screen.findByRole('list', { name: 'Deleted projects' })
     expect(list).toHaveTextContent('mobile-bff15 analyses · deleted by mara')
     expect(list).toHaveTextContent('Uploads refused')
@@ -1222,8 +1313,10 @@ describe('Quality profiles', () => {
     expect(within(profile).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Turn off' })).not.toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('New profile name'), 'Strict')
-    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await user.click(screen.getByRole('button', { name: 'New profile' }))
+    let drawer = screen.getByRole('dialog', { name: 'New profile' })
+    await user.type(within(drawer).getByLabelText('Name'), 'Strict')
+    await user.click(within(drawer).getByRole('button', { name: 'Create' }))
     expect(await screen.findByRole('region', { name: 'Strict' })).toHaveTextContent('0 rules set')
     await user.click(screen.getByRole('option', { name: /SQL queries should not be built/ }))
     const here = screen.getByRole('region', { name: 'In this profile' })
@@ -1238,9 +1331,11 @@ describe('Quality profiles', () => {
     expect(within(screen.getByRole('listbox', { name: 'Rules' })).getAllByRole('option')).toHaveLength(1)
 
     // A copy starts with the same settings.
-    await user.type(screen.getByLabelText('New profile name'), 'Strict copy')
-    await user.selectOptions(screen.getByLabelText('Copy from'), 'A copy of Strict')
-    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await user.click(screen.getByRole('button', { name: 'New profile' }))
+    drawer = screen.getByRole('dialog', { name: 'New profile' })
+    await user.type(within(drawer).getByLabelText('Name'), 'Strict copy')
+    await user.selectOptions(within(drawer).getByLabelText('Starting from'), 'A copy of Strict')
+    await user.click(within(drawer).getByRole('button', { name: 'Create' }))
     expect(await screen.findByRole('region', { name: 'Strict copy' })).toHaveTextContent('1 rule set')
 
     // Rename it, make it the default, then delete it once it isn't.
@@ -1264,7 +1359,7 @@ describe('Quality profiles', () => {
     const shell = api.shell
     renderAt('/quality-profiles', { ...api, shell: async () => ({ ...(await shell()), isAdmin: false }) })
     await screen.findByRole('region', { name: 'sonda way' })
-    expect(screen.queryByLabelText('New profile name')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New profile' })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'In this profile' })).toHaveTextContent('Not set')
     expect(screen.queryByRole('button', { name: 'Turn on' })).not.toBeInTheDocument()
   })
@@ -1339,12 +1434,12 @@ describe('Shell', () => {
 })
 
 describe('GitHub App', () => {
-  const card = async () => screen.findByRole('region', { name: 'GitHub' })
+  const card = async () => screen.findByRole('region', { name: 'GitHub App' })
 
   it("posts the App's manifest to GitHub's own page, from Administration", async () => {
     const user = userEvent.setup()
     const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
-    renderAt('/admin', createMockApi(0, { githubApp: false }))
+    renderAt('/admin/github', createMockApi(0, { githubApp: false }))
     const github = await card()
     await user.click(await within(github).findByRole('button', { name: 'An organization' }))
     await user.type(within(github).getByRole('textbox', { name: 'Organization' }), 'acme')
@@ -1372,11 +1467,11 @@ describe('GitHub App', () => {
   it("refuses a state it didn't start, and says to start again", async () => {
     renderAt('/admin/github/created?code=good&state=forged', createMockApi(0, { githubApp: false }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/wasn't started here by you/)
-    expect(screen.getByRole('link', { name: 'Start again from Administration' })).toHaveAttribute('href', '/admin#github')
+    expect(screen.getByRole('link', { name: 'Start again from Administration' })).toHaveAttribute('href', '/admin/github')
   })
 
   it("shows where it's installed, without offering to install it again", async () => {
-    renderAt('/admin')
+    renderAt('/admin/github')
     const installed = await within(await card()).findByRole('list', { name: 'Installed on' })
     expect(installed).toHaveTextContent('acme')
     expect(installed).toHaveTextContent('shop, billing')
@@ -1388,7 +1483,7 @@ describe('GitHub App', () => {
     const api = createMockApi(0, { githubApp: false })
     await api.githubAppManifest(null, 'sonda-n100')
     await api.createGithubApp('good', MOCK_MANIFEST_STATE)
-    renderAt('/admin', api)
+    renderAt('/admin/github', api)
     const fresh = await card()
     expect(await within(fresh).findByText(/isn't installed on any repository yet/)).toBeInTheDocument()
     expect(within(fresh).getByRole('link', { name: /Install it on repositories/ })).toHaveAttribute('href', 'https://github.com/apps/sonda-acme/installations/new')
@@ -1396,7 +1491,7 @@ describe('GitHub App', () => {
 
   it('disconnects a stored App after confirming', async () => {
     const user = userEvent.setup()
-    renderAt('/admin')
+    renderAt('/admin/github')
     const github = await card()
     expect(await within(github).findByText('sonda-acme')).toBeInTheDocument()
     await user.click(within(github).getByRole('button', { name: 'Disconnect…' }))

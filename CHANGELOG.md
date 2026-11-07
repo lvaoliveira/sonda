@@ -17,9 +17,18 @@ file, the report formats and the public library API.
   file with a private key, or a certificate that isn't a valid authority,
   is refused before anything is scanned. Without it, a certificate from an
   unknown authority now says to pass `--ca-cert`.
+- Adding a user can generate their initial password: four dashed groups of
+  characters that can't be mistaken for one another. A generated password
+  is shown once more after the user is added, to copy and share.
 
 ### Changed
 
+- Administration is split into tabs, each its own address: Users, Tokens,
+  GitHub and Deleted projects, as a project's pages are. Old links to its
+  sections (`/admin#github`) land on their tab.
+- Creating something opens a drawer: adding a user, generating a token
+  (under Administration and Account), a new quality gate (and editing one)
+  and a new quality profile.
 - When the install directory isn't on `PATH`, `install.sh` prints the two
   commands that add it for the user's shell (zsh, bash, fish or another,
   from `$SHELL`): one for new terminals, one for this one. It still never

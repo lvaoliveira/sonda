@@ -202,7 +202,7 @@ function GithubSetting({ settings, isAdmin, save }: Readonly<SettingProps>) {
       </p>
       {!settings.githubApp && (
         <output className="block m-0 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px]">
-          This server has no GitHub App, so nothing is posted yet. An admin creates one under <Link to="/admin#github">Administration</Link>.
+          This server has no GitHub App, so nothing is posted yet. An admin creates one under <Link to="/admin/github">Administration</Link>.
         </output>
       )}
       {isAdmin ? (
