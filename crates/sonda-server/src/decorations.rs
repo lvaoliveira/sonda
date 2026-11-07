@@ -117,6 +117,55 @@ pub(crate) async fn enqueue(pool: &PgPool, analysis: i64) -> sqlx::Result<()> {
     tx.commit().await
 }
 
+/// Queues a pull request analysis's decoration again, after a triage
+/// changed what it shows (ADR-0021), so the check and the comment follow the
+/// server without a new scan. Only an analysis queued before: one uploaded
+/// while no App was configured stays as it was. Returns whether it queued.
+pub(crate) async fn requeue(pool: &PgPool, analysis: i64) -> sqlx::Result<bool> {
+    let queued: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM decorations WHERE analysis_id = $1)")
+            .bind(analysis)
+            .fetch_one(pool)
+            .await?;
+    if queued {
+        enqueue(pool, analysis).await?;
+    }
+    Ok(queued)
+}
+
+/// The latest analysis of each of a project's pull requests, with its gate:
+/// taken before a change that re-judges gates, for `requeue_changed`.
+pub async fn pull_request_gates(pool: &PgPool, project: i64) -> sqlx::Result<Vec<(i64, Value)>> {
+    sqlx::query_as(
+        "SELECT DISTINCT ON (branch) id, gate FROM analyses
+         WHERE project_id = $1 AND pull_request IS NOT NULL
+         ORDER BY branch, id DESC",
+    )
+    .bind(project)
+    .fetch_all(pool)
+    .await
+}
+
+/// Queues again the pull requests whose gate changed since `before`, as a
+/// decision on a vulnerable dependency can change it. Those whose gate is
+/// the same show nothing new, so GitHub isn't asked again.
+pub async fn requeue_changed(
+    pool: &PgPool,
+    project: i64,
+    before: &[(i64, Value)],
+) -> sqlx::Result<usize> {
+    let mut queued = 0;
+    for (analysis, gate) in pull_request_gates(pool, project).await? {
+        let changed = before
+            .iter()
+            .any(|(id, old)| *id == analysis && *old != gate);
+        if changed && requeue(pool, analysis).await? {
+            queued += 1;
+        }
+    }
+    Ok(queued)
+}
+
 /// A new issue as an annotation shows it.
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct NewIssue {

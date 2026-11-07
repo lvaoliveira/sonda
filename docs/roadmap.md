@@ -16,7 +16,6 @@ breaking that promise.
 | [Private CA for `sonda upload`](#smaller-items) | **before** (M5) | A server behind Caddy's own certificate can't receive uploads from another machine today. |
 | [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
 | [Page flicker while navigating](#smaller-items) | **before** (M6) | Every page shows it. |
-| [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): updating on triage | **before** (M6) | Without it, a pull request keeps showing an issue accepted on the server. |
 | [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
 | [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
 | [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
@@ -223,8 +222,8 @@ SBOM), then match that list against published vulnerabilities.
 
 **Status:** designed for GitHub in
 [ADR-0021](adr/0021-pull-request-decoration.md) (accepted, 2026-11-02);
-pull request analyses and their decoration on GitHub are built;
-updating it when an issue is triaged is next. The GitHub App is created
+pull request analyses and their decoration on GitHub are built, and
+follow triage without a new scan. The GitHub App is created
 from the web app, rather than by hand
 ([ADR-0024](adr/0024-creating-the-github-app.md)). As SonarQube does, the
 result of analyzing a pull request (or GitLab merge request) shows on the

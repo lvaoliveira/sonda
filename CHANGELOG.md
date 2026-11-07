@@ -9,6 +9,13 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Pull request decorations follow triage without a new scan: accepting an
+  issue on a pull request, marking it a false positive, or reopening it,
+  posts the `sonda` check and the comment again, with the gate judged
+  again and the issue's annotation gone or back. A decision on a vulnerable
+  dependency does the same for each pull request whose gate it changes.
+  Confirming or assigning an issue posts nothing (ADR-0021).
+
 - `--ca-cert FILE` (or `SONDA_CA_CERT`) on `sonda upload` and
   `sonda scan --upload`: trust the certificate authorities in a PEM file
   instead of the public ones, so a server behind a private authority, such

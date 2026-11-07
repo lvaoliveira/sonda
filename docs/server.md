@@ -764,6 +764,13 @@ GitHub that's down never fails the upload or CI. The task retries with a
 doubling backoff for a day, and only a pull request's latest analysis is
 posted. The analysis page says whether it was posted, and if not, why.
 
+**Triage follows, without a new scan.** Accepting an issue on a pull
+request, marking it a false positive, or reopening one that was, posts its
+check and comment again: the gate is judged again, and the issue's
+annotation goes or comes back. So does a decision on a vulnerable
+dependency, for each pull request whose gate it changes. Confirming or
+assigning an issue changes nothing on GitHub, and isn't posted.
+
 **Setting it up from Administration** (ADR-0024):
 
 1. Under Administration → GitHub, choose the App's owner (your account or
