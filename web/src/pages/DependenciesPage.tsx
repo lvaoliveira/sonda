@@ -28,7 +28,7 @@ export function DependenciesPage() {
         { label: 'Dependencies', to: dependenciesUrl(key, branch) },
       ]}
     >
-      {list.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {list.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {list.state === 'error' && (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
           <span className="font-semibold">Could not load {key}’s dependencies</span>

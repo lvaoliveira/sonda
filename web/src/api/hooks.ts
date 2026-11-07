@@ -11,13 +11,24 @@ export function useApi(): SondaApi {
 export type Async<T> =
   | { state: 'loading' }
   | { state: 'error'; error: Error; retry: () => void }
-  | { state: 'ready'; data: T; reload: () => void }
+  /** `refreshing`: with `keep`, this is the last data while new deps load. */
+  | { state: 'ready'; data: T; reload: () => void; refreshing?: boolean }
+
+export type AsyncOptions = {
+  /**
+   * When the deps change, keep the last data, marked `refreshing`, until the
+   * new arrives, instead of going back to loading. For a list whose filters
+   * or page change; not for a different item, whose old data would be shown
+   * under the new one's name.
+   */
+  keep?: boolean
+}
 
 /**
  * Runs `load` whenever its dependencies change and exposes loading, error
  * and ready states. Stale responses (from earlier dependencies) are ignored.
  */
-export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
+export function useAsync<T>(load: () => Promise<T>, deps: unknown[], { keep = false }: AsyncOptions = {}): Async<T> {
   const [result, setResult] = useState<Async<T>>({ state: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const rerun = useCallback(() => setAttempt((n) => n + 1), [])
@@ -26,11 +37,16 @@ export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
   useEffect(() => {
     let current = true
     // A reload keeps what's shown until the new data arrives, so the page
-    // doesn't flash a skeleton or lose its local state (a selected tab);
-    // new deps, or a retry after an error, start over.
+    // doesn't flash a skeleton or lose its local state (a selected tab); so
+    // do new deps with `keep`. Otherwise new deps, or a retry after an
+    // error, start over.
     const reloading = attempt !== lastAttempt.current
     lastAttempt.current = attempt
-    setResult((r) => (reloading && r.state === 'ready' ? r : { state: 'loading' }))
+    setResult((r) => {
+      if (r.state !== 'ready') return { state: 'loading' }
+      if (reloading) return r
+      return keep ? { ...r, refreshing: true } : { state: 'loading' }
+    })
     load().then(
       (data) => current && setResult({ state: 'ready', data, reload: rerun }),
       (error: unknown) =>

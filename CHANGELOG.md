@@ -20,6 +20,12 @@ file, the report formats and the public library API.
 
 ### Changed
 
+- The web app no longer flashes a placeholder on every page and filter.
+  A loading placeholder appears only when loading takes more than 200 ms,
+  so a fast server's pages show their content directly. Changing a filter
+  or a page on Analyses, the Security review queue and the Overview keeps
+  the current results on screen, dimmed after the same moment and marked
+  busy, until the new ones arrive, as the Issues list already did.
 - When the install directory isn't on `PATH`, `install.sh` prints the two
   commands that add it for the user's shell (zsh, bash, fish or another,
   from `$SHELL`): one for new terminals, one for this one. It still never

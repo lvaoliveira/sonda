@@ -195,10 +195,39 @@
     text-wrap: pretty;
   }
   @media (prefers-reduced-motion: reduce) {
-    * {
+    /* The placeholder and refreshing delays below are steps, not motion. */
+    *:not(.sd-placeholder, .sd-refreshing) {
       transition: none !important;
       animation: none !important;
     }
+  }
+}
+
+/* A loading placeholder shows only if loading takes a moment: a fast answer
+   replaces it before it appears, instead of flashing it on every page. */
+.sd-placeholder {
+  animation: sd-placeholder 0s 200ms both;
+}
+@keyframes sd-placeholder {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
+  }
+}
+
+/* Results kept while new ones load (useAsync's `keep`) dim, after the same
+   moment, so nobody acts on them unawares. */
+.sd-refreshing {
+  animation: sd-refreshing 0s 200ms both;
+}
+@keyframes sd-refreshing {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.55;
   }
 }
 
