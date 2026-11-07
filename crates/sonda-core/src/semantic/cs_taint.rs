@@ -22,7 +22,9 @@
 use super::cs_cfg::{self, Access, Cfg, ENTRY};
 use super::cs_infer::{Found, Infer, Ty};
 use super::{DeclId, DeclKind, Model};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use tree_sitter::Node;
 
 /// The most variables tracked in one function, and rounds of the fixed
@@ -468,43 +470,447 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding
         return Vec::new();
     };
     let by_node = cs_cfg::decls_by_node(m);
-    let functions: Vec<Node<'t>> = m.functions.iter().map(|f| f.node).collect();
+    let file = FileCx {
+        m,
+        infer: &infer,
+        src,
+        by_node: &by_node,
+        functions: m.functions.iter().map(|f| f.node).collect(),
+        kind,
+        cfgs: RefCell::new(HashMap::new()),
+        summaries: RefCell::new(HashMap::new()),
+        busy: RefCell::new(HashSet::new()),
+        callees: RefCell::new(HashMap::new()),
+        sinks: RefCell::new(HashMap::new()),
+        reaches: RefCell::new(HashMap::new()),
+        checks: RefCell::new(HashMap::new()),
+    };
     let mut found = Vec::new();
-    for (i, function) in m.functions.iter().enumerate() {
-        let node = function.node;
-        if node.child_by_field_name("body").is_none() || node.has_error() {
+    for i in 0..m.functions.len() {
+        if !file.analyzable(i) {
             continue;
         }
-        let text = node.utf8_text(src).unwrap_or_default();
-        if ["#if", "#else", "#elif", "#endif"]
+        let sinks = file.sinks(i);
+        let calls = file.calls_with_sinks(i);
+        if sinks.is_empty() && calls.is_empty() {
+            continue;
+        }
+        let Some(cfg) = file.cfg(i) else {
+            continue;
+        };
+        let a = file.analysis(i);
+        let sources = source_params(m, &infer, i, src);
+        if let Some(inn) = a.run(&cfg, sources) {
+            found.extend(a.findings(&cfg, &inn, &sinks, &calls));
+        }
+    }
+    // A sink a helper has, reached from several callers: its shortest path.
+    found.sort_by_key(|f| (f.sink.start_byte(), f.steps.len()));
+    found.dedup_by_key(|f| f.sink.id());
+    found
+}
+
+/// One file's functions, as T3 sees them (ADR-0027): each function's graph
+/// and summary, computed once, for every call to it.
+struct FileCx<'a, 't> {
+    m: &'a Model<'t>,
+    infer: &'a Infer<'a, 't>,
+    src: &'a [u8],
+    by_node: &'a HashMap<usize, DeclId>,
+    functions: Vec<Node<'t>>,
+    kind: SinkKind,
+    cfgs: RefCell<HashMap<usize, Option<Rc<Cfg<'t>>>>>,
+    summaries: RefCell<HashMap<usize, Rc<Summary<'t>>>>,
+    /// Functions whose summary is being computed: a call back to one of
+    /// them, through recursion, counts as one without a summary.
+    busy: RefCell<HashSet<usize>>,
+    /// Each call's function in this file, by the call's node id.
+    callees: RefCell<HashMap<usize, Option<usize>>>,
+    /// Each function's own sinks.
+    sinks: RefCell<HashMap<usize, Rc<Vec<Sink<'t>>>>>,
+    /// Whether a function has a sink, itself or through its calls: only those
+    /// get a summary of their sinks.
+    reaches: RefCell<HashMap<usize, bool>>,
+    /// The parameters each function checks (`checked_values`), by position:
+    /// a call to it checks the matching arguments.
+    checks: RefCell<HashMap<usize, Option<Rc<Vec<usize>>>>>,
+}
+
+/// What a function does with its parameters, for its callers (T3).
+#[derive(Default)]
+struct Summary<'t> {
+    /// Parameters (by position) whose value reaches the return value, with
+    /// the path from the parameter.
+    returns: Vec<(usize, Path<'t>)>,
+    /// A request's value the function itself reads and returns, such as
+    /// `string Id() => Request.Query["id"]`.
+    returns_source: Option<Path<'t>>,
+    /// Parameters that reach a sink inside it: (position, the sink, the path
+    /// from the parameter to the sink).
+    sinks: Vec<(usize, Node<'t>, Path<'t>)>,
+}
+
+/// A call to a function of the same file, and that function.
+#[derive(Clone, Copy)]
+struct LocalCall<'t> {
+    call: Node<'t>,
+    callee: usize,
+}
+
+impl<'a, 't> FileCx<'a, 't> {
+    /// A function with a body, parsed cleanly, without preprocessor branches.
+    fn analyzable(&self, i: usize) -> bool {
+        let node = self.functions[i];
+        if node.child_by_field_name("body").is_none() || node.has_error() {
+            return false;
+        }
+        let text = node.utf8_text(self.src).unwrap_or_default();
+        !["#if", "#else", "#elif", "#endif"]
             .iter()
             .any(|d| text.contains(d))
-        {
-            continue;
-        }
-        let sources = source_params(m, &infer, i, src);
-        let sinks = sinks_in(m, &infer, node, &functions, kind, src);
-        if sinks.is_empty() {
-            continue;
-        }
-        let Some(cfg) = cs_cfg::build(m, node, src, &by_node) else {
-            continue;
-        };
+    }
+
+    fn cfg(&self, i: usize) -> Option<Rc<Cfg<'t>>> {
+        self.cfgs
+            .borrow_mut()
+            .entry(i)
+            .or_insert_with(|| {
+                cs_cfg::build(self.m, self.functions[i], self.src, self.by_node).map(Rc::new)
+            })
+            .clone()
+    }
+
+    fn analysis(&'a self, i: usize) -> Analysis<'a, 't> {
+        let node = self.functions[i];
         let mut a = Analysis {
-            m,
-            infer: &infer,
-            src,
-            by_node: &by_node,
-            kind,
+            m: self.m,
+            infer: self.infer,
+            src: self.src,
+            by_node: self.by_node,
+            kind: self.kind,
             checked: HashSet::new(),
             controller: ancestor(node, "class_declaration")
-                .is_some_and(|c| is_controller(&infer, c, src)),
+                .is_some_and(|c| is_controller(self.infer, c, self.src)),
+            file: self,
         };
-        a.checked = a.checked_values(node, &functions);
-        found.extend(a.function(&cfg, sources, &sinks));
+        a.checked = a.checked_values(node, &self.functions);
+        a
     }
-    found.sort_by_key(|f| f.sink.start_byte());
-    found
+
+    /// The function of this file a call resolves to, once per call.
+    fn callee(&self, call: Node<'t>) -> Option<usize> {
+        if let Some(j) = self.callees.borrow().get(&call.id()) {
+            return *j;
+        }
+        let j = self.resolve_callee(call);
+        self.callees.borrow_mut().insert(call.id(), j);
+        j
+    }
+
+    fn sinks(&self, i: usize) -> Rc<Vec<Sink<'t>>> {
+        if let Some(s) = self.sinks.borrow().get(&i) {
+            return s.clone();
+        }
+        let s = Rc::new(sinks_in(
+            self.m,
+            self.infer,
+            self.functions[i],
+            &self.functions,
+            self.kind,
+            self.src,
+        ));
+        self.sinks.borrow_mut().insert(i, s.clone());
+        s
+    }
+
+    /// The calls in function `i`'s own body to functions of this file.
+    fn local_calls(&self, i: usize) -> Vec<LocalCall<'t>> {
+        let function = self.functions[i];
+        let mut out = Vec::new();
+        let mut stack: Vec<Node<'t>> = function.child_by_field_name("body").into_iter().collect();
+        while let Some(n) = stack.pop() {
+            if n.id() != function.id() && self.functions.iter().any(|f| f.id() == n.id()) {
+                continue;
+            }
+            if n.kind() == "invocation_expression"
+                && let Some(j) = self.callee(n)
+                && j != i
+            {
+                out.push(LocalCall { call: n, callee: j });
+            }
+            stack.extend(children(n));
+        }
+        out
+    }
+
+    /// Whether function `j` has a sink, itself or through the functions of
+    /// this file it calls. Cheap, unlike a summary: no analysis runs.
+    fn reaches_sink(&self, j: usize) -> bool {
+        if let Some(r) = self.reaches.borrow().get(&j) {
+            return *r;
+        }
+        // Assumed false while it's computed, which ends recursion.
+        self.reaches.borrow_mut().insert(j, false);
+        let r = !self.sinks(j).is_empty()
+            || self
+                .local_calls(j)
+                .iter()
+                .any(|c| self.reaches_sink(c.callee));
+        self.reaches.borrow_mut().insert(j, r);
+        r
+    }
+
+    /// The parameters function `j` checks before using them, by position.
+    fn checks(&'a self, j: usize) -> Rc<Vec<usize>> {
+        if let Some(c) = self.checks.borrow().get(&j) {
+            return c.clone().unwrap_or_default();
+        }
+        self.checks.borrow_mut().insert(j, None);
+        let checked = self.analysis(j).checked;
+        let c: Vec<usize> = self.m.functions[j]
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, decls)| {
+                decls
+                    .iter()
+                    .any(|d| checked.contains(&self.m.decls[*d].name))
+            })
+            .map(|(p, _)| p)
+            .collect();
+        let c = Rc::new(c);
+        self.checks.borrow_mut().insert(j, Some(c.clone()));
+        c
+    }
+
+    /// The function of this file a call resolves to: a method or a local
+    /// function, by type inference, else by a name only one function has.
+    fn resolve_callee(&self, call: Node<'t>) -> Option<usize> {
+        let owner_of = |decl_node: Node| {
+            let owner = decl_node.parent()?;
+            self.functions.iter().position(|f| f.id() == owner.id())
+        };
+        if let Some(c) = self.infer.call(call) {
+            let local: Vec<usize> = c
+                .methods
+                .iter()
+                .filter_map(|m| match m {
+                    Found::Local(d) => owner_of(d.node),
+                    _ => None,
+                })
+                .collect();
+            if let [only] = local.as_slice() {
+                return Some(*only);
+            }
+            if !c.methods.is_empty() {
+                return None;
+            }
+        }
+        let function = call.child_by_field_name("function")?;
+        // Another object's method may share the name: only `X(...)`,
+        // `this.X(...)`, or `Class.X(...)` with the class that declares X.
+        let (name_node, through) = match function.kind() {
+            "member_access_expression" => {
+                let receiver = function.child_by_field_name("expression")?;
+                let through = match receiver.kind() {
+                    "this_expression" => None,
+                    "identifier" => Some(self.text(receiver)),
+                    _ => return None,
+                };
+                (function.child_by_field_name("name")?, through)
+            }
+            _ => (function, None),
+        };
+        let name = self.text(bare_name(name_node));
+        let arity = arguments(call).len();
+        let class_name = |f: &Node<'t>| {
+            ancestor(*f, "class_declaration")
+                .and_then(|c| c.child_by_field_name("name"))
+                .map(|n| self.text(n))
+        };
+        let mut named = self.functions.iter().enumerate().filter(|(_, f)| {
+            matches!(f.kind(), "method_declaration" | "local_function_statement")
+                && f.child_by_field_name("name")
+                    .is_some_and(|n| self.text(n) == name)
+                && f.child_by_field_name("parameters").map_or(0, |p| {
+                    children(p)
+                        .into_iter()
+                        .filter(|c| c.kind() == "parameter")
+                        .count()
+                }) == arity
+                && through.is_none_or(|t| class_name(f) == Some(t))
+        });
+        let (j, _) = named.next()?;
+        named.next().is_none().then_some(j)
+    }
+
+    fn text(&self, n: Node) -> &'a str {
+        self.infer.text_of(n)
+    }
+
+    /// The calls in function `i`'s own body to functions of this file whose
+    /// parameters reach a sink.
+    fn calls_with_sinks(&self, i: usize) -> Vec<LocalCall<'t>> {
+        self.local_calls(i)
+            .into_iter()
+            .filter(|c| self.reaches_sink(c.callee) && !self.summary(c.callee).sinks.is_empty())
+            .collect()
+    }
+
+    /// Function `j`'s summary, computed once.
+    fn summary(&self, j: usize) -> Rc<Summary<'t>> {
+        if let Some(s) = self.summaries.borrow().get(&j) {
+            return s.clone();
+        }
+        if !self.busy.borrow_mut().insert(j) {
+            return Rc::new(Summary::default());
+        }
+        let s = Rc::new(self.compute_summary(j));
+        self.busy.borrow_mut().remove(&j);
+        self.summaries.borrow_mut().insert(j, s.clone());
+        s
+    }
+
+    fn compute_summary(&self, j: usize) -> Summary<'t> {
+        let mut summary = Summary::default();
+        if !self.analyzable(j) {
+            return summary;
+        }
+        let Some(cfg) = self.cfg(j) else {
+            return summary;
+        };
+        let function = self.functions[j];
+        let name = function
+            .child_by_field_name("name")
+            .map_or("the function", |n| self.text(n));
+        let a = self.analysis(j);
+        let sinks = self.sinks(j);
+        let calls: Vec<LocalCall<'t>> = self
+            .calls_with_sinks(j)
+            .into_iter()
+            .filter(|c| c.callee != j)
+            .collect();
+        let returns = return_values(function, &self.functions);
+        // What the function returns of a request's value it reads itself.
+        if let Some(inn) = a.run(&cfg, source_params(self.m, self.infer, j, self.src)) {
+            summary.returns_source = returns.iter().find_map(|r| {
+                let st = a.state_at(&cfg, &inn, *r);
+                a.taint(*r, &st)
+            });
+        }
+        // Each parameter, tainted alone: what reaches the return, and sinks.
+        for (p, decls) in self.m.functions[j].params.iter().enumerate() {
+            for d in decls {
+                let decl = &self.m.decls[*d];
+                if decl
+                    .ty
+                    .and_then(|t| self.infer.written(t))
+                    .is_some_and(|t| is_safe_type(self.infer, &t))
+                {
+                    continue;
+                }
+                let marker = Step {
+                    node: decl.node,
+                    message: format!("`{name}`'s parameter `{}`", decl.name),
+                };
+                let mut entry = State::new();
+                entry.insert(*d, vec![marker]);
+                let Some(inn) = a.run(&cfg, entry) else {
+                    continue;
+                };
+                let from_param =
+                    |path: &Path<'t>| path.first().is_some_and(|s| s.node.id() == decl.node.id());
+                for r in &returns {
+                    let st = a.state_at(&cfg, &inn, *r);
+                    if let Some(path) = a.taint(*r, &st).filter(from_param) {
+                        summary.returns.push((p, cap(path)));
+                        break;
+                    }
+                }
+                for f in a.findings(&cfg, &inn, sinks.as_slice(), &calls) {
+                    if from_param(&f.steps) {
+                        summary.sinks.push((p, f.sink, f.steps));
+                    }
+                }
+            }
+        }
+        summary
+    }
+}
+
+/// The values a function returns: `return x;` in its own body, or its
+/// expression body.
+fn return_values<'t>(function: Node<'t>, functions: &[Node<'t>]) -> Vec<Node<'t>> {
+    let Some(body) = function.child_by_field_name("body") else {
+        return Vec::new();
+    };
+    match body.kind() {
+        "block" => {}
+        "arrow_expression_clause" => return body.named_child(0).into_iter().collect(),
+        _ => return vec![body],
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.id() != function.id() && functions.iter().any(|f| f.id() == n.id()) {
+            continue;
+        }
+        if n.kind() == "return_statement" {
+            out.extend(n.named_child(0));
+            continue;
+        }
+        stack.extend(children(n));
+    }
+    out
+}
+
+/// The argument a call passes to its callee's parameter `p`: by name, or by
+/// position; an extension method's receiver is its first.
+fn argument_for<'t>(
+    file: &FileCx<'_, 't>,
+    call: Node<'t>,
+    callee: usize,
+    p: usize,
+) -> Option<Node<'t>> {
+    let params: Vec<Node> = file.functions[callee]
+        .child_by_field_name("parameters")
+        .map(children)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.kind() == "parameter")
+        .collect();
+    let param = params.get(p)?;
+    let name = param.child_by_field_name("name").map(|n| file.text(n));
+    let extension = params
+        .first()
+        .is_some_and(|first| file.text(*first).starts_with("this "));
+    let receiver = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_access_expression")
+        .and_then(|f| f.child_by_field_name("expression"));
+    if extension && p == 0 {
+        return receiver;
+    }
+    let list: Vec<Node> = call
+        .child_by_field_name("arguments")
+        .map(children)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.kind() == "argument")
+        .collect();
+    let value = |a: Node<'t>| a.named_child(a.named_child_count().saturating_sub(1) as u32);
+    if let Some(name) = name
+        && let Some(a) = list.iter().find(|a| {
+            a.child_by_field_name("name")
+                .is_some_and(|n| file.text(n) == name)
+        })
+    {
+        return value(*a);
+    }
+    let position = if extension { p - 1 } else { p };
+    list.get(position)
+        .filter(|a| a.child_by_field_name("name").is_none())
+        .and_then(|a| value(*a))
 }
 
 /// Whether a file can have a source at all: a controller (by name,
@@ -1066,6 +1472,7 @@ struct Analysis<'a, 't> {
     checked: HashSet<String>,
     /// The function is a controller's: its `Request` is the request.
     controller: bool,
+    file: &'a FileCx<'a, 't>,
 }
 
 impl<'t> Analysis<'_, 't> {
@@ -1073,8 +1480,9 @@ impl<'t> Analysis<'_, 't> {
         n.utf8_text(self.src).unwrap_or_default()
     }
 
-    /// The findings of one function, from the state at its entry.
-    fn function(&self, cfg: &Cfg<'t>, entry: State<'t>, sinks: &[Sink<'t>]) -> Vec<Finding<'t>> {
+    /// The state at each block's entry, from the state at the function's
+    /// entry; None past the bounds.
+    fn run(&self, cfg: &Cfg<'t>, entry: State<'t>) -> Option<Vec<State<'t>>> {
         let n = cfg.blocks.len();
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (i, b) in cfg.blocks.iter().enumerate() {
@@ -1085,7 +1493,6 @@ impl<'t> Analysis<'_, 't> {
         let mut inn: Vec<State<'t>> = vec![State::new(); n];
         let mut out: Vec<State<'t>> = vec![State::new(); n];
         inn[ENTRY] = entry;
-        let mut converged = false;
         for _ in 0..(n + 2).min(MAX_ROUNDS) {
             let mut changed = false;
             for i in 0..n {
@@ -1103,7 +1510,7 @@ impl<'t> Analysis<'_, 't> {
                 inn[i] = state.clone();
                 self.transfer(cfg, i, &mut state, None);
                 if state.len() > MAX_TRACKED {
-                    return Vec::new();
+                    return None;
                 }
                 if !same_keys(&state, &out[i]) {
                     changed = true;
@@ -1111,20 +1518,33 @@ impl<'t> Analysis<'_, 't> {
                 out[i] = state;
             }
             if !changed {
-                converged = true;
-                break;
+                return Some(inn);
             }
         }
-        if !converged {
-            return Vec::new();
-        }
+        None
+    }
+
+    /// The state just before `node`.
+    fn state_at(&self, cfg: &Cfg<'t>, inn: &[State<'t>], node: Node<'t>) -> State<'t> {
+        let Some(block) = innermost_block(cfg, node) else {
+            return State::new();
+        };
+        let mut state = inn[block].clone();
+        self.transfer(cfg, block, &mut state, Some(node.start_byte()));
+        state
+    }
+
+    /// What reaches the function's sinks, and its calls' (T3).
+    fn findings(
+        &self,
+        cfg: &Cfg<'t>,
+        inn: &[State<'t>],
+        sinks: &[Sink<'t>],
+        calls: &[LocalCall<'t>],
+    ) -> Vec<Finding<'t>> {
         let mut found = Vec::new();
         for sink in sinks {
-            let Some(block) = innermost_block(cfg, sink.node) else {
-                continue;
-            };
-            let mut state = inn[block].clone();
-            self.transfer(cfg, block, &mut state, Some(sink.node.start_byte()));
+            let state = self.state_at(cfg, inn, sink.node);
             if let Some(mut steps) = sink.values.iter().find_map(|v| self.taint(*v, &state)) {
                 steps.push(Step {
                     node: sink.node,
@@ -1134,6 +1554,29 @@ impl<'t> Analysis<'_, 't> {
                     sink: sink.node,
                     steps: cap(steps),
                 });
+            }
+        }
+        for c in calls {
+            let summary = self.file.summary(c.callee);
+            let state = self.state_at(cfg, inn, c.call);
+            let name = self.file.functions[c.callee]
+                .child_by_field_name("name")
+                .map_or("", |n| self.text(n));
+            for (p, sink, path) in &summary.sinks {
+                let Some(arg) = argument_for(self.file, c.call, c.callee, *p) else {
+                    continue;
+                };
+                if let Some(mut steps) = self.taint(arg, &state) {
+                    steps.push(Step {
+                        node: c.call,
+                        message: format!("passed to `{name}`"),
+                    });
+                    steps.extend(path.iter().cloned());
+                    found.push(Finding {
+                        sink: *sink,
+                        steps: cap(steps),
+                    });
+                }
             }
         }
         found
@@ -1287,7 +1730,12 @@ impl<'t> Analysis<'_, 't> {
                     );
                 }
                 "invocation_expression" => {
-                    if !self.sanitizes(n) {
+                    if let Some(j) = self.file.callee(n) {
+                        // A function of this file: what its summary says.
+                        if let Some(path) = self.through_local_call(n, j, state) {
+                            return Some(path);
+                        }
+                    } else if !self.sanitizes(n) {
                         stack.extend(self.propagated(n).into_iter().rev());
                     }
                 }
@@ -1470,10 +1918,47 @@ impl<'t> Analysis<'_, 't> {
                             .map(|r| self.text(r).to_string()),
                     );
                 }
+                // A function of this file that checks what it's given, such
+                // as a validation helper that calls `IsPathWithinDirectory`.
+                if let Some(j) = self.file.callee(n)
+                    && self.file.functions[j].id() != function.id()
+                {
+                    for p in self.file.checks(j).iter() {
+                        out.extend(
+                            argument_for(self.file, n, j, *p).map(|a| self.text(a).to_string()),
+                        );
+                    }
+                }
             }
             stack.extend(children(n));
         }
         out
+    }
+
+    /// The value a call to function `j` of this file returns, when its
+    /// summary says a tainted argument, or a request it reads, reaches it.
+    fn through_local_call(&self, call: Node<'t>, j: usize, state: &State<'t>) -> Option<Path<'t>> {
+        let summary = self.file.summary(j);
+        let name = self.file.functions[j]
+            .child_by_field_name("name")
+            .map_or("", |n| self.text(n));
+        let returned = |mut path: Path<'t>| {
+            path.push(Step {
+                node: call,
+                message: format!("returned by `{name}`"),
+            });
+            cap(path)
+        };
+        for (p, inside) in &summary.returns {
+            let Some(arg) = argument_for(self.file, call, j, *p) else {
+                continue;
+            };
+            if let Some(mut path) = self.taint(arg, state) {
+                path.extend(inside.iter().cloned());
+                return Some(returned(path));
+            }
+        }
+        summary.returns_source.clone().map(returned)
     }
 
     /// A number, a `Guid`, an enum: nothing a request can inject through.
@@ -2170,5 +2655,170 @@ mod tests {
             "using System.IO;",
             "return PhysicalFile(Path.Join(\"/tmp\", v));"
         ));
+    }
+
+    /// A controller with `action` and other members `rest`, for T3.
+    fn controller(action: &str, rest: &str) -> String {
+        format!("{USINGS}public class C : Controller {{\n{action}\n{rest}\n}}\n")
+    }
+
+    #[test]
+    fn through_a_helper_with_the_sink() {
+        let src = controller(
+            "public void Get(string id, SqlConnection c) { Find(id, c); }",
+            "void Find(string key, SqlConnection c) {\nvar q = \"SELECT * FROM o WHERE id = \" + key;\nnew SqlCommand(q, c);\n}",
+        );
+        let found = issues(&src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line, 10, "the sink, in the helper");
+        assert_eq!(
+            flow(&found[0]),
+            [
+                "request parameter `id`",
+                "passed to `Find`",
+                "`Find`'s parameter `key`",
+                "concatenated into `q`",
+                "passed to `SqlCommand`"
+            ]
+        );
+    }
+
+    #[test]
+    fn through_a_helper_that_returns_the_query() {
+        let src = controller(
+            "public void Get(string id, SqlConnection c) { var q = Build(id); new SqlCommand(q, c); }",
+            "string Build(string key) => \"SELECT * FROM o WHERE id = \" + key;",
+        );
+        let found = issues(&src);
+        assert_eq!(found.len(), 1);
+        let steps = flow(&found[0]);
+        assert!(steps.contains(&"returned by `Build`"), "{steps:?}");
+        assert_eq!(steps.first(), Some(&"request parameter `id`"));
+        // A block body with `return`, and a static helper called by its class.
+        let block = controller(
+            "public void Get(string id, SqlConnection c) { new SqlCommand(C.Build(id), c); }",
+            "static string Build(string key) { var s = \"SELECT \" + key; return s; }",
+        );
+        assert_eq!(issues(&block).len(), 1);
+    }
+
+    #[test]
+    fn a_helper_that_reads_the_request_itself() {
+        let src = controller(
+            "public void Get(SqlConnection c) { new SqlCommand(\"SELECT \" + Id(), c); }",
+            "string Id() => Request.Query[\"id\"].ToString();",
+        );
+        let found = issues(&src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(flow(&found[0])[0], "the request's `Query`");
+    }
+
+    #[test]
+    fn chains_and_named_arguments() {
+        let chain = controller(
+            "public void Get(string id, SqlConnection c) { Outer(id, c); }",
+            "void Outer(string a, SqlConnection c) { Inner(c: c, key: a.Trim()); }\n\
+             void Inner(SqlConnection c, string key) { new SqlCommand(\"SELECT \" + key, c); }",
+        );
+        let found = issues(&chain);
+        assert_eq!(found.len(), 1);
+        let steps = flow(&found[0]);
+        assert!(
+            steps.contains(&"passed to `Outer`") && steps.contains(&"passed to `Inner`"),
+            "{steps:?}"
+        );
+        // The connection isn't the query: only the right argument counts.
+        let wrong = controller(
+            "public void Get(string id, SqlConnection c) { Inner(c, \"1\"); }",
+            "void Inner(SqlConnection c, string key) { new SqlCommand(\"SELECT \" + key, c); }",
+        );
+        assert!(issues(&wrong).is_empty());
+    }
+
+    #[test]
+    fn safe_values_and_helpers_are_not_reported() {
+        for (action, rest) in [
+            // A constant passed in.
+            (
+                "public void Get(string id, SqlConnection c) { Find(\"1\", c); }",
+                "void Find(string key, SqlConnection c) { new SqlCommand(\"SELECT \" + key, c); }",
+            ),
+            // A helper that parses: a number comes back.
+            (
+                "public void Get(string id, SqlConnection c) { new SqlCommand(\"SELECT \" + Parse(id), c); }",
+                "int Parse(string s) => int.Parse(s);",
+            ),
+            // A helper that ignores its parameter.
+            (
+                "public void Get(string id, SqlConnection c) { new SqlCommand(Fixed(id), c); }",
+                "string Fixed(string s) => \"SELECT 1\";",
+            ),
+            // A helper nobody calls with a request's value.
+            (
+                "public void Get(int id) { }",
+                "void Find(string key, SqlConnection c) { new SqlCommand(\"SELECT \" + key, c); }",
+            ),
+        ] {
+            assert!(issues(&controller(action, rest)).is_empty(), "{rest}");
+        }
+    }
+
+    #[test]
+    fn a_helper_called_twice_is_reported_once() {
+        let src = controller(
+            "public void Get(string id, SqlConnection c) { Find(id, c); }\n\
+             public void Post(string name, SqlConnection c) { Find(\"x\" + name, c); }",
+            "void Find(string key, SqlConnection c) { new SqlCommand(\"SELECT \" + key, c); }",
+        );
+        let found = issues(&src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            flow(&found[0])[0],
+            "request parameter `id`",
+            "the shortest path"
+        );
+    }
+
+    #[test]
+    fn recursion_and_ambiguous_overloads_end() {
+        let recursive = controller(
+            "public void Get(string id, SqlConnection c) { Walk(id, c, 3); }",
+            "void Walk(string key, SqlConnection c, int n) { if (n > 0) { Walk(key + \"x\", c, n - 1); } else { new SqlCommand(\"SELECT \" + key, c); } }",
+        );
+        assert_eq!(issues(&recursive).len(), 1, "the base case's sink");
+        let mutual = controller(
+            "public void Get(string id) { A(id); }",
+            "string A(string s) => B(s);\nstring B(string s) => A(s);",
+        );
+        assert!(issues(&mutual).is_empty());
+        // Two helpers named alike that inference can't tell apart: neither.
+        let overloads = controller(
+            "public void Get(string id, SqlConnection c) { Find(id, c); }",
+            "void Find(string key, SqlConnection c) { new SqlCommand(\"SELECT \" + key, c); }\n\
+             void Find(object key, SqlConnection c) { }",
+        );
+        assert!(issues(&overloads).len() <= 1);
+    }
+
+    /// A helper checks its parameter, and the action
+    /// returns when the check fails. What it checks is safe in the caller;
+    /// what it doesn't check isn't.
+    #[test]
+    fn a_check_inside_a_helper_counts_for_its_caller() {
+        let checked = controller(
+            "public object Save(string name) {\nif (Invalid(name)) return null;\nSave2(name);\nreturn null;\n}",
+            "bool Invalid(string file) => !IsPathWithinDirectory(\"/data\", file);\n\
+             void Save2(string file) { System.IO.File.Create(System.IO.Path.Join(\"/data\", file)); }",
+        );
+        assert!(issues_of("cs/path-injection", &checked).is_empty());
+        // A parameter the helper doesn't check is still reported.
+        let unchecked = controller(
+            "public object Save(string name, string path) {\nif (Invalid(name, path)) return null;\nreturn null;\n}",
+            "bool Invalid(string file, string full) {\nif (!IsPathWithinDirectory(\"/data\", file)) return true;\n\
+             System.IO.File.Delete(full);\nreturn false;\n}",
+        );
+        let found = issues_of("cs/path-injection", &unchecked);
+        assert_eq!(found.len(), 1);
+        assert_eq!(flow(&found[0])[0], "request parameter `path`");
     }
 }

@@ -4,7 +4,8 @@
   but cross-site scripting: `cs/sql-injection`, `cs/command-injection`,
   `cs/path-injection`, `cs/open-redirect`, `cs/ssrf`, `cs/xpath-injection`
   and `cs/ldap-injection`, with the path in the JSON report and SARIF,
-  stored by the server and shown on the issue page. T2 to T4 are next.
+  stored by the server and shown on the issue page. T3 built: through the
+  functions of the same file. T2 and T4 are next.
 - Date: 2026-11-07
 
 ## Context
@@ -193,6 +194,39 @@ callees first; recursion is handled by iterating to a fixed point with the
 same caps. A call to a function in the same file applies its summary instead
 of T1's "untainted" default. This is the step that turns "the query is built
 in a helper" from a miss into a finding.
+
+As built (2026-11-07):
+
+- **A summary per function and sink kind, per parameter:** the function is
+  analyzed with one parameter tainted at a time, and its summary records the
+  parameters that reach its return value, those that reach a sink (with the
+  path from the parameter), and a request's value it reads and returns
+  itself (`string Id() => Request.Query["id"]`). A call splices the path:
+  the caller's steps, "passed to `Find`", the callee's from its parameter.
+- **Checks cross calls too.** A function that checks a parameter (T1's
+  guards) checks the matching argument of every call to it, so a validation
+  helper that calls `IsPathWithinDirectory` covers its callers.
+- **Recursion isn't iterated to a fixed point,** as planned above: a function
+  whose summary is being computed counts, for a call back to it, as one
+  without a summary. That can only miss a path through the recursion, never
+  invent one.
+- **Calls resolve** by type inference to a method or local function of the
+  file, else by a name and arity only one function has, called unqualified,
+  on `this`, or on its own class. Overloads inference can't tell apart
+  resolve to nothing.
+- **A sink reached by several callers is reported once,** with its shortest
+  path.
+- **Cost:** summaries are computed once, and only for functions that reach a
+  sink, themselves or through their calls, which a walk without analysis
+  tells; each call's resolution is computed once. The scan times of the
+  seven applications are unchanged.
+
+Measured on the same applications: two helpers planted in a real controller
+action of each, one with the sink and one returning the query, were found
+14 times out of 14. Two issues T3 first reported were guarded by a check
+inside a helper, which led to checks crossing calls. One new issue looks
+like a real vulnerability in one of the applications; its details are
+withheld here until its maintainers have been told.
 
 ### T4: across files
 
