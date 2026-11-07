@@ -222,6 +222,7 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("cs/cleartext-url", &[319], &[A02]),
     ("cs/hardcoded-credential", &[259, 798], &[A07]),
     ("cs/sql-built-dynamically", &[89, 943], &[A03]),
+    ("cs/sql-injection", &[89, 943], &[A03]),
     ("cs/cookie-not-secure", &[311, 315, 614], &[A04, A05]),
     ("cs/cookie-not-httponly", &[1004], &[A05]),
     ("cs/custom-crypto", &[327], &[A02]),

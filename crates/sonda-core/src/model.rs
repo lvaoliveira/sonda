@@ -168,6 +168,24 @@ pub struct Issue {
     pub is_new: bool,
     /// The issue's identity across scans; see `analysis::fingerprints`.
     pub fingerprint: Fingerprint,
+    /// For a taint finding (ADR-0027), the path a value took: where it came
+    /// from, what it went through, and the sink, which is the issue itself.
+    /// Empty for other issues, and then left out of the report.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flow: Vec<FlowStep>,
+}
+
+/// One step of a taint finding's path, in the same file.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FlowStep {
+    /// What happens to the value here: "request parameter `id`",
+    /// "concatenated into `q`".
+    pub message: String,
+    /// 1-based, as an issue's.
+    pub line: usize,
+    pub column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
 }
 
 /// A hash, serialized as lowercase hex.

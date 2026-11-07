@@ -16,7 +16,7 @@ breaking that promise.
 | [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
 | [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
 | [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
-| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | New rules, in phases ([ADR-0027](adr/0027-taint-analysis.md)); the shape rules cover injection meanwhile. |
+| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 is built (`cs/sql-injection`); the rest are new rules, in phases ([ADR-0027](adr/0027-taint-analysis.md)), and the shape rules cover injection meanwhile. |
 | [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
 | [More lockfile formats](#dependencies-sbom-and-known-vulnerabilities) | after | Adds ecosystems; the SBOM formats don't change. |
 | [AI auto-fix](#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests) | after | Copy as prompt covers fixing with an assistant today ([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md)). |
@@ -108,8 +108,8 @@ user's `password_hash` is nullable, and accounts are never deleted.
 ## Security: CWE/OWASP mapping, hotspots, reachability
 
 **Status:** the CWE/OWASP mapping is done (2026-10-30); security review
-is done (ADR-0014, 2026-10-31); taint analysis is proposed (ADR-0027,
-2026-11-07); reachability is planned, not started. The Security screen shows
+is done (ADR-0014, 2026-10-31); taint analysis is accepted, with its
+first phase built (ADR-0027, 2026-11-07); reachability is planned, not started. The Security screen shows
 vulnerabilities by severity, age, project, component, rule and OWASP
 category. The design also has a hotspot review queue, and ranks findings
 by whether they can be reached from a public entry point. Each needs its
@@ -133,10 +133,12 @@ own groundwork, smallest first:
    metric, and bulk review.
 3. **Taint analysis.** Following a value from a request to a query, a
    command or a path, as SonarQube's commercial editions do (S3649, S2076,
-   S2083 and others). Proposed in
+   S2083 and others), in
    [ADR-0027](adr/0027-taint-analysis.md): sources, sinks and sanitizers as
-   data, then phases from one C# function (T1) to JavaScript (T2), across
-   functions (T3) and across files (T4), with the path shown on each issue.
+   data, then phases from one C# function (T1, built: `cs/sql-injection`)
+   to JavaScript (T2), across functions (T3) and across files (T4), with
+   the path shown on each issue. Next: the server and web app showing
+   paths, the other C# sinks, then T3.
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry

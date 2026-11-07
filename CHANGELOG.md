@@ -9,6 +9,23 @@ file, the report formats and the public library API.
 
 ### Added
 
+- `cs/sql-injection` (SonarQube's S3649): a value from an ASP.NET Core
+  request, an action's or a minimal API handler's parameter, or the
+  request's `Query`, `Form`, `Headers`, `Cookies`, `Path` or `RouteValues`,
+  that reaches the text of a SQL query within one method: an ADO.NET
+  command, `CommandText`, EF Core's `ExecuteSqlRaw`/`FromSqlRaw`, or
+  Dapper. It follows assignments, concatenation, interpolation,
+  `string.Format`, `StringBuilder` and branches and loops, and a number,
+  `Guid`, date or enum clears it. Taint analysis's first phase
+  ([ADR-0027](docs/adr/0027-taint-analysis.md), T1); through helpers and
+  across files comes later. On WebGoat.NET and seven open-source
+  applications it reported nothing; planted in a real controller of each, it
+  found every injection.
+- A taint finding's path: `flow` on the issue in the JSON report (each step
+  a `message` and a span, from the source to the sink), and `codeFlows` in
+  SARIF, which GitHub code scanning shows step by step. Other issues have
+  no `flow`, and a server ignores it until it shows paths.
+
 - Pull request decorations follow triage without a new scan: accepting an
   issue on a pull request, marking it a false positive, or reopening it,
   posts the `sonda` check and the comment again, with the gate judged

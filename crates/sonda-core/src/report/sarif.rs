@@ -57,7 +57,7 @@ pub fn render(r: &Report) -> String {
         .iter()
         .map(|i| {
             let rule_index = RULES.iter().position(|rule| rule.id == i.rule);
-            json!({
+            let mut result = json!({
                 "ruleId": i.rule,
                 "ruleIndex": rule_index,
                 "level": level(i.severity),
@@ -81,7 +81,33 @@ pub fn render(r: &Report) -> String {
                     "category": i.category.as_str(),
                     "isNew": i.is_new,
                 },
-            })
+            });
+            // A taint finding's path (ADR-0027), which code scanning and
+            // IDEs show step by step.
+            if !i.flow.is_empty() {
+                let locations: Vec<Value> = i
+                    .flow
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "location": {
+                                "physicalLocation": {
+                                    "artifactLocation": { "uri": i.path, "uriBaseId": "%SRCROOT%" },
+                                    "region": {
+                                        "startLine": s.line,
+                                        "startColumn": s.column,
+                                        "endLine": s.end_line,
+                                        "endColumn": s.end_column,
+                                    }
+                                },
+                                "message": { "text": s.message },
+                            }
+                        })
+                    })
+                    .collect();
+                result["codeFlows"] = json!([{ "threadFlows": [{ "locations": locations }] }]);
+            }
+            result
         })
         .collect();
 

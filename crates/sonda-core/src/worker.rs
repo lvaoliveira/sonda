@@ -15,7 +15,7 @@ use crate::analysis::{self, FileAnalysis, FileError, Token};
 use crate::config::Config;
 use crate::error::Error;
 use crate::lang::Lang;
-use crate::model::{Digest, FileMetrics, Issue, Severity};
+use crate::model::{Digest, FileMetrics, FlowStep, Issue, Severity};
 use crate::rules::{self, RuleSet};
 use crate::sandbox::{self, SandboxMode, Status};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -215,6 +215,13 @@ fn encode_response(result: &Result<FileAnalysis, FileError>) -> Vec<u8> {
         }
         e.u64(u64::from(i.effort_minutes));
         e.digest(&i.fingerprint);
+        e.usize(i.flow.len());
+        for step in &i.flow {
+            e.str(&step.message);
+            for v in [step.line, step.column, step.end_line, step.end_column] {
+                e.usize(v);
+            }
+        }
     }
     let m = &a.metrics;
     for v in [m.lines, m.ncloc, m.comment_lines, m.functions] {
@@ -244,7 +251,9 @@ fn encode_response(result: &Result<FileAnalysis, FileError>) -> Vec<u8> {
 
 /// Smallest encoded issue: two empty strings (8 bytes each), the severity
 /// byte, four positions and the effort (8 bytes each), and the fingerprint.
-const MIN_ISSUE_BYTES: usize = 8 + 1 + 8 + 4 * 8 + 8 + 16;
+const MIN_ISSUE_BYTES: usize = 8 + 1 + 8 + 4 * 8 + 8 + 16 + 8;
+/// A flow step's message length and its span.
+const MIN_FLOW_STEP_BYTES: usize = 8 + 4 * 8;
 
 /// Outer `Err`: the payload is malformed. Inner `Err`: the worker reported
 /// that the file could not be analyzed.
@@ -287,6 +296,22 @@ fn decode_response(
             effort_minutes: d.u32()?,
             is_new: true,
             fingerprint: d.digest()?,
+            flow: {
+                let mut flow = Vec::with_capacity(d.count(MIN_FLOW_STEP_BYTES)?);
+                for _ in 0..flow.capacity() {
+                    let message = d.str()?.to_string();
+                    let (line, column, end_line, end_column) =
+                        (d.usize()?, d.usize()?, d.usize()?, d.usize()?);
+                    flow.push(FlowStep {
+                        message,
+                        line,
+                        column,
+                        end_line,
+                        end_column,
+                    });
+                }
+                flow
+            },
         });
     }
     let metrics = FileMetrics {
@@ -812,6 +837,34 @@ mod tests {
     }
 
     #[test]
+    fn a_taint_findings_flow_round_trips_and_is_checked() {
+        let mut a = analyzed(Lang::JavaScript, "eval(x);\nf(y);\n");
+        let step = |line, message: &str| FlowStep {
+            message: message.into(),
+            line,
+            column: 1,
+            end_line: line,
+            end_column: 4,
+        };
+        let flow = vec![step(1, "request parameter `x`"), step(2, "passed to `f`")];
+        a.issues[0].flow = flow.clone();
+        let frame = encode_response(&Ok(a));
+        let mut a = decode_response(&frame, "a.js", Lang::JavaScript)
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.issues[0].flow, flow);
+        // A step past the file's end, as a hostile worker might send.
+        a.issues[0].flow[1].line = 999;
+        a.issues[0].flow[1].end_line = 999;
+        let frame = encode_response(&Ok(a));
+        assert!(
+            decode_response(&frame, "a.js", Lang::JavaScript)
+                .unwrap_err()
+                .contains("flow step")
+        );
+    }
+
+    #[test]
     fn errors_round_trip() {
         let frame = encode_response(&Err(FileError::ParseTimeout));
         let decoded = decode_response(&frame, "a.js", Lang::JavaScript).unwrap();
@@ -842,6 +895,7 @@ mod tests {
             e.usize(v);
         }
         e.digest(&Digest([0; 16]));
+        e.usize(0); // flow steps
         for _ in 0..6 {
             e.usize(1);
         }

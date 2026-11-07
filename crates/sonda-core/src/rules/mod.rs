@@ -72,10 +72,20 @@ pub(crate) enum Check {
         langs: &'static [Lang],
         find: SemanticFind,
     },
+    /// Taint analysis (ADR-0027): each sink a request's value reaches, with
+    /// the path it took, which becomes the issue's flow.
+    Taint {
+        langs: &'static [Lang],
+        find: TaintFind,
+    },
 }
 
 /// Finds a semantic rule's issues in a file's model.
 pub(crate) type SemanticFind = for<'t> fn(&crate::semantic::Model<'t>, &[u8]) -> Vec<Node<'t>>;
+
+/// Finds a taint rule's issues, each with its path.
+pub(crate) type TaintFind =
+    for<'t> fn(&crate::semantic::Model<'t>, &[u8]) -> Vec<crate::semantic::cs_taint::Finding<'t>>;
 
 /// Snippets that the rule must flag (`bad`) and must leave alone (`good`).
 /// Every query rule has one; the test suite runs them all.
@@ -158,7 +168,9 @@ impl Rule {
     pub fn langs(&self) -> &'static [Lang] {
         use crate::lang::{ALL, CSHARP, JAVA, JS_TS, NOT_RUST, PYTHON, RUST};
         match self.check {
-            Check::Query { langs, .. } | Check::Semantic { langs, .. } => langs,
+            Check::Query { langs, .. }
+            | Check::Semantic { langs, .. }
+            | Check::Taint { langs, .. } => langs,
             Check::Structural => match self.id.split('/').next() {
                 Some("cs") => CSHARP,
                 Some("java") => JAVA,
@@ -306,7 +318,7 @@ impl RuleSet {
             // Compiled alone, the rule's error points into its own query.
             let detail = match r.check {
                 Check::Query { query, .. } => Query::new(&lang.grammar(), query).err(),
-                Check::Structural | Check::Semantic { .. } => None,
+                Check::Structural | Check::Semantic { .. } | Check::Taint { .. } => None,
             }
             .unwrap_or(e);
             Error::Internal(format!(
@@ -413,7 +425,10 @@ mod tests {
     #[test]
     fn every_query_rule_has_an_example_in_one_of_its_languages() {
         for r in RULES.iter() {
-            if let Check::Query { langs, .. } | Check::Semantic { langs, .. } = r.check {
+            if let Check::Query { langs, .. }
+            | Check::Semantic { langs, .. }
+            | Check::Taint { langs, .. } = r.check
+            {
                 let ex = r
                     .example
                     .as_ref()

@@ -78,7 +78,7 @@ In a GitHub Actions `pull_request` job, an upload belongs to the pull request ([
 
 Without `--new-code`, sonda picks what new code is compared with ([ADR-0010](docs/adr/0010-default-new-code.md)): in a GitHub Actions pull request, its base branch; in a push, the commits it pushed; on a branch with commits its default branch lacks, their merge base; otherwise (a local run on `main`, say) uncommitted changes. The report says which it used. `--new-code none` (or `scan.new_code = "none"`) counts the whole project as new code.
 
-Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed and, with `--coverage`, its `coverage` as `covered` and `uncovered` line numbers, its `branch_coverage` (`line`, `taken`, `total`) and its `function_coverage` (`name`, `line`, `calls`) when the LCOV report has branch and function records. The JSON format is versioned by `report_version`. Its `dependencies` list each package's ecosystem, name, version, package URL, lockfile, whether it's direct where the lockfile says, and its license where recorded. Its `rule_settings` are the `[rules]` settings of `sonda.toml` the scan ran with (`disabled`, `enabled` and `severity`), so a sonda server can show why a rule reports nothing ([ADR-0016](docs/adr/0016-rule-settings-on-the-server.md)), and, from `sonda scan --upload`, its `rule_profile`, the server's rule profile it applied (`name`, `revision`). Its `active_rules` are the ids of the rules the scan ran, so a server can tell a fixed finding from one whose rule didn't run. `sonda sbom` stamps the SBOM with the current time, or with `SOURCE_DATE_EPOCH` when set, for reproducible output.
+Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed and, with `--coverage`, its `coverage` as `covered` and `uncovered` line numbers, its `branch_coverage` (`line`, `taken`, `total`) and its `function_coverage` (`name`, `line`, `calls`) when the LCOV report has branch and function records. The JSON format is versioned by `report_version`. Its `dependencies` list each package's ecosystem, name, version, package URL, lockfile, whether it's direct where the lockfile says, and its license where recorded. Its `rule_settings` are the `[rules]` settings of `sonda.toml` the scan ran with (`disabled`, `enabled` and `severity`), so a sonda server can show why a rule reports nothing ([ADR-0016](docs/adr/0016-rule-settings-on-the-server.md)), and, from `sonda scan --upload`, its `rule_profile`, the server's rule profile it applied (`name`, `revision`). Its `active_rules` are the ids of the rules the scan ran, so a server can tell a fixed finding from one whose rule didn't run. A taint finding (ADR-0027) has a `flow`: the path its value took, each step a `message` and a span (`line`, `column`, `end_line`, `end_column`), from the source to the sink; other issues have none. SARIF has the same path as the result's `codeFlows`. `sonda sbom` stamps the SBOM with the current time, or with `SOURCE_DATE_EPOCH` when set, for reproducible output.
 
 Exit codes: `0` means the gate passed, `1` means it failed, and `2` means an error (bad config, unknown rule id, git failure, and so on). Use `--no-gate` to always exit 0. With an upload, the server's gate decides, so findings accepted or marked false positive on the server no longer fail the build (see [docs/server.md](docs/server.md#uploading-analyses)).
 
@@ -202,14 +202,16 @@ SonarQube's rules for JavaScript, TypeScript, Python, Java and C#; Rust is
 earlier
 ([progress](docs/sonar-parity/README.md)). It does not (yet) have:
 
-- **Data-flow or taint analysis.** The rules are syntactic, plus the semantic
-  layer above, so they are fast and predictable, but they can't follow a
-  value from user input through several functions into a SQL query or a
-  shell command. For injection, sonda has narrower rules that flag the risky
-  shape itself, such as a query built from strings (`sql-built-dynamically`
-  in Java, JavaScript, Python and C#). SonarQube's taint analysis is part of
-  its commercial editions: the free Community Build doesn't have it either,
-  and the rule counts above are against the Community Build.
+- **Taint analysis across functions.** `cs/sql-injection` follows a value
+  from an ASP.NET Core request into a SQL query within one function, and
+  shows its path ([ADR-0027](docs/adr/0027-taint-analysis.md), phase T1),
+  but not yet through the program's own helpers or across files, nor in
+  other languages. For injection elsewhere, sonda has narrower rules that
+  flag the risky shape itself, such as a query built from strings
+  (`sql-built-dynamically` in Java, JavaScript, Python and C#). SonarQube's
+  taint analysis is part of its commercial editions: the free Community
+  Build doesn't have it either, and the rule counts above are against the
+  Community Build.
 - Pull request decoration on GitLab and Bitbucket, single sign-on, and some
   of the server's screens ([roadmap](docs/roadmap.md)).
 - Coverage formats other than LCOV (JaCoCo and Cobertura XML are planned).
