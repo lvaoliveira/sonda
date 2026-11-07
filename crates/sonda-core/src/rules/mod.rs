@@ -85,7 +85,7 @@ pub(crate) type SemanticFind = for<'t> fn(&crate::semantic::Model<'t>, &[u8]) ->
 
 /// Finds a taint rule's issues, each with its path.
 pub(crate) type TaintFind =
-    for<'t> fn(&crate::semantic::Model<'t>, &[u8]) -> Vec<crate::semantic::cs_taint::Finding<'t>>;
+    for<'t> fn(&crate::semantic::Model<'t>, &[u8]) -> Vec<crate::semantic::taint::Finding<'t>>;
 
 /// Snippets that the rule must flag (`bad`) and must leave alone (`good`).
 /// Every query rule has one; the test suite runs them all.

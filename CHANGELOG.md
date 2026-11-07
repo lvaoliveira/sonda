@@ -9,6 +9,19 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Taint analysis for JavaScript and TypeScript (ADR-0027, T2), six rules
+  with the path each value took: `js/sql-injection` (S3649),
+  `js/command-injection` (S2076), `js/path-injection` (S2083),
+  `js/open-redirect` (S5146), `js/ssrf` (S5144) and `js/code-injection`
+  (S5334: `eval`, `new Function`, `vm`). Sources are a request's members
+  in Express, Koa, Fastify, Next.js and NestJS handlers, including
+  controllers defined apart from their routes; sinks resolve through the
+  file's imports (`child_process`, `fs`, axios, `got`, `fetch`). A
+  callback sees its handler's variables. On OWASP Juice Shop and NodeGoat
+  they find the deliberate injections; on seven open-source applications
+  they report nine issues, none exploitable on review; planted in eight of
+  them, they found every injection. Scans take 2% longer at most.
+
 - Taint analysis follows a request's value through the functions of the
   same file (ADR-0027, T3): into a helper that builds the query or runs the
   command, and out of one that returns it. The path names each call

@@ -10,6 +10,12 @@ use crate::rules::owasp::y2021::{A01, A02, A03, A04, A05, A07, A08, A10};
 /// 2025 categories are derived from the CWE ids.
 pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("js/no-eval", &[95], &[A03]),
+    ("js/sql-injection", &[89, 943], &[A03]),
+    ("js/command-injection", &[78, 88], &[A03]),
+    ("js/path-injection", &[22], &[A01]),
+    ("js/open-redirect", &[601], &[A01]),
+    ("js/ssrf", &[918], &[A10]),
+    ("js/code-injection", &[94, 95], &[A03]),
     ("js/no-new-function", &[95], &[A03]),
     ("js/inner-html", &[79], &[A03]),
     ("js/tls-unverified", &[295], &[A02, A05, A07]),
