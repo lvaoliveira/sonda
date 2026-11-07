@@ -164,12 +164,16 @@ The other sinks (2026-11-07) brought three more choices:
 
 On WebGoat.NET's port and the same seven applications, the first version
 reported 13 issues. Eight were checks or fixed hosts, which the choices
-above cover and the tests now reproduce. Five are real, by each rule's
+above cover and the tests now reproduce. Five remain, by each rule's
 definition:
 - WebGoat.NET's port redirects to its login form's return URL, one of its
   deliberate vulnerabilities;
-- the other four are in two of the applications, and their details are
-  withheld here until those projects' maintainers have been told.
+- four are in two of the applications, and on review none is exploitable:
+  an administrator's endpoint whose purpose is to test a directory the
+  administrator chose, and a file name built from a request's value after
+  every `.` is removed from it, so no `..` can leave the directory. The
+  rules don't model removing characters; such a case stays a finding to
+  review.
 
 One line per sink kind, planted in a real controller action of each
 application, was found 42 times out of 42.
