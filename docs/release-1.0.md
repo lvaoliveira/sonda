@@ -159,8 +159,9 @@ fixed or written up as accepted risks.
 - [x] Every ADR's status matches what's built: C#
       ([ADR-0015](adr/0015-csharp.md)), regex analysis (0013) and
       cross-file declarations (0020) were built but still "proposed".
-- [ ] Pages no longer flicker on every navigation (the roadmap's `useAsync`
-      cache).
+- [x] Pages no longer flicker on every navigation: placeholders appear only
+      after 200 ms, and filtered lists keep their results, dimmed, while
+      new ones load (`useAsync`'s `keep`). A reload already kept them.
 - [x] Each roadmap item marked as before or after 1.0, in the roadmap's
       [table](roadmap.md#before-or-after-10). Most are after; the private
       CA, Safari, page flicker and decoration following triage are before.

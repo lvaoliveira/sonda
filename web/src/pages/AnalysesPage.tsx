@@ -36,7 +36,8 @@ function AnalysesScreen({ project: fixed }: Readonly<{ project?: string }>) {
   const gate = (['failed', 'passed'].includes(params.get('gate') ?? '') ? params.get('gate') : 'all') as GateFilter
   const offset = Math.max(0, Number(params.get('offset')) || 0)
   const query: AnalysisQuery = { project: project || undefined, gate: gate === 'all' ? undefined : gate, offset, limit: PAGE_SIZE }
-  const page = useAsync(() => api.analyses(query), [api, project, gate, offset])
+  // A filter or another page keeps the list until the new one arrives.
+  const page = useAsync(() => api.analyses(query), [api, project, gate, offset], { keep: true })
   const projects = useAsync(() => api.projects(), [api])
   const set = (changes: Record<string, string | null>) =>
     setParams(
@@ -95,9 +96,13 @@ function AnalysesScreen({ project: fixed }: Readonly<{ project?: string }>) {
           </label>
         )}
       </div>
-      {page.state === 'loading' && <div aria-busy="true" className="h-[480px] rounded-xl bg-panel-2 edge" />}
+      {page.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[480px] rounded-xl bg-panel-2 edge" />}
       {page.state === 'error' && <p role="alert">Could not load analyses: {page.error.message}</p>}
-      {page.state === 'ready' && <AnalysisList page={page.data} byProject={!fixed} onOffset={(o) => set({ offset: o ? String(o) : null })} />}
+      {page.state === 'ready' && (
+        <div aria-busy={page.refreshing} className={page.refreshing ? 'sd-refreshing' : undefined}>
+          <AnalysisList page={page.data} byProject={!fixed} onOffset={(o) => set({ offset: o ? String(o) : null })} />
+        </div>
+      )}
     </AppShell>
   )
 }

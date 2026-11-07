@@ -54,7 +54,7 @@ function IssuesSkeleton() {
   return (
     <>
       <PageHeader title="Issues" summary="Loading…" />
-      <div aria-busy="true" className="grid min-h-[520px] grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] gap-px overflow-hidden rounded-xl bg-line">
+      <div aria-busy="true" className="sd-placeholder grid min-h-[520px] grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] gap-px overflow-hidden rounded-xl bg-line">
         <div className="flex flex-col gap-3 bg-panel-2 p-4">
           {Array.from({ length: 6 }, (_, i) => (
             <div key={i} className="h-[52px] rounded-lg bg-hover" />

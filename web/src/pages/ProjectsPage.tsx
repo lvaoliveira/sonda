@@ -18,7 +18,7 @@ export function ProjectsPage() {
   const list = useAsync(() => Promise.all([api.projects(), api.shell()]), [api])
   return (
     <AppShell crumbs={[{ label: 'Projects', to: '/projects' }]}>
-      {list.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {list.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {list.state === 'error' && <p role="alert">Could not load projects: {list.error.message}</p>}
       {list.state === 'ready' && <Projects list={list.data[0]} isAdmin={list.data[1].isAdmin} />}
     </AppShell>
