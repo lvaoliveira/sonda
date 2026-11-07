@@ -155,19 +155,24 @@ threshold = 0
 
 Gate metrics: `files`, `lines`, `ncloc`, `functions`, `complexity`, `cognitive_complexity`, `issues`, `bugs`, `vulnerabilities`, `code_smells`, `blocker_issues`, `critical_issues`, `major_issues`, `debt_minutes`, `duplicated_lines`, `duplicated_lines_density`, `coverage`. Most also have a `new_` variant for new code only: `new_lines`, `new_issues`, `new_bugs`, `new_vulnerabilities`, `new_code_smells`, `new_blocker_issues`, `new_critical_issues`, `new_major_issues`, `new_debt_minutes`, `new_duplicated_lines`, `new_duplicated_lines_density` and `new_coverage`. For dependencies: `vulnerable_dependencies` and `severe_vulnerable_dependencies` (packages with a blocker or critical known vulnerability), and `new_vulnerable_dependencies` and `new_severe_vulnerable_dependencies` (those whose finding wasn't there at the new-code reference: added, or moved into an affected version), which have data only when checked against advisories. Each finding in the report's `vulnerabilities` says whether it's new (`is_new`). A condition on a metric with no data, such as coverage without a report, is shown as "no data" and does not fail the gate. Some conditions are "ignored" instead, with the reason, and don't fail it either: as in SonarQube, with fewer than 20 new lines, those on `new_coverage`, `new_duplicated_lines` and `new_duplicated_lines_density` (one uncovered line in a two-line change is 50% coverage); and without advisory data, those on dependencies. The default gate fails on new bugs, new vulnerabilities, coverage of new code below 80%, duplication of new code above 3%, and new dependencies with a blocker or critical known vulnerability.
 
-## Web app (preview)
+## Web app
 
-[`web/`](web/) is the Sonda web app, built from the design handoff in
-[`docs/designs/`](docs/designs/). Overview, Issues and Rules are done so far.
-It runs against a typed API contract with mock data until `sonda server`
-exists. See [web/README.md](web/README.md).
+[`web/`](web/) is sonda's web app, served by the server: the Overview,
+projects and their analyses, issues with triage, security, quality gates and
+profiles, rules, and administration. It's built from the design handoff in
+[`docs/designs/`](docs/designs/), and also runs against mock data for
+development. See [web/README.md](web/README.md).
 
 ## How it works
 
 Each file is parsed with [tree-sitter](https://tree-sitter.github.io/). sonda
 runs the rules' queries and structural checks on it and collects metrics and
-tokens. Duplication is then detected across all files, new code is computed
-from git, and everything is combined into measures and a quality gate.
+tokens. For JavaScript/TypeScript and C#, a semantic layer adds the scopes
+and symbols the deeper rules need, and for C# each function's control flow
+and the types of its expressions
+([ADR-0008](docs/adr/0008-semantic-layer.md)). Duplication is then
+detected across all files, new code is computed from git, and everything is
+combined into measures and a quality gate.
 [ARCHITECTURE.md](ARCHITECTURE.md) describes the pipeline and the layers.
 
 ## Security
@@ -190,12 +195,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), including [how to add a rule](CONTRIBUTI
 
 ## Compared with SonarQube
 
-sonda covers SonarQube's core loop: analyze, measure, judge new code, and gate the build. It does not (yet) have:
+sonda covers SonarQube's core loop: analyze, measure, judge new code, and
+gate the build, with a server that keeps the history, tracks triage and
+decorates pull requests on GitHub. Its more than 2,000 rules cover most of
+SonarQube's rules for JavaScript, TypeScript, Python, Java and C#; Rust is
+earlier
+([progress](docs/sonar-parity/README.md)). It does not (yet) have:
 
-- pull request decoration on GitHub, GitLab and Bitbucket (SARIF upload covers PR annotations on GitHub; [planned](docs/roadmap.md#pull-request-decoration-github-gitlab-and-bitbucket)), single sign-on, or several of the server's screens yet (see [docs/roadmap.md](docs/roadmap.md))
-- data-flow or taint analysis: the rules are syntactic, so they are fast and predictable but miss deeper bugs
-- SonarQube's rule depth: it ships thousands of rules per language, while sonda currently has 31
-- coverage formats other than LCOV (JaCoCo and Cobertura XML are planned)
+- **Data-flow or taint analysis.** The rules are syntactic, plus the semantic
+  layer above, so they are fast and predictable, but they can't follow a
+  value from user input through several functions into a SQL query or a
+  shell command. For injection, sonda has narrower rules that flag the risky
+  shape itself, such as a query built from strings (`sql-built-dynamically`
+  in Java, JavaScript, Python and C#). SonarQube's taint analysis is part of
+  its commercial editions: the free Community Build doesn't have it either,
+  and the rule counts above are against the Community Build.
+- Pull request decoration on GitLab and Bitbucket, single sign-on, and some
+  of the server's screens ([roadmap](docs/roadmap.md)).
+- Coverage formats other than LCOV (JaCoCo and Cobertura XML are planned).
 
 ## Roadmap
 

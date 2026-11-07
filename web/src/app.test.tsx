@@ -480,6 +480,31 @@ describe('Analyses', () => {
     expect(screen.getByText('uploaded by mara (token ci-payments-platform)')).toBeInTheDocument()
   })
 
+  it('keeps the list, busy and dimmed, while a filter loads, instead of flashing a placeholder', async () => {
+    const user = userEvent.setup()
+    renderAt('/analyses', createMockApi(50))
+    const list = await screen.findByRole('list', { name: 'Analyses' }, { timeout: 3000 })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(16)
+    await user.click(screen.getByRole('button', { name: 'Blocking' }))
+    // The old results stay on screen, marked busy, until the new ones arrive.
+    const kept = screen.getByRole('list', { name: 'Analyses' })
+    expect(within(kept).getAllByRole('listitem')).toHaveLength(16)
+    const wrapper = kept.closest('[aria-busy]')
+    expect(wrapper).toHaveAttribute('aria-busy', 'true')
+    expect(wrapper).toHaveClass('sd-refreshing')
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Analyses' })).getAllByRole('listitem')).toHaveLength(4))
+    expect(screen.getByRole('list', { name: 'Analyses' }).closest('[aria-busy="true"]')).toBeNull()
+    expect(document.querySelector('.sd-refreshing')).toBeNull()
+  })
+
+  it('marks loading placeholders to appear only after a moment', async () => {
+    renderAt('/analyses', createMockApi(50))
+    const placeholder = await screen.findByText((_, el) => el?.classList.contains('sd-placeholder') ?? false, {}, { timeout: 3000 })
+    expect(placeholder).toHaveAttribute('aria-busy', 'true')
+    await screen.findByRole('list', { name: 'Analyses' }, { timeout: 3000 })
+    expect(document.querySelector('.sd-placeholder')).toBeNull()
+  })
+
   it('lists analyses newest first, filters by gate and project, and pages', async () => {
     const user = userEvent.setup()
     renderAt('/analyses')

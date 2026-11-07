@@ -71,7 +71,7 @@ export function CoveragePage() {
         { label: 'Coverage', to: coverageUrl(key, branch) },
       ]}
     >
-      {list.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {list.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {list.state === 'error' && <Failed what={`${key}’s coverage`} error={list.error} back={{ to: projectUrl(key, branch), label: `Back to ${key}` }} />}
       {list.state === 'ready' && <Coverage c={list.data} branch={branch} dir={dir} />}
     </AppShell>
@@ -377,7 +377,7 @@ export function FileCoveragePage() {
         { label: path.slice(path.lastIndexOf('/') + 1), to: fileCoverageUrl(key, path, branch) },
       ]}
     >
-      {file.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {file.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {file.state === 'error' && <Failed what={path} error={file.error} back={{ to: coverageUrl(key, branch, undefined, dir), label: 'Back to coverage' }} />}
       {file.state === 'ready' && <FileView f={file.data} />}
     </AppShell>

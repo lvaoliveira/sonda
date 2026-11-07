@@ -17,7 +17,7 @@ export function GatesPage() {
   const data = useAsync(() => Promise.all([api.gates(), api.shell()]), [api])
   return (
     <AppShell crumbs={[{ label: 'Quality gates', to: '/gates' }]}>
-      {data.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {data.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {data.state === 'error' && <p role="alert">Could not load quality gates: {data.error.message}</p>}
       {data.state === 'ready' && <Gates list={data.data[0]} isAdmin={data.data[1].isAdmin} reload={data.reload} />}
     </AppShell>

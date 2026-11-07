@@ -20,7 +20,7 @@ export function QualityProfilesPage() {
   const data = useAsync(() => Promise.all([api.ruleProfiles(), api.rules(), api.shell()]), [api])
   return (
     <AppShell crumbs={[{ label: 'Quality profiles', to: '/quality-profiles' }]}>
-      {data.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {data.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {data.state === 'error' && <p role="alert">Could not load the profiles: {data.error.message}</p>}
       {/* A reload keeps the page, and the profile chosen, on screen. */}
       {data.state === 'ready' && <Profiles profiles={data.data[0]} catalog={data.data[1]} isAdmin={data.data[2].isAdmin} reload={data.reload} />}

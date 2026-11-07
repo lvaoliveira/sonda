@@ -15,7 +15,7 @@ export function RulesPage() {
   const isAdmin = shell.state === 'ready' && shell.data.isAdmin
   return (
     <AppShell crumbs={[{ label: 'Rules', to: '/rules' }]}>
-      {catalog.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {catalog.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {catalog.state === 'error' && <p role="alert">Could not load rules: {catalog.error.message}</p>}
       {catalog.state === 'ready' && <Rules catalog={catalog.data} isAdmin={isAdmin} reload={catalog.reload} />}
     </AppShell>

@@ -34,7 +34,7 @@ export function ConnectPage() {
   const data = useAsync(() => Promise.all([api.shell(), api.projects()]), [api])
   return (
     <AppShell crumbs={CRUMBS}>
-      {data.state === 'loading' && <div aria-busy="true" className="h-[400px] rounded-xl bg-panel-2 edge" />}
+      {data.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[400px] rounded-xl bg-panel-2 edge" />}
       {data.state === 'error' && <p role="alert">Could not load: {data.error.message}</p>}
       {data.state === 'ready' && !data.data[0].isAdmin && (
         <>

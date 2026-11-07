@@ -25,7 +25,7 @@ export function ProjectRulesPage() {
         { label: 'Rules', to: `${projectUrl}/rules` },
       ]}
     >
-      {data.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {data.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {data.state === 'error' && <p role="alert">Could not load the rules of {key}: {data.error.message}</p>}
       {data.state === 'ready' && <Rules rules={data.data[0]} isAdmin={data.data[1].isAdmin} profiles={data.data[2]} reload={data.reload} />}
     </AppShell>

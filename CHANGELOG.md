@@ -9,6 +9,13 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Pull request decorations follow triage without a new scan: accepting an
+  issue on a pull request, marking it a false positive, or reopening it,
+  posts the `sonda` check and the comment again, with the gate judged
+  again and the issue's annotation gone or back. A decision on a vulnerable
+  dependency does the same for each pull request whose gate it changes.
+  Confirming or assigning an issue posts nothing (ADR-0021).
+
 - `--ca-cert FILE` (or `SONDA_CA_CERT`) on `sonda upload` and
   `sonda scan --upload`: trust the certificate authorities in a PEM file
   instead of the public ones, so a server behind a private authority, such
@@ -29,6 +36,12 @@ file, the report formats and the public library API.
 - Creating something opens a drawer: adding a user, generating a token
   (under Administration and Account), a new quality gate (and editing one)
   and a new quality profile.
+- The web app no longer flashes a placeholder on every page and filter.
+  A loading placeholder appears only when loading takes more than 200 ms,
+  so a fast server's pages show their content directly. Changing a filter
+  or a page on Analyses, the Security review queue and the Overview keeps
+  the current results on screen, dimmed after the same moment and marked
+  busy, until the new ones arrive, as the Issues list already did.
 - When the install directory isn't on `PATH`, `install.sh` prints the two
   commands that add it for the user's shell (zsh, bash, fish or another,
   from `$SHELL`): one for new terminals, one for this one. It still never

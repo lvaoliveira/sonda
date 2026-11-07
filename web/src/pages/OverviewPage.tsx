@@ -52,7 +52,8 @@ function OverviewScreen({ load, canDrill }: Readonly<{ load: NonNullable<SondaAp
   const [scope, setScope] = useState<Scope>('all')
   const [range, setRange] = useState<Range>('90d')
   const [drill, setDrill] = useState<DrillMetric | null>(null)
-  const data = useAsync(() => load(scope, range), [load, scope, range])
+  // Another scope or range keeps the dashboard until the new one arrives.
+  const data = useAsync(() => load(scope, range), [load, scope, range], { keep: true })
   // Offer "My team" only where teams exist; remembered while a range reloads.
   const [teams, setTeams] = useState(false)
   if (data.state === 'ready' && data.data.teams !== teams) setTeams(data.data.teams)
@@ -95,7 +96,9 @@ function OverviewScreen({ load, canDrill }: Readonly<{ load: NonNullable<SondaAp
       {data.state === 'error' && <ErrorState message={data.error.message} retry={data.retry} />}
       {data.state === 'ready' && data.data.summary.projects === 0 && <Empty />}
       {data.state === 'ready' && data.data.summary.projects > 0 && (
-        <Live data={data.data} range={range} scopeName={scope === 'all' ? 'all projects' : 'my team'} onDrill={onDrill} active={drill} />
+        <div aria-busy={data.refreshing} className={data.refreshing ? 'sd-refreshing' : undefined}>
+          <Live data={data.data} range={range} scopeName={scope === 'all' ? 'all projects' : 'my team'} onDrill={onDrill} active={drill} />
+        </div>
       )}
       {drill && <Drawer metric={drill} scope={scope} onClose={() => setDrill(null)} />}
     </AppShell>
@@ -104,7 +107,7 @@ function OverviewScreen({ load, canDrill }: Readonly<{ load: NonNullable<SondaAp
 
 function Loading() {
   return (
-    <div aria-busy="true" className="flex flex-col gap-4">
+    <div aria-busy="true" className="sd-placeholder flex flex-col gap-4">
       <MetricGrid label="Loading metrics" minCell={170}>
         {Array.from({ length: 6 }, (_, i) => (
           <div key={i} className="box-border flex h-[120px] flex-col gap-3 bg-panel p-[18px]">
@@ -789,7 +792,7 @@ function Drawer({ metric, scope, onClose }: Readonly<{ metric: DrillMetric; scop
         )
       }
     >
-      {drill.state === 'loading' && <div aria-busy="true" className="m-2 h-40 rounded-[10px] bg-hover" />}
+      {drill.state === 'loading' && <div aria-busy="true" className="sd-placeholder m-2 h-40 rounded-[10px] bg-hover" />}
       {drill.state === 'error' && <p role="alert">Could not load: {drill.error.message}</p>}
       {d?.items.map((it, i) => {
         const expanded = open === i

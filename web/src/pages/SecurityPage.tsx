@@ -18,7 +18,7 @@ export function SecurityPage() {
   const data = useAsync(() => api.security(), [api])
   return (
     <AppShell crumbs={[{ label: 'Security', to: '/security' }]}>
-      {data.state === 'loading' && <div aria-busy="true" className="h-[600px] rounded-xl bg-panel-2 edge" />}
+      {data.state === 'loading' && <div aria-busy="true" className="sd-placeholder h-[600px] rounded-xl bg-panel-2 edge" />}
       {data.state === 'error' && <p role="alert">Could not load security: {data.error.message}</p>}
       {data.state === 'ready' && <SecurityView s={data.data} />}
     </AppShell>
@@ -112,7 +112,8 @@ function ToReview({ s }: Readonly<{ s: Security }>) {
   const [version, setVersion] = useState(0)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const assignee = mine && me ? me : undefined
-  const loaded = useAsync(() => api.securityReview({ ...query, assignee }), [api, query, assignee, version])
+  // A filter keeps the queue until the new one arrives.
+  const loaded = useAsync(() => api.securityReview({ ...query, assignee }), [api, query, assignee, version], { keep: true })
   const set = (patch: Partial<ReviewQuery>) => setQuery((q) => ({ ...q, ...patch }))
   const triage = async (f: ReviewFinding, patch: IssuePatch, message: string) => {
     try {
@@ -195,14 +196,18 @@ function ToReview({ s }: Readonly<{ s: Security }>) {
           Could not load the review queue: {loaded.error.message}
         </p>
       )}
-      {!review && loaded.state === 'loading' && <div aria-busy="true" className="mx-5 mb-4 h-24 rounded-lg bg-panel-2" />}
+      {!review && loaded.state === 'loading' && <div aria-busy="true" className="sd-placeholder mx-5 mb-4 h-24 rounded-lg bg-panel-2" />}
       {review?.items.length === 0 && (
         <p className="m-0 border-t border-line px-5 py-4 text-[13px] text-fg-faint">
           {query.status === 'open' ? 'Nothing left to review.' : 'Nothing matches.'}
         </p>
       )}
       {review && review.items.length > 0 && (
-        <ol aria-label="Vulnerabilities to review" aria-busy={loaded.state === 'loading'} className="m-0 list-none p-0">
+        <ol
+          aria-label="Vulnerabilities to review"
+          aria-busy={loaded.state === 'ready' && loaded.refreshing}
+          className={`m-0 list-none p-0${loaded.state === 'ready' && loaded.refreshing ? ' sd-refreshing' : ''}`}
+        >
           {review.items.map((f) => (
             <ReviewRow key={f.id} f={f} me={me} onTriage={(patch, message) => triage(f, patch, message)} />
           ))}

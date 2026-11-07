@@ -13,10 +13,7 @@ breaking that promise.
 
 | Item | 1.0 | Why |
 |---|---|---|
-| [Private CA for `sonda upload`](#smaller-items) | **before** (M5) | A server behind Caddy's own certificate can't receive uploads from another machine today. |
 | [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
-| [Page flicker while navigating](#smaller-items) | **before** (M6) | Every page shows it. |
-| [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): updating on triage | **before** (M6) | Without it, a pull request keeps showing an issue accepted on the server. |
 | [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
 | [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
 | [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
@@ -223,8 +220,8 @@ SBOM), then match that list against published vulnerabilities.
 
 **Status:** designed for GitHub in
 [ADR-0021](adr/0021-pull-request-decoration.md) (accepted, 2026-11-02);
-pull request analyses and their decoration on GitHub are built;
-updating it when an issue is triaged is next. The GitHub App is created
+pull request analyses and their decoration on GitHub are built, and
+follow triage without a new scan. The GitHub App is created
 from the web app, rather than by hand
 ([ADR-0024](adr/0024-creating-the-github-app.md)). As SonarQube does, the
 result of analyzing a pull request (or GitLab merge request) shows on the
@@ -403,11 +400,9 @@ never merges anything itself.
 | **Teams** | No teams, so the Overview has no "My team" scope. | Teams as user groups and project ownership; the Overview's `teams` flag. |
 | **Health score change** | Needs ratings history, which the server does not reconstruct yet. | Compute ratings per stored analysis; fills `health.delta` and "vs N days ago". |
 | **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, and analysis stages and logs. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
-| **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
 | **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript and for C# ([ADR-0008](adr/0008-semantic-layer.md), [ADR-0015](adr/0015-csharp.md)). Python, Java and C/C++ rules about names work from the syntax tree alone, so they miss what a binder would resolve. | Binders for Python, Java and C/C++, on the same model. |
 | **Last C# rules** | Two SonarQube C# rules have no sonda counterpart ([ADR-0015](adr/0015-csharp.md)): invalid casts (S1944) need the values reaching a cast, and lambdas in Blazor loops (S6802) check `.razor` markup, which sonda doesn't parse. Calls resolving to a `params` overload (S3220) are ported on [ADR-0022](adr/0022-platform-types.md)'s overload resolution. | S1944 with ADR-0008's later phases. S6802 with a Razor grammar, reviewed like the C# one. |
-| **Page flicker while navigating** | Every page loads through `useAsync` (`web/src/api/hooks.ts`), which has no cache and shows a skeleton whenever its inputs change, so moving between pages or changing a filter flashes a placeholder before the content. | A small response cache in `useAsync`: show the last data for a request while it reloads, keep the previous page's data when only a filter changes, and show skeletons only after a short delay. |
 | **OpenTelemetry traces** | [ADR-0019](adr/0019-observability.md) built request ids, request logs, JSON logs and Prometheus metrics, and left traces out: the server is one process in front of PostgreSQL, so a trace would show what the request logs and `RUST_LOG=sqlx=info` already do, at the cost of the largest dependency tree considered and an outbound connection by default. | Optional OTLP export (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`) as a `tracing` layer, off unless an endpoint is set, when sonda-server calls services of its own or someone needs its spans in an existing tracing backend. |
 | **Query matching on very deep nesting** | tree-sitter's query cursor, which matches every rule's pattern in one pass, slows down sharply past about 20,000 levels of nesting: a JavaScript function 20,000 levels deep takes about 1.5 s, one 40,000 deep runs past the 15 s per-file timeout and is skipped with a warning. Real code never nests that deep, and the timeout keeps a hostile file from stalling a scan. | Find the patterns whose in-progress matches pile up with depth (`sample` on `ts_query_cursor__advance`) and anchor or split them. `QueryCursor::set_max_start_depth` and `set_match_limit` would bound it too, but silently drop matches in deep code. |
 | **Release-age check for Rust crates** | Dependabot waits 14 days, but crates added by hand aren't checked. | A CI step comparing `Cargo.lock` dates, with a list of security exceptions. |

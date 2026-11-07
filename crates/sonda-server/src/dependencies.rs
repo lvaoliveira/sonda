@@ -547,7 +547,15 @@ pub async fn patch_review(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    // A pull request whose gate this changes gets its check and comment
+    // posted again (ADR-0021).
+    let before = if state.github.app().is_some() {
+        crate::decorations::pull_request_gates(&state.pool, project).await?
+    } else {
+        Vec::new()
+    };
     refresh_gates(&state.pool, GateScope::Project(project)).await?;
+    crate::decorations::requeue_changed(&state.pool, project, &before).await?;
     Ok(Json(Review {
         status,
         reason,
