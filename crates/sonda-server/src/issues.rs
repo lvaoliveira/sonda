@@ -373,6 +373,21 @@ pub struct IssueDetail {
     /// The code around the issue, as of the latest analysis that saw it.
     pub code: Vec<Line>,
     pub history: Vec<Event>,
+    /// A taint finding's path (ADR-0027), from the source to the sink,
+    /// each step with its line of code. Empty for other issues.
+    pub flow: Vec<FlowStepView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowStepView {
+    pub message: String,
+    pub line: u32,
+    pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+    /// The step's first line, highlighted; None without the source.
+    pub code: Option<Line>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -434,6 +449,33 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
             .copied()
             .find(|x: &Lang| x.name() == l)
     });
+    let flow: Option<sqlx::types::Json<Vec<crate::ingest::FlowStep>>> =
+        sqlx::query_scalar("SELECT flow FROM issues WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    let line_of = |n: u32| -> Option<Line> {
+        let src = source.as_ref()?;
+        let n = n as usize;
+        let mut lines = match lang {
+            Some(lang) => highlight::highlight(lang, src, n, n),
+            None => highlight::plain(src, n, n),
+        };
+        (!lines.is_empty()).then(|| lines.remove(0))
+    };
+    let flow: Vec<FlowStepView> = flow
+        .map(|f| f.0)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| FlowStepView {
+            code: line_of(s.line),
+            message: s.message,
+            line: s.line,
+            column: s.column,
+            end_line: s.end_line,
+            end_column: s.end_column,
+        })
+        .collect();
     let code = match source {
         Some(src) => {
             let line = issue.line as usize;
@@ -463,6 +505,7 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
         issue,
         code,
         history,
+        flow,
     })
 }
 

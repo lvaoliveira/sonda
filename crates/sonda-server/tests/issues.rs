@@ -236,6 +236,89 @@ async fn an_issue_comes_with_highlighted_code_and_its_rule() {
     );
 }
 
+/// A taint finding's path (ADR-0027) is stored with the issue, replaced by
+/// each analysis, and served with each step's line of code.
+#[tokio::test]
+async fn a_taint_findings_path_is_stored_and_served_with_its_code() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let controller = |query: &str| {
+        format!(
+            "using Microsoft.AspNetCore.Mvc;\nusing Microsoft.Data.SqlClient;\n\
+             public class Orders : ControllerBase {{\n\
+             public void Get(string id, SqlConnection c) {{\n\
+             {query}\n\
+             var cmd = new SqlCommand(q, c);\n}}\n}}\n"
+        )
+    };
+    let first = controller("var q = \"SELECT * FROM o WHERE id = \" + id;");
+    let body = upload_json(dir.path(), &[("Orders.cs", &first)], "main");
+    assert_eq!(upload(&db, &body).await.0, StatusCode::CREATED);
+    let app = http::router(state(db.pool.clone()), None);
+    let (_, all) = get(&app, "/api/issues?file=Orders.cs").await;
+    let by_rule = |page: &Value, rule: &str| {
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["rule"] == rule)
+            .and_then(|i| i["id"].as_i64())
+    };
+    let id = by_rule(&all, "cs/sql-injection").expect("the injection is stored");
+
+    let (status, issue) = get(&app, &format!("/api/issues/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{issue}");
+    let steps: Vec<(&str, i64)> = issue["flow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["message"].as_str().unwrap(), s["line"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            ("request parameter `id`", 4),
+            ("concatenated into `q`", 5),
+            ("passed to `SqlCommand`", 6)
+        ]
+    );
+    let code: String = issue["flow"][1]["code"]["tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(code, "var q = \"SELECT * FROM o WHERE id = \" + id;");
+
+    // The next analysis's path replaces it: here, through interpolation.
+    let second = controller("var q = $\"SELECT * FROM o WHERE id = {id}\";");
+    let body = upload_json(dir.path(), &[("Orders.cs", &second)], "main");
+    upload(&db, &body).await;
+    let (_, issue) = get(&app, &format!("/api/issues/{id}")).await;
+    assert_eq!(issue["flow"].as_array().unwrap().len(), 3, "{issue}");
+
+    // Other issues have an empty path.
+    let other = by_rule(&all, "cs/unused-local-variable").unwrap();
+    let (_, issue) = get(&app, &format!("/api/issues/{other}")).await;
+    assert_eq!(issue["flow"], json!([]));
+
+    // A malformed path is refused with the upload.
+    let mut bad = upload_json(dir.path(), &[("Orders.cs", &first)], "main");
+    let flagged = bad["report"]["issues"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|i| i["rule"] == "cs/sql-injection")
+        .unwrap();
+    flagged["flow"][0]["line"] = json!(0);
+    let (status, answer) = upload(&db, &bad).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    assert!(answer["error"].as_str().unwrap().contains("malformed flow"));
+}
+
 #[tokio::test]
 async fn triage_needs_authorization_and_is_audited() {
     let Some((db, _dir)) = seeded().await else {

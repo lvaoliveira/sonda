@@ -11,7 +11,7 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode, header};
 use flate2::read::GzDecoder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sonda_core::model::Severity;
@@ -147,7 +147,26 @@ struct Issue {
     effort_minutes: u32,
     is_new: bool,
     fingerprint: String,
+    /// A taint finding's path (ADR-0027); absent from older CLIs and from
+    /// other issues.
+    #[serde(default)]
+    flow: Vec<FlowStep>,
 }
+
+/// One step of a taint finding's path, as the CLI reports it.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct FlowStep {
+    pub message: String,
+    pub line: u32,
+    pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+/// The most steps a path keeps; the CLI keeps ten.
+const MAX_FLOW_STEPS: usize = 20;
+/// A step's message is a short phrase naming a variable or a sink.
+const MAX_FLOW_MESSAGE: usize = 300;
 
 /// An upload that passed every check, ready to store.
 pub struct Analysis {
@@ -208,6 +227,8 @@ pub struct StoredIssue {
     pub end_col: i32,
     pub effort_minutes: i32,
     pub is_new: bool,
+    /// None for an issue without a path.
+    pub flow: Option<serde_json::Value>,
 }
 
 pub async fn create(
@@ -679,6 +700,22 @@ fn stored_issue(
     if end_line < line || i.message.len() > MAX_TEXT {
         return Err(invalid(format!("{}:{line}: malformed issue", i.path)));
     }
+    let malformed_step = |s: &FlowStep| {
+        s.line < 1
+            || s.column < 1
+            || s.end_column < 1
+            || s.end_line < s.line
+            || i32::try_from(s.end_line).is_err()
+            || s.message.len() > MAX_FLOW_MESSAGE
+            || s.message.chars().any(char::is_control)
+    };
+    if i.flow.len() > MAX_FLOW_STEPS || i.flow.iter().any(malformed_step) {
+        return Err(invalid(format!("{}:{line}: malformed flow", i.path)));
+    }
+    let flow = (!i.flow.is_empty())
+        .then(|| serde_json::to_value(&i.flow))
+        .transpose()
+        .map_err(|e| ApiError::Internal(e.into()))?;
     Ok(StoredIssue {
         fingerprint,
         rule: rule.id,
@@ -693,6 +730,7 @@ fn stored_issue(
         effort_minutes: i32::try_from(i.effort_minutes)
             .map_err(|_| invalid("effort out of range".into()))?,
         is_new: i.is_new,
+        flow,
     })
 }
 

@@ -1,26 +1,53 @@
-import { type SubmitEvent, useEffect, useRef, useState } from 'react'
+import { type ReactNode, type SubmitEvent, useEffect, useId, useRef, useState } from 'react'
+import { Link, Navigate, useLocation } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import { type DeletedProject, type GitHubApp, type GitHubAppManifest, MIN_PASSWORD_LENGTH, type NewUser, type Role, type UserPatch, type UserRow } from '@/api/types'
-import { AppShell } from '@/components/shell/AppShell'
+import { AppShell, type Tab, Tabs } from '@/components/shell/AppShell'
 import { ExternalButton } from '@/components/sonda/connect'
 import { Button, Segmented } from '@/components/sonda/controls'
+import { Drawer, DrawerActions, Field } from '@/components/sonda/Drawer'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
-import { TokenGenerator, TokenTable } from '@/components/sonda/tokens'
+import { GenerateTokenDrawer, TokenTable } from '@/components/sonda/tokens'
+import { copyText } from '@/lib/clipboard'
 import { shortDate, trimTrailing } from '@/lib/format'
+import { generatePassword } from '@/lib/password'
 
-/** Administration: users and roles (ADR-0006). Admins only; the server enforces it too. */
-export function AdminPage() {
+export type AdminTab = 'users' | 'tokens' | 'github' | 'deleted-projects'
+
+/** Administration's sections, each its own route, as a project's pages are. */
+const TABS: (Tab & { tab: AdminTab })[] = [
+  { tab: 'users', to: '/admin', label: 'Users', end: true },
+  { tab: 'tokens', to: '/admin/tokens', label: 'Tokens' },
+  { tab: 'github', to: '/admin/github', label: 'GitHub' },
+  { tab: 'deleted-projects', to: '/admin/deleted-projects', label: 'Deleted projects' },
+]
+
+/** The sections were anchors on one page before they were tabs: old links still land on theirs. */
+const MOVED: Record<string, string> = { '#github': '/admin/github', '#all-tokens': '/admin/tokens', '#deleted-projects': '/admin/deleted-projects' }
+
+/** Administration: users and roles (ADR-0006), tokens, the GitHub App and deleted projects. Admins only; the server enforces it too. */
+export function AdminPage({ tab = 'users' }: Readonly<{ tab?: AdminTab }>) {
   const api = useApi()
   const shell = useAsync(() => api.shell(), [api])
+  const moved = MOVED[useLocation().hash]
+  if (moved) return <Navigate to={moved} replace />
+  const current = TABS.find((t) => t.tab === tab)!
+  const isAdmin = shell.state === 'ready' && shell.data.isAdmin
   return (
-    <AppShell crumbs={[{ label: 'Administration', to: '/admin' }]}>
+    <AppShell
+      crumbs={[{ label: 'Administration', to: '/admin' }, ...(isAdmin ? [{ label: current.label, to: current.to }] : [])]}
+      tabs={isAdmin && <Tabs label="Administration" tabs={TABS} />}
+    >
       {shell.state === 'ready' && !shell.data.isAdmin && (
         <>
           <PageHeader title="Administration" summary="Admins only." />
           <p className="m-0 text-[13.5px] text-fg-muted">Ask an admin to change users or roles.</p>
         </>
       )}
-      {shell.state === 'ready' && shell.data.isAdmin && <Users me={shell.data.me} />}
+      {isAdmin && tab === 'users' && <Users me={shell.data.me} />}
+      {isAdmin && tab === 'tokens' && <AllTokens />}
+      {isAdmin && tab === 'github' && <GitHubAppTab />}
+      {isAdmin && tab === 'deleted-projects' && <DeletedProjects />}
     </AppShell>
   )
 }
@@ -32,7 +59,8 @@ function Users({ me }: Readonly<{ me: string | null }>) {
   const [version, setVersion] = useState(0)
   const users = useAsync(() => api.users(), [api, version])
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<ReactNode>('')
+  const [adding, setAdding] = useState(false)
   const reload = () => setVersion((v) => v + 1)
 
   const update = async (user: UserRow, patch: UserPatch, done: string) => {
@@ -51,16 +79,20 @@ function Users({ me }: Readonly<{ me: string | null }>) {
   const active = list.filter((u) => !u.disabled).length
   return (
     <>
-      <PageHeader title="Administration" summary={users.state === 'ready' ? `${list.length} users · ${active} active` : ' '} />
+      <PageHeader title="Users" summary={users.state === 'ready' ? `${list.length} users · ${active} active · disabled users can’t sign in, and stay in the audit trail` : ' '}>
+        <Button primary onClick={() => setAdding(true)}>
+          Add user
+        </Button>
+      </PageHeader>
       {(error || notice) && (
         <p role={error ? 'alert' : 'status'} className={`m-0 text-[13px] ${error ? 'text-crit' : 'text-ok'}`}>
           {error || notice}
         </p>
       )}
       {users.state === 'error' && <p role="alert">Could not load users: {users.error.message}</p>}
-      <Card title="Users" subtitle="Disabled users can't sign in; they stay in the audit trail.">
+      <Card>
         <div className="relative overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse text-[13.5px]">
+          <table aria-label="Users" className="w-full min-w-[720px] border-collapse text-[13.5px]">
             <thead>
               <tr className="text-left text-[12px] text-fg-faint">
                 <th scope="col" className="py-2 font-normal">User</th>
@@ -80,21 +112,24 @@ function Users({ me }: Readonly<{ me: string | null }>) {
           </table>
         </div>
       </Card>
-      <CreateUser
-        onCreated={(username, service) => {
-          setError('')
-          setNotice(
-            service
-              ? `Created ${username}, a service user. Generate its CI tokens under Tokens below.`
-              : `Created ${username}. Share the password with them; they can change it under Account.`,
-          )
-          reload()
-        }}
-        onError={setError}
-      />
-      <AllTokens owners={list.filter((u) => !u.disabled).map((u) => u.username)} />
-      <GitHubAppCard />
-      <DeletedProjects />
+      {adding && (
+        <AddUserDrawer
+          onCreated={(username, service) => {
+            setError('')
+            setNotice(
+              service ? (
+                <>
+                  Created {username}, a service user. Generate its CI tokens under <Link to="/admin/tokens">Tokens</Link>.
+                </>
+              ) : (
+                `Created ${username}. Share the password with them; they can change it under Account.`
+              ),
+            )
+            reload()
+          }}
+          onClose={() => setAdding(false)}
+        />
+      )}
       <p className="m-0 text-[12.5px] text-fg-faint">Single sign-on (OpenID Connect) is planned; see ADR-0006.</p>
     </>
   )
@@ -105,11 +140,14 @@ function Users({ me }: Readonly<{ me: string | null }>) {
  * user, such as a `ci` service user whose tokens outlive a person's account.
  * Nobody can read a secret after it's generated.
  */
-function AllTokens({ owners }: Readonly<{ owners: string[] }>) {
+function AllTokens() {
   const api = useApi()
   const [version, setVersion] = useState(0)
   const tokens = useAsync(() => api.tokens(), [api, version])
+  const users = useAsync(() => api.users(), [api])
   const [error, setError] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const owners = users.state === 'ready' ? users.data.filter((u) => !u.disabled).map((u) => u.username) : []
   const revoke = async (id: number) => {
     setError('')
     try {
@@ -120,20 +158,35 @@ function AllTokens({ owners }: Readonly<{ owners: string[] }>) {
     }
   }
   return (
-    <Card
-      id="all-tokens"
-      title="Tokens"
-      subtitle="Everyone's tokens. Users generate their own under Account; generate CI tokens here for a service user such as ci, so pipelines don't stop when a person leaves. Disabling a user stops their tokens."
-    >
-      <TokenGenerator owners={owners} onGenerate={(token, owner) => api.createTokenFor(owner, token)} onGenerated={() => setVersion((v) => v + 1)} />
+    <>
+      <PageHeader
+        title="Tokens"
+        summary="Everyone’s tokens. Generate CI tokens for a service user such as ci, so pipelines don’t stop when a person leaves."
+      >
+        <Button primary disabled={users.state !== 'ready'} onClick={() => setGenerating(true)}>
+          Generate token
+        </Button>
+      </PageHeader>
       {error && (
         <p role="alert" className="m-0 text-[13px] text-crit">
           {error}
         </p>
       )}
-      {tokens.state === 'ready' && <TokenTable tokens={tokens.data} showOwner onRevoke={(t) => void revoke(t.id)} />}
-      {tokens.state === 'error' && <p role="alert">Could not load tokens: {tokens.error.message}</p>}
-    </Card>
+      <Card>
+        <p className="m-0 text-[13px] text-fg-muted">People generate their own tokens under Account. Disabling a user stops every token they own.</p>
+        {tokens.state === 'ready' && <TokenTable tokens={tokens.data} showOwner onRevoke={(t) => void revoke(t.id)} />}
+        {tokens.state === 'error' && <p role="alert">Could not load tokens: {tokens.error.message}</p>}
+      </Card>
+      {generating && (
+        <GenerateTokenDrawer
+          eyebrow="Administration · Tokens"
+          owners={owners}
+          onGenerate={(token, owner) => api.createTokenFor(owner, token)}
+          onGenerated={() => setVersion((v) => v + 1)}
+          onClose={() => setGenerating(false)}
+        />
+      )}
+    </>
   )
 }
 
@@ -148,14 +201,10 @@ function proposedAppName(host: string): string {
  * opens its own page filled in, then sends the browser back to
  * /admin/github/created.
  */
-function GitHubAppCard() {
+function GitHubAppTab() {
   const api = useApi()
   const app = useAsync(() => api.githubApp(), [api])
   const [error, setError] = useState('')
-  // Linked to as /admin#github: the router doesn't scroll to it.
-  useEffect(() => {
-    if (app.state === 'ready' && location.hash === '#github') document.getElementById('github')?.scrollIntoView()
-  }, [app.state])
   const disconnect = async () => {
     setError('')
     try {
@@ -166,15 +215,18 @@ function GitHubAppCard() {
     }
   }
   return (
-    <Card id="github" title="GitHub" subtitle="The GitHub App posts a sonda check and a summary comment on pull requests, where it's installed.">
-      {error && (
-        <p role="alert" className="m-0 text-[13px] text-crit">
-          {error}
-        </p>
-      )}
-      {app.state === 'error' && <p role="alert">Could not load the GitHub App: {app.error.message}</p>}
-      {app.state === 'ready' && <GitHubAppState app={app.data} onDisconnect={() => void disconnect()} />}
-    </Card>
+    <>
+      <PageHeader title="GitHub" summary="The GitHub App posts a sonda check and a summary comment on pull requests, where it’s installed." />
+      <Card id="github" title="GitHub App">
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
+        {app.state === 'error' && <p role="alert">Could not load the GitHub App: {app.error.message}</p>}
+        {app.state === 'ready' && <GitHubAppState app={app.data} onDisconnect={() => void disconnect()} />}
+      </Card>
+    </>
   )
 }
 
@@ -380,11 +432,12 @@ function DeletedProjects() {
     }
   }
   return (
-    <Card
-      id="deleted-projects"
-      title="Deleted projects"
-      subtitle="Uploads to a deleted project's key are refused, so a forgotten pipeline can't bring it back empty. Allow the key again and its next upload starts a new project."
-    >
+    <>
+      <PageHeader
+        title="Deleted projects"
+        summary="Uploads to a deleted project’s key are refused, so a forgotten pipeline can’t bring it back empty. Allow the key again and its next upload starts a new project."
+      />
+      <Card>
       {error && (
         <p role="alert" className="m-0 text-[13px] text-crit">
           {error}
@@ -419,7 +472,8 @@ function DeletedProjects() {
           ))}
         </ul>
       )}
-    </Card>
+      </Card>
+    </>
   )
 }
 
@@ -497,77 +551,151 @@ function UserRowView({ user, isMe, update }: Readonly<{ user: UserRow; isMe: boo
   )
 }
 
-function CreateUser({ onCreated, onError }: Readonly<{ onCreated: (username: string, service: boolean) => void; onError: (message: string) => void }>) {
+/**
+ * Adds a user, in a drawer. A person gets an initial password, typed or
+ * generated; a generated one is shown once more after the user is added, to
+ * copy and share. A service user has none: it can't sign in, and owns CI
+ * tokens.
+ */
+function AddUserDrawer({ onCreated, onClose }: Readonly<{ onCreated: (username: string, service: boolean) => void; onClose: () => void }>) {
   const api = useApi()
-  const empty = { username: '', displayName: '', role: 'member' as Role, password: '' }
-  const [user, setUser] = useState(empty)
+  const formId = useId()
+  const [user, setUser] = useState({ username: '', displayName: '', role: 'member' as Role, password: '' })
   const [service, setService] = useState(false)
+  // The password, while it's the one generated here: shown, and offered again once the user is added.
+  const [generated, setGenerated] = useState<string | null>(null)
+  const [added, setAdded] = useState<{ username: string; password: string } | null>(null)
   const [busy, setBusy] = useState(false)
-  const set = (patch: Partial<typeof empty>) => setUser((u) => ({ ...u, ...patch }))
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+  const set = (patch: Partial<typeof user>) => setUser((u) => ({ ...u, ...patch }))
+
+  const generate = () => {
+    const password = generatePassword()
+    set({ password })
+    setGenerated(password)
+  }
   const submit = async (e: SubmitEvent) => {
     e.preventDefault()
     setBusy(true)
+    setError('')
+    const username = user.username.trim().toLowerCase()
     const { password, ...fields } = user
     const created: NewUser = {
       ...fields,
-      username: user.username.trim().toLowerCase(),
+      username,
       displayName: user.displayName.trim(),
       // A service user has no password and is a member.
       ...(service ? { role: 'member' } : { password }),
     }
     try {
       await api.createUser(created)
-      onCreated(user.username.trim().toLowerCase(), service)
-      setUser(empty)
-      setService(false)
+      onCreated(username, service)
+      if (!service && generated === password) setAdded({ username, password })
+      else onClose()
     } catch (err) {
-      onError((err as Error).message)
+      setError((err as Error).message)
     }
     setBusy(false)
   }
+  const copy = async (password: string) => {
+    setError('')
+    if (await copyText(password)) setCopied(true)
+    else setError('Could not copy; select the password and copy it.')
+  }
+
+  if (added)
+    return (
+      <Drawer
+        eyebrow="Administration · Users"
+        title={`Added ${added.username}`}
+        subtitle="Share this password with them, then they can change it under Account. It won’t be shown again."
+        onClose={onClose}
+        footer={
+          <>
+            <span className="flex-1" />
+            <Button onClick={() => void copy(added.password)}>{copied ? 'Copied' : 'Copy'}</Button>
+            <Button primary onClick={onClose}>
+              Done
+            </Button>
+          </>
+        }
+      >
+        <output aria-label={`Password for ${added.username}`} className="block rounded-lg bg-canvas px-3.5 py-3 edge-strong">
+          <Mono className="text-[13px] select-all">{added.password}</Mono>
+        </output>
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
+      </Drawer>
+    )
+
   return (
-    <Card title="Add a user" subtitle="Usernames are lowercase and permanent; they are what issues are assigned to.">
-      <form onSubmit={submit} className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] items-end gap-3">
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>Username</span>
+    <Drawer
+      eyebrow="Administration · Users"
+      title="Add a user"
+      subtitle="Usernames are lowercase and permanent: they are what issues are assigned to."
+      onClose={onClose}
+      footer={
+        <DrawerActions
+          form={formId}
+          submit="Add user"
+          busy={busy ? 'Adding…' : undefined}
+          disabled={!service && user.password.length < MIN_PASSWORD_LENGTH}
+          onCancel={onClose}
+        />
+      }
+    >
+      <form id={formId} onSubmit={submit} className="flex flex-col gap-4">
+        <Field label="Username">
           <input required autoCapitalize="none" spellCheck={false} pattern="[a-z0-9][a-z0-9._\-]{1,63}" value={user.username} onChange={(e) => set({ username: e.target.value })} className={input} />
-        </label>
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>Display name</span>
+        </Field>
+        <Field label="Display name">
           <input required maxLength={100} value={user.displayName} onChange={(e) => set({ displayName: e.target.value })} className={input} />
+        </Field>
+        <label className="flex items-start gap-2 text-[13px]">
+          <input type="checkbox" checked={service} onChange={(e) => setService(e.target.checked)} className="mt-0.5 accent-brand" />
+          <span>
+            Service user <span className="block text-xs text-fg-faint">No password, can’t sign in: owns CI tokens.</span>
+          </span>
         </label>
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>Role</span>
+        <Field label="Role">
           <select value={service ? 'member' : user.role} disabled={service} onChange={(e) => set({ role: e.target.value as Role })} className={input}>
             <option value="member">Member</option>
             <option value="admin">Admin</option>
           </select>
-        </label>
+        </Field>
         {!service && (
-          <label className="flex flex-col gap-1.5 text-[13px]">
-            <span>Initial password</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              required
-              minLength={MIN_PASSWORD_LENGTH}
-              value={user.password}
-              onChange={(e) => set({ password: e.target.value })}
-              className={input}
-            />
-          </label>
+          <div className="flex flex-col gap-1.5 text-[13px]">
+            <label htmlFor={`${formId}-password`}>Initial password</label>
+            <div className="flex gap-2">
+              <input
+                id={`${formId}-password`}
+                // A generated password is shown, to copy; a typed one isn't.
+                type={generated !== null && generated === user.password ? 'text' : 'password'}
+                autoComplete="new-password"
+                spellCheck={false}
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                value={user.password}
+                onChange={(e) => set({ password: e.target.value })}
+                className={`${input} min-w-0 flex-1 font-mono`}
+              />
+              <Button onClick={generate} className="h-9">
+                Generate
+              </Button>
+            </div>
+            <span className="text-xs text-fg-faint">At least {MIN_PASSWORD_LENGTH} characters. They can change it under Account.</span>
+          </div>
         )}
-        <label className="flex items-center gap-2 self-center text-[13px]">
-          <input type="checkbox" checked={service} onChange={(e) => setService(e.target.checked)} className="accent-brand" />
-          <span>
-            Service user{' '}
-            <span className="block text-xs text-fg-faint">No password, can’t sign in: owns CI tokens.</span>
-          </span>
-        </label>
-        <Button type="submit" primary disabled={busy || (!service && user.password.length < MIN_PASSWORD_LENGTH)}>
-          {busy ? 'Adding…' : 'Add user'}
-        </Button>
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
       </form>
-    </Card>
+    </Drawer>
   )
 }

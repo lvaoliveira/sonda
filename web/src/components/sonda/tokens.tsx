@@ -1,9 +1,10 @@
-import { type SubmitEvent, useState } from 'react'
+import { type SubmitEvent, useId, useState } from 'react'
 import type { ApiToken, CreatedToken, NewToken, TokenType } from '@/api/types'
 import { formatAge, shortDate } from '@/lib/format'
 import { TOKEN_TYPE } from '@/lib/visual'
 import { copyText } from '@/lib/clipboard'
 import { Button } from './controls'
+import { Drawer, DrawerActions, Field } from './Drawer'
 import { Mono } from './layout'
 
 const input = 'h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] edge-strong'
@@ -16,18 +17,24 @@ const EXPIRY: { value: string; label: string }[] = [
 ]
 
 /**
- * Generates a token and shows its secret once, with a Copy button. With
- * `owners`, an admin picks whom it belongs to; otherwise it's the viewer's.
+ * A drawer that generates a token, then shows its secret once, with a Copy
+ * button. With `owners`, an admin picks whom it belongs to; otherwise it's
+ * the viewer's.
  */
-export function TokenGenerator({
+export function GenerateTokenDrawer({
+  eyebrow,
   owners,
   onGenerate,
   onGenerated,
+  onClose,
 }: Readonly<{
+  eyebrow: string
   owners?: string[]
   onGenerate: (token: NewToken, owner: string) => Promise<CreatedToken>
   onGenerated: () => void
+  onClose: () => void
 }>) {
+  const formId = useId()
   const [name, setName] = useState('')
   const [owner, setOwner] = useState('')
   const [type, setType] = useState<TokenType>('project_analysis')
@@ -42,7 +49,6 @@ export function TokenGenerator({
     e.preventDefault()
     setBusy(true)
     setError('')
-    setCopied(false)
     const token: NewToken = {
       name,
       type,
@@ -51,8 +57,6 @@ export function TokenGenerator({
     }
     try {
       setCreated(await onGenerate(token, owner))
-      setName('')
-      setProject('')
       onGenerated()
     } catch (err) {
       setError((err as Error).message)
@@ -60,16 +64,53 @@ export function TokenGenerator({
     setBusy(false)
   }
   const copy = async () => {
+    setError('')
     if (await copyText(created!.token)) setCopied(true)
     else setError('Could not copy; select the token and copy it.')
   }
 
+  if (created)
+    return (
+      <Drawer
+        eyebrow={eyebrow}
+        title={`Copy “${created.name}”`}
+        subtitle={`${created.createdBy ? `For ${created.owner}. ` : ''}It won’t be shown again.`}
+        onClose={onClose}
+        footer={
+          <>
+            <span className="flex-1" />
+            <Button onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</Button>
+            <Button primary onClick={onClose}>
+              Done
+            </Button>
+          </>
+        }
+      >
+        <output aria-label="New token" className="block rounded-lg bg-canvas px-3.5 py-3 edge-strong">
+          <Mono className="text-[12px] break-all select-all">{created.token}</Mono>
+        </output>
+        <p className="m-0 text-xs text-fg-faint">{TOKEN_TYPE[created.type].note}</p>
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
+      </Drawer>
+    )
+
   return (
-    <>
-      <form onSubmit={generate} className="flex flex-wrap items-end gap-3">
+    <Drawer
+      eyebrow={eyebrow}
+      title="Generate a token"
+      subtitle="Its secret is shown once, when it's generated."
+      onClose={onClose}
+      footer={
+        <DrawerActions form={formId} submit="Generate" busy={busy ? 'Generating…' : undefined} disabled={!name.trim() || (owners !== undefined && !owner)} onCancel={onClose} />
+      }
+    >
+      <form id={formId} onSubmit={generate} className="flex flex-col gap-4">
         {owners && (
-          <label className="flex flex-col gap-1.5 text-[13px]">
-            <span>Owner</span>
+          <Field label="Owner">
             <select required value={owner} onChange={(e) => setOwner(e.target.value)} className={input}>
               <option value="">Choose a user</option>
               {owners.map((o) => (
@@ -78,14 +119,12 @@ export function TokenGenerator({
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
         )}
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>Name</span>
+        <Field label="Name">
           <input required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder="ci-payments" className={input} />
-        </label>
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>Type</span>
+        </Field>
+        <Field label="Type" hint={TOKEN_TYPE[type].note}>
           <select value={type} onChange={(e) => setType(e.target.value as TokenType)} className={input}>
             {(Object.keys(TOKEN_TYPE) as TokenType[]).map((t) => (
               <option key={t} value={t}>
@@ -93,15 +132,13 @@ export function TokenGenerator({
               </option>
             ))}
           </select>
-        </label>
+        </Field>
         {type === 'project_analysis' && (
-          <label className="flex flex-col gap-1.5 text-[13px]">
-            <span>Project key</span>
+          <Field label="Project key">
             <input required value={project} onChange={(e) => setProject(e.target.value)} placeholder="payments-platform" className={input} />
-          </label>
+          </Field>
         )}
-        <label className="flex flex-col gap-1.5 text-[13px]">
-          <span>Expires in</span>
+        <Field label="Expires in">
           <select value={expiry} onChange={(e) => setExpiry(e.target.value)} className={input}>
             {EXPIRY.map((x) => (
               <option key={x.value} value={x.value}>
@@ -109,30 +146,14 @@ export function TokenGenerator({
               </option>
             ))}
           </select>
-        </label>
-        <Button type="submit" primary disabled={busy || !name.trim() || (owners !== undefined && !owner)}>
-          {busy ? 'Generating…' : 'Generate'}
-        </Button>
+        </Field>
+        {error && (
+          <p role="alert" className="m-0 text-[13px] text-crit">
+            {error}
+          </p>
+        )}
       </form>
-      <p className="m-0 text-xs text-fg-faint">{TOKEN_TYPE[type].note}</p>
-      {created && (
-        <div role="status" className="flex flex-col gap-2 rounded-lg bg-panel px-3.5 py-3 edge-strong">
-          <span className="text-[13px] font-semibold">
-            Copy “{created.name}”{created.createdBy && ` for ${created.owner}`} now: it won’t be shown again.
-          </span>
-          <div className="flex flex-wrap items-center gap-2">
-            <Mono className="min-w-0 flex-1 text-[12px] break-all select-all">{created.token}</Mono>
-            <Button onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</Button>
-            <Button onClick={() => setCreated(null)}>Done</Button>
-          </div>
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="m-0 text-[13px] text-crit">
-          {error}
-        </p>
-      )}
-    </>
+    </Drawer>
   )
 }
 

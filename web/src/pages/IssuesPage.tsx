@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router'
 import { type Async, useApi, useAsync } from '@/api/hooks'
-import { type FacetKey, type IssueDetail, type IssuePage, type IssuePatch, type IssueSummary, PROMPT_LIMIT, type TriageStatus } from '@/api/types'
+import { type FacetKey, type FlowStep, type IssueDetail, type IssuePage, type IssuePatch, type IssueSummary, PROMPT_LIMIT, type TriageStatus } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
-import { CodeViewer } from '@/components/sonda/CodeViewer'
+import { CodeViewer, Tokens } from '@/components/sonda/CodeViewer'
 import { Button, Toast, type ToastMessage } from '@/components/sonda/controls'
 import { Mono, PageHeader } from '@/components/sonda/layout'
 import { ReasonForm } from '@/components/sonda/triage'
@@ -699,6 +699,7 @@ function IssueView({
       </div>
       <IssueSource issue={issue} />
       <div className="flex flex-col gap-5 px-5 pt-[18px] pb-7">
+        {issue.flow && issue.flow.length > 0 && <IssuePath flow={issue.flow} />}
         <AboutRule issue={issue} />
         <IssueHistory history={issue.history} />
       </div>
@@ -799,6 +800,46 @@ function IssueSource({ issue }: Readonly<{ issue: IssueDetail }>) {
         <p className="m-0 px-5 py-4 text-[13px] text-fg-faint">The source of this file is not available.</p>
       )}
     </div>
+  )
+}
+
+/** A taint finding's path (ADR-0027): where the value came from, and each step to the issue. */
+function IssuePath({ flow }: Readonly<{ flow: FlowStep[] }>) {
+  return (
+    <section className="flex flex-col gap-0.5" aria-labelledby="issue-path">
+      <h3 id="issue-path" className="m-0 mb-1.5 font-normal micro-label">
+        How the value gets here
+      </h3>
+      <ol aria-label="Path" className="m-0 flex list-none flex-col p-0">
+        {flow.map((step, i) => (
+          <li key={`${step.line}|${step.column}|${i}`} className="flex flex-col gap-1 border-t border-line py-2">
+            <div className="flex items-baseline gap-2 text-[13px]">
+              <span aria-hidden="true" className="w-4 flex-none font-mono text-[11px] text-fg-faint">
+                {i + 1}
+              </span>
+              <span>
+                <WithCode text={step.message} />
+              </span>
+              <span className="ml-auto flex-none font-mono text-[11px] text-fg-faint">line {step.line}</span>
+            </div>
+            {step.code && (
+              <code className="ml-6 block overflow-x-auto whitespace-pre font-mono text-[12px]">
+                <Tokens tokens={step.code.tokens} />
+              </code>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+/** Text with `backticked` names as inline code. */
+function WithCode({ text }: Readonly<{ text: string }>) {
+  return (
+    <>
+      {text.split('`').map((part, i) => (i % 2 === 1 ? <code key={i} className="rounded bg-hover px-1 font-mono text-[12px]">{part}</code> : part))}
+    </>
   )
 }
 

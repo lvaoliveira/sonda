@@ -138,9 +138,8 @@ own groundwork, smallest first:
    data, then phases from one C# function (T1, built: seven rules, from
    `cs/sql-injection` to `cs/ldap-injection`)
    to JavaScript (T2), across functions (T3) and across files (T4), with
-   the path shown on each issue. Next: the server and web app showing
-   paths, the other C# sinks and T3 (through the functions of the same
-   file) are built. Next: T4, across files, then T2 for JavaScript.
+   the path shown on each issue (T1, then T3, through the functions of the
+   same file, are built). Next: T4, across files, then T2 for JavaScript.
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry
