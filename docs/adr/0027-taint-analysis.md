@@ -1,8 +1,8 @@
 # ADR-0027: Taint analysis for injection vulnerabilities
 
 - Status: **accepted** (2026-11-07). T1 built: `cs/sql-injection`, with
-  the path in the JSON report and SARIF. T2 to T4, the other sinks, and
-  the server and web app showing paths, are next.
+  the path in the JSON report and SARIF, stored by the server and shown on
+  the issue page. T2 to T4 and the other sinks are next.
 - Date: 2026-11-07
 
 ## Context
