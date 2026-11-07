@@ -65,6 +65,7 @@ export function Button({
   children,
   className = '',
   type = 'button',
+  form,
 }: Readonly<{
   primary?: boolean
   disabled?: boolean
@@ -72,10 +73,13 @@ export function Button({
   children: ReactNode
   className?: string
   type?: 'button' | 'submit'
+  /** The form a submit button submits, when it's outside it (a drawer's footer). */
+  form?: string
 }>) {
   return (
     <button
       type={type}
+      form={form}
       onClick={onClick}
       disabled={disabled}
       className={`h-8 cursor-pointer rounded-lg border-0 px-[13px] text-[13px] disabled:cursor-default disabled:opacity-45 ${

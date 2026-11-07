@@ -4,7 +4,7 @@ import { MIN_PASSWORD_LENGTH } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
-import { TokenGenerator, TokenTable } from '@/components/sonda/tokens'
+import { GenerateTokenDrawer, TokenTable } from '@/components/sonda/tokens'
 
 const input = 'h-9 rounded-lg border-0 bg-canvas px-3 text-[13px] edge-strong'
 
@@ -94,6 +94,7 @@ function Tokens() {
   const [version, setVersion] = useState(0)
   const tokens = useAsync(() => api.myTokens(), [api, version])
   const [error, setError] = useState('')
+  const [generating, setGenerating] = useState(false)
   const revoke = async (id: number) => {
     setError('')
     try {
@@ -105,8 +106,20 @@ function Tokens() {
   }
 
   return (
-    <Card id="tokens" title="Tokens" subtitle="For CI and scripts, with sonda upload or sonda scan --upload. A token never has more rights than you." className="col-span-full">
-      <TokenGenerator onGenerate={(token) => api.createToken(token)} onGenerated={() => setVersion((v) => v + 1)} />
+    <Card
+      id="tokens"
+      title="Tokens"
+      subtitle="For CI and scripts, with sonda upload or sonda scan --upload. A token never has more rights than you."
+      className="col-span-full"
+      aside={
+        <Button primary onClick={() => setGenerating(true)}>
+          Generate token
+        </Button>
+      }
+    >
+      {generating && (
+        <GenerateTokenDrawer eyebrow="Account" onGenerate={(token) => api.createToken(token)} onGenerated={() => setVersion((v) => v + 1)} onClose={() => setGenerating(false)} />
+      )}
       {error && (
         <p role="alert" className="m-0 text-[13px] text-crit">
           {error}

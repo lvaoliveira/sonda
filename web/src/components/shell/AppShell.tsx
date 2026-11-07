@@ -66,23 +66,17 @@ export interface Crumb {
   mono?: boolean
 }
 
-/** A project's own pages: shown as tabs on each of them, so moving between them never leaves the project. */
-function ProjectTabs({ project }: Readonly<{ project: string }>) {
-  const base = `/projects/${encodeURIComponent(project)}`
-  // A branch's pages stay on that branch; analyses, rules and settings are the project's.
-  const branch = useSearchParams()[0].get('branch')
-  const on = branch ? `?branch=${encodeURIComponent(branch)}` : ''
-  const tabs = [
-    { to: `${base}${on}`, label: 'Overview', end: true },
-    { to: `${base}/analyses`, label: 'Analyses' },
-    { to: `${base}/issues${on}`, label: 'Issues' },
-    { to: `${base}/coverage${on}`, label: 'Coverage' },
-    { to: `${base}/dependencies${on}`, label: 'Dependencies' },
-    { to: `${base}/rules`, label: 'Rules' },
-    { to: `${base}/settings`, label: 'Settings' },
-  ]
+/** A page's sections, as links: one route each, so each has its own address and the back button works. */
+export interface Tab {
+  to: string
+  label: string
+  /** Active only on exactly this path, not the paths under it. */
+  end?: boolean
+}
+
+export function Tabs({ label, tabs }: Readonly<{ label: string; tabs: Tab[] }>) {
   return (
-    <nav aria-label="Project" className="-mt-1 flex gap-1 overflow-x-auto border-b border-line">
+    <nav aria-label={label} className="-mt-1 flex gap-1 overflow-x-auto border-b border-line">
       {tabs.map((t) => (
         <NavLink
           key={t.to}
@@ -99,12 +93,46 @@ function ProjectTabs({ project }: Readonly<{ project: string }>) {
   )
 }
 
+/** A project's own pages: shown as tabs on each of them, so moving between them never leaves the project. */
+function ProjectTabs({ project }: Readonly<{ project: string }>) {
+  const base = `/projects/${encodeURIComponent(project)}`
+  // A branch's pages stay on that branch; analyses, rules and settings are the project's.
+  const branch = useSearchParams()[0].get('branch')
+  const on = branch ? `?branch=${encodeURIComponent(branch)}` : ''
+  return (
+    <Tabs
+      label="Project"
+      tabs={[
+        { to: `${base}${on}`, label: 'Overview', end: true },
+        { to: `${base}/analyses`, label: 'Analyses' },
+        { to: `${base}/issues${on}`, label: 'Issues' },
+        { to: `${base}/coverage${on}`, label: 'Coverage' },
+        { to: `${base}/dependencies${on}`, label: 'Dependencies' },
+        { to: `${base}/rules`, label: 'Rules' },
+        { to: `${base}/settings`, label: 'Settings' },
+      ]}
+    />
+  )
+}
+
 /** The deployment, and how many projects it has when the server says. */
 function orgLine(org: { deployment: string; projectCount: number | null }): string {
   return org.projectCount == null ? org.deployment : `${org.deployment} · ${org.projectCount} projects`
 }
 
-export function AppShell({ crumbs, project, children }: Readonly<{ crumbs: Crumb[]; /** The project whose pages these are: shows its tabs. */ project?: string; children: ReactNode }>) {
+export function AppShell({
+  crumbs,
+  project,
+  tabs,
+  children,
+}: Readonly<{
+  crumbs: Crumb[]
+  /** The project whose pages these are: shows its tabs. */
+  project?: string
+  /** Another page's sections, shown as tabs the same way. */
+  tabs?: ReactNode
+  children: ReactNode
+}>) {
   const data = useShell()
   const { signOut } = useSessionActions()
   const [theme, toggleTheme] = useTheme()
@@ -254,6 +282,7 @@ export function AppShell({ crumbs, project, children }: Readonly<{ crumbs: Crumb
           </header>
           <main className="box-border flex w-full max-w-[1560px] min-w-0 flex-1 flex-col gap-5 px-4 pt-5 pb-8 min-[900px]:px-6 min-[900px]:pt-7">
             {project && <ProjectTabs project={project} />}
+            {tabs}
             {children}
           </main>
         </div>

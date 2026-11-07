@@ -61,6 +61,9 @@ export function AppRoutes() {
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/quality-profiles" element={<QualityProfilesPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="/admin/tokens" element={<AdminPage tab="tokens" />} />
+          <Route path="/admin/github" element={<AdminPage tab="github" />} />
+          <Route path="/admin/deleted-projects" element={<AdminPage tab="deleted-projects" />} />
           <Route path="/admin/github/created" element={<GitHubAppCreatedPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="*" element={<NotFoundPage />} />

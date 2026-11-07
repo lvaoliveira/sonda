@@ -254,7 +254,7 @@ function Steps({ done }: Readonly<{ done: Connected }>) {
       ) : (
         <output className="block m-0 max-w-[720px] rounded-lg bg-panel-2 px-4 py-3 text-[13px] text-warn edge">
           This server has no GitHub App, so results won't be posted on pull requests; analyses still upload.{' '}
-          <Link to="/admin#github">Create one under Administration</Link>.
+          <Link to="/admin/github">Create one under Administration</Link>.
         </output>
       )}
       {steps.map((step, i) => {

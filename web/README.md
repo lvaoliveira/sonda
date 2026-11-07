@@ -33,7 +33,7 @@ The Docker image serves it that way (see `../docs/server.md`).
 | `src/api/http.ts` | The contract over `sonda server`'s HTTP API. It sends the session cookie same-origin and adds `Sonda-Csrf` to changes. An expired session sends the viewer back to sign-in. |
 | `src/api/mock/` | In-memory implementation for development and tests, seeded from the prototypes and converted to the server's shapes. `query.ts` does what the server does: filter, sort, page and count facets. It is imported lazily, so its sample data never ships in a production build. |
 | `src/lib/` | Pure, unit-tested logic: chart geometry, waffle allocation, issue filtering and facets, drill-down params, formatting, the visual vocabulary. |
-| `src/components/sonda/` | Shared components: `PipMeter`, `GateStatus`, `SeverityGlyph`, `CoverageRing`, `Sparkline`, `MetricGrid`, `DrillDrawer`, `CodeViewer`, plus controls and layout. |
+| `src/components/sonda/` | Shared components: `PipMeter`, `GateStatus`, `SeverityGlyph`, `CoverageRing`, `Sparkline`, `MetricGrid`, `Drawer`, `DrillDrawer`, `CodeViewer`, plus controls and layout. |
 | `src/components/shell/` | Sidebar, sheet, header, breadcrumbs, theme toggle. |
 | `src/pages/` | One file per screen. |
 
@@ -51,6 +51,14 @@ The Docker image serves it that way (see `../docs/server.md`).
   - gate status is a shaped dot plus a word
   - severity is always a glyph plus a label
   - borders are inset shadows (the `edge` utility)
+- **New items open in a drawer** (`Drawer`): adding a user, generating a
+  token, a new gate or profile. The page behind stays as it was, the form
+  has room for hints, and a secret shown once (a token, a generated
+  password) stays in the drawer until it's dismissed. The submit button sits
+  in the drawer's footer, tied to the form by `form={id}` (`DrawerActions`).
+- **A page's sections are tabs** (`Tabs`), each its own route, as a
+  project's pages and Administration's are: the address names the section,
+  and the back button works.
 - **Drill-down links** are query parameters, for example
   `/issues?cat=vulnerability&new`, so they work with the router and the back
   button. A rule link is `/rules#<rule-id>`.
@@ -76,7 +84,9 @@ People sign in with username and password (ADR-0006). The server answers
 with an `HttpOnly` session cookie, so page scripts, and anything injected
 into them, never see a credential.
 - **Administration** (`/admin`) is for admins only. It is hidden from
-  members, and the server refuses them too. Admins manage users there.
+  members, and the server refuses them too. Its tabs are Users, Tokens,
+  GitHub and Deleted projects (`/admin/tokens` and so on); the old
+  `/admin#github`-style links land on their tab.
 - **Account** (`/account`) lets anyone change their own password.
 - **"Assign to me"** uses the signed-in username.
 

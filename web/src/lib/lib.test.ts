@@ -9,6 +9,7 @@ import { initials } from './identity'
 import { DEFAULT_FILTER, filterFromParams, issueSearchParams, toQuery } from './issues'
 import { languageLabel, projectScore, SEVERITY } from './visual'
 import { copyText } from './clipboard'
+import { generatePassword } from './password'
 
 const issues = issuesData as IssueDetail[]
 const ME = 'Mara Okafor'
@@ -261,5 +262,26 @@ describe('trimming', () => {
     expect(trimTrailing('http://x/'.concat('/'.repeat(50_000)), '/')).toBe('http://x')
     expect(trimTrailing('---', '-')).toBe('')
     expect(trimTrailing('a-b', '-')).toBe('a-b')
+  })
+})
+
+describe('generated passwords', () => {
+  it('are four dashed groups of five unambiguous characters', () => {
+    const password = generatePassword()
+    expect(password).toMatch(/^[A-HJ-NP-Za-km-z2-9]{5}(-[A-HJ-NP-Za-km-z2-9]{5}){3}$/)
+    expect(password.length).toBeGreaterThanOrEqual(12)
+    expect(generatePassword()).not.toBe(password)
+  })
+
+  it('skip the bytes that would make some characters likelier', () => {
+    // 57 characters: 228 to 255 would wrap onto the first 28, so they're skipped.
+    let calls = 0
+    const fill = (bytes: Uint8Array) => {
+      calls++
+      bytes.fill(calls === 1 ? 228 : 0)
+    }
+    expect(generatePassword(fill)).toBe('AAAAA-AAAAA-AAAAA-AAAAA')
+    expect(calls).toBe(2)
+    expect(generatePassword((b) => void b.fill(227))).toBe('99999-99999-99999-99999')
   })
 })
