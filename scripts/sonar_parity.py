@@ -171,6 +171,25 @@ def status_count(rows, status, tier=None):
     return sum(1 for r in rows if r["status"] == status and tier in (None, r["tier"]))
 
 
+def taint_note(summary):
+    """Whether the counts include SonarQube's taint-analysis rules. They live
+    in repositories of their own (`javasecurity`, `jssecurity`,
+    `pythonsecurity`, C#'s `roslyn.sonaranalyzer.security.cs`), which only
+    its commercial editions have."""
+    taint = sum(1 for _, rows, _ in summary for r in rows or []
+                if r["key"].split(":")[0].endswith("security") or ".security." in r["key"])
+    if taint == 0:
+        return [
+            "- This server has none of SonarQube's taint-analysis rules (repositories such as",
+            "  `javasecurity`), which come with its commercial editions, so the counts below",
+            "  don't include them.",
+        ]
+    return [
+        f"- {taint} of the keys below are SonarQube's taint-analysis rules (repositories such",
+        "  as `javasecurity`), from a commercial edition.",
+    ]
+
+
 def summary_table(summary):
     """The counts per language, as table rows."""
     lines = []
@@ -268,7 +287,7 @@ def main():
         write_csv(args.out, lang, rows)
         summary.append((label, rows, lang))
 
-    lines = [
+    head = [
         "# Compatibility with SonarQube rules",
         "",
         "Which SonarQube rule keys have an equivalent in sonda"
@@ -282,9 +301,13 @@ def main():
         "- **tier** is a first guess at the analysis needed: `syntactic` (tree-sitter queries),",
         "  `types` (a type checker, tagged type-dependent), `dataflow` (symbolic execution).",
         "  It's confirmed when a rule is implemented.",
+        *taint_note(summary),
         "",
         "| Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |",
         "|---|---|---|---|---|---|---|",
+    ]
+    lines = [
+        *head,
         *summary_table(summary),
         *known_gaps(summary),
         *standards_drift(sonda, expected),
@@ -293,7 +316,7 @@ def main():
     ]
     with open(os.path.join(args.out, "README.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
-    print("\n".join(lines[14:]))
+    print("\n".join(lines[len(head):]))
 
 
 def fmt(standards):
