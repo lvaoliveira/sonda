@@ -275,6 +275,120 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "cs/command-injection",
+        name: "OS commands should not be built from a request's values",
+        description: "A value from the request that reaches a process's file name or arguments lets whoever sends it run, or add to, a command on the server. Pass fixed commands, and arguments one by one with `ArgumentList`. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this command from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2076")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: command_injection,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; using System.Diagnostics; public class Tools : ControllerBase { public void Ping(string host) { Process.Start(\"sh\", \"-c 'ping -c 1 \" + host + \"'\"); } }",
+            good: "using Microsoft.AspNetCore.Mvc; using System.Diagnostics; public class Tools : ControllerBase { public void Ping(string host) { var p = new ProcessStartInfo(\"ping\"); p.ArgumentList.Add(\"-c\"); p.ArgumentList.Add(\"1\"); p.ArgumentList.Add(host); Process.Start(p); } }",
+        }),
+    },
+    Rule {
+        id: "cs/path-injection",
+        name: "File paths should not be built from a request's values",
+        description: "A value from the request that reaches a file path can name any file the server can read or write, with `../` or an absolute path. Keep only its file name, with `Path.GetFileName`, or check the full path stays under its directory. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this file path from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2083")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: path_injection,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; public class Files : ControllerBase { public IActionResult Get(string name) => PhysicalFile(\"/srv/files/\" + name, \"application/pdf\"); }",
+            good: "using Microsoft.AspNetCore.Mvc; using System.IO; public class Files : ControllerBase { public IActionResult Get(string name) => PhysicalFile(Path.Combine(\"/srv/files\", Path.GetFileName(name)), \"application/pdf\"); }",
+        }),
+    },
+    Rule {
+        id: "cs/open-redirect",
+        name: "Redirects should not go to a URL from the request",
+        description: "Redirecting to a URL the request names lets a link on this site send people anywhere, such as to a page that imitates it. Redirect only to local URLs, with `LocalRedirect` or after `Url.IsLocalUrl`. The issue shows the path the value took (ADR-0027).",
+        message: "Don't redirect to a URL from the request; check it's local first.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 15,
+        sonar: &[exact("S5146")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: open_redirect,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; public class Account : Controller { public IActionResult Done(string returnUrl) => Redirect(returnUrl); }",
+            good: "using Microsoft.AspNetCore.Mvc; public class Account : Controller { public IActionResult Done(string returnUrl) => LocalRedirect(returnUrl); }",
+        }),
+    },
+    Rule {
+        id: "cs/ssrf",
+        name: "Server-side requests should not go to a URL from the request",
+        description: "A request the server makes to a URL its caller names can reach what only the server can: internal services, cloud metadata, localhost. Fix the host, and pass the caller's values in the path or query only. The issue shows the path the value took (ADR-0027).",
+        message: "Don't send this request to a URL from the request.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S5144")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: ssrf,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; using System.Net.Http; using System.Threading.Tasks; public class Preview : ControllerBase { static readonly HttpClient Http = new(); public Task<string> Get(string url) => Http.GetStringAsync(url); }",
+            good: "using Microsoft.AspNetCore.Mvc; using System.Net.Http; using System.Threading.Tasks; public class Rates : ControllerBase { static readonly HttpClient Http = new(); public Task<string> Get(string code) => Http.GetStringAsync(\"https://api.example.com/rates?c=\" + code); }",
+        }),
+    },
+    Rule {
+        id: "cs/xpath-injection",
+        name: "XPath queries should not be built from a request's values",
+        description: "A value from the request concatenated into an XPath expression can change what it selects: `' or '1'='1` matches every node. Use a fixed expression with variables, or check the value. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this XPath expression from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2091")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: xpath_injection,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; using System.Xml; public class Users : ControllerBase { XmlDocument doc = new(); public object Find(string name) => doc.SelectNodes(\"//user[name='\" + name + \"']\"); }",
+            good: "using Microsoft.AspNetCore.Mvc; using System.Xml; public class Users : ControllerBase { XmlDocument doc = new(); public object Find(string name) => doc.SelectNodes(\"//user\"); }",
+        }),
+    },
+    Rule {
+        id: "cs/ldap-injection",
+        name: "LDAP filters should not be built from a request's values",
+        description: "A value from the request concatenated into an LDAP filter can change what it matches: `*)(uid=*` finds every user. Escape it for LDAP first. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this LDAP filter from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2078")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: ldap_injection,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; using System.DirectoryServices; public class People : ControllerBase { public object Find(string user) => new DirectorySearcher(\"(uid=\" + user + \")\"); }",
+            good: "using Microsoft.AspNetCore.Mvc; using System.DirectoryServices; public class People : ControllerBase { public object Find(string user) => new DirectorySearcher(\"(objectClass=person)\"); }",
+        }),
+    },
+    Rule {
         id: "cs/cookie-not-secure",
         name: "Cookies should be sent over HTTPS only",
         description: "A cookie without `Secure` is also sent over plain HTTP, where anyone on the network can \
@@ -958,6 +1072,23 @@ fn is_constant_string(expr: Node) -> bool {
 fn first_argument(call: Node) -> Option<Node> {
     cs_call_arguments(call).into_iter().next()
 }
+
+macro_rules! taint_rule_fn {
+    ($name:ident, $kind:ident) => {
+        fn $name<'t>(
+            m: &crate::semantic::Model<'t>,
+            src: &[u8],
+        ) -> Vec<crate::semantic::cs_taint::Finding<'t>> {
+            crate::semantic::cs_taint::find(m, src, crate::semantic::cs_taint::SinkKind::$kind)
+        }
+    };
+}
+taint_rule_fn!(command_injection, Command);
+taint_rule_fn!(path_injection, Path);
+taint_rule_fn!(open_redirect, Redirect);
+taint_rule_fn!(ssrf, Ssrf);
+taint_rule_fn!(xpath_injection, XPath);
+taint_rule_fn!(ldap_injection, Ldap);
 
 /// A request's value reaching a query's text (ADR-0027, T1).
 fn sql_injection<'t>(

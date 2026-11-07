@@ -9,6 +9,20 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Six more taint rules for C# (ADR-0027, T1), each with the path its value
+  took: `cs/command-injection` (S2076: `Process.Start`,
+  `ProcessStartInfo`), `cs/path-injection` (S2083: `File`, `Directory`,
+  file streams and readers, `PhysicalFile`), `cs/open-redirect` (S5146:
+  `Redirect`, `Response.Redirect`, `Results.Redirect`, `RedirectResult`),
+  `cs/ssrf` (S5144: `HttpClient`, `HttpRequestMessage`, `WebRequest`),
+  `cs/xpath-injection` (S2091) and `cs/ldap-injection` (S2078). Each knows
+  what makes a value safe for it: `Path.GetFileName` for paths, a fixed
+  host or a local path for URLs, and checks such as `Url.IsLocalUrl` or a
+  `StartsWith` on the full path. A controller's own `Request.Query` is now
+  a source, for `cs/sql-injection` too. On seven open-source applications
+  they report four issues, all real, and WebGoat.NET's open redirect;
+  planted in each application, they found every injection.
+
 - `cs/sql-injection` (SonarQube's S3649): a value from an ASP.NET Core
   request, an action's or a minimal API handler's parameter, or the
   request's `Query`, `Form`, `Headers`, `Cookies`, `Path` or `RouteValues`,

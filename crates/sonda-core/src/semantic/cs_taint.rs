@@ -22,7 +22,7 @@
 use super::cs_cfg::{self, Access, Cfg, ENTRY};
 use super::cs_infer::{Found, Infer, Ty};
 use super::{DeclId, DeclKind, Model};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tree_sitter::Node;
 
 /// The most variables tracked in one function, and rounds of the fixed
@@ -56,6 +56,12 @@ type State<'t> = BTreeMap<DeclId, Path<'t>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SinkKind {
     Sql,
+    Command,
+    Path,
+    Redirect,
+    Ssrf,
+    XPath,
+    Ldap,
 }
 
 // ---------------------------------------------------------------- tables
@@ -152,12 +158,271 @@ const DAPPER: &[&str] = &[
     "ExecuteReaderAsync",
 ];
 
+/// A platform method whose arguments at `args` (as written, not counting
+/// an extension method's receiver) mustn't hold a request's value.
+struct MethodSink {
+    kind: SinkKind,
+    declaring: &'static str,
+    methods: &'static [&'static str],
+    args: &'static [usize],
+}
+
+/// A constructor of a platform type, by its arguments.
+struct CtorSink {
+    kind: SinkKind,
+    ty: &'static str,
+    args: &'static [usize],
+}
+
+/// A property of a platform type, set from a request's value.
+struct PropertySink {
+    kind: SinkKind,
+    declaring: &'static str,
+    property: &'static str,
+}
+
+const FILE: &str = "System.IO.File";
+const DIRECTORY: &str = "System.IO.Directory";
+const CONTROLLER_REDIRECTS: &[&str] = &[
+    "Redirect",
+    "RedirectPermanent",
+    "RedirectPreserveMethod",
+    "RedirectPermanentPreserveMethod",
+];
+
+const METHOD_SINKS: &[MethodSink] = &[
+    MethodSink {
+        kind: SinkKind::Command,
+        declaring: "System.Diagnostics.Process",
+        methods: &["Start"],
+        args: &[0, 1],
+    },
+    MethodSink {
+        kind: SinkKind::Path,
+        declaring: FILE,
+        methods: &[
+            "ReadAllText",
+            "ReadAllTextAsync",
+            "ReadAllBytes",
+            "ReadAllBytesAsync",
+            "ReadAllLines",
+            "ReadAllLinesAsync",
+            "ReadLines",
+            "WriteAllText",
+            "WriteAllTextAsync",
+            "WriteAllBytes",
+            "WriteAllBytesAsync",
+            "WriteAllLines",
+            "WriteAllLinesAsync",
+            "AppendAllText",
+            "AppendAllTextAsync",
+            "AppendAllLines",
+            "Open",
+            "OpenRead",
+            "OpenWrite",
+            "OpenText",
+            "Create",
+            "CreateText",
+            "AppendText",
+            "Delete",
+        ],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Path,
+        declaring: FILE,
+        methods: &["Copy", "Move", "Replace"],
+        args: &[0, 1],
+    },
+    MethodSink {
+        kind: SinkKind::Path,
+        declaring: DIRECTORY,
+        methods: &[
+            "Delete",
+            "CreateDirectory",
+            "GetFiles",
+            "GetDirectories",
+            "EnumerateFiles",
+            "EnumerateDirectories",
+            "EnumerateFileSystemEntries",
+        ],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Path,
+        declaring: DIRECTORY,
+        methods: &["Move"],
+        args: &[0, 1],
+    },
+    MethodSink {
+        kind: SinkKind::Path,
+        declaring: CONTROLLER_BASE,
+        methods: &["PhysicalFile"],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Redirect,
+        declaring: CONTROLLER_BASE,
+        methods: CONTROLLER_REDIRECTS,
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Redirect,
+        declaring: "Microsoft.AspNetCore.Http.HttpResponse",
+        methods: &["Redirect"],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Redirect,
+        declaring: "Microsoft.AspNetCore.Http.Results",
+        methods: &["Redirect"],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Redirect,
+        declaring: "Microsoft.AspNetCore.Http.TypedResults",
+        methods: &["Redirect"],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Ssrf,
+        declaring: "System.Net.Http.HttpClient",
+        methods: &[
+            "GetAsync",
+            "GetStringAsync",
+            "GetByteArrayAsync",
+            "GetStreamAsync",
+            "PostAsync",
+            "PutAsync",
+            "PatchAsync",
+            "DeleteAsync",
+        ],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Ssrf,
+        declaring: "System.Net.Http.Json.HttpClientJsonExtensions",
+        methods: &[
+            "GetFromJsonAsync",
+            "PostAsJsonAsync",
+            "PutAsJsonAsync",
+            "PatchAsJsonAsync",
+            "DeleteFromJsonAsync",
+        ],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::Ssrf,
+        declaring: "System.Net.WebRequest",
+        methods: &["Create", "CreateHttp"],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::XPath,
+        declaring: "System.Xml.XmlNode",
+        methods: &["SelectNodes", "SelectSingleNode"],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::XPath,
+        declaring: "System.Xml.XPath.XPathNavigator",
+        methods: &[
+            "Select",
+            "SelectSingleNode",
+            "Evaluate",
+            "Compile",
+            "Matches",
+        ],
+        args: &[0],
+    },
+    MethodSink {
+        kind: SinkKind::XPath,
+        declaring: "System.Xml.XPath.XPathExpression",
+        methods: &["Compile"],
+        args: &[0],
+    },
+];
+
+const CTOR_SINKS: &[CtorSink] = &[
+    CtorSink {
+        kind: SinkKind::Command,
+        ty: "System.Diagnostics.ProcessStartInfo",
+        args: &[0, 1],
+    },
+    CtorSink {
+        kind: SinkKind::Path,
+        ty: "System.IO.FileStream",
+        args: &[0],
+    },
+    CtorSink {
+        kind: SinkKind::Path,
+        ty: "System.IO.StreamReader",
+        args: &[0],
+    },
+    CtorSink {
+        kind: SinkKind::Path,
+        ty: "System.IO.StreamWriter",
+        args: &[0],
+    },
+    CtorSink {
+        kind: SinkKind::Path,
+        ty: "System.IO.FileInfo",
+        args: &[0],
+    },
+    CtorSink {
+        kind: SinkKind::Path,
+        ty: "System.IO.DirectoryInfo",
+        args: &[0],
+    },
+    CtorSink {
+        kind: SinkKind::Redirect,
+        ty: "Microsoft.AspNetCore.Mvc.RedirectResult",
+        args: &[0],
+    },
+    CtorSink {
+        kind: SinkKind::Ssrf,
+        ty: "System.Net.Http.HttpRequestMessage",
+        args: &[1],
+    },
+];
+
+const PROPERTY_SINKS: &[PropertySink] = &[
+    PropertySink {
+        kind: SinkKind::Command,
+        declaring: "System.Diagnostics.ProcessStartInfo",
+        property: "FileName",
+    },
+    PropertySink {
+        kind: SinkKind::Command,
+        declaring: "System.Diagnostics.ProcessStartInfo",
+        property: "Arguments",
+    },
+    PropertySink {
+        kind: SinkKind::Ssrf,
+        declaring: "System.Net.Http.HttpRequestMessage",
+        property: "RequestUri",
+    },
+    PropertySink {
+        kind: SinkKind::Ssrf,
+        declaring: "System.Net.Http.HttpClient",
+        property: "BaseAddress",
+    },
+];
+
+/// LDAP's searcher is a Windows package, outside the platform's
+/// declarations: matched by name with its namespace imported, as the SQL
+/// providers are.
+const LDAP_NAMESPACE: &str = "System.DirectoryServices";
+const LDAP_SEARCHER: &str = "DirectorySearcher";
+
 const STRING: &str = "System.String";
 const STRING_BUILDER: &str = "System.Text.StringBuilder";
 /// Types whose methods return what their receiver and arguments hold.
 const PROPAGATING_TYPES: &[&str] = &[
     STRING,
     STRING_BUILDER,
+    "System.IO.Path",
+    "System.Uri",
     "Microsoft.Extensions.Primitives.StringValues",
     "System.Convert",
 ];
@@ -193,6 +458,12 @@ const INTO_RECEIVER: &[&str] = &[
 
 /// Every function's findings for `kind`, in source order.
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding<'t>> {
+    // Every source is a controller's (by name, attribute or base class), a
+    // `Request`'s member, or a `Map…` handler's parameter: a file that
+    // mentions none of them has no request's value to follow. Most don't.
+    if !might_have_sources(src) {
+        return Vec::new();
+    }
     let Some(infer) = Infer::new(m, src) else {
         return Vec::new();
     };
@@ -212,23 +483,41 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding
             continue;
         }
         let sources = source_params(m, &infer, i, src);
-        let sinks = sinks_in(m, &infer, node, &functions, kind);
+        let sinks = sinks_in(m, &infer, node, &functions, kind, src);
         if sinks.is_empty() {
             continue;
         }
         let Some(cfg) = cs_cfg::build(m, node, src, &by_node) else {
             continue;
         };
-        let a = Analysis {
+        let mut a = Analysis {
             m,
             infer: &infer,
             src,
             by_node: &by_node,
+            kind,
+            checked: HashSet::new(),
+            controller: ancestor(node, "class_declaration")
+                .is_some_and(|c| is_controller(&infer, c, src)),
         };
+        a.checked = a.checked_values(node, &functions);
         found.extend(a.function(&cfg, sources, &sinks));
     }
     found.sort_by_key(|f| f.sink.start_byte());
     found
+}
+
+/// Whether a file can have a source at all: a controller (by name,
+/// attribute or base class), a request (`HttpRequest`, `HttpContext`, a
+/// controller's `Request.Query`), or a `Map…` handler. Checked on the bytes
+/// first, since most files have none: a DTO named `…Request` doesn't count.
+fn might_have_sources(src: &[u8]) -> bool {
+    const NEEDLES: &[&[u8]] = &[b"Controller", b"HttpRequest", b"HttpContext", b".Map"];
+    let has = |needle: &[u8]| src.windows(needle.len()).any(|w| w == needle);
+    NEEDLES.iter().any(|n| has(n))
+        || REQUEST_MEMBERS
+            .iter()
+            .any(|m| has(format!("Request.{m}").as_bytes()))
 }
 
 /// The parameters of a function that a request fills: a controller
@@ -426,6 +715,33 @@ fn attribute_names(node: Node, src: &[u8]) -> Vec<String> {
     out
 }
 
+/// `Request` or `Response` as a controller's own property, which type
+/// inference doesn't resolve through the platform base class: unqualified,
+/// or as `HttpContext.Request`, and not a local or parameter of that name.
+fn controller_property(
+    m: &Model,
+    infer: &Infer,
+    receiver: Node,
+    name: &str,
+    controller: bool,
+) -> bool {
+    if !controller {
+        return false;
+    }
+    match receiver.kind() {
+        "identifier" => infer.text_of(receiver) == name && m.decl_of(receiver).is_none(),
+        "member_access_expression" => {
+            receiver
+                .child_by_field_name("name")
+                .is_some_and(|n| infer.text_of(n) == name)
+                && receiver
+                    .child_by_field_name("expression")
+                    .is_some_and(|e| e.kind() == "identifier" && infer.text_of(e) == "HttpContext")
+        }
+        _ => false,
+    }
+}
+
 /// A member's name without type arguments: `Query` in `c.Query<int>`.
 fn bare_name(n: Node) -> Node {
     if n.kind() == "generic_name" {
@@ -444,7 +760,8 @@ fn children(n: Node) -> Vec<Node> {
 #[derive(Clone)]
 struct Sink<'t> {
     node: Node<'t>,
-    value: Node<'t>,
+    /// The values it takes from the code: the first tainted one is reported.
+    values: Vec<Node<'t>>,
     /// "passed to `SqlCommand`".
     what: &'static str,
     name: String,
@@ -457,20 +774,176 @@ fn sinks_in<'t>(
     function: Node<'t>,
     functions: &[Node<'t>],
     kind: SinkKind,
+    src: &[u8],
 ) -> Vec<Sink<'t>> {
-    let SinkKind::Sql = kind;
+    // A controller's own `Redirect(url)`, when its base, in another file,
+    // keeps the call from resolving.
+    let controller =
+        ancestor(function, "class_declaration").is_some_and(|c| is_controller(infer, c, src));
     let mut out = Vec::new();
     let mut stack: Vec<Node<'t>> = function.child_by_field_name("body").into_iter().collect();
     while let Some(n) = stack.pop() {
         if functions.iter().any(|f| f.id() == n.id()) && n.id() != function.id() {
             continue;
         }
-        if let Some(sink) = sql_sink(m, infer, n) {
-            out.push(sink);
-        }
+        let sink = match kind {
+            SinkKind::Sql => sql_sink(m, infer, n),
+            SinkKind::Ldap => ldap_sink(m, infer, n),
+            _ => table_sink(m, infer, n, kind, controller),
+        };
+        out.extend(sink);
         stack.extend(children(n).into_iter().rev());
     }
     out
+}
+
+/// A sink from the platform tables: a method, a constructor or a property.
+fn table_sink<'t>(
+    m: &Model<'t>,
+    infer: &Infer<'_, 't>,
+    n: Node<'t>,
+    kind: SinkKind,
+    controller: bool,
+) -> Option<Sink<'t>> {
+    let pick = |args: &[usize], all: &[Node<'t>]| -> Vec<Node<'t>> {
+        args.iter().filter_map(|i| all.get(*i).copied()).collect()
+    };
+    match n.kind() {
+        "invocation_expression" => {
+            let function = n.child_by_field_name("function")?;
+            let name_node = match function.kind() {
+                "member_access_expression" => function.child_by_field_name("name")?,
+                _ => function,
+            };
+            let name = infer.text_of(bare_name(name_node));
+            let all = arguments(n);
+            let resolved = infer.call(n).and_then(|call| {
+                METHOD_SINKS.iter().find(|s| {
+                    s.kind == kind
+                        && s.methods.contains(&name)
+                        && call.methods.iter().any(|m| {
+                            matches!(m, Found::Platform { declaring, .. } if declaring.name == s.declaring)
+                        })
+                })
+            });
+            // `Response.Redirect(url)` on a controller's own response.
+            let response = || {
+                (name == "Redirect"
+                    && function.kind() == "member_access_expression"
+                    && function
+                        .child_by_field_name("expression")
+                        .is_some_and(|r| controller_property(m, infer, r, "Response", controller)))
+                .then(|| {
+                    METHOD_SINKS.iter().find(|s| {
+                        s.kind == kind && s.declaring == "Microsoft.AspNetCore.Http.HttpResponse"
+                    })
+                })
+                .flatten()
+            };
+            // `Redirect(url)` in a controller whose base doesn't resolve.
+            let inherited = || {
+                (controller && matches!(function.kind(), "identifier" | "generic_name"))
+                    .then(|| {
+                        METHOD_SINKS.iter().find(|s| {
+                            s.kind == kind
+                                && s.declaring == CONTROLLER_BASE
+                                && s.methods.contains(&name)
+                        })
+                    })
+                    .flatten()
+            };
+            let spec = resolved.or_else(response).or_else(inherited)?;
+            let values = pick(spec.args, &all);
+            (!values.is_empty()).then(|| Sink {
+                node: n,
+                values,
+                what: "passed to",
+                name: name.to_string(),
+            })
+        }
+        "object_creation_expression" => {
+            let ty = infer.written(n.child_by_field_name("type")?)?;
+            let spec = CTOR_SINKS.iter().find(|s| s.kind == kind && ty.is(s.ty))?;
+            let values = pick(spec.args, &arguments(n));
+            let name = spec.ty.rsplit('.').next().unwrap_or(spec.ty);
+            (!values.is_empty()).then(|| Sink {
+                node: n,
+                values,
+                what: "passed to",
+                name: name.to_string(),
+            })
+        }
+        "assignment_expression" => {
+            let left = n
+                .child_by_field_name("left")
+                .filter(|l| l.kind() == "member_access_expression")?;
+            (infer.text_of(n.child_by_field_name("operator")?) == "=").then_some(())?;
+            let property = infer.text_of(left.child_by_field_name("name")?);
+            let receiver = infer.type_of(left.child_by_field_name("expression")?)?;
+            let spec = PROPERTY_SINKS.iter().find(|s| {
+                s.kind == kind
+                    && s.property == property
+                    && (receiver.is(s.declaring)
+                        || infer
+                            .supertypes(&receiver)
+                            .iter()
+                            .any(|t| t.is(s.declaring)))
+            })?;
+            Some(Sink {
+                node: n,
+                values: vec![n.child_by_field_name("right")?],
+                what: "assigned to",
+                name: spec.property.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `new DirectorySearcher(filter)` and `searcher.Filter = filter`.
+fn ldap_sink<'t>(m: &Model<'t>, infer: &Infer<'_, 't>, n: Node<'t>) -> Option<Sink<'t>> {
+    let imported = |at: usize| infer.in_scope(LDAP_NAMESPACE, at) && !infer.declares(LDAP_SEARCHER);
+    let names_searcher = |t: Node| {
+        let text = infer.text_of(t);
+        text == format!("{LDAP_NAMESPACE}.{LDAP_SEARCHER}")
+            || (text == LDAP_SEARCHER && imported(n.start_byte()))
+    };
+    match n.kind() {
+        "object_creation_expression" => {
+            names_searcher(n.child_by_field_name("type")?).then_some(())?;
+            Some(Sink {
+                node: n,
+                values: vec![first_argument(n)?],
+                what: "passed to",
+                name: LDAP_SEARCHER.to_string(),
+            })
+        }
+        "assignment_expression" => {
+            let left = n
+                .child_by_field_name("left")
+                .filter(|l| l.kind() == "member_access_expression")?;
+            (infer.text_of(left.child_by_field_name("name")?) == "Filter").then_some(())?;
+            let receiver = left.child_by_field_name("expression")?;
+            let decl = (receiver.kind() == "identifier")
+                .then(|| m.decl_of(receiver))
+                .flatten()?;
+            let declared = decl.ty.is_some_and(names_searcher);
+            let created = decl
+                .declarator
+                .and_then(|d| d.named_child(d.named_child_count().saturating_sub(1) as u32))
+                .filter(|v| v.kind() == "object_creation_expression")
+                .and_then(|v| v.child_by_field_name("type"))
+                .is_some_and(names_searcher);
+            (declared || created).then_some(())?;
+            Some(Sink {
+                node: n,
+                values: vec![n.child_by_field_name("right")?],
+                what: "assigned to",
+                name: "Filter".to_string(),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn sql_sink<'t>(m: &Model<'t>, infer: &Infer<'_, 't>, n: Node<'t>) -> Option<Sink<'t>> {
@@ -490,7 +963,7 @@ fn sql_sink<'t>(m: &Model<'t>, infer: &Infer<'_, 't>, n: Node<'t>) -> Option<Sin
                 .then_some(())?;
             Some(Sink {
                 node: n,
-                value: first_argument(n)?,
+                values: vec![first_argument(n)?],
                 what: "passed to",
                 name: name.to_string(),
             })
@@ -507,7 +980,7 @@ fn sql_sink<'t>(m: &Model<'t>, infer: &Infer<'_, 't>, n: Node<'t>) -> Option<Sin
             (raw || dapper).then_some(())?;
             Some(Sink {
                 node: n,
-                value: first_argument(n)?,
+                values: vec![first_argument(n)?],
                 what: "passed to",
                 name: name.to_string(),
             })
@@ -521,7 +994,7 @@ fn sql_sink<'t>(m: &Model<'t>, infer: &Infer<'_, 't>, n: Node<'t>) -> Option<Sin
             is_command(m, infer, receiver).then_some(())?;
             Some(Sink {
                 node: n,
-                value: n.child_by_field_name("right")?,
+                values: vec![n.child_by_field_name("right")?],
                 what: "assigned to",
                 name: "CommandText".to_string(),
             })
@@ -588,6 +1061,11 @@ struct Analysis<'a, 't> {
     infer: &'a Infer<'a, 't>,
     src: &'a [u8],
     by_node: &'a HashMap<usize, DeclId>,
+    kind: SinkKind,
+    /// What the function checks before using it (`checked_values`).
+    checked: HashSet<String>,
+    /// The function is a controller's: its `Request` is the request.
+    controller: bool,
 }
 
 impl<'t> Analysis<'_, 't> {
@@ -647,7 +1125,7 @@ impl<'t> Analysis<'_, 't> {
             };
             let mut state = inn[block].clone();
             self.transfer(cfg, block, &mut state, Some(sink.node.start_byte()));
-            if let Some(mut steps) = self.taint(sink.value, &state) {
+            if let Some(mut steps) = sink.values.iter().find_map(|v| self.taint(*v, &state)) {
                 steps.push(Step {
                     node: sink.node,
                     message: format!("{} `{}`", sink.what, sink.name),
@@ -789,6 +1267,8 @@ impl<'t> Analysis<'_, 't> {
                 continue;
             }
             match n.kind() {
+                "identifier" | "member_access_expression"
+                    if self.checked.contains(self.text(n)) => {}
                 "identifier" => {
                     if let Some(path) = self.decl(n).and_then(|d| state.get(&d)) {
                         return Some(path.clone());
@@ -806,16 +1286,27 @@ impl<'t> Analysis<'_, 't> {
                             .or_else(|| n.named_child(0)),
                     );
                 }
-                "invocation_expression" => stack.extend(self.propagated(n).into_iter().rev()),
+                "invocation_expression" => {
+                    if !self.sanitizes(n) {
+                        stack.extend(self.propagated(n).into_iter().rev());
+                    }
+                }
                 "object_creation_expression" => {
                     let ty = n.child_by_field_name("type").map(|t| self.text(t));
                     if matches!(
                         ty,
-                        Some("StringBuilder" | "System.Text.StringBuilder" | "string")
+                        Some(
+                            "StringBuilder"
+                                | "System.Text.StringBuilder"
+                                | "string"
+                                | "Uri"
+                                | "System.Uri"
+                        )
                     ) {
                         stack.extend(arguments(n).into_iter().rev());
                     }
                 }
+                "binary_expression" | "interpolated_string_expression" if self.fixes_origin(n) => {}
                 "binary_expression" => {
                     let op = n.child_by_field_name("operator").map(|o| self.text(o));
                     if matches!(op, Some("+" | "??")) {
@@ -863,6 +1354,128 @@ impl<'t> Analysis<'_, 't> {
         None
     }
 
+    /// For a request (SSRF) or a redirect: a URL built after text that
+    /// already fixes where it goes, `"https://api.example.com/" + x`, or a
+    /// path on this site, `"/orders/" + id`, which a client resolves against
+    /// its base address. What follows can't change the host. The leftmost
+    /// part may be a variable or constant set to such text.
+    fn fixes_origin(&self, n: Node) -> bool {
+        matches!(self.kind, SinkKind::Ssrf | SinkKind::Redirect) && self.fixed_prefix(n, 4)
+    }
+
+    fn fixed_prefix(&self, n: Node, depth: u8) -> bool {
+        // The leftmost part of a concatenation or interpolation.
+        let mut first = n;
+        loop {
+            match first.kind() {
+                "binary_expression" => match first.child_by_field_name("left") {
+                    Some(l) => first = l,
+                    None => return false,
+                },
+                "parenthesized_expression" => match first.named_child(0) {
+                    Some(inner) => first = inner,
+                    None => return false,
+                },
+                _ => break,
+            }
+        }
+        let prefix: String = match first.kind() {
+            "string_literal" | "verbatim_string_literal" => {
+                let t = self.text(first);
+                t.trim_start_matches('@').trim_matches('"').to_string()
+            }
+            "interpolated_string_expression" => children(first)
+                .into_iter()
+                .take_while(|c| c.kind() != "interpolation")
+                .filter(|c| c.kind() == "string_content")
+                .map(|c| self.text(c))
+                .collect(),
+            // `KoboImageHost + suffix`, `newPath + query`: what the name
+            // was set to where it's declared.
+            "identifier" if depth > 0 => {
+                return self
+                    .m
+                    .decl_of(first)
+                    .and_then(|d| d.declarator)
+                    .filter(|d| d.named_child_count() > 1)
+                    .and_then(|d| d.named_child(d.named_child_count() as u32 - 1))
+                    .is_some_and(|v| self.fixed_prefix(v, depth - 1));
+            }
+            _ => return false,
+        };
+        let absolute = prefix.split_once("://").is_some_and(|(scheme, rest)| {
+            !scheme.is_empty()
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+                && rest.find('/').is_some_and(|slash| slash > 0)
+        });
+        let local =
+            prefix.starts_with('/') && prefix.chars().nth(1).is_some_and(|c| c != '/' && c != '\\');
+        absolute || local
+    }
+
+    /// A call that makes its argument safe for this analysis's sink:
+    /// `Path.GetFileName` keeps a file name, without directories.
+    fn sanitizes(&self, call: Node) -> bool {
+        self.kind == SinkKind::Path
+            && self.infer.call(call).is_some_and(|c| {
+                c.methods.iter().any(|m| {
+                    matches!(m, Found::Platform { declaring, member, .. }
+                        if declaring.name == "System.IO.Path" && member.name == "GetFileName")
+                })
+            })
+    }
+
+    /// What a function checks before using it for this analysis's sink,
+    /// by its text (`returnUrl`, `model.ReturnUrl`): what the check is for.
+    /// - redirects: `Url.IsLocalUrl(x)`, and IdentityServer's
+    ///   `IsValidReturnUrl(x)` and `GetAuthorizationContextAsync(x)`, which
+    ///   is null for a URL no client registered;
+    /// - paths: `x.StartsWith(root)`, and a helper named like a path check,
+    ///   `IsPathWithinDirectory(dir, x)`.
+    ///
+    /// A check anywhere in the function counts, not only one guarding the
+    /// sink: precision before recall.
+    fn checked_values(&self, function: Node<'t>, functions: &[Node<'t>]) -> HashSet<String> {
+        let mut out = HashSet::new();
+        let mut stack: Vec<Node<'t>> = vec![function];
+        while let Some(n) = stack.pop() {
+            if n.id() != function.id() && functions.iter().any(|f| f.id() == n.id()) {
+                continue;
+            }
+            if n.kind() == "invocation_expression"
+                && let Some(f) = n.child_by_field_name("function")
+            {
+                let name = self.text(bare_name(f.child_by_field_name("name").unwrap_or(f)));
+                let validates = match self.kind {
+                    SinkKind::Redirect => matches!(
+                        name,
+                        "IsLocalUrl" | "IsValidReturnUrl" | "GetAuthorizationContextAsync"
+                    ),
+                    SinkKind::Path => {
+                        name.starts_with("Is")
+                            && ["Path", "Within", "Inside", "Safe"]
+                                .iter()
+                                .any(|w| name.contains(w))
+                    }
+                    _ => false,
+                };
+                if validates {
+                    out.extend(arguments(n).into_iter().map(|a| self.text(a).to_string()));
+                }
+                if self.kind == SinkKind::Path && name == "StartsWith" {
+                    out.extend(
+                        f.child_by_field_name("expression")
+                            .map(|r| self.text(r).to_string()),
+                    );
+                }
+            }
+            stack.extend(children(n));
+        }
+        out
+    }
+
     /// A number, a `Guid`, an enum: nothing a request can inject through.
     fn untainted_by_type(&self, n: Node) -> bool {
         matches!(
@@ -884,15 +1497,17 @@ impl<'t> Analysis<'_, 't> {
             return None;
         }
         let receiver = n.child_by_field_name("expression")?;
-        self.infer
+        let request = self
+            .infer
             .type_of(receiver)
             .is_some_and(|t| t.is(HTTP_REQUEST))
-            .then(|| {
-                vec![Step {
-                    node: n,
-                    message: format!("the request's `{name}`"),
-                }]
-            })
+            || controller_property(self.m, self.infer, receiver, "Request", self.controller);
+        request.then(|| {
+            vec![Step {
+                node: n,
+                message: format!("the request's `{name}`"),
+            }]
+        })
     }
 
     /// What a call's result carries: its receiver and arguments, for the
@@ -1039,10 +1654,22 @@ mod tests {
                           using Microsoft.Data.SqlClient;\nusing System.Data.Common;\nusing System.Text;\n";
 
     fn issues(src: &str) -> Vec<Issue> {
+        issues_of(RULE, src)
+    }
+
+    fn issues_of(rule: &str, src: &str) -> Vec<Issue> {
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).unwrap();
         let file = analyze("t.cs", Lang::CSharp, src, &rules, &cfg, far_deadline()).unwrap();
-        file.issues.into_iter().filter(|i| i.rule == RULE).collect()
+        file.issues.into_iter().filter(|i| i.rule == rule).collect()
+    }
+
+    /// Lines the rule flags in a controller action taking `string v`.
+    fn flagged_in(rule: &str, usings: &str, body: &str) -> bool {
+        let src = format!(
+            "{USINGS}{usings}\npublic class C : Controller {{\npublic object Get(string v, int n) {{\n{body}\nreturn null;\n}}\n}}\n"
+        );
+        !issues_of(rule, &src).is_empty()
     }
 
     /// A controller action with `params` and `body`.
@@ -1295,5 +1922,253 @@ mod tests {
         assert_eq!(steps.len(), super::MAX_STEPS);
         assert_eq!(steps[0], "request parameter `v0`");
         assert_eq!(steps[super::MAX_STEPS - 1], "passed to `SqlCommand`");
+    }
+
+    #[test]
+    fn os_commands() {
+        let rule = "cs/command-injection";
+        let u = "using System.Diagnostics;";
+        for body in [
+            "Process.Start(\"sh\", \"-c 'ping \" + v + \"'\");",
+            "Process.Start(v);",
+            "var p = new ProcessStartInfo(\"git\", \"log \" + v); Process.Start(p);",
+            "var p = new ProcessStartInfo(\"git\"); p.Arguments = \"log \" + v;",
+        ] {
+            assert!(flagged_in(rule, u, body), "{body}");
+        }
+        for body in [
+            "Process.Start(\"git\", \"log -n \" + n);",
+            // One argument each, never parsed by a shell: not a sink.
+            "var p = new ProcessStartInfo(\"git\"); p.ArgumentList.Add(v);",
+        ] {
+            assert!(!flagged_in(rule, u, body), "{body}");
+        }
+    }
+
+    #[test]
+    fn file_paths() {
+        let rule = "cs/path-injection";
+        let u = "using System.IO;";
+        for body in [
+            "File.ReadAllText(\"/data/\" + v);",
+            "File.Copy(\"/data/a\", Path.Combine(\"/data\", v));",
+            "new FileStream(v, FileMode.Open);",
+            "Directory.Delete(\"/tmp/\" + v, true);",
+            "PhysicalFile(Path.GetFullPath(v), \"text/plain\");",
+        ] {
+            assert!(flagged_in(rule, u, body), "{body}");
+        }
+        for body in [
+            // A file name only, whatever the request sent.
+            "File.ReadAllText(Path.Combine(\"/data\", Path.GetFileName(v)));",
+            "File.ReadAllText(\"/data/\" + n + \".json\");",
+            "File.ReadAllText(\"/data/fixed.json\");",
+        ] {
+            assert!(!flagged_in(rule, u, body), "{body}");
+        }
+    }
+
+    #[test]
+    fn open_redirects() {
+        let rule = "cs/open-redirect";
+        for body in [
+            "return Redirect(v);",
+            "return RedirectPermanent($\"{v}/done\");",
+            "Response.Redirect(v);",
+            "return new RedirectResult(v);",
+        ] {
+            assert!(flagged_in(rule, "", body), "{body}");
+        }
+        for body in [
+            "return LocalRedirect(v);",
+            "if (Url.IsLocalUrl(v)) { return Redirect(v); }",
+            "if (!Url.IsLocalUrl(v)) { return BadRequest(); } return Redirect(v);",
+            "return Redirect(\"/orders/\" + v);",
+            "return Redirect(\"https://shop.example.com/orders/\" + v);",
+        ] {
+            assert!(!flagged_in(rule, "", body), "{body}");
+        }
+        // A path starting with `//` is another host's: not fixed.
+        assert!(flagged_in(rule, "", "return Redirect(\"//\" + v);"));
+        // A controller whose base is in another file still redirects.
+        let src = format!(
+            "{USINGS}public class AccountController : AppController {{\npublic object Done(string v) {{\nreturn Redirect(v);\n}}\n}}\n"
+        );
+        assert_eq!(issues_of(rule, &src).len(), 1);
+    }
+
+    #[test]
+    fn server_side_requests() {
+        let rule = "cs/ssrf";
+        let u = "using System.Net.Http; using System.Net.Http.Json;";
+        let client = "var http = new HttpClient();";
+        for body in [
+            "http.GetStringAsync(v);",
+            "http.GetAsync(new System.Uri(v));",
+            "http.GetFromJsonAsync<int>($\"{v}/api\");",
+            "var m = new HttpRequestMessage(HttpMethod.Get, v); http.SendAsync(m);",
+            "http.BaseAddress = new System.Uri(v);",
+        ] {
+            assert!(flagged_in(rule, u, &format!("{client} {body}")), "{body}");
+        }
+        for body in [
+            "http.GetStringAsync(\"https://api.example.com/rates?c=\" + v);",
+            "http.GetStringAsync($\"https://api.example.com/users/{v}\");",
+            "http.GetStringAsync(\"https://api.example.com/\");",
+        ] {
+            assert!(!flagged_in(rule, u, &format!("{client} {body}")), "{body}");
+        }
+        // The host itself from the request: not fixed.
+        assert!(flagged_in(
+            rule,
+            u,
+            &format!("{client} http.GetStringAsync(\"https://\" + v + \"/x\");")
+        ));
+    }
+
+    #[test]
+    fn xpath_and_ldap() {
+        let u = "using System.Xml; using System.Xml.XPath;";
+        let doc = "var doc = new XmlDocument();";
+        assert!(flagged_in(
+            "cs/xpath-injection",
+            u,
+            &format!("{doc} doc.SelectNodes(\"//u[name='\" + v + \"']\");")
+        ));
+        assert!(flagged_in(
+            "cs/xpath-injection",
+            u,
+            &format!(
+                "{doc} var nav = doc.CreateNavigator(); nav.Evaluate(\"count(//u[@id='\" + v + \"'])\");"
+            )
+        ));
+        assert!(!flagged_in(
+            "cs/xpath-injection",
+            u,
+            &format!("{doc} doc.SelectNodes(\"//u\");")
+        ));
+        let ldap = "using System.DirectoryServices;";
+        assert!(flagged_in(
+            "cs/ldap-injection",
+            ldap,
+            "new DirectorySearcher(\"(uid=\" + v + \")\");"
+        ));
+        assert!(flagged_in(
+            "cs/ldap-injection",
+            ldap,
+            "var s = new DirectorySearcher(); s.Filter = $\"(mail={v})\";"
+        ));
+        assert!(!flagged_in(
+            "cs/ldap-injection",
+            ldap,
+            "new DirectorySearcher(\"(objectClass=person)\");"
+        ));
+        // Without the namespace imported, someone else's DirectorySearcher.
+        assert!(!flagged_in(
+            "cs/ldap-injection",
+            "",
+            "new DirectorySearcher(\"(uid=\" + v + \")\");"
+        ));
+    }
+
+    #[test]
+    fn each_sink_reports_once_under_its_own_rule() {
+        let src = format!(
+            "{USINGS}using System.IO;\npublic class C : Controller {{\npublic object Get(string v, SqlConnection c) {{\n\
+             File.ReadAllText(v);\nnew SqlCommand(\"SELECT \" + v, c);\nreturn Redirect(v);\n}}\n}}\n"
+        );
+        for (rule, line) in [
+            ("cs/path-injection", 9),
+            ("cs/sql-injection", 10),
+            ("cs/open-redirect", 11),
+        ] {
+            let found = issues_of(rule, &src);
+            assert_eq!(
+                found.iter().map(|i| i.line).collect::<Vec<_>>(),
+                [line],
+                "{rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_controllers_own_request_is_a_source() {
+        for body in [
+            "var id = Request.Query[\"id\"].ToString(); new SqlCommand(\"SELECT \" + id, c);",
+            "var n = HttpContext.Request.Form[\"n\"]; new SqlCommand($\"SELECT {n}\", c);",
+        ] {
+            let src = format!(
+                "{USINGS}public class C : Controller {{\npublic void Get(SqlConnection c) {{\n{body}\n}}\n}}\n"
+            );
+            assert_eq!(issues(&src).len(), 1, "{body}");
+            assert!(flow(&issues(&src)[0])[0].starts_with("the request's"));
+        }
+        // Outside a controller, or shadowed by a local, `Request` is something else.
+        let other = format!(
+            "{USINGS}public class Job {{\npublic void Run(SqlConnection c) {{\nvar id = Request.Query[\"id\"]; new SqlCommand(\"SELECT \" + id, c);\n}}\n}}\n"
+        );
+        assert!(issues(&other).is_empty());
+        let shadowed = format!(
+            "{USINGS}public class C : Controller {{\npublic void Get(SqlConnection c, Lookup Request) {{\nvar id = Request.Query[\"id\"]; new SqlCommand(\"SELECT \" + id, c);\n}}\n}}\n"
+        );
+        // A parameter named Request is an action parameter: a source anyway,
+        // but as itself, not as the request's Query.
+        assert!(
+            issues(&shadowed)
+                .iter()
+                .all(|i| flow(i)[0] == "request parameter `Request`")
+        );
+    }
+
+    /// False positives found on real applications (BTCPay Server, eShop,
+    /// Kavita, Bitwarden), reduced to their pattern.
+    #[test]
+    fn checks_and_fixed_hosts_from_real_code() {
+        // A local path in a variable, the query string appended (BTCPay).
+        assert!(!flagged_in(
+            "cs/open-redirect",
+            "",
+            "var p = \"/server/translations\" + (n > 0 ? \"\" : $\"/{v}\"); return RedirectPermanent(p + Request.QueryString);"
+        ));
+        // A constant host (Kavita).
+        let constant = format!(
+            "{USINGS}public class K : Controller {{\nprivate const string Host = \"https://cdn.example.com/img/\";\n\
+             public object Get(string v) {{ return Redirect(Host + v); }}\n}}\n"
+        );
+        assert!(issues_of("cs/open-redirect", &constant).is_empty());
+        // A model's URL checked with IsLocalUrl, or by IdentityServer (eShop).
+        assert!(!flagged_in(
+            "cs/open-redirect",
+            "",
+            "var m = new Model(); if (Url.IsLocalUrl(m.ReturnUrl)) { return Redirect(m.ReturnUrl); }"
+        ));
+        assert!(!flagged_in(
+            "cs/open-redirect",
+            "",
+            "var ctx = interaction.GetAuthorizationContextAsync(v); if (ctx != null) { return Redirect(v); }"
+        ));
+        // A path relative to the client's base address (Bitwarden).
+        assert!(!flagged_in(
+            "cs/ssrf",
+            "using System.Net.Http;",
+            "var http = new HttpClient(); var p = $\"/Account/PreValidate?hint={v}\"; http.GetAsync(p);"
+        ));
+        // A file name checked against its directory (Kavita), or by prefix.
+        assert!(!flagged_in(
+            "cs/path-injection",
+            "using System.IO;",
+            "if (!IsPathWithinDirectory(\"/tmp\", v)) { return null; } return PhysicalFile(Path.Join(\"/tmp\", v));"
+        ));
+        assert!(!flagged_in(
+            "cs/path-injection",
+            "using System.IO;",
+            "var full = Path.GetFullPath(Path.Combine(\"/data\", v)); if (!full.StartsWith(\"/data/\")) { return null; } File.Delete(full);"
+        ));
+        // Unchecked, the same code is reported.
+        assert!(flagged_in(
+            "cs/path-injection",
+            "using System.IO;",
+            "return PhysicalFile(Path.Join(\"/tmp\", v));"
+        ));
     }
 }

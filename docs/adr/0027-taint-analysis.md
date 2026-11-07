@@ -1,8 +1,10 @@
 # ADR-0027: Taint analysis for injection vulnerabilities
 
-- Status: **accepted** (2026-11-07). T1 built: `cs/sql-injection`, with
-  the path in the JSON report and SARIF. T2 to T4, the other sinks, and
-  the server and web app showing paths, are next.
+- Status: **accepted** (2026-11-07). T1 built, for every sink kind above
+  but cross-site scripting: `cs/sql-injection`, `cs/command-injection`,
+  `cs/path-injection`, `cs/open-redirect`, `cs/ssrf`, `cs/xpath-injection`
+  and `cs/ldap-injection`, with the path in the JSON report and SARIF. T2
+  to T4 are next.
 - Date: 2026-11-07
 
 ## Context
@@ -139,6 +141,39 @@ T3's and T4's; the applications have no flow T1 should report. A query
 concatenated from a parameter, planted in one real controller action of each
 application, was found in all seven, with its path; the scan time didn't
 change.
+
+The other sinks (2026-11-07) brought three more choices:
+
+- **Sanitizers per sink, as the model says, some of them checks rather than
+  transformations.** `Path.GetFileName` makes a value safe for paths only.
+  For redirects and server-side requests, a URL whose leftmost text fixes
+  where it goes, `"https://api.example.com/" + x` or a path on this site
+  `"/orders/" + x`, directly or through a variable or constant set to it,
+  can't change the host. And a value a function checks is safe for that
+  sink: `Url.IsLocalUrl(x)` and IdentityServer's validation for redirects,
+  `x.StartsWith(root)` and helpers named like path checks for paths. A check
+  anywhere in the function counts, not only one that guards the sink:
+  precision before recall.
+- **A controller's own `Request` and `Response`** are the request's and the
+  response's, though type inference doesn't resolve them through the
+  platform's base class: unqualified, or through `HttpContext`, and not
+  shadowed by a local of that name.
+- **A file with no possible source isn't analyzed.** A controller, a
+  request or a `Map…` handler shows in the file's text; 628 of Bitwarden's
+  6,221 files do. With the seven rules, its scan takes 0.5 s more, on 12.
+
+On WebGoat.NET's port and the same seven applications, the first version
+reported 13 issues. Eight were checks or fixed hosts, which the choices
+above cover and the tests now reproduce. Five are real, by each rule's
+definition:
+- WebGoat.NET's port redirects to its login form's return URL;
+- Jellyfin's `ValidatePath` writes and deletes a file in a directory the
+  request names (an administrator's endpoint);
+- Kavita's `DownloadFilesByExtension` builds a temporary file's name from
+  the requested extension, which `/../` can leave the directory with.
+
+One line per sink kind, planted in a real controller action of each
+application, was found 42 times out of 42.
 
 ### T2: within one function, JavaScript and TypeScript
 

@@ -202,11 +202,13 @@ SonarQube's rules for JavaScript, TypeScript, Python, Java and C#; Rust is
 earlier
 ([progress](docs/sonar-parity/README.md)). It does not (yet) have:
 
-- **Taint analysis across functions.** `cs/sql-injection` follows a value
-  from an ASP.NET Core request into a SQL query within one function, and
-  shows its path ([ADR-0027](docs/adr/0027-taint-analysis.md), phase T1),
-  but not yet through the program's own helpers or across files, nor in
-  other languages. For injection elsewhere, sonda has narrower rules that
+- **Taint analysis across functions.** Seven C# rules follow a value from an
+  ASP.NET Core request into a SQL query, an OS command, a file path, a
+  redirect, an outgoing request, an XPath expression or an LDAP filter
+  within one function, and show its path
+  ([ADR-0027](docs/adr/0027-taint-analysis.md), phase T1), but not yet
+  through the program's own helpers or across files, nor in other
+  languages. For injection elsewhere, sonda has narrower rules that
   flag the risky shape itself, such as a query built from strings
   (`sql-built-dynamically` in Java, JavaScript, Python and C#). SonarQube's
   taint analysis is part of its commercial editions: the free Community
