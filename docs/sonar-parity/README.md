@@ -9,6 +9,9 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-04, against SonarQube 26.7.0.1
 - **tier** is a first guess at the analysis needed: `syntactic` (tree-sitter queries),
   `types` (a type checker, tagged type-dependent), `dataflow` (symbolic execution).
   It's confirmed when a rule is implemented.
+- This server has none of SonarQube's taint-analysis rules (repositories such as
+  `javasecurity`), which come with its commercial editions, so the counts below
+  don't include them.
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
