@@ -61,6 +61,8 @@ yaml-rust2 = { version = "0.13.0", default-features = false }
 # webpki-roots 1.0.10 (RUSTSEC-2026-0381) and ctutils 0.4.4 (RUSTSEC-2026-0385,
 # the oldest fixed release).
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
+# The version ureq uses, for checking `--ca-cert` roots; its features come from ureq.
+rustls = { version = "0.23.46", default-features = false }
 
 # Argon2 is slow by design; unoptimized, it makes the server's tests crawl.
 # Release builds are unaffected (they are optimized anyway).

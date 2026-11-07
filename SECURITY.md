@@ -113,7 +113,10 @@ still validated), and the files they explicitly name (`--config`,
   It is sent only over HTTPS, except to `localhost`. Redirects are not
   followed, so it only goes to the URL you named. URLs with embedded
   credentials are refused. Server certificates are checked against Mozilla's
-  root certificates (webpki-roots).
+  root certificates (webpki-roots), or, with `--ca-cert`, against only the
+  authorities it names, such as the one `setup-server.sh --https` creates. A
+  file holding a private key is refused there, and so is a certificate that
+  isn't a valid authority, rather than skipped.
 
 ### Known limitations
 
@@ -126,8 +129,6 @@ still validated), and the files they explicitly name (`--config`,
   would run with your privileges. Use `--sandbox require` to refuse to scan
   where the sandbox is unavailable. The parsers are fuzzed weekly with
   AddressSanitizer.
-- **Uploads to a server with a private CA fail.** `sonda upload` trusts
-  Mozilla's roots, not the operating system's store or a custom CA.
 - **File-swap check is Unix-only.** On Windows (where creating symlinks needs
   elevated rights) the identity check below is not available.
 - **The repository's own `sonda.toml` is trusted by default.** A pull request

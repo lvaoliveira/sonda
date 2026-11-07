@@ -141,6 +141,15 @@ struct ScanArgs {
         requires = "upload"
     )]
     token_file: Option<PathBuf>,
+    /// PEM file of the certificate authorities to trust for the server
+    /// instead of the public ones (default: SONDA_CA_CERT).
+    #[arg(
+        long,
+        value_name = "FILE",
+        help_heading = "Upload",
+        requires = "upload"
+    )]
+    ca_cert: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -319,6 +328,10 @@ fn upload_target(args: &ScanArgs) -> Result<Option<upload::Checked>> {
             .token_file
             .clone()
             .or_else(|| env("SONDA_TOKEN_FILE").map(PathBuf::from)),
+        ca_cert: args
+            .ca_cert
+            .clone()
+            .or_else(|| env("SONDA_CA_CERT").map(PathBuf::from)),
         pull_request: args.pull_request,
         pull_request_base: args.pull_request_base.clone(),
     }

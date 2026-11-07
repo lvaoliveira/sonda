@@ -7,6 +7,17 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Added
+
+- `--ca-cert FILE` (or `SONDA_CA_CERT`) on `sonda upload` and
+  `sonda scan --upload`: trust the certificate authorities in a PEM file
+  instead of the public ones, so a server behind a private authority, such
+  as the Caddy root `scripts/setup-server.sh --https` creates, takes uploads
+  from other machines. Only those authorities are trusted for the upload. A
+  file with a private key, or a certificate that isn't a valid authority,
+  is refused before anything is scanned. Without it, a certificate from an
+  unknown authority now says to pass `--ca-cert`.
+
 ### Changed
 
 - When the install directory isn't on `PATH`, `install.sh` prints the two

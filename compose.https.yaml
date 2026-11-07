@@ -1,7 +1,8 @@
 # HTTPS on a LAN address, through Caddy (caddy/Caddyfile). Added by
 # `scripts/setup-server.sh --https IP[:PORT]`, which keeps the address in
 # .env and lists this file in .env's COMPOSE_FILE. The server itself stays
-# on 127.0.0.1 for uploads from this machine.
+# on 127.0.0.1; other machines upload through Caddy, trusting its root with
+# `sonda upload --ca-cert caddy-root.crt`.
 services:
   sonda:
     environment:
