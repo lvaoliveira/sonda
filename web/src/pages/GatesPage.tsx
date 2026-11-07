@@ -1,10 +1,11 @@
 import { X } from 'lucide-react'
-import { type SubmitEvent, useState } from 'react'
+import { type SubmitEvent, useId, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import { useApi, useAsync } from '@/api/hooks'
 import type { GateConditionInput, GateList, GateMetric, QualityGate } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { Button } from '@/components/sonda/controls'
+import { Drawer, DrawerActions } from '@/components/sonda/Drawer'
 import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 import { GateDot, GateStatus } from '@/components/sonda/status'
 import { countOf, formatAge, shortDate } from '@/lib/format'
@@ -23,7 +24,7 @@ export function GatesPage() {
   )
 }
 
-/** What the page shows beside the list: a gate, or the editor. */
+/** The gate open in the editor's drawer, if any: a new one (copying `from`), or one being edited. */
 type Editing = { gate: QualityGate | null; from: QualityGate | null } | null
 
 function Gates({ list, isAdmin, reload }: Readonly<{ list: GateList; isAdmin: boolean; reload: () => void }>) {
@@ -60,7 +61,7 @@ function Gates({ list, isAdmin, reload }: Readonly<{ list: GateList; isAdmin: bo
           </Button>
         )}
       </PageHeader>
-      {gates.length === 0 && !editing ? (
+      {gates.length === 0 ? (
         <div className="flex flex-col gap-2 rounded-xl bg-panel-2 px-5 py-8 edge">
           <span className="font-semibold">No gates yet</span>
           <span className="text-[13px] text-fg-muted">Gates appear once a project has been analyzed, or an admin creates one.</span>
@@ -69,7 +70,7 @@ function Gates({ list, isAdmin, reload }: Readonly<{ list: GateList; isAdmin: bo
         <div className="grid grid-cols-1 gap-5 min-[1100px]:grid-cols-[300px_minmax(0,1fr)]">
           <ul aria-label="Gates" className="m-0 flex list-none flex-col gap-2 self-start p-0">
             {gates.map((g) => {
-              const on = !editing && g.id === gate?.id
+              const on = g.id === gate?.id
               const failing = g.projects.filter((p) => p.state === 'failed').length
               return (
                 <li key={g.id}>
@@ -96,23 +97,29 @@ function Gates({ list, isAdmin, reload }: Readonly<{ list: GateList; isAdmin: bo
               )
             })}
           </ul>
-          {editing ? (
-            <GateEditor
-              key={editing.gate?.id ?? 'new'}
-              gate={editing.gate}
-              from={editing.from}
-              gates={gates}
-              metrics={metrics}
-              onSaved={saved}
-              onCancel={() => setEditing(null)}
+          {gate && (
+            <GateDetail
+              gate={gate}
+              isAdmin={isAdmin}
+              onEdit={() => setEditing({ gate, from: gate })}
+              onDeleted={() => {
+                setSelected('')
+                reload()
+              }}
             />
-          ) : (
-            gate && <GateDetail gate={gate} isAdmin={isAdmin} onEdit={() => setEditing({ gate, from: gate })} onDeleted={() => {
-              setSelected('')
-              reload()
-            }} />
           )}
         </div>
+      )}
+      {editing && (
+        <GateEditor
+          key={editing.gate?.id ?? 'new'}
+          gate={editing.gate}
+          from={editing.from}
+          gates={gates}
+          metrics={metrics}
+          onSaved={saved}
+          onCancel={() => setEditing(null)}
+        />
       )}
     </>
   )
@@ -257,7 +264,6 @@ function GateDetail({ gate, isAdmin, onEdit, onDeleted }: Readonly<{ gate: Quali
   )
 }
 
-/** Creating a server gate, or editing one (ADR-0017): a name and sonda.toml's conditions. */
 /** Where a gate is defined. */
 function gateOrigin(gate: QualityGate): string {
   if (gate.server) return `On the server · changed by ${gate.server.changedBy}, ${shortDate(gate.server.changedAt)}`
@@ -271,6 +277,7 @@ type ConditionRow = GateConditionInput & { key: number }
 let conditionKeys = 0
 const conditionRow = (c: GateConditionInput): ConditionRow => ({ ...c, key: conditionKeys++ })
 
+/** Creating a server gate, or editing one (ADR-0017), in a drawer: a name and sonda.toml's conditions. */
 function GateEditor({
   gate,
   from,
@@ -287,6 +294,7 @@ function GateEditor({
   onCancel: () => void
 }>) {
   const api = useApi()
+  const formId = useId()
   const conditionsOf = (g: QualityGate | null): ConditionRow[] =>
     (g ? g.conditions : [NEW_CONDITION]).map(({ metric, op, threshold }) => conditionRow({ metric, op, threshold }))
   const [name, setName] = useState(gate?.name ?? '')
@@ -310,12 +318,15 @@ function GateEditor({
   }
   const control = 'h-8 rounded-md border-0 bg-canvas px-2 text-[13px] text-fg edge'
   return (
-    <Card
-      id="gate-editor"
+    <Drawer
+      eyebrow="Quality gates"
       title={gate ? `Edit ${gate.name}` : 'New gate'}
       subtitle={gate ? `Its ${countOf(gate.projects.length, 'project is', 'projects are')} judged again when you save` : 'A gate on the server, which projects choose in their Settings'}
+      width={680}
+      onClose={onCancel}
+      footer={<DrawerActions form={formId} submit={gate ? 'Save' : 'Create'} busy={busy ? 'Saving…' : undefined} disabled={!name.trim()} onCancel={onCancel} />}
     >
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+      <form id={formId} onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
           <input aria-label="Gate name" placeholder="Name, such as Strict" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} className={`${control} w-[260px] max-w-full`} />
           {!gate && (
@@ -378,13 +389,8 @@ function GateEditor({
             )
           })}
         </ul>
-        <div className="flex flex-wrap items-center gap-2">
+        <div>
           <Button onClick={() => setConditions((cs) => [...cs, conditionRow(NEW_CONDITION)])}>Add a condition</Button>
-          <span className="flex-1" />
-          <Button onClick={onCancel}>Cancel</Button>
-          <Button type="submit" primary disabled={busy || !name.trim()}>
-            {gate ? 'Save' : 'Create'}
-          </Button>
         </div>
         {error && (
           <p role="alert" className="m-0 text-[13px] text-crit">
@@ -392,6 +398,6 @@ function GateEditor({
           </p>
         )}
       </form>
-    </Card>
+    </Drawer>
   )
 }

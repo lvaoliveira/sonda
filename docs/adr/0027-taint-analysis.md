@@ -3,8 +3,8 @@
 - Status: **accepted** (2026-11-07). T1 built, for every sink kind above
   but cross-site scripting: `cs/sql-injection`, `cs/command-injection`,
   `cs/path-injection`, `cs/open-redirect`, `cs/ssrf`, `cs/xpath-injection`
-  and `cs/ldap-injection`, with the path in the JSON report and SARIF. T2
-  to T4 are next.
+  and `cs/ldap-injection`, with the path in the JSON report and SARIF,
+  stored by the server and shown on the issue page. T2 to T4 are next.
 - Date: 2026-11-07
 
 ## Context

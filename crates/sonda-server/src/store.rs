@@ -238,19 +238,19 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
     .await?;
     let inserted: Vec<bool> = sqlx::query_scalar(
         "INSERT INTO issues (project_id, branch, fingerprint, rule, severity, category,
-             message, path, line, col, end_line, end_col, effort_minutes, is_new,
+             message, path, line, col, end_line, end_col, effort_minutes, is_new, flow,
              first_analysis_id, last_analysis_id)
          SELECT $1, $2, u.*, $3, $3
          FROM UNNEST($4::bytea[], $5::text[], $6::text[], $7::text[], $8::text[],
                      $9::text[], $10::int4[], $11::int4[], $12::int4[], $13::int4[],
-                     $14::int4[], $15::bool[]) AS u
+                     $14::int4[], $15::bool[], $16::jsonb[]) AS u
          ON CONFLICT (project_id, branch, fingerprint) DO UPDATE SET
              rule = EXCLUDED.rule, severity = EXCLUDED.severity,
              category = EXCLUDED.category, message = EXCLUDED.message,
              path = EXCLUDED.path, line = EXCLUDED.line, col = EXCLUDED.col,
              end_line = EXCLUDED.end_line, end_col = EXCLUDED.end_col,
              effort_minutes = EXCLUDED.effort_minutes, is_new = EXCLUDED.is_new,
-             last_analysis_id = EXCLUDED.last_analysis_id,
+             flow = EXCLUDED.flow, last_analysis_id = EXCLUDED.last_analysis_id,
              fixed_analysis_id = NULL, rule_not_run = false
          RETURNING (xmax = 0)",
     )
@@ -269,6 +269,7 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
     .bind(cols.end_col)
     .bind(cols.effort_minutes)
     .bind(cols.is_new)
+    .bind(cols.flow)
     .fetch_all(&mut *tx)
     .await?;
     // Missing now: fixed, or set aside when the scan didn't run the rule.
@@ -335,6 +336,7 @@ struct IssueColumns {
     end_col: Vec<i32>,
     effort_minutes: Vec<i32>,
     is_new: Vec<bool>,
+    flow: Vec<Option<serde_json::Value>>,
 }
 
 impl IssueColumns {
@@ -352,6 +354,7 @@ impl IssueColumns {
             end_col: Vec::with_capacity(n),
             effort_minutes: Vec::with_capacity(n),
             is_new: Vec::with_capacity(n),
+            flow: Vec::with_capacity(n),
         }
     }
 
@@ -368,5 +371,6 @@ impl IssueColumns {
         self.end_col.push(i.end_col);
         self.effort_minutes.push(i.effort_minutes);
         self.is_new.push(i.is_new);
+        self.flow.push(i.flow);
     }
 }

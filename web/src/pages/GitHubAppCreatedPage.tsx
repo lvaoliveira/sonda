@@ -8,7 +8,7 @@ import { Card, Mono, PageHeader } from '@/components/sonda/layout'
 
 const CRUMBS = [
   { label: 'Administration', to: '/admin' },
-  { label: 'GitHub App', to: '/admin#github' },
+  { label: 'GitHub', to: '/admin/github' },
 ]
 
 /**
@@ -34,7 +34,7 @@ export function GitHubAppCreatedPage() {
     )
   }, [api, code, state])
 
-  const startAgain = <Link to="/admin#github">Start again from Administration</Link>
+  const startAgain = <Link to="/admin/github">Start again from Administration</Link>
   return (
     <AppShell crumbs={CRUMBS}>
       <PageHeader title="GitHub App" summary="Created on GitHub, connected here." />
@@ -61,7 +61,7 @@ export function GitHubAppCreatedPage() {
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <ExternalButton href={result.app.installUrl!}>Install it on repositories</ExternalButton>
-            <Link to="/admin#github">Back to Administration</Link>
+            <Link to="/admin/github">Back to Administration</Link>
           </div>
           <p className="m-0 text-xs text-fg-faint">Then link each project to its repository in the project's Settings, or connect a repository from Projects.</p>
         </Card>
