@@ -9,6 +9,14 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Taint analysis follows a request's value through the functions of the
+  same file (ADR-0027, T3): into a helper that builds the query or runs the
+  command, and out of one that returns it. The path names each call
+  ("passed to `Find`", "`Find`'s parameter `key`", "returned by `Build`").
+  A helper that checks its parameter, such as one calling
+  `IsPathWithinDirectory`, covers its callers. All seven C# taint rules
+  gain it; scan times are unchanged.
+
 - Six more taint rules for C# (ADR-0027, T1), each with the path its value
   took: `cs/command-injection` (S2076: `Process.Start`,
   `ProcessStartInfo`), `cs/path-injection` (S2083: `File`, `Directory`,

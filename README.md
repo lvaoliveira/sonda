@@ -205,10 +205,9 @@ earlier
 - **Taint analysis across functions.** Seven C# rules follow a value from an
   ASP.NET Core request into a SQL query, an OS command, a file path, a
   redirect, an outgoing request, an XPath expression or an LDAP filter
-  within one function, and show its path
-  ([ADR-0027](docs/adr/0027-taint-analysis.md), phase T1), but not yet
-  through the program's own helpers or across files, nor in other
-  languages. For injection elsewhere, sonda has narrower rules that
+  within a file, through the functions it calls, and show its path
+  ([ADR-0027](docs/adr/0027-taint-analysis.md), phases T1 and T3), but not
+  yet across files, nor in other languages. For injection elsewhere, sonda has narrower rules that
   flag the risky shape itself, such as a query built from strings
   (`sql-built-dynamically` in Java, JavaScript, Python and C#). SonarQube's
   taint analysis is part of its commercial editions: the free Community
