@@ -204,9 +204,8 @@ As built (2026-11-07):
   itself (`string Id() => Request.Query["id"]`). A call splices the path:
   the caller's steps, "passed to `Find`", the callee's from its parameter.
 - **Checks cross calls too.** A function that checks a parameter (T1's
-  guards) checks the matching argument of every call to it, so a helper
-  such as `HasInvalidExtension(name)` that calls `IsPathWithinDirectory`
-  covers its callers.
+  guards) checks the matching argument of every call to it, so a validation
+  helper that calls `IsPathWithinDirectory` covers its callers.
 - **Recursion isn't iterated to a fixed point,** as planned above: a function
   whose summary is being computed counts, for a call back to it, as one
   without a summary. That can only miss a path through the recursion, never

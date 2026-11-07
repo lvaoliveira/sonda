@@ -1919,7 +1919,7 @@ impl<'t> Analysis<'_, 't> {
                     );
                 }
                 // A function of this file that checks what it's given, such
-                // as `HasInvalidExtension(name)` calling `IsPathWithin`.
+                // as a validation helper that calls `IsPathWithinDirectory`.
                 if let Some(j) = self.file.callee(n)
                     && self.file.functions[j].id() != function.id()
                 {
@@ -2800,7 +2800,7 @@ mod tests {
         assert!(issues(&overloads).len() <= 1);
     }
 
-    /// Kavita's pattern: a helper checks its parameter, and the action
+    /// A helper checks its parameter, and the action
     /// returns when the check fails. What it checks is safe in the caller;
     /// what it doesn't check isn't.
     #[test]
@@ -2811,7 +2811,7 @@ mod tests {
              void Save2(string file) { System.IO.File.Create(System.IO.Path.Join(\"/data\", file)); }",
         );
         assert!(issues_of("cs/path-injection", &checked).is_empty());
-        // The helper checks one parameter and deletes the other.
+        // A parameter the helper doesn't check is still reported.
         let unchecked = controller(
             "public object Save(string name, string path) {\nif (Invalid(name, path)) return null;\nreturn null;\n}",
             "bool Invalid(string file, string full) {\nif (!IsPathWithinDirectory(\"/data\", file)) return true;\n\
