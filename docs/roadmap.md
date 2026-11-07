@@ -4,8 +4,34 @@ Work that is planned but deliberately not done yet. Each item says why it
 waits and where it plugs in, so it can be picked up without re-deriving the
 context. Significant ones get an ADR when they start.
 
-What 1.0 needs, and which of these come before or after it, is in
-[release-1.0.md](release-1.0.md).
+What 1.0 needs is in [release-1.0.md](release-1.0.md). Most of what's
+below comes after it: 1.0 is a promise that upgrades don't break anyone,
+not a feature list, and each of these can land in a 1.x release without
+breaking that promise.
+
+## Before or after 1.0
+
+| Item | 1.0 | Why |
+|---|---|---|
+| [Private CA for `sonda upload`](#smaller-items) | **before** (M5) | A server behind Caddy's own certificate can't receive uploads from another machine today. |
+| [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
+| [Page flicker while navigating](#smaller-items) | **before** (M6) | Every page shows it. |
+| [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): updating on triage | **before** (M6) | Without it, a pull request keeps showing an issue accepted on the server. |
+| [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
+| [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
+| [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
+| [More lockfile formats](#dependencies-sbom-and-known-vulnerabilities) | after | Adds ecosystems; the SBOM formats don't change. |
+| [AI auto-fix](#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests) | after | Copy as prompt covers fixing with an assistant today ([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md)). |
+| [Teams](#smaller-items), [health score change](#smaller-items) | after | New screens on data the server keeps. |
+| [Design features without data](#smaller-items) | after | Each needs its data captured first. |
+| [Rest of semantic phase S1](#smaller-items) | after | Python, Java and C/C++ binders sharpen rules that exist. |
+| [Last C# rules](#smaller-items) | after | Two rules, each needing a new layer. |
+| [OpenTelemetry traces](#smaller-items) | after | ADR-0019 decided traces wait. |
+| [Query matching on very deep nesting](#smaller-items) | after | Only code nested past 20,000 levels; the timeout bounds it. |
+| [Release-age check for Rust crates](#smaller-items) | after | Dependabot already waits 14 days for the crates it updates. |
+
+Rule results improving after 1.0 is expected, and promised as such:
+[stability.md](stability.md) leaves them out of the stability promise.
 
 ## Single sign-on (OpenID Connect)
 
@@ -291,7 +317,9 @@ server's gate.
 
 ## AI auto-fix: issues, bugs and coverage gaps as pull requests
 
-**Status:** planned (2026-10-30), nothing built. An admin adds an AI API
+**Status:** planned (2026-10-30). What's built is the step before it:
+**Copy as prompt** hands issues to the developer's own assistant
+([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md), 2026-11-04). An admin adds an AI API
 token and connects a GitHub or GitLab repository. From an issue (or a
 failing gate condition), the server asks the model for a fix and opens a
 pull request or merge request with it. A person reviews and merges; sonda
@@ -377,8 +405,7 @@ never merges anything itself.
 | **Design features without data** | The designs show monorepo components (go.work, Cargo and pnpm workspaces), saved views, and analysis stages and logs. Nothing records them. | Each needs its data captured first (the CLI or the rules), then the screen shows it. |
 | **Private CA for `sonda upload`** | Upload trusts Mozilla's roots only. | A `--ca-cert` option (SECURITY.md lists the limitation). |
 | **Safari and `Secure` cookies on http://localhost** | Sign-in is verified in Chrome only. | Test Safari; behind TLS it doesn't matter. |
-| **Regex analysis** | 35 SonarQube rules (about 85 per-language instances) read a pattern as a pattern, which tree-sitter queries cannot do ([ADR-0013](adr/0013-regex-analysis.md), proposed). | A parser for the JavaScript, Python and Java dialects, then syntax rules (R1), language rules (R2) and backtracking detection (R3). |
-| **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript with twelve rules, and for C# ([ADR-0008](adr/0008-semantic-layer.md), [ADR-0015](adr/0015-csharp.md)). | On the same model: unused private methods (S1144), variables used before their declaration (S1526). Then binders for Python, Java and C/C++. |
+| **Rest of semantic phase S1** | S1 is built for JavaScript/TypeScript and for C# ([ADR-0008](adr/0008-semantic-layer.md), [ADR-0015](adr/0015-csharp.md)). Python, Java and C/C++ rules about names work from the syntax tree alone, so they miss what a binder would resolve. | Binders for Python, Java and C/C++, on the same model. |
 | **Last C# rules** | Two SonarQube C# rules have no sonda counterpart ([ADR-0015](adr/0015-csharp.md)): invalid casts (S1944) need the values reaching a cast, and lambdas in Blazor loops (S6802) check `.razor` markup, which sonda doesn't parse. Calls resolving to a `params` overload (S3220) are ported on [ADR-0022](adr/0022-platform-types.md)'s overload resolution. | S1944 with ADR-0008's later phases. S6802 with a Razor grammar, reviewed like the C# one. |
 | **Page flicker while navigating** | Every page loads through `useAsync` (`web/src/api/hooks.ts`), which has no cache and shows a skeleton whenever its inputs change, so moving between pages or changing a filter flashes a placeholder before the content. | A small response cache in `useAsync`: show the last data for a request while it reloads, keep the previous page's data when only a filter changes, and show skeletons only after a short delay. |
 | **OpenTelemetry traces** | [ADR-0019](adr/0019-observability.md) built request ids, request logs, JSON logs and Prometheus metrics, and left traces out: the server is one process in front of PostgreSQL, so a trace would show what the request logs and `RUST_LOG=sqlx=info` already do, at the cost of the largest dependency tree considered and an outbound connection by default. | Optional OTLP export (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`) as a `tracing` layer, off unless an endpoint is set, when sonda-server calls services of its own or someone needs its spans in an existing tracing backend. |

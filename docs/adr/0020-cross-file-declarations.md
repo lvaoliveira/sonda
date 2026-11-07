@@ -1,6 +1,10 @@
 # ADR-0020: Declarations across files
 
-- Status: **proposed**
+- Status: **accepted; built** (2026-11-07). Each worker summarizes its
+  file's declarations, and the C# rules that compare with base types,
+  interfaces and partial methods read the index (`semantic/cs_index.rs`).
+  Recorded as accepted when the 1.0 plan checked each ADR's status against
+  what's built.
 - Date: 2026-11-01
 
 ## Context
