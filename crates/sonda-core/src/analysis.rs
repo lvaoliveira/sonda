@@ -248,6 +248,19 @@ impl<'a> Ctx<'a> {
             is_new: true,
             // Set once the file's issues are final; see `fingerprints`.
             fingerprint: Fingerprint::default(),
+            flow: Vec::new(),
+        }
+    }
+
+    /// A step of a taint finding's path, at a node.
+    fn flow_step(&self, node: Node, message: &str) -> crate::model::FlowStep {
+        let (start, end) = (node.start_position(), node.end_position());
+        crate::model::FlowStep {
+            message: message.to_string(),
+            line: start.row + 1,
+            column: self.lines.char_column(start.row, start.column),
+            end_line: end.row + 1,
+            end_column: self.lines.char_column(end.row, end.column),
         }
     }
 
@@ -272,6 +285,7 @@ impl<'a> Ctx<'a> {
             effort_minutes: active.rule.effort_minutes,
             is_new: true,
             fingerprint: Fingerprint::default(),
+            flow: Vec::new(),
         }
     }
 
@@ -935,6 +949,7 @@ fn project_issue(rule: &ActiveRule, path: &str, line: usize, message: String) ->
         effort_minutes: rule.rule.effort_minutes,
         is_new: true,
         fingerprint: Digest(short),
+        flow: Vec::new(),
     }
 }
 
@@ -1822,11 +1837,18 @@ fn run_semantic(
         return false;
     }
     let test_file = is_test_file(ctx.path);
-    let active: Vec<(&ActiveRule, rules::SemanticFind)> = rules
+    enum Find {
+        Nodes(rules::SemanticFind),
+        Taint(rules::TaintFind),
+    }
+    let active: Vec<(&ActiveRule, Find)> = rules
         .active
         .iter()
         .filter_map(|a| match a.rule.check {
-            Check::Semantic { langs, find } if langs.contains(&lang) => Some((a, find)),
+            Check::Semantic { langs, find } if langs.contains(&lang) => {
+                Some((a, Find::Nodes(find)))
+            }
+            Check::Taint { langs, find } if langs.contains(&lang) => Some((a, Find::Taint(find))),
             _ => None,
         })
         .filter(|(a, _)| !(test_file && a.rule.category == Category::Vulnerability))
@@ -1839,9 +1861,25 @@ fn run_semantic(
         return semantic::supports(lang);
     };
     for (a, find) in active {
-        for node in find(&model, bytes) {
-            let msg = a.rule.message.to_string();
-            issues.push(ctx.issue(a, node, msg, a.rule.effort_minutes));
+        match find {
+            Find::Nodes(find) => {
+                for node in find(&model, bytes) {
+                    let msg = a.rule.message.to_string();
+                    issues.push(ctx.issue(a, node, msg, a.rule.effort_minutes));
+                }
+            }
+            Find::Taint(find) => {
+                for finding in find(&model, bytes) {
+                    let msg = a.rule.message.to_string();
+                    let mut issue = ctx.issue(a, finding.sink, msg, a.rule.effort_minutes);
+                    issue.flow = finding
+                        .steps
+                        .iter()
+                        .map(|s| ctx.flow_step(s.node, &s.message))
+                        .collect();
+                    issues.push(issue);
+                }
+            }
         }
     }
     false
@@ -2058,6 +2096,23 @@ pub(crate) fn check_invariants(a: &FileAnalysis) -> Result<(), String> {
         return Err(format!(
             "{} at {}:{} is outside the file",
             i.rule, i.line, i.column
+        ));
+    }
+    if let Some((i, s)) = a.issues.iter().find_map(|i| {
+        i.flow
+            .iter()
+            .find(|s| {
+                !inside(s.line)
+                    || !inside(s.end_line)
+                    || s.end_line < s.line
+                    || s.column < 1
+                    || s.end_column < 1
+            })
+            .map(|s| (i, s))
+    }) {
+        return Err(format!(
+            "{}'s flow step at {}:{} is outside the file",
+            i.rule, s.line, s.column
         ));
     }
     if !a.code_lines.windows(2).all(|w| w[0] < w[1]) {

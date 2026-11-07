@@ -206,6 +206,71 @@ fn is_hex(v: &Value, len: usize) -> bool {
     })
 }
 
+/// A taint finding (ADR-0027) carries its path to the JSON report as
+/// `flow`, and to SARIF as `codeFlows`, through the worker processes.
+#[test]
+fn taint_findings_carry_their_path_in_json_and_sarif() {
+    let dir = project(&[(
+        "Orders.cs",
+        "using Microsoft.AspNetCore.Mvc;\nusing Microsoft.Data.SqlClient;\n\
+         public class Orders : ControllerBase {\n\
+         public void Get(string id, SqlConnection c) {\n\
+         var q = \"SELECT * FROM o WHERE id = \" + id;\n\
+         var cmd = new SqlCommand(q, c);\n\
+         }\n}\n",
+    )]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    let issue = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["rule"] == "cs/sql-injection")
+        .expect("the injection is reported");
+    let steps: Vec<(&str, u64)> = issue["flow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["message"].as_str().unwrap(), s["line"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            ("request parameter `id`", 4),
+            ("concatenated into `q`", 5),
+            ("passed to `SqlCommand`", 6)
+        ]
+    );
+    // Other issues have no flow at all, not an empty one.
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["rule"] != "cs/sql-injection")
+            .all(|i| i.get("flow").is_none())
+    );
+
+    let sarif = json(&run(&["scan", "--no-gate", "-f", "sarif"], dir.path()));
+    let result = sarif["runs"][0]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["ruleId"] == "cs/sql-injection")
+        .unwrap();
+    let locations = result["codeFlows"][0]["threadFlows"][0]["locations"]
+        .as_array()
+        .unwrap();
+    assert_eq!(locations.len(), 3);
+    assert_eq!(
+        locations[0]["location"]["message"]["text"],
+        "request parameter `id`"
+    );
+    assert_eq!(
+        locations[2]["location"]["physicalLocation"]["region"]["startLine"],
+        6
+    );
+}
+
 #[test]
 fn sarif_report_is_valid_2_1_0() {
     let dir = project(&[("app.js", "eval(x);\n")]);

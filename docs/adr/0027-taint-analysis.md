@@ -1,6 +1,8 @@
 # ADR-0027: Taint analysis for injection vulnerabilities
 
-- Status: **proposed**
+- Status: **accepted** (2026-11-07). T1 built: `cs/sql-injection`, with
+  the path in the JSON report and SARIF. T2 to T4, the other sinks, and
+  the server and web app showing paths, are next.
 - Date: 2026-11-07
 
 ## Context
@@ -108,6 +110,35 @@ taint findings (and a warning), never a guess.
   invents a path through code sonda didn't read.
 - A finding is a source reaching a sink argument with no sanitizer for that
   sink on the way.
+
+As built (2026-11-07), three choices the text above left open:
+
+- **Controllers are found as ASP.NET Core finds them:** a public class named
+  `…Controller`, or marked `[Controller]` or `[ApiController]`, or deriving
+  from `ControllerBase`. Projects derive their controllers from a base of
+  their own, in another file, which T1 can't see: in Jellyfin, nopCommerce
+  and Kavita, most of them. An action's parameters are sources, except
+  `[FromServices]` ones; a minimal API handler's are when they're strings
+  or bound by a `[From…]` attribute, since its other parameters are mostly
+  services.
+- **Types no injection fits through clear the taint,** as a sanitizer for
+  every sink: numbers, `bool`, `Guid`, dates and times, enums, and nullable
+  ones, so `int.Parse(id)` is safe by its type. Not every value type:
+  `char` can be a quote, and `StringValues` holds strings.
+- **Provider types match by name and imported namespace.** ADO.NET providers
+  (`Microsoft.Data.SqlClient`, Npgsql, MySQL, SQLite, Oracle), EF Core and
+  Dapper ship as packages, outside the platform's declarations: a name counts
+  when its namespace is imported and the file declares no type of that name.
+  A variable set to `x.CreateCommand()` is a command too.
+
+Measured on WebGoat.NET (OWASP's, and its ASP.NET Core port) and on seven
+applications (Bitwarden's server, Jellyfin, BTCPay Server, eShop,
+nopCommerce, Squidex, Kavita; 18,000 C# files): no findings. The benchmark's
+injections all pass through a repository class in another file, which is
+T3's and T4's; the applications have no flow T1 should report. A query
+concatenated from a parameter, planted in one real controller action of each
+application, was found in all seven, with its path; the scan time didn't
+change.
 
 ### T2: within one function, JavaScript and TypeScript
 

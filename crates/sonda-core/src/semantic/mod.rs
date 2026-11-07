@@ -10,6 +10,7 @@ mod cs;
 pub(crate) mod cs_cfg;
 pub(crate) mod cs_index;
 pub(crate) mod cs_infer;
+pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
 mod js;
 

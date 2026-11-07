@@ -1036,7 +1036,7 @@ impl<'m, 't> Infer<'m, 't> {
 
     /// A platform type's kind, or a local one's: "class", "struct",
     /// "interface", "enum" or "delegate".
-    fn kind(&self, ty: &Ty) -> Option<&str> {
+    pub(crate) fn kind(&self, ty: &Ty) -> Option<&str> {
         match ty {
             Ty::Named {
                 key, local: false, ..

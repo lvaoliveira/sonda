@@ -248,6 +248,33 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "cs/sql-injection",
+        name: "SQL queries should not be built from a request's values",
+        description: "A value from the request (a query string, a form field, a route value, an action's \
+                      parameter) that reaches a query's text lets whoever sends the request change what the \
+                      query does. Pass it as a parameter instead. The issue shows the path the value took \
+                      (ADR-0027).",
+        message: "Don't build this query from the request's values; pass them as parameters.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S3649")],
+        check: Check::Taint {
+            langs: CSHARP,
+            find: sql_injection,
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "using Microsoft.AspNetCore.Mvc; using Microsoft.Data.SqlClient; \
+                  public class Orders : ControllerBase { public void Get(string id, SqlConnection c) { \
+                  var q = \"SELECT * FROM orders WHERE id = '\" + id + \"'\"; var cmd = new SqlCommand(q, c); } }",
+            good: "using Microsoft.AspNetCore.Mvc; using Microsoft.Data.SqlClient; \
+                   public class Orders : ControllerBase { public void Get(string id, SqlConnection c) { \
+                   var cmd = new SqlCommand(\"SELECT * FROM orders WHERE id = @id\", c); \
+                   cmd.Parameters.AddWithValue(\"@id\", id); } }",
+        }),
+    },
+    Rule {
         id: "cs/cookie-not-secure",
         name: "Cookies should be sent over HTTPS only",
         description: "A cookie without `Secure` is also sent over plain HTTP, where anyone on the network can \
@@ -930,6 +957,14 @@ fn is_constant_string(expr: Node) -> bool {
 
 fn first_argument(call: Node) -> Option<Node> {
     cs_call_arguments(call).into_iter().next()
+}
+
+/// A request's value reaching a query's text (ADR-0027, T1).
+fn sql_injection<'t>(
+    m: &crate::semantic::Model<'t>,
+    src: &[u8],
+) -> Vec<crate::semantic::cs_taint::Finding<'t>> {
+    crate::semantic::cs_taint::find(m, src, crate::semantic::cs_taint::SinkKind::Sql)
 }
 
 fn sql_built_dynamically(node: Node, src: &[u8]) -> bool {
