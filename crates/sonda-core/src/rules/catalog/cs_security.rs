@@ -1078,8 +1078,8 @@ macro_rules! taint_rule_fn {
         fn $name<'t>(
             m: &crate::semantic::Model<'t>,
             src: &[u8],
-        ) -> Vec<crate::semantic::cs_taint::Finding<'t>> {
-            crate::semantic::cs_taint::find(m, src, crate::semantic::cs_taint::SinkKind::$kind)
+        ) -> Vec<crate::semantic::taint::Finding<'t>> {
+            crate::semantic::cs_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
         }
     };
 }
@@ -1094,8 +1094,8 @@ taint_rule_fn!(ldap_injection, Ldap);
 fn sql_injection<'t>(
     m: &crate::semantic::Model<'t>,
     src: &[u8],
-) -> Vec<crate::semantic::cs_taint::Finding<'t>> {
-    crate::semantic::cs_taint::find(m, src, crate::semantic::cs_taint::SinkKind::Sql)
+) -> Vec<crate::semantic::taint::Finding<'t>> {
+    crate::semantic::cs_taint::find(m, src, crate::semantic::taint::SinkKind::Sql)
 }
 
 fn sql_built_dynamically(node: Node, src: &[u8]) -> bool {
