@@ -3,8 +3,9 @@
 - Status: **accepted; S1 in progress.** It's built in phases, after the
   first syntactic rule batches of [ADR-0007](0007-sonarqube-rule-parity.md).
   S1 is built for JavaScript/TypeScript (`semantic/`), with twelve rules,
-  and for C# ([ADR-0015](0015-csharp.md)), whose declarations also keep
-  their written types; the rest of S1 is on the [roadmap](../roadmap.md).
+  for C# ([ADR-0015](0015-csharp.md)), whose declarations also keep
+  their written types, and for Python (`semantic/py.rs`), for its taint
+  analysis ([ADR-0027](0027-taint-analysis.md)); the rest of S1 is on the [roadmap](../roadmap.md).
   S2 and S3 are built for C# (`semantic/cs_cfg.rs`): a control-flow graph
   per function and liveness over it, with four rules. S4 is decided by
   [ADR-0022](0022-platform-types.md), and its three steps are built for C#.

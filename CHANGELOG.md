@@ -18,6 +18,12 @@ file, the report formats and the public library API.
   longer at most. A return URL checked by a helper named like
   `IsLocalUrl` (`CheckIsLocalUrl`) now counts as checked.
 
+- Scopes and symbols for Python (ADR-0008, S1): which binding each name
+  refers to, with Python's rules (a name bound anywhere in a function is
+  the function's, class bodies aren't visible in their methods, `global`,
+  `nonlocal`, `:=` and comprehensions' scopes). It's the base of Python's
+  taint analysis; no rule uses it yet.
+
 - The server stores each step's file in a path that crosses files, and the
   issue page shows it (`routes.js:3`, the whole path on hover), with the
   step's line of code from that file. An upload whose path names a file
