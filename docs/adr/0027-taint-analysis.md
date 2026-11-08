@@ -7,7 +7,9 @@
   stored by the server and shown on the issue page. T3 built: through the
   functions of the same file. T2 built, for JavaScript and TypeScript:
   `js/sql-injection`, `js/command-injection`, `js/path-injection`,
-  `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 is next.
+  `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 built for
+  JavaScript and TypeScript: through other files' functions, with each
+  step of the path in its file; C# is next.
 - Date: 2026-11-07
 
 ## Context
@@ -314,6 +316,71 @@ re-checks only the functions whose calls resolve to another file's summary.
 C# resolves calls with `cs_index`; JavaScript through relative imports.
 Calls into dependencies stay modeled by the tables, not analyzed: sonda
 doesn't read `node_modules` or NuGet packages.
+
+As built for JavaScript and TypeScript (2026-11-08), with one change to the
+plan: **no second pass.** Re-checking callers would parse their files
+again, in a second round of workers. Instead each worker reports, as facts,
+everything the scanner needs to join paths without the syntax, and the
+scanner joins them in the project pass (`semantic/taint_project.rs`), as
+ADR-0020's rules join declarations. That's SonarQube's design too, as far
+as its documentation shows: its language analyzers export each method's
+control-flow graph, and a separate engine follows taint across all of them.
+Summaries are the smaller step; if they prove too coarse, workers can
+export a compact graph per function instead, and only the project pass
+changes.
+
+- **What a file reports, per taint rule, as one JSON fact:**
+  - the summary of each function it exports (ES and CommonJS exports,
+    exported classes' methods and default-exported objects' members):
+    which parameters reach a sink, the return value, or another file's
+    function, each with its path, and a request's value it returns itself;
+  - each request's value it passes to another file's function, with its
+    path to the call;
+  - each sink another file's function's result reaches, with the request's
+    values in that call's arguments and the path after it.
+
+  Positions are resolved in the worker, where the source is; so are each
+  sink's fingerprint and its line's suppression comment.
+- **Calls resolve through relative imports:** named, default and namespace
+  imports, `require`, an instance made with `new`, and NestJS's injected
+  services (`this.users.find(x)`, `users` a constructor's parameter typed
+  with an imported class). `./users` is `users.ts`, `users.js`,
+  `users/index.ts`…, and `./users.js` is `users.ts` too. A package's import
+  isn't the project's, and an alias such as `@/lib` isn't resolved yet.
+- **The project pass** follows a value through up to four files, and a
+  result back through one. Each sink is reported once, in its file, by its
+  shortest path, and each step of the path names its file when it isn't
+  the issue's (`path` in the JSON report, its own location in SARIF).
+- **Within one file too:** the same summaries make a helper of the file a
+  flow, as T3 did for C#: "passed to `find`", "`find`'s parameter `id`",
+  "returned by `build`".
+- **A result's SQL:** a query method's text must read as SQL, and when the
+  text is another file's function's result, that function's summary says
+  whether it does.
+- **Not seen:** a response passed to another file's helper under a name
+  other than `res`, `response`, `reply` or `ctx`; a request object passed
+  to another file's function (its values are, its members aren't followed
+  through the call); and flows through a function's own fields.
+- **Cost:** summaries are computed once per function and per rule, over
+  the writes and calls of that function only. A file stops following
+  values past a fixed budget of expressions, so no file costs unbounded
+  time.
+
+Measured on the same corpus as T2:
+
+- **Recall across files:** a helper module planted next to a real handler
+  of eight of the applications, one exported function per sink kind, each
+  called with a request's value: **48 found of 48**, each in the helper
+  with its path starting in the handler.
+- **Precision:** no new issue in the nine applications. The first version
+  reported two through same-file helpers, both false: a folder its caller
+  checked with `isPathInside` before passing it (checks now apply where a
+  value is passed on, as at a sink), and multer's `req.file.path`, a path
+  the server chose (an upload's sources are now only its names:
+  `originalname`, `name`).
+- **Cost:** scans take 0.6 s more than T2's at most (Strapi, 5.4 s to
+  6.0 s); with the taint rules off and on, the largest difference is 22%,
+  on the same application.
 
 ### The rules
 

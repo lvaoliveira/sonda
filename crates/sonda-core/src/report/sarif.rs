@@ -92,7 +92,10 @@ pub fn render(r: &Report) -> String {
                         json!({
                             "location": {
                                 "physicalLocation": {
-                                    "artifactLocation": { "uri": i.path, "uriBaseId": "%SRCROOT%" },
+                                    "artifactLocation": {
+                                        "uri": s.path.as_deref().unwrap_or(&i.path),
+                                        "uriBaseId": "%SRCROOT%",
+                                    },
                                     "region": {
                                         "startLine": s.line,
                                         "startColumn": s.column,

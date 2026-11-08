@@ -15,6 +15,7 @@ pub(crate) mod dotnet;
 mod js;
 pub(crate) mod js_taint;
 pub(crate) mod taint;
+pub(crate) mod taint_project;
 
 use crate::lang::Lang;
 use std::collections::HashMap;

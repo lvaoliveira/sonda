@@ -271,6 +271,73 @@ fn taint_findings_carry_their_path_in_json_and_sarif() {
     );
 }
 
+/// A path across files (ADR-0027, T4): the issue is at the sink, in its
+/// file, and the steps in the caller's file name it, in JSON and SARIF.
+#[test]
+fn taint_paths_cross_files_in_json_and_sarif() {
+    let dir = project(&[
+        (
+            "src/routes.js",
+            "const { findUser } = require('./users');\n\
+             app.get('/u', (req, res) => {\n  findUser(req.query.id);\n});\n",
+        ),
+        (
+            "src/users.js",
+            "exports.findUser = (id) => {\n  return db.query('SELECT * FROM u WHERE id = ' + id);\n};\n",
+        ),
+    ]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    let issue = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["rule"] == "js/sql-injection")
+        .expect("the injection is reported");
+    assert_eq!(issue["path"], "src/users.js");
+    let steps: Vec<(Option<&str>, &str)> = issue["flow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["path"].as_str(), s["message"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (Some("src/routes.js"), "the request's `query`"),
+            (Some("src/routes.js"), "passed to `findUser`"),
+            (None, "`findUser`'s parameter `id`"),
+            (None, "passed to `query`"),
+        ]
+    );
+
+    let sarif = json(&run(&["scan", "--no-gate", "-f", "sarif"], dir.path()));
+    let result = sarif["runs"][0]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["ruleId"] == "js/sql-injection")
+        .unwrap();
+    let uris: Vec<&str> = result["codeFlows"][0]["threadFlows"][0]["locations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            l["location"]["physicalLocation"]["artifactLocation"]["uri"]
+                .as_str()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        uris,
+        [
+            "src/routes.js",
+            "src/routes.js",
+            "src/users.js",
+            "src/users.js"
+        ]
+    );
+}
+
 #[test]
 fn sarif_report_is_valid_2_1_0() {
     let dir = project(&[("app.js", "eval(x);\n")]);

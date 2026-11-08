@@ -27,9 +27,14 @@
 //! Sinks resolve through the file's imports, the way C#'s resolve by type:
 //! `exec` is a sink when it's `child_process`'s, whatever it's called here.
 
-use super::taint::{Finding, SinkKind, Step, cap};
+use super::taint::{
+    CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
+    cap,
+};
 use super::{DeclId, Model};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use tree_sitter::Node;
 
 /// Rounds of the fixed point; past it, the file reports nothing.
@@ -40,6 +45,24 @@ const MAX_WRITES: usize = 50_000;
 const MAX_DEPTH: u32 = 64;
 
 type Path<'t> = Vec<Step<'t>>;
+
+/// A sink's name, and the arguments that take the value.
+type SinkCall<'t> = (String, Vec<Node<'t>>);
+
+/// A path that starts at another file's function's result: a request's
+/// value only if that function returns one, which the project pass
+/// decides. Its first step is the call, with this message.
+const FROM_CALL: &str = "\u{1}";
+/// Functions summarized per file, and summaries exported, at most.
+const MAX_SUMMARIES: usize = 256;
+/// Expressions followed for their taint in one file, at most: past it,
+/// what's left is untainted, so a pathological file costs a bounded time
+/// and loses only findings, as a file past its deadline does.
+const MAX_EVALUATIONS: u64 = 5_000_000;
+
+fn from_call(path: &Path) -> bool {
+    path.first().is_some_and(|s| s.message == FROM_CALL)
+}
 
 // ---------------------------------------------------------------- tables
 
@@ -60,9 +83,11 @@ const REQUEST_MEMBERS: &[&str] = &[
     "href",
     "nextUrl",
     "searchParams",
-    "file",
-    "files",
 ];
+
+/// An uploaded file's members its sender chose: multer's and formidable's
+/// original name, express-fileupload's `name`.
+const UPLOAD_NAMES: &[&str] = &["originalname", "originalFilename", "name"];
 
 /// A request's methods that return what its sender chose: a header
 /// (`req.get`, `req.header`), a parameter, or the body.
@@ -425,42 +450,75 @@ fn normalize_module(m: &str) -> &str {
 
 // ---------------------------------------------------------------- entry
 
-pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding<'t>> {
-    if !might_have_sources(src) || !might_have_sinks(src, kind) {
-        return Vec::new();
+pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
+    // A file without a sink can still pass a value on to another file's
+    // function, through a relative import, or export a function that
+    // builds what another file passes to one.
+    let has = |n: &[u8]| src.windows(n.len()).any(|w| w == n);
+    if !(might_have_sinks(src, kind) || has(b"./") || has(b"export")) {
+        return TaintResult::default();
     }
     let Some(root) = m.root else {
-        return Vec::new();
+        return TaintResult::default();
     };
     let Some(cx) = Cx::new(m, src, kind, root) else {
-        return Vec::new();
+        return TaintResult::default();
     };
-    let Some(state) = cx.run() else {
-        return Vec::new();
+    let Some(state) = cx.run_scoped(cx.initial.clone_with(true), None) else {
+        return TaintResult::default();
     };
-    cx.findings(&state)
-}
-
-/// Whether the file can have a request's value at all. Most can't.
-fn might_have_sources(src: &[u8]) -> bool {
-    let has = |n: &[u8]| src.windows(n.len()).any(|w| w == n);
-    // `req`, `request`, `ctx`, a destructured handler's `{ query, body,
-    // params }`, NestJS's `@Query(`.
-    [
-        b"req".as_slice(),
-        b"ctx",
-        b"query",
-        b"body",
-        b"params",
-        b"headers",
-        b"cookies",
-        b"Query(",
-        b"Param(",
-        b"Body(",
-        b"Headers(",
-    ]
-    .iter()
-    .any(|n| has(n))
+    let reached = cx.reached(None, &state);
+    let mut findings: Vec<Finding<'t>> = Vec::new();
+    let mut facts = Facts::default();
+    for r in reached {
+        match r {
+            Reach::Sink { path, sink } => findings.push(Finding {
+                sink,
+                steps: cap(path),
+            }),
+            Reach::Open {
+                path,
+                callee,
+                arg,
+                call,
+            } => facts.calls.push(CallFact {
+                steps: cap(path),
+                call,
+                callee,
+                arg,
+            }),
+            Reach::FromCall {
+                call,
+                after,
+                sink,
+                needs_sql,
+            } => {
+                if let Some(callee) = cx.callee_of(call) {
+                    let args = arguments(call)
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, a)| {
+                            cx.taint(a, &state, 0)
+                                .filter(|p| !from_call(p))
+                                .map(|p| (i, cap(p)))
+                        })
+                        .collect();
+                    facts.returns.push(ReturnFact {
+                        call,
+                        callee,
+                        args,
+                        after: cap(after),
+                        sink,
+                        needs_sql,
+                    });
+                }
+            }
+        }
+    }
+    findings.sort_by_key(|f| (f.sink.start_byte(), f.steps.len()));
+    findings.dedup_by_key(|f| f.sink.id());
+    facts.summaries = cx.exported_summaries(&state);
+    TaintResult { findings, facts }
 }
 
 /// Whether the file can have a sink of this kind.
@@ -499,6 +557,8 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
 struct Import {
     module: String,
     member: Option<String>,
+    /// `import x from 'm'`: the module's default export.
+    default: bool,
 }
 
 /// A write of a value into a variable or a pattern.
@@ -515,6 +575,54 @@ struct Write<'t> {
 struct State<'t> {
     tainted: HashMap<DeclId, Path<'t>>,
     requests: HashSet<DeclId>,
+    /// Whether other files' functions' results count, as paths that start
+    /// at the call: for the file's own run, not a summary's.
+    from_calls: bool,
+}
+
+impl<'t> State<'t> {
+    fn clone_with(&self, from_calls: bool) -> Self {
+        State {
+            tainted: self.tainted.clone(),
+            requests: self.requests.clone(),
+            from_calls,
+        }
+    }
+}
+
+/// What a value reaches: a sink, another file's function, or a sink by way
+/// of another file's function's result.
+enum Reach<'t> {
+    Sink {
+        path: Path<'t>,
+        sink: Node<'t>,
+    },
+    Open {
+        path: Path<'t>,
+        callee: Callee,
+        arg: usize,
+        call: Node<'t>,
+    },
+    FromCall {
+        call: Node<'t>,
+        after: Path<'t>,
+        sink: Node<'t>,
+        /// A query method whose text this file doesn't show as SQL: the
+        /// other function's result has to read as SQL.
+        needs_sql: bool,
+    },
+}
+
+/// What a function's parameters reach, each analyzed alone (T3's summary,
+/// for JavaScript).
+#[derive(Default)]
+struct FnSummary<'t> {
+    /// Its return value reads as SQL: `'SELECT … ' + id`.
+    returns_sql: bool,
+    to_return: Vec<(usize, Path<'t>)>,
+    to_sink: Vec<(usize, Path<'t>, Node<'t>)>,
+    /// The path ends with "passed to `f`" at the call.
+    to_call: Vec<(usize, Path<'t>, Callee, usize)>,
 }
 
 struct Cx<'a, 't> {
@@ -531,6 +639,22 @@ struct Cx<'a, 't> {
     writes: Vec<Write<'t>>,
     /// Every call and `new`, for the sinks.
     calls: Vec<Node<'t>>,
+    /// Each function's index in the model, by its node.
+    fn_index: HashMap<usize, usize>,
+    summaries: RefCell<HashMap<usize, Rc<FnSummary<'t>>>>,
+    /// The writes' indices by their target's position, and the calls'
+    /// (sorted by position), so a function's are a range.
+    writes_by_start: Vec<usize>,
+    /// Each variable's writes, for what it was set to.
+    writes_by_decl: HashMap<DeclId, Vec<usize>>,
+    /// What each handler checks, and each call's sink, computed once.
+    checks: RefCell<HashMap<usize, Rc<HashSet<String>>>>,
+    sinks: RefCell<HashMap<usize, Option<SinkCall<'t>>>>,
+    /// Expressions followed so far, against `MAX_EVALUATIONS`.
+    evaluations: std::cell::Cell<u64>,
+    /// Functions whose summary is being computed: a call back to one
+    /// counts as one without a summary.
+    busy: RefCell<HashSet<usize>>,
 }
 
 impl<'a, 't> Cx<'a, 't> {
@@ -551,10 +675,35 @@ impl<'a, 't> Cx<'a, 't> {
             initial: State::default(),
             writes: Vec::new(),
             calls: Vec::new(),
+            fn_index: m
+                .functions
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.node.id(), i))
+                .collect(),
+            summaries: RefCell::new(HashMap::new()),
+            busy: RefCell::new(HashSet::new()),
+            writes_by_start: Vec::new(),
+            writes_by_decl: HashMap::new(),
+            checks: RefCell::new(HashMap::new()),
+            sinks: RefCell::new(HashMap::new()),
+            evaluations: std::cell::Cell::new(0),
         };
         cx.walk(root)?;
         for f in &m.functions {
             cx.handler(f.node, &f.params);
+        }
+        cx.calls.sort_by_key(|c| c.start_byte());
+        let mut by_start: Vec<usize> = (0..cx.writes.len()).collect();
+        by_start.sort_by_key(|&i| cx.writes[i].target.start_byte());
+        cx.writes_by_start = by_start;
+        for (i, w) in cx.writes.iter().enumerate() {
+            let t = unwrap(w.target);
+            if t.kind() == "identifier"
+                && let Some(d) = cx.decl(t)
+            {
+                cx.writes_by_decl.entry(d).or_default().push(i);
+            }
         }
         Some(cx)
     }
@@ -587,8 +736,9 @@ impl<'a, 't> Cx<'a, 't> {
                         if name.kind() == "identifier"
                             && let Some(import) = self.import_of(value)
                         {
-                            let (module, member) = (import.module.clone(), import.member.clone());
-                            self.add_import(name, &module, member);
+                            let (module, member, default) =
+                                (import.module.clone(), import.member.clone(), import.default);
+                            self.add_import_as(name, &module, member, default);
                         }
                         self.writes.push(Write {
                             target: name,
@@ -657,7 +807,12 @@ impl<'a, 't> Cx<'a, 't> {
                 "import_clause" | "namespace_import" | "named_imports" => {
                     stack.extend(children(c));
                 }
-                "identifier" => self.add_import(c, &module, None),
+                // `import x from 'm'`, directly in the clause; a namespace's
+                // name is in `namespace_import`.
+                "identifier" => {
+                    let default = c.parent().is_some_and(|p| p.kind() == "import_clause");
+                    self.add_import_as(c, &module, None, default);
+                }
                 "import_specifier" => {
                     let Some(name) = c.child_by_field_name("name") else {
                         continue;
@@ -681,12 +836,17 @@ impl<'a, 't> Cx<'a, 't> {
     }
 
     fn add_import(&mut self, local: Node, module: &str, member: Option<String>) {
+        self.add_import_as(local, module, member, false);
+    }
+
+    fn add_import_as(&mut self, local: Node, module: &str, member: Option<String>, default: bool) {
         if let Some(d) = self.decl(local) {
             self.imports.insert(
                 d,
                 Import {
                     module: module.to_string(),
                     member,
+                    default,
                 },
             );
         }
@@ -745,7 +905,7 @@ impl<'a, 't> Cx<'a, 't> {
 
     fn import_of(&self, n: Node) -> Option<&Import> {
         let n = unwrap(n);
-        (n.kind() == "identifier")
+        matches!(n.kind(), "identifier" | "type_identifier")
             .then(|| self.decl(n))
             .flatten()
             .and_then(|d| self.imports.get(&d))
@@ -898,14 +1058,29 @@ impl<'a, 't> Cx<'a, 't> {
 
     // ------------------------------------------------------------ fixed point
 
-    fn run(&self) -> Option<State<'t>> {
-        let mut state = State {
-            tainted: self.initial.tainted.clone(),
-            requests: self.initial.requests.clone(),
+    /// The fixed point from `state`, over the writes in `scope` (a
+    /// function, for a summary), or the whole file's.
+    fn run_scoped(&self, mut state: State<'t>, scope: Option<Node>) -> Option<State<'t>> {
+        let writes: Vec<&Write<'t>> = match scope {
+            None => self.writes.iter().collect(),
+            Some(s) => {
+                let start = |i: &usize| self.writes[*i].target.start_byte();
+                let lo = self
+                    .writes_by_start
+                    .partition_point(|i| start(i) < s.start_byte());
+                let hi = self
+                    .writes_by_start
+                    .partition_point(|i| start(i) < s.end_byte());
+                self.writes_by_start[lo..hi]
+                    .iter()
+                    .map(|&i| &self.writes[i])
+                    .filter(|w| within(w.target, s))
+                    .collect()
+            }
         };
         for _ in 0..MAX_ROUNDS {
             let mut changed = false;
-            for w in &self.writes {
+            for w in &writes {
                 changed |= self.bind(w, &mut state);
             }
             if !changed {
@@ -926,12 +1101,15 @@ impl<'a, 't> Cx<'a, 't> {
                 if !w.adds && self.is_request(w.value, state) {
                     return state.requests.insert(decl);
                 }
-                if state.tainted.contains_key(&decl) {
+                if settled(state, decl) {
                     return false;
                 }
                 let Some(mut path) = self.taint(w.value, state, 0) else {
                     return false;
                 };
+                if !replaces(state, decl, &path) {
+                    return false;
+                }
                 let name = self.text(target);
                 let into = if w.adds && w.target.parent().is_some_and(|p| p.kind() == "arguments") {
                     format!("added to `{name}`")
@@ -971,7 +1149,7 @@ impl<'a, 't> Cx<'a, 't> {
                 let Some(decl) = self.decl(object) else {
                     return false;
                 };
-                if state.tainted.contains_key(&decl)
+                if settled(state, decl)
                     || state.requests.contains(&decl)
                     || self.handler_params.contains(&decl)
                 {
@@ -980,6 +1158,9 @@ impl<'a, 't> Cx<'a, 't> {
                 let Some(mut path) = self.taint(w.value, state, 0) else {
                     return false;
                 };
+                if !replaces(state, decl, &path) {
+                    return false;
+                }
                 path.push(Step {
                     node: target,
                     message: format!("assigned to `{}`", self.text(target)),
@@ -1007,7 +1188,7 @@ impl<'a, 't> Cx<'a, 't> {
             let Some(decl) = self.decl(name) else {
                 continue;
             };
-            if state.tainted.contains_key(&decl) {
+            if settled(state, decl) {
                 continue;
             }
             if from_request {
@@ -1026,7 +1207,7 @@ impl<'a, 't> Cx<'a, 't> {
                 } else if REQUEST_OBJECTS.contains(&key.as_str()) {
                     changed |= state.requests.insert(decl);
                 }
-            } else if let Some(path) = &carried {
+            } else if let Some(path) = carried.as_ref().filter(|p| replaces(state, decl, p)) {
                 let mut path = path.clone();
                 path.push(Step {
                     node: name,
@@ -1057,7 +1238,9 @@ impl<'a, 't> Cx<'a, 't> {
 
     /// The path of the first request's value an expression carries, or None.
     fn taint(&self, n: Node<'t>, state: &State<'t>, depth: u32) -> Option<Path<'t>> {
-        if depth > MAX_DEPTH {
+        let evaluations = self.evaluations.get() + 1;
+        self.evaluations.set(evaluations);
+        if depth > MAX_DEPTH || evaluations > MAX_EVALUATIONS {
             return None;
         }
         let d = depth + 1;
@@ -1085,6 +1268,14 @@ impl<'a, 't> Cx<'a, 't> {
                             message: format!("the request's `{property}`"),
                         }]
                     });
+                }
+                // An upload's name is its sender's; where it was stored
+                // (multer's `path`, `filename`) is the server's.
+                if UPLOAD_NAMES.contains(&property) && self.is_upload(object, state) {
+                    return Some(vec![Step {
+                        node: n,
+                        message: format!("the uploaded file's `{property}`"),
+                    }]);
                 }
                 if property == "length" {
                     return None;
@@ -1174,6 +1365,18 @@ impl<'a, 't> Cx<'a, 't> {
                 .into_iter()
                 .find_map(|a| self.taint(a, state, d))
         };
+        // A function of this file: what its summary returns.
+        if let Some(j) = self.local_function(call) {
+            return self.through_local(call, j, state, d);
+        }
+        // Another file's: a request's value if it returns one, which the
+        // project pass decides.
+        if state.from_calls && self.callee_of(call).is_some() {
+            return Some(vec![Step {
+                node: call,
+                message: FROM_CALL.to_string(),
+            }]);
+        }
         let callee = unwrap(call.child_by_field_name("function")?);
         if callee.kind() == "identifier" {
             let name = self.text(callee);
@@ -1327,57 +1530,595 @@ impl<'a, 't> Cx<'a, 't> {
 
     // ------------------------------------------------------------ sinks
 
-    fn findings(&self, state: &State<'t>) -> Vec<Finding<'t>> {
+    /// What the request's values reach from the calls in `scope` (a
+    /// function, for a summary), or the whole file's: sinks, this file's
+    /// helpers' sinks, and other files' functions.
+    fn reached(&self, scope: Option<Node>, state: &State<'t>) -> Vec<Reach<'t>> {
         let mut out = Vec::new();
-        let mut checks: HashMap<usize, HashSet<String>> = HashMap::new();
-        for &call in &self.calls {
-            let Some((name, args)) = self.sink(call, state) else {
-                continue;
-            };
-            for arg in args {
-                let Some(mut path) = self.taint(arg, state, 0) else {
-                    continue;
-                };
-                if self.kind == SinkKind::Sql
-                    && SQL_QUERY.contains(&name.as_str())
-                    && !self.reads_as_sql(arg, 3)
-                {
-                    continue;
-                }
-                let scope = outermost_function(call, self.m);
-                let checked = checks
-                    .entry(scope.map_or(0, |s| s.id()))
-                    .or_insert_with(|| scope.map(|s| self.checked_values(s)).unwrap_or_default());
-                // The argument, the names and members in it, and each
-                // variable the value went through.
-                let mut mentioned = vec![unwrap(arg)];
-                let mut stack = children(unwrap(arg));
-                while let Some(c) = stack.pop() {
-                    if matches!(c.kind(), "identifier" | "member_expression") {
-                        mentioned.push(c);
+        let calls = match scope {
+            None => &self.calls[..],
+            Some(s) => {
+                let lo = self
+                    .calls
+                    .partition_point(|c| c.start_byte() < s.start_byte());
+                let hi = self
+                    .calls
+                    .partition_point(|c| c.start_byte() < s.end_byte());
+                &self.calls[lo..hi]
+            }
+        };
+        for &call in calls {
+            let sink = self
+                .sinks
+                .borrow_mut()
+                .entry(call.id())
+                .or_insert_with(|| self.sink(call, &self.initial))
+                .clone();
+            if let Some((name, args)) = sink {
+                for arg in args {
+                    let Some(mut path) = self.taint(arg, state, 0) else {
+                        continue;
+                    };
+                    let needs_sql = self.kind == SinkKind::Sql
+                        && SQL_QUERY.contains(&name.as_str())
+                        && !self.reads_as_sql(arg, 3);
+                    if needs_sql && !from_call(&path) {
+                        continue;
                     }
-                    stack.extend(children(c));
+                    let scope = outermost_function(call, self.m);
+                    let checked = self.checks_of(scope);
+                    if self.is_checked(&checked, call, arg, &path) {
+                        continue;
+                    }
+                    path.push(Step {
+                        node: call,
+                        message: format!("passed to `{name}`"),
+                    });
+                    out.push(self.reach_sink(path, call, needs_sql));
+                    break;
                 }
-                mentioned.extend(path.iter().map(|s| s.node));
-                let equal = self.equal_to_literal(call);
-                if mentioned
-                    .iter()
-                    .any(|m| checked.contains(self.text(*m)) || equal.contains(self.text(*m)))
-                {
-                    continue;
+                continue;
+            }
+            // A helper of this file whose parameter reaches a sink, or
+            // another file's function.
+            if let Some(j) = self.local_function(call) {
+                let summary = self.summary(j);
+                let name = self.function_name(j);
+                for (i, arg) in arguments(call).into_iter().enumerate() {
+                    if !summary.to_sink.iter().any(|t| t.0 == i)
+                        && !summary.to_call.iter().any(|t| t.0 == i)
+                    {
+                        continue;
+                    }
+                    let Some(path) = self.taint(arg, state, 0) else {
+                        continue;
+                    };
+                    if self.is_checked(
+                        &self.checks_of(outermost_function(call, self.m)),
+                        call,
+                        arg,
+                        &path,
+                    ) {
+                        continue;
+                    }
+                    let into = |inner: &Path<'t>| {
+                        let mut p = path.clone();
+                        p.push(Step {
+                            node: call,
+                            message: format!("passed to `{name}`"),
+                        });
+                        p.extend(inner.iter().cloned());
+                        p
+                    };
+                    for (_, inner, sink) in summary.to_sink.iter().filter(|t| t.0 == i) {
+                        out.push(self.reach_sink(into(inner), *sink, false));
+                    }
+                    if !from_call(&path) {
+                        for (_, inner, callee, a) in summary.to_call.iter().filter(|t| t.0 == i) {
+                            out.push(Reach::Open {
+                                path: into(inner),
+                                callee: callee.clone(),
+                                arg: *a,
+                                call,
+                            });
+                        }
+                    }
                 }
-                path.push(Step {
-                    node: call,
-                    message: format!("passed to `{name}`"),
-                });
-                out.push(Finding {
-                    sink: call,
-                    steps: cap(path),
-                });
-                break;
+                continue;
+            }
+            if let Some(callee) = self.callee_of(call) {
+                let checked = self.checks_of(outermost_function(call, self.m));
+                for (i, arg) in arguments(call).into_iter().enumerate() {
+                    if let Some(path) = self
+                        .taint(arg, state, 0)
+                        .filter(|p| !from_call(p) && !self.is_checked(&checked, call, arg, p))
+                    {
+                        out.push(Reach::Open {
+                            path,
+                            callee: callee.clone(),
+                            arg: i,
+                            call,
+                        });
+                    }
+                }
             }
         }
         out
+    }
+
+    /// A sink reached: by a request's value, or by another file's
+    /// function's result, which the project pass follows.
+    fn reach_sink(&self, path: Path<'t>, sink: Node<'t>, needs_sql: bool) -> Reach<'t> {
+        if from_call(&path) {
+            Reach::FromCall {
+                call: path[0].node,
+                after: path[1..].to_vec(),
+                sink,
+                needs_sql,
+            }
+        } else {
+            Reach::Sink { path, sink }
+        }
+    }
+
+    // ------------------------------------------------------------ calls
+
+    /// The function of this file a call calls: `build(x)`, with `build`
+    /// declared here as a function or a variable set to one.
+    fn local_function(&self, call: Node<'t>) -> Option<usize> {
+        if call.kind() != "call_expression" {
+            return None;
+        }
+        let callee = unwrap(call.child_by_field_name("function")?);
+        if callee.kind() != "identifier" {
+            return None;
+        }
+        let decl = &self.m.decls[self.decl(callee)?];
+        let parent = decl.node.parent()?;
+        let function = match parent.kind() {
+            "function_declaration" | "generator_function_declaration" => parent,
+            "variable_declarator" => unwrap(parent.child_by_field_name("value")?),
+            _ => return None,
+        };
+        self.fn_index.get(&function.id()).copied()
+    }
+
+    /// The name a function goes by in a path.
+    fn function_name(&self, j: usize) -> String {
+        let f = self.m.functions[j].node;
+        f.child_by_field_name("name")
+            .or_else(|| {
+                let p = f.parent()?;
+                match p.kind() {
+                    "variable_declarator" => p.child_by_field_name("name"),
+                    "pair" => p.child_by_field_name("key"),
+                    // `exports.find = (id) => …`
+                    "assignment_expression" => p
+                        .child_by_field_name("left")
+                        .map(|l| l.child_by_field_name("property").unwrap_or(l)),
+                    _ => None,
+                }
+            })
+            .map_or_else(|| "function".to_string(), |n| self.text(n).to_string())
+    }
+
+    /// A call to this file's function `j`: its result, when its summary
+    /// says an argument reaches it.
+    fn through_local(
+        &self,
+        call: Node<'t>,
+        j: usize,
+        state: &State<'t>,
+        d: u32,
+    ) -> Option<Path<'t>> {
+        let summary = self.summary(j);
+        let name = self.function_name(j);
+        let args = arguments(call);
+        summary.to_return.iter().find_map(|(p, inner)| {
+            let mut path = self.taint(*args.get(*p)?, state, d)?;
+            path.push(Step {
+                node: call,
+                message: format!("passed to `{name}`"),
+            });
+            path.extend(inner.iter().cloned());
+            path.push(Step {
+                node: call,
+                message: format!("returned by `{name}`"),
+            });
+            Some(cap(path))
+        })
+    }
+
+    /// The other file's function a call calls, through a relative import:
+    /// `find(x)` imported from `./users`, `users.find(x)` with `users` its
+    /// namespace or `require`, `service.find(x)` with `service` set to
+    /// `new UserService()`, and NestJS's `this.users.find(x)`, with `users`
+    /// a constructor's parameter of an imported class's type.
+    fn callee_of(&self, call: Node<'t>) -> Option<Callee> {
+        if call.kind() != "call_expression" {
+            return None;
+        }
+        let relative = |i: &Import| i.module.starts_with("./") || i.module.starts_with("../");
+        let name_of = |i: &Import| {
+            i.member
+                .clone()
+                .or_else(|| i.default.then(|| "default".to_string()))
+        };
+        let callee = unwrap(call.child_by_field_name("function")?);
+        if callee.kind() == "identifier" {
+            let import = self.import_of(callee).filter(|i| relative(i))?;
+            return Some(Callee::Js {
+                spec: import.module.clone(),
+                name: name_of(import),
+                member: None,
+            });
+        }
+        let (receiver, member) = method(call)?;
+        let member = Some(self.text(member).to_string());
+        let receiver = unwrap(receiver);
+        if let Some(import) = self.import_of(receiver).filter(|i| relative(i)) {
+            return Some(Callee::Js {
+                spec: import.module.clone(),
+                name: name_of(import),
+                member,
+            });
+        }
+        // An instance: `const s = new UserService()`, or a parameter or a
+        // field of an imported class's type.
+        let class = match receiver.kind() {
+            "identifier" => {
+                let decl = &self.m.decls[self.decl(receiver)?];
+                decl.declarator
+                    .and_then(|d| d.child_by_field_name("value"))
+                    .map(unwrap)
+                    .filter(|v| v.kind() == "new_expression")
+                    .and_then(|v| v.child_by_field_name("constructor"))
+                    .or_else(|| self.declared_type(decl.node))
+            }
+            "member_expression" => {
+                let object = receiver.child_by_field_name("object")?;
+                if object.kind() != "this" {
+                    return None;
+                }
+                let field = self.text(receiver.child_by_field_name("property")?);
+                self.field_type(receiver, field)
+            }
+            _ => None,
+        }?;
+        let import = self.import_of(class).filter(|i| relative(i))?;
+        Some(Callee::Js {
+            spec: import.module.clone(),
+            name: name_of(import).or_else(|| Some(self.text(class).to_string())),
+            member,
+        })
+    }
+
+    /// The type a parameter is declared with: `users: UsersService`.
+    fn declared_type(&self, name: Node<'t>) -> Option<Node<'t>> {
+        let param = name.parent().filter(|p| {
+            matches!(
+                p.kind(),
+                "required_parameter" | "optional_parameter" | "public_field_definition"
+            )
+        })?;
+        type_identifier(param)
+    }
+
+    /// The type of `this.field` in the class around `at`: a constructor's
+    /// parameter with an accessibility modifier (NestJS's injection), or a
+    /// field declared with a type.
+    fn field_type(&self, at: Node<'t>, field: &str) -> Option<Node<'t>> {
+        let body = std::iter::successors(at.parent(), |p| p.parent())
+            .find(|p| p.kind() == "class_body")?;
+        for member in children(body) {
+            match member.kind() {
+                "method_definition"
+                    if member
+                        .child_by_field_name("name")
+                        .is_some_and(|n| self.text(n) == "constructor") =>
+                {
+                    for p in param_nodes(member) {
+                        if pattern_of(p).kind() == "identifier"
+                            && self.text(pattern_of(p)) == field
+                            && let Some(t) = type_identifier(p)
+                        {
+                            return Some(t);
+                        }
+                    }
+                }
+                "public_field_definition"
+                    if member
+                        .child_by_field_name("name")
+                        .is_some_and(|n| self.text(n) == field) =>
+                {
+                    if let Some(t) = type_identifier(member) {
+                        return Some(t);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    // ------------------------------------------------------------ summaries
+
+    /// What function `j`'s parameters reach, each analyzed alone, computed
+    /// once. A call back to a function being summarized finds none.
+    fn summary(&self, j: usize) -> Rc<FnSummary<'t>> {
+        if let Some(s) = self.summaries.borrow().get(&j) {
+            return s.clone();
+        }
+        if !self.busy.borrow_mut().insert(j) || self.summaries.borrow().len() >= MAX_SUMMARIES {
+            return Rc::default();
+        }
+        let s = Rc::new(self.compute_summary(j));
+        self.busy.borrow_mut().remove(&j);
+        self.summaries.borrow_mut().insert(j, s.clone());
+        s
+    }
+
+    fn compute_summary(&self, j: usize) -> FnSummary<'t> {
+        let f = &self.m.functions[j];
+        let name = self.function_name(j);
+        let returns = return_values(f.node, &self.fn_index);
+        let mut summary = FnSummary {
+            returns_sql: self.kind == SinkKind::Sql
+                && returns.iter().any(|r| self.reads_as_sql(*r, 3)),
+            ..FnSummary::default()
+        };
+        for (p, decls) in f.params.iter().enumerate() {
+            if decls.is_empty() {
+                continue;
+            }
+            let tainted = decls
+                .iter()
+                .map(|&d| {
+                    let decl = &self.m.decls[d];
+                    (
+                        d,
+                        vec![Step {
+                            node: decl.node,
+                            message: format!("`{name}`'s parameter `{}`", decl.name),
+                        }],
+                    )
+                })
+                .collect();
+            let start = State {
+                tainted,
+                requests: HashSet::new(),
+                from_calls: false,
+            };
+            let Some(state) = self.run_scoped(start, Some(f.node)) else {
+                continue;
+            };
+            if let Some(path) = returns.iter().find_map(|r| self.taint(*r, &state, 0)) {
+                summary.to_return.push((p, cap(path)));
+            }
+            for r in self.reached(Some(f.node), &state) {
+                match r {
+                    Reach::Sink { path, sink } => summary.to_sink.push((p, cap(path), sink)),
+                    Reach::Open {
+                        mut path,
+                        callee,
+                        arg,
+                        call,
+                    } => {
+                        path.push(Step {
+                            node: call,
+                            message: format!("passed to `{}`", callee.display()),
+                        });
+                        summary.to_call.push((p, cap(path), callee, arg));
+                    }
+                    Reach::FromCall { .. } => {}
+                }
+            }
+        }
+        summary
+    }
+
+    /// The summaries of the functions this file exports, for other files.
+    fn exported_summaries(&self, state: &State<'t>) -> Vec<SummaryFact<'t>> {
+        let mut out = Vec::new();
+        for (key, j) in self.exports() {
+            if out.len() >= MAX_SUMMARIES {
+                break;
+            }
+            let summary = self.summary(j);
+            // A request's value it reads and returns itself.
+            let returns_source = return_values(self.m.functions[j].node, &self.fn_index)
+                .into_iter()
+                .find_map(|r| self.taint(r, state, 0).filter(|p| !from_call(p)))
+                .map(cap);
+            if summary.to_sink.is_empty()
+                && summary.to_return.is_empty()
+                && summary.to_call.is_empty()
+                && returns_source.is_none()
+            {
+                continue;
+            }
+            out.push(SummaryFact {
+                key,
+                returns_sql: summary.returns_sql,
+                to_sink: summary.to_sink.clone(),
+                to_return: summary.to_return.clone(),
+                returns_source,
+                to_call: summary.to_call.clone(),
+            });
+        }
+        out
+    }
+
+    /// The functions other files can call, by the key they call them by:
+    /// ES exports (`export function f`, `export const f = () => …`,
+    /// `export default`, `export { f as g }`), CommonJS's (`module.exports =
+    /// …`, `exports.f = …`), and the methods of exported classes and
+    /// objects.
+    fn exports(&self) -> Vec<(Key, usize)> {
+        let Some(root) = self.m.root else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            match n.kind() {
+                "export_statement" if n.child_by_field_name("source").is_none() => {
+                    let default =
+                        children(n).is_empty() || n.child(1).is_some_and(|c| c.kind() == "default");
+                    if let Some(d) = n.child_by_field_name("declaration") {
+                        match d.kind() {
+                            "lexical_declaration" | "variable_declaration" => {
+                                for v in children(d)
+                                    .into_iter()
+                                    .filter(|v| v.kind() == "variable_declarator")
+                                {
+                                    if let (Some(name), Some(value)) = (
+                                        v.child_by_field_name("name"),
+                                        v.child_by_field_name("value"),
+                                    ) {
+                                        self.export_value(&mut out, self.text(name), value);
+                                    }
+                                }
+                            }
+                            _ => {
+                                let name = if default {
+                                    "default"
+                                } else {
+                                    d.child_by_field_name("name")
+                                        .map_or("default", |x| self.text(x))
+                                };
+                                self.export_value(&mut out, name, d);
+                            }
+                        }
+                    } else if let Some(v) = n.child_by_field_name("value") {
+                        self.export_value(&mut out, "default", v);
+                    }
+                    for clause in children(n)
+                        .into_iter()
+                        .filter(|c| c.kind() == "export_clause")
+                    {
+                        for spec in children(clause) {
+                            let (Some(local), alias) = (
+                                spec.child_by_field_name("name"),
+                                spec.child_by_field_name("alias"),
+                            ) else {
+                                continue;
+                            };
+                            let exported = self.text(alias.unwrap_or(local));
+                            self.export_value(&mut out, exported, local);
+                        }
+                    }
+                }
+                "assignment_expression" => {
+                    let (Some(left), Some(right)) = (
+                        n.child_by_field_name("left"),
+                        n.child_by_field_name("right"),
+                    ) else {
+                        stack.extend(children(n));
+                        continue;
+                    };
+                    let target = self.text(left);
+                    if target == "module.exports" {
+                        if unwrap(right).kind() == "object" {
+                            for (k, v) in self.object_members(unwrap(right)) {
+                                self.export_value(&mut out, &k, v);
+                            }
+                        } else {
+                            self.export_value(&mut out, "default", right);
+                        }
+                    } else if let Some(name) = target
+                        .strip_prefix("module.exports.")
+                        .or_else(|| target.strip_prefix("exports."))
+                        .filter(|n| !n.contains('.'))
+                    {
+                        self.export_value(&mut out, name, right);
+                    }
+                }
+                _ => {}
+            }
+            stack.extend(children(n));
+        }
+        out.sort_by(|a, b| (&a.0.export, &a.0.member, a.1).cmp(&(&b.0.export, &b.0.member, b.1)));
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+
+    /// An exported value's functions: a function, a name set to one, a
+    /// class's methods, a default-exported object's members.
+    fn export_value(&self, out: &mut Vec<(Key, usize)>, name: &str, value: Node<'t>) {
+        let value = unwrap(value);
+        let key = |member: Option<&str>| Key {
+            export: name.to_string(),
+            member: member.map(str::to_string),
+        };
+        if let Some(&j) = self.fn_index.get(&value.id()) {
+            out.push((key(None), j));
+            return;
+        }
+        match value.kind() {
+            "identifier" => {
+                let Some(d) = self.decl(value) else { return };
+                let node = self.m.decls[d].node;
+                let Some(parent) = node.parent() else { return };
+                match parent.kind() {
+                    "function_declaration" | "generator_function_declaration" => {
+                        if let Some(&j) = self.fn_index.get(&parent.id()) {
+                            out.push((key(None), j));
+                        }
+                    }
+                    "variable_declarator" => {
+                        if let Some(v) = parent.child_by_field_name("value") {
+                            self.export_value(out, name, v);
+                        }
+                    }
+                    "class_declaration" | "abstract_class_declaration" => {
+                        self.export_value(out, name, parent);
+                    }
+                    _ => {}
+                }
+            }
+            "class_declaration" | "abstract_class_declaration" | "class" => {
+                let Some(body) = value.child_by_field_name("body") else {
+                    return;
+                };
+                for m in children(body)
+                    .into_iter()
+                    .filter(|m| m.kind() == "method_definition")
+                {
+                    if let (Some(n), Some(&j)) =
+                        (m.child_by_field_name("name"), self.fn_index.get(&m.id()))
+                    {
+                        out.push((key(Some(self.text(n))), j));
+                    }
+                }
+            }
+            "object" if name == "default" => {
+                for (k, v) in self.object_members(value) {
+                    if let Some(&j) = self.fn_index.get(&unwrap(v).id()) {
+                        out.push((key(Some(&k)), j));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// An object literal's members and their values: `{ f, g: h, k() {} }`.
+    fn object_members(&self, object: Node<'t>) -> Vec<(String, Node<'t>)> {
+        children(object)
+            .into_iter()
+            .filter_map(|p| match p.kind() {
+                "pair" => Some((
+                    string_value(self.text(p.child_by_field_name("key")?)).to_string(),
+                    p.child_by_field_name("value")?,
+                )),
+                "shorthand_property_identifier" => Some((self.text(p).to_string(), p)),
+                "method_definition" => {
+                    Some((self.text(p.child_by_field_name("name")?).to_string(), p))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// The sink a call is for this analysis's kind: its name, and the
@@ -1535,13 +2276,60 @@ impl<'a, 't> Cx<'a, 't> {
         }
         depth > 0
             && names.iter().filter_map(|i| self.decl(*i)).any(|d| {
-                self.writes.iter().any(|w| {
-                    let t = unwrap(w.target);
-                    t.kind() == "identifier"
-                        && self.decl(t) == Some(d)
-                        && self.reads_as_sql(w.value, depth - 1)
+                self.writes_by_decl.get(&d).is_some_and(|ws| {
+                    ws.iter()
+                        .any(|&w| self.reads_as_sql(self.writes[w].value, depth - 1))
                 })
             })
+    }
+
+    /// Whether the handler checked a value before `call`: the argument,
+    /// the names and members in it, or a variable the value went through.
+    fn is_checked(&self, checked: &HashSet<String>, call: Node, arg: Node, path: &Path) -> bool {
+        let mut mentioned = vec![unwrap(arg)];
+        let mut stack = children(unwrap(arg));
+        while let Some(c) = stack.pop() {
+            if matches!(c.kind(), "identifier" | "member_expression") {
+                mentioned.push(c);
+            }
+            stack.extend(children(c));
+        }
+        mentioned.extend(path.iter().map(|s| s.node));
+        let equal = self.equal_to_literal(call);
+        mentioned
+            .iter()
+            .any(|m| checked.contains(self.text(*m)) || equal.contains(self.text(*m)))
+    }
+
+    /// An upload: `req.file`, `req.files`, an element or member of them.
+    fn is_upload(&self, n: Node, state: &State) -> bool {
+        let mut n = unwrap(n);
+        loop {
+            match n.kind() {
+                "member_expression" | "subscript_expression" => {
+                    let Some(object) = n.child_by_field_name("object").map(unwrap) else {
+                        return false;
+                    };
+                    let property = n.child_by_field_name("property").map(|p| self.text(p));
+                    if matches!(property, Some("file" | "files")) && self.is_request(object, state)
+                    {
+                        return true;
+                    }
+                    n = object;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// `checked_values` of a handler, computed once.
+    fn checks_of(&self, scope: Option<Node>) -> Rc<HashSet<String>> {
+        let key = scope.map_or(0, |s| s.id());
+        self.checks
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| Rc::new(scope.map(|s| self.checked_values(s)).unwrap_or_default()))
+            .clone()
     }
 
     /// What a function checks before using it for this analysis's sink,
@@ -1756,6 +2544,59 @@ impl<'a, 't> Cx<'a, 't> {
                 t.starts_with('^') && t.ends_with('$') && !t.ends_with("\\$")
             })
     }
+}
+
+/// A variable whose path no later write replaces: a request's value. One
+/// from another file's function's result gives way to a request's.
+fn settled(state: &State, decl: DeclId) -> bool {
+    state.tainted.get(&decl).is_some_and(|p| !from_call(p))
+}
+
+/// Whether `path` replaces what `decl` holds.
+fn replaces(state: &State, decl: DeclId, path: &Path) -> bool {
+    match state.tainted.get(&decl) {
+        None => true,
+        Some(old) => from_call(old) && !from_call(path),
+    }
+}
+
+/// Whether `n` is inside `outer`.
+fn within(n: Node, outer: Node) -> bool {
+    outer.start_byte() <= n.start_byte() && n.end_byte() <= outer.end_byte()
+}
+
+/// A function's return values: its `return`s, not those of functions in
+/// it, and an arrow's expression body.
+fn return_values<'t>(f: Node<'t>, functions: &HashMap<usize, usize>) -> Vec<Node<'t>> {
+    let Some(body) = f.child_by_field_name("body") else {
+        return Vec::new();
+    };
+    if body.kind() != "statement_block" {
+        return vec![body];
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if functions.contains_key(&n.id()) {
+            continue;
+        }
+        if n.kind() == "return_statement" {
+            out.extend(n.named_child(0));
+            continue;
+        }
+        stack.extend(children(n));
+    }
+    out
+}
+
+/// The type a parameter or field is declared with, when it's a name:
+/// `users: UsersService`.
+fn type_identifier(n: Node) -> Option<Node> {
+    let t = n.child_by_field_name("type")?;
+    children(t)
+        .into_iter()
+        .find(|c| c.kind() == "type_identifier")
+        .or_else(|| (t.kind() == "type_identifier").then_some(t))
 }
 
 // ---------------------------------------------------------------- syntax
@@ -2536,5 +3377,245 @@ mod tests {
         ] {
             assert_eq!(js(REDIRECT, &route("", body)).len(), 1, "{body}");
         }
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    /// Each file analyzed, then the project pass: the issues of every file,
+    /// as a scan reports them.
+    fn project(files: &[(&str, &str)]) -> Vec<Issue> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<_> = files
+            .iter()
+            .map(|(path, src)| {
+                let lang = if path.ends_with(".ts") {
+                    Lang::TypeScript
+                } else {
+                    Lang::JavaScript
+                };
+                analyze(path, lang, src, &rules, &cfg, far_deadline()).unwrap()
+            })
+            .collect();
+        crate::analysis::taint_project_rules(&mut analyzed, &rules);
+        analyzed
+            .into_iter()
+            .flat_map(|f| f.issues)
+            .filter(|i| i.rule.starts_with("js/") && !i.flow.is_empty())
+            .collect()
+    }
+
+    fn files_of(i: &Issue) -> Vec<Option<&str>> {
+        i.flow.iter().map(|s| s.path.as_deref()).collect()
+    }
+
+    #[test]
+    fn a_request_value_passed_to_another_files_function_that_reaches_a_sink() {
+        let found = project(&[
+            (
+                "src/routes.js",
+                "const { findUser } = require('./users');\n\
+                 app.get('/u', (req, res) => {\n  findUser(req.query.id);\n});\n",
+            ),
+            (
+                "src/users.js",
+                "exports.findUser = (id) => {\n  return db.query('SELECT * FROM u WHERE id = ' + id);\n};\n",
+            ),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let i = &found[0];
+        assert_eq!((i.path.as_str(), i.rule, i.line), ("src/users.js", SQL, 2));
+        assert_eq!(
+            flow(i),
+            [
+                "the request's `query`",
+                "passed to `findUser`",
+                "`findUser`'s parameter `id`",
+                "passed to `query`"
+            ]
+        );
+        assert_eq!(
+            files_of(i),
+            [Some("src/routes.js"), Some("src/routes.js"), None, None]
+        );
+        assert_eq!(
+            i.flow.iter().map(|s| s.line).collect::<Vec<_>>(),
+            [3, 3, 1, 2]
+        );
+    }
+
+    #[test]
+    fn imports_of_every_kind_and_two_hops() {
+        let service = "import { run } from './run';\nexport function ping(host) { return run('ping ' + host); }\n";
+        let runner =
+            "import { exec } from 'child_process';\nexport function run(cmd) { exec(cmd); }\n";
+        for head in [
+            "import { ping } from './service';",
+            "import * as svc from './service'; const ping = (h) => svc.ping(h);",
+        ] {
+            let routes =
+                format!("{head}\napp.get('/p', (req, res) => {{ ping(req.query.host); }});\n");
+            let found = project(&[
+                ("src/routes.ts", &routes),
+                ("src/service.ts", service),
+                ("src/run.ts", runner),
+            ]);
+            assert_eq!(found.len(), 1, "{head}: {found:?}");
+            assert_eq!(found[0].path, "src/run.ts");
+            assert!(flow(&found[0]).contains(&"`ping`'s parameter `host`"));
+        }
+        // A default export, and a default-exported object's member.
+        for (head, call, callee) in [
+            (
+                "import save from './save';",
+                "save(req.body.name)",
+                "export default function (p) { fs.writeFileSync(p, 'x'); }",
+            ),
+            (
+                "import store from './save';",
+                "store.save(req.body.name)",
+                "export default { save(p) { fs.writeFileSync(p, 'x'); } };",
+            ),
+            (
+                "const store = require('./save');",
+                "store.save(req.body.name)",
+                "module.exports = { save: (p) => fs.writeFileSync(p, 'x') };",
+            ),
+        ] {
+            let routes = format!("{head}\napp.post('/s', (req, res) => {{ {call}; }});\n");
+            let callee = format!("const fs = require('fs');\n{callee}\n");
+            let found = project(&[("src/routes.js", &routes), ("src/save.js", &callee)]);
+            assert_eq!(found.len(), 1, "{call}: {found:?}");
+            assert_eq!(found[0].rule, PATH);
+        }
+    }
+
+    #[test]
+    fn another_files_result_reaching_a_sink() {
+        // A helper that builds the query from what it's given.
+        let found = project(&[
+            (
+                "src/routes.js",
+                "import { byId } from './sql';\napp.get('/o', (req, res) => {\n  db.query(byId(req.query.id));\n});\n",
+            ),
+            (
+                "src/sql.js",
+                "export const byId = (id) => 'SELECT * FROM o WHERE id = ' + id;\n",
+            ),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            (found[0].path.as_str(), found[0].line),
+            ("src/routes.js", 3)
+        );
+        assert_eq!(
+            flow(&found[0]),
+            [
+                "the request's `query`",
+                "passed to `byId`",
+                "`byId`'s parameter `id`",
+                "returned by `byId`",
+                "passed to `query`"
+            ]
+        );
+        assert_eq!(files_of(&found[0])[2], Some("src/sql.js"));
+        // One that reads the request itself.
+        let found = project(&[
+            (
+                "src/routes.js",
+                "import { term } from './input';\napp.get('/s', (req, res) => {\n  db.query('SELECT * FROM p WHERE n = ' + term(req));\n});\n",
+            ),
+            (
+                "src/input.js",
+                "export function term(req) { return req.query.q; }\n",
+            ),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(flow(&found[0])[0], "the request's `query`");
+    }
+
+    #[test]
+    fn nest_services_injected_by_type() {
+        let controller = "import { UsersService } from './users.service';\n\
+                          @Controller('users') export class UsersController {\n\
+                          constructor(private readonly users: UsersService) {}\n\
+                          @Get(':id') find(@Param('id') id: string) { return this.users.findOne(id); }\n}\n";
+        let service = "export class UsersService {\n\
+                       findOne(id: string) { return this.db.query(`SELECT * FROM u WHERE id = ${id}`); }\n\
+                       count() { return this.db.query('SELECT count(*) FROM u'); }\n}\n";
+        let found = project(&[
+            ("src/users.controller.ts", controller),
+            ("src/users.service.ts", service),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "src/users.service.ts");
+        assert_eq!(flow(&found[0])[1], "passed to `UsersService.findOne`");
+    }
+
+    #[test]
+    fn helpers_of_the_same_file() {
+        let src = route(
+            "function find(id) { return db.query('SELECT * FROM o WHERE id = ' + id); }\n\
+             const byName = (n) => 'SELECT * FROM u WHERE name = ' + n;",
+            "find(req.query.id);\ndb.query(byName(req.query.name));",
+        );
+        let found = js(SQL, &src);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().any(|i| flow(i).contains(&"passed to `find`")));
+        assert!(
+            found
+                .iter()
+                .any(|i| flow(i).contains(&"returned by `byName`"))
+        );
+        // A helper that parses its parameter, and recursion, end safely.
+        let src = route(
+            "function n(id) { return parseInt(id, 10); }\nfunction r(x) { return r(x); }",
+            "db.query('SELECT * FROM o WHERE id = ' + n(req.query.id));\ndb.query('SELECT ' + r(1));",
+        );
+        assert!(js(SQL, &src).is_empty());
+    }
+
+    #[test]
+    fn what_doesnt_cross_files() {
+        let routes = "import { findUser } from './users';\nimport { q } from 'some-package';\n\
+                      app.get('/u', (req, res) => { findUser(req.query.id); q(req.query.id); });\n";
+        for users in [
+            // Parsed before the query.
+            "export function findUser(id) { return db.query('SELECT * FROM u WHERE id = ' + Number(id)); }",
+            // Not exported.
+            "function findUser(id) { return db.query('SELECT * FROM u WHERE id = ' + id); }",
+            // The sink's line suppresses the rule.
+            "export function findUser(id) { return db.query('SELECT * FROM u WHERE id = ' + id); } // NOSONAR",
+        ] {
+            assert!(
+                project(&[("src/routes.js", routes), ("src/users.js", users)]).is_empty(),
+                "{users}"
+            );
+        }
+    }
+
+    #[test]
+    fn uploads_and_checks_before_a_helper() {
+        let head = "const fs = require('fs'); const path = require('path');";
+        // Where multer stored the upload is the server's.
+        let stored = "const del = (f) => fs.unlinkSync(f.path);\napp.post('/u', (req, res) => { del(req.file); });";
+        assert!(js(PATH, &format!("{head}\n{stored}")).is_empty());
+        let named = route(
+            head,
+            "fs.writeFileSync('/up/' + req.file.originalname, 'x');",
+        );
+        assert_eq!(js(PATH, &named).len(), 1);
+        assert_eq!(
+            flow(&js(PATH, &named)[0])[0],
+            "the uploaded file's `originalname`"
+        );
+        // Checked before it's passed to a helper.
+        let src = format!(
+            "{head}\nfunction list(dir) {{ return fs.readdirSync(dir); }}\n\
+             app.get('/f', (req, res) => {{\n\
+             const d = path.join('/up', req.query.dir);\n\
+             if (!isPathInside('/up', d)) return;\n list(d);\n}});"
+        );
+        assert!(js(PATH, &src).is_empty());
     }
 }

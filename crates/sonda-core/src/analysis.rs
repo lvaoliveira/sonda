@@ -91,7 +91,16 @@ pub(crate) fn analyze(
             deadline,
         ));
     }
-    let semantic_incomplete = run_semantic(&ctx, lang, root, rules, deadline, &mut issues);
+    let mut taint_facts = Vec::new();
+    let semantic_incomplete = run_semantic(
+        &ctx,
+        lang,
+        root,
+        rules,
+        deadline,
+        &mut issues,
+        &mut taint_facts,
+    );
     let mut metrics = FileMetrics::default();
     measure_functions(&ctx, syn, root, rules, cfg, &mut issues, &mut metrics);
     let scan = scan_tokens(&ctx, syn, root, rules, &mut issues);
@@ -168,7 +177,10 @@ pub(crate) fn analyze(
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
                 .collect(),
-        },
+        }
+        .into_iter()
+        .chain(taint_facts)
+        .collect(),
         semantic_incomplete,
         sha256: Digest(sha2::Sha256::digest(bytes).into()),
     })
@@ -256,6 +268,7 @@ impl<'a> Ctx<'a> {
     fn flow_step(&self, node: Node, message: &str) -> crate::model::FlowStep {
         let (start, end) = (node.start_position(), node.end_position());
         crate::model::FlowStep {
+            path: None,
             message: message.to_string(),
             line: start.row + 1,
             column: self.lines.char_column(start.row, start.column),
@@ -1830,6 +1843,7 @@ fn run_semantic(
     rules: &RuleSet,
     deadline: Instant,
     issues: &mut Vec<Issue>,
+    taint_facts: &mut Vec<(String, String)>,
 ) -> bool {
     // Declaration files describe code that lives elsewhere: nothing in them
     // runs, and their names are all visible to other files.
@@ -1869,7 +1883,9 @@ fn run_semantic(
                 }
             }
             Find::Taint(find) => {
-                for finding in find(&model, bytes) {
+                let found = find(&model, bytes);
+                taint_facts.extend(taint_fact(ctx, a.rule.id, &found.facts));
+                for finding in found.findings {
                     let msg = a.rule.message.to_string();
                     let mut issue = ctx.issue(a, finding.sink, msg, a.rule.effort_minutes);
                     issue.flow = finding
@@ -1883,6 +1899,216 @@ fn run_semantic(
         }
     }
     false
+}
+
+/// A taint rule's facts for the project pass (ADR-0027, T4), positions
+/// resolved here, where the source is: one JSON fact per rule.
+fn taint_fact(ctx: &Ctx, rule: &str, facts: &semantic::taint::Facts) -> Option<(String, String)> {
+    use semantic::taint::Step;
+    use semantic::taint_project as tp;
+    if facts.is_empty() {
+        return None;
+    }
+    let step = |s: &Step| {
+        let f = ctx.flow_step(s.node, &s.message);
+        tp::StepFact {
+            m: f.message,
+            l: f.line,
+            c: f.column,
+            el: f.end_line,
+            ec: f.end_column,
+        }
+    };
+    let steps = |ss: &[Step]| ss.iter().map(step).collect::<Vec<_>>();
+    let at = |node: Node, message: String| step(&Step { node, message });
+    let sink = |node: Node| {
+        let row = node.start_position().row;
+        tp::SinkFact {
+            at: at(node, String::new()),
+            fingerprint: project_fingerprint(ctx, rule, row).to_string(),
+            suppressed: Suppression::of(ctx.lines.text(row)).covers(rule),
+        }
+    };
+    let file = tp::FileFacts {
+        summaries: facts
+            .summaries
+            .iter()
+            .map(|s| tp::Summary {
+                key: s.key.clone(),
+                returns_sql: s.returns_sql,
+                to_sink: s
+                    .to_sink
+                    .iter()
+                    .map(|(p, ss, n)| tp::ParamSink {
+                        p: *p,
+                        steps: steps(ss),
+                        sink: sink(*n),
+                    })
+                    .collect(),
+                to_return: s
+                    .to_return
+                    .iter()
+                    .map(|(p, ss)| tp::ParamPath {
+                        p: *p,
+                        steps: steps(ss),
+                    })
+                    .collect(),
+                returns_source: s.returns_source.as_deref().map(steps),
+                to_call: s
+                    .to_call
+                    .iter()
+                    .map(|(p, ss, callee, arg)| tp::ParamCall {
+                        p: *p,
+                        steps: steps(ss),
+                        callee: callee.clone(),
+                        arg: *arg,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        calls: facts
+            .calls
+            .iter()
+            .map(|c| {
+                let mut ss = steps(&c.steps);
+                ss.push(at(c.call, format!("passed to `{}`", c.callee.display())));
+                tp::Call {
+                    steps: ss,
+                    callee: c.callee.clone(),
+                    arg: c.arg,
+                }
+            })
+            .collect(),
+        returns: facts
+            .returns
+            .iter()
+            .map(|r| tp::Return {
+                callee: r.callee.clone(),
+                passed: at(r.call, format!("passed to `{}`", r.callee.display())),
+                returned: at(r.call, format!("returned by `{}`", r.callee.display())),
+                args: r
+                    .args
+                    .iter()
+                    .map(|(p, ss)| tp::ParamPath {
+                        p: *p,
+                        steps: steps(ss),
+                    })
+                    .collect(),
+                after: steps(&r.after),
+                sink: sink(r.sink),
+                needs_sql: r.needs_sql,
+            })
+            .collect(),
+    };
+    let json = serde_json::to_string(&file).ok()?;
+    Some((format!("{}{rule}", tp::FACT_PREFIX), json))
+}
+
+/// The fingerprint of an issue the project pass reports: the algorithm of
+/// `fingerprints`, with an ordinal no file's own issues reach, so the two
+/// never collide.
+fn project_fingerprint(ctx: &Ctx, rule: &str, row: usize) -> Fingerprint {
+    const PROJECT_ORDINAL: u64 = 1 << 32;
+    let line: String = ctx
+        .lines
+        .text(row)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let mut hasher = sha2::Sha256::new();
+    for field in ["sonda-fingerprint-v1", rule, ctx.path, &line] {
+        hasher.update((field.len() as u64).to_le_bytes());
+        hasher.update(field.as_bytes());
+    }
+    hasher.update(PROJECT_ORDINAL.to_le_bytes());
+    let hash = hasher.finalize();
+    let mut short = [0; 16];
+    short.copy_from_slice(&hash[..16]);
+    Digest(short)
+}
+
+/// Taint findings whose path crosses files (ADR-0027, T4): each taint
+/// rule's facts, joined. The issue is at the sink, in its file; each step
+/// names its own file when it's another.
+pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    use semantic::taint_project as tp;
+    let mut keys: Vec<&str> = files
+        .iter()
+        .flat_map(|f| f.facts.iter())
+        .filter_map(|(k, _)| k.strip_prefix(tp::FACT_PREFIX).map(|_| k.as_str()))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let keys: Vec<String> = keys.into_iter().map(str::to_string).collect();
+    for key in keys {
+        let Some(active) = rules.get(&key[tp::FACT_PREFIX.len()..]) else {
+            continue;
+        };
+        let facts: Vec<Option<tp::FileFacts>> = files
+            .iter()
+            .map(|f| {
+                f.facts
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .and_then(|(_, json)| serde_json::from_str(json).ok())
+            })
+            .collect();
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        let found = tp::compose(&paths, &facts);
+        let mut issues = Vec::new();
+        for f in found {
+            let file = &files[f.file];
+            let at = &f.sink.at;
+            if file
+                .issues
+                .iter()
+                .any(|i| i.rule == active.rule.id && i.line == at.l && i.column == at.c)
+            {
+                continue;
+            }
+            let mut issue =
+                project_issue(active, &file.path, at.l, active.rule.message.to_string());
+            issue.column = at.c;
+            issue.end_line = at.el;
+            issue.end_column = at.ec;
+            if let Some(fp) = parse_fingerprint(&f.sink.fingerprint) {
+                issue.fingerprint = fp;
+            }
+            issue.flow = f
+                .steps
+                .iter()
+                .map(|(i, s)| crate::model::FlowStep {
+                    path: (*i != f.file).then(|| files[*i].path.clone()),
+                    message: s.m.clone(),
+                    line: s.l,
+                    column: s.c,
+                    end_line: s.el,
+                    end_column: s.ec,
+                })
+                .collect();
+            issues.push((f.file, issue));
+        }
+        for (i, issue) in issues {
+            if !files[i]
+                .issues
+                .iter()
+                .any(|x| x.rule == issue.rule && x.fingerprint == issue.fingerprint)
+            {
+                files[i].issues.push(issue);
+            }
+        }
+    }
+}
+
+fn parse_fingerprint(hex: &str) -> Option<Fingerprint> {
+    let mut out = [0u8; 16];
+    if hex.len() != 32 {
+        return None;
+    }
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(Digest(out))
 }
 
 /// TypeScript declaration files: `x.d.ts`, `x.d.mts`, `x.d.cts`.

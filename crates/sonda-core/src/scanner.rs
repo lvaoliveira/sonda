@@ -450,6 +450,7 @@ fn scan_files(
     let package_issues_before: Vec<usize> = files.iter().map(|f| f.issues.len()).collect();
     analysis::java_package_rules(&mut files, rules);
     analysis::js_dependency_rules(&mut files, rules, manifests);
+    analysis::taint_project_rules(&mut files, rules);
     analysis::cs_project_rules(&mut files, rules);
     for (f, before) in files.iter_mut().zip(package_issues_before) {
         for issue in &mut f.issues[before..] {

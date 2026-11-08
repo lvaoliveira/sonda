@@ -175,9 +175,13 @@ pub struct Issue {
     pub flow: Vec<FlowStep>,
 }
 
-/// One step of a taint finding's path, in the same file.
+/// One step of a taint finding's path.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlowStep {
+    /// The file the step is in, when it isn't the issue's: a path that
+    /// crosses files (ADR-0027, T4). Relative to the project root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// What happens to the value here: "request parameter `id`",
     /// "concatenated into `q`".
     pub message: String,

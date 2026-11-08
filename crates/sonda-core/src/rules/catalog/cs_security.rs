@@ -1078,8 +1078,15 @@ macro_rules! taint_rule_fn {
         fn $name<'t>(
             m: &crate::semantic::Model<'t>,
             src: &[u8],
-        ) -> Vec<crate::semantic::taint::Finding<'t>> {
-            crate::semantic::cs_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
+        ) -> crate::semantic::taint::TaintResult<'t> {
+            crate::semantic::taint::TaintResult {
+                findings: crate::semantic::cs_taint::find(
+                    m,
+                    src,
+                    crate::semantic::taint::SinkKind::$kind,
+                ),
+                facts: Default::default(),
+            }
         }
     };
 }
@@ -1090,13 +1097,7 @@ taint_rule_fn!(ssrf, Ssrf);
 taint_rule_fn!(xpath_injection, XPath);
 taint_rule_fn!(ldap_injection, Ldap);
 
-/// A request's value reaching a query's text (ADR-0027, T1).
-fn sql_injection<'t>(
-    m: &crate::semantic::Model<'t>,
-    src: &[u8],
-) -> Vec<crate::semantic::taint::Finding<'t>> {
-    crate::semantic::cs_taint::find(m, src, crate::semantic::taint::SinkKind::Sql)
-}
+taint_rule_fn!(sql_injection, Sql);
 
 fn sql_built_dynamically(node: Node, src: &[u8]) -> bool {
     match node.kind() {
