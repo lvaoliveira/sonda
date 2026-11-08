@@ -294,6 +294,8 @@ export interface IssueDetail extends IssueSummary {
 
 /** One step of a taint finding's path: what happened to the value, and where. */
 export interface FlowStep {
+  /** The step's file, when it isn't the issue's: a path through other files. */
+  path?: string
   /** Names in backticks: "concatenated into `q`". */
   message: string
   line: number

@@ -144,7 +144,10 @@ describe('Issues', () => {
     const steps = within(path).getAllByRole('listitem')
     expect(steps).toHaveLength(3)
     expect(steps[0]).toHaveTextContent('request parameter customerID')
-    expect(steps[0]).toHaveTextContent('line 86')
+    // A step in another file names it.
+    expect(steps[0]).toHaveTextContent('handler.go:86')
+    expect(within(steps[0]).getByTitle('services/checkout-api/internal/orders/handler.go')).toBeInTheDocument()
+    expect(steps[1]).toHaveTextContent(/line \d+/)
     expect(within(steps[0]).getByText('customerID', { selector: 'code' })).toBeInTheDocument()
     expect(steps[1]).toHaveTextContent(`query := "SELECT id, total_cents, status FROM orders`)
     expect(steps[2]).toHaveTextContent('passed to QueryContext')

@@ -342,10 +342,11 @@ no language.
 - for a taint finding ([ADR-0027](adr/0027-taint-analysis.md)), its `flow`:
   the path the value took, from the source to the issue, each step a
   `message`, its span (`line`, `column`, `endLine`, `endColumn`) and its
-  line of `code`, highlighted the same way. The latest analysis's path
-  replaces the one before; an issue without one has `[]`. An upload's path
-  is checked like its issues: at most 20 steps, positions from 1, short
-  messages.
+  line of `code`, highlighted the same way. A step in another file than the
+  issue's has that file's `path`, and its code is that file's. The latest
+  analysis's path replaces the one before; an issue without one has `[]`.
+  An upload's path is checked like its issues: at most 20 steps, positions
+  from 1, short messages, and a step's file one of the report's.
 
 The server highlights with a small built-in lexer, not tree-sitter: it
 runs on uploaded code inside the server process, where sonda never runs its

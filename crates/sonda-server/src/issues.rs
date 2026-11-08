@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sonda_core::highlight::{self, Line};
 use sonda_core::lang::Lang;
 use sqlx::PgPool;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const DEFAULT_LIMIT: i64 = 50;
 pub const MAX_LIMIT: i64 = 200;
@@ -381,6 +381,9 @@ pub struct IssueDetail {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FlowStepView {
+    /// The step's file, when it isn't the issue's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub message: String,
     pub line: u32,
     pub column: u32,
@@ -440,6 +443,21 @@ async fn source_of(pool: &PgPool, id: i64) -> sqlx::Result<Option<String>> {
     .await
 }
 
+/// Another file's source and language, in the analysis that last saw
+/// the issue: for a path's steps in other files.
+async fn source_at(pool: &PgPool, id: i64, path: &str) -> sqlx::Result<Option<(String, String)>> {
+    sqlx::query_as(
+        "SELECT src.content, f.language FROM issues i
+         JOIN analysis_files f ON f.analysis_id = i.last_analysis_id AND f.path = $2
+         JOIN sources src ON src.sha256 = f.sha256
+         WHERE i.id = $1",
+    )
+    .bind(id)
+    .bind(path)
+    .fetch_optional(pool)
+    .await
+}
+
 async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
     let issue = view(pool, id).await?;
     let source = source_of(pool, id).await?;
@@ -454,8 +472,29 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
             .bind(id)
             .fetch_one(pool)
             .await?;
-    let line_of = |n: u32| -> Option<Line> {
-        let src = source.as_ref()?;
+    let flow: Vec<crate::ingest::FlowStep> = flow.map(|f| f.0).unwrap_or_default();
+    // The other files a path goes through, each read once.
+    let mut others: HashMap<String, Option<(String, Option<Lang>)>> = HashMap::new();
+    for path in flow.iter().filter_map(|s| s.path.as_deref()) {
+        if !others.contains_key(path) {
+            let found = source_at(pool, id, path).await?.map(|(src, language)| {
+                let lang = sonda_core::lang::ALL
+                    .iter()
+                    .copied()
+                    .find(|x: &Lang| x.name() == language);
+                (src, lang)
+            });
+            others.insert(path.to_string(), found);
+        }
+    }
+    let line_of = |path: Option<&str>, n: u32| -> Option<Line> {
+        let (src, lang) = match path {
+            None => (source.as_ref()?, lang),
+            Some(p) => {
+                let (src, lang) = others.get(p)?.as_ref()?;
+                (src, *lang)
+            }
+        };
         let n = n as usize;
         let mut lines = match lang {
             Some(lang) => highlight::highlight(lang, src, n, n),
@@ -464,11 +503,10 @@ async fn detail(pool: &PgPool, id: i64) -> Result<IssueDetail, ApiError> {
         (!lines.is_empty()).then(|| lines.remove(0))
     };
     let flow: Vec<FlowStepView> = flow
-        .map(|f| f.0)
-        .unwrap_or_default()
         .into_iter()
         .map(|s| FlowStepView {
-            code: line_of(s.line),
+            code: line_of(s.path.as_deref(), s.line),
+            path: s.path,
             message: s.message,
             line: s.line,
             column: s.column,

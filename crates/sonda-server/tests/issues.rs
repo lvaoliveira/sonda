@@ -319,6 +319,81 @@ async fn a_taint_findings_path_is_stored_and_served_with_its_code() {
     assert!(answer["error"].as_str().unwrap().contains("malformed flow"));
 }
 
+/// A path through two files (ADR-0027, T4): each step in the other file
+/// names it, with its line of code from that file; a step in a file the
+/// report doesn't have is refused.
+#[tokio::test]
+async fn a_path_through_other_files_is_served_with_their_code() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let routes = "const { findUser } = require('./users');\n\
+                  app.get('/u', (req, res) => {\n  findUser(req.query.id);\n});\n";
+    let users = "exports.findUser = (id) => {\n  return db.query('SELECT * FROM u WHERE id = ' + id);\n};\n";
+    let files = [("src/routes.js", routes), ("src/users.js", users)];
+    let body = upload_json(dir.path(), &files, "main");
+    assert_eq!(upload(&db, &body).await.0, StatusCode::CREATED);
+    let app = http::router(state(db.pool.clone()), None);
+    let (_, page) = get(&app, "/api/issues?file=src/users.js").await;
+    let id = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["rule"] == "js/sql-injection")
+        .and_then(|i| i["id"].as_i64())
+        .expect("the injection is stored");
+    let (status, issue) = get(&app, &format!("/api/issues/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{issue}");
+    let steps: Vec<(Option<&str>, &str)> = issue["flow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["path"].as_str(), s["message"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (Some("src/routes.js"), "the request's `query`"),
+            (Some("src/routes.js"), "passed to `findUser`"),
+            (None, "`findUser`'s parameter `id`"),
+            (None, "passed to `query`"),
+        ]
+    );
+    let code = |step: usize| -> String {
+        issue["flow"][step]["code"]["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["text"].as_str().unwrap())
+            .collect()
+    };
+    assert_eq!(code(0), "  findUser(req.query.id);");
+    assert_eq!(
+        code(3),
+        "  return db.query('SELECT * FROM u WHERE id = ' + id);"
+    );
+
+    let mut bad = upload_json(dir.path(), &files, "main");
+    let flagged = bad["report"]["issues"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|i| i["rule"] == "js/sql-injection")
+        .unwrap();
+    flagged["flow"][0]["path"] = json!("src/elsewhere.js");
+    let (status, answer) = upload(&db, &bad).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    assert!(
+        answer["error"]
+            .as_str()
+            .unwrap()
+            .contains("not in the report"),
+        "{answer}"
+    );
+}
+
 #[tokio::test]
 async fn triage_needs_authorization_and_is_audited() {
     let Some((db, _dir)) = seeded().await else {

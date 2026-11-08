@@ -422,6 +422,7 @@
     "history": [],
     "flow": [
       {
+        "path": "services/checkout-api/internal/orders/handler.go",
         "message": "request parameter `customerID`",
         "line": 86,
         "column": 48,

@@ -9,6 +9,11 @@ file, the report formats and the public library API.
 
 ### Added
 
+- The server stores each step's file in a path that crosses files, and the
+  issue page shows it (`routes.js:3`, the whole path on hover), with the
+  step's line of code from that file. An upload whose path names a file
+  the report doesn't have is refused.
+
 - JavaScript and TypeScript taint analysis follows a request's value into
   the project's other files (ADR-0027, T4): a handler passing it to a
   service that builds the query, a helper module that runs the command, a

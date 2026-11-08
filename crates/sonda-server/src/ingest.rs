@@ -156,6 +156,10 @@ struct Issue {
 /// One step of a taint finding's path, as the CLI reports it.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct FlowStep {
+    /// The file the step is in, when it isn't the issue's (ADR-0027, T4):
+    /// one of the report's files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub message: String,
     pub line: u32,
     pub column: u32,
@@ -668,6 +672,17 @@ fn validate_issues(
             return Err(invalid(format!(
                 "issue in {}, which is not in the report",
                 i.path
+            )));
+        }
+        if let Some(step) = i
+            .flow
+            .iter()
+            .filter_map(|s| s.path.as_deref())
+            .find(|p| !by_path.contains_key(p))
+        {
+            return Err(invalid(format!(
+                "{}:{}: flow step in {step}, which is not in the report",
+                i.path, i.line
             )));
         }
         let fingerprint = parse_fingerprint(&i.fingerprint)

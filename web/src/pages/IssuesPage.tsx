@@ -820,7 +820,10 @@ function IssuePath({ flow }: Readonly<{ flow: FlowStep[] }>) {
               <span>
                 <WithCode text={step.message} />
               </span>
-              <span className="ml-auto flex-none font-mono text-[11px] text-fg-faint">line {step.line}</span>
+              {/* A step in another file names it; the full path on hover. */}
+              <span className="ml-auto flex-none font-mono text-[11px] text-fg-faint" title={step.path}>
+                {step.path ? `${step.path.slice(step.path.lastIndexOf('/') + 1)}:${step.line}` : `line ${step.line}`}
+              </span>
             </div>
             {step.code && (
               <code className="ml-6 block overflow-x-auto whitespace-pre font-mono text-[12px]">
