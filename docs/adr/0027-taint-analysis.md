@@ -7,9 +7,9 @@
   stored by the server and shown on the issue page. T3 built: through the
   functions of the same file. T2 built, for JavaScript and TypeScript:
   `js/sql-injection`, `js/command-injection`, `js/path-injection`,
-  `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 built for
-  JavaScript and TypeScript: through other files' functions, with each
-  step of the path in its file; C# is next.
+  `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 built:
+  through other files' functions, with each step of the path in its file,
+  for JavaScript and TypeScript, and for C# in the calls' direction.
 - Date: 2026-11-07
 
 ## Context
@@ -381,6 +381,54 @@ Measured on the same corpus as T2:
 - **Cost:** scans take 0.6 s more than T2's at most (Strapi, 5.4 s to
   6.0 s); with the taint rules off and on, the largest difference is 22%,
   on the same application.
+
+As built for C# (2026-11-08), on the same facts and project pass:
+
+- **Calls resolve through ADR-0020's index.** A call names its receiver's
+  declared type as written (`IOrderService` for a field, a property, a
+  parameter or a local, the type of a `new` one, or the type of a static
+  call), with the namespace and the type it's written in; the project pass
+  resolves it as C# would, through the file's `using`s. An interface or a
+  base class reaches the summaries of each of its implementations and
+  subclasses in the project, as dependency injection would. A platform's
+  method isn't the project's, and a name that resolves to several types
+  resolves to none.
+- **Summaries** are keyed by the type's full name and the method's name
+  and arity (`App.Services.OrderService`0`, `Find/1`), for its methods
+  that aren't private.
+- **Only the calls' direction:** a controller's value through services to
+  a repository's sink. A value returned from another file's method isn't
+  followed yet: C#'s flow-sensitive analysis needs a way to keep a
+  "returned by another file" value that doesn't lose a request's own.
+- **Cost, which shaped it:**
+  - files without a request's value are now analyzed too, for their
+    summaries, but only methods with a sink of the rule (by the sink
+    tables' names in their text) or a parameter passed on to another
+    file's method;
+  - that second kind is read from the syntax, not the analysis: a
+    parameter that can carry text (not a number, a `Guid`, a date) passed
+    as an argument, a member of one, or in a concatenation or an
+    interpolation, not through another call, which may sanitize it. The
+    first version analyzed each such method per parameter, which made a
+    scan of Jellyfin 7 s longer;
+  - what every rule asks alike (each call's other file's method, each
+    method's parameters passed on) is computed once per file.
+
+Measured on the T1 corpus:
+
+- **Recall across files:** a static helper class planted in another file
+  of each of seven applications' controllers, one method per sink kind,
+  each called from the action with its request parameter: **49 found of
+  49**.
+- **Precision:** the first version reported seven new issues. Two were
+  return URLs nopCommerce's services check with a helper named
+  `CheckIsLocalUrl`; a check named like `IsLocalUrl` now counts. Five
+  remain, in Jellyfin, none exploitable on review: an endpoint any user
+  can call with paths a library monitor only reads the metadata of, four
+  sinks in one method, and an administrator's endpoint whose purpose is to
+  download an image from the URL given.
+- **Cost:** scans take 2.2 s more at most (nopCommerce, 5.1 s to 7.3 s);
+  Bitwarden, the largest, 1.1 s more on 12 s.
 
 ### The rules
 

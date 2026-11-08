@@ -28,7 +28,7 @@ pub(crate) struct Span {
 /// A reference to a type by its simple name and number of type arguments,
 /// and what qualifies it where it's written: `System.IO` in
 /// `System.IO.Stream`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) struct TypeRef {
     pub(crate) name: String,
     pub(crate) arity: usize,

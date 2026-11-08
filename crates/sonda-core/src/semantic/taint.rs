@@ -115,12 +115,28 @@ pub(crate) enum Callee {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         member: Option<String>,
     },
+    /// `orders.Find(id)` with `orders` declared as `IOrderService`: the
+    /// type as written, where it's written (the namespace, and the type the
+    /// call is in, for nested types), and the method's name and arity. The
+    /// project pass resolves the type with ADR-0020's index, and an
+    /// interface or a base class to its implementations too.
+    Cs {
+        #[serde(rename = "type")]
+        ty: super::cs_index::TypeRef,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        namespace: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        owner: String,
+        method: String,
+        arity: usize,
+    },
 }
 
 impl Callee {
     /// The name the path shows: `find`, `UserService.find`.
     pub(crate) fn display(&self) -> String {
         match self {
+            Callee::Cs { method, .. } => method.clone(),
             Callee::Js { name, member, .. } => match (name.as_deref(), member.as_deref()) {
                 (Some(n), Some(m)) if n != "default" => format!("{n}.{m}"),
                 (_, Some(m)) => m.to_string(),
