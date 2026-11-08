@@ -765,23 +765,26 @@ function TriageActions({
 }>) {
   const mine = me !== null && issue.assignee === me
   return (
-    <div className="flex flex-wrap gap-1.5">
-      <Button primary={!mine && !!me} disabled={mine || !me} onClick={onAssign}>
-        {assignLabel(mine, me)}
-      </Button>
-      <Button disabled={issue.status === 'confirmed'} onClick={() => onStatus('confirmed')}>
-        Confirm
-      </Button>
-      <Button disabled={issue.status === 'accepted'} onClick={() => onDecide('accepted')}>
-        Accept risk
-      </Button>
-      <Button disabled={issue.status === 'false_positive'} onClick={() => onDecide('false_positive')}>
-        False positive
-      </Button>
-      {issue.status !== 'open' && issue.status !== 'fixed' && <Button onClick={() => onStatus('open')}>Reopen</Button>}
-      <Button className="ml-auto" onClick={onCopyPrompt}>
-        Copy as prompt
-      </Button>
+    // Triage on the left, Copy as prompt on the right. When the row wraps,
+    // space-between puts the button that is alone on its line at the start,
+    // under the others, not stranded at the right edge.
+    <div className="flex flex-wrap justify-between gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
+        <Button primary={!mine && !!me} disabled={mine || !me} onClick={onAssign}>
+          {assignLabel(mine, me)}
+        </Button>
+        <Button disabled={issue.status === 'confirmed'} onClick={() => onStatus('confirmed')}>
+          Confirm
+        </Button>
+        <Button disabled={issue.status === 'accepted'} onClick={() => onDecide('accepted')}>
+          Accept risk
+        </Button>
+        <Button disabled={issue.status === 'false_positive'} onClick={() => onDecide('false_positive')}>
+          False positive
+        </Button>
+        {issue.status !== 'open' && issue.status !== 'fixed' && <Button onClick={() => onStatus('open')}>Reopen</Button>}
+      </div>
+      <Button onClick={onCopyPrompt}>Copy as prompt</Button>
     </div>
   )
 }

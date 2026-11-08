@@ -122,6 +122,12 @@ file, the report formats and the public library API.
   hundreds), and upgrade with `git fetch origin tag v<next>`, which works
   in such a clone and fetches only the new release.
 
+### Fixed
+
+- On an issue, Copy as prompt no longer sits alone at the right edge when
+  the triage buttons wrap: it goes to the start of the next line, under
+  them. When everything fits on one line, it stays on the right.
+
 ## [0.2.1] - 2026-11-06
 
 The CLI now comes as a binary for macOS and Windows too, an install script
