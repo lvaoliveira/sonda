@@ -15,6 +15,7 @@ pub(crate) mod dotnet;
 mod js;
 pub(crate) mod js_taint;
 mod py;
+pub(crate) mod py_taint;
 pub(crate) mod taint;
 pub(crate) mod taint_project;
 

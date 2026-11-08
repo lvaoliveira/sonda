@@ -18,6 +18,17 @@ file, the report formats and the public library API.
   longer at most. A return URL checked by a helper named like
   `IsLocalUrl` (`CheckIsLocalUrl`) now counts as checked.
 
+- Taint analysis for Python (ADR-0027), eight rules with the path each
+  value took: `py/sql-injection` (S3649), `py/command-injection` (S2076),
+  `py/path-injection` (S2083), `py/open-redirect` (S5146), `py/ssrf`
+  (S5144), `py/code-injection` (S5334), `py/xpath-injection` (S2091) and
+  `py/ldap-injection` (S2078). Sources are a request's members and the
+  parameters Flask, Django, FastAPI and aiohttp fill from it; sinks resolve
+  through the file's imports; the file's functions, and a class's methods
+  through `self`, are followed. On OWASP PyGoat and Vulnerable-Flask-App
+  they find the deliberate injections; on seven open-source applications
+  they report none; planted in each, they found every injection.
+
 - Scopes and symbols for Python (ADR-0008, S1): which binding each name
   refers to, with Python's rules (a name bound anywhere in a function is
   the function's, class bodies aren't visible in their methods, `global`,

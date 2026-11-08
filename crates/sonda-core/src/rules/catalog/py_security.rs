@@ -557,6 +557,158 @@ pub(super) static RULES: &[Rule] = &[
             good: "model = torch.load(path, weights_only=True)\n",
         }),
     },
+    Rule {
+        id: "py/sql-injection",
+        name: "SQL queries should not be built from a request's values",
+        description: "A value from the request (a query string, a form field, a route parameter, a header) that reaches a query's text lets whoever sends the request change what the query does. Pass it as a parameter instead. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this query from the request's values; pass them as parameters.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S3649")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: sql_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/o')\ndef orders():\n    cursor.execute(\"SELECT * FROM o WHERE id = '%s'\" % request.args['id'])\n",
+            good: "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/o')\ndef orders():\n    cursor.execute('SELECT * FROM o WHERE id = %s', (request.args['id'],))\n",
+        }),
+    },
+    Rule {
+        id: "py/command-injection",
+        name: "OS commands should not be built from a request's values",
+        description: "A value from the request that reaches a command lets whoever sends it run, or add to, a command on the server. Run a fixed program with `subprocess`, passing the value as one of its arguments, without a shell. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this command from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2076")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: command_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "import os\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/ping')\ndef ping():\n    os.system('ping -c 1 ' + request.args['host'])\n",
+            good: "import subprocess\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/ping')\ndef ping():\n    subprocess.run(['ping', '-c', '1', request.args['host']])\n",
+        }),
+    },
+    Rule {
+        id: "py/path-injection",
+        name: "File paths should not be built from a request's values",
+        description: "A value from the request that reaches a file path can name any file the server can read or write, with `../` or an absolute path. Keep only its file name, with `os.path.basename` or `secure_filename`, or check the resolved path stays under its directory. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this file path from the request's values.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S2083")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: path_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/f')\ndef read():\n    return open('/srv/files/' + request.args['name']).read()\n",
+            good: "import os\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/f')\ndef read():\n    return open('/srv/files/' + os.path.basename(request.args['name'])).read()\n",
+        }),
+    },
+    Rule {
+        id: "py/open-redirect",
+        name: "Redirects should not go to a URL from the request",
+        description: "A redirect to a URL the request chose sends users wherever its sender likes, with this site's name on the link. Redirect to a path on this site, or check the URL with `url_has_allowed_host_and_scheme` or an allowlist. The issue shows the path the value took (ADR-0027).",
+        message: "Don't redirect to a URL taken from the request; check it first.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S5146")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: open_redirect,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "from flask import Flask, request, redirect\napp = Flask(__name__)\n@app.route('/login')\ndef login():\n    return redirect(request.args['next'])\n",
+            good: "from flask import Flask, request, redirect\napp = Flask(__name__)\n@app.route('/login')\ndef login():\n    return redirect('/home/' + request.args['next'])\n",
+        }),
+    },
+    Rule {
+        id: "py/ssrf",
+        name: "Server-side requests should not go to a URL from the request",
+        description: "A request the server makes to a URL its caller chose can reach what only the server can: internal services, cloud metadata endpoints, the local network. Fix the host, and put only the request's values in the path or query. The issue shows the path the value took (ADR-0027).",
+        message: "Don't let the request choose where this server-side request goes.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S5144")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: ssrf,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "import requests\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/proxy')\ndef proxy():\n    return requests.get(request.args['url']).text\n",
+            good: "import requests\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/user')\ndef user():\n    return requests.get('https://api.example.com/users/' + request.args['id']).text\n",
+        }),
+    },
+    Rule {
+        id: "py/code-injection",
+        name: "Code should not be built from a request's values",
+        description: "A value from the request that reaches `eval` or `exec` runs as code on the server, with its permissions. Parse the value as data instead, with `json.loads` or `ast.literal_eval`. The issue shows the path the value took (ADR-0027).",
+        message: "Don't run code built from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S5334")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: code_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/calc', methods=['POST'])\ndef calc():\n    return str(eval(request.form['expr']))\n",
+            good: "import ast\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/calc', methods=['POST'])\ndef calc():\n    return str(ast.literal_eval(request.form['expr']))\n",
+        }),
+    },
+    Rule {
+        id: "py/xpath-injection",
+        name: "XPath expressions should not be built from a request's values",
+        description: "A value from the request in an XPath expression can change what it selects, and read data it shouldn't. Pass it as a variable of the expression instead. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this XPath expression from the request's values.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S2091")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: xpath_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/u')\ndef user():\n    return str(tree.xpath(\"//user[@name='\" + request.args['name'] + \"']\"))\n",
+            good: "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/u')\ndef user():\n    return str(tree.xpath('//user[@name=$name]', name=request.args['name']))\n",
+        }),
+    },
+    Rule {
+        id: "py/ldap-injection",
+        name: "LDAP filters should not be built from a request's values",
+        description: "A value from the request in an LDAP filter can change what it matches, and read entries it shouldn't. Escape it with `ldap.filter.escape_filter_chars`. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this LDAP filter from the request's values.",
+        category: Vulnerability,
+        severity: Critical,
+        effort_minutes: 30,
+        sonar: &[exact("S2078")],
+        check: Check::Taint {
+            langs: PYTHON,
+            find: ldap_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "import ldap\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/u')\ndef user():\n    return str(conn.search_s('dc=example', ldap.SCOPE_SUBTREE, '(uid=' + request.args['uid'] + ')'))\n",
+            good: "import ldap\nfrom ldap.filter import escape_filter_chars\nfrom flask import Flask, request\napp = Flask(__name__)\n@app.route('/u')\ndef user():\n    return str(conn.search_s('dc=example', ldap.SCOPE_SUBTREE, '(uid=' + escape_filter_chars(request.args['uid']) + ')'))\n",
+        }),
+    },
 ];
 
 // ---------------------------------------------------- filters
@@ -1109,3 +1261,23 @@ mod tests {
         assert_eq!(flagged("py/torch-load-unsafe", src), [4, 6]);
     }
 }
+
+macro_rules! py_taint_rule_fn {
+    ($name:ident, $kind:ident) => {
+        /// A request's value reaching this kind of sink (ADR-0027).
+        fn $name<'t>(
+            m: &crate::semantic::Model<'t>,
+            src: &[u8],
+        ) -> crate::semantic::taint::TaintResult<'t> {
+            crate::semantic::py_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
+        }
+    };
+}
+py_taint_rule_fn!(sql_injection, Sql);
+py_taint_rule_fn!(command_injection, Command);
+py_taint_rule_fn!(path_injection, Path);
+py_taint_rule_fn!(open_redirect, Redirect);
+py_taint_rule_fn!(ssrf, Ssrf);
+py_taint_rule_fn!(code_injection, Code);
+py_taint_rule_fn!(xpath_injection, XPath);
+py_taint_rule_fn!(ldap_injection, Ldap);
