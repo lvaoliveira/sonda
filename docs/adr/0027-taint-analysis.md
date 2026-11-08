@@ -10,6 +10,10 @@
   `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 built:
   through other files' functions, with each step of the path in its file,
   for JavaScript and TypeScript, and for C# in the calls' direction.
+  Python built (T2 and T3, on its binder, ADR-0008 S1):
+  `py/sql-injection`, `py/command-injection`, `py/path-injection`,
+  `py/open-redirect`, `py/ssrf`, `py/code-injection`,
+  `py/xpath-injection` and `py/ldap-injection`.
 - Date: 2026-11-07
 
 ## Context
@@ -430,6 +434,64 @@ Measured on the T1 corpus:
 - **Cost:** scans take 2.2 s more at most (nopCommerce, 5.1 s to 7.3 s);
   Bitwarden, the largest, 1.1 s more on 12 s.
 
+### Python
+
+Built on Python's binder ([ADR-0008](0008-semantic-layer.md), S1) as
+JavaScript's is on its scopes: flow-insensitive over the file, with the
+file's functions followed through their summaries (T3), including a
+class's methods called through `self`. It's `semantic/py_taint.rs`.
+
+- **Sources:** a request's members in Flask (`request.args`, `form`,
+  `json`, `files[…].filename`), Django (`request.GET`, `POST`, `COOKIES`,
+  `META`, `body`), Starlette and FastAPI (`query_params`, `await
+  request.json()`) and aiohttp (`match_info`, `query`); Flask's `request`
+  is the one imported from `flask`, the others a parameter named `request`
+  or typed as one. The parameters a framework fills are sources too: a
+  Flask route's (not those its path converts to numbers, `<int:id>`), a
+  Django view's after its `request`, and a FastAPI path operation's, but
+  not numbers, `Depends(…)` or framework objects.
+- **Sinks resolve through imports,** as JavaScript's: `os.system`,
+  `subprocess.*` (only the program, for a list without a shell), `open`,
+  `os.*` and `shutil.*`, a `pathlib` path's file operations (`Path(p)`
+  only names one), Flask's `send_file` and `redirect`, Django's `redirect`
+  and `HttpResponseRedirect`, `RedirectResponse`, `requests`, `httpx`,
+  `urllib.request` and their sessions, `eval` and `exec`, SQLAlchemy's
+  `text`, Django's `raw` and `RawSQL`, and a cursor's `execute` with text
+  that reads as SQL. XPath (lxml's `xpath`) and LDAP (`search_s`, ldap3's
+  `search`) too: Python has all eight of C#'s and JavaScript's kinds.
+- **Sanitizers and checks**, beyond JavaScript's: `os.path.basename`,
+  `secure_filename` and a `pathlib` path's `.name` for paths,
+  `shlex.quote` for commands; Django's `url_has_allowed_host_and_scheme`
+  and functions named like checks (`_allow_redirect`, `safe_for_redirect`);
+  membership in its branch (`if plugin in plugins:`) and allowlists
+  (`ext not in ALLOWED_EXTENSIONS`); anchored patterns
+  (`re.match(r"^[a-z_]+$", x)`); and a helper's return value it checked
+  itself (`is_relative_to`) carries nothing.
+- **A redirect to the request's own path** (`request.path`,
+  `get_full_path()`) isn't one: its route matched it. `request.url` is,
+  since its host is the sender's `Host` header.
+
+Measured on OWASP PyGoat, DVPWA and Vulnerable-Flask-App, and seven
+applications (CTFd, Redash, Superset, healthchecks, paperless-ngx, NetBox
+and Mealie):
+
+- **The deliberate vulnerabilities in these rules' scope are found:**
+  PyGoat's command injection, `eval`, SQL injection, SSRF and path
+  traversal, and Vulnerable-Flask-App's SQL injection. DVPWA's SQL
+  injection isn't: its handler passes the value to a data-access module,
+  which takes Python's T4.
+- **Precision:** the first version reported 18 issues in the seven
+  applications, all false: a list of plugins checked by membership, checks
+  named like `_allow_redirect` and `safe_for_redirect`, redirects to the
+  request's own path, `shutil.copyfileobj` taken for a path sink (it takes
+  file objects), `Path(…)` taken for one when only a file operation is, and
+  a string's `replace` taken for a path's. With each fixed and reproduced
+  in a test, none remain.
+- **Recall in real files:** one line per sink kind, planted in a real view
+  of each of the seven applications with that view's own request value:
+  **56 found of 56**.
+- **Cost:** scan times are unchanged within a run's noise.
+
 ### The rules
 
 Each sink kind is a new rule, with SonarQube's taint key as its exact
@@ -482,7 +544,8 @@ fixed number of steps; a longer path keeps its first and last steps.
   benchmarked on a large repository before it ships.
 - **Report format.** `flow` is an addition to the JSON report and to SARIF,
   so older consumers ignore it. The server stores it with the issue.
-- **Not covered:** Python and Java, until each has a semantic layer; flows
+- **Not covered:** Java, until it has a semantic layer; Python across
+  files (T4), next; flows
   through dependencies' own code; second-order injection, where a value is
   stored and read back later; and custom sources and sinks in `sonda.toml`,
   which wait until the built-in tables have settled.
