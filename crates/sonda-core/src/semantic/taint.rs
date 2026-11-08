@@ -115,6 +115,18 @@ pub(crate) enum Callee {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         member: Option<String>,
     },
+    /// `from app.db import query; query(x)` is `app.db`'s `query`;
+    /// `db.query(x)` with `db` a module is the module's `query`;
+    /// `UserService().find(x)` names `UserService` and its member `find`.
+    /// Relative modules keep their dots (`.db`); the project pass resolves
+    /// them from the calling file.
+    Py {
+        module: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member: Option<String>,
+    },
     /// `orders.Find(id)` with `orders` declared as `IOrderService`: the
     /// type as written, where it's written (the namespace, and the type the
     /// call is in, for nested types), and the method's name and arity. The
@@ -137,6 +149,12 @@ impl Callee {
     pub(crate) fn display(&self) -> String {
         match self {
             Callee::Cs { method, .. } => method.clone(),
+            Callee::Py { name, member, .. } => match (name.as_deref(), member.as_deref()) {
+                (Some(n), Some(m)) => format!("{n}.{m}"),
+                (_, Some(m)) => m.to_string(),
+                (Some(n), None) => n.to_string(),
+                (None, None) => String::new(),
+            },
             Callee::Js { name, member, .. } => match (name.as_deref(), member.as_deref()) {
                 (Some(n), Some(m)) if n != "default" => format!("{n}.{m}"),
                 (_, Some(m)) => m.to_string(),

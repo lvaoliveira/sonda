@@ -9,6 +9,14 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Python taint analysis follows a request's value into the project's
+  other modules (ADR-0027, T4): a view passing it to a data-access module,
+  a service's class method, or a helper module that runs the command, and
+  back out of one that builds the query. Modules resolve by path, relative
+  or absolute. DVPWA's SQL injection is now found; planted in another
+  module of seven open-source applications, every injection was; scans
+  take 1.6 s longer at most.
+
 - C# taint analysis follows a request's value into the project's other
   files (ADR-0027, T4): a controller's value through a service, injected
   by its interface, to a repository's query or file. Calls resolve with

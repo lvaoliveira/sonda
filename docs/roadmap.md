@@ -16,7 +16,7 @@ breaking that promise.
 | [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
 | [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
 | [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
-| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 to T4 are built: seven C# rules, `cs/sql-injection` and its kin, and six for JavaScript and TypeScript, within and across files, and eight for Python within a file ([ADR-0027](adr/0027-taint-analysis.md)); the shape rules cover injection where they don't reach. |
+| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 to T4 are built: seven C# rules, `cs/sql-injection` and its kin, and six for JavaScript and TypeScript, within and across files, and eight for Python ([ADR-0027](adr/0027-taint-analysis.md)); the shape rules cover injection where they don't reach. |
 | [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
 | [More lockfile formats](#dependencies-sbom-and-known-vulnerabilities) | after | Adds ecosystems; the SBOM formats don't change. |
 | [AI auto-fix](#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests) | after | Copy as prompt covers fixing with an assistant today ([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md)). |
@@ -141,8 +141,7 @@ own groundwork, smallest first:
    the path shown on each issue (T1; T3, through the functions of the same
    file; T2, six JavaScript and TypeScript rules; and T4 for JavaScript and
    TypeScript, across files, are built; T4 for C#, in the calls'
-   direction; and Python's eight rules, within a file). Next: T4 for
-   Python.
+   direction; and Python's eight rules, within and across files).
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry

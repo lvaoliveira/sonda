@@ -10,7 +10,7 @@
   `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 built:
   through other files' functions, with each step of the path in its file,
   for JavaScript and TypeScript, and for C# in the calls' direction.
-  Python built (T2 and T3, on its binder, ADR-0008 S1):
+  Python built (T2 to T4, on its binder, ADR-0008 S1):
   `py/sql-injection`, `py/command-injection`, `py/path-injection`,
   `py/open-redirect`, `py/ssrf`, `py/code-injection`,
   `py/xpath-injection` and `py/ldap-injection`.
@@ -492,6 +492,43 @@ and Mealie):
   **56 found of 56**.
 - **Cost:** scan times are unchanged within a run's noise.
 
+Across files (T4, 2026-11-08), on the same facts and project pass as
+JavaScript's:
+
+- **Calls into other modules:** a function imported from one
+  (`from .db import query`, `from app.db import query`), a module's
+  function (`db.query(x)` with `from . import db` or `import app.db as
+  db`), and an instance of an imported class (`svc = UserService();
+  svc.find(x)`). A library's module (`os`, `requests`, `flask`…) isn't one.
+- **Modules resolve by path:** a relative import from the calling file's
+  package (`..db` one package up); an absolute one by the files whose path
+  ends with it (`app/db.py`, `app/db/__init__.py`), when only one does. A
+  name imported from a package can be its submodule (`from app import
+  db`). The project's Python files are indexed by every module path they
+  can be imported by, once per scan: the first version scanned every file
+  per call, which made Superset's scan 4 s longer.
+- **Summaries** are keyed by a module's function's name, or a module's
+  class and method, `self` not counted among the arguments.
+- **A file without a sink of the rule** reports what its functions pass
+  straight on to other modules, and return built straight from a
+  parameter, read from the syntax, as C#'s do: as the argument, a member,
+  or in a concatenation, a `%` or an f-string, not through another call.
+  Analyzing each of its functions per parameter cost a large project
+  seconds, for files that can't have a finding of their own.
+
+Measured on the same corpus:
+
+- **DVPWA's SQL injection is found:** its aiohttp handler passes the
+  form's value to a data-access module's class method, which builds the
+  query.
+- **Recall across files:** a helper module planted next to a real view of
+  each of the seven applications, one function per sink kind, each called
+  with the view's own request value: **56 found of 56**. The planted
+  injections within a file are still found, 56 of 56.
+- **Precision:** no issue in the seven applications.
+- **Cost:** Superset, the largest, takes 1.6 s more on 10 s; the others
+  0.2 s at most.
+
 ### The rules
 
 Each sink kind is a new rule, with SonarQube's taint key as its exact
@@ -544,8 +581,7 @@ fixed number of steps; a longer path keeps its first and last steps.
   benchmarked on a large repository before it ships.
 - **Report format.** `flow` is an addition to the JSON report and to SARIF,
   so older consumers ignore it. The server stores it with the issue.
-- **Not covered:** Java, until it has a semantic layer; Python across
-  files (T4), next; flows
+- **Not covered:** Java, until it has a semantic layer; flows
   through dependencies' own code; second-order injection, where a value is
   stored and read back later; and custom sources and sinks in `sonda.toml`,
   which wait until the built-in tables have settled.
