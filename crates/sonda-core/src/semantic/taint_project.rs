@@ -125,9 +125,17 @@ pub(crate) struct Found {
     pub(crate) steps: Vec<(usize, StepFact)>,
 }
 
+/// The C# summaries a call can reach: (file, key) pairs, from ADR-0020's
+/// index. The project pass passes one in; tests can pass none.
+pub(crate) type CsResolver<'r> = &'r dyn Fn(usize, &Callee) -> Vec<(usize, Key)>;
+
 /// Joins one rule's facts, `facts[i]` being file `i`'s (with `paths[i]`
 /// its path from the project root), into the findings that cross files.
-pub(crate) fn compose(paths: &[&str], facts: &[Option<FileFacts>]) -> Vec<Found> {
+pub(crate) fn compose(
+    paths: &[&str],
+    facts: &[Option<FileFacts>],
+    cs: Option<CsResolver>,
+) -> Vec<Found> {
     let by_path: HashMap<String, usize> = paths
         .iter()
         .enumerate()
@@ -140,14 +148,23 @@ pub(crate) fn compose(paths: &[&str], facts: &[Option<FileFacts>]) -> Vec<Found>
         }
     }
     let resolve = |from: usize, callee: &Callee| -> Vec<(usize, &Summary)> {
-        let Callee::Js { spec, name, member } = callee;
-        let Some(file) = resolve_module(paths[from], spec, &by_path) else {
-            return Vec::new();
-        };
-        candidate_keys(name.as_deref(), member.as_deref())
-            .into_iter()
-            .find_map(|k| summaries.get(&(file, &k)).map(|s| vec![(file, *s)]))
-            .unwrap_or_default()
+        match callee {
+            Callee::Js { spec, name, member } => {
+                let Some(file) = resolve_module(paths[from], spec, &by_path) else {
+                    return Vec::new();
+                };
+                candidate_keys(name.as_deref(), member.as_deref())
+                    .into_iter()
+                    .find_map(|k| summaries.get(&(file, &k)).map(|s| vec![(file, *s)]))
+                    .unwrap_or_default()
+            }
+            Callee::Cs { .. } => cs
+                .map(|r| r(from, callee))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(file, key)| summaries.get(&(file, &key)).map(|s| (file, *s)))
+                .collect(),
+        }
     };
 
     let mut found = Vec::new();

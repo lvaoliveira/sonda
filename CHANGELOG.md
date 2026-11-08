@@ -9,6 +9,15 @@ file, the report formats and the public library API.
 
 ### Added
 
+- C# taint analysis follows a request's value into the project's other
+  files (ADR-0027, T4): a controller's value through a service, injected
+  by its interface, to a repository's query or file. Calls resolve with
+  the cross-file declarations of ADR-0020, and an interface or a base
+  class reaches each implementation. On seven open-source applications
+  every injection planted in another file was found; scans take 2.2 s
+  longer at most. A return URL checked by a helper named like
+  `IsLocalUrl` (`CheckIsLocalUrl`) now counts as checked.
+
 - The server stores each step's file in a path that crosses files, and the
   issue page shows it (`routes.js:3`, the whole path on hover), with the
   step's line of code from that file. An upload whose path names a file

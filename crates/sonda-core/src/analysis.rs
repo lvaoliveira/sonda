@@ -2040,6 +2040,8 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
     keys.sort_unstable();
     keys.dedup();
     let keys: Vec<String> = keys.into_iter().map(str::to_string).collect();
+    // C#'s indexes, parsed once for every C# rule.
+    let mut cs_parsed: Option<Vec<(usize, semantic::cs_index::FileIndex)>> = None;
     for key in keys {
         let Some(active) = rules.get(&key[tp::FACT_PREFIX.len()..]) else {
             continue;
@@ -2054,7 +2056,17 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             })
             .collect();
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-        let found = tp::compose(&paths, &facts);
+        let found = if key[tp::FACT_PREFIX.len()..].starts_with("cs/") {
+            let parsed = cs_parsed.get_or_insert_with(|| cs_indexes(files));
+            let index = CsTaintIndex::new(parsed);
+            tp::compose(
+                &paths,
+                &facts,
+                Some(&|from, callee| index.resolve(from, callee)),
+            )
+        } else {
+            tp::compose(&paths, &facts, None)
+        };
         let mut issues = Vec::new();
         for f in found {
             let file = &files[f.file];
@@ -2097,6 +2109,91 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                 files[i].issues.push(issue);
             }
         }
+    }
+}
+
+/// The files' C# indexes (ADR-0020), by their position in `files`.
+fn cs_indexes(files: &[FileAnalysis]) -> Vec<(usize, semantic::cs_index::FileIndex)> {
+    files
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            let (_, json) = f
+                .facts
+                .iter()
+                .find(|(k, _)| k == semantic::cs_index::FACT)?;
+            Some((i, serde_json::from_str(json).ok()?))
+        })
+        .collect()
+}
+
+/// ADR-0020's index, for the project pass's C# calls: a call's type,
+/// written in one file, to the summaries of its methods in the project,
+/// and of an interface's or a base class's implementations.
+struct CsTaintIndex<'a> {
+    files: Vec<usize>,
+    index: semantic::cs_index::ProjectIndex<'a>,
+    /// Each type's implementations and subclasses in the project.
+    below: HashMap<usize, Vec<usize>>,
+}
+
+impl<'a> CsTaintIndex<'a> {
+    fn new(parsed: &'a [(usize, semantic::cs_index::FileIndex)]) -> Self {
+        let index = semantic::cs_index::ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
+        let mut below: HashMap<usize, Vec<usize>> = HashMap::new();
+        for t in 0..index.len() {
+            let mut above = index.interfaces(t);
+            above.extend(index.ancestors(t));
+            for a in above {
+                below.entry(a).or_default().push(t);
+            }
+        }
+        CsTaintIndex {
+            files: parsed.iter().map(|(i, _)| *i).collect(),
+            index,
+            below,
+        }
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Cs {
+            ty,
+            namespace,
+            owner,
+            method,
+            arity,
+        } = callee
+        else {
+            return Vec::new();
+        };
+        let Some(at) = self.files.iter().position(|i| *i == from) else {
+            return Vec::new();
+        };
+        let Some(id) = self.index.resolve_at(at, namespace, owner, ty) else {
+            return Vec::new();
+        };
+        let member = format!("{method}/{arity}");
+        let mut out = Vec::new();
+        let types = std::iter::once(id).chain(self.below.get(&id).into_iter().flatten().copied());
+        for t in types {
+            let full = self.index.decl(t).1.full_name();
+            for (file, _) in self.index.parts(t) {
+                out.push((
+                    self.files[*file],
+                    semantic::taint::Key {
+                        export: full.clone(),
+                        member: Some(member.clone()),
+                    },
+                ));
+            }
+        }
+        out.sort_by(|a, b| (a.0, &a.1.export).cmp(&(b.0, &b.1.export)));
+        out.dedup();
+        out
     }
 }
 

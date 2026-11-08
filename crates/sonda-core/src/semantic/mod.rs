@@ -111,6 +111,10 @@ pub(crate) struct Function<'t> {
     pub(crate) params: Vec<Vec<DeclId>>,
 }
 
+/// A function's parameter passed straight on to another file's method:
+/// its position, its declaration, the call, the callee and the argument.
+pub(crate) type PassedOn<'t> = (usize, DeclId, Node<'t>, taint::Callee, usize);
+
 pub(crate) struct Model<'t> {
     pub(crate) scopes: Vec<Scope>,
     pub(crate) decls: Vec<Decl<'t>>,
@@ -136,6 +140,13 @@ pub(crate) struct Model<'t> {
     /// The supertypes `Infer::supertypes` found, by type.
     pub(crate) cs_supertypes:
         std::cell::RefCell<std::collections::HashMap<cs_infer::Ty, Vec<cs_infer::Ty>>>,
+    /// C# taint (ADR-0027, T4): each call's other file's method, and each
+    /// function's parameters passed straight on to one, which every taint
+    /// rule of the file asks for alike.
+    pub(crate) cs_external:
+        std::cell::RefCell<std::collections::HashMap<usize, Option<taint::Callee>>>,
+    pub(crate) cs_passed:
+        std::cell::RefCell<std::collections::HashMap<usize, std::rc::Rc<Vec<PassedOn<'t>>>>>,
 }
 
 impl<'t> Model<'t> {
@@ -158,6 +169,8 @@ impl<'t> Model<'t> {
             cs_context: std::cell::OnceCell::new(),
             cs_types: std::cell::RefCell::default(),
             cs_supertypes: std::cell::RefCell::default(),
+            cs_external: std::cell::RefCell::default(),
+            cs_passed: std::cell::RefCell::default(),
         }
     }
 

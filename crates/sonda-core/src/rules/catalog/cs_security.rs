@@ -1079,14 +1079,7 @@ macro_rules! taint_rule_fn {
             m: &crate::semantic::Model<'t>,
             src: &[u8],
         ) -> crate::semantic::taint::TaintResult<'t> {
-            crate::semantic::taint::TaintResult {
-                findings: crate::semantic::cs_taint::find(
-                    m,
-                    src,
-                    crate::semantic::taint::SinkKind::$kind,
-                ),
-                facts: Default::default(),
-            }
+            crate::semantic::cs_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
         }
     };
 }

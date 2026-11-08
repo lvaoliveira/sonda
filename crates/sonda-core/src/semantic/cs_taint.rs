@@ -20,8 +20,9 @@
 //! function reports nothing.
 
 use super::cs_cfg::{self, Access, Cfg, ENTRY};
+use super::cs_index::TypeRef;
 use super::cs_infer::{Found, Infer, Ty};
-use super::taint::{Finding, SinkKind, Step, cap};
+use super::taint::{Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult, cap};
 use super::{DeclId, DeclKind, Model};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -36,6 +37,8 @@ const MAX_ROUNDS: usize = 512;
 const MAX_EXPR_NODES: usize = 4096;
 
 type Path<'t> = Vec<Step<'t>>;
+/// A call to another file's method, and what it calls (T4).
+type ExternalCall<'t> = (Node<'t>, Callee);
 type State<'t> = BTreeMap<DeclId, Path<'t>>;
 
 // ---------------------------------------------------------------- tables
@@ -431,15 +434,14 @@ const INTO_RECEIVER: &[&str] = &[
 // ---------------------------------------------------------------- analysis
 
 /// Every function's findings for `kind`, in source order.
-pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding<'t>> {
+pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
     // Every source is a controller's (by name, attribute or base class), a
     // `Request`'s member, or a `Map…` handler's parameter: a file that
-    // mentions none of them has no request's value to follow. Most don't.
-    if !might_have_sources(src) {
-        return Vec::new();
-    }
+    // mentions none of them has no request's value to follow. Most don't,
+    // but their methods can still take one from another file's (T4).
+    let sources = might_have_sources(src);
     let Some(infer) = Infer::new(m, src) else {
-        return Vec::new();
+        return TaintResult::default();
     };
     let by_node = cs_cfg::decls_by_node(m);
     let file = FileCx {
@@ -456,15 +458,19 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding
         sinks: RefCell::new(HashMap::new()),
         reaches: RefCell::new(HashMap::new()),
         checks: RefCell::new(HashMap::new()),
+        external: RefCell::new(HashMap::new()),
+        sink_text: might_have_sinks(src, kind),
     };
     let mut found = Vec::new();
+    let mut facts = Facts::default();
     for i in 0..m.functions.len() {
-        if !file.analyzable(i) {
+        if !sources || !file.analyzable(i) {
             continue;
         }
         let sinks = file.sinks(i);
         let calls = file.calls_with_sinks(i);
-        if sinks.is_empty() && calls.is_empty() {
+        let external = file.external_calls(i);
+        if sinks.is_empty() && calls.is_empty() && external.is_empty() {
             continue;
         }
         let Some(cfg) = file.cfg(i) else {
@@ -474,12 +480,24 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Vec<Finding
         let sources = source_params(m, &infer, i, src);
         if let Some(inn) = a.run(&cfg, sources) {
             found.extend(a.findings(&cfg, &inn, &sinks, &calls));
+            for (steps, call, callee, arg) in a.opens(&cfg, &inn, &external) {
+                facts.calls.push(super::taint::CallFact {
+                    steps: cap(steps),
+                    call,
+                    callee,
+                    arg,
+                });
+            }
         }
     }
     // A sink a helper has, reached from several callers: its shortest path.
     found.sort_by_key(|f| (f.sink.start_byte(), f.steps.len()));
     found.dedup_by_key(|f| f.sink.id());
-    found
+    facts.summaries = file.exported_summaries();
+    TaintResult {
+        findings: found,
+        facts,
+    }
 }
 
 /// One file's functions, as T3 sees them (ADR-0027): each function's graph
@@ -506,6 +524,10 @@ struct FileCx<'a, 't> {
     /// The parameters each function checks (`checked_values`), by position:
     /// a call to it checks the matching arguments.
     checks: RefCell<HashMap<usize, Option<Rc<Vec<usize>>>>>,
+    /// Each function's calls to other files' methods (T4).
+    external: RefCell<HashMap<usize, Rc<Vec<ExternalCall<'t>>>>>,
+    /// Whether the file's text names a sink of this kind at all.
+    sink_text: bool,
 }
 
 /// What a function does with its parameters, for its callers (T3).
@@ -520,6 +542,9 @@ struct Summary<'t> {
     /// Parameters that reach a sink inside it: (position, the sink, the path
     /// from the parameter to the sink).
     sinks: Vec<(usize, Node<'t>, Path<'t>)>,
+    /// Parameters passed on to another file's method (T4): the path, ending
+    /// at the call, the callee, and the argument it becomes.
+    calls: Vec<(usize, Path<'t>, Callee, usize)>,
 }
 
 /// A call to a function of the same file, and that function.
@@ -743,6 +768,266 @@ impl<'a, 't> FileCx<'a, 't> {
         s
     }
 
+    /// The calls in function `i`'s own body to other files' methods.
+    fn external_calls(&self, i: usize) -> Rc<Vec<ExternalCall<'t>>> {
+        if let Some(e) = self.external.borrow().get(&i) {
+            return e.clone();
+        }
+        let function = self.functions[i];
+        let mut out = Vec::new();
+        let mut stack: Vec<Node<'t>> = function.child_by_field_name("body").into_iter().collect();
+        while let Some(n) = stack.pop() {
+            if n.id() != function.id() && self.functions.iter().any(|f| f.id() == n.id()) {
+                continue;
+            }
+            if n.kind() == "invocation_expression"
+                && !arguments(n).is_empty()
+                && let Some(c) = self.external_callee(n)
+            {
+                out.push((n, c));
+            }
+            stack.extend(children(n));
+        }
+        let out = Rc::new(out);
+        self.external.borrow_mut().insert(i, out.clone());
+        out
+    }
+
+    /// Another file's method a call calls (T4): `orders.Find(id)` with
+    /// `orders` a field, property, parameter or local declared with a type
+    /// of the project, or set to a `new` one, and `OrderService.Find(id)`,
+    /// a static call. Not a platform's method, nor one of this file.
+    fn external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if let Some(c) = self.m.cs_external.borrow().get(&call.id()) {
+            return c.clone();
+        }
+        let c = self.resolve_external(call);
+        self.m.cs_external.borrow_mut().insert(call.id(), c.clone());
+        c
+    }
+
+    fn resolve_external(&self, call: Node<'t>) -> Option<Callee> {
+        // The syntax first, which rules out most calls; inference last.
+        let function = call.child_by_field_name("function")?;
+        if function.kind() != "member_access_expression" {
+            return None;
+        }
+        let method = self
+            .text(bare_name(function.child_by_field_name("name")?))
+            .to_string();
+        let receiver = function.child_by_field_name("expression")?;
+        let name = match receiver.kind() {
+            "identifier" => receiver,
+            // `this._orders.Find(id)`
+            "member_access_expression"
+                if receiver
+                    .child_by_field_name("expression")
+                    .is_some_and(|e| e.kind() == "this_expression") =>
+            {
+                receiver.child_by_field_name("name")?
+            }
+            _ => return None,
+        };
+        let written = match self.m.decl_of(name) {
+            Some(decl) => match decl.ty {
+                Some(t) => self.text(t),
+                // `var orders = new OrderService(…)`
+                None => decl
+                    .declarator
+                    .and_then(|d| d.named_child(d.named_child_count().saturating_sub(1) as u32))
+                    .filter(|v| v.kind() == "object_creation_expression")
+                    .and_then(|v| v.child_by_field_name("type"))
+                    .map(|t| self.text(t))?,
+            },
+            // A name declared nowhere in the file: a type's, for a static
+            // call, if it reads like one.
+            None if self.text(name).starts_with(char::is_uppercase) => self.text(name),
+            None => return None,
+        };
+        let ty = TypeRef::parse(written)?;
+        if PREDEFINED.contains(&ty.name.as_str()) || self.callee(call).is_some() {
+            return None;
+        }
+        if self.infer.call(call).is_some_and(|c| {
+            c.methods
+                .iter()
+                .any(|m| matches!(m, Found::Platform { .. }))
+        }) {
+            return None;
+        }
+        let (namespace, owner) = scope_of(call, self.src);
+        Some(Callee::Cs {
+            ty,
+            namespace,
+            owner,
+            method,
+            arity: arguments(call).len(),
+        })
+    }
+
+    /// The summaries of the methods other files can call (T4): a type's
+    /// methods that aren't private, by the type's full name and the
+    /// method's name and arity.
+    fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
+        let mut out = Vec::new();
+        for j in 0..self.functions.len() {
+            let f = self.functions[j];
+            if f.kind() != "method_declaration" || !self.analyzable(j) {
+                continue;
+            }
+            let modifiers: Vec<&str> = children(f)
+                .into_iter()
+                .filter(|c| c.kind() == "modifier")
+                .map(|c| self.text(c))
+                .collect();
+            if !modifiers
+                .iter()
+                .any(|m| matches!(*m, "public" | "internal" | "protected"))
+            {
+                continue;
+            }
+            // Only a method with a sink, or one passing a parameter on to
+            // another file's method, has anything to say.
+
+            // A method whose text names no sink of this kind has none,
+            // unless a helper of the file it calls does.
+            let own_text = f.utf8_text(self.src).unwrap_or_default().as_bytes();
+            let sinks_here = self.sink_text
+                && (might_have_sinks(own_text, self.kind) || !self.local_calls(j).is_empty())
+                && self.reaches_sink(j);
+            if !(sinks_here || !self.passed_on(j).is_empty()) {
+                continue;
+            }
+            let (_, owner) = scope_of(f, self.src);
+            if owner.is_empty() {
+                continue;
+            }
+            let Some(name) = f.child_by_field_name("name") else {
+                continue;
+            };
+            let summary = if sinks_here {
+                self.summary(j)
+            } else {
+                Rc::new(Summary {
+                    calls: self.calls_passed_on(j),
+                    ..Summary::default()
+                })
+            };
+            if summary.sinks.is_empty() && summary.calls.is_empty() {
+                continue;
+            }
+            out.push(SummaryFact {
+                key: Key {
+                    export: owner,
+                    member: Some(format!("{}/{}", self.text(name), params_count(f))),
+                },
+                returns_sql: false,
+                to_sink: summary
+                    .sinks
+                    .iter()
+                    .map(|(p, sink, path)| (*p, path.clone(), *sink))
+                    .collect(),
+                to_return: Vec::new(),
+                returns_source: None,
+                to_call: summary.calls.clone(),
+            });
+        }
+        out
+    }
+
+    /// The parameters function `j` passes straight on to other files'
+    /// methods: as the argument, a member of it, or in a concatenation or
+    /// an interpolation, not through another call, which may sanitize it.
+    /// Read from the syntax, once per file for every rule: running the
+    /// analysis per parameter for every such method costs a large project
+    /// seconds. Parameters that can't carry text (numbers, `Guid`s) don't
+    /// count.
+    fn passed_on(&self, j: usize) -> Rc<Vec<super::PassedOn<'t>>> {
+        if let Some(p) = self.m.cs_passed.borrow().get(&j) {
+            return p.clone();
+        }
+        let mut out = Vec::new();
+        let function = self.functions[j];
+        let decls: Vec<(usize, DeclId)> = self.m.functions[j]
+            .params
+            .iter()
+            .enumerate()
+            .flat_map(|(p, ds)| ds.iter().map(move |d| (p, *d)))
+            .filter(|(_, d)| {
+                !self.m.decls[*d]
+                    .ty
+                    .and_then(|t| self.infer.written(t))
+                    .is_some_and(|t| is_safe_type(self.infer, &t))
+            })
+            .collect();
+        let mut stack: Vec<Node<'t>> = if decls.is_empty() {
+            Vec::new()
+        } else {
+            function.child_by_field_name("body").into_iter().collect()
+        };
+        while let Some(n) = stack.pop() {
+            if n.id() != function.id() && self.functions.iter().any(|f| f.id() == n.id()) {
+                continue;
+            }
+            stack.extend(children(n));
+            if n.kind() != "invocation_expression" {
+                continue;
+            }
+            let passed: Vec<(usize, usize, DeclId)> = arguments(n)
+                .iter()
+                .enumerate()
+                .flat_map(|(k, a)| {
+                    decls
+                        .iter()
+                        .filter(|(_, d)| passes_directly(*a, &self.m.decls[*d].name, self.src))
+                        .map(move |(p, d)| (k, *p, *d))
+                })
+                .collect();
+            if passed.is_empty() {
+                continue;
+            }
+            let Some(callee) = self.external_callee(n) else {
+                continue;
+            };
+            out.extend(
+                passed
+                    .into_iter()
+                    .map(|(k, p, d)| (p, d, n, callee.clone(), k)),
+            );
+        }
+        let out = Rc::new(out);
+        self.m.cs_passed.borrow_mut().insert(j, out.clone());
+        out
+    }
+
+    /// `passed_on` as a summary's `calls`, with their paths.
+    fn calls_passed_on(&self, j: usize) -> Vec<(usize, Path<'t>, Callee, usize)> {
+        let name = self.functions[j]
+            .child_by_field_name("name")
+            .map_or("the function", |n| self.text(n));
+        self.passed_on(j)
+            .iter()
+            .map(|(p, d, call, callee, k)| {
+                let decl = &self.m.decls[*d];
+                (
+                    *p,
+                    vec![
+                        Step {
+                            node: decl.node,
+                            message: format!("`{name}`'s parameter `{}`", decl.name),
+                        },
+                        Step {
+                            node: *call,
+                            message: format!("passed to `{}`", callee.display()),
+                        },
+                    ],
+                    callee.clone(),
+                    *k,
+                )
+            })
+            .collect()
+    }
+
     fn compute_summary(&self, j: usize) -> Summary<'t> {
         let mut summary = Summary::default();
         if !self.analyzable(j) {
@@ -762,6 +1047,7 @@ impl<'a, 't> FileCx<'a, 't> {
             .into_iter()
             .filter(|c| c.callee != j)
             .collect();
+        let external = self.external_calls(j);
         let returns = return_values(function, &self.functions);
         // What the function returns of a request's value it reads itself.
         if let Some(inn) = a.run(&cfg, source_params(self.m, self.infer, j, self.src)) {
@@ -802,6 +1088,15 @@ impl<'a, 't> FileCx<'a, 't> {
                 for f in a.findings(&cfg, &inn, sinks.as_slice(), &calls) {
                     if from_param(&f.steps) {
                         summary.sinks.push((p, f.sink, f.steps));
+                    }
+                }
+                for (mut path, call, callee, arg) in a.opens(&cfg, &inn, &external) {
+                    if from_param(&path) {
+                        path.push(Step {
+                            node: call,
+                            message: format!("passed to `{}`", callee.display()),
+                        });
+                        summary.calls.push((p, cap(path), callee, arg));
                     }
                 }
             }
@@ -889,6 +1184,66 @@ fn argument_for<'t>(
 /// attribute or base class), a request (`HttpRequest`, `HttpContext`, a
 /// controller's `Request.Query`), or a `Map…` handler. Checked on the bytes
 /// first, since most files have none: a DTO named `…Request` doesn't count.
+/// Whether text names a sink of this kind: a cheap test before looking
+/// for its sinks in a method other files call. The names of the sink
+/// tables' types and members.
+fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
+    let has = |needle: &[u8]| src.windows(needle.len()).any(|w| w == needle);
+    let needles: &[&[u8]] = match kind {
+        SinkKind::Sql => &[
+            b"SqlCommand",
+            b"CommandText",
+            b"ExecuteSql",
+            b"FromSql",
+            b"SqlQuery",
+            b"Command(",
+            b"Query(",
+            b"Query<",
+            b"QueryAsync",
+            b"Execute(",
+            b"ExecuteAsync",
+            b"ExecuteScalar",
+            b"QueryFirst",
+            b"QuerySingle",
+            b"QueryMultiple",
+        ],
+        SinkKind::Command => &[b"Process"],
+        SinkKind::Path => &[
+            b"File.",
+            b"Directory.",
+            b"FileStream",
+            b"StreamReader",
+            b"StreamWriter",
+            b"FileInfo",
+            b"DirectoryInfo",
+            b"PhysicalFile",
+        ],
+        SinkKind::Redirect => &[b"Redirect"],
+        SinkKind::Ssrf => &[
+            b"HttpClient",
+            b"HttpRequestMessage",
+            b"WebRequest",
+            b"RequestUri",
+            b"BaseAddress",
+            b"GetAsync",
+            b"PostAsync",
+            b"PutAsync",
+            b"DeleteAsync",
+            b"SendAsync",
+            b"GetString",
+            b"GetStream",
+            b"GetByteArray",
+            b"GetFromJson",
+            b"PostAsJson",
+            b"PutAsJson",
+        ],
+        SinkKind::XPath => &[b"SelectNodes", b"SelectSingleNode", b"XPath", b"Evaluate"],
+        SinkKind::Ldap => &[b"DirectorySearcher", b"Filter"],
+        SinkKind::Code => &[],
+    };
+    needles.iter().any(|n| has(n))
+}
+
 fn might_have_sources(src: &[u8]) -> bool {
     const NEEDLES: &[&[u8]] = &[b"Controller", b"HttpRequest", b"HttpContext", b".Map"];
     let has = |needle: &[u8]| src.windows(needle.len()).any(|w| w == needle);
@@ -1121,6 +1476,100 @@ fn controller_property(
 }
 
 /// A member's name without type arguments: `Query` in `c.Query<int>`.
+/// C#'s keywords for types, which are never the project's.
+const PREDEFINED: &[&str] = &[
+    "string", "object", "int", "long", "bool", "var", "dynamic", "decimal", "double", "float",
+];
+
+/// The namespace a node is written in, and the full name of the type it's
+/// in (`App.Orders.OrderService`0`, as ADR-0020's index names types).
+fn scope_of(n: Node, src: &[u8]) -> (String, String) {
+    let text = |x: Node| x.utf8_text(src).unwrap_or_default().to_string();
+    let mut namespaces: Vec<String> = Vec::new();
+    let mut types: Vec<(String, usize)> = Vec::new();
+    let mut cur = Some(n);
+    let mut root = n;
+    while let Some(c) = cur {
+        match c.kind() {
+            "namespace_declaration" => namespaces.extend(c.child_by_field_name("name").map(text)),
+            "class_declaration"
+            | "struct_declaration"
+            | "record_declaration"
+            | "interface_declaration"
+            | "record_struct_declaration" => {
+                if let Some(name) = c.child_by_field_name("name") {
+                    let arity = c
+                        .child_by_field_name("type_parameters")
+                        .map_or(0, |t| t.named_child_count());
+                    types.push((text(name), arity));
+                }
+            }
+            _ => {}
+        }
+        root = c;
+        cur = c.parent();
+    }
+    // `namespace App;` is a sibling of the code it covers.
+    if let Some(file_scoped) = children(root)
+        .into_iter()
+        .find(|c| c.kind() == "file_scoped_namespace_declaration")
+    {
+        namespaces.extend(file_scoped.child_by_field_name("name").map(text));
+    }
+    namespaces.reverse();
+    let namespace = namespaces.join(".");
+    let Some((name, arity)) = types.first().cloned() else {
+        return (namespace, String::new());
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if !namespace.is_empty() {
+        parts.push(namespace.clone());
+    }
+    parts.extend(types.iter().skip(1).rev().map(|(t, _)| t.clone()));
+    parts.push(name);
+    (namespace, format!("{}`{arity}", parts.join(".")))
+}
+
+/// A method's number of parameters.
+fn params_count(f: Node) -> usize {
+    f.child_by_field_name("parameters").map_or(0, |p| {
+        children(p)
+            .into_iter()
+            .filter(|c| c.kind() == "parameter")
+            .count()
+    })
+}
+
+/// Whether `name` reaches an argument as it is: the argument itself, a
+/// member of it (`dto.Name`), or a part of a concatenation or an
+/// interpolation, not inside another call.
+fn passes_directly(arg: Node, name: &str, src: &[u8]) -> bool {
+    let text = |n: Node| n.utf8_text(src).unwrap_or_default();
+    let mut stack = vec![arg];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "identifier" if text(n) == name => return true,
+            "member_access_expression" | "conditional_access_expression" => {
+                stack.extend(
+                    n.child_by_field_name("expression")
+                        .or_else(|| n.named_child(0)),
+                );
+            }
+            "binary_expression"
+                if n.child_by_field_name("operator")
+                    .is_some_and(|o| text(o) == "+") =>
+            {
+                stack.extend(children(n));
+            }
+            "interpolated_string_expression" | "interpolation" | "parenthesized_expression" => {
+                stack.extend(children(n));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn bare_name(n: Node) -> Node {
     if n.kind() == "generic_name" {
         n.named_child(0).unwrap_or(n)
@@ -1554,6 +2003,27 @@ impl<'t> Analysis<'_, 't> {
         found
     }
 
+    /// The request's values passed to other files' methods (T4): each
+    /// tainted argument, with its path, the call, the callee and its
+    /// position.
+    fn opens(
+        &self,
+        cfg: &Cfg<'t>,
+        inn: &[State<'t>],
+        external: &[(Node<'t>, Callee)],
+    ) -> Vec<(Path<'t>, Node<'t>, Callee, usize)> {
+        let mut out = Vec::new();
+        for (call, callee) in external {
+            let state = self.state_at(cfg, inn, *call);
+            for (k, arg) in arguments(*call).into_iter().enumerate() {
+                if let Some(path) = self.taint(arg, &state) {
+                    out.push((path, *call, callee.clone(), k));
+                }
+            }
+        }
+        out
+    }
+
     /// Applies block `i`'s writes, in order, up to byte `until` when given.
     fn transfer(&self, cfg: &Cfg<'t>, i: usize, state: &mut State<'t>, until: Option<usize>) {
         let block = &cfg.blocks[i];
@@ -1869,10 +2339,12 @@ impl<'t> Analysis<'_, 't> {
             {
                 let name = self.text(bare_name(f.child_by_field_name("name").unwrap_or(f)));
                 let validates = match self.kind {
-                    SinkKind::Redirect => matches!(
-                        name,
-                        "IsLocalUrl" | "IsValidReturnUrl" | "GetAuthorizationContextAsync"
-                    ),
+                    // `Url.IsLocalUrl`, and helpers around it such as
+                    // nopCommerce's `CheckIsLocalUrl`.
+                    SinkKind::Redirect => {
+                        name.ends_with("IsLocalUrl")
+                            || matches!(name, "IsValidReturnUrl" | "GetAuthorizationContextAsync")
+                    }
                     SinkKind::Path => {
                         name.starts_with("Is")
                             && ["Path", "Within", "Inside", "Safe"]
@@ -2784,5 +3256,181 @@ mod tests {
         let found = issues_of("cs/path-injection", &unchecked);
         assert_eq!(found.len(), 1);
         assert_eq!(flow(&found[0])[0], "request parameter `path`");
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    /// Each file analyzed, then the project pass, as a scan runs them.
+    fn project(files: &[(&str, &str)]) -> Vec<Issue> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<_> = files
+            .iter()
+            .map(|(path, src)| {
+                analyze(path, Lang::CSharp, src, &rules, &cfg, far_deadline()).unwrap()
+            })
+            .collect();
+        crate::analysis::taint_project_rules(&mut analyzed, &rules);
+        analyzed
+            .into_iter()
+            .flat_map(|f| f.issues)
+            // Every taint rule's issues: they're the ones with a path.
+            .filter(|i| i.rule.starts_with("cs/") && !i.flow.is_empty())
+            .collect()
+    }
+
+    const CONTROLLER: &str = "using Microsoft.AspNetCore.Mvc;\nusing App.Services;\nnamespace App.Web;\n\
+        public class OrdersController : ControllerBase {\n\
+        private readonly IOrderService _orders;\n\
+        public OrdersController(IOrderService orders) { _orders = orders; }\n\
+        public IActionResult Get(string id) {\n_orders.Find(id);\nreturn Ok();\n}\n}\n";
+    const INTERFACE: &str =
+        "namespace App.Services;\npublic interface IOrderService { void Find(string id); }\n";
+
+    fn service(body: &str) -> String {
+        format!(
+            "using Microsoft.Data.SqlClient;\nnamespace App.Services;\n\
+             public class OrderService : IOrderService {{\n\
+             private readonly SqlConnection _c;\n{body}\n}}\n"
+        )
+    }
+
+    #[test]
+    fn a_controller_value_reaches_a_services_sink_through_its_interface() {
+        let svc = service(
+            "public void Find(string id) {\nvar cmd = new SqlCommand(\"SELECT * FROM o WHERE id = \" + id, _c);\n}",
+        );
+        let found = project(&[
+            ("Web/OrdersController.cs", CONTROLLER),
+            ("Services/IOrderService.cs", INTERFACE),
+            ("Services/OrderService.cs", &svc),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let i = &found[0];
+        assert_eq!(
+            (i.path.as_str(), i.rule, i.line),
+            ("Services/OrderService.cs", RULE, 6)
+        );
+        assert_eq!(
+            flow(i),
+            [
+                "request parameter `id`",
+                "passed to `Find`",
+                "`Find`'s parameter `id`",
+                "passed to `SqlCommand`"
+            ]
+        );
+        let files: Vec<Option<&str>> = i.flow.iter().map(|s| s.path.as_deref()).collect();
+        assert_eq!(
+            files,
+            [
+                Some("Web/OrdersController.cs"),
+                Some("Web/OrdersController.cs"),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn three_files_and_static_calls() {
+        let svc = service(
+            "private readonly OrderRepository _repo = new OrderRepository();\npublic void Find(string id) { _repo.ById(id); }",
+        );
+        let repo = "using Microsoft.Data.SqlClient;\nnamespace App.Services;\n\
+                    public class OrderRepository {\nprivate SqlConnection _c;\n\
+                    public void ById(string key) { new SqlCommand(\"SELECT * FROM o WHERE id = '\" + key + \"'\", _c); }\n}\n";
+        let found = project(&[
+            ("Web/OrdersController.cs", CONTROLLER),
+            ("Services/IOrderService.cs", INTERFACE),
+            ("Services/OrderService.cs", &svc),
+            ("Services/OrderRepository.cs", repo),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "Services/OrderRepository.cs");
+        assert!(flow(&found[0]).contains(&"`ById`'s parameter `key`"));
+
+        let controller = CONTROLLER.replace("_orders.Find(id);", "OrderQueries.Run(id);");
+        let queries = "using Microsoft.Data.SqlClient;\nnamespace App.Services;\n\
+                       public static class OrderQueries {\n\
+                       public static void Run(string q) { new SqlCommand(\"SELECT \" + q, new SqlConnection()); }\n}\n";
+        let found = project(&[
+            ("Web/OrdersController.cs", &controller),
+            ("Services/OrderQueries.cs", queries),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn what_doesnt_cross_files_in_csharp() {
+        for body in [
+            // A number can't inject.
+            "public void Find(string id) { var n = int.Parse(id); new SqlCommand(\"SELECT * FROM o WHERE id = \" + n, _c); }",
+            // Another overload.
+            "public void Find(string id, int page) { new SqlCommand(\"SELECT \" + id, _c); }\npublic void Find(string id) { }",
+            // Parameterized.
+            "public void Find(string id) { var c = new SqlCommand(\"SELECT * FROM o WHERE id = @id\", _c); c.Parameters.AddWithValue(\"@id\", id); }",
+        ] {
+            let found = project(&[
+                ("Web/OrdersController.cs", CONTROLLER),
+                ("Services/IOrderService.cs", INTERFACE),
+                ("Services/OrderService.cs", &service(body)),
+            ]);
+            assert!(found.is_empty(), "{body}: {found:?}");
+        }
+        // A type of a namespace the controller doesn't import.
+        let elsewhere = INTERFACE.replace("namespace App.Services;", "namespace Other;");
+        let svc = service("public void Find(string id) { new SqlCommand(\"SELECT \" + id, _c); }")
+            .replace("namespace App.Services;", "namespace Other;");
+        let found = project(&[
+            ("Web/OrdersController.cs", CONTROLLER),
+            ("Other/IOrderService.cs", &elsewhere),
+            ("Other/OrderService.cs", &svc),
+            // A second `IOrderService`, so the name alone is ambiguous.
+            (
+                "Third/IOrderService.cs",
+                &INTERFACE.replace("namespace App.Services;", "namespace Third;"),
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_service_checking_a_return_url_before_redirecting() {
+        let controller = "using Microsoft.AspNetCore.Mvc;\nusing App.Services;\nnamespace App.Web;\n\
+            public class LoginController : Controller {\nprivate readonly SignIn _signIn;\n\
+            public IActionResult Login(string returnUrl) { return _signIn.Complete(returnUrl); }\n}\n";
+        for check in [
+            "_web.CheckIsLocalUrl(returnUrl)",
+            "Url.IsLocalUrl(returnUrl)",
+        ] {
+            let svc = format!(
+                "using Microsoft.AspNetCore.Mvc;\nnamespace App.Services;\npublic class SignIn {{\n\
+                 public IActionResult Complete(string returnUrl) {{\n\
+                 if ({check}) return new RedirectResult(returnUrl);\nreturn null;\n}}\n}}\n"
+            );
+            let found = project(&[
+                ("Web/LoginController.cs", controller),
+                ("Services/SignIn.cs", &svc),
+            ]);
+            assert!(
+                found.iter().all(|i| i.rule != "cs/open-redirect"),
+                "{check}: {found:?}"
+            );
+        }
+        let svc = "using Microsoft.AspNetCore.Mvc;\nnamespace App.Services;\npublic class SignIn {\n\
+                   public IActionResult Complete(string returnUrl) { return new RedirectResult(returnUrl); }\n}\n";
+        let found = project(&[
+            ("Web/LoginController.cs", controller),
+            ("Services/SignIn.cs", svc),
+        ]);
+        assert_eq!(
+            found
+                .iter()
+                .filter(|i| i.rule == "cs/open-redirect")
+                .count(),
+            1,
+            "{found:?}"
+        );
     }
 }
