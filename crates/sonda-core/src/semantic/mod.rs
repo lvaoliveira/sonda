@@ -14,6 +14,7 @@ pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
 mod js;
 pub(crate) mod js_taint;
+mod py;
 pub(crate) mod taint;
 pub(crate) mod taint_project;
 
@@ -323,6 +324,7 @@ pub(crate) fn build<'t>(
     match lang {
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => js::build(root, src, deadline),
         Lang::CSharp => cs::build(root, src, deadline),
+        Lang::Python => py::build(root, src, deadline),
         _ => None,
     }
 }
@@ -332,6 +334,6 @@ pub(crate) fn build<'t>(
 pub(crate) fn supports(lang: Lang) -> bool {
     matches!(
         lang,
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp
+        Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp | Lang::Python
     )
 }
