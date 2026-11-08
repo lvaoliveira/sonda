@@ -1471,7 +1471,7 @@ macro_rules! js_taint_rule_fn {
         fn $name<'t>(
             m: &crate::semantic::Model<'t>,
             src: &[u8],
-        ) -> Vec<crate::semantic::taint::Finding<'t>> {
+        ) -> crate::semantic::taint::TaintResult<'t> {
             crate::semantic::js_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
         }
     };

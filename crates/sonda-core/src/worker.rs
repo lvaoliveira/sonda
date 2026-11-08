@@ -303,6 +303,7 @@ fn decode_response(
                     let (line, column, end_line, end_column) =
                         (d.usize()?, d.usize()?, d.usize()?, d.usize()?);
                     flow.push(FlowStep {
+                        path: None,
                         message,
                         line,
                         column,
@@ -840,6 +841,7 @@ mod tests {
     fn a_taint_findings_flow_round_trips_and_is_checked() {
         let mut a = analyzed(Lang::JavaScript, "eval(x);\nf(y);\n");
         let step = |line, message: &str| FlowStep {
+            path: None,
             message: message.into(),
             line,
             column: 1,

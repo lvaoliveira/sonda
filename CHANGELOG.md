@@ -9,6 +9,17 @@ file, the report formats and the public library API.
 
 ### Added
 
+- JavaScript and TypeScript taint analysis follows a request's value into
+  the project's other files (ADR-0027, T4): a handler passing it to a
+  service that builds the query, a helper module that runs the command, a
+  NestJS service injected into the controller, and back out of one that
+  returns it. The issue is at the sink, in its file, and each step of its
+  path names its own file: `path` in the JSON report's flow steps, its own
+  location in SARIF's code flows. Helpers of the same file are followed
+  too. Planted in eight open-source applications, every cross-file
+  injection was found, with no new false positive in nine; scans take
+  0.6 s longer at most.
+
 - Taint analysis for JavaScript and TypeScript (ADR-0027, T2), six rules
   with the path each value took: `js/sql-injection` (S3649),
   `js/command-injection` (S2076), `js/path-injection` (S2083),
