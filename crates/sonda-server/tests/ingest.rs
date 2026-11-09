@@ -225,3 +225,58 @@ async fn tampered_uploads_are_rejected_and_store_nothing() {
         .unwrap();
     assert_eq!(stored, 0);
 }
+
+#[tokio::test]
+async fn concurrent_uploads_to_a_branch_all_land() {
+    // Uploads to one branch run one at a time, and so must what each does
+    // after (new code, counts): unlocked, those updated the same issues in a
+    // different order from the next upload and deadlocked, failing it.
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    // Two versions of a file, overlapping: each upload fixes some issues and
+    // reopens others.
+    let lines = |from: usize, to: usize| -> String {
+        (from..to).map(|i| format!("eval(input{i});\n")).collect()
+    };
+    let bodies: Vec<Value> = [lines(0, 200), lines(100, 300)]
+        .iter()
+        .map(|src| {
+            let dir = tempfile::tempdir().unwrap();
+            upload_json(dir.path(), &[("app.js", src)], "main")
+        })
+        .collect();
+    let app = http::router(state(db.pool.clone()), None);
+    let mut uploads = tokio::task::JoinSet::new();
+    let mut statuses = Vec::new();
+    for i in 0..64 {
+        let body = gzip(&serde_json::to_vec(&bodies[i % 2]).unwrap());
+        let app = app.clone();
+        uploads.spawn(async move { post(app, Some(TOKEN), body).await });
+        if uploads.len() == 8 {
+            statuses.push(uploads.join_next().await.unwrap().unwrap());
+        }
+    }
+    while let Some(done) = uploads.join_next().await {
+        statuses.push(done.unwrap());
+    }
+    let failed: Vec<_> = statuses
+        .iter()
+        .filter(|(s, _)| *s != StatusCode::CREATED)
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "{} of 64 failed: {:?}",
+        failed.len(),
+        failed.first()
+    );
+    // The latest analysis's counts are the last upload's issues: 200.
+    let open: i64 = sqlx::query_scalar(
+        "SELECT (measures->>'issues')::float8::bigint FROM analyses ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(open, 200);
+}
