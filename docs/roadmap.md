@@ -140,8 +140,8 @@ own groundwork, smallest first:
    to JavaScript (T2), across functions (T3) and across files (T4), with
    the path shown on each issue (T1; T3, through the functions of the same
    file; T2, six JavaScript and TypeScript rules; and T4 for JavaScript and
-   TypeScript, across files, are built; T4 for C#, in the calls'
-   direction; and Python's eight rules, within and across files).
+   TypeScript, across files, are built; T4 for C#; and Python's eight
+   rules, within and across files).
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry

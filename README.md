@@ -211,9 +211,8 @@ earlier
   outgoing request or `eval`, and eight Python rules follow one from a
   Flask, Django, FastAPI or aiohttp request, all through the project's
   other files too; each shows its path
-  ([ADR-0027](docs/adr/0027-taint-analysis.md), phases T1 to T4). C#
-  doesn't yet follow a value returned from another file, and Java has
-  none. For injection elsewhere, sonda has narrower rules that
+  ([ADR-0027](docs/adr/0027-taint-analysis.md), phases T1 to T4). Java
+  has none yet. For injection elsewhere, sonda has narrower rules that
   flag the risky shape itself, such as a query built from strings
   (`sql-built-dynamically` in Java, JavaScript, Python and C#). SonarQube's
   taint analysis is part of its commercial editions: the free Community

@@ -37,6 +37,15 @@ const MAX_ROUNDS: usize = 512;
 const MAX_EXPR_NODES: usize = 4096;
 
 type Path<'t> = Vec<Step<'t>>;
+
+/// A path that starts at another file's method's result: a request's
+/// value only if that method returns one, which the project pass decides
+/// (T4). Its first step is the call, with this message.
+const FROM_CALL: &str = "\u{1}";
+
+fn from_call(path: &Path) -> bool {
+    path.first().is_some_and(|s| s.message == FROM_CALL)
+}
 /// A call to another file's method, and what it calls (T4).
 type ExternalCall<'t> = (Node<'t>, Callee);
 type State<'t> = BTreeMap<DeclId, Path<'t>>;
@@ -476,10 +485,41 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
         let Some(cfg) = file.cfg(i) else {
             continue;
         };
-        let a = file.analysis(i);
+        let mut a = file.analysis(i);
+        // Another file's result matters only where it can reach a sink of
+        // this function, or of a helper it calls; elsewhere it's only work.
+        a.from_calls = !sinks.is_empty() || !calls.is_empty();
         let sources = source_params(m, &infer, i, src);
         if let Some(inn) = a.run(&cfg, sources) {
-            found.extend(a.findings(&cfg, &inn, &sinks, &calls));
+            for f in a.findings(&cfg, &inn, &sinks, &calls) {
+                if !from_call(&f.steps) {
+                    found.push(f);
+                    continue;
+                }
+                // Another file's method's result reaching a sink here.
+                let call = f.steps[0].node;
+                let Some(callee) = file.external_callee(call) else {
+                    continue;
+                };
+                let state = a.state_at(&cfg, &inn, call);
+                let args = arguments(call)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(k, arg)| {
+                        a.taint(arg, &state)
+                            .filter(|p| !from_call(p))
+                            .map(|p| (k, cap(p)))
+                    })
+                    .collect();
+                facts.returns.push(super::taint::ReturnFact {
+                    call,
+                    callee,
+                    args,
+                    after: cap(f.steps[1..].to_vec()),
+                    sink: f.sink,
+                    needs_sql: false,
+                });
+            }
             for (steps, call, callee, arg) in a.opens(&cfg, &inn, &external) {
                 facts.calls.push(super::taint::CallFact {
                     steps: cap(steps),
@@ -589,6 +629,7 @@ impl<'a, 't> FileCx<'a, 't> {
             controller: ancestor(node, "class_declaration")
                 .is_some_and(|c| is_controller(self.infer, c, self.src)),
             file: self,
+            from_calls: false,
         };
         a.checked = a.checked_values(node, &self.functions);
         a
@@ -895,7 +936,8 @@ impl<'a, 't> FileCx<'a, 't> {
             let sinks_here = self.sink_text
                 && (might_have_sinks(own_text, self.kind) || !self.local_calls(j).is_empty())
                 && self.reaches_sink(j);
-            if !(sinks_here || !self.passed_on(j).is_empty()) {
+            let returned = self.returned_params(j);
+            if !(sinks_here || !self.passed_on(j).is_empty() || !returned.is_empty()) {
                 continue;
             }
             let (_, owner) = scope_of(f, self.src);
@@ -913,7 +955,14 @@ impl<'a, 't> FileCx<'a, 't> {
                     ..Summary::default()
                 })
             };
-            if summary.sinks.is_empty() && summary.calls.is_empty() {
+            // What it returns of its parameters: the analysis's, for a
+            // method summarized in full, else read from the syntax.
+            let to_return: Vec<(usize, Path<'t>)> = if sinks_here {
+                summary.returns.clone()
+            } else {
+                returned
+            };
+            if summary.sinks.is_empty() && summary.calls.is_empty() && to_return.is_empty() {
                 continue;
             }
             out.push(SummaryFact {
@@ -927,10 +976,58 @@ impl<'a, 't> FileCx<'a, 't> {
                     .iter()
                     .map(|(p, sink, path)| (*p, path.clone(), *sink))
                     .collect(),
-                to_return: Vec::new(),
+                to_return,
                 returns_source: None,
                 to_call: summary.calls.clone(),
             });
+        }
+        out
+    }
+
+    /// The parameters function `j` returns built straight from, as the
+    /// value, a member of it, or in a concatenation or an interpolation: a
+    /// query builder's. Read from the syntax; parameters that can't carry
+    /// text don't count.
+    fn returned_params(&self, j: usize) -> Vec<(usize, Path<'t>)> {
+        let returns = return_values(self.functions[j], &self.functions);
+        if returns.is_empty() {
+            return Vec::new();
+        }
+        let name = self.functions[j]
+            .child_by_field_name("name")
+            .map_or("the function", |n| self.text(n));
+        let mut out = Vec::new();
+        for (p, decls) in self.m.functions[j].params.iter().enumerate() {
+            for &d in decls {
+                let decl = &self.m.decls[d];
+                let safe = decl
+                    .ty
+                    .and_then(|t| self.infer.written(t))
+                    .is_some_and(|t| is_safe_type(self.infer, &t));
+                // `return q;` after `var q = $"… {id}";`: what the local was
+                // set to, one step back.
+                let returned = |r: Node<'t>| {
+                    passes_directly(r, &decl.name, self.src)
+                        || (r.kind() == "identifier"
+                            && self
+                                .m
+                                .decl_of(r)
+                                .and_then(|d| d.declarator)
+                                .and_then(|v| {
+                                    v.named_child(v.named_child_count().saturating_sub(1) as u32)
+                                })
+                                .is_some_and(|v| passes_directly(v, &decl.name, self.src)))
+                };
+                if !safe && returns.iter().any(|r| returned(*r)) {
+                    out.push((
+                        p,
+                        vec![Step {
+                            node: decl.node,
+                            message: format!("`{name}`'s parameter `{}`", decl.name),
+                        }],
+                    ));
+                }
+            }
         }
         out
     }
@@ -1894,6 +1991,9 @@ struct Analysis<'a, 't> {
     /// The function is a controller's: its `Request` is the request.
     controller: bool,
     file: &'a FileCx<'a, 't>,
+    /// Whether other files' methods' results count, as paths that start at
+    /// the call: for a function's own run, not a summary's.
+    from_calls: bool,
 }
 
 impl<'t> Analysis<'_, 't> {
@@ -1923,7 +2023,15 @@ impl<'t> Analysis<'_, 't> {
                     let mut s = State::new();
                     for p in &preds[i] {
                         for (d, path) in &out[*p] {
-                            s.entry(*d).or_insert_with(|| path.clone());
+                            // A request's own path wins over one from
+                            // another file's result, whichever branch came
+                            // first.
+                            match s.get(d) {
+                                Some(old) if !(from_call(old) && !from_call(path)) => {}
+                                _ => {
+                                    s.insert(*d, path.clone());
+                                }
+                            }
                         }
                     }
                     s
@@ -2016,7 +2124,7 @@ impl<'t> Analysis<'_, 't> {
         for (call, callee) in external {
             let state = self.state_at(cfg, inn, *call);
             for (k, arg) in arguments(*call).into_iter().enumerate() {
-                if let Some(path) = self.taint(arg, &state) {
+                if let Some(path) = self.taint(arg, &state).filter(|p| !from_call(p)) {
                     out.push((path, *call, callee.clone(), k));
                 }
             }
@@ -2143,6 +2251,9 @@ impl<'t> Analysis<'_, 't> {
     fn taint(&self, expr: Node<'t>, state: &State<'t>) -> Option<Path<'t>> {
         let mut stack = vec![expr];
         let mut visited = 0;
+        // Another file's method's result, kept until no request's own value
+        // turns up: `Build(x) + id` is `id`'s.
+        let mut fallback: Option<Path<'t>> = None;
         while let Some(n) = stack.pop() {
             visited += 1;
             if visited > MAX_EXPR_NODES {
@@ -2156,7 +2267,10 @@ impl<'t> Analysis<'_, 't> {
                     if self.checked.contains(self.text(n)) => {}
                 "identifier" => {
                     if let Some(path) = self.decl(n).and_then(|d| state.get(&d)) {
-                        return Some(path.clone());
+                        if !from_call(path) {
+                            return Some(path.clone());
+                        }
+                        fallback.get_or_insert_with(|| path.clone());
                     }
                 }
                 "member_access_expression" => {
@@ -2175,8 +2289,20 @@ impl<'t> Analysis<'_, 't> {
                     if let Some(j) = self.file.callee(n) {
                         // A function of this file: what its summary says.
                         if let Some(path) = self.through_local_call(n, j, state) {
-                            return Some(path);
+                            if !from_call(&path) {
+                                return Some(path);
+                            }
+                            fallback.get_or_insert(path);
                         }
+                    } else if self.from_calls && self.file.external_callee(n).is_some() {
+                        // Another file's: a request's value if it returns
+                        // one, which the project pass decides.
+                        fallback.get_or_insert_with(|| {
+                            vec![Step {
+                                node: n,
+                                message: FROM_CALL.to_string(),
+                            }]
+                        });
                     } else if !self.sanitizes(n) {
                         stack.extend(self.propagated(n).into_iter().rev());
                     }
@@ -2241,7 +2367,7 @@ impl<'t> Analysis<'_, 't> {
                 _ => {}
             }
         }
-        None
+        fallback
     }
 
     /// For a request (SSRF) or a redirect: a URL built after text that
@@ -3432,5 +3558,73 @@ mod tests {
             1,
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_query_built_in_another_file_and_run_here() {
+        let controller = "using Microsoft.AspNetCore.Mvc;\nusing Microsoft.Data.SqlClient;\nusing App.Services;\nnamespace App.Web;\n\
+            public class OrdersController : ControllerBase {\n\
+            private readonly SqlConnection _c;\n\
+            public IActionResult Get(string id) {\n\
+            var cmd = new SqlCommand(OrderQueries.ById(id), _c);\nreturn Ok();\n}\n}\n";
+        for queries in [
+            // Built from the parameter, expression-bodied and with a block.
+            "public static string ById(string id) => \"SELECT * FROM o WHERE id = '\" + id + \"'\";",
+            "public static string ById(string id) { var q = $\"SELECT * FROM o WHERE id = '{id}'\"; return q; }",
+        ] {
+            let file = format!(
+                "namespace App.Services;\npublic static class OrderQueries {{\n{queries}\n}}\n"
+            );
+            let found = project(&[
+                ("Web/OrdersController.cs", controller),
+                ("Services/OrderQueries.cs", &file),
+            ]);
+            let sql: Vec<_> = found.iter().filter(|i| i.rule == RULE).collect();
+            {
+                assert_eq!(sql.len(), 1, "{queries}: {found:?}");
+                assert_eq!(sql[0].path, "Web/OrdersController.cs");
+                assert_eq!(
+                    flow(sql[0]),
+                    [
+                        "request parameter `id`",
+                        "passed to `ById`",
+                        "`ById`'s parameter `id`",
+                        "returned by `ById`",
+                        "passed to `SqlCommand`"
+                    ]
+                );
+                assert_eq!(
+                    sql[0].flow[2].path.as_deref(),
+                    Some("Services/OrderQueries.cs")
+                );
+            }
+        }
+        // A number can't inject, and a constant query carries nothing.
+        for queries in [
+            "public static string ById(string id) => \"SELECT * FROM o WHERE id = \" + int.Parse(id);",
+            "public static string ById(string id) => \"SELECT * FROM o\";",
+        ] {
+            let file = format!(
+                "namespace App.Services;\npublic static class OrderQueries {{\n{queries}\n}}\n"
+            );
+            let found = project(&[
+                ("Web/OrdersController.cs", controller),
+                ("Services/OrderQueries.cs", &file),
+            ]);
+            assert!(found.iter().all(|i| i.rule != RULE), "{queries}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_request_value_beside_another_files_result_is_still_found() {
+        // `Prefix()` is another file's, and returns nothing of the request's;
+        // `id` is the request's own, and still a finding in this file.
+        let src = action(
+            "string id, SqlConnection c",
+            "var cmd = new SqlCommand(Other.Prefix() + \"SELECT * FROM o WHERE id = \" + id, c);",
+        );
+        let found = issues(&src);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(flow(&found[0])[0], "request parameter `id`");
     }
 }

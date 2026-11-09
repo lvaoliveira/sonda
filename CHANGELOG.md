@@ -9,6 +9,12 @@ file, the report formats and the public library API.
 
 ### Added
 
+- C# taint analysis follows a value returned from another file's method:
+  a query built from the request's value by a helper class in another file
+  and run in the controller is a finding there, with its path through the
+  helper ("returned by `ById`"). A request's own value next to another
+  file's result is still followed in the same expression.
+
 - Python taint analysis follows a request's value into the project's
   other modules (ADR-0027, T4): a view passing it to a data-access module,
   a service's class method, or a helper module that runs the command, and
