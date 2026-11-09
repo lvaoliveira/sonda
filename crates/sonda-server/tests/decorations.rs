@@ -23,8 +23,8 @@ struct Fake {
     down: bool,
     tokens_issued: usize,
     check_runs: Vec<Value>,
-    /// (id, body)
-    comments: Vec<(u64, String)>,
+    /// (id, body, the App that wrote it: `None` for a person)
+    comments: Vec<(u64, String, Option<u64>)>,
     /// The App's public key, to check each JWT.
     public_key: Vec<u8>,
 }
@@ -118,14 +118,20 @@ fn fake_github(github: Github) -> axum::Router {
             get(|Shared(g): Shared<Github>, headers: HeaderMap| async move {
                 assert!(installation_token(&headers));
                 let g = g.lock().unwrap();
-                let list: Vec<Value> = g.comments.iter().map(|(id, body)| json!({"id": id, "body": body})).collect();
+                let list: Vec<Value> = g
+                    .comments
+                    .iter()
+                    .map(|(id, body, app)| {
+                        json!({"id": id, "body": body, "performed_via_github_app": app.map(|a| json!({"id": a}))})
+                    })
+                    .collect();
                 Json(Value::from(list))
             })
             .post(|Shared(g): Shared<Github>, headers: HeaderMap, Json(body): Json<Value>| async move {
                 assert!(installation_token(&headers));
                 let mut g = g.lock().unwrap();
                 let id = 500 + g.comments.len() as u64;
-                g.comments.push((id, body["body"].as_str().unwrap().to_string()));
+                g.comments.push((id, body["body"].as_str().unwrap().to_string(), Some(123)));
                 (StatusCode::CREATED, Json(json!({"id": id})))
             }),
         )
@@ -267,6 +273,13 @@ async fn pull_requests_get_a_check_and_one_comment_on_github() {
         (status, &s["githubRepository"], &s["githubApp"]),
         (StatusCode::OK, &json!("acme/shop"), &json!(true))
     );
+    // Someone's own comment with sonda's marker in it: never sonda's to edit.
+    let spoof = "<!-- sonda:project=shop -->\nAll clear, merge away.".to_string();
+    github
+        .lock()
+        .unwrap()
+        .comments
+        .push((400, spoof.clone(), None));
     let (_, answer) = send(&server, upload(pull_request(&eval, "acme/shop"))).await;
     let second = answer["analysis_id"].as_i64().unwrap();
     assert_eq!(decoration(second).await["state"], "pending");
@@ -290,8 +303,10 @@ async fn pull_requests_get_a_check_and_one_comment_on_github() {
                 .any(|a| a["path"] == "b.js" && a["start_line"] == 1),
             "{run}"
         );
-        assert_eq!(g.comments.len(), 1);
-        assert!(g.comments[0].1.starts_with("<!-- sonda:project=shop -->"));
+        assert_eq!(g.comments.len(), 2);
+        assert_eq!(g.comments[0].1, spoof);
+        assert!(g.comments[1].1.starts_with("<!-- sonda:project=shop -->"));
+        assert_ne!(g.comments[1].1, spoof);
     }
 
     // Fixed: the same comment is edited, not another added, and the
@@ -303,11 +318,12 @@ async fn pull_requests_get_a_check_and_one_comment_on_github() {
         let g = github.lock().unwrap();
         assert_eq!(g.check_runs.len(), 2);
         assert_eq!(g.check_runs[1]["output"]["annotations"], json!([]));
-        assert_eq!(g.comments.len(), 1);
+        assert_eq!(g.comments.len(), 2);
+        assert_eq!(g.comments[0].1, spoof);
         assert!(
-            g.comments[0].1.contains("No new issues."),
+            g.comments[1].1.contains("No new issues."),
             "{}",
-            g.comments[0].1
+            g.comments[1].1
         );
         assert_eq!(g.tokens_issued, 1);
     }

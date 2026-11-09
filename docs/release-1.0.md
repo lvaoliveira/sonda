@@ -135,17 +135,17 @@ up no new bug that loses findings, coverage or data.
 
 ## M5: security
 
-- [ ] SECURITY.md's server section finished as a threat model, as
+- [x] SECURITY.md's server section finished as a threat model, as
       [ADR-0005](adr/0005-sonda-server.md) requires before release: users
       and tokens, sessions and CSRF, uploads, the GitHub App and its key,
       `SONDA_PLAIN_HTTP` on a LAN, HTTPS through Caddy, Connect's tokens.
 - [x] `sonda upload --ca-cert`, closing the listed limitation: a server
       behind a private CA (Caddy's included) can't receive uploads from
       another machine today.
-- [ ] A full security review of the server: authentication, authorization
+- [x] A full security review of the server: authentication, authorization
       per endpoint, CSRF, token handling, the decoration task, the web
       app's handling of uploaded content. Findings fixed or documented.
-- [ ] The Windows sandbox limitation stays documented, or is closed.
+- [x] The Windows sandbox limitation stays documented, or is closed.
 
 **Done when** the threat model is merged and the review's findings are
 fixed or written up as accepted risks.

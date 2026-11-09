@@ -446,6 +446,47 @@ async fn users_change_their_own_password() {
 }
 
 #[tokio::test]
+async fn wrong_current_passwords_are_throttled_with_sign_in() {
+    let Some(db) = migrated().await else { return };
+    create_user(&db, "ann", "member").await;
+    let app = http::router(state(db.pool.clone()), None);
+    let session = sign_in(&app, "ann", PASSWORD).await.unwrap();
+    let change = |current: &str| {
+        request(
+            "PUT",
+            "/api/me/password",
+            Some(&session),
+            Some(json!({ "current": current, "new": "an even better password" })),
+        )
+    };
+    // The free failures, and one more that starts a wait.
+    for _ in 0..=sonda_server::throttle::FREE_FAILURES {
+        assert_eq!(
+            send(&app, change("wrong guess")).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    // During it, even the right password is refused, here and at sign-in.
+    assert_eq!(
+        send(&app, change(PASSWORD)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert!(sign_in(&app, "ann", PASSWORD).await.is_none());
+
+    // Once it's over, the right password works and clears the count.
+    sqlx::query("UPDATE sign_in_failures SET blocked_until = now() - interval '1 second'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(send(&app, change(PASSWORD)).await.0, StatusCode::NO_CONTENT);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM sign_in_failures")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
+#[tokio::test]
 async fn expired_and_forged_sessions_are_rejected() {
     let Some(db) = migrated().await else { return };
     create_user(&db, "ann", "member").await;

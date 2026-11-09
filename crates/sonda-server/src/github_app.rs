@@ -81,6 +81,11 @@ impl Connection {
         }
     }
 
+    /// GitHub's web pages, where the manifest form is posted.
+    pub fn web_url(&self) -> String {
+        github::web_url(&self.api)
+    }
+
     /// The App to decorate with, if any.
     pub fn app(&self) -> Option<Arc<App>> {
         match &*self.current.read().unwrap() {
@@ -308,7 +313,7 @@ pub async fn manifest(
             "metadata": "read",
         },
     });
-    let web = github::web_url(&state.github.api);
+    let web = state.github.web_url();
     let page = match owner {
         Some(org) => format!("{web}/organizations/{org}/settings/apps/new"),
         None => format!("{web}/settings/apps/new"),
