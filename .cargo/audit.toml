@@ -1,0 +1,11 @@
+# cargo audit reads Cargo.lock, which lists every optional driver sqlx can
+# use; cargo deny (deny.toml) follows what's actually built.
+[advisories]
+ignore = [
+    # libsqlite3-sys 0.37 (C SQLite, CVE-2026-119375): in Cargo.lock only as
+    # sqlx's SQLite driver, which sonda never builds (`cargo tree -i
+    # libsqlite3-sys --target all -e all` prints nothing): the server uses
+    # PostgreSQL. sqlx 0.9.0, the latest, can't take the fixed 0.39; drop
+    # this once a sqlx release can.
+    "RUSTSEC-2026-0459",
+]
