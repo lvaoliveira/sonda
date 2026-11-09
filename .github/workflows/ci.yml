@@ -349,6 +349,8 @@ jobs:
       - run: cargo deny --locked check
       # Overlaps with deny's advisory check, but uses RustSec's reference tool.
       - run: cargo audit --deny warnings
+      # The advisories audit.toml ignores: still not built, and not overdue.
+      - run: scripts/check-advisory-exceptions.sh
 
   # Reported, not gated, so it runs on main only: on pull requests it was a
   # fourth full run of the test suite, instrumented, that nobody read.

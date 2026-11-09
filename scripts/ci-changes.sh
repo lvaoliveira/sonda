@@ -26,7 +26,8 @@ while IFS= read -r f; do
   case "$f" in
     .github/*) everything ;;
     # docs/rules.md is generated from the rules, and checked against them.
-    crates/* | fuzz/* | Cargo.toml | Cargo.lock | deny.toml | rust-toolchain* | .cargo/* | docs/rules.md)
+    crates/* | fuzz/* | Cargo.toml | Cargo.lock | deny.toml | rust-toolchain* | .cargo/* | docs/rules.md \
+      | scripts/check-advisory-exceptions.sh)
       rust=true ;;
     web/*) web=true ;;
     Dockerfile | .dockerignore | compose*.yaml | caddy/*) docker=true ;;
