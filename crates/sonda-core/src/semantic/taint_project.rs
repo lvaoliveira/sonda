@@ -147,6 +147,7 @@ pub(crate) fn compose(
             summaries.entry((i, &s.key)).or_insert(s);
         }
     }
+    let py_index = std::cell::OnceCell::new();
     let resolve = |from: usize, callee: &Callee| -> Vec<(usize, &Summary)> {
         match callee {
             Callee::Js { spec, name, member } => {
@@ -158,6 +159,21 @@ pub(crate) fn compose(
                     .find_map(|k| summaries.get(&(file, &k)).map(|s| vec![(file, *s)]))
                     .unwrap_or_default()
             }
+            Callee::Py {
+                module,
+                name,
+                member,
+            } => py_candidates(
+                paths[from],
+                module,
+                name.as_deref(),
+                member.as_deref(),
+                &by_path,
+                py_index.get_or_init(|| PyModules::new(&by_path)),
+            )
+            .into_iter()
+            .find_map(|(file, k)| summaries.get(&(file, &k)).map(|s| vec![(file, *s)]))
+            .unwrap_or_default(),
             Callee::Cs { .. } => cs
                 .map(|r| r(from, callee))
                 .unwrap_or_default()
@@ -320,6 +336,114 @@ fn resolve_module(from: &str, spec: &str, by_path: &HashMap<String, usize>) -> O
         .find_map(|p| by_path.get(&p).copied())
 }
 
+/// The files and keys a Python call can mean, most specific first:
+/// `from app import db; db.query(x)` is `app/__init__.py`'s `db.query`, or
+/// `app/db.py`'s `query`.
+fn py_candidates(
+    from: &str,
+    module: &str,
+    name: Option<&str>,
+    member: Option<&str>,
+    by_path: &HashMap<String, usize>,
+    modules: &PyModules,
+) -> Vec<(usize, Key)> {
+    let key = |export: &str, member: Option<&str>| Key {
+        export: export.to_string(),
+        member: member.map(str::to_string),
+    };
+    let mut out = Vec::new();
+    match (name, member) {
+        (Some(n), m) => {
+            if let Some(f) = resolve_py_module(from, module, by_path, modules) {
+                out.push((f, key(n, m)));
+            }
+            // `n` a submodule: `from app import db`.
+            if let Some(m) = m {
+                let sub = if module.ends_with('.') {
+                    format!("{module}{n}")
+                } else {
+                    format!("{module}.{n}")
+                };
+                if let Some(f) = resolve_py_module(from, &sub, by_path, modules) {
+                    out.push((f, key(m, None)));
+                }
+            }
+        }
+        (None, Some(m)) => {
+            if let Some(f) = resolve_py_module(from, module, by_path, modules) {
+                out.push((f, key(m, None)));
+            }
+        }
+        (None, None) => {}
+    }
+    out
+}
+
+/// The project file a Python module names: `.db` from `app/views.py` is
+/// `app/db.py` or `app/db/__init__.py`; `..db` one package up; `app.db`
+/// whichever file of the project ends with `app/db.py` (or its package's
+/// `__init__.py`), when only one does.
+fn resolve_py_module(
+    from: &str,
+    module: &str,
+    by_path: &HashMap<String, usize>,
+    modules: &PyModules,
+) -> Option<usize> {
+    let dots = module.chars().take_while(|c| *c == '.').count();
+    let rest = module[dots..].replace('.', "/");
+    if dots > 0 {
+        let from = normalize(from);
+        let mut parts: Vec<&str> = from.split('/').collect();
+        parts.pop();
+        for _ in 1..dots {
+            parts.pop()?;
+        }
+        let base = parts.join("/");
+        let join = |tail: &str| {
+            if base.is_empty() {
+                tail.to_string()
+            } else if tail.is_empty() {
+                base.clone()
+            } else {
+                format!("{base}/{tail}")
+            }
+        };
+        let stem = join(&rest);
+        return [format!("{stem}.py"), format!("{}/__init__.py", stem)]
+            .iter()
+            .find_map(|p| by_path.get(p.trim_start_matches('/')).copied());
+    }
+    match modules.by_suffix.get(&rest).map(Vec::as_slice) {
+        Some([one]) => Some(*one),
+        _ => None,
+    }
+}
+
+/// The project's Python files by every module path they can be imported
+/// by: `src/app/db.py` is `db`, `app/db` and `src/app/db`; a package's
+/// `__init__.py` is its directory's. Built once per project pass, so an
+/// absolute import's resolution doesn't scan every file.
+pub(crate) struct PyModules {
+    by_suffix: HashMap<String, Vec<usize>>,
+}
+
+impl PyModules {
+    fn new(by_path: &HashMap<String, usize>) -> Self {
+        let mut by_suffix: HashMap<String, Vec<usize>> = HashMap::new();
+        for (path, &i) in by_path {
+            let Some(stem) = path.strip_suffix(".py") else {
+                continue;
+            };
+            let stem = stem.strip_suffix("/__init__").unwrap_or(stem);
+            let parts: Vec<&str> = stem.split('/').collect();
+            for k in 0..parts.len() {
+                by_suffix.entry(parts[k..].join("/")).or_default().push(i);
+            }
+        }
+        PyModules { by_suffix }
+    }
+}
+
 fn normalize(p: &str) -> String {
     p.replace('\\', "/").trim_start_matches("./").to_string()
 }
@@ -334,6 +458,43 @@ mod tests {
             .enumerate()
             .map(|(i, p)| (p.to_string(), i))
             .collect()
+    }
+
+    #[test]
+    fn python_modules_resolve_to_project_files() {
+        let p: HashMap<String, usize> = [
+            "app/views.py",
+            "app/db.py",
+            "app/services/__init__.py",
+            "app/services/users.py",
+            "lib/util.py",
+            "other/util.py",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.to_string(), i))
+        .collect();
+        let m = PyModules::new(&p);
+        assert_eq!(resolve_py_module("app/views.py", ".db", &p, &m), Some(1));
+        assert_eq!(
+            resolve_py_module("app/views.py", ".services", &p, &m),
+            Some(2)
+        );
+        assert_eq!(
+            resolve_py_module("app/services/users.py", "..db", &p, &m),
+            Some(1)
+        );
+        assert_eq!(resolve_py_module("app/views.py", "app.db", &p, &m), Some(1));
+        assert_eq!(
+            resolve_py_module("app/views.py", "app.services.users", &p, &m),
+            Some(3)
+        );
+        // Two `util` modules: ambiguous; and a package's module isn't ours.
+        assert_eq!(resolve_py_module("app/views.py", "util", &p, &m), None);
+        assert_eq!(resolve_py_module("app/views.py", "requests", &p, &m), None);
+        // `from . import db; db.query(x)`.
+        let c = py_candidates("app/views.py", ".", Some("db"), Some("query"), &p, &m);
+        assert!(c.iter().any(|(f, k)| *f == 1 && k.export == "query"));
     }
 
     #[test]

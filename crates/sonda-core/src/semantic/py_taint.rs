@@ -18,7 +18,10 @@
 //! the parameters a framework fills from the request: a Flask route's, a
 //! Django view's after its `request`, a FastAPI path operation's.
 
-use super::taint::{Finding, SinkKind, Step, TaintResult, cap};
+use super::taint::{
+    CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
+    cap,
+};
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -26,6 +29,80 @@ use std::rc::Rc;
 use tree_sitter::Node;
 
 type Path<'t> = Vec<Step<'t>>;
+
+/// A path that starts at another file's function's result: a request's
+/// value only if that function returns one, which the project pass
+/// decides (T4). Its first step is the call, with this message.
+const FROM_CALL: &str = "\u{1}";
+
+fn from_call(path: &Path) -> bool {
+    path.first().is_some_and(|s| s.message == FROM_CALL)
+}
+
+/// Modules that are libraries, whose functions the tables model or that
+/// return nothing of a request's: no other file of the project.
+const LIBRARIES: &[&str] = &[
+    "os",
+    "sys",
+    "re",
+    "json",
+    "subprocess",
+    "shutil",
+    "pathlib",
+    "requests",
+    "httpx",
+    "urllib",
+    "urllib3",
+    "aiohttp",
+    "flask",
+    "django",
+    "fastapi",
+    "starlette",
+    "sqlalchemy",
+    "lxml",
+    "ldap",
+    "ldap3",
+    "typing",
+    "logging",
+    "datetime",
+    "time",
+    "base64",
+    "hashlib",
+    "html",
+    "shlex",
+    "collections",
+    "itertools",
+    "functools",
+    "math",
+    "random",
+    "uuid",
+    "io",
+    "tempfile",
+    "werkzeug",
+    "pydantic",
+    "asyncio",
+];
+
+/// What a value reaches: a sink, another file's function, or a sink by way
+/// of another file's function's result.
+enum Reach<'t> {
+    Sink {
+        path: Path<'t>,
+        sink: Node<'t>,
+    },
+    Open {
+        path: Path<'t>,
+        callee: Callee,
+        arg: usize,
+        call: Node<'t>,
+    },
+    FromCall {
+        call: Node<'t>,
+        after: Path<'t>,
+        sink: Node<'t>,
+        needs_sql: bool,
+    },
+}
 
 /// Rounds of the fixed point; past it, the file reports nothing.
 const MAX_ROUNDS: usize = 64;
@@ -426,7 +503,28 @@ const INSTANCE_MAKERS: &[&str] = &[
 // ---------------------------------------------------------------- entry
 
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
-    if !might_have_sinks(src, kind) {
+    // A file without a sink can still pass a value on to another file's
+    // function, or define one another file calls.
+    let has = |n: &[u8]| src.windows(n.len()).any(|w| w == n);
+    let sinks = might_have_sinks(src, kind);
+    // A request's value: Django's, Flask's, Starlette's `request`, and the
+    // parameters of a route a decorator registers.
+    // `request.args`, `def view(request, …)`, `request: Request`; not
+    // `requests` or `request_id`.
+    let sources = [
+        b"request.".as_slice(),
+        b"request,",
+        b"request)",
+        b"request:",
+    ]
+    .iter()
+    .any(|n| has(n))
+        || has(b".route(")
+        || has(b"api_route")
+        || [b"@app.".as_slice(), b"@router.", b"@bp.", b"@blueprint."]
+            .iter()
+            .any(|d| has(d));
+    if !sinks && !sources && !has(b"import") && !has(b"def ") {
         return TaintResult::default();
     }
     let Some(root) = m.root else {
@@ -435,42 +533,106 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     let Some(cx) = Cx::new(m, src, kind, root) else {
         return TaintResult::default();
     };
-    let Some(state) = cx.run(cx.initial.clone(), None) else {
+    // Neither a sink nor a request: only what its functions pass straight
+    // on to other modules matters, read from the syntax. Analyzing every
+    // such file costs a large project seconds.
+    if !sinks && !sources {
+        return TaintResult {
+            findings: Vec::new(),
+            facts: Facts {
+                summaries: cx.passed_on_summaries(),
+                ..Facts::default()
+            },
+        };
+    }
+    let mut start = cx.initial.clone();
+    start.from_calls = true;
+    let Some(state) = cx.run(start, None) else {
         return TaintResult::default();
     };
-    let mut findings: Vec<Finding<'t>> = cx
-        .reached(None, &state)
-        .into_iter()
-        .map(|(path, sink)| Finding {
-            sink,
-            steps: cap(path),
-        })
-        .collect();
+    let mut findings: Vec<Finding<'t>> = Vec::new();
+    let mut facts = Facts::default();
+    for r in cx.reached(None, &state) {
+        match r {
+            Reach::Sink { path, sink } => findings.push(Finding {
+                sink,
+                steps: cap(path),
+            }),
+            Reach::Open {
+                path,
+                callee,
+                arg,
+                call,
+            } => facts.calls.push(CallFact {
+                steps: cap(path),
+                call,
+                callee,
+                arg,
+            }),
+            Reach::FromCall {
+                call,
+                after,
+                sink,
+                needs_sql,
+            } => {
+                if let Some(callee) = cx.callee_of(call) {
+                    let args = positional(call)
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, a)| {
+                            cx.taint(a, &state, 0)
+                                .filter(|p| !from_call(p))
+                                .map(|p| (i, cap(p)))
+                        })
+                        .collect();
+                    facts.returns.push(ReturnFact {
+                        call,
+                        callee,
+                        args,
+                        after: cap(after),
+                        sink,
+                        needs_sql,
+                    });
+                }
+            }
+        }
+    }
     findings.sort_by_key(|f| (f.sink.start_byte(), f.steps.len()));
     findings.dedup_by_key(|f| f.sink.id());
-    TaintResult {
-        findings,
-        facts: Default::default(),
-    }
+    // Without a sink of its own, a file's functions pass values on at
+    // most, which the syntax shows more cheaply than a summary per function.
+    facts.summaries = if sinks {
+        cx.exported_summaries(&state)
+    } else {
+        cx.passed_on_summaries()
+    };
+    TaintResult { findings, facts }
 }
 
-/// Whether the file can have a sink of this kind.
+/// Whether the file can have a sink of this kind: the modules and names
+/// the sink tables use, as written.
 fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
     let has = |n: &[u8]| src.windows(n.len()).any(|w| w == n);
+    let os = || has(b"import os") || has(b"from os");
     let words: &[&[u8]] = match kind {
         SinkKind::Sql => &[
             b"execute",
-            b"raw",
+            b".raw(",
             b"RawSQL",
-            b"text(",
+            b"sqlalchemy",
             b"literal_column",
             b"from_statement",
         ],
-        SinkKind::Command => &[b"os", b"subprocess"],
-        SinkKind::Path => &[b"open", b"os", b"shutil", b"pathlib", b"send_file"],
+        SinkKind::Command => return os() || has(b"subprocess"),
+        SinkKind::Path => {
+            return os()
+                || [b"open(".as_slice(), b"shutil", b"pathlib", b"send_file"]
+                    .iter()
+                    .any(|w| has(w));
+        }
         SinkKind::Redirect => &[b"redirect", b"Redirect"],
         SinkKind::Ssrf => &[b"requests", b"httpx", b"urllib", b"aiohttp"],
-        SinkKind::Code => &[b"eval", b"exec"],
+        SinkKind::Code => &[b"eval(", b"exec("],
         SinkKind::XPath => &[b"xpath", b"XPath"],
         SinkKind::Ldap => &[b"ldap"],
     };
@@ -500,13 +662,20 @@ struct State<'t> {
     requests: HashSet<DeclId>,
     /// Variables holding an upload: `f = request.files['doc']`.
     uploads: HashSet<DeclId>,
+    /// Whether other files' functions' results count, as paths that start
+    /// at the call: for the file's own run, not a summary's.
+    from_calls: bool,
 }
 
 /// What a function's parameters reach, each analyzed alone.
 #[derive(Default)]
 struct FnSummary<'t> {
+    /// Its return value reads as SQL: `'SELECT … ' + id`.
+    returns_sql: bool,
     to_return: Vec<(usize, Path<'t>)>,
     to_sink: Vec<(usize, Path<'t>, Node<'t>)>,
+    /// The path ends with "passed to `f`" at the call.
+    to_call: Vec<(usize, Path<'t>, Callee, usize)>,
 }
 
 struct Cx<'a, 't> {
@@ -525,7 +694,18 @@ struct Cx<'a, 't> {
     busy: RefCell<HashSet<usize>>,
     checks: RefCell<HashMap<usize, Rc<HashSet<String>>>>,
     evaluations: Cell<u64>,
+    /// The writes' indices by their target's position (and the calls,
+    /// sorted by position), so a function's are a range, not the file's.
+    writes_by_start: Vec<usize>,
+    /// Per call and per function, computed once: what a call calls in
+    /// this file, its sink, and a function's return values.
+    local_calls: RefCell<HashMap<usize, Option<usize>>>,
+    sink_calls: RefCell<HashMap<usize, Option<SinkCall<'t>>>>,
+    returns: RefCell<HashMap<usize, Rc<Vec<Node<'t>>>>>,
 }
+
+/// A sink's name, and the arguments that take the value.
+type SinkCall<'t> = (String, Vec<Node<'t>>);
 
 impl<'a, 't> Cx<'a, 't> {
     fn new(m: &'a Model<'t>, src: &'a [u8], kind: SinkKind, root: Node<'t>) -> Option<Self> {
@@ -554,8 +734,16 @@ impl<'a, 't> Cx<'a, 't> {
             busy: RefCell::new(HashSet::new()),
             checks: RefCell::new(HashMap::new()),
             evaluations: Cell::new(0),
+            writes_by_start: Vec::new(),
+            local_calls: RefCell::new(HashMap::new()),
+            sink_calls: RefCell::new(HashMap::new()),
+            returns: RefCell::new(HashMap::new()),
         };
         cx.walk(root)?;
+        cx.calls.sort_by_key(|c| c.start_byte());
+        let mut by_start: Vec<usize> = (0..cx.writes.len()).collect();
+        by_start.sort_by_key(|&i| cx.writes[i].target.start_byte());
+        cx.writes_by_start = by_start;
         for (i, f) in m.functions.iter().enumerate() {
             cx.handler(i, f.node);
         }
@@ -862,11 +1050,23 @@ impl<'a, 't> Cx<'a, 't> {
     /// The fixed point from `state`, over the writes in `scope` (a function,
     /// for a summary), or the whole file's.
     fn run(&self, mut state: State<'t>, scope: Option<Node>) -> Option<State<'t>> {
-        let writes: Vec<&Write<'t>> = self
-            .writes
-            .iter()
-            .filter(|w| scope.is_none_or(|s| within(w.target, s)))
-            .collect();
+        let writes: Vec<&Write<'t>> = match scope {
+            None => self.writes.iter().collect(),
+            Some(s) => {
+                let start = |i: &usize| self.writes[*i].target.start_byte();
+                let lo = self
+                    .writes_by_start
+                    .partition_point(|i| start(i) < s.start_byte());
+                let hi = self
+                    .writes_by_start
+                    .partition_point(|i| start(i) < s.end_byte());
+                self.writes_by_start[lo..hi]
+                    .iter()
+                    .map(|&i| &self.writes[i])
+                    .filter(|w| within(w.target, s))
+                    .collect()
+            }
+        };
         for _ in 0..MAX_ROUNDS {
             let mut changed = false;
             for w in &writes {
@@ -892,12 +1092,15 @@ impl<'a, 't> Cx<'a, 't> {
                 if !w.adds && self.is_upload(w.value, state) {
                     return state.uploads.insert(decl);
                 }
-                if state.tainted.contains_key(&decl) {
+                if settled(state, decl) {
                     return false;
                 }
                 let Some(mut path) = self.taint(w.value, state, 0) else {
                     return false;
                 };
+                if !replaces(state, decl, &path) {
+                    return false;
+                }
                 let name = self.text(target);
                 let message = if w.adds
                     && w.target
@@ -1198,6 +1401,17 @@ impl<'a, 't> Cx<'a, 't> {
             let name = self.text(callee);
             return PROPAGATING_BUILTINS.contains(&name).then(any_arg).flatten();
         }
+        if state.from_calls
+            && self.callee_of(call).is_some()
+            && !self
+                .qualified(callee)
+                .is_some_and(|(m, _)| PROPAGATING_MODULES.contains(&m.as_str()))
+        {
+            return Some(vec![Step {
+                node: call,
+                message: FROM_CALL.to_string(),
+            }]);
+        }
         if let Some((module, name)) = self.qualified(callee) {
             // `os.path.basename` and `secure_filename` keep a file name.
             let sanitizes = match self.kind {
@@ -1292,22 +1506,32 @@ impl<'a, 't> Cx<'a, 't> {
     // ------------------------------------------------------------ sinks
 
     /// What the request's values reach from the calls in `scope`, or the
-    /// whole file's: each sink with its path, ending at the sink.
-    fn reached(&self, scope: Option<Node>, state: &State<'t>) -> Vec<(Path<'t>, Node<'t>)> {
+    /// whole file's: sinks, this file's helpers' sinks, and other files'
+    /// functions.
+    fn reached(&self, scope: Option<Node>, state: &State<'t>) -> Vec<Reach<'t>> {
         let mut out = Vec::new();
-        for &call in &self.calls {
-            if scope.is_some_and(|s| !within(call, s)) {
-                continue;
+        let calls = match scope {
+            None => &self.calls[..],
+            Some(s) => {
+                let lo = self
+                    .calls
+                    .partition_point(|c| c.start_byte() < s.start_byte());
+                let hi = self
+                    .calls
+                    .partition_point(|c| c.start_byte() < s.end_byte());
+                &self.calls[lo..hi]
             }
+        };
+        for &call in calls {
             if let Some((name, args)) = self.sink(call) {
                 for arg in args {
                     let Some(mut path) = self.taint(arg, state, 0) else {
                         continue;
                     };
-                    if self.kind == SinkKind::Sql
+                    let needs_sql = self.kind == SinkKind::Sql
                         && SQL_EXECUTE.contains(&name.as_str())
-                        && !self.reads_as_sql(arg, 3)
-                    {
+                        && !self.reads_as_sql(arg, 3);
+                    if needs_sql && !from_call(&path) {
                         continue;
                     }
                     if self.is_checked(call, arg, &path) {
@@ -1317,43 +1541,399 @@ impl<'a, 't> Cx<'a, 't> {
                         node: call,
                         message: format!("passed to `{name}`"),
                     });
-                    out.push((path, call));
+                    out.push(reach_sink(path, call, needs_sql));
                     break;
                 }
                 continue;
             }
-            // A helper of this file whose parameter reaches a sink.
+            // A helper of this file whose parameter reaches a sink, or
+            // another file's function.
             if let Some(j) = self.local_function(call) {
                 let summary = self.summary(j);
-                if summary.to_sink.is_empty() {
+                if summary.to_sink.is_empty() && summary.to_call.is_empty() {
                     continue;
                 }
                 let fname = self.function_name(j);
-                for (p, inner, sink) in &summary.to_sink {
-                    let Some(arg) = self.argument_for(call, j, *p) else {
+                let params: HashSet<usize> = summary
+                    .to_sink
+                    .iter()
+                    .map(|t| t.0)
+                    .chain(summary.to_call.iter().map(|t| t.0))
+                    .collect();
+                for p in params {
+                    let Some(arg) = self.argument_for(call, j, p) else {
                         continue;
                     };
-                    let Some(mut path) = self.taint(arg, state, 0) else {
+                    let Some(path) = self.taint(arg, state, 0) else {
                         continue;
                     };
                     if self.is_checked(call, arg, &path) {
                         continue;
                     }
-                    path.push(Step {
-                        node: call,
-                        message: format!("passed to `{fname}`"),
-                    });
-                    path.extend(inner.iter().cloned());
-                    out.push((path, *sink));
+                    let into = |inner: &Path<'t>| {
+                        let mut path = path.clone();
+                        path.push(Step {
+                            node: call,
+                            message: format!("passed to `{fname}`"),
+                        });
+                        path.extend(inner.iter().cloned());
+                        path
+                    };
+                    for (_, inner, sink) in summary.to_sink.iter().filter(|t| t.0 == p) {
+                        out.push(reach_sink(into(inner), *sink, false));
+                    }
+                    if !from_call(&path) {
+                        for (_, inner, callee, a) in summary.to_call.iter().filter(|t| t.0 == p) {
+                            out.push(Reach::Open {
+                                path: into(inner),
+                                callee: callee.clone(),
+                                arg: *a,
+                                call,
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(callee) = self.callee_of(call) {
+                for (i, arg) in positional(call).into_iter().enumerate() {
+                    if let Some(path) = self
+                        .taint(arg, state, 0)
+                        .filter(|p| !from_call(p) && !self.is_checked(call, arg, p))
+                    {
+                        out.push(Reach::Open {
+                            path,
+                            callee: callee.clone(),
+                            arg: i,
+                            call,
+                        });
+                    }
                 }
             }
         }
         out
     }
 
+    /// Another file's function a call calls: imported from a module of the
+    /// project (`from .db import query`), through a module (`db.query`), or
+    /// an instance of an imported class (`svc = UserService()`).
+    fn callee_of(&self, call: Node<'t>) -> Option<Callee> {
+        let callee = call.child_by_field_name("function")?;
+        let project = |i: &Import| {
+            let root = i
+                .module
+                .trim_start_matches('.')
+                .split('.')
+                .next()
+                .unwrap_or("");
+            i.module.starts_with('.') || !LIBRARIES.contains(&root)
+        };
+        let import_of = |n: Node| {
+            (n.kind() == "identifier")
+                .then(|| self.decl(n))
+                .flatten()
+                .filter(|d| !self.initial.requests.contains(d))
+                .and_then(|d| self.imports.get(&d))
+                .filter(|i| project(i))
+        };
+        if callee.kind() == "identifier" {
+            let import = import_of(callee)?;
+            return Some(Callee::Py {
+                module: import.module.clone(),
+                name: import.member.clone(),
+                member: None,
+            });
+        }
+        let (receiver, member) = method(call)?;
+        let member = Some(self.text(member).to_string());
+        if let Some(import) = import_of(receiver) {
+            return Some(Callee::Py {
+                module: import.module.clone(),
+                name: import.member.clone(),
+                member,
+            });
+        }
+        // `svc = UserService(…)`, with `UserService` imported.
+        if receiver.kind() == "identifier"
+            && let Some(class) = self
+                .decl(receiver)
+                .and_then(|d| self.m.decls[d].declarator)
+                .and_then(|a| a.child_by_field_name("right"))
+                .filter(|v| v.kind() == "call")
+                .and_then(|v| v.child_by_field_name("function"))
+            && let Some(import) = import_of(class)
+        {
+            return Some(Callee::Py {
+                module: import.module.clone(),
+                name: import
+                    .member
+                    .clone()
+                    .or_else(|| Some(self.text(class).to_string())),
+                member,
+            });
+        }
+        None
+    }
+
+    /// Function `j`'s return values, computed once.
+    fn returns_of(&self, j: usize) -> Rc<Vec<Node<'t>>> {
+        if let Some(r) = self.returns.borrow().get(&j) {
+            return r.clone();
+        }
+        let r = Rc::new(return_values(self.m.functions[j].node, &self.fn_index));
+        self.returns.borrow_mut().insert(j, r.clone());
+        r
+    }
+
+    /// Whether function `j` can have anything to summarize, read from the
+    /// syntax: a sink, a call to a helper of the file or to another file's
+    /// function with a parameter in its arguments, or a parameter in what
+    /// it returns. Most functions have none, and a summary analyzes the
+    /// function once per parameter.
+    fn worth_summarizing(&self, j: usize) -> bool {
+        let f = &self.m.functions[j];
+        let params: Vec<&str> = f
+            .params
+            .iter()
+            .flatten()
+            .map(|d| self.m.decls[*d].name.as_str())
+            .filter(|n| !matches!(*n, "self" | "cls"))
+            .collect();
+        if params.is_empty() {
+            // It may still return a request's value it reads itself.
+            return true;
+        }
+        let mentions = |n: Node| {
+            let mut stack = vec![n];
+            while let Some(c) = stack.pop() {
+                if c.kind() == "identifier" && params.contains(&self.text(c)) {
+                    return true;
+                }
+                stack.extend(children(c));
+            }
+            false
+        };
+        let lo = self
+            .calls
+            .partition_point(|c| c.start_byte() < f.node.start_byte());
+        let hi = self
+            .calls
+            .partition_point(|c| c.start_byte() < f.node.end_byte());
+        self.calls[lo..hi].iter().any(|&c| {
+            self.sink(c).is_some()
+                || ((self.local_function(c).is_some() || self.callee_of(c).is_some())
+                    && arguments(c).into_iter().any(mentions))
+        }) || self.returns_of(j).iter().any(|r| mentions(*r))
+    }
+
+    /// The key other modules import function `j` by: a module's function
+    /// by its name, a module's class's method by class and method.
+    fn export_key(&self, j: usize) -> Option<Key> {
+        let f = self.m.functions[j].node;
+        if f.kind() != "function_definition" {
+            return None;
+        }
+        let name = self.text(f.child_by_field_name("name")?).to_string();
+        let mut owner = f.parent();
+        if owner.is_some_and(|o| o.kind() == "decorated_definition") {
+            owner = owner.and_then(|o| o.parent());
+        }
+        match owner?.kind() {
+            "module" => Some(Key {
+                export: name,
+                member: None,
+            }),
+            "block" => {
+                let class = owner?.parent().filter(|c| c.kind() == "class_definition")?;
+                let parent = class.parent()?;
+                let at_top = parent.kind() == "module"
+                    || (parent.kind() == "decorated_definition"
+                        && parent.parent().is_some_and(|g| g.kind() == "module"));
+                at_top.then(|| Key {
+                    export: self
+                        .text(class.child_by_field_name("name").unwrap_or(class))
+                        .to_string(),
+                    member: Some(name),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// For a module with neither a sink nor a request: its functions'
+    /// parameters passed straight on to other modules' functions, as the
+    /// argument, a member of it, or in a concatenation, a `%` or an
+    /// f-string, not through another call, which may sanitize it.
+    fn passed_on_summaries(&self) -> Vec<SummaryFact<'t>> {
+        let mut out = Vec::new();
+        for (j, f) in self.m.functions.iter().enumerate() {
+            let Some(key) = self.export_key(j) else {
+                continue;
+            };
+            let fname = self.function_name(j);
+            let first_is_self = f
+                .params
+                .first()
+                .and_then(|d| d.first())
+                .is_some_and(|d| matches!(self.m.decls[*d].name.as_str(), "self" | "cls"));
+            let shift = usize::from(key.member.is_some() && first_is_self);
+            let lo = self
+                .calls
+                .partition_point(|c| c.start_byte() < f.node.start_byte());
+            let hi = self
+                .calls
+                .partition_point(|c| c.start_byte() < f.node.end_byte());
+            let mut to_call = Vec::new();
+            for &call in &self.calls[lo..hi] {
+                let positional = positional(call);
+                if positional.is_empty() {
+                    continue;
+                }
+                for (p, decls) in f.params.iter().enumerate().skip(shift) {
+                    for &d in decls {
+                        let decl = &self.m.decls[d];
+                        let Some(k) = positional
+                            .iter()
+                            .position(|a| passes_directly(*a, &decl.name, self.src))
+                        else {
+                            continue;
+                        };
+                        let Some(callee) = self.callee_of(call) else {
+                            continue;
+                        };
+                        to_call.push((
+                            p - shift,
+                            vec![
+                                Step {
+                                    node: decl.node,
+                                    message: format!("`{fname}`'s parameter `{}`", decl.name),
+                                },
+                                Step {
+                                    node: call,
+                                    message: format!("passed to `{}`", callee.display()),
+                                },
+                            ],
+                            callee,
+                            k,
+                        ));
+                    }
+                }
+            }
+            // A value it returns built straight from a parameter: a query
+            // builder's.
+            let returns = self.returns_of(j);
+            let mut to_return = Vec::new();
+            for (p, decls) in f.params.iter().enumerate().skip(shift) {
+                for &d in decls {
+                    let decl = &self.m.decls[d];
+                    if returns
+                        .iter()
+                        .any(|r| passes_directly(*r, &decl.name, self.src))
+                    {
+                        to_return.push((
+                            p - shift,
+                            vec![Step {
+                                node: decl.node,
+                                message: format!("`{fname}`'s parameter `{}`", decl.name),
+                            }],
+                        ));
+                    }
+                }
+            }
+            if !to_call.is_empty() || !to_return.is_empty() {
+                out.push(SummaryFact {
+                    key,
+                    returns_sql: self.kind == SinkKind::Sql
+                        && returns.iter().any(|r| self.reads_as_sql(*r, 3)),
+                    to_sink: Vec::new(),
+                    to_return,
+                    returns_source: None,
+                    to_call,
+                });
+            }
+        }
+        out
+    }
+
+    /// The summaries of the functions other modules can import: the
+    /// module's functions, by name, and its classes' methods, by class and
+    /// method, their parameters counted after `self`.
+    fn exported_summaries(&self, state: &State<'t>) -> Vec<SummaryFact<'t>> {
+        let mut out = Vec::new();
+        for (j, f) in self.m.functions.iter().enumerate() {
+            if out.len() >= MAX_SUMMARIES {
+                continue;
+            }
+            let Some(key) = self.export_key(j) else {
+                continue;
+            };
+            if !self.worth_summarizing(j) {
+                continue;
+            }
+            let summary = self.summary(j);
+            let returns_source = self
+                .returns_of(j)
+                .iter()
+                .find_map(|r| self.taint(*r, state, 0).filter(|p| !from_call(p)))
+                .map(cap);
+            if summary.to_sink.is_empty()
+                && summary.to_return.is_empty()
+                && summary.to_call.is_empty()
+                && returns_source.is_none()
+            {
+                continue;
+            }
+            // A method's `self` isn't one of its call's arguments.
+            let first_is_self = f
+                .params
+                .first()
+                .and_then(|d| d.first())
+                .is_some_and(|d| matches!(self.m.decls[*d].name.as_str(), "self" | "cls"));
+            let shift = |p: usize| {
+                if key.member.is_some() && first_is_self {
+                    p.checked_sub(1)
+                } else {
+                    Some(p)
+                }
+            };
+            out.push(SummaryFact {
+                returns_sql: summary.returns_sql,
+                to_sink: summary
+                    .to_sink
+                    .iter()
+                    .filter_map(|(p, path, sink)| Some((shift(*p)?, path.clone(), *sink)))
+                    .collect(),
+                to_return: summary
+                    .to_return
+                    .iter()
+                    .filter_map(|(p, path)| Some((shift(*p)?, path.clone())))
+                    .collect(),
+                returns_source,
+                to_call: summary
+                    .to_call
+                    .iter()
+                    .filter_map(|(p, path, c, a)| Some((shift(*p)?, path.clone(), c.clone(), *a)))
+                    .collect(),
+                key,
+            });
+        }
+        out
+    }
+
     /// The sink a call is for this analysis's kind: its name, and the
     /// arguments that take the value.
-    fn sink(&self, call: Node<'t>) -> Option<(String, Vec<Node<'t>>)> {
+    fn sink(&self, call: Node<'t>) -> Option<SinkCall<'t>> {
+        if let Some(found) = self.sink_calls.borrow().get(&call.id()) {
+            return found.clone();
+        }
+        let found = self.resolve_sink(call);
+        self.sink_calls
+            .borrow_mut()
+            .insert(call.id(), found.clone());
+        found
+    }
+
+    fn resolve_sink(&self, call: Node<'t>) -> Option<SinkCall<'t>> {
         let callee = call.child_by_field_name("function")?;
         let positional = arguments(call)
             .into_iter()
@@ -1483,9 +2063,10 @@ impl<'a, 't> Cx<'a, 't> {
                 // A helper of this file: what it returns.
                 "call" if depth > 0 && self.local_function(c).is_some() => {
                     if let Some(j) = self.local_function(c)
-                        && return_values(self.m.functions[j].node, &self.fn_index)
-                            .into_iter()
-                            .any(|r| self.reads_as_sql(r, depth - 1))
+                        && self
+                            .returns_of(j)
+                            .iter()
+                            .any(|r| self.reads_as_sql(*r, depth - 1))
                     {
                         return true;
                     }
@@ -1716,6 +2297,15 @@ impl<'a, 't> Cx<'a, 't> {
     /// The function of this file a call calls: `build(x)`, or a method of
     /// the same class through `self.build(x)`.
     fn local_function(&self, call: Node<'t>) -> Option<usize> {
+        if let Some(j) = self.local_calls.borrow().get(&call.id()) {
+            return *j;
+        }
+        let j = self.resolve_local(call);
+        self.local_calls.borrow_mut().insert(call.id(), j);
+        j
+    }
+
+    fn resolve_local(&self, call: Node<'t>) -> Option<usize> {
         let callee = call.child_by_field_name("function")?;
         let function = match callee.kind() {
             "identifier" => {
@@ -1831,8 +2421,12 @@ impl<'a, 't> Cx<'a, 't> {
     fn compute_summary(&self, j: usize) -> FnSummary<'t> {
         let f = &self.m.functions[j];
         let name = self.function_name(j);
-        let returns = return_values(f.node, &self.fn_index);
-        let mut summary = FnSummary::default();
+        let returns = self.returns_of(j);
+        let mut summary = FnSummary {
+            returns_sql: self.kind == SinkKind::Sql
+                && returns.iter().any(|r| self.reads_as_sql(*r, 3)),
+            ..FnSummary::default()
+        };
         for (p, decls) in f.params.iter().enumerate() {
             if decls.is_empty() {
                 continue;
@@ -1858,6 +2452,7 @@ impl<'a, 't> Cx<'a, 't> {
                 tainted,
                 requests: self.initial.requests.clone(),
                 uploads: HashSet::new(),
+                from_calls: false,
             };
             let Some(state) = self.run(start, Some(f.node)) else {
                 continue;
@@ -1870,18 +2465,98 @@ impl<'a, 't> Cx<'a, 't> {
             }) {
                 summary.to_return.push((p, cap(path)));
             }
-            for (path, sink) in self.reached(Some(f.node), &state) {
-                if path.first().is_some_and(|s| {
+            let from_param = |path: &Path<'t>| {
+                path.first().is_some_and(|s| {
                     decls
                         .iter()
                         .any(|d| self.m.decls[*d].node.id() == s.node.id())
-                }) {
-                    summary.to_sink.push((p, cap(path), sink));
+                })
+            };
+            for r in self.reached(Some(f.node), &state) {
+                match r {
+                    Reach::Sink { path, sink } if from_param(&path) => {
+                        summary.to_sink.push((p, cap(path), sink));
+                    }
+                    Reach::Open {
+                        mut path,
+                        callee,
+                        arg,
+                        call,
+                    } if from_param(&path) => {
+                        path.push(Step {
+                            node: call,
+                            message: format!("passed to `{}`", callee.display()),
+                        });
+                        summary.to_call.push((p, cap(path), callee, arg));
+                    }
+                    _ => {}
                 }
             }
         }
         summary
     }
+}
+
+/// A sink reached: by a request's value, or by another file's function's
+/// result, which the project pass follows.
+fn reach_sink<'t>(path: Path<'t>, sink: Node<'t>, needs_sql: bool) -> Reach<'t> {
+    if from_call(&path) {
+        Reach::FromCall {
+            call: path[0].node,
+            after: path[1..].to_vec(),
+            sink,
+            needs_sql,
+        }
+    } else {
+        Reach::Sink { path, sink }
+    }
+}
+
+/// A variable whose path no later write replaces: a request's value.
+fn settled(state: &State, decl: DeclId) -> bool {
+    state.tainted.get(&decl).is_some_and(|p| !from_call(p))
+}
+
+/// Whether `path` replaces what `decl` holds.
+fn replaces(state: &State, decl: DeclId, path: &Path) -> bool {
+    match state.tainted.get(&decl) {
+        None => true,
+        Some(old) => from_call(old) && !from_call(path),
+    }
+}
+
+/// Whether `name` reaches an argument as it is: the argument itself, a
+/// member of it (`user.id`), or a part of a concatenation, a `%` or an
+/// f-string, not inside another call.
+fn passes_directly(arg: Node, name: &str, src: &[u8]) -> bool {
+    let text = |n: Node| n.utf8_text(src).unwrap_or_default();
+    let mut stack = vec![arg];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "identifier" if text(n) == name => return true,
+            "attribute" | "subscript" => stack.extend(n.named_child(0)),
+            "binary_operator"
+            | "string"
+            | "interpolation"
+            | "parenthesized_expression"
+            | "concatenated_string" => stack.extend(children(n)),
+            _ => {}
+        }
+    }
+    false
+}
+
+/// A call's positional arguments.
+fn positional(call: Node) -> Vec<Node> {
+    arguments(call)
+        .into_iter()
+        .filter(|a| {
+            !matches!(
+                a.kind(),
+                "keyword_argument" | "dictionary_splat" | "list_splat"
+            )
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- syntax
@@ -2515,5 +3190,142 @@ mod tests {
              @app.route('/x')\ndef view():\n    safe(request.args['f']).unlink()\n"
         );
         assert!(py(PATH, &src).is_empty(), "{src}");
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    fn project(files: &[(&str, &str)]) -> Vec<Issue> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<_> = files
+            .iter()
+            .map(|(path, src)| {
+                analyze(path, Lang::Python, src, &rules, &cfg, far_deadline()).unwrap()
+            })
+            .collect();
+        crate::analysis::taint_project_rules(&mut analyzed, &rules);
+        analyzed
+            .into_iter()
+            .flat_map(|f| f.issues)
+            .filter(|i| i.rule.starts_with("py/") && !i.flow.is_empty())
+            .collect()
+    }
+
+    const VIEWS: &str = "from flask import Flask, request\napp = Flask(__name__)\n";
+
+    #[test]
+    fn a_request_value_into_another_modules_function() {
+        let dao = "def find_student(sid):\n    cursor.execute(\"SELECT * FROM s WHERE id = '%s'\" % sid)\n";
+        // The step names the callee as the import does: `dao.find_student`
+        // when `dao` is the name imported from the package.
+        for (import, call, shown) in [
+            (
+                "from .dao import find_student",
+                "find_student",
+                "find_student",
+            ),
+            (
+                "from app.dao import find_student",
+                "find_student",
+                "find_student",
+            ),
+            ("from . import dao", "dao.find_student", "dao.find_student"),
+            ("import app.dao as dao", "dao.find_student", "find_student"),
+        ] {
+            let views = format!(
+                "{VIEWS}{import}\n@app.route('/s')\ndef show():\n    {call}(request.args['id'])\n"
+            );
+            let found = project(&[("app/views.py", &views), ("app/dao.py", dao)]);
+            assert_eq!(found.len(), 1, "{import}: {found:?}");
+            assert_eq!(found[0].path, "app/dao.py");
+            assert_eq!(
+                flow(&found[0]),
+                [
+                    "the request's `args`",
+                    &*format!("passed to `{shown}`"),
+                    "`find_student`'s parameter `sid`",
+                    "passed to `execute`"
+                ],
+                "{import}"
+            );
+            assert_eq!(found[0].flow[0].path.as_deref(), Some("app/views.py"));
+        }
+    }
+
+    #[test]
+    fn methods_returns_and_hops() {
+        // A class's method through an instance; `self` isn't an argument.
+        let svc = "class UserService:\n    def find(self, uid):\n        cursor.execute('SELECT * FROM u WHERE id = ' + uid)\n";
+        let views = format!(
+            "{VIEWS}from .services import UserService\n@app.route('/u')\ndef show():\n    \
+             svc = UserService()\n    svc.find(request.args['id'])\n"
+        );
+        let found = project(&[("app/views.py", &views), ("app/services.py", svc)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "app/services.py");
+        // A query built in another module and run here.
+        let sql = "def by_id(i):\n    return 'SELECT * FROM t WHERE id = ' + i\n";
+        let views = format!(
+            "{VIEWS}from .sql import by_id\n@app.route('/t')\ndef show():\n    cursor.execute(by_id(request.args['id']))\n"
+        );
+        let found = project(&[("app/views.py", &views), ("app/sql.py", sql)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "app/views.py");
+        assert!(flow(&found[0]).contains(&"returned by `by_id`"));
+        // Two hops: views, service, repository.
+        let service = "from .repo import fetch\ndef lookup(key):\n    return fetch(key)\n";
+        let repo = "def fetch(k):\n    cursor.execute(f\"SELECT * FROM t WHERE k = '{k}'\")\n";
+        let views = format!(
+            "{VIEWS}from .service import lookup\n@app.route('/k')\ndef show():\n    lookup(request.args['k'])\n"
+        );
+        let found = project(&[
+            ("app/views.py", &views),
+            ("app/service.py", service),
+            ("app/repo.py", repo),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "app/repo.py");
+    }
+
+    #[test]
+    fn what_doesnt_cross_python_files() {
+        let views = format!(
+            "{VIEWS}from .dao import find\nimport requests\n@app.route('/s')\ndef show():\n    find(request.args['id'])\n"
+        );
+        for dao in [
+            "def find(sid):\n    cursor.execute('SELECT * FROM s WHERE id = %d' % int(sid))\n",
+            "def find(sid):\n    cursor.execute('SELECT * FROM s WHERE id = %s', (sid,))\n",
+            "def find(sid):\n    cursor.execute('SELECT * FROM s WHERE id = ' + sid)  # NOSONAR\n",
+        ] {
+            assert!(
+                project(&[("app/views.py", &views), ("app/dao.py", dao)]).is_empty(),
+                "{dao}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_service_without_sinks_passes_values_on() {
+        // The service has neither a sink nor a request: its summary is read
+        // from the syntax.
+        let service = "from .repo import fetch\n\ndef lookup(key):\n    return fetch('k:' + key)\n";
+        let repo = "def fetch(k):\n    cursor.execute(f\"SELECT * FROM t WHERE k = '{k}'\")\n";
+        let views = format!(
+            "{VIEWS}from .service import lookup\n@app.route('/k')\ndef show():\n    lookup(request.args['k'])\n"
+        );
+        let found = project(&[
+            ("app/views.py", &views),
+            ("app/service.py", service),
+            ("app/repo.py", repo),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        // Through another call, which may sanitize it: no.
+        let service = "from .repo import fetch\n\ndef lookup(key):\n    return fetch(int(key))\n";
+        let found = project(&[
+            ("app/views.py", &views),
+            ("app/service.py", service),
+            ("app/repo.py", repo),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
     }
 }
