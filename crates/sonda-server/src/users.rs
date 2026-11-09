@@ -352,14 +352,23 @@ pub async fn change_own_password(
         ));
     };
     check_password(&change.new).map_err(ApiError::Unprocessable)?;
+    // Guesses here count with sign-in's, under the same name, so a session
+    // left open isn't a way around sign-in's throttle.
+    let key = crate::throttle::key(&user.username);
+    if let Some(wait) = crate::throttle::blocked_for(&state.pool, &key).await? {
+        return Err(ApiError::TooManyAttempts(wait));
+    }
     let stored: Option<String> =
         sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
             .bind(user.id)
             .fetch_one(&state.pool)
             .await?;
     if !verify_password(stored, change.current).await {
+        tracing::warn!(user = user.username, "wrong current password");
+        crate::throttle::record_failure(&state.pool, &key).await?;
         return Err(ApiError::Forbidden("the current password is wrong".into()));
     }
+    crate::throttle::clear(&state.pool, &key).await?;
     let hash = hash_password(change.new).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")

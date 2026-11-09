@@ -350,7 +350,17 @@ impl App {
         Ok(())
     }
 
-    /// Edits the pull request's comment that contains `marker`, or adds one.
+    /// Whether a comment (as GitHub lists it) was written by this App:
+    /// anyone can write the marker in a comment of their own, and editing
+    /// theirs would post sonda's summary under their name.
+    fn wrote(&self, comment: &Value) -> bool {
+        comment["performed_via_github_app"]["id"]
+            .as_u64()
+            .is_some_and(|id| id.to_string() == self.id)
+    }
+
+    /// Edits the pull request's comment that contains `marker`, written by
+    /// this App, or adds one.
     pub fn upsert_comment(
         &self,
         repository: &str,
@@ -370,7 +380,7 @@ impl App {
             let list = comments.as_array().map(Vec::as_slice).unwrap_or_default();
             existing = list
                 .iter()
-                .find(|c| c["body"].as_str().is_some_and(|b| b.contains(marker)))
+                .find(|c| self.wrote(c) && c["body"].as_str().is_some_and(|b| b.contains(marker)))
                 .and_then(|c| c["id"].as_u64());
             if existing.is_some() || list.len() < 100 {
                 break;

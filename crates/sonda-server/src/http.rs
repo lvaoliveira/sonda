@@ -43,6 +43,7 @@ pub struct State {
 
 pub fn router(state: State, web_dir: Option<&Path>) -> Router {
     let metrics = state.metrics.clone();
+    let headers = Arc::new(security_headers(&state.github.web_url()));
     let writes = Router::new()
         .route("/analyses", post(ingest::create))
         .layer(DefaultBodyLimit::max(ingest::MAX_BODY_BYTES))
@@ -186,7 +187,11 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
             .fallback_service(ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html")))),
         None => api,
     };
-    app.layer(TimeoutLayer::with_status_code(
+    app.layer(middleware::map_response_with_state(
+        headers,
+        add_security_headers,
+    ))
+    .layer(TimeoutLayer::with_status_code(
         StatusCode::REQUEST_TIMEOUT,
         Duration::from_secs(30),
     ))
@@ -195,6 +200,51 @@ pub fn router(state: State, web_dir: Option<&Path>) -> Router {
         metrics,
         observability::log_request,
     ))
+}
+
+/// The headers every response carries, for the browser: the web app's
+/// content policy and the like. `github` is GitHub's web pages, the one
+/// place outside the server a form is posted to (the App's manifest).
+/// HSTS is the reverse proxy's, which knows whether HTTPS is for good.
+fn security_headers(github: &str) -> Vec<(header::HeaderName, header::HeaderValue)> {
+    // Only an origin from the configuration: nothing that could end the
+    // directive and start another.
+    let safe = github
+        .bytes()
+        .all(|b| b.is_ascii_graphic() && !b"';,\"\\".contains(&b));
+    let github = if safe { github } else { "" };
+    let csp = format!(
+        "default-src 'self'; script-src 'self'; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
+         connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; \
+         form-action 'self' {github}"
+    );
+    let value = |v: &str| header::HeaderValue::from_str(v.trim()).expect("a header value");
+    vec![
+        (header::CONTENT_SECURITY_POLICY, value(&csp)),
+        (header::X_CONTENT_TYPE_OPTIONS, value("nosniff")),
+        (header::X_FRAME_OPTIONS, value("DENY")),
+        (header::REFERRER_POLICY, value("same-origin")),
+        (
+            header::HeaderName::from_static("cross-origin-opener-policy"),
+            value("same-origin"),
+        ),
+    ]
+}
+
+async fn add_security_headers(
+    axum::extract::State(headers): axum::extract::State<
+        Arc<Vec<(header::HeaderName, header::HeaderValue)>>,
+    >,
+    mut response: Response,
+) -> Response {
+    for (name, value) in headers.iter() {
+        response
+            .headers_mut()
+            .entry(name)
+            .or_insert_with(|| value.clone());
+    }
+    response
 }
 
 /// The metrics listener's routes (`SONDA_METRICS_LISTEN`): `GET /metrics`

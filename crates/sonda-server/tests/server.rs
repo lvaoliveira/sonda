@@ -108,6 +108,41 @@ async fn every_response_carries_a_request_id() {
 }
 
 #[tokio::test]
+async fn every_response_carries_the_browsers_security_headers() {
+    use tower::ServiceExt;
+    let web = tempfile::tempdir().unwrap();
+    std::fs::write(web.path().join("index.html"), "<!doctype html>app").unwrap();
+    let app = http::router(state(unreachable_pool()), Some(web.path()));
+    for path in ["/", "/issues", "/api/health", "/api/no-such-route"] {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let h = |name: &str| response.headers()[name].to_str().unwrap().to_string();
+        let csp = h("content-security-policy");
+        for directive in [
+            "default-src 'self'",
+            "script-src 'self';",
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+            // The App's manifest is posted to GitHub's own page.
+            "form-action 'self' https://github.com",
+        ] {
+            assert!(csp.contains(directive), "{path}: {directive} not in {csp}");
+        }
+        assert!(!csp.contains("unsafe-eval"), "{csp}");
+        assert_eq!(h("x-content-type-options"), "nosniff", "{path}");
+        assert_eq!(h("x-frame-options"), "DENY", "{path}");
+        assert_eq!(h("referrer-policy"), "same-origin", "{path}");
+    }
+}
+
+#[tokio::test]
 async fn metrics_are_served_on_their_own_router_only() {
     let state = state(unreachable_pool());
     let metrics = state.metrics.clone();

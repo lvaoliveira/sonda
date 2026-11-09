@@ -168,6 +168,21 @@ file, the report formats and the public library API.
   the triage buttons wrap: it goes to the start of the next line, under
   them. When everything fits on one line, it stays on the right.
 
+### Security
+
+- The server sends a Content Security Policy and framing, sniffing and
+  referrer headers with every response: scripts only from the server, no
+  `eval`, no framing, and forms posted only to the server or GitHub's App
+  creation page.
+- sonda edits only a pull request comment its own GitHub App wrote. It
+  matched its earlier comment by a hidden marker alone, so a comment
+  someone else wrote with the marker would have been edited instead.
+- A wrong current password when changing one's own password is throttled
+  with sign-in's failures, so a session left open no longer allows
+  unlimited guesses.
+- SECURITY.md's server section is a threat model: what the server
+  protects, who it trusts, each boundary, and the accepted risks.
+
 ## [0.2.1] - 2026-11-06
 
 The CLI now comes as a binary for macOS and Windows too, an install script
