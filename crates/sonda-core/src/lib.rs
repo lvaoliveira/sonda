@@ -47,6 +47,7 @@ mod git;
 mod measures;
 mod newcode;
 mod project;
+mod py_syntax;
 mod regex;
 mod rust_macros;
 mod rust_suppress;
