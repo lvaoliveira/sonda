@@ -5,6 +5,7 @@
 
 use super::js::{has_token, string_content, text};
 use super::js_extra::{named, operator_text};
+use super::js_index;
 use super::prelude::*;
 
 /// This module's rules that are off unless `rules.enabled` lists them
@@ -1659,21 +1660,12 @@ fn regex_variable_is_global(call: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
-    let name = text(object, src);
-    let mut found = false;
-    walk(root_node(call), &mut |n| {
-        if !found
-            && n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-            && n.child_by_field_name("value")
+    js_index::named(call, &["variable_declarator"], text(object, src), src)
+        .iter()
+        .any(|n| {
+            n.child_by_field_name("value")
                 .is_some_and(|v| regex_is_global(v, src))
-        {
-            found = true;
-        }
-        !found
-    });
-    found
+        })
 }
 
 fn is_not_pascal_case(name: Node, src: &[u8]) -> bool {
@@ -2113,17 +2105,7 @@ fn uses_result_of_void_function(call: Node, src: &[u8]) -> bool {
     let Some(callee) = call.child_by_field_name("function") else {
         return false;
     };
-    let name = text(callee, src);
-    let mut declared = Vec::new();
-    walk(root_node(call), &mut |n| {
-        if n.kind() == "function_declaration"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-        {
-            declared.push(n);
-        }
-        true
-    });
+    let declared = js_index::named(call, &["function_declaration"], text(callee, src), src);
     let [function] = declared.as_slice() else {
         return false;
     };

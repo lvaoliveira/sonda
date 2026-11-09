@@ -164,6 +164,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Large JavaScript and TypeScript files no longer overrun the per-file
+  timeout and lose their findings. Rules that looked a declaration up
+  across the whole file did so once per match, and taint analysis read a
+  class's fields once per call through one: both are now read once per
+  file. On VS Code's source, 12 files of 300-900 KB timed out and lost
+  3,648 findings; none do now, and the scan takes 37 s instead of 100 s.
+
 - On an issue, Copy as prompt no longer sits alone at the right edge when
   the triage buttons wrap: it goes to the start of the next line, under
   them. When everything fits on one line, it stays on the right.
