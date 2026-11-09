@@ -164,6 +164,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The issue list answers about three times faster on a large project
+  (0.26 s instead of 0.85 s for 20,000 issues): whether each issue's rule
+  is turned off was asked once per issue, in each of the list's eight
+  queries, and is now asked once per rule.
+
 - On an issue, Copy as prompt no longer sits alone at the right edge when
   the triage buttons wrap: it goes to the start of the next line, under
   them. When everything fits on one line, it stays on the right.

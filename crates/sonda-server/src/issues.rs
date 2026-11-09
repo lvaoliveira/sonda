@@ -43,13 +43,25 @@ const ISO_8601: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'";
 
 /// The issues of the chosen project (or all projects) on the chosen branch
 /// (or each project's main branch). Parameters: $1 project key, $2 branch.
+///
+/// Whether a rule is off is asked once per project and rule, not once per
+/// issue: a project's 20,000 issues use a few hundred rules, and asking for
+/// each issue was most of each query's time. `rules` is materialized so the
+/// planner can't push `rule_off` back down to every issue.
 fn scoped() -> String {
     format!(
-        "WITH scoped AS (
+        "WITH rules AS MATERIALIZED (
+            SELECT DISTINCT i.project_id, i.rule FROM issues i JOIN projects p ON p.id = i.project_id
+            WHERE ($1::text IS NULL OR p.key = $1)
+              AND i.branch = coalesce($2::text, p.main_branch)
+        ), off AS MATERIALIZED (
+            SELECT project_id, rule FROM rules WHERE rule_off(project_id, rule)
+        ), scoped AS (
             SELECT {DERIVED} FROM issues i JOIN projects p ON p.id = i.project_id
             WHERE ($1::text IS NULL OR p.key = $1)
               AND i.branch = coalesce($2::text, p.main_branch)
-              AND NOT rule_off(i.project_id, i.rule)
+              AND NOT EXISTS (SELECT 1 FROM off o
+                              WHERE o.project_id = i.project_id AND o.rule = i.rule)
         )"
     )
 }
