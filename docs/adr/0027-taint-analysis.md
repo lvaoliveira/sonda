@@ -9,7 +9,7 @@
   `js/sql-injection`, `js/command-injection`, `js/path-injection`,
   `js/open-redirect`, `js/ssrf` and `js/code-injection`. T4 built:
   through other files' functions, with each step of the path in its file,
-  for JavaScript and TypeScript, and for C# in the calls' direction.
+  for JavaScript and TypeScript, and for C#.
   Python built (T2 to T4, on its binder, ADR-0008 S1):
   `py/sql-injection`, `py/command-injection`, `py/path-injection`,
   `py/open-redirect`, `py/ssrf`, `py/code-injection`,
@@ -400,10 +400,17 @@ As built for C# (2026-11-08), on the same facts and project pass:
 - **Summaries** are keyed by the type's full name and the method's name
   and arity (`App.Services.OrderService`0`, `Find/1`), for its methods
   that aren't private.
-- **Only the calls' direction:** a controller's value through services to
-  a repository's sink. A value returned from another file's method isn't
-  followed yet: C#'s flow-sensitive analysis needs a way to keep a
-  "returned by another file" value that doesn't lose a request's own.
+- **Both directions:** a controller's value through services to a
+  repository's sink, and a value another file's method returns built from
+  its parameter (a query builder) to a sink in the controller. For the
+  second, another file's method's result is a conditional path, as in
+  JavaScript: in the flow-sensitive analysis, a request's own path wins
+  over it where branches join, and in an expression, `Build(x) + id` is
+  `id`'s. It's tracked only in a function with a sink of its own, or a
+  helper's, since only there can it become a finding; elsewhere it cost a
+  scan of BTCPay Server 1 s. A method's parameters returned are read from
+  the syntax, as those passed on are, with a returned local followed to
+  what it was set to (`var q = $"… {id}"; return q;`).
 - **Cost, which shaped it:**
   - files without a request's value are now analyzed too, for their
     summaries, but only methods with a sink of the rule (by the sink
@@ -433,6 +440,12 @@ Measured on the T1 corpus:
   download an image from the URL given.
 - **Cost:** scans take 2.2 s more at most (nopCommerce, 5.1 s to 7.3 s);
   Bitwarden, the largest, 1.1 s more on 12 s.
+- **The return direction** (2026-11-09): a static helper class planted in
+  another file of the same seven controllers, one method per sink kind
+  building the sink's argument from its parameter, its result passed to
+  the sink in the action: **49 found of 49**, with the calls' direction
+  still 49 of 49. No issue added or lost in the corpus, and scan times
+  within 0.1 s of the calls' direction alone.
 
 ### Python
 
