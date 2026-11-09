@@ -164,6 +164,16 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The server's Overview, Security and analysis pages no longer slow down
+  as analyses accumulate, and deleting old analyses no longer scans every
+  issue. With 2,800 analyses and 1.26 million issues, Overview took 1.6 s
+  (now 0.18 s), an analysis 0.9 s (now 0.18 s), and deleting one analysis
+  340 ms (now 2 ms). Issues are indexed by the analyses they point at, and
+  each branch's first analysis is found once, not once per issue.
+- A new database migration is built into the server even when nothing
+  else in it changed: an incremental build, such as the Docker image's
+  cached one, could leave it out.
+
 - On an issue, Copy as prompt no longer sits alone at the right edge when
   the triage buttons wrap: it goes to the start of the next line, under
   them. When everything fits on one line, it stays on the right.

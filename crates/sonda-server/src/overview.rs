@@ -311,12 +311,13 @@ pub async fn get_overview(
                 i.status IN ('accepted', 'false_positive') OR rule_off(i.project_id, i.rule),
                 extract(epoch FROM fa.received_at)::float8,
                 extract(epoch FROM xa.received_at)::float8, i.rule_not_run,
-                i.first_analysis_id = (SELECT min(b.id) FROM analyses b
-                                       WHERE b.project_id = i.project_id AND b.branch = i.branch)
+                i.first_analysis_id = first.id
          FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          JOIN analyses fa ON fa.id = i.first_analysis_id
-         LEFT JOIN analyses xa ON xa.id = i.fixed_analysis_id",
+         LEFT JOIN analyses xa ON xa.id = i.fixed_analysis_id
+         JOIN (SELECT project_id, branch, min(id) AS id FROM analyses GROUP BY 1, 2) first
+           ON first.project_id = i.project_id AND first.branch = i.branch",
     )
     .fetch_all(pool)
     .await?
@@ -342,11 +343,12 @@ pub async fn get_overview(
          FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          JOIN analyses fa ON fa.id = i.first_analysis_id
+         JOIN (SELECT project_id, branch, min(id) AS id FROM analyses GROUP BY 1, 2) first
+           ON first.project_id = i.project_id AND first.branch = i.branch
          WHERE i.fixed_analysis_id IS NULL AND i.status NOT IN ('accepted', 'false_positive')
            AND NOT rule_off(i.project_id, i.rule)
            AND i.severity IN ('blocker', 'critical') AND fa.received_at >= to_timestamp($1)
-           AND i.first_analysis_id <> (SELECT min(b.id) FROM analyses b
-                                       WHERE b.project_id = i.project_id AND b.branch = i.branch)
+           AND i.first_analysis_id <> first.id
          ORDER BY array_position(ARRAY['blocker', 'critical'], i.severity), fa.received_at DESC",
     )
     .bind(now - f64::from(days) * DAY)

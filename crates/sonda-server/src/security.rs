@@ -200,12 +200,13 @@ pub async fn get_security(
         "SELECT i.id, p.key, i.branch, i.severity, i.rule, i.message, i.path, i.line,
                 i.status::text, extract(epoch FROM fa.received_at)::float8,
                 extract(epoch FROM xa.received_at)::float8, i.rule_not_run,
-                i.first_analysis_id = (SELECT min(b.id) FROM analyses b
-                                       WHERE b.project_id = i.project_id AND b.branch = i.branch)
+                i.first_analysis_id = first.id
          FROM issues i
          JOIN projects p ON p.id = i.project_id AND i.branch = p.main_branch
          JOIN analyses fa ON fa.id = i.first_analysis_id
          LEFT JOIN analyses xa ON xa.id = i.fixed_analysis_id
+         JOIN (SELECT project_id, branch, min(id) AS id FROM analyses GROUP BY 1, 2) first
+           ON first.project_id = i.project_id AND first.branch = i.branch
          WHERE i.category = 'vulnerability' AND NOT rule_off(i.project_id, i.rule)",
     )
     .fetch_all(pool)
