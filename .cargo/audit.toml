@@ -1,0 +1,12 @@
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0459 / CVE-2026-119375
+    # libsqlite3-sys 0.37.0 is present in Cargo.lock through SQLx's
+    # optional SQLite driver, but is not used in our release builds.
+    # Our application uses PostgreSQL exclusively.
+    # Review by: 2027-01-28
+    # Remove when a compatible SQLx release resolves the advisory.
+    # scripts/check-advisory-exceptions.sh fails CI if a release build
+    # starts compiling SQLite, or after the review date.
+    "RUSTSEC-2026-0459",
+]
