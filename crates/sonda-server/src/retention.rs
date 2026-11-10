@@ -71,11 +71,7 @@ async fn thin_branch(pool: &PgPool, days: i32, project: i64, branch: &str) -> sq
     let mut tx = pool.begin().await?;
     // The lock an upload to the branch takes (store::ingest), so one arriving
     // now lands before this or after it, never in between.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || E'\\n' || $2, 0))")
-        .bind(project)
-        .bind(branch)
-        .execute(&mut *tx)
-        .await?;
+    crate::store::lock_branch(&mut tx, project, branch).await?;
     // Chosen under the lock, so what's thinned is what's there now.
     let thinned: Vec<i64> =
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM ({THINNED}) t")))

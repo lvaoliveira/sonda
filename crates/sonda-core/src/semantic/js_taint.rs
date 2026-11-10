@@ -655,6 +655,9 @@ struct Cx<'a, 't> {
     /// Functions whose summary is being computed: a call back to one
     /// counts as one without a summary.
     busy: RefCell<HashSet<usize>>,
+    /// Each class body's typed fields and constructor parameters, by name,
+    /// read once: a large class has a call through a field on most lines.
+    field_types: RefCell<HashMap<usize, Rc<HashMap<String, Node<'t>>>>>,
 }
 
 impl<'a, 't> Cx<'a, 't> {
@@ -683,6 +686,7 @@ impl<'a, 't> Cx<'a, 't> {
                 .collect(),
             summaries: RefCell::new(HashMap::new()),
             busy: RefCell::new(HashSet::new()),
+            field_types: RefCell::new(HashMap::new()),
             writes_by_start: Vec::new(),
             writes_by_decl: HashMap::new(),
             checks: RefCell::new(HashMap::new()),
@@ -1810,6 +1814,21 @@ impl<'a, 't> Cx<'a, 't> {
     fn field_type(&self, at: Node<'t>, field: &str) -> Option<Node<'t>> {
         let body = std::iter::successors(at.parent(), |p| p.parent())
             .find(|p| p.kind() == "class_body")?;
+        let types = self.field_types.borrow().get(&body.id()).cloned();
+        let types = types.unwrap_or_else(|| {
+            let types = Rc::new(self.class_field_types(body));
+            self.field_types
+                .borrow_mut()
+                .insert(body.id(), types.clone());
+            types
+        });
+        types.get(field).copied()
+    }
+
+    /// A class body's typed constructor parameters and fields, by name: the
+    /// first of each name, in the order of the members.
+    fn class_field_types(&self, body: Node<'t>) -> HashMap<String, Node<'t>> {
+        let mut types: HashMap<String, Node<'t>> = HashMap::new();
         for member in children(body) {
             match member.kind() {
                 "method_definition"
@@ -1819,26 +1838,25 @@ impl<'a, 't> Cx<'a, 't> {
                 {
                     for p in param_nodes(member) {
                         if pattern_of(p).kind() == "identifier"
-                            && self.text(pattern_of(p)) == field
                             && let Some(t) = type_identifier(p)
                         {
-                            return Some(t);
+                            types
+                                .entry(self.text(pattern_of(p)).to_string())
+                                .or_insert(t);
                         }
                     }
                 }
-                "public_field_definition"
-                    if member
-                        .child_by_field_name("name")
-                        .is_some_and(|n| self.text(n) == field) =>
-                {
-                    if let Some(t) = type_identifier(member) {
-                        return Some(t);
+                "public_field_definition" => {
+                    if let Some(n) = member.child_by_field_name("name")
+                        && let Some(t) = type_identifier(member)
+                    {
+                        types.entry(self.text(n).to_string()).or_insert(t);
                     }
                 }
                 _ => {}
             }
         }
-        None
+        types
     }
 
     // ------------------------------------------------------------ summaries

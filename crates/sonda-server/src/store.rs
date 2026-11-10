@@ -68,6 +68,24 @@ fn is_zero(n: &u64) -> bool {
     *n == 0
 }
 
+/// Takes the lock on one branch of a project that every change to its
+/// issues or its latest analysis's measures takes: an upload, recomputing
+/// new code or counts, thinning or removing analyses. Without it, two of
+/// them update the same issues in different orders and deadlock, or the
+/// last to write keeps counts from before the other. Released at commit.
+pub(crate) async fn lock_branch(
+    conn: &mut sqlx::PgConnection,
+    project: i64,
+    branch: &str,
+) -> sqlx::Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || E'\\n' || $2, 0))")
+        .bind(project)
+        .bind(branch)
+        .execute(conn)
+        .await
+        .map(|_| ())
+}
+
 /// Records `a` as the branch's latest analysis. Issues are matched to the
 /// branch's tracked issues by fingerprint:
 /// - an unknown fingerprint is a new issue;
@@ -107,12 +125,8 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
     .fetch_one(&mut *tx)
     .await?;
     // One ingestion per branch at a time, so concurrent uploads cannot both
-    // see an issue as present (or both mark it fixed). Released at commit.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || E'\\n' || $2, 0))")
-        .bind(project_id)
-        .bind(&a.meta.branch)
-        .execute(&mut *tx)
-        .await?;
+    // see an issue as present (or both mark it fixed).
+    lock_branch(&mut tx, project_id, &a.meta.branch).await?;
 
     let pr = a.meta.pull_request.as_ref();
     let analysis_id: i64 = sqlx::query_scalar(

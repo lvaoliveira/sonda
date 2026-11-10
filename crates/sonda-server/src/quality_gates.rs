@@ -87,13 +87,17 @@ pub(crate) async fn rejudge(pool: &PgPool, projects: &[i64]) -> sqlx::Result<()>
 
 /// The gate to evaluate for a project's analysis: its server gate's
 /// conditions, marked with which gate it is, or the scan's own.
-pub(crate) async fn gate_for(pool: &PgPool, project: i64, scan_gate: Value) -> sqlx::Result<Value> {
+pub(crate) async fn gate_for<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    project: i64,
+    scan_gate: Value,
+) -> sqlx::Result<Value> {
     let server: Option<(i64, String, Value)> = sqlx::query_as(
         "SELECT g.id, g.name, g.conditions FROM projects p
          JOIN quality_gates g ON g.id = p.quality_gate_id WHERE p.id = $1",
     )
     .bind(project)
-    .fetch_optional(pool)
+    .fetch_optional(db)
     .await?;
     let mut gate = if scan_gate.is_object() {
         scan_gate

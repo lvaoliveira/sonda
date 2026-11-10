@@ -11,6 +11,7 @@ use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
 pub(crate) use catalog::cs_project;
+pub(crate) use catalog::js_index;
 pub use owasp::{Edition, Owasp};
 
 pub(crate) const COGNITIVE_COMPLEXITY: &str = "common/cognitive-complexity";
