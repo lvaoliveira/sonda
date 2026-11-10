@@ -1714,6 +1714,8 @@ pub(super) const BUILTIN_NAMES: &[&str] = &[
     "filter",
     "float",
     "format",
+    // Python 3.15 (PEP 814).
+    "frozendict",
     "frozenset",
     "getattr",
     "globals",
@@ -3119,7 +3121,7 @@ mod tests {
 
     #[test]
     fn module_names() {
-        let src = "import os\n__all__ = ['f', 'Missing', 'sub']\ndef f():\n    pass\nprint(os.name, nothing_here, len)";
+        let src = "import os\n__all__ = ['f', 'Missing', 'sub']\ndef f():\n    pass\nprint(os.name, nothing_here, len, frozendict)";
         assert_eq!(flagged("py/all-undefined-name", src), [2]);
         assert_eq!(flagged("py/undefined-name", src), [5]);
     }
