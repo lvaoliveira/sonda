@@ -224,16 +224,29 @@ earlier
 
 ## Roadmap
 
+What 1.0 still needs is in [docs/release-1.0.md](docs/release-1.0.md):
+weeks of real use, findings compared with SonarQube's, performance limits,
+and Safari and Firefox. What comes after it is below, each in a 1.x
+release; [docs/roadmap.md](docs/roadmap.md) says why each waits and where
+it plugs in.
+
+- [x] Server: store analyses, track trends, web dashboard, users and roles
+- [x] Pull request decoration on GitHub ([ADR-0021](docs/adr/0021-pull-request-decoration.md))
+- [x] Dependencies: SBOMs and known vulnerabilities ([ADR-0009](docs/adr/0009-dependencies-and-advisories.md))
 - [ ] An equivalent for every SonarQube rule key in the supported languages ([ADR-0007](docs/adr/0007-sonarqube-rule-parity.md); progress in [docs/sonar-parity/](docs/sonar-parity/README.md))
+- [ ] Taint analysis for injection-style vulnerabilities: built for C#, JavaScript/TypeScript and Python (across files for the last two); Java has none yet ([ADR-0027](docs/adr/0027-taint-analysis.md))
+- [ ] Reachability: rank findings by whether a public entry point reaches them ([docs/roadmap.md](docs/roadmap.md#security-cweowasp-mapping-hotspots-reachability))
+- [ ] Pull request decoration on GitLab and Bitbucket ([docs/roadmap.md](docs/roadmap.md#pull-request-decoration-github-gitlab-and-bitbucket))
+- [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md#single-sign-on-openid-connect))
+- [ ] AI auto-fix: the server opens a pull request with a fix, which a person reviews; Copy as prompt covers fixing with an assistant today ([docs/roadmap.md](docs/roadmap.md#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests))
+- [ ] More lockfile formats: Go, Gradle, Bun's binary `bun.lockb` ([docs/roadmap.md](docs/roadmap.md#dependencies-sbom-and-known-vulnerabilities))
 - [ ] JaCoCo and Cobertura coverage import
 - [ ] Caching, to skip re-analyzing unchanged files
 - [ ] Baseline file to accept existing issues without suppressing them line by line
-- [x] Server: store analyses, track trends, web dashboard, users and roles
-- [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md))
 - [ ] More languages (Go, PHP, Ruby, Kotlin)
-- [ ] Data-flow analysis for injection-style vulnerabilities
 
-Smaller deferred items, with why each waits, are in [docs/roadmap.md](docs/roadmap.md).
+The last four are in [docs/roadmap.md](docs/roadmap.md#scanner-additions)
+too, with the smaller deferred items.
 
 ## License
 
