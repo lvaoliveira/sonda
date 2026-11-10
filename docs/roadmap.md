@@ -27,6 +27,10 @@ breaking that promise.
 | [OpenTelemetry traces](#smaller-items) | after | ADR-0019 decided traces wait. |
 | [Query matching on very deep nesting](#smaller-items) | after | Only code nested past 20,000 levels; the timeout bounds it. |
 | [Release-age check for Rust crates](#smaller-items) | after | Dependabot already waits 14 days for the crates it updates. |
+| [JaCoCo and Cobertura coverage](#scanner-additions) | after | LCOV covers most tools; adds formats, `--coverage` doesn't change. |
+| [Caching unchanged files](#scanner-additions) | after | Makes scans faster; reports stay the same. |
+| [Baseline file](#scanner-additions) | after | New code and server triage already keep old issues out of the gate. |
+| [More languages](#scanner-additions) | after | Adds languages; the promised formats don't change. |
 
 Rule results improving after 1.0 is expected, and promised as such:
 [stability.md](stability.md) leaves them out of the stability promise.
@@ -408,6 +412,18 @@ never merges anything itself.
   config does not change the PR's files.
 - The AI and forge tokens never appear in an API response, a log line or
   a PR description, and a request over budget is refused.
+
+## Scanner additions
+
+**Status:** planned, not started. Listed in the README's roadmap; none has
+a design yet, and each gets an ADR when it starts.
+
+| Item | Why it waits | Where it plugs in |
+|---|---|---|
+| **JaCoCo and Cobertura coverage** | LCOV covers the JavaScript, Python and C/C++ tools, and coverlet (C#) can write it. Java's JaCoCo needs a converter today. | `sonda-core`'s `coverage.rs`: a parser per format, chosen from the file's content, filling the same per-line, branch and function data; `--coverage` stays the one option. |
+| **Caching unchanged files** | Full scans are fast enough so far (VS Code's 4 million lines in under a minute on 12 workers), and cross-file analysis (ADR-0020's declarations, taint phase T4) makes a file's results depend on other files, so a file's hash alone can't key a cache. | A cache keyed by the file's hash, the sonda version, the rule settings and the cross-file inputs it read. Reports must stay byte-identical with and without it. |
+| **Baseline file** | New-code detection and the server's triage (accepted, false positive) already keep existing issues out of the gate; a baseline matters for CLI-only use without a new-code reference. | Issue fingerprints, already stable when a line moves: a file of them that `sonda scan` reads and leaves out of the counts and the gate. |
+| **More languages (Go, PHP, Ruby, Kotlin)** | Parity in the supported languages comes first ([ADR-0007](adr/0007-sonarqube-rule-parity.md)). | A tree-sitter grammar and a language module like the existing ones, with rules tracked against SonarQube's in [sonar-parity/](sonar-parity/README.md). |
 
 ## Smaller items
 
