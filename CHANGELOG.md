@@ -164,6 +164,12 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Concurrent uploads to a project's main branch no longer fail with a
+  server error. Recomputing new code after an upload updated the branch's
+  issues without the lock uploads take, so it deadlocked with the next
+  upload: with 8 uploads at a time, about half failed. It now takes that
+  lock, as recounting a branch's issues does.
+
 - Large JavaScript and TypeScript files no longer overrun the per-file
   timeout and lose their findings. Rules that looked a declaration up
   across the whole file did so once per match, and taint analysis read a
