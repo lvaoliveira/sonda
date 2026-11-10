@@ -795,7 +795,7 @@ pub async fn refresh_gates(pool: &PgPool, scope: GateScope) -> Result<usize, sql
         annotate(pool, &mut [(project, &mut deps)]).await?;
         // On the main branch, what its new code period started with, by
         // today's advisories too.
-        let start = match crate::new_code::period(pool, project).await? {
+        let start = match crate::new_code::period(&mut *pool.acquire().await?, project).await? {
             Some(p) if on_main_branch(pool, id).await? => base_analysis(pool, p.analysis).await?,
             _ => None,
         };

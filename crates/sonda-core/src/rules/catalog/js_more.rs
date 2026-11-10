@@ -8,6 +8,7 @@ use super::js::{
     string_content, tag_name, text,
 };
 use super::js_extra::{count_pattern, count_word, named, operator_text};
+use super::js_index;
 use super::prelude::*;
 
 pub(super) static RULES: &[Rule] = &[
@@ -1073,27 +1074,11 @@ fn call_arguments_of(call: Node) -> Vec<Node> {
         .unwrap_or_default()
 }
 
-fn root_of(node: Node) -> Node {
-    let mut cur = node;
-    while let Some(p) = cur.parent() {
-        cur = p;
-    }
-    cur
-}
-
 /// A call to a function declared in this file whose every return is an array.
 fn returns_an_array(call: Node, name: &[u8], src: &[u8], depth: usize) -> bool {
-    let mut declared = None;
-    crate::rules::catalog::js_syntax::walk(root_of(call), &mut |n| {
-        if declared.is_none()
-            && n.kind() == "function_declaration"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-        {
-            declared = Some(n);
-        }
-        declared.is_none()
-    });
+    let declared = js_index::named(call, &["function_declaration"], name, src)
+        .into_iter()
+        .next();
     let Some(function) = declared.and_then(|f| f.child_by_field_name("body")) else {
         return false;
     };

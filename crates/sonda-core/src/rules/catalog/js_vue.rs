@@ -6,6 +6,7 @@
 
 use super::js::{has_token, string_content, text};
 use super::js_extra::named;
+use super::js_index;
 use super::js_syntax::{root_node, walk};
 use super::prelude::*;
 
@@ -138,8 +139,19 @@ pub(super) static RULES: &[Rule] = &[
 
 // ------------------------------------------------------------- helpers
 
-/// The name bound by `const <name> = <macro>(...)` in the file.
-fn macro_binding<'a>(root: Node, macro_name: &[u8], src: &'a [u8]) -> Option<&'a [u8]> {
+/// The name bound by `const <name> = <macro>(...)` in `node`'s file,
+/// found once per file.
+fn macro_binding<'a>(node: Node, macro_name: &[u8], src: &'a [u8]) -> Option<&'a [u8]> {
+    let found = js_index::memo(src, ("macro_binding", macro_name), || {
+        macro_binding_in(root_node(node), macro_name, src).map(|n| {
+            let start = n.as_ptr() as usize - src.as_ptr() as usize;
+            (start, start + n.len())
+        })
+    });
+    found.map(|(s, e)| &src[s..e])
+}
+
+fn macro_binding_in<'a>(root: Node, macro_name: &[u8], src: &'a [u8]) -> Option<&'a [u8]> {
     let mut found = None;
     walk(root, &mut |n| {
         if found.is_none()
@@ -291,7 +303,7 @@ fn writes_to_props(node: Node, src: &[u8]) -> bool {
     let Some(object) = target.and_then(|t| t.child_by_field_name("object")) else {
         return false;
     };
-    macro_binding(root_node(node), b"defineProps", src) == Some(text(object, src))
+    macro_binding(node, b"defineProps", src) == Some(text(object, src))
 }
 
 // ------------------------------------------------------------- events
@@ -368,22 +380,15 @@ fn emits_an_undeclared_event(call: Node, src: &[u8]) -> bool {
     let Some(callee) = call.child_by_field_name("function") else {
         return false;
     };
-    let root = root_node(call);
-    let mut define = None;
-    walk(root, &mut |n| {
-        if define.is_none()
-            && n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == text(callee, src))
-            && let Some(v) = n.child_by_field_name("value")
-            && v.kind() == "call_expression"
-            && v.child_by_field_name("function")
-                .is_some_and(|f| text(f, src) == b"defineEmits")
-        {
-            define = Some(v);
-        }
-        define.is_none()
-    });
+    let define = js_index::named(call, &["variable_declarator"], text(callee, src), src)
+        .into_iter()
+        .find_map(|n| {
+            n.child_by_field_name("value").filter(|v| {
+                v.kind() == "call_expression"
+                    && v.child_by_field_name("function")
+                        .is_some_and(|f| text(f, src) == b"defineEmits")
+            })
+        });
     let Some(define) = define else {
         return false;
     };

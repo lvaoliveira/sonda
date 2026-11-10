@@ -5,6 +5,7 @@
 
 use super::js::{has_token, text};
 use super::js_extra::{named, operator_text};
+use super::js_index;
 use super::js_syntax::{ancestors_in_function, is_function_kind, root_node, walk};
 use super::prelude::*;
 
@@ -654,17 +655,7 @@ fn is_module(node: Node) -> bool {
 
 /// The function declaration named `name` in the file, when exactly one is.
 fn declared_function<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
-    let mut found: Vec<Node> = Vec::new();
-    walk(root, &mut |n| {
-        if n.kind() == "function_declaration"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-        {
-            found.push(n);
-        }
-        true
-    });
-    match found.as_slice() {
+    match js_index::named(root, &["function_declaration"], name, src).as_slice() {
         [only] => Some(*only),
         _ => None,
     }
@@ -733,20 +724,12 @@ fn declared_then_returned<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 // ------------------------------------------------------------- bugs
 
 fn array_declaration<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
-    let mut found = None;
-    walk(root, &mut |n| {
-        if found.is_none()
-            && n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-            && let Some(v) = n.child_by_field_name("value")
-            && v.kind() == "array"
-        {
-            found = Some(v);
-        }
-        found.is_none()
-    });
-    found
+    js_index::named(root, &["variable_declarator"], name, src)
+        .into_iter()
+        .find_map(|n| {
+            n.child_by_field_name("value")
+                .filter(|v| v.kind() == "array")
+        })
 }
 
 fn deletes_by_index(unary: Node, src: &[u8]) -> bool {
@@ -803,19 +786,12 @@ fn constructor_is_an_arrow(new_expr: Node, src: &[u8]) -> bool {
     let Some(name) = new_expr.child_by_field_name("constructor") else {
         return false;
     };
-    let mut arrow = false;
-    walk(root_node(new_expr), &mut |n| {
-        if n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == text(name, src))
-            && n.child_by_field_name("value")
+    js_index::named(new_expr, &["variable_declarator"], text(name, src), src)
+        .iter()
+        .any(|n| {
+            n.child_by_field_name("value")
                 .is_some_and(|v| v.kind() == "arrow_function")
-        {
-            arrow = true;
-        }
-        !arrow
-    });
-    arrow
+        })
 }
 
 fn compares_a_string_literal(binary: Node, src: &[u8]) -> bool {
@@ -947,19 +923,12 @@ fn for_in_over_an_array(node: Node, src: &[u8]) -> bool {
     if right.kind() != "identifier" {
         return false;
     }
-    let mut array = false;
-    walk(root_node(node), &mut |n| {
-        if n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == text(right, src))
-            && n.child_by_field_name("value")
+    js_index::named(node, &["variable_declarator"], text(right, src), src)
+        .iter()
+        .any(|n| {
+            n.child_by_field_name("value")
                 .is_some_and(|v| v.kind() == "array")
-        {
-            array = true;
-        }
-        !array
-    });
-    array
+        })
 }
 
 fn async_work_in_constructor<'t>(constructor: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

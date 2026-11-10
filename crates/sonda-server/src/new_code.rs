@@ -39,7 +39,10 @@ pub struct Period {
 /// of the latest version, after the last analysis with another version.
 /// Analyses without a version don't change it, so a project that never
 /// sends one keeps its first analysis.
-pub async fn period(pool: &PgPool, project: i64) -> Result<Option<Period>, sqlx::Error> {
+pub async fn period(
+    conn: &mut sqlx::PgConnection,
+    project: i64,
+) -> Result<Option<Period>, sqlx::Error> {
     let row: Option<(i64, bool, Option<String>, String, f64)> = sqlx::query_as(
         "WITH main AS (
              SELECT a.id, a.project_version FROM analyses a JOIN projects p ON p.id = a.project_id
@@ -66,7 +69,7 @@ pub async fn period(pool: &PgPool, project: i64) -> Result<Option<Period>, sqlx:
          WHERE p.id = $1",
     )
     .bind(project)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     let Some((analysis, reset, version, sha, at)) = row else {
         return Ok(None);
@@ -79,7 +82,7 @@ pub async fn period(pool: &PgPool, project: i64) -> Result<Option<Period>, sqlx:
                  WHERE p.id = $1 AND a.branch = p.main_branch ORDER BY a.id DESC LIMIT 1))",
     )
     .bind(project)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     let mut from_scan = vec!["new_duplicated_lines_density"];
     if !per_file_coverage {
@@ -100,22 +103,34 @@ pub async fn period(pool: &PgPool, project: i64) -> Result<Option<Period>, sqlx:
 /// branch's latest analysis, and that analysis's gate. Older analyses keep
 /// what they had.
 pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
-    let Some(start) = period(pool, project).await? else {
-        return Ok(());
-    };
-    let latest: Option<(i64, String, Value, Value)> = sqlx::query_as(
-        "SELECT a.id, p.main_branch, a.measures, a.gate
-         FROM projects p JOIN analyses a ON a.project_id = p.id AND a.branch = p.main_branch
-         WHERE p.id = $1 ORDER BY a.id DESC LIMIT 1",
+    let branch: Option<String> = sqlx::query_scalar(
+        "SELECT main_branch FROM projects WHERE id = $1 AND main_branch IS NOT NULL",
     )
     .bind(project)
     .fetch_optional(pool)
     .await?;
-    let Some((latest, branch, mut measures, _gate)) = latest else {
+    let Some(branch) = branch else {
         return Ok(());
     };
-
+    // Under the branch's lock, as uploads to it are: the latest analysis
+    // and its issues are the ones there now, and no upload or other
+    // recomputation updates them at the same time.
     let mut tx = pool.begin().await?;
+    crate::store::lock_branch(&mut tx, project, &branch).await?;
+    let Some(start) = period(&mut tx, project).await? else {
+        return Ok(());
+    };
+    let latest: Option<(i64, Value)> = sqlx::query_as(
+        "SELECT id, measures FROM analyses
+         WHERE project_id = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(project)
+    .bind(&branch)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((latest, mut measures)) = latest else {
+        return Ok(());
+    };
     let changed = changed_lines(&mut tx, start.analysis, latest).await?;
     // An issue is new if it was first seen after the start and sits on a
     // line changed since then. First seen alone isn't enough: a rule added
@@ -160,8 +175,8 @@ pub async fn refresh(pool: &PgPool, project: i64) -> Result<(), sqlx::Error> {
         .bind(&measures)
         .execute(&mut *tx)
         .await?;
-    tx.commit().await?;
-    recount(pool, project, &branch).await
+    recount_locked(&mut tx, project, &branch).await?;
+    tx.commit().await
 }
 
 /// An issue as `recount` counts it: category, severity, effort, new.
@@ -173,19 +188,31 @@ type CountedIssue = (String, String, i32, bool);
 /// stores its gate. New code is what `is_new` says: the period's on the
 /// main branch (see `refresh`), the scan's elsewhere.
 pub async fn recount(pool: &PgPool, project: i64, branch: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    crate::store::lock_branch(&mut tx, project, branch).await?;
+    recount_locked(&mut tx, project, branch).await?;
+    tx.commit().await
+}
+
+/// `recount`, in a transaction that holds the branch's lock.
+async fn recount_locked(
+    tx: &mut sqlx::PgConnection,
+    project: i64,
+    branch: &str,
+) -> Result<(), sqlx::Error> {
     let latest: Option<(i64, Value, Value)> = sqlx::query_as(
         "SELECT id, measures, coalesce(scan_gate, gate) FROM analyses
          WHERE project_id = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
     )
     .bind(project)
     .bind(branch)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((latest, mut measures, scan_gate)) = latest else {
         return Ok(());
     };
     // The project's server gate, if it has one, else the scan's (ADR-0017).
-    let mut gate = crate::quality_gates::gate_for(pool, project, scan_gate).await?;
+    let mut gate = crate::quality_gates::gate_for(&mut *tx, project, scan_gate).await?;
     let issues: Vec<CountedIssue> = sqlx::query_as(
         "SELECT category, severity, effort_minutes, is_new FROM issues
          WHERE project_id = $1 AND branch = $2 AND fixed_analysis_id IS NULL
@@ -194,7 +221,7 @@ pub async fn recount(pool: &PgPool, project: i64, branch: &str) -> Result<(), sq
     .bind(project)
     .bind(branch)
     .bind(crate::issues::DECIDED)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
     for (prefix, new_only) in [("", false), ("new_", true)] {
         let counted: Vec<&CountedIssue> = issues.iter().filter(|i| !new_only || i.3).collect();
@@ -220,7 +247,7 @@ pub async fn recount(pool: &PgPool, project: i64, branch: &str) -> Result<(), sq
         .bind(&measures)
         .bind(&gate)
         .bind(passed)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     Ok(())
 }
@@ -391,7 +418,7 @@ pub async fn put_period(
     refresh(pool, project).await?;
     crate::dependencies::refresh_gates(pool, crate::dependencies::GateScope::Project(project))
         .await?;
-    period(pool, project)
+    period(&mut *pool.acquire().await?, project)
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound)

@@ -100,11 +100,7 @@ pub async fn remove_stale(pool: &PgPool) -> sqlx::Result<usize> {
         let mut tx = pool.begin().await?;
         // The lock an upload to it takes (store::ingest), so one arriving
         // now either lands first, and the check below keeps it, or after.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || E'\\n' || $2, 0))")
-            .bind(project)
-            .bind(&branch)
-            .execute(&mut *tx)
-            .await?;
+        crate::store::lock_branch(&mut tx, project, &branch).await?;
         let still: bool = sqlx::query_scalar(
             "SELECT max(received_at) < now() - make_interval(days => $3) FROM analyses
              WHERE project_id = $1 AND branch = $2",

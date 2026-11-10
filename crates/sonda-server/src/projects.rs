@@ -417,7 +417,7 @@ pub async fn get_project(
     let dependencies = crate::dependencies::summary(pool, project, analysis).await?;
     let pull_requests = crate::pull_requests::list(pool, project, now).await?;
     let new_code_period = if branch == main_branch {
-        crate::new_code::period(pool, project).await?
+        crate::new_code::period(&mut *pool.acquire().await?, project).await?
     } else {
         None
     };
