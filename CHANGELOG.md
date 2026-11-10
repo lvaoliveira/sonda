@@ -164,6 +164,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The issue list answers about three times faster on a large project
+  (0.26 s instead of 0.85 s for 20,000 issues): whether each issue's rule
+  is turned off was asked once per issue, in each of the list's eight
+  queries, and is now asked once per rule.
+
 - The server's Overview, Security and analysis pages no longer slow down
   as analyses accumulate, and deleting old analyses no longer scans every
   issue. With 2,800 analyses and 1.26 million issues, Overview took 1.6 s
