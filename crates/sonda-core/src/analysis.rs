@@ -62,7 +62,13 @@ pub(crate) fn analyze(
 ) -> Result<FileAnalysis, FileError> {
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar())?;
-    let bytes = src.as_bytes();
+    // Newer Python syntax, rewritten in place for the grammar; rules read
+    // `src` itself, at the same positions.
+    let parsed = match lang {
+        Lang::Python => crate::py_syntax::for_parser(src),
+        _ => std::borrow::Cow::Borrowed(src),
+    };
+    let bytes = parsed.as_bytes();
     let mut check_deadline = |_: &_| expired(deadline);
     let options = ParseOptions::new().progress_callback(&mut check_deadline);
     let Some(tree) = parser.parse_with_options(
@@ -3450,6 +3456,27 @@ pub(crate) mod tests {
         assert!(hits("pkg/test_thing.py", "x = 1\n").is_empty());
         assert_eq!(hits("pkg/BadName.py", "x = 1\n"), [rules::PY_MODULE_NAME]);
         assert_eq!(hits("a.py", "x = (\n"), [rules::PY_PARSE_FAILURE]);
+    }
+
+    #[test]
+    fn python_3_13_and_3_15_syntax_parses() {
+        // A lazy import (3.15) and a type parameter default (3.13), which the
+        // grammar doesn't know yet: no syntax error, `lazy` isn't a name, and
+        // the lazily imported sink is still resolved.
+        let src = "lazy from subprocess import run\n\
+            from flask import request\n\
+            def ident[T = int](x: T) -> T:\n    return x\n\
+            def view():\n    run(\"ls \" + request.args[\"d\"], shell=True)\n";
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let a = analyze("app.py", Lang::Python, src, &rules, &cfg, far_deadline()).unwrap();
+        assert!(!a.has_syntax_errors);
+        let found: Vec<_> = a.issues.iter().map(|i| (i.rule, i.line)).collect();
+        assert!(
+            !found.iter().any(|(r, _)| *r == "py/undefined-name"),
+            "{found:?}"
+        );
+        assert!(found.contains(&("py/command-injection", 6)), "{found:?}");
     }
 
     #[test]

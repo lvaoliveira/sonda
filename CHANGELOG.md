@@ -171,6 +171,13 @@ file, the report formats and the public library API.
   file. On VS Code's source, 12 files of 300-900 KB timed out and lost
   3,648 findings; none do now, and the scan takes 37 s instead of 100 s.
 
+- Python's lazy imports (`lazy import json`, Python 3.15) and type
+  parameter defaults (`def f[T = int]`, 3.13) no longer make a file a
+  syntax error, which tree-sitter-python's grammar doesn't know yet: they
+  are rewritten in place for the parser, positions unchanged. `lazy` was
+  also reported as an undefined name. On CPython's own source, Python files
+  with syntax errors went from 93 to 4. `frozendict` (3.15) is a builtin.
+
 - On an issue, Copy as prompt no longer sits alone at the right edge when
   the triage buttons wrap: it goes to the start of the next line, under
   them. When everything fits on one line, it stays on the right.
