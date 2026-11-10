@@ -169,6 +169,17 @@ file, the report formats and the public library API.
   is turned off was asked once per issue, in each of the list's eight
   queries, and is now asked once per rule.
 
+- The server's Overview, Security and analysis pages no longer slow down
+  as analyses accumulate, and deleting old analyses no longer scans every
+  issue. With 2,800 analyses and 1.26 million issues, Overview took 1.6 s
+  (now 0.18 s), an analysis 0.9 s (now 0.18 s), and deleting one analysis
+  340 ms (now 2 ms). Issues are indexed by the analyses they point at, and
+  each branch's first analysis is found once, not once per issue.
+
+- A new database migration is built into the server even when nothing
+  else in it changed: an incremental build, such as the Docker image's
+  cached one, could leave it out.
+
 - Concurrent uploads to a project's main branch no longer fail with a
   server error. Recomputing new code after an upload updated the branch's
   issues without the lock uploads take, so it deadlocked with the next

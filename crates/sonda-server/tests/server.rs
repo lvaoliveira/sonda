@@ -59,6 +59,37 @@ async fn migrations_create_the_schema_and_rerun_cleanly() {
 }
 
 #[tokio::test]
+async fn foreign_keys_on_tables_that_grow_with_uploads_are_indexed() {
+    // Deleting a row checks every foreign key that points at it: without an
+    // index, that's a scan of the whole table, for each row deleted.
+    // Retention deletes analyses daily, and with a million issues each one
+    // took 340 ms to delete.
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    db::migrate(&db.pool).await.unwrap();
+    let unindexed: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.conrelid::regclass::text, a.attname::text
+         FROM pg_constraint c
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+         WHERE c.contype = 'f'
+           AND c.conrelid::regclass::text IN
+               ('analyses', 'issues', 'issue_events', 'analysis_files', 'analysis_dependencies')
+           AND NOT EXISTS (SELECT 1 FROM pg_index i
+                           WHERE i.indrelid = c.conrelid AND i.indkey[0] = c.conkey[1])
+         ORDER BY 1, 2",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    // API tokens are revoked, never deleted.
+    assert_eq!(
+        unindexed,
+        [("analyses".to_string(), "token_id".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn the_schema_rejects_invalid_data() {
     let Some(db) = TestDb::new().await else {
         return;
