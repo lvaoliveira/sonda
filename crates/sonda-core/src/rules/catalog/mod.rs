@@ -44,6 +44,7 @@ mod js;
 mod js_a11y;
 mod js_checks;
 mod js_extra;
+pub(crate) mod js_index;
 mod js_last;
 mod js_modern;
 mod js_more;
