@@ -8,6 +8,7 @@ use super::js::{
 };
 use super::js_checks::literal_kind;
 use super::js_extra::{named, operator_text};
+use super::js_index;
 use super::js_syntax::{is_function_kind, root_node, strip_parens, walk, walk_with_ancestors};
 use super::prelude::*;
 
@@ -772,8 +773,22 @@ fn pattern_names<'a>(pattern: Node<'_>, src: &'a [u8], out: &mut Vec<&'a [u8]>) 
     }
 }
 
-/// Every name declared anywhere under `root`.
+/// Every name declared anywhere under `root`, found once per node: a
+/// function inside another asks for the outermost one's.
 fn declared_names<'a>(root: Node<'_>, src: &'a [u8]) -> Vec<&'a [u8]> {
+    let ranges = js_index::memo(src, ("declared_names", &root.id().to_le_bytes()), || {
+        declared_names_in(root, src)
+            .into_iter()
+            .map(|n| {
+                let start = n.as_ptr() as usize - src.as_ptr() as usize;
+                (start, start + n.len())
+            })
+            .collect::<Vec<_>>()
+    });
+    ranges.iter().map(|&(s, e)| &src[s..e]).collect()
+}
+
+fn declared_names_in<'a>(root: Node<'_>, src: &'a [u8]) -> Vec<&'a [u8]> {
     let mut out: Vec<&[u8]> = Vec::new();
     let mut visit = |n: Node<'_>| {
         names_declared_by(n, src, &mut out);
@@ -1376,20 +1391,12 @@ fn arrow_style_is_inconsistent(arrow: Node, src: &[u8]) -> bool {
 // ------------------------------------------------------------- S3579, S3782
 
 fn declared_array<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> bool {
-    let mut found = false;
-    walk(root, &mut |n| {
-        if !found
-            && n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-            && n.child_by_field_name("value")
+    js_index::named(root, &["variable_declarator"], name, src)
+        .iter()
+        .any(|n| {
+            n.child_by_field_name("value")
                 .is_some_and(|v| v.kind() == "array")
-        {
-            found = true;
-        }
-        !found
-    });
-    found
+        })
 }
 
 fn array_index_is_not_a_count(subscript: Node, src: &[u8]) -> bool {
@@ -1734,42 +1741,32 @@ fn to_string_is_missing(node: Node, src: &[u8]) -> bool {
     if target.kind() != "identifier" {
         return false;
     }
-    let root = root_node(node);
-    let mut class_name = None;
-    walk(root, &mut |n| {
-        if class_name.is_none()
-            && n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == text(target, src))
-            && let Some(v) = n.child_by_field_name("value")
-            && v.kind() == "new_expression"
-        {
-            class_name = v.child_by_field_name("constructor").map(|c| text(c, src));
-        }
-        class_name.is_none()
-    });
+    let class_name = js_index::named(node, &["variable_declarator"], text(target, src), src)
+        .into_iter()
+        .find_map(|n| {
+            n.child_by_field_name("value")
+                .filter(|v| v.kind() == "new_expression")
+                .and_then(|v| v.child_by_field_name("constructor"))
+                .map(|c| text(c, src))
+        });
     let Some(class_name) = class_name else {
         return false;
     };
-    let mut defined = false;
-    let mut has_to_string = false;
-    walk(root, &mut |n| {
-        if n.kind() == "class_declaration"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == class_name)
-        {
-            defined = true;
-            has_to_string = n.child_by_field_name("body").is_some_and(|b| {
-                named(b).iter().any(|m| {
-                    m.child_by_field_name("name")
-                        .is_some_and(|x| text(x, src) == b"toString")
-                })
-            }) || n.child_by_field_name("heritage").is_some()
-                || has_token(n, "class_heritage");
-        }
-        true
-    });
-    defined && !has_to_string
+    // The last class of that name decides, as a later one replaces it.
+    let Some(class) = js_index::named(node, &["class_declaration"], class_name, src)
+        .into_iter()
+        .last()
+    else {
+        return false;
+    };
+    let has_to_string = class.child_by_field_name("body").is_some_and(|b| {
+        named(b).iter().any(|m| {
+            m.child_by_field_name("name")
+                .is_some_and(|x| text(x, src) == b"toString")
+        })
+    }) || class.child_by_field_name("heritage").is_some()
+        || has_token(class, "class_heritage");
+    !has_to_string
 }
 
 fn wallet_phrase_is_hardcoded(string: Node, src: &[u8]) -> bool {
@@ -1956,18 +1953,14 @@ fn type_members<'t>(type_node: Node<'t>) -> Vec<Node<'t>> {
 }
 
 fn props_type_in_file<'t>(root: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
-    let mut found = None;
-    walk(root, &mut |n| {
-        if found.is_none()
-            && matches!(n.kind(), "interface_declaration" | "type_alias_declaration")
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-        {
-            found = Some(n);
-        }
-        found.is_none()
-    });
-    found
+    js_index::named(
+        root,
+        &["interface_declaration", "type_alias_declaration"],
+        name,
+        src,
+    )
+    .into_iter()
+    .next()
 }
 
 fn props_are_writable<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -2286,23 +2279,18 @@ fn default_type_argument_is_redundant(generic: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    let declaration = {
-        let mut found = None;
-        walk(root_node(generic), &mut |n| {
-            if found.is_none()
-                && matches!(
-                    n.kind(),
-                    "interface_declaration" | "type_alias_declaration" | "class_declaration"
-                )
-                && n.child_by_field_name("name")
-                    .is_some_and(|x| text(x, src) == text(name, src))
-            {
-                found = Some(n);
-            }
-            found.is_none()
-        });
-        found
-    };
+    let declaration = js_index::named(
+        generic,
+        &[
+            "interface_declaration",
+            "type_alias_declaration",
+            "class_declaration",
+        ],
+        text(name, src),
+        src,
+    )
+    .into_iter()
+    .next();
     let Some(params) = declaration.and_then(|d| d.child_by_field_name("type_parameters")) else {
         return false;
     };
@@ -2346,30 +2334,33 @@ fn union_alias_is_repeated(union: Node, src: &[u8]) -> bool {
     if count(union) < 3 {
         return false;
     }
-    let key: Vec<u8> = text(union, src)
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    let mut seen = 0;
-    let mut first = None;
-    walk(root_node(union), &mut |n| {
-        if n.kind() == "union_type"
-            && !n
-                .parent()
-                .is_some_and(|p| matches!(p.kind(), "union_type" | "type_alias_declaration"))
-            && text(n, src)
-                .iter()
-                .copied()
-                .filter(|b| !b.is_ascii_whitespace())
-                .eq(key.iter().copied())
-        {
-            seen += 1;
-            first.get_or_insert(n.start_byte());
-        }
-        true
+    let squeezed = |n: Node| -> Vec<u8> {
+        text(n, src)
+            .iter()
+            .copied()
+            .filter(|b| !b.is_ascii_whitespace())
+            .collect()
+    };
+    // Every outermost union in the file, by its text without whitespace:
+    // how many, and where the first starts. Found once per file.
+    let unions = js_index::memo(src, ("outermost_unions", b""), || {
+        let mut unions: std::collections::HashMap<Vec<u8>, (usize, usize)> =
+            std::collections::HashMap::new();
+        walk_with_ancestors(root_node(union), &mut |n, ancestors| {
+            if n.kind() == "union_type"
+                && !ancestors
+                    .last()
+                    .is_some_and(|p| matches!(p.kind(), "union_type" | "type_alias_declaration"))
+            {
+                unions.entry(squeezed(n)).or_insert((0, n.start_byte())).0 += 1;
+            }
+            true
+        });
+        unions
     });
-    seen >= 2 && first == Some(union.start_byte())
+    unions
+        .get(&squeezed(union))
+        .is_some_and(|&(seen, first)| seen >= 2 && first == union.start_byte())
 }
 
 fn cast_changes_nothing(node: Node, src: &[u8]) -> bool {

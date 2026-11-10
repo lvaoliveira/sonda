@@ -1759,6 +1759,10 @@ fn run_queries_in(
         return Ok(issues);
     };
     let test_file = is_test_file(ctx.path);
+    // Declarations by name, for the filters that look one up.
+    let _declarations = crate::lang::JS_TS
+        .contains(&lang)
+        .then(|| crate::rules::js_index::scope(root, bytes));
     let options = QueryCursorOptions::new().progress_callback(&mut check_deadline);
     let mut matches = cursor.matches_with_options(&cq.query, root, bytes, options);
     while let Some(m) = matches.next() {
