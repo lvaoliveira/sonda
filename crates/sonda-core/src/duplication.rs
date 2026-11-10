@@ -4,14 +4,19 @@
 //! hash. Each repeated window is paired with the first occurrence of that
 //! window, then extended token by token into a maximal block.
 //!
-//! Linear time, even on hostile input: no block starts inside a copy that
+//! Memory: the tokens, then 16 bytes per window while the windows are
+//! sorted by hash, then 8 per window. (A hash map from each window's hash to
+//! its first occurrence took over 2 GB on VS Code's 34 million tokens.)
+//!
+//! Apart from that sort, linear time, even on hostile input: no block starts inside a copy that
 //! is already reported, so copy ranges are disjoint and the total extension
 //! work is bounded by the number of tokens. (Without that rule, a file
 //! repeating one token was quadratic: 80,000 lines took 75 s.)
 
 use crate::analysis::Token;
+use rayon::slice::ParallelSliceMut;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Span {
@@ -37,11 +42,9 @@ const BASE: u64 = 0x0000_0100_0000_01b3;
 
 pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplication {
     let w = min_tokens.max(1);
-    let hashes: Vec<Vec<u64>> = files.iter().map(|t| window_hashes(t, w)).collect();
-    let first = first_occurrences(&hashes);
+    let first = FirstOccurrences::new(files, w);
     let windows = Windows {
         files,
-        hashes: &hashes,
         first: &first,
         w,
     };
@@ -50,14 +53,14 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
         lines: vec![BTreeSet::new(); files.len()],
         blocks: Vec::new(),
     };
-    // Per file, the token index up to which copies are already reported.
-    let mut copied_until = vec![0usize; files.len()];
-    for (fb, hs) in hashes.iter().enumerate() {
-        for pb in 0..hs.len() {
-            let Some((block, end)) = windows.copy_at(fb, pb, copied_until[fb]) else {
+    for fb in 0..files.len() {
+        // The token index up to which this file's copies are reported.
+        let mut copied_until = 0;
+        for pb in 0..first.windows(fb) {
+            let Some((block, end)) = windows.copy_at(fb, pb, copied_until) else {
                 continue;
             };
-            copied_until[fb] = end;
+            copied_until = end;
             if block.copy.end_line - block.copy.start_line + 1 < min_lines {
                 continue;
             }
@@ -70,10 +73,9 @@ pub fn detect(files: &[&[Token]], min_tokens: usize, min_lines: usize) -> Duplic
     out
 }
 
-/// The files' tokens with their window hashes, each `w` tokens long.
+/// The files' tokens and their windows, each `w` tokens long.
 struct Windows<'a> {
     files: &'a [&'a [Token]],
-    hashes: &'a [Vec<u64>],
     first: &'a FirstOccurrences,
     w: usize,
 }
@@ -86,12 +88,12 @@ impl Windows<'_> {
     /// or only shares its hash.
     fn copy_at(&self, fb: usize, pb: usize, copied_until: usize) -> Option<(Block, usize)> {
         let w = self.w;
-        // Indexing `first` cannot panic: it holds every hash in `hashes`.
-        let ((fa, pa), repeated) = self.first[&self.hashes[fb][pb]];
-        if !repeated || (fa, pa) == (fb, pb) || overlaps(fa, pa, fb, pb, w) || pb < copied_until {
+        let (a, repeated) = self.first.of(fb, pb);
+        if !repeated || a == self.first.index(fb, pb) || pb < copied_until {
             return None;
         }
-        if extends_previous_block(self.hashes, self.first, (fa, pa), (fb, pb)) {
+        let (fa, pa) = self.first.position(a);
+        if overlaps(fa, pa, fb, pb, w) || self.first.extends_previous_block((fa, pa), (fb, pb)) {
             return None;
         }
         let (ta, tb) = (self.files[fa], self.files[fb]);
@@ -112,35 +114,68 @@ impl Windows<'_> {
     }
 }
 
-/// Hash -> (file, position) of its first occurrence, and whether it repeats.
-type FirstOccurrences = HashMap<u64, ((usize, usize), bool)>;
-
-fn first_occurrences(hashes: &[Vec<u64>]) -> FirstOccurrences {
-    let mut first = FirstOccurrences::new();
-    for (f, hs) in hashes.iter().enumerate() {
-        for (p, &h) in hs.iter().enumerate() {
-            first
-                .entry(h)
-                .and_modify(|e| e.1 = true)
-                .or_insert(((f, p), false));
-        }
-    }
-    first
+/// Each window's first occurrence: the earliest window, in file order, with
+/// the same hash. Windows are numbered across files, file by file.
+struct FirstOccurrences {
+    /// The number of each file's first window, then the total.
+    starts: Vec<usize>,
+    /// Per window: its first occurrence's number, shifted left one bit, with
+    /// the low bit set when its hash repeats.
+    first: Vec<u64>,
 }
 
-/// Whether the copy at `b` of the window at `a` is covered by a block that
-/// started one token earlier.
-fn extends_previous_block(
-    hashes: &[Vec<u64>],
-    first: &FirstOccurrences,
-    (fa, pa): (usize, usize),
-    (fb, pb): (usize, usize),
-) -> bool {
-    if pa == 0 || pb == 0 {
-        return false;
+impl FirstOccurrences {
+    fn new(files: &[&[Token]], w: usize) -> Self {
+        let mut starts = Vec::with_capacity(files.len() + 1);
+        let mut by_hash: Vec<(u64, u64)> = Vec::new();
+        for tokens in files {
+            starts.push(by_hash.len());
+            let start = by_hash.len() as u64;
+            by_hash.extend(window_hashes(tokens, w).into_iter().zip(start..));
+        }
+        starts.push(by_hash.len());
+        // Within a hash, by window number: the first is the first occurrence.
+        by_hash.par_sort_unstable();
+        let mut first = vec![0u64; by_hash.len()];
+        for group in by_hash.chunk_by(|a, b| a.0 == b.0) {
+            let packed = group[0].1 << 1 | u64::from(group.len() > 1);
+            for &(_, i) in group {
+                first[i as usize] = packed;
+            }
+        }
+        Self { starts, first }
     }
-    let prev = hashes[fb][pb - 1];
-    hashes[fa][pa - 1] == prev && first[&prev].0 == (fa, pa - 1)
+
+    /// How many windows file `f` has.
+    fn windows(&self, f: usize) -> usize {
+        self.starts[f + 1] - self.starts[f]
+    }
+
+    /// The number of window `p` of file `f`.
+    fn index(&self, f: usize, p: usize) -> usize {
+        self.starts[f] + p
+    }
+
+    /// The number of the first occurrence of window `p` of file `f`, and
+    /// whether its hash repeats.
+    fn of(&self, f: usize, p: usize) -> (usize, bool) {
+        let packed = self.first[self.index(f, p)];
+        ((packed >> 1) as usize, packed & 1 == 1)
+    }
+
+    /// The (file, position) of window number `i`. Files without windows share
+    /// their start with the next file; the last of those is the one with it.
+    fn position(&self, i: usize) -> (usize, usize) {
+        let f = self.starts.partition_point(|&s| s <= i) - 1;
+        (f, i - self.starts[f])
+    }
+
+    /// Whether the copy at `b` of the window at `a` is covered by a block
+    /// that started one token earlier: the window before `b` first occurs
+    /// just before `a` (and so has the same hash).
+    fn extends_previous_block(&self, (fa, pa): (usize, usize), (fb, pb): (usize, usize)) -> bool {
+        pa > 0 && pb > 0 && self.of(fb, pb - 1).0 == self.index(fa, pa - 1)
+    }
 }
 
 fn same_tokens(a: &[Token], b: &[Token]) -> bool {
@@ -284,7 +319,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         });
-        prop::collection::vec(file, 1..4)
+        // Empty files too: they have no windows, and share a start.
+        prop::collection::vec(prop_oneof![1 => Just(Vec::new()), 4 => file], 1..5)
     }
 
     proptest! {
@@ -299,6 +335,33 @@ mod tests {
             let rolled = window_hashes(&tokens, w);
             for (i, h) in rolled.iter().enumerate() {
                 prop_assert_eq!(*h, window_hashes(&tokens[i..i + w], w)[0]);
+            }
+        }
+
+        /// Against the hash map it replaced: for every window, the same
+        /// first occurrence and the same answer to whether it repeats.
+        #[test]
+        fn first_occurrences_match_a_hash_map(
+            files in token_files(),
+            w in 1usize..6,
+        ) {
+            let refs: Vec<&[Token]> = files.iter().map(Vec::as_slice).collect();
+            let hashes: Vec<Vec<u64>> = refs.iter().map(|t| window_hashes(t, w)).collect();
+            let mut expected: std::collections::HashMap<u64, ((usize, usize), bool)> =
+                std::collections::HashMap::new();
+            for (f, hs) in hashes.iter().enumerate() {
+                for (p, &h) in hs.iter().enumerate() {
+                    expected.entry(h).and_modify(|e| e.1 = true).or_insert(((f, p), false));
+                }
+            }
+            let first = FirstOccurrences::new(&refs, w);
+            for (f, hs) in hashes.iter().enumerate() {
+                prop_assert_eq!(first.windows(f), hs.len());
+                for (p, h) in hs.iter().enumerate() {
+                    let (i, repeated) = first.of(f, p);
+                    prop_assert_eq!((first.position(i), repeated), expected[h]);
+                    prop_assert_eq!(first.position(first.index(f, p)), (f, p));
+                }
             }
         }
 
