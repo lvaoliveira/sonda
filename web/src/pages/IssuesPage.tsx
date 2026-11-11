@@ -103,6 +103,8 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
   const narrow = !useWide(900)
   const [reading, setReading] = useState(false)
   const listHidden = narrow && reading
+  // Where the phone's list was scrolled to, for coming back from an issue.
+  const listScroll = useRef(0)
   const [showFacets, setShowFacets] = useFacets(wide)
 
   const loaded = useAsync(() => api.issues(toQuery(filter, me ?? '', offset)), [api, filter, offset, me])
@@ -148,7 +150,16 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
   const assignToMe = (ids: number[]) => me && apply(ids, { assignee: me }, 'Assigned to you')
   const open = (id: number) => {
     setSelectedId(id)
-    if (narrow) setReading(true)
+    if (!narrow) return
+    // The issue takes the list's place: start it at the top of the page,
+    // not where the list was scrolled to.
+    listScroll.current = window.scrollY
+    setReading(true)
+    window.scrollTo(0, 0)
+  }
+  const backToList = () => {
+    setReading(false)
+    requestAnimationFrame(() => window.scrollTo(0, listScroll.current))
   }
   /** The chosen issues (whatever their status), or the first PROMPT_LIMIT matching, as a prompt for an AI assistant (ADR-0025). */
   const copyPrompt = async (ids?: number[]) => {
@@ -206,10 +217,16 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
       )}
       {loaded.state === 'error' && <p role="alert">Could not load issues: {loaded.error.message}</p>}
 
-      <div className="grid min-h-[calc(100vh-220px)] gap-px overflow-hidden rounded-xl bg-line" style={{ gridTemplateColumns: columns, boxShadow: '0 0 0 1px var(--sd-line)' }}>
+      {/* Side by side, the grid fits the window and each column scrolls on its
+          own, so the issue stays in view however far down the list it was
+          picked. On a phone, one pane at a time, the page scrolls. */}
+      <div
+        className={`grid gap-px overflow-hidden rounded-xl bg-line ${narrow ? 'min-h-[calc(100vh-220px)]' : 'h-[calc(100dvh-220px)] min-h-[480px]'}`}
+        style={{ gridTemplateColumns: columns, gridTemplateRows: narrow ? undefined : 'minmax(0,1fr)', boxShadow: '0 0 0 1px var(--sd-line)' }}
+      >
         {showFacets && !listHidden && <Facets page={page} filter={filter} base={base} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
 
-        <section hidden={listHidden} aria-label="Issue list" aria-busy={loaded.state === 'loading'} className="flex min-w-0 flex-col bg-panel-2">
+        <section hidden={listHidden} aria-label="Issue list" aria-busy={loaded.state === 'loading'} className="flex min-h-0 min-w-0 flex-col bg-panel-2">
           <ListBar
             page={page}
             last={last}
@@ -220,7 +237,7 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
             onConfirm={() => setStatus(checked, 'confirmed')}
           />
           {items.length === 0 && <NothingMatches onReset={() => changeFilter(base)} />}
-          <div role="listbox" aria-label="Issues" className="flex flex-1 flex-col overflow-auto">
+          <div role="listbox" aria-label="Issues" className="flex min-h-0 flex-1 flex-col overflow-auto">
             {items.map((issue) => (
               <IssueRow
                 key={issue.id}
@@ -238,7 +255,9 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
 
         {selected && (!narrow || reading) && (
           <IssueView
-            onBack={narrow ? () => setReading(false) : undefined}
+            // A new issue starts at its top, not where the last one was scrolled to.
+            key={selected.id}
+            onBack={narrow ? backToList : undefined}
             id={selected.id}
             version={detailVersion}
             me={me}
@@ -384,8 +403,14 @@ function IssueRow({
   onOpen,
   onCheck,
 }: Readonly<{ issue: IssueSummary; on: boolean; checked: boolean; me: string | null; onOpen: () => void; onCheck: () => void }>) {
+  const row = useRef<HTMLDivElement>(null)
+  // Selected with j/k (or a drill-down link) past the list's edge: scroll it in.
+  useEffect(() => {
+    if (on) row.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [on])
   return (
     <div
+      ref={row}
       role="option"
       aria-selected={on}
       tabIndex={on ? 0 : -1}
