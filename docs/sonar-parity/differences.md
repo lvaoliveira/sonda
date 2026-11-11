@@ -31,7 +31,7 @@ its default profile (Sonar way) and sonda its default rules.
 |---|---|---|---|---|
 | arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
 | sonda | TypeScript (TSX), Rust | `bb310b2` | 47 of 47 | 0 |
-| CPython, 7 packages¹ | Python | `bf6623a` | 456 of 510 | 134 |
+| CPython, 7 packages¹ | Python | `bf6623a` | 456 of 510 | 75 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
@@ -131,17 +131,42 @@ what sonda did, sonda now does the same:
   S1192 treats hyphenated words as identifiers; S107 allows 13 parameters,
   not counting `self`; S1135 and S1134 know TODO and FIXME, not XXX.
 
+Measured in a second round:
+
+- **Once per name.** A local, a field (per class) or a builtin shadowed is
+  reported where an assignment first binds it; a loop's `for a, b in`
+  doesn't count as that binding. A name declared `global` isn't a local.
+- **Unused locals.** Class attributes, even of a class in a function, and a
+  parenthesized tuple `(a, b) = t` aren't reported.
+- **Duplicated strings.** Of an implicit concatenation, only the first part
+  counts; bytes don't.
+- **Smaller ones.** S8492 needs a known set; S6660 is `==` and `!=`, not
+  `is`; S1656 leaves `X = X` at module level; S1066 leaves two ifs with a
+  comment between them; S2772 leaves a function's docstring and `pass`;
+  S1871 leaves one-line branches in a chain with an else.
+
 ### Still open in Python
 
-On CPython, 54 of SonarQube's issues and 134 of sonda's remain, spread over
-about 30 keys, none yet classified one by one. The largest:
-`common/commented-out-code` (33: sonda reports example code indented in a
-comment, and a lone `# print(x)`; SonarQube reported a grammar line in a
-docstring), `py/local-name` (13), `py/unused-parameter` (12),
-`py/mergeable-if` (11, with an `and` in the outer condition) and S1110 (12
-multi-line parenthesized expressions SonarQube reports that don't look
-doubled). Deliberate: `py/mutable-default` also reports a mutable default
-the function doesn't change, which SonarQube doesn't.
+On CPython, 54 of SonarQube's issues and 75 of sonda's remain:
+
+- `common/commented-out-code` (33 sonda, 2 SonarQube): sonda reports example
+  code indented in a comment and a lone `# print(x)`; SonarQube reported a
+  grammar line in a docstring. The heuristics differ and haven't been
+  measured case by case.
+- `py/unused-parameter` (12 and 9): SonarQube follows a method's base
+  class into other files to decide whether it overrides; sonda knows the
+  standard library's and this file's. A known gap.
+- `py/mergeable-if` (10): not explained by the cases measured so far.
+- S1110 (12 SonarQube): multi-line parenthesized expressions it reports
+  that don't look doubled; not explained.
+- S930 (5 SonarQube): calls with an unexpected argument, which needs the
+  callee's signature from another file. A known gap.
+- `py/duplicated-string`: SonarQube never reports `"%s:%s"`, while it
+  reports `"%s=%s"`; not explained.
+- About 20 keys with one to four issues each.
+
+Deliberate: `py/mutable-default` also reports a mutable default the
+function doesn't change, which SonarQube doesn't.
 
 ## Rules that depend on knowing a type
 

@@ -214,6 +214,26 @@ Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,
 where it raised 142, and 4 issues SonarQube doesn't, where it raised 14.
 
+- Python, a second round on the same CPython packages: 134 issues
+  SonarQube doesn't raise down to 75, with as many of its issues raised
+  (456 of 510).
+  - Names are reported once, where an assignment first binds them, as
+    SonarQube does: `py/local-name`, `py/field-name` (per class),
+    `py/builtin-shadowed`, `py/unused-local`. A name declared `global`
+    isn't a local; `file` isn't a builtin in Python 3.
+  - `py/unused-local` leaves class attributes (a class in a function too)
+    and a parenthesized tuple, `(a, b) = t`.
+  - `py/duplicated-string` counts the first part of an implicit
+    concatenation only, and not bytes.
+  - `py/set-discard` reports a known set only; `py/type-comparison`
+    reports `==` and `!=`, not `is`; `py/self-assignment` leaves
+    `X = X` at module level (an alias); `py/mergeable-if` leaves two ifs
+    with a comment between them; `py/needless-pass` leaves a function's
+    docstring and `pass`; `py/duplicated-branch` leaves one-line branches
+    in a chain with an else (SonarQube's stated exception).
+  - `py/default-parameter-modified` no longer takes `del self[name]` for
+    a change to the default `name`: it matched the name anywhere in the
+    statement.
 - Python, compared on seven standard-library packages of CPython and on a
   Home Assistant integration, and measured on SonarQube 26.7 one case at a
   time: sonda raises 456 of SonarQube's 510 issues on the 87 files

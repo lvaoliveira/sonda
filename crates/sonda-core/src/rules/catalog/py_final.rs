@@ -1293,7 +1293,23 @@ fn mutates(n: Node, param: &[u8], src: &[u8]) -> bool {
                 && f.child_by_field_name("attribute")
                     .is_some_and(|a| MUTATORS.contains(&text(a, src)))
         }),
-        "delete_statement" => text(n, src).windows(param.len()).any(|w| w == param),
+        // `del seen[k]` or `del seen.attr`, not `del other[seen]`.
+        "delete_statement" => {
+            let mut targets = vec![n];
+            let mut deleted = false;
+            while let Some(t) = targets.pop() {
+                match t.kind() {
+                    "subscript" => deleted |= is_param(t.child_by_field_name("value")),
+                    "attribute" => deleted |= is_param(t.child_by_field_name("object")),
+                    "delete_statement" | "expression_list" => {
+                        let mut c = t.walk();
+                        targets.extend(t.named_children(&mut c));
+                    }
+                    _ => {}
+                }
+            }
+            deleted
+        }
         _ => false,
     }
 }
