@@ -11,6 +11,7 @@ use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
 pub(crate) use catalog::cs_project;
+pub(crate) use catalog::java_line_looks_like_code;
 pub(crate) use catalog::java_project;
 pub(crate) use catalog::js_index;
 pub use owasp::{Edition, Owasp};

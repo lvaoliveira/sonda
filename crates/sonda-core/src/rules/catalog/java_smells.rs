@@ -832,11 +832,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Critical,
         effort_minutes: 10,
         sonar: &[exact("S1452")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(method_declaration type: (generic_type (type_arguments (wildcard)))) @match"#,
-            filter: Some(Keep(wildcard_is_not_a_class)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class A { List<?> f() { return null; } }",
@@ -994,7 +990,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1643")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(assignment_expression left: (identifier) operator: "+=") @match"#,
+            query: r#"(assignment_expression left: (identifier) operator: "+=") @match
+(assignment_expression left: (identifier) operator: "=" right: (binary_expression operator: "+")) @match"#,
             filter: Some(Keep(concatenates_a_string_in_a_loop)),
         },
         example: Some(Example {
@@ -2121,8 +2118,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S112")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match
-(throws (type_identifier) @match (#any-of? @match "Exception" "Throwable" "RuntimeException" "Error"))"#,
+            query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match"#,
             filter: Some(Keep(generic_exception_reported)),
         },
         example: Some(Example {
@@ -2622,7 +2618,12 @@ fn constant_name_not_upper_snake(field: Node, src: &[u8]) -> bool {
                 | b"Double"
         )
     });
+    // An array is mutable, not a constant (measured on SonarQube 26.7).
+    let array = children_of_kind(field, "variable_declarator")
+        .iter()
+        .any(|d| d.child_by_field_name("dimensions").is_some());
     is_plain_value
+        && !array
         && declarator_names(field, src)
             .iter()
             .any(|n| *n != b"serialVersionUID" && !is_valid_constant(n))
@@ -2874,18 +2875,27 @@ fn returned_bool(branch: Node) -> Option<bool> {
     }
 }
 
+/// `if (c) return true; else return false;`, or the same with the second
+/// `return` after the `if` (measured on SonarQube 26.7).
 fn returns_boolean_from_both_branches(statement: Node, _: &[u8]) -> bool {
+    let otherwise = match statement.child_by_field_name("alternative") {
+        Some(alternative) => returned_bool(alternative),
+        None => statement
+            .next_named_sibling()
+            .filter(|n| n.kind() == "return_statement")
+            .and_then(returned_bool),
+    };
     let (Some(a), Some(b)) = (
         statement
             .child_by_field_name("consequence")
             .and_then(returned_bool),
-        statement
-            .child_by_field_name("alternative")
-            .and_then(returned_bool),
+        otherwise,
     ) else {
         return false;
     };
-    a != b
+    // Even the same value twice (measured on SonarQube 26.7).
+    let _ = (a, b);
+    true
 }
 
 fn first_unused_import<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -3126,6 +3136,22 @@ fn says_what_to_do(tag: &[u8]) -> bool {
 }
 
 fn concatenates_a_string_in_a_loop(assign: Node, src: &[u8]) -> bool {
+    // `s = s + x` is `s += x` (measured on SonarQube 26.7).
+    if assign
+        .child_by_field_name("operator")
+        .is_some_and(|o| o.kind() == "=")
+    {
+        let target = assign.child_by_field_name("left").map(|l| text(l, src));
+        let mut first = assign.child_by_field_name("right");
+        while let Some(b) = first.filter(|b| b.kind() == "binary_expression") {
+            first = b.child_by_field_name("left");
+        }
+        let same = first.is_some_and(|f| f.kind() == "identifier" && Some(text(f, src)) == target);
+        let string = assign
+            .child_by_field_name("left")
+            .is_some_and(|l| type_text(declared_type(assign, text(l, src), src), src) == b"String");
+        return same && string && inside_a_loop(assign, src);
+    }
     let is_text = assign
         .child_by_field_name("right")
         .is_some_and(|r| r.kind() == "string_literal")
@@ -3278,25 +3304,6 @@ fn switch_has_fewer_than_three_cases(switch: Node, src: &[u8]) -> bool {
         })
         .count();
     cases >= 1 && clauses < 3
-}
-
-/// `Class<?>` is how a class of unknown type is written; other wildcard
-/// return types aren't exempt.
-/// SonarQube 26.7 (measured) leaves `Class<?>`, `Collector<T, ?, R>`,
-/// whose middle type is the collector's own business, and private methods.
-fn wildcard_is_not_a_class(method: Node, src: &[u8]) -> bool {
-    !has_modifier(method, "private")
-        && !has_annotation(method, b"Override", src)
-        && method
-            .child_by_field_name("type")
-            .and_then(|t| t.named_child(0))
-            .is_none_or(|base| {
-                let name = text(base, src)
-                    .rsplit(|b| *b == b'.')
-                    .next()
-                    .unwrap_or_default();
-                !matches!(name, b"Class" | b"Collector")
-            })
 }
 
 /// A field, local or parameter declared `ThreadGroup`, as SonarQube reports
@@ -3841,12 +3848,48 @@ fn concatenates_text(arg: Node, src: &[u8]) -> bool {
         && find_node(arg, |n| n.kind() == "string_literal").is_some()
 }
 
+/// A logging call given a concatenation that costs something to build, in
+/// any argument: one with an operand besides literals and plain getters
+/// (`e.getMessage()`, `vo.getName()` are left alone; `"a" + x` and
+/// `"a" + o.toString()` aren't), as SonarQube 26.7 reports it (measured).
 fn logs_a_concatenated_message(call: Node, src: &[u8]) -> bool {
+    // Or a call passed as an argument that needs evaluating: one with
+    // arguments, `map.get("k")`, or `toString()`; not a getter or
+    // `hashCode()`.
+    let costly_call = |a: &Node| {
+        a.kind() == "method_invocation"
+            && (method_name(*a, src) == b"toString" || !call_arguments(*a).is_empty())
+    };
     call.child_by_field_name("object")
         .is_some_and(|o| contains_ignoring_case(text(o, src), b"log"))
-        && call_arguments(call)
-            .first()
-            .is_some_and(|a| concatenates_text(*a, src))
+        && call_arguments(call).iter().enumerate().any(|(i, a)| {
+            concatenates_text(*a, src) && concatenation_costs(*a, src) || i > 0 && costly_call(a)
+        })
+}
+
+/// Whether a concatenation has an operand besides literals and getters.
+fn concatenation_costs(expr: Node, src: &[u8]) -> bool {
+    let mut stack = vec![expr];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "binary_expression" | "parenthesized_expression" => {
+                let mut c = n.walk();
+                stack.extend(n.named_children(&mut c));
+            }
+            "string_literal" | "character_literal" | "decimal_integer_literal" => {}
+            "method_invocation" => {
+                let name = method_name(n, src);
+                let getter = call_arguments(n).is_empty()
+                    && (name.starts_with(b"get") || name.starts_with(b"is"));
+                if !getter {
+                    return true;
+                }
+            }
+            _ if n.kind().ends_with("comment") => {}
+            _ => return true,
+        }
+    }
+    false
 }
 
 fn checks_index_of_for_positive(binary: Node, src: &[u8]) -> bool {
@@ -4036,15 +4079,74 @@ fn logger_names_another_class(call: Node, src: &[u8]) -> bool {
     found_class
 }
 
+/// A `return;` ending a void method, or a `continue;` ending a loop's body,
+/// also from the end of an `if` branch, a `try` or a `catch` that itself
+/// ends it (measured on SonarQube 26.7).
 fn jump_is_redundant(jump: Node, _: &[u8]) -> bool {
-    let Some(block) = jump.parent().filter(|p| p.kind() == "block") else {
-        return false;
-    };
-    if statements(block).last() != Some(&jump) {
+    // A labeled jump, `continue outer;`, goes somewhere else.
+    if jump.kind() != "return_statement" && jump.named_child_count() > 0 {
         return false;
     }
-    let Some(owner) = block.parent() else {
+    // Whether `n` is the last statement of its block, or a branch of an
+    // `if` (with no braces).
+    let last_in_block = |n: Node| {
+        n.parent()
+            .is_some_and(|p| p.kind() == "block" && statements(p).last() == Some(&n))
+    };
+    if !last_in_block(jump) && !jump.parent().is_some_and(|p| p.kind() == "if_statement") {
         return false;
+    }
+    // Climb out through constructs the jump ends.
+    let mut node = jump;
+    let owner = loop {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        let up = match parent.kind() {
+            "block" => {
+                if statements(parent).last() != Some(&node) {
+                    return false;
+                }
+                match parent.parent() {
+                    Some(p)
+                        if matches!(
+                            p.kind(),
+                            "if_statement" | "try_statement" | "catch_clause"
+                        ) =>
+                    {
+                        p
+                    }
+                    Some(p) => break p,
+                    None => return false,
+                }
+            }
+            "if_statement" => parent,
+            _ => break parent,
+        };
+        // The construct itself must end what holds it.
+        let construct = match up.kind() {
+            "catch_clause" => match up.parent() {
+                Some(t) => t,
+                None => return false,
+            },
+            _ => up,
+        };
+        if construct.kind() == "try_statement"
+            && construct
+                .children(&mut construct.walk())
+                .any(|c| c.kind() == "finally_clause")
+        {
+            return false;
+        }
+        // An `else if` chain is one statement.
+        let mut statement = construct;
+        while statement
+            .parent()
+            .is_some_and(|p| p.kind() == "if_statement")
+        {
+            statement = statement.parent().unwrap_or(statement);
+        }
+        node = statement;
     };
     if jump.kind() == "return_statement" {
         jump.named_child_count() == 0 && owner.kind() == "method_declaration"
@@ -4186,11 +4288,33 @@ fn else_binds_to_inner_if(statement: Node, _: &[u8]) -> bool {
             })
 }
 
+/// A `replaceAll` whose pattern matches only itself: no metacharacter, or
+/// one escaped (`"\\^"`), once the Java string is read (`"\uBD84"` is a
+/// letter), as SonarQube 26.7 reports it (measured).
 fn replace_pattern_is_plain_text(call: Node, src: &[u8]) -> bool {
     let args = call_arguments(call);
-    args.len() == 2
-        && string_value(args[0], src)
-            .is_some_and(|p| !p.is_empty() && !p.iter().any(|b| b".^$*+?{}[]\\|()".contains(b)))
+    let Some(raw) = (args.len() == 2)
+        .then(|| string_value(args[0], src))
+        .flatten()
+    else {
+        return false;
+    };
+    let pattern = super::java_regex::unescape_java(&String::from_utf8_lossy(raw));
+    let mut chars = pattern.chars();
+    let mut any = false;
+    while let Some(c) = chars.next() {
+        any = true;
+        if c == '\\' {
+            // `\^` is a literal `^`; `\d`, `\s` are classes.
+            match chars.next() {
+                Some(n) if !n.is_alphanumeric() => {}
+                _ => return false,
+            }
+        } else if ".^$*+?{}[]|()".contains(c) {
+            return false;
+        }
+    }
+    any
 }
 
 fn asserts_a_comparison(call: Node, src: &[u8]) -> bool {
@@ -4785,69 +4909,15 @@ fn compares_with_empty_string(node: Node, src: &[u8]) -> bool {
 /// (`@Override`, `InvocationHandler.invoke`, `Callable.call`,
 /// `AutoCloseable.close`).
 fn generic_exception_reported(node: Node, src: &[u8]) -> bool {
-    if node.kind() == "throw_statement" {
-        // Wrapping the caught exception, `throw new RuntimeException(e)`,
-        // isn't reported (measured on SonarQube 26.7).
-        let caught = catch_parameter_around(node, src);
-        let wraps = node.named_child(0).is_some_and(|creation| {
-            call_arguments(creation)
-                .iter()
-                .any(|a| a.kind() == "identifier" && Some(text(*a, src)) == caught)
-        });
-        return !wraps;
-    }
-    let Some(method) = node
-        .parent()
-        .and_then(|t| t.parent())
-        .filter(|m| m.kind() == "method_declaration")
-    else {
-        return false;
-    };
-    if has_annotation(method, b"Override", src) {
-        return false;
-    }
-    let name = name_text(method, src);
-    let implements_one = enclosing_class(method).is_some_and(|c| {
-        let mut cur = c.walk();
-        c.children(&mut cur).any(|i| {
-            i.kind() == "super_interfaces"
-                && [
-                    (&b"InvocationHandler"[..], &b"invoke"[..]),
-                    (b"Callable", b"call"),
-                    (b"AutoCloseable", b"close"),
-                    (b"Closeable", b"close"),
-                ]
-                .iter()
-                .any(|(iface, m)| name == *m && count_word(text(i, src), iface) > 0)
-        })
-    });
-    // A call to a method of the class declared `throws Exception`, or to a
-    // `call()`, passes one on; `Throwable`, `RuntimeException` and `Error`
-    // are reported anyway (measured on SonarQube 26.7).
-    let class_methods_throwing = |name: &[u8]| {
-        enclosing_class(method).is_some_and(|c| {
-            super::java_extra::class_members(c).into_iter().any(|m| {
-                m.kind() == "method_declaration"
-                    && name_text(m, src) == name
-                    && m.children(&mut m.walk())
-                        .any(|t| t.kind() == "throws" && count_word(text(t, src), b"Exception") > 0)
-            })
-        })
-    };
-    let passes_one_on = method.child_by_field_name("body").is_some_and(|b| {
-        find_node(b, |n| {
-            n.kind() == "method_invocation" && {
-                let name = method_name(n, src);
-                // `Callable.call()` and `AutoCloseable.close()` throw `Exception`.
-                matches!(name, b"call" | b"close")
-                    || n.child_by_field_name("object")
-                        .is_none_or(|o| o.kind() == "this")
-                        && class_methods_throwing(name)
-            }
-        })
-        .is_some()
-    });
-    !implements_one && (text(node, src) != b"Exception" || !passes_one_on)
+    // Wrapping the caught exception, `throw new RuntimeException(e)`, isn't
+    // reported (measured on SonarQube 26.7). A `throws` clause is judged by
+    // the project pass, which sees the callees in other files.
+    let caught = catch_parameter_around(node, src);
+    !node.named_child(0).is_some_and(|creation| {
+        call_arguments(creation)
+            .iter()
+            .any(|a| a.kind() == "identifier" && Some(text(*a, src)) == caught)
+    })
 }
 
 /// The name of the exception the `catch` around `node` caught, if any.
@@ -5370,5 +5440,47 @@ mod tests {
         // S5869 on a regex in a constant, reported at the constant.
         let src = "class A {\nprivate static final String P = \"[a-zA-z]+\";\nboolean f(String s) { return s.matches(P); }\n}";
         assert_eq!(flagged("java/regex-duplicate-class-member", src), [2]);
+    }
+
+    /// Measured on SonarQube 26.7 against eGovFrame's shapes.
+    #[test]
+    fn java_egov_shapes_measured_on_sonarqube() {
+        // S6830: a stereotype's bean name, at its string.
+        let src = "@Service(\"EgovFooService\")\nclass A {}\n@Repository(\"fooDao\")\nclass B {}";
+        assert_eq!(flagged("java/bean-method-name", src), [1]);
+        // S1126: without an else, and with the same value twice.
+        let src = "class A {\nboolean a(boolean c) {\nif (c) { return true; }\nreturn false;\n}\nboolean b(int x) {\nif (x > 0) { return true; }\nreturn true;\n}\n}";
+        assert_eq!(flagged("java/return-boolean-if", src), [3, 7]);
+        // S5411: a negated Boolean too.
+        let src = "class A { int f(Boolean b) {\nif (!b) { return 1; }\nif (b) { return 2; }\nreturn 3;\n} }";
+        assert_eq!(flagged("java/boxed-boolean-condition", src), [2, 3]);
+        // S1643: `s = s + x` in a loop, inside an if too.
+        let src = "class A { String f(String[] xs) {\nString s = \"\";\nfor (int i = 0; i < xs.length; i++) {\nif (i != 0) { s = s + \",\"; }\ns += xs[i];\n}\nreturn s;\n} }";
+        assert_eq!(flagged("java/string-concatenation-in-loop", src), [4, 5]);
+        // S125: a /* */ comment at its first line of code.
+        let src = "class A { void f() {\n/*\n * Some words.\n * setX(removeMinus(getX()));\n */\ng();\n} }";
+        assert_eq!(flagged("java/commented-out-code", src), [4]);
+        // S8491: Javadocs in a run before a declaration, other comments
+        // between them aside.
+        let src = "class A {\n/** Old. */\n/* int old; */\n/** New. */\nvoid f() {}\n/** Alone. */\n// note\nint c;\n}";
+        assert_eq!(flagged("java/dangling-javadoc", src), [5]);
+        // S2629: costly concatenations and calls, not getters or getMessage().
+        let src = "class A { void f(String x, Exception e, Object o, java.util.Map<String, String> m) {\nlog.debug(\"a\" + x);\nlog.debug(\"a\" + e.getMessage());\nlog.debug(\"a\" + o.getName());\nlog.debug(\"a {}\", m.get(\"k\"));\nlog.debug(\"a {}\", o.toString());\nlog.debug(\"a {}\", o.hashCode());\n} }";
+        assert_eq!(flagged("java/log-argument-concatenation", src), [2, 5, 6]);
+        // S5361: an escaped metacharacter or a Unicode escape is plain text.
+        let src = "class A { String f(String s) {\nreturn s.replaceAll(\"\\\\^\", \"\") + s.replaceAll(\"\\uBD84\", \"\") + s.replaceAll(\"\\\\d\", \"\");\n} }";
+        assert_eq!(flagged("java/replace-all-literal", src), [2, 2]);
+        // A call in a chain is reported on its own line.
+        let src = "class A { String f(String s) {\nreturn s.replaceAll(\"/\", \"\")\n.replaceAll(\";\", \"\");\n} }";
+        assert_eq!(flagged("java/replace-all-literal", src), [2, 3]);
+        // S3626: from the end of an if branch, not a labeled jump.
+        let src = "class A {\nvoid g(boolean b) {\nh();\nif (b) {\nh();\nreturn;\n}\n}\nvoid k(int[] xs) {\nouter:\nfor (int x : xs) {\nfor (int y : xs) {\nif (x == y) { continue outer; } else { continue; }\n}\n}\n}\n}";
+        assert_eq!(flagged("java/redundant-jump", src), [6, 13]);
+        // S115: an array isn't a constant.
+        let src = "class A {\nprivate static final String bad = \"x\";\nprivate static final String arr[] = {\"a\"};\n}";
+        assert_eq!(flagged("java/constant-name", src), [2]);
+        // S2093: a resource created with new, not one from a call.
+        let src = "class A {\nvoid f() { java.io.PrintWriter w = null; try { w = new java.io.PrintWriter(\"x\"); } finally { w.close(); } }\nvoid g() { java.io.PrintWriter w = null; try { w = open(); } finally { w.close(); } }\n}";
+        assert_eq!(flagged("java/close-in-finally", src), [2]);
     }
 }

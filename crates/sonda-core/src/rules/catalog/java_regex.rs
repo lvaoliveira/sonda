@@ -578,7 +578,7 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------- extraction
 
-fn unescape_java(raw: &str) -> String {
+pub(super) fn unescape_java(raw: &str) -> String {
     let chars: Vec<char> = raw.chars().collect();
     let mut out = String::with_capacity(raw.len());
     let mut i = 0;

@@ -30,7 +30,11 @@ profile first (`api/qualityprofiles/search?project=...&organization=...`):
 a project with its own profile, or changed rule parameters, measures its
 conventions, not the analyzers; pick one on a built-in profile. SonarCloud
 runs a newer analyzer than a given SonarQube: where they disagree, measure
-the case on your SonarQube, which is the reference.
+the case on your SonarQube, which is the reference. And check whether the
+project uses automatic analysis (`autoscanEnabled` in
+`api/navigation/component`): without a build, SonarCloud leaves out what
+needs a library's types, so rules that need types differ. A project made
+of git submodules needs each submodule at the commit the parent pins.
 
 ## 1. Scan a project at one commit
 
@@ -187,5 +191,6 @@ On the comparison server, as of 2026-11-11:
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
 | `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration | |
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
+| `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring), with its submodule | `14313bc` |
 
 Next: C# and C++ on public projects that SonarCloud analyzes.

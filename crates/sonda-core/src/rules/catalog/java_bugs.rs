@@ -672,6 +672,26 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "java/logger-format",
+        name: "Format strings should be used correctly",
+        description: "A logger's message built by concatenation, or with placeholders that don't match its arguments, logs something other than meant.",
+        message: "Use placeholders matching the arguments.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S3457")],
+        check: Check::Query {
+            langs: JAVA,
+            query: r#"(method_invocation name: (identifier) @n (#any-of? @n "trace" "debug" "info" "warn" "error")) @match"#,
+            filter: Some(Keep(logger_format_mismatch)),
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: "class A { void f(String id) { log.debug(\"id {} and {}\", id); } }",
+            good: "class A { void f(String id) { log.debug(\"id {}\", id); } }",
+        }),
+    },
+    Rule {
         id: "java/sleep-while-locked",
         name: "wait(...) should be used instead of Thread.sleep(...) when a lock is held",
         description: "sleep keeps the lock while it waits, blocking everyone else.",
@@ -1786,6 +1806,96 @@ fn format_specifiers(format: &[u8]) -> Option<usize> {
     Some(count)
 }
 
+/// A logger's format: a concatenation in its place, or `{}` placeholders
+/// that don't match the arguments, a last exception aside (measured on
+/// SonarQube 26.7, SLF4J's style).
+fn logger_format_mismatch(call: Node, src: &[u8]) -> bool {
+    let Some(object) = call.child_by_field_name("object") else {
+        return false;
+    };
+    let receiver = text(object, src).to_ascii_lowercase();
+    if !receiver.windows(3).any(|w| w == b"log") {
+        return false;
+    }
+    let args = call_arguments(call);
+    let Some(format) = args.first() else {
+        return false;
+    };
+    if format.kind() == "binary_expression" {
+        return find_node(*format, |n| {
+            !matches!(
+                n.kind(),
+                "binary_expression"
+                    | "string_literal"
+                    | "string_fragment"
+                    | "parenthesized_expression"
+            ) && n.parent().is_some_and(|p| p.kind() == "binary_expression")
+        })
+        .is_some();
+    }
+    if format.kind() != "string_literal" {
+        return false;
+    }
+    // `x.toString()` given for a placeholder does what the logger would.
+    if args[1..].iter().any(|a| {
+        a.kind() == "method_invocation"
+            && method_name(*a, src) == b"toString"
+            && call_arguments(*a).is_empty()
+    }) {
+        return true;
+    }
+    let Some(value) = super::java_security::string_value(*format, src) else {
+        return false;
+    };
+    let placeholders = value.windows(2).filter(|w| *w == b"{}").count();
+    let rest = args.len() - 1;
+    // A last argument that is the exception is logged with its trace: a
+    // variable declared or caught as one, or `getCause()`.
+    let throwable = |ty: &[u8]| {
+        ty.ends_with(b"Exception") || ty.ends_with(b"Throwable") || ty.ends_with(b"Error")
+    };
+    let caught_as = |name: &[u8]| {
+        let mut p = call.parent();
+        while let Some(n) = p {
+            if n.kind() == "catch_clause"
+                && let Some(param) = n.named_child(0)
+                && param
+                    .child_by_field_name("name")
+                    .is_some_and(|x| text(x, src) == name)
+            {
+                let mut c = param.walk();
+                return param.named_children(&mut c).any(|t| {
+                    t.kind() != "identifier" && t.kind() != "modifiers" && throwable(text(t, src))
+                });
+            }
+            p = n.parent();
+        }
+        false
+    };
+    let exception = |a: &Node| {
+        let t = text(*a, src);
+        match a.kind() {
+            "identifier" => {
+                matches!(t, b"e" | b"ex" | b"exc" | b"t" | b"th" | b"throwable")
+                    || caught_as(t)
+                    || super::java_extra::declared_type(*a, t, src)
+                        .is_some_and(|ty| throwable(text(ty, src)))
+            }
+            "method_invocation" => method_name(*a, src) == b"getCause",
+            _ => false,
+        }
+    };
+    // A last exception either fills the last placeholder or is logged as the
+    // exception; alone, it never fills one (measured on SonarQube 26.7:
+    // `warn("{} {}", x, e)` and `warn("{}", x, e)` are fine, `error("{}", e)`
+    // isn't).
+    let last_is_exception = args.last().is_some_and(exception);
+    if last_is_exception && rest == 1 {
+        return placeholders != 0;
+    }
+    !(placeholders == rest || last_is_exception && placeholders + 1 == rest)
+}
+
 fn format_arguments_mismatch(call: Node, src: &[u8]) -> bool {
     let name = method_name(call, src);
     let mut args = call_arguments(call);
@@ -2444,5 +2554,12 @@ mod tests {
         let src = "class W extends Thread { void other() {} }\nclass X extends Thread { public void run() {} }\nclass Y extends Thread { Y(Runnable r) { super(r); } }\nrecord R(int[] v) {}\nrecord S(int[] v) { public boolean equals(Object o) { return true; } }\nrecord T(int v) {}";
         assert_eq!(flagged("java/thread-without-run", src), [1]);
         assert_eq!(flagged("java/record-array-component", src), [4]);
+    }
+
+    /// Measured on SonarQube 26.7: a logger's format.
+    #[test]
+    fn logger_formats() {
+        let src = "class A { void f(String x, Object y) {\ntry { g(); } catch (java.io.IOException ce) {\nlog.debug(\"a\" + x);\nlog.debug(\"a {}\", x);\nlog.error(\"a {}\", x, y);\nlog.warn(\"a {} b {}\", x, ce);\nlog.warn(\"a {}\", x, ce);\nlog.error(\"d {}\", ce);\nlog.debug(\"c {}\", ce.getCause());\nlog.debug(\"Failed\", ce);\nlog.info(\"a {}\", y.toString());\n}\n} }";
+        assert_eq!(flagged("java/logger-format", src), [3, 5, 8, 9, 11]);
     }
 }

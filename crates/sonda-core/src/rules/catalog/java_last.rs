@@ -631,7 +631,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5411")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(if_statement condition: (parenthesized_expression (identifier) @match))"#,
+            query: r#"(if_statement condition: (parenthesized_expression (identifier) @match))
+(if_statement condition: (parenthesized_expression (unary_expression operator: "!" operand: (identifier) @match)))"#,
             filter: Some(Keep(is_boxed_boolean)),
         },
         example: Some(Example {
@@ -803,8 +804,8 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/dangling-javadoc",
         name: "Dangling Javadoc comments should be removed",
-        description: "A Javadoc comment that documents nothing is dead text.",
-        message: "Remove it or attach it to a declaration.",
+        description: "Only the last of several Javadocs before a declaration documents it; the others are ignored.",
+        message: "Merge the Javadocs before this declaration into one.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
@@ -812,12 +813,12 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(block_comment) @match"#,
-            filter: Some(Keep(javadoc_documents_nothing)),
+            filter: Some(Find(javadoc_documents_nothing)),
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() {\n /** note */\n g();\n } }",
-            good: "class A { void f() {\n // note\n g();\n } }",
+            bad: "class A {\n /** Old. */\n /** New. */\n void f() {}\n}",
+            good: "class A {\n /** New. */\n void f() {}\n}",
         }),
     },
     Rule {
@@ -1556,35 +1557,51 @@ fn mixes_matchers_and_values(call: Node, src: &[u8]) -> bool {
         })
 }
 
-fn javadoc_documents_nothing(comment: Node, src: &[u8]) -> bool {
-    if !text(comment, src).starts_with(b"/**") {
-        return false;
+/// Two Javadocs or more before a declaration, other comments aside: only
+/// the last documents it, and SonarQube 26.7 reports the declaration
+/// (measured). A lone Javadoc, or one among a method's statements, isn't
+/// reported.
+fn javadoc_documents_nothing<'t>(comment: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    const DECLARATIONS: &[&str] = &[
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+        "annotation_type_declaration",
+        "method_declaration",
+        "constructor_declaration",
+        "compact_constructor_declaration",
+        "field_declaration",
+        "constant_declaration",
+        "enum_constant",
+        "annotation_type_element_declaration",
+    ];
+    let javadoc = |n: Node| n.kind() == "block_comment" && text(n, src).starts_with(b"/**");
+    if !javadoc(comment) {
+        return None;
     }
-    match comment.next_named_sibling() {
-        Some(next) => !matches!(
-            next.kind(),
-            "class_declaration"
-                | "interface_declaration"
-                | "enum_declaration"
-                | "record_declaration"
-                | "annotation_type_declaration"
-                | "method_declaration"
-                | "constructor_declaration"
-                | "compact_constructor_declaration"
-                | "field_declaration"
-                | "constant_declaration"
-                | "enum_constant"
-                | "package_declaration"
-                | "import_declaration"
-                | "module_declaration"
-                | "annotation_type_element_declaration"
-                | "static_initializer"
-                | "line_comment"
-                | "block_comment"
-                | "enum_body_declarations"
-        ),
-        None => comment.parent().is_some_and(|p| p.kind() == "block"),
+    // The run's first Javadoc reports it, once.
+    // Other comments between them, `//` or `/* */`, don't break the run.
+    let other_comment =
+        |n: Node| matches!(n.kind(), "line_comment" | "block_comment") && !javadoc(n);
+    let mut previous = comment.prev_named_sibling();
+    while let Some(p) = previous.filter(|p| other_comment(*p)) {
+        previous = p.prev_named_sibling();
     }
+    if previous.is_some_and(javadoc) {
+        return None;
+    }
+    let mut javadocs = 1;
+    let mut next = comment.next_named_sibling();
+    while let Some(n) = next {
+        if javadoc(n) {
+            javadocs += 1;
+        } else if !other_comment(n) {
+            break;
+        }
+        next = n.next_named_sibling();
+    }
+    next.filter(|d| javadocs >= 2 && DECLARATIONS.contains(&d.kind()))
 }
 
 fn compiles_a_literal_inside_a_method(call: Node, _: &[u8]) -> bool {
@@ -1839,7 +1856,8 @@ mod tests {
     #[test]
     fn javadoc_and_private_fields() {
         let src = "/** Header. */\npackage p;\nclass A {\n private int tmp;\n private int shared;\n /** Doc. */\n void a() {\n  /** stray */\n  tmp = 1;\n  g(tmp);\n }\n void b() { shared = 2; }\n void c() { g(shared); }\n}";
-        assert_eq!(flagged("java/dangling-javadoc", src), [8]);
+        // A Javadoc among a method's statements isn't S8491's (measured).
+        assert!(flagged("java/dangling-javadoc", src).is_empty());
         assert_eq!(flagged("java/private-field-used-locally", src), [4]);
     }
 }
