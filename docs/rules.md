@@ -12810,13 +12810,17 @@ SonarQube: S1656
 Noncompliant:
 
 ```python
-x = x
+def f(x, y):
+    x = x
+    return x
 ```
 
 Compliant:
 
 ```python
-x = y
+def f(x, y):
+    x = y
+    return x
 ```
 
 ## py/identical-operands
@@ -16465,6 +16469,7 @@ SonarQube: S8492
 Noncompliant:
 
 ```python
+s = set()
 if x in s:
     s.remove(x)
 ```

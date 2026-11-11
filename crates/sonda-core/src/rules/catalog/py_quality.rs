@@ -23,8 +23,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "x = x\n",
-            good: "x = y\n",
+            bad: "def f(x, y):\n    x = x\n    return x\n",
+            good: "def f(x, y):\n    x = y\n    return x\n",
         }),
     },
     Rule {
@@ -1049,10 +1049,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5806")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(assignment left: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile"))
-(assignment left: (pattern_list (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile")))
-(for_statement left: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "file" "compile"))"#,
-            filter: None,
+            query: r#"(assignment left: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "compile"))
+(assignment left: (pattern_list (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "compile")))
+(for_statement left: (identifier) @match (#any-of? @match "list" "dict" "set" "str" "int" "float" "bool" "tuple" "type" "id" "input" "len" "max" "min" "sum" "map" "filter" "object" "format" "range" "sorted" "iter" "next" "open" "print" "vars" "dir" "hash" "all" "any" "bytes" "zip" "compile"))"#,
+            filter: Some(Keep(first_binding_in_scope)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -2189,8 +2189,10 @@ fn assigns_to_itself(assignment: Node, src: &[u8]) -> bool {
         .and_then(|s| s.parent())
         .and_then(|b| b.parent())
         .is_some_and(|c| c.kind() == "class_definition");
+    // `TimeoutError = TimeoutError` at module level makes a module attribute.
     assignment.child_by_field_name("type").is_none()
         && !at_class_scope
+        && nearest_function(assignment, 64).is_some()
         && matches!(left.kind(), "identifier" | "attribute" | "subscript")
         && text(left, src) == text(right, src)
 }
@@ -2661,7 +2663,7 @@ fn pass_with_other_statements<'t>(block: Node<'t>, _: &[u8]) -> Option<Node<'t>>
     };
     if block
         .parent()
-        .is_some_and(|p| p.kind() == "class_definition")
+        .is_some_and(|p| matches!(p.kind(), "class_definition" | "function_definition"))
         && items
             .iter()
             .all(|s| s.kind() == "pass_statement" || docstring(s))
@@ -2818,6 +2820,17 @@ fn countable_string(n: Node, src: &[u8]) -> Option<Vec<u8>> {
     {
         return None;
     }
+    // Of `"a" "b"`, SonarQube counts the first part only; bytes aren't text.
+    let later_part = n.parent().is_some_and(|p| {
+        p.kind() == "concatenated_string" && p.named_child(0).is_some_and(|f| f.id() != n.id())
+    });
+    if later_part
+        || text(n, src)
+            .first()
+            .is_some_and(|b| b.eq_ignore_ascii_case(&b'b'))
+    {
+        return None;
+    }
     let v = string_value(n, src).filter(|v| v.len() >= 5)?;
     // `encoded-word`: SonarQube counts hyphenated words as word-like too.
     let identifier_like = v
@@ -2877,6 +2890,16 @@ fn if_only_wraps_another_if<'t>(statement: Node<'t>, _: &[u8]) -> Option<Node<'t
         return None;
     }
     let body = statement.child_by_field_name("consequence")?;
+    // A comment between the two says why the inner one is separate; the
+    // parser hangs it on the outer if, or opens the block with it.
+    let mut cursor = statement.walk();
+    if body.named_child(0).is_some_and(|c| c.kind() == "comment")
+        || statement
+            .named_children(&mut cursor)
+            .any(|c| c.kind() == "comment")
+    {
+        return None;
+    }
     match statements(body).as_slice() {
         [only]
             if only.kind() == "if_statement"
@@ -2966,7 +2989,8 @@ fn compares_type_directly(cmp: Node, src: &[u8]) -> bool {
                 .is_some_and(|f| text(f, src) == b"type")
             && call_arguments(n).len() == 1
     };
-    matches!(op, b"==" | b"!=" | b"is" | b"is not") && (is_type_call(l) || is_type_call(r))
+    // `type(x) is T` asks for that exact type, as SonarQube accepts.
+    matches!(op, b"==" | b"!=") && (is_type_call(l) || is_type_call(r))
 }
 
 fn one_argument(call: Node, _: &[u8]) -> bool {
@@ -3084,15 +3108,109 @@ fn iterates_a_known_dict(node: Node, src: &[u8]) -> bool {
         .is_some_and(|r| is_known_dict(r, src))
 }
 
+/// Whether `name` is the first place its scope (function, or module) binds
+/// that name: SonarQube reports a name once, where it's first given a value.
+pub(super) fn first_binding_in_scope(name: Node, src: &[u8]) -> bool {
+    let n = text(name, src);
+    let scope = nearest_function(name, 64).unwrap_or_else(|| {
+        let mut root = name;
+        while let Some(p) = root.parent() {
+            root = p;
+        }
+        root
+    });
+    let mut cursor = scope.walk();
+    loop {
+        let node = cursor.node();
+        if node.kind() == "identifier" && text(node, src) == n && is_binding(node) {
+            return node.id() == name.id();
+        }
+        let nested = node.id() != scope.id()
+            && matches!(
+                node.kind(),
+                "function_definition" | "class_definition" | "lambda"
+            );
+        if !nested && cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == scope.id() {
+                return true;
+            }
+        }
+    }
+}
+
+/// An identifier that gives a name a value: an assignment's target, part of
+/// one, a loop's or a comprehension's variable, `as x`, `x := ...`.
+fn is_binding(id: Node) -> bool {
+    let Some(p) = id.parent() else {
+        return false;
+    };
+    let is_left = |f| p.child_by_field_name(f).is_some_and(|l| l.id() == id.id());
+    match p.kind() {
+        "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
+            is_left("left")
+        }
+        "named_expression" => is_left("name"),
+        "as_pattern_target" => true,
+        // A loop's `for a, b in` doesn't count: SonarQube reports the name
+        // where an assignment first binds it.
+        "pattern_list" | "tuple_pattern" => {
+            let mut up = p;
+            while let Some(q) = up
+                .parent()
+                .filter(|q| matches!(q.kind(), "pattern_list" | "tuple_pattern"))
+            {
+                up = q;
+            }
+            up.parent().is_some_and(|g| g.kind() == "assignment")
+        }
+        _ => false,
+    }
+}
+
+/// Whether an expression is a set: a literal, a comprehension, a `set(...)`
+/// call, a name assigned one of those in its scope, or a parameter annotated
+/// `set`.
+pub(super) fn is_known_set(expr: Node, src: &[u8]) -> bool {
+    is_known_collection(
+        expr,
+        src,
+        &["set", "set_comprehension"],
+        b"set",
+        &[b"set", b"Set"],
+    )
+}
+
 /// Whether an expression is a dictionary: a literal, a comprehension, a
 /// `dict(...)` call, a name assigned one of those in its scope, or a
 /// parameter annotated `dict`.
 pub(super) fn is_known_dict(expr: Node, src: &[u8]) -> bool {
+    is_known_collection(
+        expr,
+        src,
+        &["dictionary", "dictionary_comprehension"],
+        b"dict",
+        &[b"dict", b"Dict"],
+    )
+}
+
+fn is_known_collection(
+    expr: Node,
+    src: &[u8],
+    kinds: &[&str],
+    constructor: &[u8],
+    annotations: &[&[u8]],
+) -> bool {
     let literal = |v: Node| {
-        matches!(v.kind(), "dictionary" | "dictionary_comprehension")
+        kinds.contains(&v.kind())
             || v.kind() == "call"
                 && v.child_by_field_name("function")
-                    .is_some_and(|f| text(f, src) == b"dict")
+                    .is_some_and(|f| text(f, src) == constructor)
     };
     if literal(expr) {
         return true;
@@ -3118,7 +3236,7 @@ pub(super) fn is_known_dict(expr: Node, src: &[u8]) -> bool {
                 && p.named_child(0).is_some_and(|n| text(n, src) == name)
                 && p.child_by_field_name("type").is_some_and(|t| {
                     let t = text(t, src);
-                    t == b"dict" || t.starts_with(b"dict[") || t.starts_with(b"Dict")
+                    annotations.iter().any(|a| t.starts_with(a))
                 })
         })
     });
@@ -3377,7 +3495,10 @@ mod tests {
     fn identical_operands_and_self_assignment() {
         let src = "a < a\na - a\na and a\nf() < f()\na < b\nx = x\nself.x = self.x\ny = z\nx: int = x\nclass K:\n    P = P\no != o";
         assert_eq!(flagged("py/identical-operands", src), [1, 2, 3]);
-        assert_eq!(flagged("py/self-assignment", src), [6, 7]);
+        // At module level `x = x` makes a module attribute (an alias).
+        assert!(flagged("py/self-assignment", src).is_empty());
+        let src = "def f(x):\n    x = x\n    self.x = self.x\n    x: int = x\n";
+        assert_eq!(flagged("py/self-assignment", src), [2, 3]);
     }
 
     #[test]
@@ -3580,5 +3701,28 @@ mod tests {
         // S1192: hyphenated words are word-like; words with spaces count.
         let src = "def f(g):\n    g('encoded-word')\n    g('encoded-word')\n    g('encoded-word')\n    g('two words')\n    g('two words')\n    g('two words')\n";
         assert_eq!(flagged("py/duplicated-string", src), [5]);
+    }
+
+    /// More Python cases as SonarQube 26.7 reports them.
+    #[test]
+    fn python_cases_measured_on_sonarqube_round_two() {
+        // A name is reported once, where an assignment first binds it.
+        let src = "def f(m, xs):\n    for min, x in xs:\n        min = int(min)\n        min = min + 1\n    return min\n";
+        assert_eq!(flagged("py/builtin-shadowed", src), [3]);
+        // S1192: of a concatenation, the first part only; not bytes.
+        let src = "def f(g):\n    g('one long ' 'repeated part')\n    g('two long ' 'repeated part')\n    g('three long ' 'repeated part')\n    g('Unable to go ' 'x')\n    g('Unable to go ' 'y')\n    g('Unable to go ' 'z')\n    return b' \\t\\n\\r' + b' \\t\\n\\r' + b' \\t\\n\\r'\n";
+        assert_eq!(flagged("py/duplicated-string", src), [5]);
+        // S8492: a known set only.
+        let src = "def f(x, xs):\n    s = set()\n    if x in s:\n        s.remove(x)\n    if x in xs:\n        xs.remove(x)\n";
+        assert_eq!(flagged("py/set-discard", src), [3]);
+        // S6660: == and !=, not is.
+        let src = "def f(a):\n    return type(a) is bytes or type(a) == str\n";
+        assert_eq!(flagged("py/type-comparison", src), [2]);
+        // S1066: a comment between the two ifs keeps them apart.
+        let src = "def f(a, c, g):\n    if a:\n        # why\n        if c:\n            g()\n";
+        assert!(flagged("py/mergeable-if", src).is_empty());
+        // S2772: a function's docstring and pass.
+        let src = "def f():\n    \"\"\"Does nothing.\"\"\"\n    pass\n";
+        assert!(flagged("py/needless-pass", src).is_empty());
     }
 }

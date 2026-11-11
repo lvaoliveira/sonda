@@ -1626,7 +1626,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "if x in s:\n    s.remove(x)\n",
+            bad: "s = set()\nif x in s:\n    s.remove(x)\n",
             good: "s.discard(x)\n",
         }),
     },
@@ -2581,9 +2581,16 @@ fn branch_repeats_a_body<'t>(if_statement: Node<'t>, src: &[u8]) -> Option<Node<
     }
     let mut distinct: Vec<&[u8]> = Vec::new();
     let mut repeated = None;
+    let all_same = blocks.iter().all(|b| text(*b, src) == text(blocks[0], src));
     for b in &blocks {
         let t = text(*b, src);
         if statements(*b).is_empty() {
+            continue;
+        }
+        // A one-line branch repeated is usually on purpose, unless a chain
+        // without else does the same thing in every branch (SonarQube's
+        // stated exception).
+        if b.start_position().row == b.end_position().row && (has_else || !all_same) {
             continue;
         }
         if distinct.contains(&t) {
@@ -2929,6 +2936,87 @@ fn name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
         && !is_snake_case(t)
         && !constant
         && !in_class_with_bases(name, src)
+        && first_field_assignment(name, src)
+}
+
+/// Whether `self.<name>` here is the first assignment of that field in its
+/// class: SonarQube reports a field once, where it's first given a value.
+fn first_field_assignment(name: Node, src: &[u8]) -> bool {
+    let Some(attr) = name.parent().filter(|p| p.kind() == "attribute") else {
+        return true;
+    };
+    let n = text(name, src);
+    let mut class = attr.parent();
+    while let Some(c) = class.filter(|c| c.kind() != "class_definition") {
+        class = c.parent();
+    }
+    let Some(class) = class else {
+        return true;
+    };
+    let mut cursor = class.walk();
+    loop {
+        let node = cursor.node();
+        if node.kind() == "attribute"
+            && node
+                .child_by_field_name("attribute")
+                .is_some_and(|a| text(a, src) == n)
+            && node
+                .child_by_field_name("object")
+                .is_some_and(|o| text(o, src) == b"self")
+            && node.parent().is_some_and(|p| {
+                p.kind() == "pattern_list"
+                    || p.kind() == "assignment"
+                        && p.child_by_field_name("left")
+                            .is_some_and(|l| l.id() == node.id())
+            })
+        {
+            return node.id() == attr.id();
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == class.id() {
+                return true;
+            }
+        }
+    }
+}
+
+/// Whether `function` declares `name` global or nonlocal: not its own local.
+fn declared_global(function: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut found = false;
+    let mut stack = vec![function];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "global_statement" | "nonlocal_statement") {
+            let mut c = n.walk();
+            found |= n.named_children(&mut c).any(|id| text(id, src) == name);
+        }
+        if n.id() != function.id() && matches!(n.kind(), "function_definition" | "class_definition")
+        {
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    found
+}
+
+/// Whether `node` is in a class body before any function: a class attribute,
+/// even when the class is defined inside a function.
+fn in_class_body(node: Node) -> bool {
+    let mut n = node.parent();
+    while let Some(p) = n {
+        match p.kind() {
+            "class_definition" => return true,
+            "function_definition" | "lambda" => return false,
+            _ => n = p.parent(),
+        }
+    }
+    false
 }
 
 fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
@@ -2947,6 +3035,8 @@ fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
             !t.iter()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
                 && !plain_parameters(f, src).0.iter().any(|(_, p)| *p == n)
+                && !declared_global(f, n, src)
+                && super::py_quality::first_binding_in_scope(name, src)
         }),
         Some(_) => true,
         None => false,
@@ -3082,7 +3172,11 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
     };
     if n.starts_with(b"_")
         || unpacked_by_a_loop
+        // `(a, b) = t` spells out the shape on purpose, as SonarQube accepts.
+        || kind == "tuple_pattern"
+        || in_class_body(name)
         || !(kind == "assignment" || unpacked || loop_variable)
+        || !super::py_quality::first_binding_in_scope(name, src)
     {
         return false;
     }
@@ -3736,6 +3830,7 @@ fn remove_after_membership(if_statement: Node, src: &[u8]) -> bool {
     };
     let args = call_arguments(call);
     op == b"in"
+        && super::py_quality::is_known_set(set, src)
         && callee_name(call, src) == b"remove"
         && call
             .child_by_field_name("function")
@@ -4037,5 +4132,22 @@ mod tests {
         // S7483: the parameter named timeout, not ssl_handshake_timeout.
         let src = "async def f(timeout=None):\n    return timeout\nasync def g(ssl_handshake_timeout=None):\n    return ssl_handshake_timeout\n";
         assert_eq!(flagged("py/async-timeout-parameter", src), [1]);
+    }
+
+    /// More Python cases as SonarQube 26.7 reports them.
+    #[test]
+    fn python_names_and_unused_round_two() {
+        // S117: once per name, where first bound; not a global.
+        let src = "_myF = None\ndef f(x):\n    global _myF\n    _myF = x\n    extMatch = 1\n    if x:\n        extMatch = 2\n    return extMatch\n";
+        assert_eq!(flagged("py/local-name", src), [5]);
+        // S116: once per field, where first assigned in the class.
+        let src = "class C(object):\n    def __init__(self):\n        self.threadName = None\n    def run(self):\n        self.threadName = 'x'\n";
+        assert_eq!(flagged("py/field-name", src), [3]);
+        // S1481: not class attributes, not a parenthesized tuple, once per name.
+        let src = "def f(r, g, u):\n    class S:\n        reuse = True\n    (version, code) = r()\n    nil, netloc, nil = u()\n    g(code, netloc, S)\n";
+        assert_eq!(flagged("py/unused-local", src), [5]);
+        // S1871: one-line branches in a chain with else are left alone.
+        let src = "def f(a, g, h):\n    if a == 1:\n        p = 0\n    elif a == 2:\n        p = 1\n    else:\n        p = 0\n    if a == 3:\n        g()\n        h()\n    else:\n        g()\n        h()\n    return p\n";
+        assert!(flagged("py/duplicated-branch", src).is_empty());
     }
 }
