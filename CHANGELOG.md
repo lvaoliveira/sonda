@@ -9,6 +9,16 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Java rules follow the Java version a project targets: `[java] version`
+  in `sonda.toml`, or, unset, what the root `pom.xml`
+  (`maven.compiler.release`, `<release>`, `maven.compiler.source`,
+  `java.version`) or `build.gradle` (toolchain, `jvmToolchain`,
+  `sourceCompatibility`) says, as SonarQube's scanners pass it. A rule
+  whose suggestion needs a newer Java is skipped on older code:
+  `@Deprecated(since, forRemoval)` (9), comma-separated case labels and
+  switch expressions (14), pattern matching and `Stream.toList()` (16),
+  unnamed variables (22). Unknown, every rule runs, as before.
+
 - C# taint analysis follows a value returned from another file's method:
   a query built from the request's value by a helper class in another file
   and run in the controller is a finding there, with its path through the
@@ -214,6 +224,27 @@ file, the report formats and the public library API.
   them. When everything fits on one line, it stays on the right.
 
 ### Changed rule results
+
+- Java, compared with SonarQube 26.7 on Apache Commons Lang (`5d2715b`,
+  Java 8): sonda raises 826 of SonarQube's 918 issues, where it raised
+  762, and 138 SonarQube doesn't, where it raised 683.
+  - `common/todo-comment` reports a TODO in a block comment (a Javadoc)
+    on the tag's line, in every language.
+  - `java/wrapper-constructor` reports `new String()` and `new
+    String("x")`, not a conversion such as `new String(chars, 0, n)`.
+  - `java/concrete-collection-type` leaves locals; `java/wildcard-return-type`
+    leaves `Class<?>`; `java/thread-group` reports declarations, not a type
+    argument or an override's parameter; `java/stream-for-each` reports a
+    collection's `stream()`, not a static `stream(x)`.
+  - `java/switch-too-few-cases` counts `default` as a clause.
+    `java/static-init-uses-subclass` reports a subclass's static member
+    used during initialization, not a subclass created.
+  - `java/legacy-date-time` reports a file once, as SonarQube does.
+    `java/empty-string-comparison` reports a `String`'s length only, since
+    `CharSequence.isEmpty()` needs Java 15.
+  - `java/duplicated-string` leaves an exception's message out of the
+    count. `java/commented-out-code` reports a block of lines once, and a
+    one-line `/* ... */`; `common/commented-out-code` leaves Java to it.
 
 Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,
