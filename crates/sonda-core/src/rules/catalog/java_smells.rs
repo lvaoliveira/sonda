@@ -297,8 +297,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1128")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(program) @match"#,
-            filter: Some(Find(first_unused_import)),
+            // Each one, not only a file's first (measured on SonarQube 26.7).
+            query: r#"(program (import_declaration) @match)"#,
+            filter: Some(Keep(import_is_unused)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2922,34 +2923,25 @@ fn returns_boolean_from_both_branches(statement: Node, _: &[u8]) -> bool {
     }
 }
 
-fn first_unused_import<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut cursor = program.walk();
-    for import in program.named_children(&mut cursor) {
-        if import.kind() != "import_declaration" {
-            continue;
-        }
-        let mut c = import.walk();
-        if import.children(&mut c).any(|k| k.kind() == "asterisk") {
-            continue;
-        }
-        let t = text(import, src);
-        let path = t
-            .strip_prefix(b"import")
-            .unwrap_or(t)
-            .trim_ascii()
-            .trim_ascii_end();
-        let path = path.strip_prefix(b"static").unwrap_or(path).trim_ascii();
-        let path = path.strip_suffix(b";").unwrap_or(path);
-        let name = path
-            .rsplit(|&b| b == b'.')
-            .next()
-            .unwrap_or(path)
-            .trim_ascii();
-        if count_word(src, name) <= 1 {
-            return Some(import);
-        }
+fn import_is_unused(import: Node, src: &[u8]) -> bool {
+    let mut c = import.walk();
+    if import.children(&mut c).any(|k| k.kind() == "asterisk") {
+        return false;
     }
-    None
+    let t = text(import, src);
+    let path = t
+        .strip_prefix(b"import")
+        .unwrap_or(t)
+        .trim_ascii()
+        .trim_ascii_end();
+    let path = path.strip_prefix(b"static").unwrap_or(path).trim_ascii();
+    let path = path.strip_suffix(b";").unwrap_or(path);
+    let name = path
+        .rsplit(|&b| b == b'.')
+        .next()
+        .unwrap_or(path)
+        .trim_ascii();
+    count_word(src, name) <= 1
 }
 
 /// A `try` with a catch, inside another's body at any depth, through loops,
@@ -5204,7 +5196,8 @@ mod tests {
     #[test]
     fn unused_imports_and_privates() {
         let src = "import java.util.List;\nimport java.util.Map;\nimport static java.lang.Math.max;\nimport java.io.*;\nclass A {\nList<String> l;\nprivate int unusedField;\nprivate int usedField;\nprivate void unusedMethod() {}\nprivate void usedMethod() {}\nvoid f() { usedMethod(); usedField++; int unusedLocal = 1; int usedLocal = 2; use(usedLocal); }\nprivate static class Unused {}\nprivate static class Used {}\nUsed u;\n}";
-        assert_eq!(flagged("java/unused-import", src), [2]);
+        // Each one, the static import too (measured on SonarQube 26.7).
+        assert_eq!(flagged("java/unused-import", src), [2, 3]);
         assert_eq!(flagged("java/unused-private-field", src), [7]);
         assert_eq!(flagged("java/unused-private-method", src), [9]);
         assert_eq!(flagged("java/unused-private-class", src), [12]);
@@ -5766,5 +5759,13 @@ mod tests {
         assert_eq!(flagged("java/nested-try", src), [4, 7]);
         let logs = "class A {\n    void f(Object vo, String[] p) {\n        LOGGER.debug(vo.toString());\n        LOGGER.debug(Arrays.toString(p));\n    }\n}";
         assert_eq!(flagged("java/log-argument-concatenation", logs), [4]);
+    }
+
+    /// Each unused import, not only a file's first (measured on SonarQube
+    /// 26.7).
+    #[test]
+    fn every_unused_import() {
+        let src = "import java.util.List;\nimport java.util.Map;\nimport java.util.Set;\n\nclass A {\n    int f(List<String> xs) {\n        return xs.size();\n    }\n}";
+        assert_eq!(flagged("java/unused-import", src), [2, 3]);
     }
 }

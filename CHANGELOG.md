@@ -425,9 +425,12 @@ file, the report formats and the public library API.
     `java/select-star` a query not passed to a call; `java/jdbc-update-in-loop`
     an `execute` that isn't JDBC's; `java/concrete-collection-type`
     `Vector`; `java/hardcoded-credential` a URL or a word in capitals.
+  - `java/unused-import` reports each unused import, not only a file's
+    first.
   - Positions: `java/double-checked-locking` at the `synchronized`,
     `java/map-get-then-put` at the `get`, `java/catch-only-rethrows` at
-    the `throw`.
+    the `throw`, `java/session-attributes-not-completed` at the
+    `@SessionAttributes`.
 - JavaScript, compared on eGovFrame's browser scripts (`var`, globals,
   DOM calls, regexes): sonda raises 450 of SonarCloud's 454 JavaScript
   issues; the 279 it doesn't are `var`, which SonarQube 26.7 reports and

@@ -23,7 +23,7 @@ the steps, the commands and what was learned along the way.
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
-| apigen.springboot² | Java (Spring Boot) | `ef13838` | 121 of 171 | 11 |
+| apigen.springboot² | Java (Spring Boot) | `ef13838` | 122 of 171 | 15 |
 | eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
 | eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
 
@@ -463,22 +463,26 @@ On Commons Lang, 28 of SonarQube's issues and 2 of sonda's:
 - **Known gap, the JDK's declarations (2):** S1161, a method overriding
   `CharSequence.isEmpty()`, a default method of the JDK; S3014, a lambda's
   parameter whose type is inferred as `ThreadGroup`.
-- **Not explained (2 sonda only):** `java/brain-method`, reported by
-  SonarQube when their file is scanned alone or copied into a file of its
-  own, but not in the whole project.
+- **Not explained (2 sonda only):** `java/brain-method` on
+  `StringUtils.java:6551` and `WordUtils.java:700`. SonarQube 26.7 reports
+  both when the two files are analyzed alone, with the project's compiled
+  classes, and not when the whole project is, analyzed again to check.
+  Both are at the rule's nesting threshold, 3; a method over it, at 7795,
+  is reported both ways.
 
-On apigen.springboot, 50 of SonarCloud's issues and 11 of sonda's:
+On apigen.springboot, 49 of SonarCloud's issues and 15 of sonda's:
 
 - **SonarCloud's profile and version (45):** rules off in Sonar way and in
   sonda by default (S6204, S6201: 24); rules added after SonarQube 26.7
   (S9391, S9149, S9397: 14); S6096, from the commercial security analyzer
   (7). Not counted against sonda.
-- **SonarCloud differs from SonarQube 26.7 (8 sonda only):** S6809 (4),
-  S3011 (2), S1481 and S3516, each measured to be reported by 26.7.
+- **SonarCloud differs from SonarQube 26.7 (15 sonda only):** S6809 (4),
+  S3011 (2), S1481 and S3516, each measured to be reported by 26.7; and
+  unused imports (S1128, 7) in three files where SonarCloud reports none,
+  as in eGovFrame's `upstream/`, which 26.7 reports.
 - **Known gap, data flow (3):** S2259.
-- **Not explained (5):** three unused imports SonarCloud leaves and one it
-  reports, all in files without anything unusual; and one of two S5869
-  issues on the same constant, which sonda reports once.
+- **Deliberate (1):** S5869, two classes with duplicates in one pattern,
+  one issue per pattern, as for S6035.
 
 On eGovFrame's common components, 1,152 of SonarCloud's Java issues and
 868 of sonda's:
@@ -487,14 +491,14 @@ On eGovFrame's common components, 1,152 of SonarCloud's Java issues and
   S9439, S9355 and S9436 (11), added after 26.7; S7476, S6201 and S6204
   (41), off in Sonar way.
 - **Autoscan or a newer analyzer, where SonarQube 26.7 reports what sonda
-  reports (783):** S3752 (414), S112 (136, calls into a library it couldn't
+  reports (790):** S3752 (414), S112 (136, calls into a library it couldn't
   resolve, or a library's exception thrown), S117 (58), S1452 (33,
   supertypes in a library), S2629, S3457, S1192 and S2093, S115 on enum
-  constants, S2143 on an import, S4488 (28, not explained: 26.7 doesn't
-  report it in small files either).
-- **Not measured, needing a library's types (7):** S3753 (5) on
-  `@SessionAttributes`, S1989 on a servlet's `doGet`, S1130 on a library's
-  exception.
+  constants, S2143 on an import. S4488 (28): SonarQube runs it only with
+  spring-web 4.3 or later among the libraries, a version it reads from the
+  jar's name; autoscan has no libraries. S3753 (5) on `@SessionAttributes`,
+  S1989 on a servlet's `doGet`, S1130 on a library's exception (7): each
+  measured with the library's classes in a jar.
 - **SonarCloud differs from SonarQube 26.7, each measured on 26.7 (70 sonda
   only, 4 SonarCloud only):** 26.7 reports unused imports (S1128, 23,
   SonarCloud none under `upstream/`), `replaceAll` on a getter's string

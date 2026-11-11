@@ -128,7 +128,7 @@ built.
       CPython are listed as not explained. Java (Apache Commons Lang): 890
       of 918 raised and 2 extra, every difference classified; 2 not
       explained. Java on a Spring Boot application (apigen.springboot,
-      against SonarCloud): 121 of 171 and 11 extra, every difference
+      against SonarCloud): 122 of 171 and 15 extra, every difference
       classified; 45 come from SonarCloud's profile and newer rules. And on
       eGovFrame's common components (against SonarCloud): Java 3,726 of
       4,878 and 868 extra, every difference classified; JavaScript 450 of 454 and 279 extra, every
