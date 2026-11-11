@@ -15125,7 +15125,7 @@ class A:
 
 ## py/exception-base-class
 
-**Custom exception classes should inherit from Exception.** A class with no base cannot be raised or caught.
+**Custom exception classes should inherit from Exception.** A class with no base cannot be raised or caught, and one deriving BaseException directly escapes `except Exception`.
 
 SonarQube: S5709
 

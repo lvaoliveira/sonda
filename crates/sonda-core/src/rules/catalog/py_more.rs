@@ -302,7 +302,8 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/exception-base-class",
         name: "Custom exception classes should inherit from Exception",
-        description: "A class with no base cannot be raised or caught.",
+        description: "A class with no base cannot be raised or caught, and one deriving \
+                      BaseException directly escapes `except Exception`.",
         message: "Derive from Exception.",
         category: CodeSmell,
         severity: Major,
@@ -673,7 +674,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1871")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(if_statement) @match"#,
+            query: r#"[(elif_clause) (else_clause)] @match"#,
             filter: Some(Find(branch_repeats_a_body)),
         },
         example: Some(Example {
@@ -2182,7 +2183,12 @@ fn exception_without_base(class: Node, src: &[u8]) -> bool {
     }
     match class.child_by_field_name("superclasses") {
         None => true,
-        Some(s) => text(s, src) == b"(object)",
+        Some(s) => {
+            let mut c = s.walk();
+            text(s, src) == b"(object)"
+                || s.named_children(&mut c)
+                    .any(|b| text(b, src) == b"BaseException")
+        }
     }
 }
 
@@ -2566,7 +2572,10 @@ fn branch_block(branch: Node) -> Option<Node> {
         .or_else(|| children_of_kind(branch, "block").pop())
 }
 
-fn branch_repeats_a_body<'t>(if_statement: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// An elif or else whose body repeats an earlier branch's: every one, as
+/// SonarQube reports them.
+fn branch_repeats_a_body<'t>(clause: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let if_statement = clause.parent().filter(|p| p.kind() == "if_statement")?;
     let mut blocks = Vec::new();
     if let Some(b) = branch_block(if_statement) {
         blocks.push(b);
@@ -2579,31 +2588,28 @@ fn branch_repeats_a_body<'t>(if_statement: Node<'t>, src: &[u8]) -> Option<Node<
             blocks.push(b);
         }
     }
-    let mut distinct: Vec<&[u8]> = Vec::new();
-    let mut repeated = None;
     let all_same = blocks.iter().all(|b| text(*b, src) == text(blocks[0], src));
-    for b in &blocks {
-        let t = text(*b, src);
-        if statements(*b).is_empty() {
-            continue;
-        }
-        // A one-line branch repeated is usually on purpose, unless a chain
-        // without else does the same thing in every branch (SonarQube's
-        // stated exception).
-        if b.start_position().row == b.end_position().row && (has_else || !all_same) {
-            continue;
-        }
-        if distinct.contains(&t) {
-            repeated.get_or_insert(*b);
-        } else {
-            distinct.push(t);
-        }
-    }
     // Every branch the same is `py/identical-branches`.
-    if has_else && blocks.iter().all(|b| text(*b, src) == text(blocks[0], src)) {
+    if has_else && all_same {
         return None;
     }
-    repeated
+    let mine = branch_block(clause)?;
+    // A one-line branch repeated is usually on purpose, unless a chain
+    // without else does the same thing in every branch (SonarQube's
+    // stated exception).
+    let counts = |b: &Node| {
+        !statements(*b).is_empty()
+            && (b.start_position().row != b.end_position().row || !has_else && all_same)
+    };
+    if !counts(&mine) {
+        return None;
+    }
+    let t = text(mine, src);
+    blocks
+        .iter()
+        .take_while(|b| b.id() != mine.id())
+        .any(|b| counts(b) && text(*b, src) == t)
+        .then_some(mine)
 }
 
 fn closes_over_loop_variable(closure: Node, src: &[u8]) -> bool {
@@ -2986,6 +2992,20 @@ fn first_field_assignment(name: Node, src: &[u8]) -> bool {
     }
 }
 
+/// Whether an identifier `name` appears under `node`: in code, an
+/// f-string's fields included, not as a word in a docstring or a comment.
+fn mentions_identifier(node: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && text(n, src) == name {
+            return true;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    false
+}
+
 /// Whether `function` declares `name` global or nonlocal: not its own local.
 fn declared_global(function: Node, name: &[u8], src: &[u8]) -> bool {
     let mut found = false;
@@ -3175,6 +3195,10 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
         // `(a, b) = t` spells out the shape on purpose, as SonarQube accepts.
         || kind == "tuple_pattern"
         || in_class_body(name)
+        // Names that say they're thrown away.
+        || n == b"dummy"
+        || n.starts_with(b"unused_")
+        || n.starts_with(b"ignored_")
         || !(kind == "assignment" || unpacked || loop_variable)
         || !super::py_quality::first_binding_in_scope(name, src)
     {
@@ -3255,7 +3279,8 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
     if overrides_a_method_of_this_file(function, fname, src) {
         return false;
     }
-    count_word(whole, n) == 0
+    // Mentioned in code, not in the docstring or a comment.
+    !mentions_identifier(body, n, src)
 }
 
 /// The `def` whose parameter list `name` is in; a lambda's doesn't count.
@@ -3318,7 +3343,7 @@ fn reads_its_locals(body: &[u8]) -> bool {
 
 /// Whether `function` is a method of a class whose base, defined in this file,
 /// has a method of the same name.
-fn overrides_a_method_of_this_file(function: Node, name: &[u8], src: &[u8]) -> bool {
+pub(super) fn overrides_a_method_of_this_file(function: Node, name: &[u8], src: &[u8]) -> bool {
     let Some(class) = function
         .parent()
         .and_then(|b| b.parent())
@@ -3795,6 +3820,17 @@ fn enumerate_index_lookup<'t>(for_statement: Node<'t>, src: &[u8]) -> Option<Nod
     }
     let seq = text(*seq, src);
     let body = for_statement.child_by_field_name("body")?;
+    let element = |n: Node| {
+        n.kind() == "subscript"
+            && n.child_by_field_name("value")
+                .is_some_and(|v| text(v, src) == seq)
+            && n.child_by_field_name("subscript")
+                .is_some_and(|s| text(s, src) == index)
+    };
+    // `values[i] = ...` needs the index; reading it back is then fine.
+    if find_in_scope(body, &[], |n| element(n) && is_assignment_target(n)).is_some() {
+        return None;
+    }
     find_in_scope(body, &[], |n| {
         n.kind() == "subscript"
             && !is_assignment_target(n)
@@ -4149,5 +4185,22 @@ mod tests {
         // S1871: one-line branches in a chain with else are left alone.
         let src = "def f(a, g, h):\n    if a == 1:\n        p = 0\n    elif a == 2:\n        p = 1\n    else:\n        p = 0\n    if a == 3:\n        g()\n        h()\n    else:\n        g()\n        h()\n    return p\n";
         assert!(flagged("py/duplicated-branch", src).is_empty());
+    }
+
+    /// Round three, as SonarQube 26.7 reports these.
+    #[test]
+    fn python_cases_round_three() {
+        // S1172: a word in the docstring isn't a use; an f-string field is.
+        let src = "def f(domain, b):\n    \"\"\"Given cookie domain.\"\"\"\n    return f'{b}'\n";
+        assert_eq!(flagged("py/unused-parameter", src), [1]);
+        // S1481: a name that says it's thrown away.
+        let src = "def f(g):\n    dummy = g()\n    unused_x = g()\n    y = g()\n";
+        assert_eq!(flagged("py/unused-local", src), [4]);
+        // S8518: the index is needed to assign seq[i].
+        let src = "def f(values, g):\n    for i, v in enumerate(values):\n        values[i] = g(v)\n        g(values[i])\n";
+        assert!(flagged("py/enumerate-index-lookup", src).is_empty());
+        // S5709: deriving BaseException directly.
+        let src = "class CancelledError(BaseException):\n    pass\nclass AppError(Exception):\n    pass\n";
+        assert_eq!(flagged("py/exception-base-class", src), [1]);
     }
 }

@@ -30,8 +30,8 @@ its default profile (Sonar way) and sonda its default rules.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `bb310b2` | 47 of 47 | 0 |
-| CPython, 7 packages¹ | Python | `bf6623a` | 456 of 510 | 75 |
+| sonda | TypeScript (TSX), Rust | `8b30263` | 51 of 51 | 0 |
+| CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
@@ -145,28 +145,72 @@ Measured in a second round:
   comment between them; S2772 leaves a function's docstring and `pass`;
   S1871 leaves one-line branches in a chain with an else.
 
-### Still open in Python
+And in a third:
 
-On CPython, 54 of SonarQube's issues and 75 of sonda's remain:
+- **Cognitive complexity, every file.** A try's `else` costs 1 and nests its
+  body; code outside functions counts for the file; a class defined in a
+  function restarts at no nesting and stays part of the function's score;
+  only a function that defines one function and returns it is a wrapper.
+  Every CPython file's total and every calibration file's equals
+  SonarQube's.
+- **Commented-out code.** A block of comment lines is judged as a whole: it
+  is code when, without its `#`s, it parses as Python and holds a
+  statement other than an expression (a lone call isn't enough). A block
+  that starts with prose doesn't parse. A comment after code on its line is
+  judged alone. A docstring that parses as code counts too.
+- **Smaller ones.** S1172 doesn't count the parameter's name in the
+  docstring as a use; S1871 reports every repeated branch; S8510 sees
+  names in a loop's tuple; S5709 includes a class deriving `BaseException`;
+  S2201 leaves a lone call in a try body; S8518 leaves an index used to
+  assign `seq[i]`; S3626 leaves a jump in a branch another branch follows;
+  S1186 leaves an empty override of a method of a base in the same file;
+  S1481 leaves names such as `dummy`; S5527 is reported where the context
+  is made.
 
-- `common/commented-out-code` (33 sonda, 2 SonarQube): sonda reports example
-  code indented in a comment and a lone `# print(x)`; SonarQube reported a
-  grammar line in a docstring. The heuristics differ and haven't been
-  measured case by case.
-- `py/unused-parameter` (12 and 9): SonarQube follows a method's base
-  class into other files to decide whether it overrides; sonda knows the
-  standard library's and this file's. A known gap.
-- `py/mergeable-if` (10): not explained by the cases measured so far.
-- S1110 (12 SonarQube): multi-line parenthesized expressions it reports
-  that don't look doubled; not explained.
-- S930 (5 SonarQube): calls with an unexpected argument, which needs the
-  callee's signature from another file. A known gap.
-- `py/duplicated-string`: SonarQube never reports `"%s:%s"`, while it
-  reports `"%s=%s"`; not explained.
-- About 20 keys with one to four issues each.
+### What remains in Python
 
-Deliberate: `py/mutable-default` also reports a mutable default the
-function doesn't change, which SonarQube doesn't.
+On CPython, 39 of SonarQube's issues and 37 of sonda's:
+
+**Known gaps**, needing what sonda doesn't read (other modules, or the
+standard library's signatures):
+- `py/unused-parameter`, sonda only (14): methods that override a method
+  of a base class in another module; SonarQube follows the import, sonda
+  can't see the base.
+- S930 (5): calls with an argument the callee doesn't take, the callee in
+  another module or a C extension (`binascii.b2a_base64(wrapcol=...)`).
+- S2638 (1): an override whose signature differs from `list.pop`'s.
+
+**Deliberate:**
+- S7504 (4): `for x in list(d.values()):` — sonda keeps the copy when the
+  loop iterates a dictionary view, since the body may change the
+  dictionary and removing `list()` would then raise.
+- S6353 (3): `[0-9]` three times in one pattern is one issue in sonda,
+  three in SonarQube.
+- `py/unused-parameter`, SonarQube only (4): methods of classes deriving a
+  standard-library class (`logging.Handler`), which sonda treats as
+  possible overrides whose signature callers rely on.
+- S6659 (2): `x[i+1:] == ""` and `x[1:] == ':'`, which SonarQube reads as
+  `endswith`; neither is one.
+- S1764 (1): `o != o`, the test for NaN.
+- S2245 (1): `py/random-secret` reports a random value used as a secret
+  only.
+- `py/mutable-default` (2): a mutable default the function doesn't
+  change.
+
+**Not explained**, each measured or bisected without finding the rule
+SonarQube follows:
+- S1110 (12): parentheses SonarQube calls redundant in multi-line or
+  bitwise expressions; exact copies of the same shapes aren't reported in
+  isolation.
+- `py/mergeable-if` (10): an exact copy of one case isn't reported by
+  SonarQube either; removing its comment and its docstring together makes
+  it reported, either one alone doesn't.
+- About 20 issues, one or two per key: S1481 (2), S5857 (2), S8572 (2),
+  S125 (1 each way), S1192 (`"%s:%s"`), S3358, S5843, S5869, S6035,
+  S6659, S7483, S8513, S8786.
+
+On ha-budgetthuis-prices, both of sonda's own (S7503 on an options flow
+step, S7632 on a `# noqa` with an explanation) aren't explained.
 
 ## Rules that depend on knowing a type
 

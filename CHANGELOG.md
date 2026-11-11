@@ -214,6 +214,30 @@ Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,
 where it raised 142, and 4 issues SonarQube doesn't, where it raised 14.
 
+- Python, a third round: sonda now raises 471 of SonarQube's 510 issues on
+  the CPython packages, where it raised 456, and 37 SonarQube doesn't,
+  where it raised 75. Each change measured on SonarQube 26.7.
+  - Cognitive complexity matches SonarQube's on every file (87 of 87, and
+    238 calibration files): a try's `else` costs 1 and nests; code outside
+    functions counts for the file; a class defined in a function restarts
+    at no nesting and stays part of the function; only a function that
+    defines one function and returns it is a wrapper.
+  - `common/commented-out-code` judges a block of Python comment lines as
+    a whole, as SonarQube does: code under a line of prose, or a lone call,
+    isn't reported; a statement (an assignment, a return, an assert...)
+    is, after code on its line too, and a docstring that parses as code.
+  - `py/unused-parameter` no longer takes the parameter's name in the
+    docstring for a use. `py/duplicated-branch` reports every repeated
+    branch. `py/loop-variable-reused` sees names in a loop's tuple.
+    `py/exception-base-class` reports a class deriving `BaseException`.
+  - Fixed: `py/assert-tuple` reported `assert x, (a, b)`, whose tuple is
+    the message; `py/invariant-return` reported a function that also falls
+    off the end (returning None).
+  - Left alone, as SonarQube does: a lone call in a try body
+    (`py/ignored-pure-call`), `seq[i]` assigned in an enumerate loop, a
+    jump in a branch another branch follows, an empty override of a
+    method of a base in the file, and names such as `dummy`.
+    `py/hostname-unverified` reports where the context is made.
 - Python, a second round on the same CPython packages: 134 issues
   SonarQube doesn't raise down to 75, with as many of its issues raised
   (456 of 510).

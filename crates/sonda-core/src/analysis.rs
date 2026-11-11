@@ -2309,10 +2309,16 @@ fn measure_functions(
         });
     }
     if syn.cognitive_includes_nested_functions {
-        // Each outermost function (a method too), with its nested ones.
+        // Code outside any function counts for the file, as SonarQube's
+        // Python analyzer measures it (`if __name__ == "__main__":`).
+        metrics.cognitive_complexity += complexity(root, syn, ctx.src.as_bytes()).cognitive;
+        // Each outermost function (a method too), with what's nested in it.
         walk(root, |node| {
             if !node.is_named() || !syn.functions.contains(&node.kind()) {
                 return true;
+            }
+            if !scored_on_its_own(node) {
+                return true; // part of the function around it
             }
             let cognitive = complexity_with(node, syn, ctx.src.as_bytes(), true).cognitive;
             metrics.cognitive_complexity += cognitive;
@@ -2332,9 +2338,36 @@ fn measure_functions(
     }
 }
 
-/// Whether a nested function's enclosing function only wraps it: its body
-/// holds nothing but function definitions, a docstring and a `return` of a
-/// name, as a decorator does.
+/// Whether a Python function is scored on its own: it isn't inside another
+/// function, not even through a class defined there, as SonarQube scores it.
+fn scored_on_its_own(function: Node) -> bool {
+    let mut n = function.parent();
+    while let Some(p) = n {
+        if p.kind() == "function_definition" {
+            return false;
+        }
+        n = p.parent();
+    }
+    true
+}
+
+/// Whether a function is defined directly in a class body.
+fn is_method(function: Node) -> bool {
+    let mut n = function;
+    if n.parent()
+        .is_some_and(|p| p.kind() == "decorated_definition")
+    {
+        n = n.parent().unwrap_or(n);
+    }
+    n.parent()
+        .filter(|b| b.kind() == "block")
+        .and_then(|b| b.parent())
+        .is_some_and(|c| c.kind() == "class_definition")
+}
+
+/// Whether a nested function's enclosing function only wraps it, as a
+/// decorator does: its body holds that one function (and a docstring) and
+/// returns it by name. A function defining several isn't a wrapper.
 fn encloses_only_functions(nested: Node) -> bool {
     let mut n = nested;
     if n.parent()
@@ -2351,13 +2384,21 @@ fn encloses_only_functions(nested: Node) -> bool {
     {
         return false;
     }
+    let mut functions = 0;
+    let mut returns_a_name = false;
     let mut cursor = body.walk();
-    body.named_children(&mut cursor).all(|s| match s.kind() {
-        "function_definition" | "decorated_definition" | "comment" => true,
-        "return_statement" => s.named_child(0).is_none_or(|v| v.kind() == "identifier"),
-        "expression_statement" => s.named_child(0).is_some_and(|c| c.kind() == "string"),
-        _ => false,
-    })
+    for s in body.named_children(&mut cursor) {
+        match s.kind() {
+            "function_definition" | "decorated_definition" => functions += 1,
+            "comment" => {}
+            "return_statement" => {
+                returns_a_name = s.named_child(0).is_some_and(|v| v.kind() == "identifier");
+            }
+            "expression_statement" if s.named_child(0).is_some_and(|c| c.kind() == "string") => {}
+            _ => return false,
+        }
+    }
+    functions == 1 && returns_a_name
 }
 
 /// An outermost function's share of its file's cognitive complexity, with
@@ -2381,7 +2422,7 @@ struct TokenScan {
 }
 
 /// The rules about comments `scan_tokens` checks on each one.
-struct CommentRules<'r> {
+struct CommentRules<'r, 't> {
     todo: Option<&'r ActiveRule>,
     code: Option<&'r ActiveRule>,
     trailing: Option<&'r ActiveRule>,
@@ -2390,10 +2431,26 @@ struct CommentRules<'r> {
     /// The row of the last commented-out-code issue: a block of commented
     /// lines is one finding, reported at its first line.
     last_code_comment_row: Option<usize>,
+    /// Python: the comment lines of the block being read, judged together
+    /// when it ends, as SonarQube judges a block.
+    python_block: Vec<(Node<'t>, String)>,
 }
 
-impl CommentRules<'_> {
-    fn check(&mut self, ctx: &Ctx, node: Node, issues: &mut Vec<Issue>) {
+impl<'t> CommentRules<'_, 't> {
+    /// Judges the Python comment block read so far as code or not.
+    fn flush_python_block(&mut self, ctx: &Ctx, issues: &mut Vec<Issue>) {
+        let block = std::mem::take(&mut self.python_block);
+        let (Some(rule), Some((first, _))) = (self.code, block.first()) else {
+            return;
+        };
+        let lines: Vec<&str> = block.iter().map(|(_, t)| t.as_str()).collect();
+        if python_block_is_code(&lines) {
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue(rule, *first, msg, rule.rule.effort_minutes));
+        }
+    }
+
+    fn check(&mut self, ctx: &Ctx, node: Node<'t>, issues: &mut Vec<Issue>) {
         let text = ctx.text(node);
         let alone = comment_is_alone(ctx, node);
         if let Some(rule) = self.nosonar
@@ -2409,7 +2466,27 @@ impl CommentRules<'_> {
             let msg = "Move this comment to its own line.".to_string();
             issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
         }
-        if let Some(rule) = self.code
+        if self.python {
+            // A block of comment lines is judged as one; a comment after
+            // code on its line, on its own.
+            let row = node.start_position().row;
+            let continues = alone
+                && self
+                    .python_block
+                    .last()
+                    .is_some_and(|(last, _)| last.end_position().row + 1 == row);
+            if !continues {
+                self.flush_python_block(ctx, issues);
+            }
+            if alone {
+                self.python_block.push((node, text.to_string()));
+            } else if let Some(rule) = self.code
+                && python_block_is_code(&[text])
+            {
+                let msg = "Remove this commented-out code.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
+        } else if let Some(rule) = self.code
             && reads_as_code(text, alone, self.python)
         {
             let row = node.start_position().row;
@@ -2434,6 +2511,105 @@ fn comment_is_alone(ctx: &Ctx, node: Node) -> bool {
     let start = node.start_position();
     let line = ctx.lines.text(start.row);
     line[..start.column.min(line.len())].trim().is_empty()
+}
+
+/// A string that is a module's, class's or function's docstring: the first
+/// statement of its body.
+fn is_docstring(string: Node) -> bool {
+    let Some(statement) = string
+        .parent()
+        .filter(|p| p.kind() == "expression_statement")
+    else {
+        return false;
+    };
+    let Some(body) = statement.parent() else {
+        return false;
+    };
+    let first = body
+        .named_child(0)
+        .is_some_and(|f| f.id() == statement.id());
+    first
+        && (body.kind() == "module"
+            || body.kind() == "block"
+                && body.parent().is_some_and(|d| {
+                    matches!(d.kind(), "function_definition" | "class_definition")
+                }))
+}
+
+/// Whether a Python comment block (its lines, `#` and all) is commented-out
+/// code, as SonarQube judges it: the whole block, without its `#`s and
+/// dedented, parses as Python and holds a statement (an assignment, a
+/// return, an assert, a block header...), not only expressions such as a
+/// lone call. A block mixing prose and code doesn't parse.
+fn python_block_is_code(lines: &[&str]) -> bool {
+    use std::cell::RefCell;
+    thread_local! {
+        static PARSER: RefCell<Option<tree_sitter::Parser>> = const { RefCell::new(None) };
+    }
+    let stripped: Vec<&str> = lines
+        .iter()
+        .map(|l| l.trim_start().trim_start_matches('#').trim_end())
+        .collect();
+    let indent = stripped
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let body: Vec<&str> = stripped
+        .iter()
+        .map(|l| {
+            if l.len() >= indent {
+                &l[indent..]
+            } else {
+                l.trim_start()
+            }
+        })
+        .collect();
+    let joined = body.join("\n");
+    let text = joined.trim();
+    // `fmt: off`, `pylint: disable=...`: SonarQube's own exception.
+    let directive = text.starts_with("fmt:")
+        || text.starts_with("py")
+            && text
+                .split(':')
+                .next()
+                .is_some_and(|w| !w.contains(' ') && text.contains(':'));
+    if directive || is_directive_or_too_short(text) {
+        return false;
+    }
+    let mut source = format!("{joined}\n");
+    if text.ends_with(':') {
+        source.push_str("    pass\n");
+    }
+    PARSER.with(|p| {
+        let mut p = p.borrow_mut();
+        let parser = p.get_or_insert_with(|| {
+            let mut parser = tree_sitter::Parser::new();
+            let _ = parser.set_language(&Lang::Python.grammar());
+            parser
+        });
+        let Some(tree) = parser.parse(&source, None) else {
+            return false;
+        };
+        let root = tree.root_node();
+        if root.has_error() {
+            return false;
+        }
+        let mut cursor = root.walk();
+        let statements: Vec<Node> = root
+            .named_children(&mut cursor)
+            .filter(|n| n.kind() != "comment")
+            .collect();
+        statements.iter().any(|s| match s.kind() {
+            "expression_statement" => s.named_child(0).is_some_and(|e| {
+                e.kind() == "augmented_assignment"
+                    || e.kind() == "assignment" && e.child_by_field_name("right").is_some()
+            }),
+            "future_import_statement" | "pass_statement" | "comment" => false,
+            _ => true,
+        })
+    })
 }
 
 /// Whether a comment is commented-out code. In Python, one after code on
@@ -2468,7 +2644,9 @@ fn scan_tokens(
         nosonar: rules.get(rules::NOSONAR_COMMENT),
         python: std::ptr::eq(syn, Lang::Python.syntax()),
         last_code_comment_row: None,
+        python_block: Vec::new(),
     };
+    let python = comment_rules.python;
 
     walk(root, |node| {
         let kind = node.kind();
@@ -2481,6 +2659,22 @@ fn scan_tokens(
             mark(&mut code, node);
             return false;
         }
+        // A docstring that parses as code is commented-out code too, as
+        // SonarQube reports it.
+        if python
+            && kind == "string"
+            && let Some(rule) = comment_rules.code
+            && is_docstring(node)
+        {
+            let content = ctx
+                .text(node)
+                .trim_matches(['"', '\'', 'r', 'R', 'u', 'U', 'b', 'B']);
+            let lines: Vec<&str> = content.lines().collect();
+            if python_block_is_code(&lines) {
+                let msg = "Remove this commented-out code.".to_string();
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
+        }
         if node.child_count() == 0 && node.start_byte() < node.end_byte() {
             mark(&mut code, node);
             tokens.push(Token {
@@ -2490,6 +2684,7 @@ fn scan_tokens(
         }
         true
     });
+    comment_rules.flush_python_block(ctx, issues);
 
     let code_lines = (0..rows).filter(|&r| code[r]).map(|r| r + 1).collect();
     TokenScan {
@@ -2654,10 +2849,16 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
 
     fn visit(&mut self, node: Node<'t>, nesting: u32, parent_op: Option<&'a str>) {
         let kind = node.kind();
+        // A class in a Python function starts again at no nesting, and its
+        // methods add none (measured on SonarQube 26.7).
+        if self.nested && self.syn.cognitive_includes_nested_functions && kind == "class_definition"
+        {
+            return self.children(node, 0, None);
+        }
         if self.syn.functions.contains(&kind) {
             if self.nested {
                 let deeper = !(self.syn.cognitive_includes_nested_functions
-                    && encloses_only_functions(node));
+                    && (encloses_only_functions(node) || is_method(node)));
                 self.children(node, nesting + u32::from(deeper), None);
             }
             return;
@@ -2669,6 +2870,12 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         }
         if matches!(kind, "if_statement" | "if_expression") {
             return self.stack.push(Step::If(node, nesting, false));
+        }
+        // Python's `try: ... else:` costs 1 and nests its body, as an if's
+        // else does (measured on SonarQube 26.7).
+        if kind == "else_clause" && node.parent().is_some_and(|p| p.kind() == "try_statement") {
+            self.c.cognitive += 1;
+            return self.children(node, nesting + 1, None);
         }
         if self.syn.branches.contains(&kind) {
             self.c.cyclomatic += 1;
@@ -3530,6 +3737,36 @@ pub(crate) mod tests {
         assert_eq!(a.metrics.cognitive_complexity, 17);
     }
 
+    /// More of SonarQube 26.7's Python cognitive complexity: a try's else
+    /// costs 1 and nests; code outside functions counts for the file; a
+    /// class in a function restarts at no nesting and stays part of the
+    /// function; only a function defining one function and returning it is
+    /// a wrapper.
+    #[test]
+    fn python_cognitive_complexity_round_two() {
+        let cognitive = |src| run(Lang::Python, src).metrics.cognitive_complexity;
+        assert_eq!(
+            cognitive(
+                "def f(g, a):\n    try:\n        g()\n    except OSError:\n        return 1\n    else:\n        if a:\n            return 2\n    return 0\n"
+            ),
+            4
+        );
+        assert_eq!(
+            cognitive(
+                "if __name__ == '__main__':\n    try:\n        main()\n    except OSError:\n        pass\n"
+            ),
+            3
+        );
+        assert_eq!(
+            cognitive(
+                "def outer(a):\n    if a:\n        return 0\n    class C:\n        def m(self, x):\n            if x:\n                return 1\n            return 0\n    return C\n"
+            ),
+            2
+        );
+        let two = "def outer():\n    def a(x):\n        if x:\n            return 1\n    def b(x):\n        if x:\n            return 1\n    return a\n";
+        assert_eq!(cognitive(two), 4);
+    }
+
     /// Python allows 13 parameters, as SonarQube does, not counting `self`;
     /// JavaScript 7. An explicit threshold applies to every language.
     #[test]
@@ -3919,15 +4156,26 @@ pub(crate) mod tests {
 
     #[test]
     fn commented_out_code() {
-        let src = "# this explains the next step\n# x = compute(a, b)\n# if ready:\n# See https://example.com/a;\ny = 1\n";
-        let a = run(Lang::Python, src);
-        let lines: Vec<usize> = a
-            .issues
-            .iter()
-            .filter(|i| i.rule == rules::COMMENTED_OUT_CODE)
-            .map(|i| i.line)
-            .collect();
-        assert_eq!(lines, [2]); // consecutive lines are one finding
+        // Python, as SonarQube 26.7 judges it: a block of comment lines as
+        // a whole. Prose with code isn't code; a lone call isn't either.
+        let lines = |src: &str| -> Vec<usize> {
+            run(Lang::Python, src)
+                .issues
+                .iter()
+                .filter(|i| i.rule == rules::COMMENTED_OUT_CODE)
+                .map(|i| i.line)
+                .collect()
+        };
+        let mixed = "# this explains the next step\n# x = compute(a, b)\n# if ready:\ny = 1\n";
+        assert!(lines(mixed).is_empty());
+        let code = "y = 1\n\n# x = compute(a, b)\n# if x:\n#     y = x\n\n# print(y)\n";
+        assert_eq!(lines(code), [3]); // one finding per block
+        let trailing = "def f(url):\n    return url  # return (domain, rest)\n";
+        assert_eq!(lines(trailing), [2]);
+        let docstring =
+            "def f():\n    \"\"\" mailbox = name_addr / addr_spec\n    \"\"\"\n    return 1\n";
+        assert_eq!(lines(docstring), [2]);
+        assert!(lines("# fmt: off\n# pylint: disable=x\ny = 1\n").is_empty());
         let js = run(
             Lang::JavaScript,
             "// Returns the sum;\n// foo(1);\n/** @return {x}; */\n",
