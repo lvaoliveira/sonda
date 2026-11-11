@@ -66,8 +66,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S6830")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
-            filter: Some(Keep(bean_method_name_is_wrong)),
+            query: r#"[(method_declaration) (class_declaration)] @match"#,
+            filter: Some(Find(bean_method_name_is_wrong)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1315,11 +1315,42 @@ fn configuration_autowires_a_field<'t>(class: Node<'t>, src: &[u8]) -> Option<No
     })
 }
 
-fn bean_method_name_is_wrong(method: Node, src: &[u8]) -> bool {
-    let n = name_text(method, src);
-    has_annotation(method, b"Bean", src)
-        && !(n.first().is_some_and(u8::is_ascii_lowercase)
-            && n.iter().all(u8::is_ascii_alphanumeric))
+/// A bean named against the convention: a `@Bean` method, or the name a
+/// stereotype annotation gives its class, `@Service("FooService")`
+/// (measured on SonarQube 26.7).
+fn bean_method_name_is_wrong<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let camel = |n: &[u8]| {
+        n.first().is_some_and(u8::is_ascii_lowercase) && n.iter().all(u8::is_ascii_alphanumeric)
+    };
+    if decl.kind() == "method_declaration" {
+        return (has_annotation(decl, b"Bean", src) && !camel(name_text(decl, src)))
+            .then_some(decl);
+    }
+    // The name a stereotype gives, reported where it's written.
+    let mods = decl
+        .children(&mut decl.walk())
+        .find(|c| c.kind() == "modifiers")?;
+    let mut c = mods.walk();
+    mods.children(&mut c).find_map(|a| {
+        let stereotype = a.kind() == "annotation"
+            && a.child_by_field_name("name").is_some_and(|n| {
+                matches!(
+                    text(n, src),
+                    b"Component"
+                        | b"Service"
+                        | b"Repository"
+                        | b"Controller"
+                        | b"RestController"
+                        | b"Configuration"
+                )
+            });
+        let value = a
+            .child_by_field_name("arguments")
+            .and_then(|args| args.named_child(0))
+            .filter(|v| v.kind() == "string_literal")?;
+        let name = string_value(value, src)?;
+        (stereotype && !name.is_empty() && !camel(name)).then_some(value)
+    })
 }
 
 fn bean_method_called_without_proxy<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

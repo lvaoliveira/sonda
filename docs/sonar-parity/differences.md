@@ -24,6 +24,7 @@ the steps, the commands and what was learned along the way.
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 889 of 918 | 2 |
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 121 of 171 | 11 |
+| eGovFrame common components² | Java (Spring) | `14313bc` | 3,636 of 4,858 | 1,535 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -33,6 +34,10 @@ SonarQube indexed without lines of code.
 ² Compared with SonarCloud's analysis of the same commit, its built-in
 "Sonar way comprehensive" profile and a newer analyzer than SonarQube 26.7:
 where the two disagreed, SonarQube 26.7 was measured and is the reference.
+Both projects use SonarCloud's automatic analysis ("Autoscan for Java"),
+which doesn't build: without the compiled classes and the libraries, it
+leaves out what needs a type it can't resolve, so its results differ from
+SonarQube's with `sonar.java.binaries` on rules that need types.
 
 On sonda's own code, SonarQube raises nothing on the Python scripts, and
 its Rust issues are all cognitive complexity (33, every one matched). The
@@ -330,6 +335,32 @@ annotations as stubs, and a library as a jar on the classpath:
 - **`@SuppressWarnings`** silences as SonarQube honors it: `"all"` or a rule
   key, over the annotated declaration.
 
+And on eGovFrame's common components, each difference measured on
+SonarQube 26.7 the same way:
+
+- **Across files.** `throws Exception` isn't S112's when a call in the body
+  reaches a method declaring it, in another file too; implementations of a
+  supertype's method are left. S1452 is reported once per wildcard
+  directly in the type, at the interface, not its implementations.
+  `toString()` overriding a project class's is S1161's.
+- **Loggers.** S3457 reports a message built by concatenation, a
+  `toString()` argument, and placeholders that don't match the arguments;
+  a last exception is set aside when it's more than the placeholders take,
+  and never fills one alone (`error("{}", e)` is reported). S2629 reports a
+  costly concatenation (not of literals, getters or `getMessage()`) or a
+  call with arguments, or `toString()`, given as an argument.
+- **Positions.** A method call is reported at its name: in a chain over
+  several lines, each call on its own line. A `/* */` comment of code at
+  its first line of code; a stereotype's bean name at its string.
+- **Smaller ones.** S6830 is a stereotype's bean name too; S1126 is an `if`
+  returning a boolean before a `return` of one, the same value or not;
+  S5411 includes `!b`; S1643 includes `s = s + x`; S8491 is a run of
+  Javadocs before a declaration, other comments between them aside; S3516
+  is boolean methods; S115 leaves arrays; S2093 is a resource created with
+  `new`; S3626 reaches through `if` branches, `try` and `catch`, not a
+  labeled jump; S5361 reads the Java string (an escaped metacharacter is
+  plain text).
+
 ### Still open in Java
 
 On Commons Lang, 29 of SonarQube's issues and 2 of sonda's:
@@ -359,6 +390,24 @@ On apigen.springboot, 50 of SonarCloud's issues and 11 of sonda's:
 - **Not explained (5):** three unused imports SonarCloud leaves and one it
   reports, all in files without anything unusual; and one of two S5869
   issues on the same constant, which sonda reports once.
+
+On eGovFrame's common components, 1,222 of SonarCloud's Java issues and
+934 of sonda's (and 613 JavaScript issues of sonda's, below):
+
+- **SonarCloud's newer rules and profile (1,008):** S9438 (968), added after
+  26.7; S7476 and S6201 (40), off in Sonar way.
+- **Autoscan or a newer analyzer, where SonarQube 26.7 reports what sonda
+  reports:** S3752 (414), S112 (135, calls into a library it couldn't
+  resolve), S117 (58), S1452 (33, supertypes in a library), S2629, S3457,
+  S1192 and S2093, S115 on enum constants, S2143 on an import, S4488 (28,
+  not explained: 26.7 doesn't report it in small files either).
+- **Known gaps:** S1130 (53), whether a checked exception is thrown needs
+  the libraries' signatures; S5411 (10), a `Boolean` returned by another
+  file's method; S2259 (10), data flow.
+- **Deliberate:** S6035 (44), one issue per pattern, not one per group, as
+  for Python's S6353.
+- **JavaScript (613 sonda only):** SonarCloud raised none of `var` (320) and
+  other JavaScript rules on the project's scripts; not looked into yet.
 
 ## Rules that depend on knowing a type
 

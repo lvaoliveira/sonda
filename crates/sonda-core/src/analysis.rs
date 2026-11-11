@@ -775,6 +775,10 @@ pub(crate) fn java_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             f.issues.push(issue);
         }
     }
+    for f in files.iter_mut() {
+        f.issues
+            .sort_by(|a, b| (a.line, a.column, a.rule).cmp(&(b.line, b.column, b.rule)));
+    }
 }
 
 /// Partial methods declared, and implemented in no file.
@@ -1940,6 +1944,11 @@ fn filtered_node<'t>(
 /// annotations: at its name, below them (measured on SonarQube 26.7, for
 /// classes, methods and constructors), not at the first annotation.
 fn java_anchor(node: Node) -> Node {
+    // A call is reported at its method's name: in a chain spanning lines,
+    // `a.b()\n.c()`, each call on its own line (measured on 26.7).
+    if node.kind() == "method_invocation" {
+        return node.child_by_field_name("name").unwrap_or(node);
+    }
     const DECLARATIONS: &[&str] = &[
         "class_declaration",
         "interface_declaration",
@@ -2665,6 +2674,9 @@ struct CommentRules<'r, 't> {
     python: bool,
     /// Java has its own rule for this, java/commented-out-code.
     java: bool,
+    /// java/commented-out-code, for Java's `/* */` comments, judged here line
+    /// by line.
+    java_code: Option<&'r ActiveRule>,
     /// The row of the last commented-out-code issue: a block of commented
     /// lines is one finding, reported at its first line.
     last_code_comment_row: Option<usize>,
@@ -2690,6 +2702,37 @@ impl<'t> CommentRules<'_, 't> {
     fn check(&mut self, ctx: &Ctx, node: Node<'t>, issues: &mut Vec<Issue>) {
         let text = ctx.text(node);
         let alone = comment_is_alone(ctx, node);
+        // A Java `/* */` comment (not a Javadoc) with code in it, reported at
+        // its first line of code, as SonarQube 26.7 does (measured).
+        if let Some(rule) = self.java_code
+            && node.kind() == "block_comment"
+            && !text.starts_with("/**")
+        {
+            let body = text.strip_suffix("*/").unwrap_or(text);
+            for (i, line) in body.lines().enumerate() {
+                let line = if i == 0 {
+                    line.strip_prefix("/*").unwrap_or(line)
+                } else {
+                    line
+                };
+                let content = line.trim();
+                let content = content.strip_prefix('*').unwrap_or(content).trim();
+                if !content.is_empty()
+                    && crate::rules::java_line_looks_like_code(content.as_bytes())
+                {
+                    let row = node.start_position().row + i;
+                    let column = if i == 0 {
+                        ctx.lines.char_column(row, node.start_position().column)
+                    } else {
+                        0
+                    };
+                    let width = ctx.lines.text(row).chars().count().max(column + 1);
+                    let msg = "Remove this commented-out code.".to_string();
+                    issues.push(ctx.issue_on_line(rule, row, (column, width), msg));
+                    break;
+                }
+            }
+        }
         if let Some(rule) = self.nosonar
             && text.contains("NOSONAR")
         {
@@ -2899,6 +2942,9 @@ fn scan_tokens(
         nosonar: rules.get(rules::NOSONAR_COMMENT),
         python: std::ptr::eq(syn, Lang::Python.syntax()),
         java: std::ptr::eq(syn, Lang::Java.syntax()),
+        java_code: std::ptr::eq(syn, Lang::Java.syntax())
+            .then(|| rules.get("java/commented-out-code"))
+            .flatten(),
         last_code_comment_row: None,
         python_block: Vec::new(),
     };

@@ -100,7 +100,10 @@ a constructor taking varargs. Java uses the same scheme:
   inheritance depth (S110), and, after a Spring Boot application's
   comparison, overrides without `@Override` (S1161), static methods
   reached through a subclass (S3252) and class coupling (S6539), which
-  counts the project's types and not a library's. Each was measured on
+  counts the project's types and not a library's; then, after eGovFrame's,
+  generic exceptions declared without a callee passing one on (S112) and
+  wildcards in return types, at the interface (S1452), from the calls and
+  return types the summary also records. Each was measured on
   SonarQube 26.7 with files of their own, the parent or the callee in
   another file.
 - **Suppressions**: the summary's file also reports its lines with

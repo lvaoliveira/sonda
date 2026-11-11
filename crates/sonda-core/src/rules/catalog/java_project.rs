@@ -26,6 +26,8 @@ pub(crate) const DEEP_INHERITANCE: &str = "java/inheritance-too-deep";
 pub(crate) const MISSING_OVERRIDE: &str = "java/missing-override";
 pub(crate) const STATIC_VIA_SUBCLASS: &str = "java/static-via-subclass";
 pub(crate) const CLASS_COUPLING: &str = "java/class-coupling";
+pub(crate) const WILDCARD_RETURN: &str = "java/wildcard-return-type";
+pub(crate) const GENERIC_EXCEPTION: &str = "java/generic-exception-thrown";
 
 /// The rules this module checks.
 pub(crate) const RULES: &[&str] = &[
@@ -39,6 +41,8 @@ pub(crate) const RULES: &[&str] = &[
     MISSING_OVERRIDE,
     STATIC_VIA_SUBCLASS,
     CLASS_COUPLING,
+    WILDCARD_RETURN,
+    GENERIC_EXCEPTION,
 ];
 
 /// How many of the project's types a class may depend on (SonarQube's
@@ -236,6 +240,12 @@ pub(crate) fn run<'f>(
             }
             if on(MISSING_OVERRIDE) {
                 overrides_without_annotation(&index, id, &mut found);
+            }
+            if on(WILDCARD_RETURN) {
+                wildcard_returns(&index, id, &mut found);
+            }
+            if on(GENERIC_EXCEPTION) {
+                generic_exceptions_declared(&index, id, &mut found);
             }
             if index.decl(id).kind == "class" {
                 if on(CLASS_COUPLING) && project_types_used(&index, id) > MAX_COUPLING {
@@ -693,7 +703,7 @@ fn depth(index: &ProjectIndex, id: TypeId) -> usize {
 /// Methods overriding a method with a body, in a superclass or an
 /// interface (a default method) the project declares, without `@Override`
 /// (measured on SonarQube 26.7). Implementing an abstract method isn't
-/// reported, nor overriding `Object`'s.
+/// reported, nor overriding `Object`'s alone.
 fn overrides_without_annotation(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
     let decl = index.decl(id);
     if !matches!(
@@ -717,13 +727,11 @@ fn overrides_without_annotation(index: &ProjectIndex, id: TypeId, found: &mut Ve
             || m.annotations.iter().any(|a| a == "Override")
             || has(&m.modifiers, "static")
             || has(&m.modifiers, "private")
-            || matches!(
-                m.name.as_str(),
-                "equals" | "hashCode" | "toString" | "clone" | "finalize"
-            )
         {
             continue;
         }
+        // `toString()` overriding only `Object`'s finds no supertype here and
+        // isn't reported; overriding a project class's, it is (measured).
         let overrides = supers.iter().any(|t| {
             let parent = index.decl(*t);
             parent.methods.iter().any(|p| {
@@ -830,6 +838,149 @@ fn project_types_used(index: &ProjectIndex, id: TypeId) -> usize {
         seen.push(target);
     }
     seen.len()
+}
+
+// ---------------------------------------------------------------- S1452
+
+/// A wildcard in what a method returns, once per `?`, as SonarQube 26.7
+/// reports it (measured): not `Class<?>` or `Collector<T, ?, R>`, not a
+/// private method, and not one implementing or overriding a supertype's,
+/// whose type it must keep; the supertype's is reported instead.
+fn wildcard_returns(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
+    // Direct type arguments only: `List<Class<?>>` isn't reported.
+    fn wildcards(t: &TypeRef) -> usize {
+        t.args.iter().filter(|a| a.is_wildcard()).count()
+    }
+    let decl = index.decl(id);
+    let mut supers: Vec<TypeId> = Vec::new();
+    let mut queue = index.supertypes(id);
+    while let Some(t) = queue.pop() {
+        if t == id || supers.contains(&t) {
+            continue;
+        }
+        supers.push(t);
+        queue.extend(index.supertypes(t));
+    }
+    for m in &decl.methods {
+        let Some(ret) = m.ret.as_ref() else { continue };
+        if m.constructor
+            || has(&m.modifiers, "private")
+            || m.annotations.iter().any(|a| a == "Override")
+            || matches!(ret.name.as_str(), "Class" | "Collector")
+        {
+            continue;
+        }
+        let inherited = supers.iter().any(|t| {
+            index
+                .decl(*t)
+                .methods
+                .iter()
+                .any(|p| !p.constructor && p.name == m.name && p.params.len() == m.params.len())
+        });
+        if inherited {
+            continue;
+        }
+        for _ in 0..wildcards(ret) {
+            found.push((WILDCARD_RETURN, id.0, m.span));
+        }
+    }
+}
+
+// ---------------------------------------------------------------- S112
+
+/// Generic exceptions a method declares (`throws Exception`, `Throwable`,
+/// `RuntimeException`, `Error`), as SonarQube 26.7 reports them (measured):
+/// not on a method implementing or overriding one whose signature it must
+/// keep, and `Exception` not where a call passes one on, to a method of the
+/// project declaring it (another file's included), or a `call()` or
+/// `close()`.
+fn generic_exceptions_declared(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
+    const GENERIC: &[&str] = &["Exception", "Throwable", "RuntimeException", "Error"];
+    const JDK_HOOKS: &[(&str, &str)] = &[
+        ("InvocationHandler", "invoke"),
+        ("Callable", "call"),
+        ("AutoCloseable", "close"),
+        ("Closeable", "close"),
+    ];
+    let decl = index.decl(id);
+    let supers = all_supertypes(index, id);
+    let throws_generic = |m: &MethodDecl| {
+        m.throws
+            .iter()
+            .any(|(t, _)| matches!(t.as_str(), "Exception" | "Throwable"))
+    };
+    // The methods of a type and its supertypes by name and arity.
+    let methods_of = |t: TypeId, name: &str, args: usize| -> Vec<&MethodDecl> {
+        let mut types = vec![t];
+        types.extend(all_supertypes(index, t));
+        types
+            .into_iter()
+            .flat_map(|t| index.decl(t).methods.iter())
+            .filter(|m| !m.constructor && m.name == name && (m.params.len() == args || m.varargs))
+            .collect()
+    };
+    for m in &decl.methods {
+        if m.throws.iter().all(|(t, _)| !GENERIC.contains(&t.as_str())) {
+            continue;
+        }
+        if m.annotations.iter().any(|a| a == "Override")
+            || JDK_HOOKS.iter().any(|(iface, name)| {
+                m.name == *name
+                    && decl
+                        .implements
+                        .iter()
+                        .chain(&decl.extends)
+                        .any(|t| t.name == *iface)
+            })
+        {
+            continue;
+        }
+        let overrides = supers.iter().any(|t| {
+            index
+                .decl(*t)
+                .methods
+                .iter()
+                .any(|p| !p.constructor && p.name == m.name && p.params.len() == m.params.len())
+        });
+        if overrides {
+            continue;
+        }
+        let passes_one_on = m.calls.iter().any(|c| {
+            if matches!(c.name.as_str(), "call" | "close") {
+                return true;
+            }
+            let target = if c.own {
+                Some(id)
+            } else {
+                c.receiver.as_ref().and_then(|r| index.resolve_in(id, r))
+            };
+            target.is_some_and(|t| {
+                methods_of(t, &c.name, c.args)
+                    .into_iter()
+                    .any(throws_generic)
+            })
+        });
+        for (t, span) in &m.throws {
+            if !GENERIC.contains(&t.as_str()) || (t == "Exception" && passes_one_on) {
+                continue;
+            }
+            found.push((GENERIC_EXCEPTION, id.0, *span));
+        }
+    }
+}
+
+/// Every supertype the project declares, at any distance.
+fn all_supertypes(index: &ProjectIndex, id: TypeId) -> Vec<TypeId> {
+    let mut supers: Vec<TypeId> = Vec::new();
+    let mut queue = index.supertypes(id);
+    while let Some(t) = queue.pop() {
+        if t == id || supers.contains(&t) {
+            continue;
+        }
+        supers.push(t);
+        queue.extend(index.supertypes(t));
+    }
+    supers
 }
 
 #[cfg(test)]
@@ -1078,5 +1229,47 @@ mod tests {
         all.push(("Used.java", &used));
         all.push(("Made.java", &made));
         assert_eq!(flagged("java/class-coupling", &all), [at("Used.java", 2)]);
+    }
+
+    /// Measured on SonarQube 26.7: `throws Exception` passed on from another
+    /// file's method, wildcards per argument, and `toString()` overriding a
+    /// project class's.
+    #[test]
+    fn exceptions_wildcards_and_object_methods() {
+        let files = [
+            (
+                "Svc.java",
+                "package p;\npublic interface Svc {\nString find() throws Exception;\nString plain();\njava.util.Map<?, ?> detail();\n}",
+            ),
+            (
+                "Ctl.java",
+                "package p;\npublic class Ctl {\nprivate Svc svc;\npublic String c() throws Exception { return svc.find(); }\npublic String e() throws Exception { return svc.plain(); }\npublic String r() throws RuntimeException { return svc.find(); }\n}",
+            ),
+            (
+                "Impl.java",
+                "package p;\npublic class Impl implements Svc {\npublic String find() throws Exception { return \"\"; }\npublic String plain() { return \"\"; }\npublic java.util.Map<?, ?> detail() { return null; }\npublic java.util.List<Class<?>> nested() { return null; }\n}",
+            ),
+            (
+                "P.java",
+                "package p;\npublic class P { public String toString() { return \"p\"; } }",
+            ),
+            (
+                "Q.java",
+                "package p;\npublic class Q extends P { public String toString() { return \"q\"; } }",
+            ),
+            (
+                "R.java",
+                "package p;\npublic class R { public String toString() { return \"r\"; } }",
+            ),
+        ];
+        assert_eq!(
+            flagged("java/generic-exception-thrown", &files),
+            [at("Ctl.java", 5), at("Ctl.java", 6), at("Svc.java", 3)]
+        );
+        assert_eq!(
+            flagged("java/wildcard-return-type", &files),
+            [at("Svc.java", 5), at("Svc.java", 5)]
+        );
+        assert_eq!(flagged("java/missing-override", &files), [at("Q.java", 2)]);
     }
 }

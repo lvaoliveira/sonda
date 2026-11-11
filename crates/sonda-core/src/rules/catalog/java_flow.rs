@@ -83,8 +83,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { int f(boolean b) { if (b) { return 0; } return 0; } }",
-            good: "class A { int f(boolean b) { if (b) { return 0; } return 1; } }",
+            bad: "class A { boolean f(int x) { if (x > 0) { return true; } return true; } }",
+            good: "class A { boolean f(int x) { if (x > 0) { return true; } return false; } }",
         }),
     },
     Rule {
@@ -657,7 +657,16 @@ fn divides_by_literal_zero(node: Node, src: &[u8]) -> bool {
             .is_none_or(|l| l.kind() != "decimal_floating_point_literal")
 }
 
+/// A boolean method whose every `return` gives the same value: a method
+/// always returning the same string or number isn't reported (measured on
+/// SonarQube 26.7).
 fn returns_are_all_the_same_constant(method: Node, src: &[u8]) -> bool {
+    if !matches!(
+        method.child_by_field_name("type").map(|t| text(t, src)),
+        Some(b"boolean" | b"Boolean")
+    ) {
+        return false;
+    }
     let Some(body) = method.child_by_field_name("body") else {
         return false;
     };
@@ -1265,7 +1274,9 @@ mod tests {
         assert_eq!(flagged("java/stream-reused", src), [7]);
         assert_eq!(flagged("java/min-max-constant", src), [8]);
         assert_eq!(flagged("java/zero-denominator", src), [10]);
-        assert_eq!(flagged("java/invariant-return", src), [12]);
+        // An int method always returning one value isn't S3516's (measured
+        // on SonarQube 26.7): only boolean ones are.
+        assert!(flagged("java/invariant-return", src).is_empty());
     }
 
     #[test]

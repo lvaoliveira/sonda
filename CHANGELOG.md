@@ -337,6 +337,38 @@ file, the report formats and the public library API.
     anonymous iterators; `java/thread-local-never-removed` a ThreadLocal
     whose own `remove()` is never called; `java/unused-type-parameter` a
     parameter a nested class declares again.
+- Java, compared on eGovFrame's common components, a Korean government
+  framework (Spring, Java 17, about 100,000 lines with its submodule):
+  sonda raises 3,636 of SonarCloud's 4,858 issues, where it raised 2,933,
+  and 1,535 it doesn't, where it raised 2,473. Each change was measured on
+  SonarQube 26.7 first.
+  - On the project index: `java/generic-exception-thrown` excuses `throws
+    Exception` when a call in the body reaches a method of another file
+    declaring it, and leaves implementations of a supertype's method;
+    `java/wildcard-return-type` reports each wildcard, at the interface
+    rather than its implementations, and leaves nested ones.
+  - A new rule, `java/logger-format` (S3457): a logger's message built by
+    concatenation, a `toString()` argument, or placeholders that don't
+    match the arguments, a last exception aside. It was part of
+    `java/format-arguments`, which counted it under S2275 too.
+  - Issues on a method call are reported at the method's name, each call
+    of a chain on its own line.
+  - Broader: `java/bean-method-name` reports a stereotype's bean name
+    (`@Service("FooService")`) at its string; `java/return-boolean-if`
+    without an `else` and with the same value twice;
+    `java/boxed-boolean-condition` a negated `Boolean`;
+    `java/string-concatenation-in-loop` `s = s + x`;
+    `java/commented-out-code` a `/* */` comment over several lines, at its
+    first line of code; `java/redundant-jump` from the end of an `if`
+    branch, a `try` or a `catch`; `java/replace-all-literal` an escaped
+    metacharacter or a Unicode escape; `java/missing-override` a
+    `toString()` overriding a project class's.
+  - Narrower: `java/log-argument-concatenation` leaves getters and
+    `getMessage()`, and reports a costly call passed as an argument;
+    `java/dangling-javadoc` is a run of Javadocs before a declaration, not
+    a Javadoc among statements; `java/invariant-return` is boolean methods;
+    `java/constant-name` leaves arrays; `java/close-in-finally` is a
+    resource created with `new`; `java/redundant-jump` leaves labeled jumps.
 - Java, compared on a Spring Boot application, apigen.springboot
   (`ef13838`, Java 21, SonarCloud's built-in profile): sonda raises 121 of
   its 171 issues, where it raised 100, and 11 it doesn't, where it raised

@@ -34,6 +34,11 @@ mod java_flow;
 mod java_last;
 mod java_last2;
 mod java_more;
+
+/// Whether a Java comment line reads as code, for the comment walker.
+pub(crate) fn java_line_looks_like_code(line: &[u8]) -> bool {
+    java_more::line_looks_like_code(line)
+}
 pub(crate) mod java_project;
 mod java_regex;
 mod java_rest;

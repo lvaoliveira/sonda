@@ -129,7 +129,9 @@ built.
       of 918 raised and 2 extra, every difference classified; 3 not
       explained. Java on a Spring Boot application (apigen.springboot,
       against SonarCloud): 121 of 171 and 11 extra, every difference
-      classified; 45 come from SonarCloud's profile and newer rules.
+      classified; 45 come from SonarCloud's profile and newer rules. And on
+      eGovFrame's common components (against SonarCloud): 3,636 of 4,858,
+      every Java difference classified; JavaScript's not yet.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

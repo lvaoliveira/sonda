@@ -690,7 +690,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() { try { use(in); } finally { in.close(); } } }",
+            bad: "class A { void f() { InputStream in = new FileInputStream(\"x\"); try { use(in); } finally { in.close(); } } }",
             good: "class A { void f() { try (InputStream in = open()) { use(in); } } }",
         }),
     },
@@ -1833,12 +1833,36 @@ fn transient_field_of_plain_class(field: Node, src: &[u8]) -> bool {
     true
 }
 
+/// A resource created with `new` and closed in `finally`: one obtained from a
+/// call (`response.getWriter()`) isn't the try's to own (measured on
+/// SonarQube 26.7).
 fn closes_in_finally(try_: Node, src: &[u8]) -> bool {
+    let scope = try_.parent().unwrap_or(try_);
+    let created_with_new = |name: &[u8]| {
+        find_node(scope, |n| {
+            let (target, value) = match n.kind() {
+                "assignment_expression" => (
+                    n.child_by_field_name("left"),
+                    n.child_by_field_name("right"),
+                ),
+                "variable_declarator" => (
+                    n.child_by_field_name("name"),
+                    n.child_by_field_name("value"),
+                ),
+                _ => (None, None),
+            };
+            target.is_some_and(|t| text(t, src) == name)
+                && value.is_some_and(|v| v.kind() == "object_creation_expression")
+        })
+        .is_some()
+    };
     children_of_kind(try_, "finally_clause").iter().any(|f| {
         find_node(*f, |n| {
             n.kind() == "method_invocation"
                 && method_name(n, src) == b"close"
                 && call_arguments(n).is_empty()
+                && n.child_by_field_name("object")
+                    .is_some_and(|o| o.kind() == "identifier" && created_with_new(text(o, src)))
         })
         .is_some()
     }) && try_.child_by_field_name("resources").is_none()
@@ -2205,11 +2229,10 @@ fn second_lifecycle_method_of_a_kind<'t>(class: Node<'t>, src: &[u8]) -> Option<
 /// A comment that reads as code, once per block of `//` lines (SonarQube
 /// reports the block), or a one-line `/* ... */`.
 fn looks_like_code(comment: Node, src: &[u8]) -> bool {
+    // A `/* */` comment is judged line by line by the comment walker
+    // (`analysis.rs`), which reports its first line of code.
     if comment.kind() == "block_comment" {
-        let t = text(comment, src);
-        let one_line = comment.start_position().row == comment.end_position().row;
-        let body = t.strip_prefix(b"/*").and_then(|b| b.strip_suffix(b"*/"));
-        return one_line && !t.starts_with(b"/**") && body.is_some_and(line_looks_like_code);
+        return false;
     }
     // The block's first line of code reports it, once for the block.
     let mut earlier_code = false;
@@ -2236,7 +2259,7 @@ fn p_body<'s>(comment: Node, src: &'s [u8]) -> &'s [u8] {
 /// similar opening, spaces aside; or it ends with `;` and has a keyword,
 /// `&&` or `||`, or a camelCase word among its space-separated words.
 /// `buffer.append(x);` isn't code, and `do not wrap a long word;` is.
-fn line_looks_like_code(body: &[u8]) -> bool {
+pub(super) fn line_looks_like_code(body: &[u8]) -> bool {
     const KEYWORDS: &[&[u8]] = &[
         b"public",
         b"abstract",
@@ -2501,7 +2524,7 @@ mod tests {
 
     #[test]
     fn small_checks() {
-        let src = "class A {\nint count;\nstatic ThreadLocal<String> t = new ThreadLocal<>();\nvoid a() { int count = 1; }\nstatic void b() { int count = 1; }\nvoid c(InputStream in) { try { use(in); } finally { in.close(); } }\nvoid d() { try { g(); } catch (IOException e) { log.error(\"x\", e); throw e; } }\nvoid e() { try { g(); } catch (IOException e) { throw new UncheckedIOException(e); } }\nvoid f() { Class.forName(\"com.mysql.cj.jdbc.Driver\"); Class.forName(\"com.acme.Plugin\"); }\nvoid g() { Region r = Region.of(\"eu-west-1\"); S3Client c = S3Client.builder().build(); }\npublic String toString() { return \"\"; }\n@Override public int hashCode() { return 1; }\n}";
+        let src = "class A {\nint count;\nstatic ThreadLocal<String> t = new ThreadLocal<>();\nvoid a() { int count = 1; }\nstatic void b() { int count = 1; }\nvoid c() { InputStream in = null; try { in = new FileInputStream(\"x\"); use(in); } finally { in.close(); } }\nvoid d() { try { g(); } catch (IOException e) { log.error(\"x\", e); throw e; } }\nvoid e() { try { g(); } catch (IOException e) { throw new UncheckedIOException(e); } }\nvoid f() { Class.forName(\"com.mysql.cj.jdbc.Driver\"); Class.forName(\"com.acme.Plugin\"); }\nvoid g() { Region r = Region.of(\"eu-west-1\"); S3Client c = S3Client.builder().build(); }\npublic String toString() { return \"\"; }\n@Override public int hashCode() { return 1; }\n}";
         assert_eq!(flagged("java/local-shadows-field", src), [4]);
         assert_eq!(flagged("java/thread-local-never-removed", src), [3]);
         assert_eq!(flagged("java/close-in-finally", src), [6]);

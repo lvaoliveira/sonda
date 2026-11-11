@@ -91,6 +91,16 @@ pub(crate) struct MethodDecl {
     /// parameters, and returns what that returns.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) only_calls_super: bool,
+    /// The exceptions its `throws` clause names, where.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) throws: Vec<(String, Span)>,
+    /// The calls it makes, recorded when it declares a generic exception
+    /// (`throws Exception`), to tell whether one of them passes it on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) calls: Vec<Call>,
+    /// What it returns, for a method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ret: Option<TypeRef>,
     /// It has a body: not abstract, or an interface's default method.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) body: bool,
@@ -99,6 +109,20 @@ pub(crate) struct MethodDecl {
     /// The first and last lines of the whole declaration, annotations
     /// included.
     pub(crate) lines: (usize, usize),
+}
+
+/// A call in a method: its name, how many arguments, and what it's called
+/// on, when the file shows it: the declared type of a field, parameter or
+/// local, a type named directly (`Util.f()`), or the class itself (`f()`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub(crate) struct Call {
+    pub(crate) name: String,
+    pub(crate) args: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) receiver: Option<TypeRef>,
+    /// Unqualified, or on `this`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) own: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -354,7 +378,22 @@ impl<'s> Extractor<'s> {
             }
         }
         let name_text = name.map(|n| self.text(n)).unwrap_or_default();
+        let throws: Vec<(String, Span)> = children(m)
+            .into_iter()
+            .filter(|c| c.kind() == "throws")
+            .flat_map(named)
+            .map(|t| {
+                let r = self.type_ref(t);
+                (r.name, self.span(t))
+            })
+            .collect();
+        let generic = throws
+            .iter()
+            .any(|(t, _)| matches!(t.as_str(), "Exception" | "Throwable"));
+        let calls = if generic { self.calls(m) } else { Vec::new() };
         MethodDecl {
+            throws,
+            calls,
             name: name_text.to_string(),
             params,
             varargs,
@@ -363,9 +402,117 @@ impl<'s> Extractor<'s> {
             annotations,
             only_calls_super: self.only_calls_super(m, name_text, &names),
             body: m.child_by_field_name("body").is_some(),
+            ret: m.child_by_field_name("type").map(|t| self.type_ref(t)),
             span: name.map(|n| self.span(n)).unwrap_or_default(),
             lines: (m.start_position().row + 1, m.end_position().row + 1),
         }
+    }
+
+    /// The calls in a method's body, with their receiver's declared type
+    /// where the method or its class declares the receiver.
+    fn calls(&self, m: Node) -> Vec<Call> {
+        let Some(body) = m.child_by_field_name("body") else {
+            return Vec::new();
+        };
+        // Names declared in the method: parameters and locals.
+        let mut declared: Vec<(String, TypeRef)> = Vec::new();
+        let mut stack = vec![m];
+        while let Some(n) = stack.pop() {
+            match n.kind() {
+                "formal_parameter"
+                | "spread_parameter"
+                | "local_variable_declaration"
+                | "catch_formal_parameter" => {
+                    let ty = n.child_by_field_name("type").or_else(|| {
+                        named(n)
+                            .into_iter()
+                            .find(|c| c.kind().ends_with("type") || c.kind() == "type_identifier")
+                    });
+                    if let Some(ty) = ty {
+                        let r = self.type_ref(ty);
+                        let names: Vec<Node> = match n.kind() {
+                            "local_variable_declaration" | "spread_parameter" => named(n)
+                                .into_iter()
+                                .filter(|d| d.kind() == "variable_declarator")
+                                .filter_map(|d| d.child_by_field_name("name"))
+                                .collect(),
+                            _ => n.child_by_field_name("name").into_iter().collect(),
+                        };
+                        for name in names {
+                            declared.push((self.text(name).to_string(), r.clone()));
+                        }
+                    }
+                }
+                "lambda_expression" | "class_body" => continue,
+                _ => {}
+            }
+            stack.extend(named(n));
+        }
+        // And the class's fields.
+        if let Some(class_body) = m.parent() {
+            for f in named(class_body)
+                .into_iter()
+                .filter(|f| f.kind() == "field_declaration")
+            {
+                for field in self.fields(f) {
+                    if !declared.iter().any(|(n, _)| *n == field.name) {
+                        declared.push((field.name, field.ty));
+                    }
+                }
+            }
+        }
+        let mut calls = Vec::new();
+        let mut stack = vec![body];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "method_invocation"
+                && let Some(name) = n.child_by_field_name("name")
+            {
+                let object = n.child_by_field_name("object");
+                let receiver_name = object.and_then(|o| match o.kind() {
+                    "identifier" => Some(self.text(o)),
+                    "field_access"
+                        if o.child_by_field_name("object")
+                            .is_some_and(|x| x.kind() == "this") =>
+                    {
+                        o.child_by_field_name("field").map(|f| self.text(f))
+                    }
+                    _ => None,
+                });
+                let receiver = receiver_name.and_then(|r| {
+                    declared
+                        .iter()
+                        .find(|(n, _)| n == r)
+                        .map(|(_, t)| t.clone())
+                        .or_else(|| {
+                            // A type named directly: `Util.f()`.
+                            r.chars()
+                                .next()
+                                .filter(|c| c.is_uppercase())
+                                .map(|_| TypeRef {
+                                    name: r.to_string(),
+                                    ..TypeRef::default()
+                                })
+                        })
+                });
+                let args = n.child_by_field_name("arguments").map_or(0, |a| {
+                    named(a)
+                        .into_iter()
+                        .filter(|x| !x.kind().ends_with("comment"))
+                        .count()
+                });
+                calls.push(Call {
+                    name: self.text(name).to_string(),
+                    args,
+                    receiver,
+                    own: object.is_none_or(|o| o.kind() == "this"),
+                });
+            }
+            if matches!(n.kind(), "lambda_expression" | "class_body") {
+                continue;
+            }
+            stack.extend(named(n));
+        }
+        calls
     }
 
     /// `return super.name(params);` or `super.name(params);`, alone.
