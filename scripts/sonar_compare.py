@@ -129,7 +129,9 @@ def match(sonar_lines, sonda_lines, tolerance):
     for distance in range(tolerance + 1):
         rest = []
         for a in left:
-            j = next((j for j, b in enumerate(right) if abs(a[0] - b[0]) == distance), None)
+            # A SonarQube issue without a line is on the file: any line will do.
+            j = next((j for j, b in enumerate(right)
+                      if abs(a[0] - b[0]) == distance or a[0] == 0 and distance == 0), None)
             if j is None:
                 rest.append(a)
             else:
