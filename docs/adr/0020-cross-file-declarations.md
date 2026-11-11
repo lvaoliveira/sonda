@@ -4,7 +4,8 @@
   file's declarations, and the C# rules that compare with base types,
   interfaces and partial methods read the index (`semantic/cs_index.rs`).
   Recorded as accepted when the 1.0 plan checked each ADR's status against
-  what's built.
+  what's built. Extended to Java on 2026-11-11 (`semantic/java_index.rs`,
+  [below](#java)).
 - Date: 2026-11-01
 
 ## Context
@@ -68,9 +69,47 @@ The rules on the index are eighteen C# rules:
   - controller action models with under-posted value types (S6964);
   - interface references cast to concrete types (S3215).
 
+## Java
+
+Compared with SonarQube on Apache Commons Lang, about seventy of the Java
+differences left came from declarations in another file: an override whose
+parent is elsewhere, a field whose type is, a superclass defining `equals`,
+a constructor taking varargs. Java uses the same scheme:
+
+- **The summary** (`semantic/java_index.rs`) holds the file's package, its
+  single-type and on-demand imports, the types it declares at any depth
+  (kind, modifiers, type parameters and their bounds, superclass and
+  interfaces, fields, methods and constructors with their parameter types,
+  varargs, annotations, and whether a method only calls the same method of
+  `super`), and the calls whose last argument is an array literal. It
+  travels as one JSON fact per file, `java-index`.
+- **Names resolve as Java resolves them**, at the level summaries allow:
+  the types nested in the enclosing types and their supertypes, the file's
+  single-type imports, its package, then its on-demand imports, where a
+  name found twice resolves to nothing. A qualified name is a full name or
+  a type nested in one the file sees.
+- **The JDK isn't in the project.** A few of its types are known by name:
+  which classes are serializable or define `equals`, which aren't
+  serializable, how deep common superclasses are. Any other outside type
+  gets the benefit of the doubt.
+- **The rules** move from per-file queries to `Check::Structural`, checked
+  in `rules/catalog/java_project.rs`, with the same ids: useless overrides
+  (S1185), non-serializable fields (S1948), subclasses adding fields to an
+  `equals` (S2160), arrays passed as varargs (S3878), abstract methods an
+  interface declares (S3038), overrides dropping `synchronized` (S3551)
+  and inheritance depth (S110). Each was measured on SonarQube 26.7 with
+  files of their own, the parent or the callee in another file.
+- **Suppressions**: the summary's file also reports its lines with
+  `NOSONAR` or `sonda-ignore`, which silence what the project pass finds.
+
+On Commons Lang, the seven rules went from 73 differences to none. Its scan
+(638 Java files) takes 3.9 s where it took 3.7 s, median of five on 12
+workers.
+
 ## Consequences
 
 - **What stays unseen:** types from referenced packages aren't in the project, so they resolve to nothing. That costs recall. The framework's own types do resolve, through the summary of its reference packs ([ADR-0022](0022-platform-types.md)). By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`, and all eighteen are.
 - **Cost:** extraction is one cursor walk that copies no member bodies, and builds the semantic model only for files with a site that needs it. The scan time of the seven reference projects is unchanged (3.0 s). The project pass parses one JSON summary per C# file. The summaries hold declarations and sites only, a small fraction of each file's size.
 - **The worker model is unchanged.** Workers still analyze one file each and return facts; only what a fact can carry grew. A rule that needs more than declarations from other files (call graphs, data flow across calls) still needs a decision of its own.
-- **Other languages can use the same scheme** when their rules need it, Java first.
+- **Other languages can use the same scheme** when their rules need it; Java
+  does since 2026-11-11.

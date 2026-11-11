@@ -1593,10 +1593,20 @@ fn in_the_default_package(annotation: Node, _: &[u8]) -> bool {
 }
 
 fn thread_local_is_never_removed(field: Node, src: &[u8]) -> bool {
+    // Its own `remove()`: another ThreadLocal's doesn't count.
+    let removes = |name: &[u8]| {
+        let call = [name, b".remove("].concat();
+        src.windows(call.len()).enumerate().any(|(i, w)| {
+            w == call.as_slice()
+                && (i == 0 || !(src[i - 1].is_ascii_alphanumeric() || src[i - 1] == b'_'))
+        })
+    };
     field
         .child_by_field_name("type")
         .is_some_and(|t| text(t, src).starts_with(b"ThreadLocal"))
-        && !src.windows(8).any(|w| w == b".remove(")
+        && super::java_smells::declarator_names(field, src)
+            .iter()
+            .any(|n| !removes(n))
 }
 
 fn inner_test_class_lacks_nested(class: Node, src: &[u8]) -> bool {
@@ -2208,13 +2218,19 @@ fn looks_like_code(comment: Node, src: &[u8]) -> bool {
         let body = t.strip_prefix(b"/*").and_then(|b| b.strip_suffix(b"*/"));
         return one_line && !t.starts_with(b"/**") && body.is_some_and(line_looks_like_code);
     }
-    // The block's first line of code reports it.
-    let previous_is_code = comment.prev_sibling().is_some_and(|p| {
-        p.kind() == "line_comment"
-            && p.end_position().row + 1 == comment.start_position().row
-            && line_looks_like_code(p_body(p, src))
-    });
-    !previous_is_code && line_looks_like_code(p_body(comment, src))
+    // The block's first line of code reports it, once for the block.
+    let mut earlier_code = false;
+    let mut current = comment;
+    while let Some(p) = current.prev_sibling().filter(|p| {
+        p.kind() == "line_comment" && p.end_position().row + 1 == current.start_position().row
+    }) {
+        if line_looks_like_code(p_body(p, src)) {
+            earlier_code = true;
+            break;
+        }
+        current = p;
+    }
+    !earlier_code && line_looks_like_code(p_body(comment, src))
 }
 
 fn p_body<'s>(comment: Node, src: &'s [u8]) -> &'s [u8] {
@@ -2222,18 +2238,70 @@ fn p_body<'s>(comment: Node, src: &'s [u8]) -> &'s [u8] {
     t.strip_prefix(b"//").unwrap_or(t)
 }
 
+/// Whether a comment line is code, as SonarQube 26.7 judges Java (measured
+/// on single lines): it ends with a brace; it holds `if(`, `for(` or a
+/// similar opening, spaces aside; or it ends with `;` and has a keyword,
+/// `&&` or `||`, or a camelCase word among its space-separated words.
+/// `buffer.append(x);` isn't code, and `do not wrap a long word;` is.
 fn line_looks_like_code(body: &[u8]) -> bool {
+    const KEYWORDS: &[&[u8]] = &[
+        b"public",
+        b"abstract",
+        b"class",
+        b"implements",
+        b"extends",
+        b"return",
+        b"throw",
+        b"private",
+        b"protected",
+        b"enum",
+        b"continue",
+        b"assert",
+        b"package",
+        b"synchronized",
+        b"boolean",
+        b"this",
+        b"double",
+        b"instanceof",
+        b"final",
+        b"interface",
+        b"static",
+        b"void",
+        b"long",
+        b"int",
+        b"float",
+        b"super",
+        b"true",
+        b"case:",
+        b"&&",
+        b"||",
+    ];
+    const OPENINGS: &[&[u8]] = &[
+        b"for(", b"if(", b"while(", b"catch(", b"switch(", b"try{", b"else{",
+    ];
     let body = body.trim_ascii();
-    let starts_like_code = body
-        .first()
-        .is_some_and(|b| b.is_ascii_lowercase() || *b == b'@' || *b == b'}')
-        && !body.starts_with(b"http");
-    let ends_like_code = body.ends_with(b";") || body.ends_with(b"{");
-    let has_code = body.contains(&b'(')
-        || body.contains(&b'=')
-        || body.windows(2).any(|w| w == b"&&" || w == b"||")
-        || body.starts_with(b"assert ");
-    starts_like_code && ends_like_code && has_code
+    if body.ends_with(b"{") || body.ends_with(b"}") {
+        return true;
+    }
+    let compact: Vec<u8> = body
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if OPENINGS
+        .iter()
+        .any(|o| compact.windows(o.len()).any(|w| w == *o))
+    {
+        return true;
+    }
+    let camel = |w: &[u8]| {
+        w.windows(2)
+            .any(|p| p[0].is_ascii_lowercase() && p[1].is_ascii_uppercase())
+    };
+    body.ends_with(b";")
+        && body
+            .split(|b| b.is_ascii_whitespace())
+            .any(|w| KEYWORDS.contains(&w) || camel(w))
 }
 
 fn package_has_uppercase(package: Node, src: &[u8]) -> bool {
@@ -2331,7 +2399,8 @@ mod tests {
     fn flagged(rule: &str, src: &str) -> Vec<usize> {
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)

@@ -11,6 +11,7 @@ use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
 pub(crate) use catalog::cs_project;
+pub(crate) use catalog::java_project;
 pub(crate) use catalog::js_index;
 pub use owasp::{Edition, Owasp};
 
@@ -463,6 +464,7 @@ mod tests {
             let mut bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
             // Project-level rules see the example as a project of one file.
             crate::analysis::cs_project_rules(std::slice::from_mut(&mut bad), &rules);
+            crate::analysis::java_project_rules(std::slice::from_mut(&mut bad), &rules);
             assert!(
                 bad.issues.iter().any(|i| i.rule == r.id),
                 "{} did not flag its bad example:\n{}\nissues: {:?}",
@@ -472,6 +474,7 @@ mod tests {
             );
             let mut good = analyze("good", ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
             crate::analysis::cs_project_rules(std::slice::from_mut(&mut good), &rules);
+            crate::analysis::java_project_rules(std::slice::from_mut(&mut good), &rules);
             assert!(
                 !good.issues.iter().any(|i| i.rule == r.id),
                 "{} flagged its good example:\n{}",

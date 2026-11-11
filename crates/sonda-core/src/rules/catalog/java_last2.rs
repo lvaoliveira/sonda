@@ -852,7 +852,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)

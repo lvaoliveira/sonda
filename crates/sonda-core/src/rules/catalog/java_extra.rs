@@ -37,7 +37,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(catch_clause) @match"#,
-            filter: Some(Keep(catch_tests_exception_type)),
+            filter: Some(Find(catch_tests_exception_type)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -141,7 +141,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void g() throws IOException, RuntimeException {} }",
+            bad: "class A { void g() throws Exception, IOException {} }",
             good: "class A { void g() throws IOException {} }",
         }),
     },
@@ -179,7 +179,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1182")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration name: (identifier) @n (#eq? @n "clone")) @match"#,
+            query: r#"(method_declaration name: (identifier) @match (#eq? @match "clone"))"#,
             filter: Some(Keep(clone_breaks_contract)),
         },
         example: Some(Example {
@@ -1501,19 +1501,24 @@ fn catch_parameter_name<'s>(catch: Node, src: &'s [u8]) -> Option<&'s [u8]> {
     param.child_by_field_name("name").map(|n| text(n, src))
 }
 
-fn catch_tests_exception_type(catch: Node, src: &[u8]) -> bool {
-    let (Some(name), Some(body)) = (
-        catch_parameter_name(catch, src),
-        catch.child_by_field_name("body"),
-    ) else {
-        return false;
-    };
-    find_node(body, |n| {
+/// A catch block that starts by testing the exception's type, `if (e
+/// instanceof X)`, reported at that `if` (measured on SonarQube 26.7: a
+/// test after other statements isn't reported).
+fn catch_tests_exception_type<'t>(catch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let name = catch_parameter_name(catch, src)?;
+    let body = catch.child_by_field_name("body")?;
+    let mut c = body.walk();
+    let first = body
+        .named_children(&mut c)
+        .find(|n| !n.kind().ends_with("comment"))
+        .filter(|n| n.kind() == "if_statement")?;
+    let condition = first.child_by_field_name("condition")?;
+    find_node(condition, |n| {
         n.kind() == "instanceof_expression"
             && n.child_by_field_name("left")
                 .is_some_and(|l| text(l, src) == name)
     })
-    .is_some()
+    .map(|_| first)
 }
 
 fn rethrows_without_cause<'t>(catch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1533,36 +1538,25 @@ fn rethrows_without_cause<'t>(catch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 fn throws_is_superfluous(throws: Node, src: &[u8]) -> bool {
-    const UNCHECKED: &[&[u8]] = &[
-        b"RuntimeException",
-        b"IllegalArgumentException",
-        b"IllegalStateException",
-        b"NullPointerException",
-        b"UnsupportedOperationException",
-        b"IndexOutOfBoundsException",
-        b"ArrayIndexOutOfBoundsException",
-        b"ArithmeticException",
-        b"ClassCastException",
-        b"SecurityException",
-        b"NumberFormatException",
-        b"ConcurrentModificationException",
-        b"Error",
-        b"AssertionError",
-        b"OutOfMemoryError",
-        b"StackOverflowError",
-    ];
     let names: Vec<&[u8]> = named_children(throws)
         .iter()
         .map(|n| text(*n, src))
         .collect();
+    // An unchecked one documents what callers may see (measured on
+    // SonarQube 26.7); unless `Exception` covers it, it isn't superfluous.
     names.iter().enumerate().any(|(i, n)| {
-        UNCHECKED.contains(n)
-            || names[..i].contains(n)
+        names[..i].contains(n)
             || (*n != b"Exception" && names.contains(&&b"Exception"[..]) && *n != b"Throwable")
     })
 }
 
-fn clone_breaks_contract(method: Node, src: &[u8]) -> bool {
+/// A `clone()` of a class that isn't Cloneable, or that doesn't call
+/// `super.clone()` itself, even when a helper it calls does (measured on
+/// SonarQube 26.7), reported at its name.
+fn clone_breaks_contract(name: Node, src: &[u8]) -> bool {
+    let Some(method) = name.parent() else {
+        return false;
+    };
     if method
         .child_by_field_name("parameters")
         .is_some_and(|p| p.named_child_count() > 0)
@@ -1587,10 +1581,7 @@ fn clone_breaks_contract(method: Node, src: &[u8]) -> bool {
         })
         .is_some()
     });
-    let builds_new = method
-        .child_by_field_name("body")
-        .is_some_and(|b| find_node(b, |n| n.kind() == "object_creation_expression").is_some());
-    !cloneable || (!calls_super && builds_new)
+    !cloneable || !calls_super
 }
 
 fn class_lacks_clone(class: Node, src: &[u8]) -> bool {
@@ -2169,12 +2160,32 @@ fn shadows_class_type_parameter(method: Node, src: &[u8]) -> bool {
 
 fn method_has_unused_type_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let tp = method.child_by_field_name("type_parameters")?;
+    // Uses as a type, short of a nested declaration with its own parameter
+    // of that name; the Javadoc's `@param <V>` isn't one.
+    let uses = |name: &[u8]| {
+        let mut count = 0;
+        let mut stack = vec![method];
+        while let Some(n) = stack.pop() {
+            let shadows = n.id() != method.id()
+                && n.child_by_field_name("type_parameters").is_some_and(|tps| {
+                    children_of_kind(tps, "type_parameter")
+                        .iter()
+                        .any(|p| p.named_child(0).is_some_and(|x| text(x, src) == name))
+                });
+            if shadows {
+                continue;
+            }
+            if n.kind() == "type_identifier" && text(n, src) == name {
+                count += 1;
+            }
+            let mut c = n.walk();
+            stack.extend(n.named_children(&mut c));
+        }
+        count
+    };
     children_of_kind(tp, "type_parameter")
         .into_iter()
-        .find(|p| {
-            p.named_child(0)
-                .is_some_and(|n| count_word(text(method, src), text(n, src)) == 1)
-        })
+        .find(|p| p.named_child(0).is_some_and(|n| uses(text(n, src)) == 1))
 }
 
 fn closes_a_managed_resource<'t>(try_statement: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -2240,7 +2251,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
@@ -2251,7 +2263,8 @@ mod tests {
     #[test]
     fn exceptions() {
         let src = "class A {\n void a() throws IOException, RuntimeException {}\n void b() throws IOException {}\n void c() throws Exception, IOException {}\n void d() {\n  try { f(); } catch (IOException e) { throw new X(\"m\"); }\n  try { f(); } catch (IOException e) { throw new X(\"m\", e); }\n }\n}";
-        assert_eq!(flagged("java/superfluous-throws", src), [2, 4]);
+        // An unchecked exception isn't superfluous (measured on SonarQube 26.7).
+        assert_eq!(flagged("java/superfluous-throws", src), [4]);
         assert_eq!(flagged("java/catch-drops-cause", src), [6]);
     }
 

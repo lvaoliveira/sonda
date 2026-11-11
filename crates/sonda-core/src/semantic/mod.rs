@@ -12,6 +12,7 @@ pub(crate) mod cs_index;
 pub(crate) mod cs_infer;
 pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
+pub(crate) mod java_index;
 mod js;
 pub(crate) mod js_taint;
 mod py;
