@@ -62,12 +62,17 @@ class Sonar:
             page += 1
 
     def files(self, project, branch):
-        """Path -> (qualifier, language) of every file SonarQube indexed. A file
-        it couldn't parse has no lines of code; its qualifier is "UNPARSED"."""
+        """Path -> (qualifier, language) of every file SonarQube indexed. A main
+        file it couldn't parse has no lines of code; its qualifier is "UNPARSED".
+        (Test files never have lines of code.)"""
         extra = {"branch": branch} if branch else {}
+
+        def qualifier(c):
+            parsed = any(m["metric"] == "ncloc" for m in c["measures"])
+            return c["qualifier"] if parsed or c["qualifier"] != "FIL" else "UNPARSED"
+
         return {
-            c["path"]: (c["qualifier"] if any(m["metric"] == "ncloc" for m in c["measures"])
-                        else "UNPARSED", c.get("language"))
+            c["path"]: (qualifier(c), c.get("language"))
             for c in self.pages("/api/measures/component_tree", "components",
                                 component=project, qualifiers="FIL,UTS", metricKeys="ncloc",
                                 **extra)
