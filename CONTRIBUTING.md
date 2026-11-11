@@ -153,6 +153,10 @@ language.
   finding. A rule that misfires doesn't ship.
 - **Refresh the compatibility table:**
   `python3 scripts/sonar_parity.py --server URL --token-file FILE`.
+- **Compare findings on real code** with SonarQube's, on the same commit,
+  as [docs/sonar-parity/comparing.md](docs/sonar-parity/comparing.md)
+  describes; the results are in
+  [differences.md](docs/sonar-parity/differences.md).
 
 ## Fuzzing
 

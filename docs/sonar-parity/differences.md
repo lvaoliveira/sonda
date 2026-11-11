@@ -8,22 +8,11 @@ gets fixed, a known gap, or a deliberate change, each listed below.
 
 ## How
 
-`scripts/sonar_compare.py` reads a sonda JSON report and the SonarQube
-project's issues, and pairs them: the same file, the same SonarQube rule key
-(the keys a sonda rule's `sonar` field lists), and lines at most one apart.
-
-```sh
-sonda scan . -f json -o sonda.json --no-gate --new-code none
-python3 scripts/sonar_compare.py --server http://sonarqube:9000 \
-    --token-file ~/.sonar_token --project my-project --report sonda.json \
-    --commit "$(git rev-parse HEAD)" --details differences.json
-```
-
-It compares only the files SonarQube analyzed as main code: it runs few rules
-on test files. A sonda issue counts as a difference only when SonarQube's
-quality profile has the rule's key active; sonda's rules without a SonarQube
-key, and those whose key is off there, are counted apart. SonarQube runs
-its default profile (Sonar way) and sonda its default rules.
+Both tools scan the same commit, `scripts/sonar_compare.py` pairs their
+issues by file, rule key and line, and every difference is read and
+classified. Where reading the code doesn't explain one, SonarQube is
+measured on small files, one case each. [comparing.md](comparing.md) has
+the steps, the commands and what was learned along the way.
 
 ## Results
 
