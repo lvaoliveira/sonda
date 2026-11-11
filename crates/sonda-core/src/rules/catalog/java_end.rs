@@ -1462,8 +1462,56 @@ fn publishes_before_initializing<'t>(sync: Node<'t>, src: &[u8]) -> Option<Node<
     })?;
     let statement = assignment.parent()?;
     let name = text(assignment.child_by_field_name("left")?, src);
+    // Double-checked locking of a field: a null check outside the
+    // `synchronized` and another inside, around the assignment (measured on
+    // SonarQube 26.7). A local set once isn't published.
+    let checks_null = |n: Node| {
+        n.kind() == "if_statement"
+            && n.child_by_field_name("condition").is_some_and(|c| {
+                let t = text(c, src);
+                count_word(t, name) > 0 && count_word(t, b"null") > 0
+            })
+    };
+    let mut inner = false;
+    let mut up = assignment.parent();
+    while let Some(n) = up.filter(|n| n.id() != sync.id()) {
+        inner |= checks_null(n);
+        up = n.parent();
+    }
+    let mut outer = false;
+    let mut up = sync.parent();
+    for _ in 0..3 {
+        let Some(n) = up else { break };
+        outer |= checks_null(n);
+        up = n.parent();
+    }
+    let local = find_node(sync, |n| {
+        n.kind() == "local_variable_declaration" && declarator_names(n, src).contains(&name)
+    })
+    .is_some()
+        || owning_body(sync).is_some_and(|b| {
+            find_node(b, |n| {
+                n.kind() == "local_variable_declaration" && declarator_names(n, src).contains(&name)
+            })
+            .is_some()
+        });
+    if !(inner && outer) || local {
+        return None;
+    }
     let next = statement.next_named_sibling()?;
     (count_word(text(next, src), name) > 0).then_some(assignment)
+}
+
+/// The body of the method or constructor around a node.
+fn owning_body(node: Node) -> Option<Node> {
+    let mut up = node.parent();
+    while let Some(n) = up {
+        if matches!(n.kind(), "method_declaration" | "constructor_declaration") {
+            return n.child_by_field_name("body");
+        }
+        up = n.parent();
+    }
+    None
 }
 
 fn waits_inside_nested_synchronized(call: Node, _: &[u8]) -> bool {
@@ -2035,5 +2083,13 @@ mod tests {
         };
         assert_eq!(flagged("java/class-coupling", &class(21)), [3]);
         assert!(flagged("java/class-coupling", &class(20)).is_empty());
+    }
+
+    /// Measured on SonarQube 26.7: a local set once in a block isn't
+    /// published; a field behind a double null check is.
+    #[test]
+    fn double_checked_publication_needs_a_field() {
+        let src = "class A {\n    private java.util.Map<String, String> cache;\n    java.util.Map<String, String> f(java.util.Map<String, Object> s) {\n        synchronized (s) {\n            java.util.Map<String, String> m = null;\n            m = new java.util.HashMap<>();\n            s.put(\"k\", m);\n        }\n        if (cache == null) {\n            synchronized (this) {\n                if (cache == null) {\n                    cache = new java.util.HashMap<>();\n                    cache.put(\"a\", \"b\");\n                }\n            }\n        }\n        return cache;\n    }\n}";
+        assert_eq!(flagged("java/double-checked-publication", src), [12]);
     }
 }

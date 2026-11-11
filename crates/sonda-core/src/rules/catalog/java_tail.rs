@@ -257,7 +257,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2209")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_invocation object: (identifier) name: (identifier)) @match"#,
+            query: r#"(method_invocation object: (identifier) name: (identifier)) @match
+(field_access object: (this) field: (identifier)) @match"#,
             filter: Some(Keep(calls_a_static_method_on_an_instance)),
         },
         example: Some(Example {
@@ -622,6 +623,34 @@ fn static_method_names(root: Node, src: &[u8]) -> std::collections::HashSet<Vec<
 }
 
 fn calls_a_static_method_on_an_instance(call: Node, src: &[u8]) -> bool {
+    // `this.field` for a static field of the class (measured on SonarQube
+    // 26.7).
+    if call.kind() == "field_access" {
+        let Some(field) = call.child_by_field_name("field") else {
+            return false;
+        };
+        let mut up = call.parent();
+        while let Some(n) = up {
+            if matches!(n.kind(), "class_declaration" | "enum_declaration") {
+                return class_members(n).into_iter().any(|m| {
+                    m.kind() == "field_declaration"
+                        && has_modifier(m, "static")
+                        && children_of_kind(m, "variable_declarator").iter().any(|d| {
+                            d.child_by_field_name("name")
+                                .is_some_and(|x| text(x, src) == text(field, src))
+                        })
+                });
+            }
+            if matches!(n.kind(), "class_body" | "object_creation_expression")
+                && n.parent()
+                    .is_some_and(|p| p.kind() == "object_creation_expression")
+            {
+                return false;
+            }
+            up = n.parent();
+        }
+        return false;
+    }
     let Some(object) = call.child_by_field_name("object") else {
         return false;
     };
@@ -876,5 +905,12 @@ mod tests {
             flagged("java/loop-bound-changes", src),
             [4, 5, 8, 9, 11, 12]
         );
+    }
+
+    /// Measured on SonarQube 26.7: `this.field` for a static field.
+    #[test]
+    fn static_field_through_this() {
+        let src = "class A {\n    private static Object service;\n    private Object other;\n    void f(Object s) {\n        this.service = s;\n        this.other = s;\n    }\n}";
+        assert_eq!(flagged("java/static-member-via-instance", src), [5]);
     }
 }

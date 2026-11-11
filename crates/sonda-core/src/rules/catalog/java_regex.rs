@@ -866,7 +866,7 @@ fn regex_backtracks_exponentially<'t>(call: Node<'t>, src: &[u8]) -> Option<Node
 }
 
 fn regex_backtracks_polynomially<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, checks::backtracks_polynomially)
+    find_in_pattern(call, src, checks::backtracks_polynomially_java)
 }
 
 fn regex_boundary_cannot_match<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -906,7 +906,7 @@ fn regex_has_single_character_alternation<'t>(call: Node<'t>, src: &[u8]) -> Opt
 }
 
 fn regex_has_single_character_class<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(call, src, checks::has_single_character_class)
+    find_in_pattern(call, src, checks::has_single_character_class_java)
 }
 
 fn regex_has_superfluous_braces<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -976,5 +976,18 @@ mod tests {
         assert_eq!(flagged("java/regex-unicode-case", src), [8]);
         assert_eq!(flagged("java/regex-stack-overflow", src), [9]);
         assert_eq!(flagged("java/regex-multiline-empty-lines", src), [10]);
+    }
+
+    /// Measured on SonarQube 26.7: Java reports `[-]` and `[\\]`, not `[.]`;
+    /// and `.*X.*`, two repetitions around characters both match.
+    #[test]
+    fn java_regex_egov_shapes() {
+        let src = "class A {\n    Pattern a = Pattern.compile(\"(\\\\d{6})[-](\\\\d{7})\");\n    Pattern b = Pattern.compile(\"a[.]b\");\n    String c(String s) { return s.replaceFirst(\"^[\\\\\\\\]+\", \"\"); }\n    boolean d(String p) { return p.matches(\".*[a-zA-Z].*\"); }\n    boolean e(String p) { return p.matches(\"[a-z]+\\\\.[0-9]+\"); }\n}";
+        assert_eq!(flagged("java/regex-single-character-class", src), [2, 4]);
+        assert_eq!(flagged("java/regex-polynomial-backtracking", src), [5]);
+        // Line ends aren't `.`'s, the other characters are.
+        let ends =
+            "class A {\n    boolean f(String p) { return p.matches(\".*[\\\\r\\\\n;|<>].*\"); }\n}";
+        assert_eq!(flagged("java/regex-polynomial-backtracking", ends), [2]);
     }
 }

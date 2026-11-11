@@ -946,9 +946,15 @@ fn is_hardcoded_credential(node: Node, src: &[u8]) -> bool {
         .iter()
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'_'))
         && literal.iter().any(|b| matches!(b, b'.' | b'-'));
+    // A URL (`ACCESS_TOKEN = "https://..."`, an endpoint), or one word in
+    // capitals (`TOKEN_KEY = "DEFAULT"`, a name), isn't a secret.
+    let url = literal.windows(3).any(|w| w == b"://");
+    let constant_word = literal.iter().all(|b| b.is_ascii_uppercase() || *b == b'_');
     credential_name
         && !describes_location
         && !looks_like_property_key
+        && !url
+        && !constant_word
         && literal.len() >= 4
         && !literal.contains(&b' ')
         && !literal.contains(&b'{')

@@ -770,7 +770,21 @@ fn map_get_null_check_then_put<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'
                     .first()
                     .is_some_and(|a| text(*a, src) == text(key, src))
         });
-        (null_test && puts.is_some()).then_some(ifs)
+        // Only the new value and the put, nothing else in between (measured
+        // on SonarQube 26.7).
+        let only_assigns_and_puts = statements(ifs.child_by_field_name("consequence")?)
+            .iter()
+            .all(|st| {
+                st.kind() == "expression_statement"
+                    && st.named_child(0).is_some_and(|e| {
+                        e.kind() == "assignment_expression"
+                            && e.child_by_field_name("left")
+                                .is_some_and(|l| text(l, src) == var)
+                            || Some(e) == puts
+                    })
+            });
+        // Reported at the `get` (measured on SonarQube 26.7).
+        (null_test && puts.is_some() && only_assigns_and_puts).then_some(get)
     })
 }
 
@@ -1287,5 +1301,13 @@ mod tests {
         assert_eq!(flagged("java/compareto-overloaded", src), [5]);
         assert_eq!(flagged("java/hash-key-without-hashcode", src), [7]);
         assert_eq!(flagged("java/tree-key-not-comparable", src), [7]);
+    }
+
+    /// Measured on SonarQube 26.7: only an `if` that holds the new value and
+    /// the put, reported at the `get`.
+    #[test]
+    fn map_get_then_put_only_alone() {
+        let src = "class A {\n    java.util.Map<String, StringBuilder> m;\n    StringBuilder f(String k) {\n        StringBuilder v = m.get(k);\n        if (v == null) {\n            v = new StringBuilder();\n            m.put(k, v);\n        }\n        return v;\n    }\n    StringBuilder g(String k) {\n        StringBuilder v = m.get(k);\n        if (v == null) {\n            m.clear();\n            v = new StringBuilder();\n            m.put(k, v);\n        }\n        return v;\n    }\n}";
+        assert_eq!(flagged("java/map-get-then-put", src), [4]);
     }
 }

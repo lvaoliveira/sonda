@@ -720,6 +720,15 @@ fn java_suppressed_regions(src: &str, root: Node) -> Vec<SuppressedRegion> {
                 inner.extend(x.named_children(&mut c));
             }
             for v in values {
+                // `"unused"` silences the rules about unused code (measured on
+                // SonarQube 26.7): locals, private fields and methods,
+                // parameters.
+                if v == "unused" {
+                    for key in ["S1481", "S1068", "S1144", "S1172"] {
+                        regions.push(SuppressedRegion::new(Some(key.to_string()), start, end));
+                    }
+                    continue;
+                }
                 let key = match v.split_once(':') {
                     Some(("java" | "squid", key)) => Some(Some(key.to_string())),
                     None if v == "all" => Some(None),
@@ -1908,11 +1917,51 @@ const JAVA_MIN_VERSION: &[(&str, u32)] = &[
     // `case A, B:`, switch expressions
     ("java/ends-with-else-switch-labels", 14),
     ("java/switch-to-expression", 14),
+    // StringBuilder.isEmpty(), from CharSequence
+    ("java/string-builder-empty", 15),
     // pattern matching for instanceof, Stream.toList()
     ("java/instanceof-then-cast", 16),
     ("java/collectors-to-list", 16),
     // unnamed variables
     ("java/unused-exception-parameter", 22),
+];
+
+/// The Java version SonarQube needs before it runs a rule, by its key: the
+/// rules it tags `java9` to `java22` (read from SonarQube 26.7's rule
+/// list). `List.reversed()`, `Math.clamp` and a pattern `switch` need 21.
+const JAVA_MIN_VERSION_BY_KEY: &[(&str, u32)] = &[
+    ("S4738", 9),
+    ("S6355", 9),
+    ("S5194", 14),
+    ("S5663", 14),
+    ("S5664", 14),
+    ("S5665", 14),
+    ("S6205", 14),
+    ("S6208", 14),
+    ("S6201", 16),
+    ("S6204", 16),
+    ("S6206", 16),
+    ("S6207", 16),
+    ("S6209", 16),
+    ("S6211", 16),
+    ("S6216", 16),
+    ("S6218", 16),
+    ("S6219", 16),
+    ("S6217", 17),
+    ("S6876", 21),
+    ("S6877", 21),
+    ("S6878", 21),
+    ("S6880", 21),
+    ("S6881", 21),
+    ("S6885", 21),
+    ("S6901", 21),
+    ("S6906", 21),
+    ("S6913", 21),
+    ("S6915", 21),
+    ("S6916", 21),
+    ("S7466", 22),
+    ("S7467", 22),
+    ("S7475", 22),
 ];
 
 /// Whether the project targets a Java older than the rule's suggestion needs.
@@ -1921,6 +1970,13 @@ fn needs_newer_java(active: &ActiveRule, java_version: Option<u32>) -> bool {
         JAVA_MIN_VERSION
             .iter()
             .any(|&(id, min)| id == active.rule.id && v < min)
+            || active.rule.id.starts_with("java/")
+                && active.rule.sonar.iter().any(|r| {
+                    r.exact
+                        && JAVA_MIN_VERSION_BY_KEY
+                            .iter()
+                            .any(|&(key, min)| key == r.key && v < min)
+                })
     })
 }
 
@@ -1959,7 +2015,7 @@ fn js_chain_anchor(node: Node) -> Node {
 
 /// Where SonarQube reports an issue about a Java declaration that has
 /// annotations: at its name, below them (measured on SonarQube 26.7, for
-/// classes, methods and constructors), not at the first annotation.
+/// classes, methods, constructors and fields), not at the first annotation.
 fn java_anchor(node: Node) -> Node {
     // A call is reported at its method's name: in a chain spanning lines,
     // `a.b()\n.c()`, each call on its own line (measured on 26.7).
@@ -1974,6 +2030,7 @@ fn java_anchor(node: Node) -> Node {
         "annotation_type_declaration",
         "method_declaration",
         "constructor_declaration",
+        "field_declaration",
     ];
     if !DECLARATIONS.contains(&node.kind()) {
         return node;
@@ -1987,7 +2044,14 @@ fn java_anchor(node: Node) -> Node {
             m.children(&mut c)
                 .any(|a| matches!(a.kind(), "marker_annotation" | "annotation"))
         });
-    match node.child_by_field_name("name") {
+    // A field's name is its first declarator's.
+    let name = if node.kind() == "field_declaration" {
+        node.child_by_field_name("declarator")
+            .and_then(|d| d.child_by_field_name("name"))
+    } else {
+        node.child_by_field_name("name")
+    };
+    match name {
         Some(name) if annotated => name,
         _ => node,
     }
@@ -4175,6 +4239,43 @@ pub(crate) mod tests {
         assert_eq!(count(Some(8)), 0);
         assert_eq!(count(Some(17)), 1);
         assert_eq!(count(None), 1);
+    }
+
+    /// Rules SonarQube runs only from a Java version, by key: `Math.clamp`
+    /// needs 21 (S6885, tagged `java21` on SonarQube 26.7).
+    #[test]
+    fn java_rules_follow_their_keys_version() {
+        let src = "class A {\n    int f(int v) {\n        return Math.min(Math.max(v, 0), 10);\n    }\n}\n";
+        let count = |version: Option<u32>| {
+            let mut cfg = Config::default();
+            cfg.java.version = version;
+            let rules = RuleSet::new(&cfg.rules).unwrap();
+            analyze("A.java", Lang::Java, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .filter(|i| i.rule == "java/clamp")
+                .count()
+        };
+        assert_eq!(count(Some(17)), 0);
+        assert_eq!(count(Some(21)), 1);
+    }
+
+    /// `@SuppressWarnings("unused")` silences unused locals, as SonarQube
+    /// 26.7 does; a method's covers its body.
+    #[test]
+    fn suppress_unused_covers_unused_code() {
+        let src = "class A {\n    @SuppressWarnings({\"rawtypes\", \"unused\"})\n    void f() {\n        int a = 1;\n    }\n\n    void g() {\n        int b = 1;\n    }\n}\n";
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let a = analyze("A.java", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let lines: Vec<usize> = a
+            .issues
+            .iter()
+            .filter(|i| i.rule == "java/unused-local-variable")
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(lines, [8]);
     }
 
     /// A TODO in a block comment is reported on its own line.

@@ -130,9 +130,8 @@ built.
       explained. Java on a Spring Boot application (apigen.springboot,
       against SonarCloud): 121 of 171 and 11 extra, every difference
       classified; 45 come from SonarCloud's profile and newer rules. And on
-      eGovFrame's common components (against SonarCloud): Java 3,650 of
-      4,878 and 912 extra, the large differences classified and about 240
-      small ones not yet; JavaScript 450 of 454 and 279 extra, every
+      eGovFrame's common components (against SonarCloud): Java 3,726 of
+      4,878 and 868 extra, every difference classified; JavaScript 450 of 454 and 279 extra, every
       difference classified (the extra ones are `var`, which SonarQube
       26.7 reports).
 - [x] Performance measured on a large repository (time, peak memory, worker

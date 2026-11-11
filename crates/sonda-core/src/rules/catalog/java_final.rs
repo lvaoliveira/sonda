@@ -1008,11 +1008,11 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_invocation name: (identifier) @n (#any-of? @n "executeUpdate" "execute") arguments: (argument_list)) @match"#,
-            filter: Some(Keep(is_inside_a_loop)),
+            filter: Some(Keep(jdbc_update_in_a_loop)),
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() { for (int i = 0; i < 3; i++) { ps.executeUpdate(); } } }",
+            bad: "class A { void f(PreparedStatement ps) throws Exception { for (int i = 0; i < 3; i++) { ps.executeUpdate(); } } }",
             good: "class A { void f() { ps.executeBatch(); } }",
         }),
     },
@@ -1323,8 +1323,40 @@ fn bean_method_name_is_wrong<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>>
         n.first().is_some_and(u8::is_ascii_lowercase) && n.iter().all(u8::is_ascii_alphanumeric)
     };
     if decl.kind() == "method_declaration" {
-        return (has_annotation(decl, b"Bean", src) && !camel(name_text(decl, src)))
-            .then_some(decl);
+        if !has_annotation(decl, b"Bean", src) {
+            return None;
+        }
+        // `@Bean("egov.sqlSession")` or `@Bean(name = ...)` names the bean
+        // itself, reported at that string (measured on SonarQube 26.7).
+        let given = decl
+            .children(&mut decl.walk())
+            .find(|c| c.kind() == "modifiers")
+            .and_then(|mods| {
+                let mut c = mods.walk();
+                mods.children(&mut c).find(|a| {
+                    a.kind() == "annotation"
+                        && a.child_by_field_name("name")
+                            .is_some_and(|n| text(n, src) == b"Bean")
+                })
+            })
+            .and_then(|bean| {
+                let mut stack = vec![bean.child_by_field_name("arguments")?];
+                while let Some(n) = stack.pop() {
+                    if n.kind() == "string_literal" {
+                        return Some(n);
+                    }
+                    let mut c = n.walk();
+                    stack.extend(n.named_children(&mut c));
+                }
+                None
+            });
+        return match given {
+            Some(value) => {
+                let name = string_value(value, src)?;
+                (!name.is_empty() && !camel(name)).then_some(value)
+            }
+            None => (!camel(name_text(decl, src))).then_some(decl),
+        };
     }
     // The name a stereotype gives, reported where it's written.
     let mods = decl
@@ -2156,6 +2188,26 @@ fn try_expects_exception_with_many_calls(try_statement: Node, src: &[u8]) -> boo
         }) >= 2
 }
 
+/// A JDBC statement's update in a loop: the receiver is declared a
+/// `Statement`, or made by `createStatement()` and the like. Another type's
+/// `execute` isn't (measured on SonarQube 26.7).
+fn jdbc_update_in_a_loop(call: Node, src: &[u8]) -> bool {
+    let jdbc = call
+        .child_by_field_name("object")
+        .is_some_and(|o| match o.kind() {
+            "identifier" => matches!(
+                base_type(type_text(declared_type(call, text(o, src), src), src)),
+                b"Statement" | b"PreparedStatement" | b"CallableStatement"
+            ),
+            "method_invocation" => matches!(
+                method_name(o, src),
+                b"createStatement" | b"prepareStatement" | b"prepareCall"
+            ),
+            _ => false,
+        });
+    jdbc && is_inside_a_loop(call, src)
+}
+
 fn is_inside_a_loop(call: Node, _: &[u8]) -> bool {
     let mut p = call.parent();
     while let Some(n) = p {
@@ -2367,5 +2419,16 @@ mod tests {
             flagged("java/multiplication-overflow", src),
             [7, 8, 9, 10, 11, 12, 16, 17]
         );
+    }
+
+    /// Measured on SonarQube 26.7: `@Bean("egov.x")` and `@Bean(name =
+    /// ...)` name the bean, reported at the string; only a JDBC statement's
+    /// update in a loop.
+    #[test]
+    fn bean_names_and_jdbc() {
+        let src = "class C {\n    @Bean(\"egov.session\")\n    public Object session() { return null; }\n    @Bean(name = \"egov.other\")\n    public Object other() { return null; }\n    @Bean(\"good\")\n    public Object Good() { return null; }\n}";
+        assert_eq!(flagged("java/bean-method-name", src), [2, 4]);
+        let jdbc = "class A {\n    void f(Statement st, Entry e, String[] s) throws Exception {\n        for (String x : s) {\n            st.executeUpdate(x);\n            e.execute(x, x);\n        }\n    }\n}";
+        assert_eq!(flagged("java/jdbc-update-in-loop", jdbc), [4]);
     }
 }
