@@ -180,7 +180,7 @@ pub(crate) fn analyze(
         has_syntax_errors: root.has_error(),
         facts: match lang {
             Lang::CSharp => cs_facts(&ctx, root, deadline),
-            _ => java_facts(&ctx, lang, root)
+            _ => java_facts(&ctx, lang, root, deadline)
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
                 .collect(),
@@ -319,11 +319,33 @@ impl<'a> Ctx<'a> {
 /// The facts the project-level Java rules need from this file: its package,
 /// the base packages its Spring scan annotations cover, and the lines of
 /// the components it declares.
-fn java_facts(ctx: &Ctx, lang: Lang, root: Node) -> Vec<(String, String)> {
+fn java_facts(ctx: &Ctx, lang: Lang, root: Node, deadline: Instant) -> Vec<(String, String)> {
     if lang != Lang::Java {
         return Vec::new();
     }
     let mut facts = Vec::new();
+    // The types this file declares, for rules that compare declarations
+    // across files (ADR-0020).
+    let index = crate::semantic::java_index::extract(root, ctx.src.as_bytes(), deadline);
+    if (!index.types.is_empty() || !index.sites.is_empty())
+        && let Ok(json) = serde_json::to_string(&index)
+    {
+        facts.push((crate::semantic::java_index::FACT.to_string(), json));
+    }
+    // Lines whose comment suppresses issues, for the issues the project
+    // pass adds.
+    let suppressing: Vec<(usize, &str)> = ctx
+        .src
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("NOSONAR") || l.contains("sonda-ignore"))
+        .map(|(i, l)| (i + 1, l))
+        .collect();
+    if !suppressing.is_empty()
+        && let Ok(json) = serde_json::to_string(&suppressing)
+    {
+        facts.push((JAVA_SUPPRESSED_LINES.to_string(), json));
+    }
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
     let package = java_package(ctx, &children);
@@ -656,6 +678,41 @@ pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
         missing_neutral_language(files, rule);
     }
     apply_suppressions(files);
+}
+
+/// The fact listing a Java file's lines with a suppression comment.
+const JAVA_SUPPRESSED_LINES: &str = "java-suppressed-lines";
+
+/// Java rules that need other files' declarations (ADR-0020): overrides,
+/// serializable fields, `equals` in subclasses, arrays passed as varargs.
+pub(crate) fn java_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    let active: Vec<&str> = rules::java_project::RULES
+        .iter()
+        .copied()
+        .filter(|r| rules.get(r).is_some())
+        .collect();
+    if active.is_empty() {
+        return;
+    }
+    let found = rules::java_project::run(files.iter().map(|f| f.facts.as_slice()), &active);
+    for (rule, file, span) in found {
+        let Some(r) = rules.get(rule) else { continue };
+        let f = &mut files[file];
+        let suppressed = f
+            .facts
+            .iter()
+            .find(|(k, _)| k == JAVA_SUPPRESSED_LINES)
+            .and_then(|(_, json)| serde_json::from_str::<Vec<(usize, String)>>(json).ok())
+            .is_some_and(|lines| {
+                lines
+                    .iter()
+                    .any(|(line, text)| *line == span.line && Suppression::of(text).covers(rule))
+            });
+        if !suppressed {
+            let issue = project_issue_at(r, &f.path, span, r.rule.message.to_string());
+            f.issues.push(issue);
+        }
+    }
 }
 
 /// Partial methods declared, and implemented in no file.
@@ -2537,21 +2594,28 @@ impl<'t> CommentRules<'_, 't> {
                 issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
             }
         }
-        if let Some(rule) = self.todo
-            && let Some((tag, at)) = todo_tag_at(text)
-        {
-            // On the tag's line, as SonarQube reports it in a block comment.
-            let msg = format!("Complete the task associated with this {tag} comment.");
-            let before = &text[..at];
-            let row = node.start_position().row + before.matches('\n').count();
-            let column = match before.rfind('\n') {
-                Some(nl) => before[nl + 1..].chars().count(),
-                None => {
-                    ctx.lines.char_column(row, node.start_position().column)
-                        + before.chars().count()
+        if let Some(rule) = self.todo {
+            // On each tag's line, as SonarQube reports them in a block
+            // comment: one per line.
+            let mut from = 0;
+            while let Some((tag, found)) = todo_tag_at(&text[from..]) {
+                let at = from + found;
+                let msg = format!("Complete the task associated with this {tag} comment.");
+                let before = &text[..at];
+                let row = node.start_position().row + before.matches('\n').count();
+                let column = match before.rfind('\n') {
+                    Some(nl) => before[nl + 1..].chars().count(),
+                    None => {
+                        ctx.lines.char_column(row, node.start_position().column)
+                            + before.chars().count()
+                    }
+                };
+                issues.push(ctx.issue_on_line(rule, row, (column, column + tag.len()), msg));
+                match text[at..].find('\n') {
+                    Some(nl) => from = at + nl + 1,
+                    None => break,
                 }
-            };
-            issues.push(ctx.issue_on_line(rule, row, (column, column + tag.len()), msg));
+            }
         }
     }
 }
@@ -3126,15 +3190,19 @@ fn todo_tag(comment: &str) -> Option<&'static str> {
 /// The task tag in a comment, and its byte offset in it.
 fn todo_tag_at(comment: &str) -> Option<(&'static str, usize)> {
     // SonarQube knows TODO and FIXME only; XXX is a note, not a task.
-    ["TODO", "FIXME"].into_iter().find_map(|tag| {
-        comment.match_indices(tag).find_map(|(i, _)| {
-            let before = comment[..i].chars().next_back();
-            let after = comment[i + tag.len()..].chars().next();
-            (!before.is_some_and(char::is_alphanumeric)
-                && !after.is_some_and(char::is_alphanumeric))
-            .then_some((tag, i))
+    // The first one in the comment.
+    ["TODO", "FIXME"]
+        .into_iter()
+        .filter_map(|tag| {
+            comment.match_indices(tag).find_map(|(i, _)| {
+                let before = comment[..i].chars().next_back();
+                let after = comment[i + tag.len()..].chars().next();
+                (!before.is_some_and(char::is_alphanumeric)
+                    && !after.is_some_and(char::is_alphanumeric))
+                .then_some((tag, i))
+            })
         })
-    })
+        .min_by_key(|(_, i)| *i)
 }
 
 /// What a line's suppression comment covers: `NOSONAR` or `sonda-ignore`

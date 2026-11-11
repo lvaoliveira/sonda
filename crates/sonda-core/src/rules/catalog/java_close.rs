@@ -209,8 +209,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S3398")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Find(private_method_used_only_by_inner_classes)),
+            query: r#"(method_declaration name: (identifier) @match)"#,
+            filter: Some(Keep(private_method_used_only_by_inner_classes)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -247,11 +247,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S3551")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Find(override_drops_synchronized)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class P { synchronized void f() {} }\nclass C extends P { @Override void f() {} }",
@@ -846,26 +842,53 @@ fn passes_the_default_value(annotation: Node, src: &[u8]) -> bool {
     })
 }
 
-fn private_method_used_only_by_inner_classes<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+fn private_method_used_only_by_inner_classes(name_node: Node, src: &[u8]) -> bool {
+    let Some(m) = name_node.parent() else {
+        return false;
+    };
+    let Some(class) = m
+        .parent()
+        .filter(|b| b.kind() == "class_body")
+        .and_then(|b| b.parent())
+        .filter(|c| c.kind() == "class_declaration")
+    else {
+        return false;
+    };
+    if !has_modifier(m, "private") {
+        return false;
+    }
     let members = class_members(class);
     let nested: Vec<Node> = members
         .iter()
         .copied()
         .filter(|m| m.kind() == "class_declaration")
         .collect();
-    members.iter().copied().find(|m| {
-        if m.kind() != "method_declaration" || !has_modifier(*m, "private") {
-            return false;
-        }
-        let name = name_text(*m, src);
-        let outside: usize = members
-            .iter()
-            .filter(|o| o.kind() != "class_declaration" && **o != *m)
-            .map(|o| count_word(text(*o, src), name))
-            .sum();
-        let inside: usize = nested.iter().map(|n| count_word(text(*n, src), name)).sum();
-        outside == 0 && inside > 0
-    })
+    // Calls of the method itself: unqualified, or on `this`; `Other.name()`
+    // is another method.
+    let calls = |scope: Node, name: &[u8]| {
+        nodes_in(scope, &[], |n| {
+            n.kind() == "method_invocation"
+                && method_name(n, src) == name
+                && n.child_by_field_name("object")
+                    .is_none_or(|o| matches!(text(o, src), b"this"))
+        })
+        .len()
+            + count_word(text(scope, src), &[b"::", name].concat())
+    };
+    // Used by exactly one inner class, which it could move into (measured
+    // on SonarQube 26.7); a nested class with its own method of that name
+    // calls that one.
+    let name = name_text(m, src);
+    let outside: usize = members
+        .iter()
+        .filter(|o| o.kind() != "class_declaration" && **o != m)
+        .map(|o| calls(*o, name))
+        .sum();
+    let users = nested
+        .iter()
+        .filter(|n| has_method(**n, name, src).is_empty() && calls(**n, name) > 0)
+        .count();
+    outside == 0 && users == 1
 }
 
 fn serializable_class_holds_optional<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -880,18 +903,6 @@ fn serializable_class_holds_optional<'t>(class: Node<'t>, src: &[u8]) -> Option<
             && !has_modifier(*m, "static")
             && !has_modifier(*m, "transient")
             && base_type(type_text(m.child_by_field_name("type"), src)).starts_with(b"Optional")
-    })
-}
-
-fn override_drops_synchronized<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let parent = parent_class(class, src)?;
-    class_members(class).into_iter().find(|m| {
-        m.kind() == "method_declaration"
-            && !has_modifier(*m, "synchronized")
-            && !has_modifier(*m, "static")
-            && has_method(parent, name_text(*m, src), src)
-                .iter()
-                .any(|p| arity(*p) == arity(*m) && has_modifier(*p, "synchronized"))
     })
 }
 
@@ -975,16 +986,20 @@ fn passes_null_to_a_nonnull_parameter(call: Node, src: &[u8]) -> bool {
 
 fn passes_a_bare_null_to_varargs(call: Node, src: &[u8]) -> bool {
     let args = call_arguments(call);
+    // The null lands exactly on the variable-arity parameter, and no
+    // overload of that arity without one would be chosen first.
+    let same_arity: Vec<Vec<Node>> = same_class_target(call, src)
+        .iter()
+        .filter_map(|m| m.child_by_field_name("parameters"))
+        .map(|ps| ps.named_children(&mut ps.walk()).collect::<Vec<Node>>())
+        .filter(|params| params.len() == args.len())
+        .collect();
     args.last().is_some_and(|a| a.kind() == "null_literal")
-        && same_class_target(call, src).iter().any(|m| {
-            m.child_by_field_name("parameters").is_some_and(|ps| {
-                let params: Vec<Node> = ps.named_children(&mut ps.walk()).collect();
-                // the null lands exactly on the variable-arity parameter
-                params.len() == args.len()
-                    && params
-                        .last()
-                        .is_some_and(|p| p.kind() == "spread_parameter")
-            })
+        && !same_arity.is_empty()
+        && same_arity.iter().all(|params| {
+            params
+                .last()
+                .is_some_and(|p| p.kind() == "spread_parameter")
         })
 }
 
@@ -1324,7 +1339,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
@@ -1416,5 +1432,16 @@ mod tests {
         assert!(flagged("java/brain-method", &brain(64, true, true)).is_empty());
         assert!(flagged("java/brain-method", &brain(80, false, true)).is_empty());
         assert!(flagged("java/brain-method", &brain(80, true, false)).is_empty());
+    }
+
+    /// Measured on SonarQube 26.7: used by exactly one inner class, and a
+    /// call on another type isn't a use; a non-varargs overload of that
+    /// arity takes the null.
+    #[test]
+    fn inner_class_methods_and_null_varargs() {
+        let src = "class A {\nprivate int one() { return 1; }\nprivate int two() { return 2; }\nint outer() { return Other.one(); }\nclass B { int b() { return one() + two(); } }\nclass C { int c() { return two(); } }\nstatic class D { static int one() { return 1; } int d() { return one(); } }\n}";
+        assert_eq!(flagged("java/private-method-for-inner-class", src), [2]);
+        let src = "class A {\nvoid m(Object o, Object... xs) {}\nvoid m(Object o, Object[] xs, Class<?>[] ts) {}\nvoid n(Object o, Object... xs) {}\nvoid f() {\nm(1, null);\nm(1, new Object[0], null);\nn(1, null);\n}\n}";
+        assert_eq!(flagged("java/varargs-called-with-null", src), [6, 8]);
     }
 }

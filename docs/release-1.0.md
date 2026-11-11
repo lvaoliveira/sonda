@@ -125,7 +125,9 @@ built.
       [differences.md](sonar-parity/differences.md) has each language's
       result. Done: JavaScript (arandu), TypeScript and Rust (sonda).
       Python: compared, every difference classified; about 40 issues on
-      CPython are listed as not explained.
+      CPython are listed as not explained. Java (Apache Commons Lang): 889
+      of 918 raised and 2 extra, every difference classified; 3 not
+      explained.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

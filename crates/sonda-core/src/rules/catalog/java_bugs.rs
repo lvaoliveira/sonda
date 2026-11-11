@@ -641,7 +641,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2272")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_declaration (super_interfaces) @i) @match"#,
+            query: r#"(class_declaration (super_interfaces) @i) @match
+(object_creation_expression type: (generic_type) (class_body)) @match"#,
             filter: Some(Find(next_never_throws)),
         },
         example: Some(Example {
@@ -904,7 +905,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(object_creation_expression (class_body (block))) @match"#,
-            filter: None,
+            filter: Some(Keep(only_an_initializer)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1711,13 +1712,29 @@ fn counter_moves_away_from_bound(for_loop: Node, src: &[u8]) -> bool {
 
 fn next_never_throws<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut cursor = class.walk();
-    let implements_iterator = class.children(&mut cursor).any(|i| {
-        i.kind() == "super_interfaces" && text(i, src).windows(9).any(|w| w == b"Iterator<")
-    });
+    // A class implementing Iterator, or an anonymous one, `new Iterator<T>() {}`.
+    let anonymous = class.kind() == "object_creation_expression";
+    let implements_iterator = if anonymous {
+        class.child_by_field_name("type").is_some_and(|t| {
+            let t = text(t, src);
+            t.starts_with(b"Iterator<") || t.windows(10).any(|w| w == b".Iterator<")
+        })
+    } else {
+        class.children(&mut cursor).any(|i| {
+            i.kind() == "super_interfaces" && text(i, src).windows(9).any(|w| w == b"Iterator<")
+        })
+    };
     if !implements_iterator {
         return None;
     }
-    let body = class.child_by_field_name("body")?;
+    let body = if anonymous {
+        let mut c = class.walk();
+        class
+            .named_children(&mut c)
+            .find(|n| n.kind() == "class_body")?
+    } else {
+        class.child_by_field_name("body")?
+    };
     let mut c = body.walk();
     body.named_children(&mut c).find(|m| {
         m.kind() == "method_declaration"
@@ -1726,8 +1743,16 @@ fn next_never_throws<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             && parameter_types(*m, src).is_empty()
             && m.child_by_field_name("body").is_some_and(|b| {
                 let t = text(b, src);
+                // Another iterator's `next()` throws for it.
+                let delegates = find_node(b, |n| {
+                    n.kind() == "method_invocation"
+                        && method_name(n, src) == b"next"
+                        && n.child_by_field_name("object").is_some()
+                })
+                .is_some();
                 !t.windows(21).any(|w| w == b"NoSuchElementException")
                     && find_node(b, |n| n.kind() == "throw_statement").is_none()
+                    && !delegates
             })
     })
 }
@@ -2245,6 +2270,22 @@ fn is_double_checked_locking(statement: Node, src: &[u8]) -> bool {
     .is_some()
 }
 
+/// An anonymous class that is only an initializer block: one with fields or
+/// methods besides is a subclass in its own right (measured on SonarQube
+/// 26.7).
+fn only_an_initializer(creation: Node, _: &[u8]) -> bool {
+    let mut c = creation.walk();
+    creation
+        .named_children(&mut c)
+        .find(|n| n.kind() == "class_body")
+        .is_some_and(|body| {
+            let mut c = body.walk();
+            body.named_children(&mut c)
+                .filter(|m| !m.kind().ends_with("comment"))
+                .all(|m| m.kind() == "block")
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -2256,7 +2297,8 @@ mod tests {
     fn flagged(rule: &str, src: &str) -> Vec<usize> {
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)

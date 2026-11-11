@@ -540,6 +540,7 @@ fn scan_files(
     analysis::js_dependency_rules(&mut files, rules, manifests);
     analysis::taint_project_rules(&mut files, rules);
     analysis::cs_project_rules(&mut files, rules);
+    analysis::java_project_rules(&mut files, rules);
     for (f, before) in files.iter_mut().zip(package_issues_before) {
         for issue in &mut f.issues[before..] {
             issue.is_new = new_code.is_new(&f.path, issue.line);

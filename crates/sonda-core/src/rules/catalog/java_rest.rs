@@ -2,10 +2,9 @@
 //! persistence and session checks, and a few loop and constructor-reference
 //! mistakes.
 
-use super::java_bugs::{has_annotation, has_modifier};
+use super::java_bugs::has_annotation;
 use super::java_extra::{class_members, declared_type, name_text, type_text};
 use super::java_final::{base_type, root_of};
-use super::java_flow::find_declared_type;
 use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::count_word;
 use super::prelude::*;
@@ -182,11 +181,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 10,
         sonar: &[exact("S2160")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(class_declaration superclass: (superclass) ) @match"#,
-            filter: Some(Keep(subclass_adds_fields_without_equals)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class P { public boolean equals(Object o) { return true; } }\nclass C extends P { int extra; }",
@@ -313,45 +308,6 @@ fn ascending_loop_removes_by_index<'t>(for_statement: Node<'t>, src: &[u8]) -> O
     })
 }
 
-fn subclass_adds_fields_without_equals(child: Node, src: &[u8]) -> bool {
-    let defines_equals = |c: Node| {
-        class_members(c)
-            .iter()
-            .any(|m| m.kind() == "method_declaration" && name_text(*m, src) == b"equals")
-    };
-    let Some(sup) = child.child_by_field_name("superclass") else {
-        return false;
-    };
-    let parent_name = sup
-        .named_child(0)
-        .map_or(&b""[..], |t| base_type(text(t, src)));
-    // A parent in this file is checked; a few JDK parents are known to
-    // define equals.
-    let parent_defines_equals = match find_declared_type(root_of(child), parent_name, src) {
-        Some(p) => p.id() != child.id() && defines_equals(p),
-        None => matches!(
-            parent_name,
-            b"ArrayList"
-                | b"LinkedList"
-                | b"HashMap"
-                | b"TreeMap"
-                | b"LinkedHashMap"
-                | b"HashSet"
-                | b"TreeSet"
-                | b"Date"
-                | b"Calendar"
-                | b"GregorianCalendar"
-                | b"AbstractList"
-                | b"AbstractMap"
-        ),
-    };
-    parent_defines_equals
-        && !defines_equals(child)
-        && class_members(child)
-            .iter()
-            .any(|m| m.kind() == "field_declaration" && !has_modifier(*m, "static"))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -364,7 +320,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)

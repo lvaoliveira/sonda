@@ -22,7 +22,7 @@ the steps, the commands and what was learned along the way.
 | sonda | TypeScript (TSX), Rust | `8b30263` | 51 of 51 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
-| Apache Commons Lang | Java | `5d2715b` | 842 of 918 | 56 |
+| Apache Commons Lang | Java | `5d2715b` | 889 of 918 | 2 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -262,26 +262,51 @@ And in a second round:
   - S2143 counts `Date` and `Calendar`, an import included, not
     `SimpleDateFormat`, `DateFormat`, `java.sql` or a name written out.
 
+And in a third, with the other files' declarations
+([ADR-0020](../adr/0020-cross-file-declarations.md#java)):
+
+- **Across files.** An override widening `protected` to `public` isn't
+  useless (S1185), nor `equals`, `hashCode`, `toString`, a final one or one
+  with another annotation, and `@Override` isn't needed to be one. A class
+  is serializable through a parent in another file or the JDK's
+  (`Exception`, `MessageFormat`); its field is reported when its type isn't
+  serializable (`Object`, `Type`, `Thread`, a project type without
+  `Serializable`, a type variable without such a bound), when it's a
+  collection interface and not private, or when it holds a type that
+  isn't serializable (S1948). An `equals` counts at any distance up the
+  superclasses (S2160); any varargs constructor or method takes an array
+  literal (S3878). Inheritance depth counts ancestors up to `Object`, more
+  than 5 (S110).
+- **Commented-out code (S125).** A line is code when it ends with a brace,
+  holds `if(`, `for(`, `while(`, `catch(`, `switch(`, `try{` or `else{`
+  with spaces removed, or ends with `;` and has a keyword, `&&`, `||` or a
+  camelCase word among its space-separated words. The keywords are a list
+  of SonarQube's, without `new`, `do`, `break` or `char`.
+- **Smaller ones.** S1135 is each line with a tag; S1193 the catch's first
+  statement; S3024 a concatenation appended in a loop; S4144 leaves
+  single-statement methods; S1130 leaves unchecked exceptions; S112
+  reports `throws Exception` with nothing in the body to pass it on;
+  S3599 is an anonymous class that is only an initializer; S3398 a method
+  one inner class uses; S106 any use of `System.out`; S1182 a `clone()`
+  not calling `super.clone()` itself; S1612 `() -> x.run()` too; S4276 a
+  boxed primitive in or out; S3011 a field written by reflection.
+
 ### Still open in Java
 
-- **Known gaps**, needing other files' declarations, which sonda indexes
-  for C# only ([ADR-0020](../adr/0020-cross-file-declarations.md)):
-  - `java/useless-override` (40 sonda only): overrides widening
-    `protected` to `public`; whether that is all they do depends on the
-    overridden method.
-  - S1948 (14 and 3): whether a field's type is serializable.
-  - S2160 (6): a subclass adding fields to a parent, in another file, that
-    defines `equals`.
-  - S3878 (6): an array passed to a constructor's varargs, declared in
-    another file.
-- **Known gap, data flow:** S2259 (15), null dereferences.
-- **Deliberate:** S2245 (11). `java/random-secret` reports a random value
+On Commons Lang, 29 of SonarQube's issues and 2 of sonda's:
+
+- **Known gap, data flow (15):** S2259, null dereferences SonarQube finds by
+  following calls (`getLength(array) < 2` before `array[0]`) and paths.
+- **Deliberate (11):** S2245. `java/random-secret` reports a random value
   that becomes a secret; SonarQube asks for a review of every
   `ThreadLocalRandom` and random-utility call.
-- **Not explained:** `java/brain-method` (2). Both methods are reported
-  when their file is scanned alone, or copied as they are into a file of
-  their own; in the whole project they aren't, with or without the tests.
-- About 30 issues of one or two per key, still to measure.
+- **Known gap, the JDK's declarations (2):** S1161, a method overriding
+  `CharSequence.isEmpty()`, a default method of the JDK; S3014, a lambda's
+  parameter whose type is inferred as `ThreadGroup`.
+- **Not explained (3):** S8491 on a field whose Javadoc is followed by a
+  line comment; `java/brain-method` (2), reported by SonarQube when their
+  file is scanned alone or copied into a file of its own, but not in the
+  whole project.
 
 ## Rules that depend on knowing a type
 

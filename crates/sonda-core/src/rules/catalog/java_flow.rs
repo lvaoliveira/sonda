@@ -318,11 +318,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 30,
         sonar: &[exact("S110")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Keep(inheritance_chain_is_deep)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class A1 {}\nclass A2 extends A1 {}\nclass A3 extends A2 {}\nclass A4 extends A3 {}\nclass A5 extends A4 {}\nclass A6 extends A5 {}\nclass A7 extends A6 {}",
@@ -358,11 +354,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Minor,
         effort_minutes: 2,
         sonar: &[exact("S3038")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Find(redeclares_an_interface_method)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "interface I { void f(); }\nabstract class A implements I { public abstract void f(); }",
@@ -1104,23 +1096,6 @@ fn clamp_bounds_are_reversed(call: Node, src: &[u8]) -> bool {
 
 // ---- hierarchy
 
-fn inheritance_chain_is_deep(class: Node, src: &[u8]) -> bool {
-    let root = root_of(class);
-    let mut depth = 0;
-    let mut cur = class;
-    while let Some(parent_name) = superclass_name(cur, src) {
-        let Some(parent) = find_declared_type(root, parent_name, src) else {
-            break;
-        };
-        depth += 1;
-        cur = parent;
-        if depth > 5 {
-            return true;
-        }
-    }
-    depth > 5
-}
-
 fn static_member_called_through_subclass(call: Node, src: &[u8]) -> bool {
     let Some(object) = call.child_by_field_name("object").filter(|o| {
         o.kind() == "identifier" && text(*o, src).first().is_some_and(u8::is_ascii_uppercase)
@@ -1142,43 +1117,6 @@ fn static_member_called_through_subclass(call: Node, src: &[u8]) -> bool {
         && has_method(base, name, src)
             .iter()
             .any(|m| has_modifier(*m, "static"))
-}
-
-fn redeclares_an_interface_method<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if !has_modifier(class, "abstract") {
-        return None;
-    }
-    let interfaces = class.child_by_field_name("interfaces")?;
-    let root = root_of(class);
-    let arity = |m: &Node| {
-        m.child_by_field_name("parameters")
-            .map_or(0, |p| p.named_child_count())
-    };
-    class_members(class).into_iter().find(|m| {
-        m.kind() == "method_declaration"
-            && has_modifier(*m, "abstract")
-            && root_interfaces(root, interfaces, src).iter().any(|i| {
-                has_method(*i, name_text(*m, src), src)
-                    .iter()
-                    .any(|im| arity(im) == arity(m))
-            })
-    })
-}
-
-fn root_interfaces<'t>(root: Node<'t>, list: Node, src: &[u8]) -> Vec<Node<'t>> {
-    let mut out = Vec::new();
-    let mut stack = vec![list];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "type_identifier"
-            && let Some(i) = find_declared_type(root, text(n, src), src)
-                .filter(|d| d.kind() == "interface_declaration")
-        {
-            out.push(i);
-        }
-        let mut c = n.walk();
-        stack.extend(n.named_children(&mut c));
-    }
-    out
 }
 
 fn compare_to_takes_another_type(method: Node, src: &[u8]) -> bool {
@@ -1323,7 +1261,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
