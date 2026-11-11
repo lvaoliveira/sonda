@@ -74,7 +74,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1874")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(call_expression) @match"#,
+            query: r#"[(call_expression) (member_expression)] @match"#,
             filter: Some(Find(uses_deprecated_api)),
         },
         example: Some(Example {
@@ -1201,7 +1201,35 @@ fn enclosing_function_of(node: Node) -> Option<Node> {
 
 // ------------------------------------------------------------- S1874
 
-fn uses_deprecated_api<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// A deprecated member of a module or global object: `fs.exists`,
+/// `document.execCommand`.
+fn deprecated_member_of(object: &[u8], member: &[u8]) -> bool {
+    match (object, member) {
+        (b"util", m) => m.starts_with(b"is") && m != b"isDeepStrictEqual",
+        (b"fs", b"exists")
+        | (b"crypto", b"createCipher" | b"createDecipher")
+        | (b"url", b"parse")
+        | (b"process", b"binding")
+        | (b"ReactDOM", b"render" | b"hydrate" | b"findDOMNode" | b"unmountComponentAtNode")
+        | (b"React", b"createClass")
+        | (b"document", b"execCommand") => true,
+        _ => false,
+    }
+}
+
+/// A deprecated API: called, or, for one of a module or global object, also
+/// referred to without a call (`typeof document.execCommand`), as SonarQube
+/// reports any use.
+fn uses_deprecated_api<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if node.kind() == "member_expression" {
+        let called = node.parent().is_some_and(|p| {
+            p.kind() == "call_expression" && p.child_by_field_name("function") == Some(node)
+        });
+        let part = |f| node.child_by_field_name(f).map(|n| text(n, src));
+        return (!called && deprecated_member_of(part("object")?, part("property")?))
+            .then_some(node);
+    }
+    let call = node;
     let function = call.child_by_field_name("function")?;
     let t = text(function, src);
     let member = function
@@ -1213,14 +1241,7 @@ fn uses_deprecated_api<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .map(|o| text(o, src))
         .unwrap_or_default();
     let deprecated = match (object, member) {
-        (b"util", m) if m.starts_with(b"is") && m != b"isDeepStrictEqual" => true,
-        (b"fs", b"exists") => true,
-        (b"crypto", b"createCipher" | b"createDecipher") => true,
-        (b"url", b"parse") => true,
-        (b"process", b"binding") => true,
-        (b"ReactDOM", b"render" | b"hydrate" | b"findDOMNode" | b"unmountComponentAtNode") => true,
-        (b"React", b"createClass") => true,
-        (b"document", b"execCommand") => true,
+        (o, m) if deprecated_member_of(o, m) => true,
         (b"Object" | b"Reflect", _) => false,
         (_, b"substr") => true,
         (_, b"getYear" | b"setYear" | b"toGMTString") => true,
@@ -2578,5 +2599,13 @@ mod tests {
         assert_eq!(flagged("js/unused-assignment", destructured), [2]);
         let declared = "function h(s) {\n  let x;\n  x = s.y;\n}";
         assert_eq!(flagged("js/unused-assignment", declared), [3]);
+    }
+
+    /// A deprecated member of a module or global object is reported where
+    /// it's used, not only where it's called.
+    #[test]
+    fn deprecated_members_referred_to() {
+        let src = "function copy(t) {\n  if (typeof document.execCommand !== 'function') return false;\n  return document.execCommand('copy');\n}\nconst s = x.substr;";
+        assert_eq!(flagged("js/deprecated-api", src), [2, 3]);
     }
 }

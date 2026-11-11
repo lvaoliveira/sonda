@@ -2,8 +2,8 @@
 //! `js_modern.rs` about keeping queries cheap on deep trees.
 
 use super::js::{
-    attribute, has_spread, has_token, on_dom_element, opening_tag, static_value, string_content,
-    tag_name, text,
+    attribute, has_content, has_spread, has_token, on_dom_element, opening_tag, static_value,
+    string_content, tag_name, text,
 };
 use super::js_modern::collect_below;
 use super::prelude::*;
@@ -244,7 +244,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JSX,
             query: r#"(jsx_attribute (property_identifier) @a (#eq? @a "role")) @match"#,
-            filter: Some(Keep(role_has_native_tag)),
+            filter: Some(Find(element_with_native_tag_role)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -620,15 +620,119 @@ const NATIVE_TAG_FOR_ROLE: &[(&[u8], &str)] = &[
     (b"article", "article"),
     (b"complementary", "aside"),
     (b"region", "section"),
+    (b"img", "img"),
+    (b"status", "output"),
+    (b"option", "option"),
+    (b"listbox", "select"),
+    (b"textbox", "input"),
+    (b"progressbar", "progress"),
+    (b"separator", "hr"),
+    (b"dialog", "dialog"),
+    (b"group", "fieldset"),
+    (b"row", "tr"),
 ];
 
+/// The element, reported where it starts, as SonarQube does.
+fn element_with_native_tag_role<'t>(attr: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    role_has_native_tag(attr, src)
+        .then(|| element_of_attribute(attr))
+        .flatten()
+}
+
+/// A role a native tag has, on a generic element (`div`, `span`, `svg`), as
+/// SonarQube 26.7 reports it, measured one case at a time: not `role="img"`
+/// on an element with content or an inline `svg` with a name (a labelled
+/// icon or chart), nor `role="status"` with `aria-live`, nor an `option`
+/// inside a `listbox` or a `row` inside a `table`, nor those containers
+/// written with them. A role chosen by a ternary counts as written
+/// (`role={label ? 'img' : undefined}`).
 fn role_has_native_tag(attr: Node, src: &[u8]) -> bool {
     let Some(opening) = element_of_attribute(attr) else {
         return false;
     };
-    matches!(opening_name(opening, src), b"div" | b"span")
-        && static_value(attr, src)
-            .is_some_and(|role| NATIVE_TAG_FOR_ROLE.iter().any(|(r, _)| *r == role))
+    let tag = opening_name(opening, src);
+    if !matches!(tag, b"div" | b"span" | b"svg") {
+        return false;
+    }
+    let Some((role, literal)) = role_value(attr, src) else {
+        return false;
+    };
+    if !NATIVE_TAG_FOR_ROLE.iter().any(|(r, _)| *r == role) {
+        return false;
+    }
+    let element = if opening.kind() == "jsx_opening_element" {
+        opening.parent().unwrap_or(opening)
+    } else {
+        opening
+    };
+    let named = || {
+        ["aria-label", "aria-labelledby"]
+            .iter()
+            .any(|a| attribute(opening, a, src).is_some())
+    };
+    match role {
+        b"img" => !(literal && (has_content(element, src) || tag == b"svg" && named())),
+        b"status" => attribute(opening, "aria-live", src).is_none(),
+        b"option" => !inside_role(element, b"listbox", src),
+        b"row" => !inside_role(element, b"table", src),
+        b"listbox" => !has_child_with_role(element, b"option", src),
+        b"table" => !has_child_with_role(element, b"row", src),
+        _ => true,
+    }
+}
+
+/// Whether one of the element's own JSX children has `role`: a listbox
+/// written with its options, a table with its rows, which SonarQube leaves
+/// alone (a list with its items it still reports).
+fn has_child_with_role(element: Node, role: &[u8], src: &[u8]) -> bool {
+    let mut cursor = element.walk();
+    element.named_children(&mut cursor).any(|c| {
+        let open = match c.kind() {
+            "jsx_element" => c.child_by_field_name("open_tag"),
+            "jsx_self_closing_element" => Some(c),
+            _ => None,
+        };
+        open.and_then(|o| attribute(o, "role", src))
+            .is_some_and(|a| static_value(a, src) == Some(role))
+    })
+}
+
+/// Whether an enclosing JSX element, in the same expression, has `role`.
+fn inside_role(element: Node, role: &[u8], src: &[u8]) -> bool {
+    let mut n = element.parent();
+    while let Some(p) = n {
+        if p.kind() == "jsx_element"
+            && let Some(open) = p.child_by_field_name("open_tag")
+            && attribute(open, "role", src).is_some_and(|a| static_value(a, src) == Some(role))
+        {
+            return true;
+        }
+        if matches!(p.kind(), "program" | "class_body") {
+            return false;
+        }
+        n = p.parent();
+    }
+    false
+}
+
+/// A role attribute's value, and whether it is written as is: `"img"`, or
+/// from either branch of a ternary, `{cond ? 'img' : undefined}`.
+fn role_value<'s>(attr: Node, src: &'s [u8]) -> Option<(&'s [u8], bool)> {
+    if let Some(role) = static_value(attr, src) {
+        return Some((role, true));
+    }
+    let ternary = attr
+        .named_child(1)
+        .filter(|v| v.kind() == "jsx_expression")?
+        .named_child(0)
+        .filter(|t| t.kind() == "ternary_expression")?;
+    ["consequence", "alternative"].iter().find_map(|f| {
+        let branch = ternary
+            .child_by_field_name(f)
+            .filter(|b| b.kind() == "string")?;
+        let t = text(branch, src);
+        Some((t.get(1..t.len().checked_sub(1)?)?, false))
+    })
 }
 
 // `option` and `treeitem` are left out: inside a listbox or tree, focus is
@@ -751,10 +855,52 @@ mod tests {
 
     #[test]
     fn html_and_semantics() {
-        let src = "const a = <html><body /></html>;\nconst b = <html lang=\"en\"><body /></html>;\nconst c = <meta aria-label=\"x\" />;\nconst d = <div role=\"navigation\" />;\nconst e = <span role=\"img\" aria-label=\"ok\" />;\nconst f = <div role=\"option\" />;";
+        let src = "const a = <html><body /></html>;\nconst b = <html lang=\"en\"><body /></html>;\nconst c = <meta aria-label=\"x\" />;\nconst d = <div role=\"navigation\" />;\nconst e = <span role=\"img\" aria-label=\"ok\">★</span>;\nconst f = <p role=\"option\" />;";
         assert_eq!(flagged("js/html-lang", src), [1]);
         assert_eq!(flagged("js/aria-on-unsupported-element", src), [3]);
         assert_eq!(flagged("js/prefer-semantic-tag", src), [4]);
         assert!(flagged("js/role-needs-focus", src).is_empty());
+    }
+
+    /// Each case as SonarQube 26.7 reports S6819 on it.
+    #[test]
+    fn native_tag_roles_as_sonarqube_reports_them() {
+        let cases = [
+            ("<div role=\"status\"><p>{x}</p></div>", true),
+            (
+                "<div role=\"status\" aria-live=\"polite\"><p>{x}</p></div>",
+                false,
+            ),
+            ("<span role=\"img\" aria-label=\"ok\" />", true),
+            ("<span role=\"img\" aria-label=\"ok\">★</span>", false),
+            ("<svg role=\"img\" aria-label=\"chart\" />", false),
+            (
+                "<svg role={label ? 'img' : undefined} aria-label={label}><path /></svg>",
+                true,
+            ),
+            ("<div role=\"option\" aria-selected={on}>{x}</div>", true),
+            (
+                "<div role=\"listbox\" aria-label=\"L\">{xs.map((y) => <p key={y}>{y}</p>)}</div>",
+                true,
+            ),
+            ("<div role=\"progressbar\" aria-valuenow={1} />", true),
+            ("<div role=\"separator\" />", true),
+            ("<div role=\"alert\">{x}</div>", false),
+            ("<p role=\"status\">{x}</p>", false),
+        ];
+        for (jsx, reported) in cases {
+            let src = format!("const e = (\n  {jsx}\n);");
+            let expected: &[usize] = if reported { &[2] } else { &[] };
+            assert_eq!(flagged("js/prefer-semantic-tag", &src), expected, "{jsx}");
+        }
+    }
+
+    /// An option inside a listbox, a row inside a table, and those containers
+    /// written with them aren't reported; a list with its items is. Reported
+    /// where the element starts, not at its role.
+    #[test]
+    fn composite_roles_with_their_items() {
+        let src = "const a = (\n  <div role=\"listbox\">\n    {xs.map((x) => (\n      <div\n        key={x}\n        role=\"option\"\n      >\n        {x}\n      </div>\n    ))}\n  </div>\n);\nconst b = <div role=\"table\"><div role=\"row\">a</div></div>;\nconst c = <div role=\"list\"><div role=\"listitem\">a</div></div>;\nconst d = (\n  <div\n    role=\"option\"\n  />\n);";
+        assert_eq!(flagged("js/prefer-semantic-tag", src), [2, 14, 14, 16]);
     }
 }
