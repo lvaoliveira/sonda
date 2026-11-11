@@ -1884,7 +1884,12 @@ fn next_line_looks_guarded(parent: Node, _: &[u8]) -> bool {
     if parent.kind() == "if_statement" && parent.child_by_field_name("alternative").is_some() {
         return false;
     }
-    let Some(next) = parent.next_named_sibling() else {
+    // A comment after the body guards nothing.
+    let mut next = parent.next_named_sibling();
+    while next.is_some_and(|n| matches!(n.kind(), "line_comment" | "block_comment")) {
+        next = next.and_then(|n| n.next_named_sibling());
+    }
+    let Some(next) = next else {
         return false;
     };
     body.start_position().row > parent.start_position().row
@@ -2417,5 +2422,11 @@ mod tests {
         assert_eq!(flagged("java/aws-region-hardcoded", src), [10]);
         assert_eq!(flagged("java/region-not-set", src), [10]);
         assert_eq!(flagged("java/missing-override", src), [11]);
+    }
+
+    #[test]
+    fn a_comment_after_the_body_is_not_guarded() {
+        let src = "class A {\n  void f(boolean c) {\n    if (c)\n      a();\n      // note\n    b();\n  }\n}";
+        assert!(flagged("java/multiline-without-braces", src).is_empty());
     }
 }

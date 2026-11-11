@@ -1008,7 +1008,10 @@ fn assigned_name<'s>(statement: Node, src: &'s [u8]) -> Option<&'s [u8]> {
         "lexical_declaration" | "variable_declaration" => {
             let decls = named(statement);
             let [d] = decls.as_slice() else { return None };
-            d.child_by_field_name("value")?;
+            // `let x = null;` then `x = ...` only says where x starts.
+            if is_trivial_value(d.child_by_field_name("value")?, src) {
+                return None;
+            }
             let n = d
                 .child_by_field_name("name")
                 .filter(|n| n.kind() == "identifier")?;
@@ -1038,12 +1041,15 @@ fn overwrites_unread(statement: Node, name: &[u8], src: &[u8]) -> bool {
     overwrites && !reads
 }
 
-/// (b) A local that is written and never read.
+/// (b) A local that is written and never read, reported at its first write
+/// that isn't a trivial starting value (`null`, `0`, `false`, `''`, `[]`,
+/// `{}` and the like, as SonarQube ignores them): `let x = null; ... x = y;`
+/// at `x = y`.
 fn written_never_read<'t>(function: Node<'t>, body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let refs = references(body);
     declared_locals(body, src)
         .into_iter()
-        .find_map(|(name, declarator)| {
+        .find_map(|(name, binding, declarator)| {
             if name.starts_with(b"_") {
                 return None;
             }
@@ -1060,13 +1066,60 @@ fn written_never_read<'t>(function: Node<'t>, body: Node<'t>, src: &[u8]) -> Opt
                     && r.parent
                         .is_some_and(|p| is_function_kind(p.kind()) && p.id() != function.id())
             });
-            (!read && !captured).then_some(declarator)
+            if read || captured {
+                return None;
+            }
+            if !starts_trivially(binding, declarator, src) {
+                return Some(declarator);
+            }
+            refs.iter()
+                .filter(same)
+                .filter_map(|r| r.parent.filter(|p| p.kind() == "assignment_expression"))
+                .find(|p| {
+                    p.child_by_field_name("left")
+                        .is_some_and(|l| text(l, src) == name)
+                })
         })
 }
 
-/// The names a function body declares with a value, outside nested
-/// functions, `for` heads and exports, each with its declarator.
-fn declared_locals<'t, 's>(body: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Node<'t>)> {
+/// Whether a declared name starts out with nothing worth reporting: no value
+/// (`let x;`), a trivial one (`let x = null`), or a trivial default in a
+/// destructuring (`const { a = false } = o`).
+fn starts_trivially(binding: Node, declarator: Node, src: &[u8]) -> bool {
+    if let Some(p) = binding.parent()
+        && matches!(p.kind(), "assignment_pattern" | "object_assignment_pattern")
+        && p.child_by_field_name("left") == Some(binding)
+    {
+        return p
+            .child_by_field_name("right")
+            .is_some_and(|v| is_trivial_value(v, src));
+    }
+    if declarator.child_by_field_name("name") != Some(binding) {
+        return false; // destructured from the value
+    }
+    declarator
+        .child_by_field_name("value")
+        .is_none_or(|v| is_trivial_value(v, src))
+}
+
+/// `null`, `undefined`, `true`, `false`, `0`, `1`, `-1`, an empty string,
+/// `[]` or `{}`: a variable's starting value rather than a computed one.
+fn is_trivial_value(value: Node, src: &[u8]) -> bool {
+    match value.kind() {
+        "null" | "undefined" | "true" | "false" => true,
+        "identifier" => text(value, src) == b"undefined",
+        "number" => matches!(text(value, src), b"0" | b"1"),
+        "unary_expression" => text(value, src) == b"-1",
+        "string" | "template_string" => text(value, src).len() == 2,
+        "array" | "object" => value.named_child_count() == 0,
+        _ => false,
+    }
+}
+
+/// The names a function body declares, outside nested functions, `for`
+/// heads and exports, each with the node naming it and its declarator. A
+/// destructuring is included only with a value, as it always has one.
+fn declared_locals<'t, 's>(body: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Node<'t>, Node<'t>)> {
     let mut locals = Vec::new();
     walk(body, &mut |n| {
         if is_function_kind(n.kind()) {
@@ -1074,17 +1127,41 @@ fn declared_locals<'t, 's>(body: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Node
         }
         if n.kind() == "variable_declarator"
             && let Some(pattern) = n.child_by_field_name("name")
-            && n.child_by_field_name("value").is_some()
+            && (n.child_by_field_name("value").is_some() || pattern.kind() == "identifier")
             && is_plain_declaration(n)
             && !has_rest(pattern)
         {
             let mut names = Vec::new();
-            pattern_names(pattern, src, &mut names);
-            locals.extend(names.into_iter().map(|name| (name, n)));
+            pattern_name_nodes(pattern, &mut names);
+            locals.extend(names.into_iter().map(|name| (text(name, src), name, n)));
         }
         true
     });
     locals
+}
+
+/// The nodes naming each variable a pattern declares, as `pattern_names`
+/// reads them.
+fn pattern_name_nodes<'t>(pattern: Node<'t>, out: &mut Vec<Node<'t>>) {
+    match pattern.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => out.push(pattern),
+        "pair_pattern" => {
+            if let Some(v) = pattern.child_by_field_name("value") {
+                pattern_name_nodes(v, out);
+            }
+        }
+        "assignment_pattern" | "object_assignment_pattern" => {
+            if let Some(l) = pattern.child_by_field_name("left") {
+                pattern_name_nodes(l, out);
+            }
+        }
+        "object_pattern" | "array_pattern" => {
+            for c in named(pattern) {
+                pattern_name_nodes(c, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A declarator of a `let`, `const` or `var` that isn't a `for` head or exported.
@@ -2489,5 +2566,17 @@ mod tests {
     fn find_on_the_right_of_and_is_its_value() {
         let src = "function f(key, items) {\n  const d = key && items.find((x) => x.key === key);\n  if (d) return d.name;\n  if (key && items.find((x) => x.ok)) return 1;\n  return ok || items.find((x) => x.ok);\n}";
         assert_eq!(flagged("js/find-for-existence", src), [4]);
+    }
+
+    /// A trivial starting value isn't a dead store; the first real write to
+    /// a variable never read is, where it happens.
+    #[test]
+    fn unused_assignment_skips_trivial_starting_values() {
+        let src = "function f(o, s) {\n  let a = null;\n  if (s) {\n    a = s.x;\n  }\n  const { b = false, c } = o;\n  let d = 0;\n  d = 1;\n  return c;\n}";
+        assert_eq!(flagged("js/unused-assignment", src), [4]);
+        let destructured = "function g(o) {\n  const { b, c } = o;\n  return c;\n}";
+        assert_eq!(flagged("js/unused-assignment", destructured), [2]);
+        let declared = "function h(s) {\n  let x;\n  x = s.y;\n}";
+        assert_eq!(flagged("js/unused-assignment", declared), [3]);
     }
 }
