@@ -122,9 +122,9 @@ built.
       language ([ADR-0007](adr/0007-sonarqube-rule-parity.md)): every
       difference is a bug, a known gap listed in `docs/rules.md`, or a
       deliberate change.
-- [ ] Performance measured on a large repository (time, peak memory, worker
+- [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
-      times); limits documented.
+      times); limits documented in [performance.md](performance.md).
 - [ ] Sign-in and the main pages checked in Safari and Firefox, not only
       Chrome.
 - [ ] Every bug found gets a test that would have caught it, like the

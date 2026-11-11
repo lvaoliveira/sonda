@@ -1312,6 +1312,9 @@ history costs more; older history never grows past one a day. Your project's num
 pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC` shows where
 a database's size is.
 
+How the pages and uploads hold up with thousands of analyses, and the
+limits on an upload, are in [performance.md](performance.md#server).
+
 ## Upgrading
 
 1. **Back up** (see Backups above). There's no downgrade: a new version
