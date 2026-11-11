@@ -227,7 +227,7 @@ file, the report formats and the public library API.
 
 - Java, compared with SonarQube 26.7 on Apache Commons Lang (`5d2715b`,
   Java 8): sonda raises 826 of SonarQube's 918 issues, where it raised
-  762, and 138 SonarQube doesn't, where it raised 683.
+  762, and 89 SonarQube doesn't, where it raised 683.
   - `common/todo-comment` reports a TODO in a block comment (a Javadoc)
     on the tag's line, in every language.
   - `java/wrapper-constructor` reports `new String()` and `new
@@ -245,6 +245,15 @@ file, the report formats and the public library API.
   - `java/duplicated-string` leaves an exception's message out of the
     count. `java/commented-out-code` reports a block of lines once, and a
     one-line `/* ... */`; `common/commented-out-code` leaves Java to it.
+  - `java/deprecated-code` also reports an element deprecated by its
+    Javadoc tag alone, and leaves one whose tag says what to use instead or
+    when it goes ("use ... instead", "will be removed in").
+  - `java/brain-method` needs all four of SonarQube's measures: 65 lines of
+    code, a cyclomatic complexity of 15, control structures nested 3 deep
+    and 7 variables. It used lines and branches only.
+  - `java/class-coupling` counts the project's own types, not the JDK's,
+    the class's nested types or its type parameters, and is reported past
+    20 of them.
 
 Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,

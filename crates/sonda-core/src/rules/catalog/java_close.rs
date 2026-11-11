@@ -634,7 +634,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f(int a) {\n if (a == 1) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 2) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 3) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 4) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 5) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 6) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 7) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 8) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 9) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 10) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 11) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 12) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 13) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 14) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 15) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 16) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 17) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 18) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 19) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 20) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 21) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 22) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 23) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 24) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 25) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 26) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 27) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 28) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 29) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 30) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 31) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 32) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 33) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 34) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 35) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 36) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 37) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 38) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 39) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 40) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 41) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 42) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 43) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 44) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 45) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 46) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 47) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 48) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 49) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 50) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 51) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 52) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 53) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 54) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 55) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 56) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 57) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 58) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 59) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 60) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 61) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 62) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 63) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 64) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 65) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 66) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 67) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 68) { if (a > 1) { if (a > 2) { g(); } } }\n if (a == 69) { if (a > 1) { if (a > 2) { g(); } } }\n} }",
+            bad: "class A { void f(int a, int b, int c, int d, int e, int f, int g) {\n if (a == 1) { if (b > 1) { if (c > 1) { g(); } } }\n if (a == 2) { if (b > 2) { if (c > 2) { g(); } } }\n if (a == 3) { if (b > 3) { if (c > 3) { g(); } } }\n if (a == 4) { if (b > 4) { if (c > 4) { g(); } } }\n if (a == 5) { if (b > 5) { if (c > 5) { g(); } } }\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n a += b + c + d + e + f + g;\n} }",
             good: "class A { void f(int a) { g(); } }",
         }),
     },
@@ -1199,15 +1199,40 @@ fn parser_pool_keeps_comments(creation: Node, src: &[u8]) -> bool {
     count_word(text(scope, src), b"setIgnoreComments") == 0
 }
 
+/// A brain method as SonarQube 26.7 measures one (all four, measured on
+/// small methods): 65 lines of code or more, a cyclomatic complexity of
+/// 15 or more, control structures nested 3 deep, and 7 or more variables.
 fn is_a_brain_method(method: Node, src: &[u8]) -> bool {
-    let lines = method.end_position().row - method.start_position().row + 1;
-    if lines <= 64 {
-        return false;
-    }
     let Some(body) = method.child_by_field_name("body") else {
         return false;
     };
-    let branches = nodes_in(body, &["lambda_expression", "class_body"], |n| {
+    code_lines(method) >= 65
+        && cyclomatic(body, src) >= 15
+        && max_nesting(body) >= 3
+        && variables_accessed(method, body, src) >= 7
+}
+
+/// The lines that hold code, not only comments or blanks.
+fn code_lines(node: Node) -> usize {
+    let mut rows = std::collections::BTreeSet::new();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if n.child_count() == 0 {
+            rows.extend(n.start_position().row..=n.end_position().row);
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.children(&mut c));
+    }
+    rows.len()
+}
+
+/// 1 + the decisions: branches, loops, catches, ternaries, cases, `&&`, `||`.
+fn cyclomatic(body: Node, src: &[u8]) -> usize {
+    1 + nodes_in(body, &["lambda_expression", "class_body"], |n| {
         match n.kind() {
             "if_statement"
             | "for_statement"
@@ -1217,11 +1242,74 @@ fn is_a_brain_method(method: Node, src: &[u8]) -> bool {
             | "catch_clause"
             | "ternary_expression" => true,
             "switch_label" => text(n, src).starts_with(b"case"),
+            "binary_expression" => n
+                .child_by_field_name("operator")
+                .is_some_and(|o| matches!(text(o, src), b"&&" | b"||")),
             _ => false,
         }
     })
-    .len();
-    branches > 14
+    .len()
+}
+
+/// How deep control structures nest; an `else if` doesn't go deeper.
+fn max_nesting(body: Node) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(body, 0)];
+    while let Some((n, depth)) = stack.pop() {
+        let control = matches!(
+            n.kind(),
+            "if_statement"
+                | "for_statement"
+                | "enhanced_for_statement"
+                | "while_statement"
+                | "do_statement"
+                | "switch_expression"
+                | "try_statement"
+                | "try_with_resources_statement"
+        ) && !(n.kind() == "if_statement"
+            && n.parent().is_some_and(|p| p.kind() == "if_statement"));
+        let depth = depth + usize::from(control);
+        deepest = deepest.max(depth);
+        if matches!(n.kind(), "lambda_expression" | "class_body") {
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c).map(|k| (k, depth)));
+    }
+    deepest
+}
+
+/// The distinct parameters, locals and fields the method reads or writes.
+fn variables_accessed(method: Node, body: Node, src: &[u8]) -> usize {
+    let mut declared: Vec<&[u8]> = Vec::new();
+    if let Some(params) = method.child_by_field_name("parameters") {
+        let mut c = params.walk();
+        declared.extend(
+            params
+                .named_children(&mut c)
+                .filter_map(|p| p.child_by_field_name("name").map(|n| text(n, src))),
+        );
+    }
+    for d in nodes_in(body, &[], |n| n.kind() == "variable_declarator") {
+        declared.extend(d.child_by_field_name("name").map(|n| text(n, src)));
+    }
+    if let Some(class) = method.parent().and_then(|b| b.parent()) {
+        for f in nodes_in(
+            class,
+            &["method_declaration", "constructor_declaration"],
+            |n| n.kind() == "variable_declarator",
+        ) {
+            declared.extend(f.child_by_field_name("name").map(|n| text(n, src)));
+        }
+    }
+    let mut accessed: Vec<&[u8]> = Vec::new();
+    for id in nodes_in(body, &[], |n| n.kind() == "identifier") {
+        let t = text(id, src);
+        if declared.contains(&t) && !accessed.contains(&t) {
+            accessed.push(t);
+        }
+    }
+    accessed.len()
 }
 
 #[cfg(test)]
@@ -1274,5 +1362,59 @@ mod tests {
         let src = "import static a.B.c;\nimport java.util.List;\nclass A {\n private void helper() {}\n class B { void f() { helper(); } }\n}";
         assert_eq!(flagged("java/import-order", src), [2]);
         assert_eq!(flagged("java/private-method-for-inner-class", src), [4]);
+    }
+
+    /// A method with `code` lines of code, three nested loops or none, and
+    /// nine variables or five.
+    fn brain(code: usize, nested: bool, fields: bool) -> String {
+        let mut body: Vec<String> = vec!["int x = 0;".into()];
+        let flow: &[&str] = if nested {
+            &[
+                "if (p > 0) {",
+                "for (int i = 0; i < q; i++) {",
+                "while (r > i) {",
+                "r--;",
+                "}",
+                "}",
+                "}",
+            ]
+        } else {
+            &[
+                "if (p > 0) {",
+                "r--;",
+                "}",
+                "for (int i = 0; i < q; i++) {",
+                "r--;",
+                "}",
+                "while (r > 0) {",
+                "r--;",
+                "}",
+            ]
+        };
+        body.extend(flow.iter().map(|l| (*l).to_string()));
+        body.extend((0..12).map(|k| format!("if (x == {k}) {{ x++; }}")));
+        let pad = if fields {
+            "x += a + b + c + d;"
+        } else {
+            "x += 1;"
+        };
+        // The signature and the closing brace are lines of code too.
+        while body.len() + 3 < code {
+            body.push(pad.into());
+        }
+        body.push("return x;".into());
+        format!(
+            "class A {{\nint a, b, c, d;\nint m(int p, int q, int r) {{\n{}\n}}\n}}",
+            body.join("\n")
+        )
+    }
+
+    /// Measured on SonarQube 26.7: every threshold must be met.
+    #[test]
+    fn brain_methods() {
+        assert_eq!(flagged("java/brain-method", &brain(65, true, true)), [3]);
+        assert!(flagged("java/brain-method", &brain(64, true, true)).is_empty());
+        assert!(flagged("java/brain-method", &brain(80, false, true)).is_empty());
+        assert!(flagged("java/brain-method", &brain(80, true, false)).is_empty());
     }
 }

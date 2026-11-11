@@ -32333,76 +32333,72 @@ SonarQube: S6541
 Noncompliant:
 
 ```java
-class A { void f(int a) {
- if (a == 1) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 2) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 3) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 4) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 5) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 6) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 7) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 8) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 9) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 10) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 11) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 12) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 13) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 14) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 15) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 16) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 17) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 18) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 19) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 20) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 21) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 22) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 23) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 24) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 25) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 26) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 27) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 28) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 29) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 30) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 31) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 32) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 33) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 34) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 35) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 36) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 37) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 38) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 39) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 40) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 41) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 42) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 43) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 44) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 45) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 46) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 47) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 48) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 49) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 50) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 51) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 52) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 53) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 54) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 55) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 56) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 57) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 58) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 59) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 60) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 61) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 62) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 63) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 64) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 65) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 66) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 67) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 68) { if (a > 1) { if (a > 2) { g(); } } }
- if (a == 69) { if (a > 1) { if (a > 2) { g(); } } }
+class A { void f(int a, int b, int c, int d, int e, int f, int g) {
+ if (a == 1) { if (b > 1) { if (c > 1) { g(); } } }
+ if (a == 2) { if (b > 2) { if (c > 2) { g(); } } }
+ if (a == 3) { if (b > 3) { if (c > 3) { g(); } } }
+ if (a == 4) { if (b > 4) { if (c > 4) { g(); } } }
+ if (a == 5) { if (b > 5) { if (c > 5) { g(); } } }
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
+ a += b + c + d + e + f + g;
 } }
 ```
 

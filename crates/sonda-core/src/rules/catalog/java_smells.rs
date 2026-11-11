@@ -3067,7 +3067,15 @@ fn is_the_only_public_constructor(ctor: Node) -> bool {
 
 /// The name of a declaration marked `@Deprecated`, where SonarQube reports it.
 fn deprecated_declaration_name<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if !has_annotation(declaration, b"Deprecated", src) {
+    // The annotation, or the Javadoc tag alone, as SonarQube reports both.
+    let tag = declaration
+        .prev_named_sibling()
+        .filter(|c| c.kind() == "block_comment" && text(*c, src).starts_with(b"/**"))
+        .and_then(|c| deprecated_tag(text(c, src)));
+    if !has_annotation(declaration, b"Deprecated", src) && tag.is_none() {
+        return None;
+    }
+    if tag.is_some_and(says_what_to_do) {
         return None;
     }
     if declaration.kind() == "field_declaration" {
@@ -3076,6 +3084,34 @@ fn deprecated_declaration_name<'t>(declaration: Node<'t>, src: &[u8]) -> Option<
             .and_then(|d| d.child_by_field_name("name"));
     }
     declaration.child_by_field_name("name")
+}
+
+/// The text of a Javadoc's `@deprecated` tag, up to the next tag.
+fn deprecated_tag(javadoc: &[u8]) -> Option<&[u8]> {
+    let start = javadoc.windows(11).position(|w| w == b"@deprecated")? + 11;
+    let rest = &javadoc[start..];
+    let mut end = rest.len();
+    let mut offset = 0;
+    for line in rest.split_inclusive(|&b| b == b'\n') {
+        let body = line.trim_ascii_start();
+        let body = body.strip_prefix(b"*").unwrap_or(body).trim_ascii_start();
+        if offset > 0 && body.starts_with(b"@") {
+            end = offset;
+            break;
+        }
+        offset += line.len();
+    }
+    Some(&rest[..end])
+}
+
+/// Whether a deprecation says what to use instead or when it goes, which
+/// SonarQube 26.7 takes as enough: the text holds both "use" and "instead",
+/// anywhere and in any case (even inside "because"), or "will be removed
+/// in" or "to be removed in" on one line.
+fn says_what_to_do(tag: &[u8]) -> bool {
+    let tag = tag.to_ascii_lowercase();
+    let has = |s: &[u8]| tag.windows(s.len()).any(|w| w == s);
+    (has(b"use") && has(b"instead")) || has(b"will be removed in") || has(b"to be removed in")
 }
 
 fn concatenates_a_string_in_a_loop(assign: Node, src: &[u8]) -> bool {
@@ -4753,5 +4789,47 @@ mod tests {
         // S1192: an exception's message doesn't count.
         let src = "class A { void f(int i) {\nif (i == 1) throw new IllegalStateException(\"shut down here\");\nif (i == 2) throw new IllegalStateException(\"shut down here\");\nif (i == 3) throw new IllegalStateException(\"shut down here\");\n} }";
         assert!(flagged("java/duplicated-string", src).is_empty());
+    }
+
+    /// Measured on SonarQube 26.7: a deprecation is reported unless its tag
+    /// says what to use instead or when it goes.
+    #[test]
+    fn deprecations_that_say_what_to_do() {
+        let case = |tag: &str| {
+            let src = format!(
+                "class A {{\n/**\n * Returns one.\n *\n * @deprecated {tag}\n */\n@Deprecated\nint old() {{ return 1; }}\n}}"
+            );
+            !flagged("java/deprecated-code", &src).is_empty()
+        };
+        // Reported.
+        for tag in [
+            "Use one.",
+            "Prefer one instead.",
+            "Instead, call one.",
+            "Removed in 4.",
+            "Will be removed.",
+            "May be removed in a future release.",
+            "Shall be removed in 4.",
+            "Will be removed\n *     in 4.",
+            "Old.\n * @see #one() Use one instead.",
+        ] {
+            assert!(case(tag), "{tag}");
+        }
+        // Not reported.
+        for tag in [
+            "Use {@link #one()} instead.",
+            "Instead use one.",
+            "Because of one, instead.",
+            "USE ONE INSTEAD.",
+            "Use one\n *     instead.",
+            "Will be removed in 4.0.0.",
+            "This feature will be removed in Lang 4, use one.",
+            "Is to be removed in 4.",
+        ] {
+            assert!(!case(tag), "{tag}");
+        }
+        // The rest of the Javadoc doesn't count, and the tag alone deprecates.
+        let src = "class A {\n/**\n * Use one instead.\n * @deprecated Old.\n */\n@Deprecated\nint old() { return 1; }\n/**\n * @deprecated Old.\n */\nint older() { return 1; }\n}";
+        assert_eq!(flagged("java/deprecated-code", src), [7, 11]);
     }
 }

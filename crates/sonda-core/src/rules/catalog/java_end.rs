@@ -1607,8 +1607,12 @@ fn operand_is_a_float(binary: Node, src: &[u8]) -> bool {
     is_float(binary.child_by_field_name("left")) || is_float(binary.child_by_field_name("right"))
 }
 
+/// A class that depends on more than 20 of the project's own types, as
+/// SonarQube's S6539 counts them (measured): fields, locals, parameters and
+/// type arguments count; the JDK's types, the class's own type parameters
+/// and nested types, and a type only named in a static call don't.
 fn depends_on_many_types(class: Node, src: &[u8]) -> bool {
-    const TRIVIAL: &[&[u8]] = &[
+    const JAVA_LANG: &[&[u8]] = &[
         b"String",
         b"Object",
         b"Integer",
@@ -1620,15 +1624,111 @@ fn depends_on_many_types(class: Node, src: &[u8]) -> bool {
         b"Byte",
         b"Character",
         b"Void",
+        b"Number",
+        b"Math",
+        b"StrictMath",
+        b"StringBuilder",
+        b"StringBuffer",
+        b"CharSequence",
+        b"Class",
+        b"ClassLoader",
+        b"Enum",
+        b"Record",
+        b"Iterable",
+        b"Comparable",
+        b"Cloneable",
+        b"AutoCloseable",
+        b"Runnable",
+        b"Thread",
+        b"ThreadLocal",
+        b"ThreadGroup",
+        b"System",
+        b"Runtime",
+        b"Process",
+        b"ProcessBuilder",
+        b"StackTraceElement",
+        b"Throwable",
+        b"Exception",
+        b"Error",
+        b"RuntimeException",
+        b"IllegalArgumentException",
+        b"IllegalStateException",
+        b"NullPointerException",
+        b"UnsupportedOperationException",
+        b"IndexOutOfBoundsException",
+        b"ArrayIndexOutOfBoundsException",
+        b"StringIndexOutOfBoundsException",
+        b"NumberFormatException",
+        b"ClassCastException",
+        b"ArithmeticException",
+        b"CloneNotSupportedException",
+        b"InterruptedException",
+        b"ReflectiveOperationException",
+        b"ClassNotFoundException",
+        b"NoSuchMethodException",
+        b"NoSuchFieldException",
+        b"IllegalAccessException",
+        b"InstantiationException",
+        b"SecurityException",
+        b"AssertionError",
+        b"LinkageError",
+        b"OutOfMemoryError",
+        b"StackOverflowError",
+        b"Appendable",
+        b"Readable",
         b"Override",
         b"Deprecated",
+        b"SuppressWarnings",
         b"FunctionalInterface",
+        b"SafeVarargs",
     ];
-    let own = name_text(class, src);
+    let root = root_of(class);
+    let mut jdk: Vec<&[u8]> = Vec::new();
+    let mut cursor = root.walk();
+    for import in root
+        .named_children(&mut cursor)
+        .filter(|n| n.kind() == "import_declaration")
+    {
+        let t = text(import, src);
+        let path = t.strip_prefix(b"import").unwrap_or(t).trim_ascii();
+        let path = path.strip_prefix(b"static").unwrap_or(path).trim_ascii();
+        if path.starts_with(b"java.") || path.starts_with(b"javax.") {
+            let name = path.trim_ascii_end().strip_suffix(b";").unwrap_or(path);
+            jdk.extend(name.rsplit(|b| *b == b'.').next());
+        }
+    }
+    // Declared here: the class, its nested types, its type parameters.
+    let mut own: Vec<&[u8]> = vec![name_text(class, src)];
+    for n in nodes_in(class, &[], |n| {
+        matches!(
+            n.kind(),
+            "class_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | "record_declaration"
+                | "type_parameter"
+        )
+    }) {
+        let name = n
+            .child_by_field_name("name")
+            .or_else(|| n.named_child(0))
+            .map(|x| text(x, src));
+        own.extend(name);
+    }
     let mut seen: Vec<&[u8]> = Vec::new();
     for n in nodes_in(class, &[], |n| n.kind() == "type_identifier") {
         let t = text(n, src);
-        if t != own && !TRIVIAL.contains(&t) && !seen.contains(&t) {
+        // `java.util.ArrayList` written out is the JDK's too.
+        let qualified_jdk = n.parent().is_some_and(|p| {
+            p.kind() == "scoped_type_identifier" && {
+                let q = text(p, src);
+                q.starts_with(b"java.") || q.starts_with(b"javax.")
+            }
+        });
+        if qualified_jdk {
+            continue;
+        }
+        if !own.contains(&t) && !jdk.contains(&t) && !JAVA_LANG.contains(&t) && !seen.contains(&t) {
             seen.push(t);
         }
     }
@@ -2050,5 +2150,18 @@ mod tests {
         assert_eq!(flagged("java/arguments-in-wrong-order", src), [4]);
         assert_eq!(flagged("java/reverse-index-loop", src), [5]);
         assert_eq!(flagged("java/prepared-constant-in-loop", src), [6]);
+    }
+
+    /// Measured on SonarQube 26.7: more than 20 of the project's own types.
+    #[test]
+    fn class_coupling_counts_own_types() {
+        let class = |own: usize| {
+            let fields: String = (0..own).map(|k| format!("T{k} f{k};\n")).collect();
+            format!(
+                "import java.util.List;\nimport java.util.Map;\nclass A<E> {{\n{fields}List<E> l;\nMap<String, Integer> m;\njava.util.Set<Thread> s;\nInner i;\nclass Inner {{}}\nvoid f() {{ Util.call(); }}\n}}"
+            )
+        };
+        assert_eq!(flagged("java/class-coupling", &class(21)), [3]);
+        assert!(flagged("java/class-coupling", &class(20)).is_empty());
     }
 }
