@@ -94,9 +94,15 @@ function useFitToWindow(min: number) {
   useEffect(() => {
     if (!el) return
     const fit = () => {
-      const rect = el.getBoundingClientRect()
-      const top = rect.top + window.scrollY
-      const below = document.documentElement.scrollHeight - (rect.bottom + window.scrollY)
+      const top = el.getBoundingClientRect().top + window.scrollY
+      // What stays under the panel, the last thing in its parent: the
+      // parent's bottom padding, and whatever follows the parent. Not the
+      // gap between the panel and the page's end: the parent stretches to
+      // fill a taller window, and that space is the panel's to take.
+      const parent = el.parentElement
+      const below = parent
+        ? document.documentElement.scrollHeight - (parent.getBoundingClientRect().bottom + window.scrollY) + Number.parseFloat(getComputedStyle(parent).paddingBottom)
+        : 0
       const next = Math.max(min, Math.floor(window.innerHeight - top - Math.max(0, below)))
       setHeight((h) => (h === next ? h : next))
     }
