@@ -68,7 +68,7 @@ mod rs;
 mod rs_more;
 pub(super) mod standards;
 
-pub(super) use super::Filter::{Find, Keep};
+pub(super) use super::Filter::{Find, FindSaying, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
 pub(super) use crate::lang::{C_CPP, C_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, RUST, TS};
 pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
@@ -81,9 +81,9 @@ pub(super) use tree_sitter::Node;
 /// the one Rust and SonarQube allow (a module named `prelude`).
 mod prelude {
     pub(super) use super::{
-        Blocker, Bug, C_CPP, C_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find, Info, JAVA,
-        JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, RUST, Rule, TS, Vulnerability,
-        bare_except, empty_block, exact, has_equality_operator, no_arguments,
+        Blocker, Bug, C_CPP, C_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find, FindSaying,
+        Info, JAVA, JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, RUST, Rule, TS,
+        Vulnerability, bare_except, empty_block, exact, has_equality_operator, no_arguments,
         not_nullish_comparison, related,
     };
 }

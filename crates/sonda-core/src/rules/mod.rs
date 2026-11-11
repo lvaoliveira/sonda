@@ -56,7 +56,14 @@ pub(crate) enum Filter {
     /// rule can capture a container, which is cheap to match, and point at
     /// the offending child.
     Find(for<'t> fn(Node<'t>, &[u8]) -> Option<Node<'t>>),
+    /// `Find`, with a message of its own in place of the rule's: for a rule
+    /// whose fix depends on what it found, such as which API replaces a
+    /// deprecated one.
+    FindSaying(FindSayingFn),
 }
+
+/// A `Filter::FindSaying`: the node to report, and its message.
+pub(crate) type FindSayingFn = for<'t> fn(Node<'t>, &[u8]) -> Option<(Node<'t>, String)>;
 
 pub(crate) enum Check {
     /// A tree-sitter query; every `@match` capture becomes an issue.

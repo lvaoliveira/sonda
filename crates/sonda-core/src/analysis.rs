@@ -1759,12 +1759,18 @@ fn needs_newer_java(active: &ActiveRule, java_version: Option<u32>) -> bool {
 }
 
 /// The node a query rule reports for a capture: the capture itself, if its
-/// filter keeps it, or the node its filter finds.
-fn filtered_node<'t>(filter: Option<Filter>, node: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
+/// filter keeps it, or the node its filter finds; with the message its
+/// filter gives, if any, in place of the rule's.
+fn filtered_node<'t>(
+    filter: Option<Filter>,
+    node: Node<'t>,
+    bytes: &[u8],
+) -> Option<(Node<'t>, Option<String>)> {
     match filter {
-        None => Some(node),
-        Some(Filter::Keep(keep)) => keep(node, bytes).then_some(node),
-        Some(Filter::Find(find)) => find(node, bytes),
+        None => Some((node, None)),
+        Some(Filter::Keep(keep)) => keep(node, bytes).then_some((node, None)),
+        Some(Filter::Find(find)) => find(node, bytes).map(|n| (n, None)),
+        Some(Filter::FindSaying(find)) => find(node, bytes).map(|(n, m)| (n, Some(m))),
     }
 }
 
@@ -1813,9 +1819,9 @@ fn run_queries_in(
                 .iter()
                 .filter(|c| c.index == cq.match_capture)
                 .filter_map(|cap| filtered_node(filter, cap.node, bytes))
-                .filter(|node| within.is_none_or(|w| w.covers(node.start_byte())));
-            for node in found {
-                let msg = active.rule.message.to_string();
+                .filter(|(node, _)| within.is_none_or(|w| w.covers(node.start_byte())));
+            for (node, message) in found {
+                let msg = message.unwrap_or_else(|| active.rule.message.to_string());
                 issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
             }
         }
