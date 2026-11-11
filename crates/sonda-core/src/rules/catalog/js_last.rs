@@ -970,7 +970,112 @@ fn unused_assignment<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if body.kind() != "statement_block" {
         return None;
     }
-    overwritten_before_read(body, src).or_else(|| written_never_read(function, body, src))
+    overwritten_before_read(body, src)
+        .or_else(|| written_never_read(function, body, src))
+        .or_else(|| last_write_never_read(body, src))
+}
+
+/// A use of a local, for [`last_write_never_read`]: where, the assignment
+/// if it's a statement's, and whether in a loop or a nested function.
+struct LocalUse<'s, 't> {
+    name: &'s [u8],
+    at: usize,
+    write: Option<Node<'t>>,
+    in_loop: bool,
+    nested: bool,
+}
+
+/// (c) A local's value given by a statement of its own that nothing after
+/// it reads, though earlier ones were: `d = '';` before the function returns
+/// (measured on SonarQube 26.7, an empty string included). Left alone in a
+/// loop, where the next iteration may read it, and for a name a nested
+/// function uses.
+fn last_write_never_read<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let locals = declared_locals(body, src);
+    if locals.is_empty() {
+        return None;
+    }
+    let local = |name: &[u8]| !name.starts_with(b"_") && locals.iter().any(|(l, ..)| *l == name);
+    let mut uses: Vec<LocalUse> = Vec::new();
+    let mut stack = vec![(body, false, false)];
+    while let Some((n, in_loop, nested)) = stack.pop() {
+        if matches!(n.kind(), "identifier" | "shorthand_property_identifier") {
+            let name = text(n, src);
+            if local(name) {
+                uses.push(LocalUse {
+                    name,
+                    at: n.start_byte(),
+                    write: None,
+                    in_loop,
+                    nested,
+                });
+            }
+            continue;
+        }
+        let in_loop = in_loop
+            || matches!(
+                n.kind(),
+                "for_statement" | "for_in_statement" | "while_statement" | "do_statement"
+            );
+        let nested = nested || (n.id() != body.id() && is_function_kind(n.kind()));
+        // A declaration's name is neither a read nor a statement's write.
+        if n.kind() == "variable_declarator" {
+            if let Some(value) = n.child_by_field_name("value") {
+                stack.push((value, in_loop, nested));
+            }
+            continue;
+        }
+        let assignment = (n.kind() == "expression_statement")
+            .then(|| n.named_child(0))
+            .flatten()
+            .filter(|a| a.kind() == "assignment_expression");
+        if let Some(a) = assignment
+            && let Some(left) = a
+                .child_by_field_name("left")
+                .filter(|l| l.kind() == "identifier" && local(text(*l, src)))
+        {
+            uses.push(LocalUse {
+                name: text(left, src),
+                at: left.start_byte(),
+                write: Some(a),
+                in_loop,
+                nested,
+            });
+            if let Some(right) = a.child_by_field_name("right") {
+                stack.push((right, in_loop, nested));
+            }
+            continue;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor).map(|c| (c, in_loop, nested)));
+    }
+    uses.sort_by_key(|u| u.at);
+    // Only a name's last use can be a write nothing reads after: per name,
+    // that use, whether it was read before, and whether a nested function
+    // uses it.
+    let mut by_name: Vec<(&[u8], usize, bool, bool)> = Vec::new();
+    for (i, u) in uses.iter().enumerate() {
+        let name = u.name;
+        let entry = match by_name.iter_mut().find(|e| e.0 == name) {
+            Some(e) => e,
+            None => {
+                by_name.push((name, i, false, false));
+                by_name.last_mut().expect("just pushed")
+            }
+        };
+        if entry.1 != i && uses[entry.1].write.is_none() {
+            entry.2 = true; // the previous last use was a read
+        }
+        entry.1 = i;
+        entry.3 |= u.nested;
+    }
+    by_name
+        .iter()
+        .filter(|&&(_, last, read_before, captured)| {
+            read_before && !captured && !uses[last].in_loop
+        })
+        .filter_map(|&(_, last, ..)| uses[last].write)
+        .min_by_key(|w| w.start_byte())
 }
 
 /// (a) A value overwritten by the next statement before anyone reads it.
@@ -1220,6 +1325,10 @@ fn member_replacement(object: &[u8], member: &[u8]) -> Option<&'static str> {
         (b"ReactDOM", b"unmountComponentAtNode") => "the root's unmount()",
         (b"React", b"createClass") => "a class or function component",
         (b"document", b"execCommand") => "navigator.clipboard to copy and paste",
+        // Marked deprecated in the DOM's type definitions (measured on
+        // SonarQube 26.7).
+        (b"document", b"write" | b"writeln") => "DOM methods such as append()",
+        (b"document", b"all") => "document.getElementById or querySelector",
         _ => return None,
     })
 }
@@ -1949,6 +2058,26 @@ fn wallet_phrase_is_hardcoded(string: Node, src: &[u8]) -> bool {
             .all(|w| (3..=8).contains(&w.len()) && w.iter().all(u8::is_ascii_lowercase))
 }
 
+/// `(function () { ... })()`, `(() => { ... })()` or `(function () { ... }())`.
+fn is_called_where_defined(function: Node) -> bool {
+    if !matches!(
+        function.kind(),
+        "function_expression" | "function" | "arrow_function"
+    ) {
+        return false;
+    }
+    let mut callee = function;
+    while let Some(p) = callee
+        .parent()
+        .filter(|p| p.kind() == "parenthesized_expression")
+    {
+        callee = p;
+    }
+    callee.parent().is_some_and(|c| {
+        c.kind() == "call_expression" && c.child_by_field_name("function") == Some(callee)
+    })
+}
+
 fn function_captures_nothing(function: Node, src: &[u8]) -> bool {
     // A named function or a const-bound arrow, declared inside another function.
     let (name_owner, func) = match function.kind() {
@@ -1967,6 +2096,11 @@ fn function_captures_nothing(function: Node, src: &[u8]) -> bool {
     let Some(enclosing) = enclosing_function_of(name_owner) else {
         return false;
     };
+    // An IIFE is there to keep its functions out of the outer scope
+    // (measured on SonarQube 26.7).
+    if is_called_where_defined(enclosing) {
+        return false;
+    }
     let uses_this = {
         let mut found = false;
         walk(func, &mut |n| {
@@ -2697,5 +2831,39 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// document.write, writeln and all are deprecated in the DOM's types
+    /// (measured on SonarQube 26.7).
+    #[test]
+    fn deprecated_document_members() {
+        let src = "document.write('x');\ndocument.writeln('y');\nconst a = document.all;";
+        assert_eq!(flagged("js/deprecated-api", src), [1, 2, 3]);
+    }
+
+    /// An IIFE keeps its functions out of the outer scope (measured on
+    /// SonarQube 26.7).
+    #[test]
+    fn functions_in_an_iife_stay() {
+        let iife = "(function () {\n  window.go = function () { return ok(); };\n  function ok() {\n    return !!lib.get('w');\n  }\n})();";
+        assert!(flagged("js/function-can-move-up", iife).is_empty());
+        let named = "function setup() {\n  window.go = function () { return ok(); };\n  function ok() {\n    return !!lib.get('w');\n  }\n}";
+        assert_eq!(flagged("js/function-can-move-up", named), [3]);
+    }
+
+    /// Measured on SonarQube 26.7: the last value given to a local that
+    /// nothing reads after, an empty string too; not in a loop, and not
+    /// for a name a closure uses.
+    #[test]
+    fn last_write_nothing_reads() {
+        let src =
+            "function g(f) {\n  var d = list();\n  var p = f(d[0]);\n  d = '';\n  return p;\n}";
+        assert_eq!(flagged("js/unused-assignment", src), [4]);
+        let looped = "function g(f) {\n  var d = list();\n  for (const x of f) {\n    use(d);\n    d = x;\n  }\n}";
+        assert!(flagged("js/unused-assignment", looped).is_empty());
+        let read = "function g(f) {\n  var d = list();\n  use(d);\n  d = f();\n  return d;\n}";
+        assert!(flagged("js/unused-assignment", read).is_empty());
+        let captured = "function g(f) {\n  var d = list();\n  use(d);\n  const h = () => d;\n  d = f();\n  return h;\n}";
+        assert!(flagged("js/unused-assignment", captured).is_empty());
     }
 }

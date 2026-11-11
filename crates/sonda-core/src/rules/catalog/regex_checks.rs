@@ -229,6 +229,17 @@ pub(super) fn anchors_bind_one_alternative(r: &Regex) -> bool {
         || (some_end && !all_end && ends_with_anchor(&alts[alts.len() - 1]))
 }
 
+/// JavaScript's S5850 leaves alternatives that are each anchored at one end,
+/// `^\s+|\s+$`: it reports only when one of them has no anchor at all
+/// (measured on SonarQube 26.7).
+pub(super) fn anchors_leave_an_alternative_free(r: &Regex) -> bool {
+    let Rx::Alt(alts) = &r.root else { return false };
+    anchors_bind_one_alternative(r)
+        && alts
+            .iter()
+            .any(|a| !starts_with_anchor(a) && !ends_with_anchor(a))
+}
+
 pub(super) fn has_redundant_alternative(r: &Regex) -> bool {
     any_node(r, |n| {
         let Rx::Alt(alts) = n else { return false };
@@ -449,6 +460,63 @@ pub(super) fn backtracks_polynomially(r: &Regex) -> bool {
             false
         })
     })
+}
+
+/// JavaScript's S8786 also reports (measured on SonarQube 26.7) an
+/// alternative that starts, unanchored, with an unbounded repeat of one
+/// character set and has more after it, `/\s*$/` or `/\d+x/`, tried again
+/// from every position; and two repeats separated only by characters both of them
+/// match, `/[^@]+\.[^@]+$/`.
+pub(super) fn backtracks_polynomially_js(r: &Regex) -> bool {
+    if backtracks_polynomially(r) {
+        return true;
+    }
+    let alts: &[Rx] = match &r.root {
+        Rx::Alt(a) => a,
+        other => std::slice::from_ref(other),
+    };
+    let leading = alts.iter().any(|alt| {
+        let items: &[Rx] = match alt {
+            Rx::Concat(i) => i,
+            other => std::slice::from_ref(other),
+        };
+        items.len() > 1
+            && matches!(&items[0], first @ Rx::Repeat { inner, .. }
+                if is_unbounded(first) && single_char_set(inner, &r.flags).is_some())
+    });
+    leading
+        || any_node(r, |n| {
+            let Rx::Concat(items) = n else { return false };
+            (0..items.len()).any(|i| {
+                let Rx::Repeat { inner: a, .. } = &items[i] else {
+                    return false;
+                };
+                let Some(sa) = is_unbounded(&items[i])
+                    .then(|| single_char_set(a, &r.flags))
+                    .flatten()
+                else {
+                    return false;
+                };
+                let mut separators = Vec::new();
+                for later in &items[i + 1..] {
+                    if let Rx::Repeat { inner: b, .. } = later
+                        && is_unbounded(later)
+                    {
+                        return !separators.is_empty()
+                            && single_char_set(b, &r.flags).is_some_and(|sb| {
+                                sa.overlaps(&sb)
+                                    && separators.iter().all(|s: &Set| s.is_subset_of(&sb))
+                            });
+                    }
+                    match single_char_set(later, &r.flags) {
+                        Some(s) if s.is_subset_of(&sa) => separators.push(s),
+                        _ if nullable(later) => {}
+                        _ => return false,
+                    }
+                }
+                false
+            })
+        })
 }
 
 // ---- Java-only analyses

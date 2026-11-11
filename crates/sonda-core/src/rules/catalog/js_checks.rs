@@ -419,7 +419,11 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S6557")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(binary_expression) @match"#,
+            query: r#"(binary_expression) @match
+(call_expression
+  function: (member_expression
+    object: [(regex) (parenthesized_expression (regex))]
+    property: (property_identifier) @p (#eq? @p "test"))) @match"#,
             filter: Some(Keep(checks_a_string_end_by_hand)),
         },
         example: Some(Example {
@@ -994,7 +998,58 @@ fn is_async_iife_in_a_module(statement: Node, src: &[u8]) -> bool {
         && is_module(statement)
 }
 
+/// `/^abc/.test(s)` or `/abc$/.test(s)`, parenthesized or not: a fixed
+/// string at one end, without the `i` or `m` flag (measured on SonarQube
+/// 26.7).
+fn tests_a_fixed_end(call: Node, src: &[u8]) -> bool {
+    let Some(mut regex) = call
+        .child_by_field_name("function")
+        .and_then(|f| f.child_by_field_name("object"))
+    else {
+        return false;
+    };
+    if regex.kind() == "parenthesized_expression" {
+        let Some(inner) = regex.named_child(0) else {
+            return false;
+        };
+        regex = inner;
+    }
+    let flags = regex
+        .child_by_field_name("flags")
+        .map_or(&b""[..], |f| text(f, src));
+    let Some(pattern) = regex.child_by_field_name("pattern").map(|p| text(p, src)) else {
+        return false;
+    };
+    if flags.iter().any(|f| matches!(f, b'i' | b'm')) {
+        return false;
+    }
+    let body = match (pattern.strip_prefix(b"^"), pattern.strip_suffix(b"$")) {
+        (Some(rest), None) => rest,
+        (None, Some(rest)) if !rest.ends_with(b"\\") => rest,
+        _ => return false,
+    };
+    let mut i = 0;
+    while i < body.len() {
+        match body[i] {
+            b'\\' => {
+                // An escaped punctuation character is itself; `\d` is a class.
+                if !body.get(i + 1).is_some_and(|c| c.is_ascii_punctuation()) {
+                    return false;
+                }
+                i += 2;
+            }
+            b'.' | b'*' | b'+' | b'?' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'|' | b'^'
+            | b'$' => return false,
+            _ => i += 1,
+        }
+    }
+    !body.is_empty()
+}
+
 fn checks_a_string_end_by_hand(binary: Node, src: &[u8]) -> bool {
+    if binary.kind() == "call_expression" {
+        return tests_a_fixed_end(binary, src);
+    }
     if !matches!(operator_text(binary, src), b"===" | b"==" | b"!==" | b"!=") {
         return false;
     }

@@ -1940,6 +1940,23 @@ fn filtered_node<'t>(
     }
 }
 
+/// A JavaScript method call in a chain over several lines, `s\n.replace()`,
+/// is reported on its method's line (measured on SonarQube 26.7); a call on
+/// one line keeps its position.
+fn js_chain_anchor(node: Node) -> Node {
+    if node.kind() != "call_expression" {
+        return node;
+    }
+    match node
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_expression")
+        .and_then(|f| f.child_by_field_name("property"))
+    {
+        Some(p) if p.start_position().row != node.start_position().row => p,
+        _ => node,
+    }
+}
+
 /// Where SonarQube reports an issue about a Java declaration that has
 /// annotations: at its name, below them (measured on SonarQube 26.7, for
 /// classes, methods and constructors), not at the first annotation.
@@ -2024,10 +2041,10 @@ fn run_queries_in(
                 .filter(|(node, _)| within.is_none_or(|w| w.covers(node.start_byte())));
             for (node, message) in found {
                 let msg = message.unwrap_or_else(|| active.rule.message.to_string());
-                let node = if lang == Lang::Java {
-                    java_anchor(node)
-                } else {
-                    node
+                let node = match lang {
+                    Lang::Java => java_anchor(node),
+                    Lang::JavaScript | Lang::TypeScript | Lang::Tsx => js_chain_anchor(node),
+                    _ => node,
                 };
                 issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
             }
@@ -3776,8 +3793,9 @@ pub(crate) mod tests {
     #[test]
     fn locals_used_in_deeply_nested_code_stay_cheap() {
         let depth = 5_000;
+        // `a` is read at the end, so no assignment to it is dead.
         let src = format!(
-            "function g(items) {{\nlet a = f();\nconst hit = items.find(f);\n{}{}}}\n",
+            "function g(items) {{\nlet a = f();\nconst hit = items.find(f);\n{}{}return a;\n}}\n",
             "if (a && hit) {\na = 2;\n".repeat(depth),
             "}\n".repeat(depth)
         );

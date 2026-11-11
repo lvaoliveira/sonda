@@ -451,7 +451,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7740"), exact("S4327")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(variable_declarator name: (identifier) value: (this)) @match"#,
+            // An assignment too, `self = this;` (measured on SonarQube 26.7).
+            query: r#"(variable_declarator name: (identifier) value: (this)) @match
+(assignment_expression left: (identifier) right: (this)) @match"#,
             filter: None,
         },
         example: Some(Example {
@@ -734,13 +736,13 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7768")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(call_expression function: (member_expression property: (property_identifier) @p (#any-of? @p "appendChild" "insertBefore" "replaceChild" "insertAdjacentElement" "insertAdjacentText"))) @match"#,
-            filter: None,
+            query: r#"(call_expression function: (member_expression property: (property_identifier) @p (#any-of? @p "insertBefore" "replaceChild" "insertAdjacentElement" "insertAdjacentText"))) @match"#,
+            filter: Some(Keep(dom_call_on_plain_names)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "parent.appendChild(child);",
-            good: "parent.append(child);",
+            bad: "parent.insertBefore(child, next);",
+            good: "next.before(child);",
         }),
     },
     Rule {
@@ -876,7 +878,14 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7781")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(call_expression function: (member_expression property: (property_identifier) @p (#eq? @p "replace")) arguments: (arguments . (regex flags: (regex_flags) @f (#match? @f "g")))) @match"#,
+            query: r#"(call_expression function: (member_expression property: (property_identifier) @p (#eq? @p "replace")) arguments: (arguments . (regex flags: (regex_flags) @f (#match? @f "g")))) @match
+(call_expression
+  function: (member_expression
+    object: (call_expression
+      function: (member_expression property: (property_identifier) @s (#eq? @s "split"))
+      arguments: (arguments . (string) .))
+    property: (property_identifier) @j (#eq? @j "join"))
+  arguments: (arguments . (_) .)) @match"#,
             filter: Some(Keep(replaces_all_in_a_known_string)),
         },
         example: Some(Example {
@@ -1224,7 +1233,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S6535")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(string) @match"#,
+            query: r#"(string) @match
+(regex) @match"#,
             filter: Some(Keep(has_needless_escape)),
         },
         example: Some(Example {
@@ -1287,7 +1297,7 @@ pub(super) static RULES: &[Rule] = &[
             query: r#"(if_statement consequence: [(expression_statement) (return_statement) (throw_statement) (break_statement) (continue_statement)]) @match
 (for_statement body: (expression_statement)) @match
 (while_statement body: (expression_statement)) @match"#,
-            filter: Some(Keep(next_line_looks_guarded)),
+            filter: Some(Find(next_line_looks_guarded)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -1324,16 +1334,14 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 15,
         sonar: &[exact("S4144")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: JS_TS,
-            query: r#"(program) @match
-(class_body) @match"#,
-            filter: Some(Find(duplicate_function_body)),
+            find: duplicate_functions,
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "function a() {\n  const x = 1;\n  return x + 1;\n}\nfunction b() {\n  const x = 1;\n  return x + 1;\n}",
-            good: "function a() {\n  const x = 1;\n  return x + 1;\n}\nfunction b() {\n  return 2;\n}",
+            bad: "function a() {\n  const x = 1;\n  const y = x * 2;\n  return x + y;\n}\nfunction b() {\n  const x = 1;\n  const y = x * 2;\n  return x + y;\n}",
+            good: "function a() {\n  const x = 1;\n  const y = x * 2;\n  return x + y;\n}\nfunction b() {\n  return 2;\n}",
         }),
     },
     Rule {
@@ -2410,6 +2418,15 @@ fn has_needless_escape(string: Node, src: &[u8]) -> bool {
     if string.parent().is_some_and(|p| p.kind() == "jsx_attribute") {
         return false;
     }
+    if string.kind() == "regex" {
+        let flags = string
+            .child_by_field_name("flags")
+            .map_or(&b""[..], |f| text(f, src));
+        return !flags.contains(&b'v')
+            && string
+                .child_by_field_name("pattern")
+                .is_some_and(|p| regex_has_needless_escape(text(p, src)));
+    }
     let raw = text(string, src);
     let Some(&quote) = raw.first() else {
         return false;
@@ -2431,6 +2448,74 @@ fn has_needless_escape(string: Node, src: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// An escape a regex doesn't need (measured on SonarQube 26.7): outside a
+/// class, of anything but a metacharacter, `/` or an escape sequence; in a
+/// class, of a metacharacter that means nothing there, `^` other than first
+/// and `-` first or last.
+fn regex_has_needless_escape(pattern: &[u8]) -> bool {
+    const ANYWHERE: &[u8] = b"\\bcdDfnpPrsStvwWxu0123456789]";
+    const OUTSIDE: &[u8] = b"^/.$*+?[{}|()Bk";
+    let mut class_start: Option<usize> = None;
+    let mut i = 0;
+    while i < pattern.len() {
+        match pattern[i] {
+            b'\\' => {
+                let Some(&next) = pattern.get(i + 1) else {
+                    return false;
+                };
+                let needed = ANYWHERE.contains(&next)
+                    || match class_start {
+                        None => OUTSIDE.contains(&next),
+                        Some(start) => match next {
+                            b'^' => i == start,
+                            b'-' => i != start && pattern.get(i + 2) != Some(&b']'),
+                            _ => false,
+                        },
+                    };
+                if !needed {
+                    return true;
+                }
+                i += 2;
+                continue;
+            }
+            b'[' if class_start.is_none() => {
+                let negated = pattern.get(i + 1) == Some(&b'^');
+                class_start = Some(i + 1 + usize::from(negated));
+            }
+            b']' if class_start.is_some() => class_start = None,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// insertBefore and replaceChild are reported only on plain names,
+/// `parent.insertBefore(node, next)`: not on `x.parentNode`, `this`, a call or
+/// `p.firstChild` (measured on SonarQube 26.7).
+fn dom_call_on_plain_names(call: Node, src: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let method = function
+        .child_by_field_name("property")
+        .map(|p| text(p, src));
+    if !matches!(method, Some(b"insertBefore" | b"replaceChild")) {
+        return true;
+    }
+    let receiver = function.child_by_field_name("object");
+    let args: Vec<Node> = call
+        .child_by_field_name("arguments")
+        .map(|a| {
+            let mut cursor = a.walk();
+            a.named_children(&mut cursor).collect()
+        })
+        .unwrap_or_default();
+    receiver.is_some_and(|r| r.kind() == "identifier")
+        && args.len() == 2
+        && args.iter().all(|a| a.kind() == "identifier")
 }
 
 fn catch_name_not_error(catch: Node, src: &[u8]) -> bool {
@@ -2486,34 +2571,38 @@ fn reassigns_parameter_with_literal(statement: Node, src: &[u8]) -> bool {
         .is_some_and(|names| names.contains(&text(left, src)))
 }
 
-fn next_line_looks_guarded(parent: Node, _: &[u8]) -> bool {
-    let Some(body) = parent
+fn next_line_looks_guarded<'t>(parent: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
+    let body = parent
         .child_by_field_name("consequence")
-        .or_else(|| parent.child_by_field_name("body"))
-    else {
-        return false;
-    };
+        .or_else(|| parent.child_by_field_name("body"))?;
     // An else branch ends the statement the first line belongs to.
     if parent.kind() == "if_statement" && parent.child_by_field_name("alternative").is_some() {
-        return false;
+        return None;
     }
     // A comment after the body, on its line or the next, guards nothing.
     let mut next = parent.next_named_sibling();
     while next.is_some_and(|n| n.kind() == "comment") {
         next = next.and_then(|n| n.next_named_sibling());
     }
-    let Some(next) = next else {
-        return false;
-    };
+    let next = next?;
     // `if (x) a(); b();` on one line reads the same way: b() looks guarded.
     if next.start_position().row == body.end_position().row && body.kind() == "expression_statement"
     {
-        return true;
+        return Some(parent);
     }
-    body.start_position().row > parent.start_position().row
+    // `if (x) return;` with the next line indented under it, counting a
+    // tab as one column, reported at that line (measured on SonarQube 26.7).
+    if body.start_position().row == parent.start_position().row
+        && next.start_position().row > body.end_position().row
+        && next.start_position().column > parent.start_position().column
+    {
+        return Some(next);
+    }
+    (body.start_position().row > parent.start_position().row
         && next.start_position().row > body.end_position().row
         && next.start_position().column == body.start_position().column
-        && body.start_position().column > parent.start_position().column
+        && body.start_position().column > parent.start_position().column)
+        .then_some(parent)
 }
 
 fn second_import_of_module<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -2542,31 +2631,56 @@ fn second_import_of_module<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>
     None
 }
 
-fn duplicate_function_body<'t>(container: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut seen: Vec<&[u8]> = Vec::new();
-    let mut cursor = container.walk();
-    for member in container.named_children(&mut cursor) {
-        if !matches!(member.kind(), "function_declaration" | "method_definition") {
-            continue;
-        }
-        let name = member
-            .child_by_field_name("name")
-            .map_or(&b""[..], |n| text(n, src));
-        let Some(body) = member.child_by_field_name("body").filter(|b| {
-            b.named_child_count() >= 2 && b.end_position().row - b.start_position().row >= 2
-        }) else {
-            continue;
+/// Every function whose body repeats an earlier one's, anywhere in the file
+/// (measured on SonarQube 26.7): declarations, methods and functions given
+/// to a variable, nested ones too, but not an object's properties; with a
+/// body of three lines or more.
+fn duplicate_functions<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(root) = m.root else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let compared = match n.kind() {
+            "function_declaration" | "generator_function_declaration" => true,
+            "method_definition" => {
+                let name = n
+                    .child_by_field_name("name")
+                    .map_or(&b""[..], |x| text(x, src));
+                name != b"constructor" && !has_token(n, "get") && !has_token(n, "set")
+            }
+            "function_expression" | "arrow_function" => n
+                .parent()
+                .is_some_and(|p| p.kind() == "variable_declarator"),
+            _ => false,
         };
-        if name == b"constructor" || has_token(member, "get") || has_token(member, "set") {
-            continue;
+        if compared
+            && let Some(body) = n
+                .child_by_field_name("body")
+                .filter(|b| b.kind() == "statement_block")
+        {
+            let mut cursor = body.walk();
+            let statements: Vec<Node> = body
+                .named_children(&mut cursor)
+                .filter(|s| s.kind() != "comment")
+                .collect();
+            if let (Some(first), Some(last)) = (statements.first(), statements.last())
+                && last.end_position().row - first.start_position().row >= 2
+            {
+                candidates.push((n, text(body, src)));
+            }
         }
-        let body_text = text(body, src);
-        if seen.contains(&body_text) {
-            return Some(member);
-        }
-        seen.push(body_text);
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
     }
-    None
+    candidates.sort_by_key(|(n, _)| n.start_byte());
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|(_, body)| !seen.insert(*body))
+        .map(|(n, _)| n)
+        .collect()
 }
 
 fn in_playwright_action(pair: Node, src: &[u8]) -> bool {
@@ -2600,17 +2714,35 @@ fn in_playwright_action(pair: Node, src: &[u8]) -> bool {
 /// matches one fixed string, so `replaceAll('x', ...)` says the same. A
 /// character class or any other pattern is left alone, as SonarQube does.
 fn replaces_all_in_a_known_string(call: Node, src: &[u8]) -> bool {
+    let function = call.child_by_field_name("function");
+    // `s.split('a').join('b')` (measured on SonarQube 26.7).
+    if function
+        .and_then(|f| f.child_by_field_name("property"))
+        .is_some_and(|p| text(p, src) == b"join")
+    {
+        let split = function.and_then(|f| f.child_by_field_name("object"));
+        let typescript = call.language().id_for_node_kind("type_annotation", true) != 0;
+        return !typescript
+            || split
+                .and_then(|c| c.child_by_field_name("function"))
+                .and_then(|f| f.child_by_field_name("object"))
+                .is_some_and(|o| is_provably_string(o, src, 0));
+    }
     let fixed = arguments_of(call)
         .and_then(|args| args.named_child(0))
         .is_some_and(|regex| {
             let part = |field| regex.child_by_field_name(field).map(|n| text(n, src));
             part("flags") == Some(b"g") && part("pattern").is_some_and(matches_one_string)
         });
+    // TypeScript's types say whether the receiver is a string; in plain
+    // JavaScript SonarQube reports any receiver (measured on 26.7).
+    let typescript = call.language().id_for_node_kind("type_annotation", true) != 0;
     fixed
-        && call
-            .child_by_field_name("function")
-            .and_then(|f| f.child_by_field_name("object"))
-            .is_some_and(|o| is_provably_string(o, src, 0))
+        && (!typescript
+            || call
+                .child_by_field_name("function")
+                .and_then(|f| f.child_by_field_name("object"))
+                .is_some_and(|o| is_provably_string(o, src, 0)))
 }
 
 /// Whether a regex pattern matches one fixed string: no metacharacter, and
@@ -2758,8 +2890,8 @@ class G extends A { constructor() { super(...arguments); } }";
 
     #[test]
     fn identical_function_bodies() {
-        let src = "function a() {\n  const x = 1;\n  return x;\n}\nfunction b() {\n  const x = 1;\n  return x;\n}\nfunction c() { return 1; }\nfunction d() { return 1; }";
-        assert_eq!(flagged("js/identical-functions", JS, src), [5]);
+        let src = "function a() {\n  const x = 1;\n  log(x);\n  return x;\n}\nfunction b() {\n  const x = 1;\n  log(x);\n  return x;\n}\nfunction c() { return 1; }\nfunction d() { return 1; }";
+        assert_eq!(flagged("js/identical-functions", JS, src), [6]);
     }
 
     #[test]
@@ -2848,5 +2980,164 @@ class G extends A { constructor() { super(...arguments); } }";
     fn type_error_only_for_a_lone_throw_in_a_block() {
         let src = "function f(x) {\n  if (typeof x !== 'number' || !Number.isFinite(x)) {\n    throw new Error('a');\n  }\n  if (!Array.isArray(x)) throw new Error('b');\n  if (!Array.isArray(x)) {\n    log(x);\n    throw new Error('c');\n  }\n  if (!Array.isArray(x)) {\n    // why\n    throw new Error('d');\n  }\n  if (!Array.isArray(x) || x.length === 0) {\n    throw new Error('e');\n  }\n}";
         assert_eq!(flagged("js/type-error-after-check", JS, src), [3, 12]);
+    }
+
+    /// appendChild isn't reported, insertBefore is (measured on SonarQube
+    /// 26.7).
+    #[test]
+    fn append_child_is_not_legacy() {
+        let src = "parent.appendChild(child);\nparent.insertBefore(child, next);";
+        assert_eq!(flagged("js/legacy-dom-insert", JS, src), [2]);
+    }
+
+    /// In JavaScript any receiver counts; in TypeScript it must be known to
+    /// be a string (measured on SonarQube 26.7).
+    #[test]
+    fn replace_all_receiver_by_language() {
+        let src = "function f(x) {\n  return x.replace(/a/g, 'b');\n}";
+        assert_eq!(flagged("js/replace-all", JS, src), [2]);
+        let ts = "function f(x: Foo) {\n  return x.replace(/a/g, 'b');\n}";
+        assert!(flagged("js/replace-all", Lang::TypeScript, ts).is_empty());
+    }
+
+    /// A call in a chain over several lines is reported on its method's line
+    /// (measured on SonarQube 26.7).
+    #[test]
+    fn chained_call_reported_at_its_method() {
+        let src =
+            "const s = String(v)\n  .replace(/a/g, 'b');\nconst t = String(v).replace(/a/g, 'b');";
+        assert_eq!(flagged("js/replace-all", JS, src), [2, 3]);
+    }
+
+    /// Measured on SonarQube 26.7: each copy is reported, nested functions
+    /// and functions given to a variable are compared, an object's
+    /// properties aren't, and a body under three lines is too small.
+    #[test]
+    fn identical_functions_across_the_file() {
+        let body = "{\n  const a = s.split(':');\n  const h = a[0] * 60;\n  return h + a[1];\n}\n";
+        let three = format!("function a(s) {body}function b(s) {body}function c(s) {body}");
+        assert_eq!(flagged("js/identical-functions", JS, &three), [6, 11]);
+        let nested = format!(
+            "function f() {{\nfunction g(s) {body}return g;\n}}\nfunction k() {{\nfunction h(s) {body}return h;\n}}\n"
+        );
+        assert_eq!(flagged("js/identical-functions", JS, &nested), [10]);
+        let arrows = format!("const a = (s) => {body};\nconst b = (s) => {body};\n");
+        assert_eq!(flagged("js/identical-functions", JS, &arrows), [7]);
+        let props = format!("const o = {{\na: function (s) {body},\nb: function (s) {body}\n}};\n");
+        assert!(flagged("js/identical-functions", JS, &props).is_empty());
+        let short = "function a(s) {\n  const x = s;\n  return x;\n}\nfunction b(s) {\n  const x = s;\n  return x;\n}";
+        assert!(flagged("js/identical-functions", JS, short).is_empty());
+    }
+
+    /// Measured on SonarQube 26.7: in a regex, an escape outside a class is
+    /// needed only before a metacharacter or `/`; in a class, `^` only first
+    /// and `-` only between two characters.
+    #[test]
+    fn needless_escapes_in_a_regex() {
+        let needless = [
+            "/[^\\/]/", "/[\\.]/", "/[\\-a]/", "/[a\\^]/", "/\\:/", "/\\-/", "/a\\@b/",
+        ];
+        for r in needless {
+            let src = format!("const r = {r};");
+            assert_eq!(flagged("js/unnecessary-escape", JS, &src), [1], "{r}");
+        }
+        let needed = ["/\\//", "/[a\\-z]/", "/[\\^a]/", "/[\\]]/", "/\\.\\d\\(/"];
+        for r in needed {
+            let src = format!("const r = {r};");
+            assert!(flagged("js/unnecessary-escape", JS, &src).is_empty(), "{r}");
+        }
+    }
+
+    /// Measured on SonarQube 26.7: insertBefore and replaceChild on plain
+    /// names only.
+    #[test]
+    fn legacy_dom_insert_on_plain_names() {
+        let src = "p.insertBefore(a, b);\np.replaceChild(a, b);\np.insertBefore(a, p.firstChild);\nx.parentNode.insertBefore(a, x);\nthis.parentNode.insertBefore(a, this);\np.insertBefore(make(), b);";
+        assert_eq!(flagged("js/legacy-dom-insert", JS, src), [1, 2]);
+    }
+
+    /// Measured on SonarQube 26.7: `split(s).join(t)` is a replaceAll too.
+    #[test]
+    fn split_join_is_a_replace_all() {
+        let src = "const a = s.split('x').join('y');\nconst b = s.split(/x/).join('y');";
+        assert_eq!(flagged("js/replace-all", JS, src), [1]);
+    }
+
+    /// Measured on SonarQube 26.7: `if (c) return;` followed by a line
+    /// indented under it, a tab counting as one column, reported there.
+    #[test]
+    fn same_line_body_then_an_indented_line() {
+        let src = "function e(f) {\n\t\tif (f == null) return '';\n\t    var len = f.length;\n\t\treturn len;\n}";
+        assert_eq!(flagged("js/multiline-without-braces", JS, src), [3]);
+        let aligned = "function e(f) {\n  if (f == null) return '';\n  return f.length;\n}";
+        assert!(flagged("js/multiline-without-braces", JS, aligned).is_empty());
+    }
+
+    /// `self = this;`, not only a declaration (measured on SonarQube 26.7).
+    #[test]
+    fn this_alias_by_assignment() {
+        let src = "function M() {\n  _base = this;\n}";
+        assert_eq!(flagged("js/this-alias", JS, src), [2]);
+    }
+
+    /// Measured on SonarQube 26.7: `/^abc/.test(s)`, parenthesized too, but
+    /// not with the `i` flag or a metacharacter.
+    #[test]
+    fn regex_test_of_a_fixed_end() {
+        let src = "a = /^abc/.test(s);\nb = (/^\\/js/).test(s);\nc = /end$/.test(s);\nd = /^abc/i.test(s);\ne = /^a.c/.test(s);\nf = /^abc$/.test(s);";
+        assert_eq!(flagged("js/prefer-starts-ends-with", JS, src), [1, 2, 3]);
+    }
+
+    /// Measured on SonarQube 26.7: `^a|b$` anchors each alternative at one
+    /// end; `^a|b|c$` leaves `b` free.
+    #[test]
+    fn anchors_on_each_alternative() {
+        let src = "const a = /^\\s+|\\s+$/g;\nconst b = /^a|b|c$/;\nconst c = /^a|b/;";
+        assert_eq!(flagged("js/regex-anchor-alternation", JS, src), [2, 3]);
+    }
+
+    /// Measured on SonarQube 26.7: an unanchored leading repetition with more
+    /// after it, and two repetitions separated by characters both match.
+    #[test]
+    fn polynomial_backtracking_shapes() {
+        let reported = [
+            "/\\s+$/",
+            "/\\s*$/",
+            "/\\d+x/",
+            "/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/",
+            "/^.+@.+$/",
+            "/\\d+(?=x)/",
+        ];
+        for r in reported {
+            let src = format!("const r = {r};");
+            assert_eq!(
+                flagged("js/regex-polynomial-backtracking", JS, &src),
+                [1],
+                "{r}"
+            );
+        }
+        let fine = [
+            "/^\\s+$/",
+            "/^[a-z.]+\\.[a-z]+$/",
+            "/^\\d+\\.\\d+$/",
+            "/x+/",
+            "/(ab)+c/",
+            "/^\\d+x/",
+            "/x\\s+$/",
+        ];
+        for r in fine {
+            let src = format!("const r = {r};");
+            assert!(
+                flagged("js/regex-polynomial-backtracking", JS, &src).is_empty(),
+                "{r}"
+            );
+        }
+    }
+
+    /// `[\.]`: a class of one escaped character (measured on SonarQube 26.7).
+    #[test]
+    fn class_of_one_escaped_character() {
+        let src = "const a = /[\\.]/;\nconst b = /[\\]]/;\nconst c = /[\\s\\/]/;";
+        assert_eq!(flagged("js/regex-single-character-class", JS, src), [1, 2]);
     }
 }

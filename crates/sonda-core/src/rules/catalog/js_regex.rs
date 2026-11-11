@@ -212,7 +212,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "const r = /^a|b$/;",
+            bad: "const r = /^a|b|c$/;",
             good: "const r = /^(?:a|b)$/;",
         }),
     },
@@ -259,8 +259,10 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "js/regex-polynomial-backtracking",
         name: "Regular expressions should not cause non-linear backtracking",
-        description: "Adjacent repetitions over the same characters take polynomial time on input that almost matches.",
-        message: "Merge the repetitions.",
+        description: "Repetitions that can match the same characters, or an unanchored pattern \
+                      that starts with a repetition, take time growing with the square of the \
+                      input on text that almost matches.",
+        message: "Merge the repetitions, or anchor the pattern, so it can't retry the same text.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 20,
@@ -273,7 +275,7 @@ pub(super) static RULES: &[Rule] = &[
         example: Some(Example {
             lang: Lang::JavaScript,
             bad: "const r = /\\d*\\d*x/;",
-            good: "const r = /\\d+x/;",
+            good: "const r = /^\\d+x/;",
         }),
     },
     Rule {
@@ -755,7 +757,39 @@ fn find_has_empty_alternative<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>
 }
 
 fn find_has_single_character_class<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(node, src, checks::has_single_character_class)
+    find_in_pattern_text(node, src, |text, r| {
+        checks::has_single_character_class(r) || has_escaped_single_character_class(text)
+    })
+}
+
+/// `[\.]` or `[\(]`: one escaped character in a class, which the escape
+/// alone already makes literal (measured on SonarQube 26.7). `[.]`, where the
+/// class saves the escape, stays left to the shared check.
+fn has_escaped_single_character_class(pattern: &str) -> bool {
+    let p = pattern.as_bytes();
+    let mut in_class = false;
+    let mut i = 0;
+    while i < p.len() {
+        match p[i] {
+            b'\\' => {
+                i += 2;
+                continue;
+            }
+            b'[' if !in_class => {
+                if p.get(i + 1) == Some(&b'\\')
+                    && p.get(i + 2).is_some_and(u8::is_ascii_punctuation)
+                    && p.get(i + 3) == Some(&b']')
+                {
+                    return true;
+                }
+                in_class = true;
+            }
+            b']' if in_class => in_class = false,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 fn find_could_be_concise<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -783,7 +817,7 @@ fn find_repeats_something_empty<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'
 }
 
 fn find_anchors_bind_one_alternative<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(node, src, checks::anchors_bind_one_alternative)
+    find_in_pattern(node, src, checks::anchors_leave_an_alternative_free)
 }
 
 fn find_ends_with_reluctant<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -795,7 +829,7 @@ fn find_is_too_complex<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 fn find_backtracks_polynomially<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_in_pattern(node, src, checks::backtracks_polynomially)
+    find_in_pattern(node, src, checks::backtracks_polynomially_js)
 }
 
 fn find_backtracks_exponentially<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

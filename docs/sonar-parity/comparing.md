@@ -92,7 +92,15 @@ field lists) and line, at most one apart (`--tolerance`). The summary has:
 - What isn't compared: test files, files SonarQube couldn't parse (it
   indexed them without lines of code), sonda's rules with no SonarQube key
   or whose key is off there.
+- For a project in more than one language, both counts per language.
 - A table per key, most differences first.
+
+Past 10,000 issues, the most one search returns, the script fetches them
+language by language, and rule by rule within a language still past it.
+SonarCloud gives such a total as 10,000 exactly, and a facet lists 100
+values at most, so splitting by rule alone left some out. A key SonarQube
+raised on a language's files counts as active there even when the
+profile's rule search leaves it out, as SonarCloud's does for a few rules.
 
 `--details` writes every difference with SonarQube's message, for your
 review only: the docs describe differences in sonda's own words, and never
@@ -175,6 +183,19 @@ behavior on the version measured.
   a calibration file with two of each catches it.
 - **Counts.** A rule can report once per pattern in sonda and once per
   occurrence in SonarQube; the comparison counts each issue.
+- **Line ends.** A file whose lines end with a carriage return alone is one
+  line to a parser that only splits on line feeds: every issue lands on
+  line 1. SonarQube counts each carriage return.
+- **A key can name another rule.** `js/global-isnan` carried S6679, a
+  value compared with itself; SonarQube reported S7773 on the same lines.
+  When one side's issues sit exactly where the other's are, under another
+  key, read both rules' descriptions.
+- **Check what the reference skips.** SonarCloud, with a newer analyzer,
+  reported `var` in a few of eGovFrame's files and not in the others;
+  SonarQube 26.7 reports every one. A calibration file decides it.
+- **Check the fetch.** A first count of eGovFrame's issues stopped at the
+  search limit and missed about 500 of them; compare the script's total
+  with the project's page in SonarQube.
 
 ## Projects
 
@@ -183,14 +204,15 @@ On the comparison server, as of 2026-11-11:
 | Project key | What | Commit |
 |---|---|---|
 | `lvaoliveira_arandu` | arandu (JavaScript) | `ecb5cc9` |
-| `sonda` | sonda's own code (TypeScript, Rust, Python scripts), by CI | latest `main` |
+| `sonda` | sonda's own code (TypeScript, Rust, Python scripts), by CI | latest `main` (`43ed97a` in the results) |
 | `sonda-compare-cpython-lib` | CPython: 7 packages of `Lib/` | `bf6623a` |
 | `sonda-compare-budgetthuis` | ha-budgetthuis-prices (Python) | `f563c0d` |
 | `sonda-calibrate-cc` | JavaScript and TypeScript calibration | |
+| `sonda-calibrate-js-browser`, `sonda-calibrate-js-browser2` to `7` | JavaScript calibration: browser scripts, regexes | |
 | `sonda-calibrate-py`, `sonda-calibrate-py13`, `sonda-calibrate-py14` | Python calibration | |
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
 | `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration | |
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
-| `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring), with its submodule | `14313bc` |
+| `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
 Next: C# and C++ on public projects that SonarCloud analyzes.

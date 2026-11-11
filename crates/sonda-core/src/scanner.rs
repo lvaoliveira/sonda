@@ -733,6 +733,22 @@ fn declares_latin1(bytes: &[u8]) -> bool {
     })
 }
 
+/// A carriage return not followed by a line feed ends a line too, as in
+/// old Mac files: SonarQube counts it as one, and the parsers would read the
+/// whole file as one line. It becomes a line feed, the same length, so
+/// every position stays where it was.
+fn lone_cr_as_newline(src: String) -> String {
+    let bytes = src.as_bytes();
+    let lone = |i: usize| bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n');
+    if !(0..bytes.len()).any(lone) {
+        return src;
+    }
+    let out: Vec<u8> = (0..bytes.len())
+        .map(|i| if lone(i) { b'\n' } else { bytes[i] })
+        .collect();
+    String::from_utf8(out).expect("one ASCII byte replaced by another")
+}
+
 /// A candidate's source text, or the warning explaining why it is skipped.
 fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<String, String> {
     let rel = &c.rel;
@@ -742,6 +758,7 @@ fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<Strin
         .ok_or_else(|| format!("{rel}: skipped, larger than {max_kb} KB"))?;
     let src =
         decode_source(rel, bytes).ok_or_else(|| format!("{rel}: skipped, not valid UTF-8"))?;
+    let src = lone_cr_as_newline(src);
     let src = if rel.ends_with(".vue") {
         vue_script_only(&src)
     } else {
@@ -1773,5 +1790,16 @@ mod tests {
             gradle_java_version("sourceCompatibility = '11'\n"),
             Some(11)
         );
+    }
+
+    /// A lone carriage return ends a line, as SonarQube counts it; a CRLF
+    /// pair is left alone.
+    #[test]
+    fn lone_carriage_returns_end_lines() {
+        assert_eq!(
+            super::lone_cr_as_newline("a\r\rb\r\nc\r".into()),
+            "a\n\nb\r\nc\n"
+        );
+        assert_eq!(super::lone_cr_as_newline("a\r\nb".into()), "a\r\nb");
     }
 }

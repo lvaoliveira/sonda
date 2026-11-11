@@ -1143,21 +1143,49 @@ fn index_only_reads_the_array(for_loop: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    if text(prop, src) != b"length" || array.kind() != "identifier" {
+    // `items.length` or `field.options.length` (measured on SonarQube 26.7).
+    if text(prop, src) != b"length" || !is_name_path(array) {
         return false;
     }
     let ut = text(update, src);
     let steps_by_one = ut == [index, b"++"].concat() || ut == [b"++", index].concat();
-    let access = [text(array, src), b"[", index, b"]"].concat();
-    let body_text = text(body, src);
-    let reads = count_pattern(body_text, &access);
-    let assigned = count_pattern(body_text, &[access.as_slice(), b" ="].concat())
-        - count_pattern(body_text, &[access.as_slice(), b" =="].concat());
-    starts_at_zero
-        && steps_by_one
-        && reads > 0
-        && assigned == 0
-        && count_word(body_text, index) == reads
+    let array = text(array, src);
+    // Every use of the index, in the syntax tree rather than the text, so a
+    // string containing the name doesn't count: `array[index]`, read only.
+    let mut uses = 0;
+    let mut only_reads = true;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && text(n, src) == index {
+            uses += 1;
+            let read = n.parent().is_some_and(|p| {
+                p.kind() == "subscript_expression"
+                    && p.child_by_field_name("index") == Some(n)
+                    && p.child_by_field_name("object").map(|o| text(o, src)) == Some(array)
+                    && !p.parent().is_some_and(|a| {
+                        matches!(
+                            a.kind(),
+                            "assignment_expression"
+                                | "augmented_assignment_expression"
+                                | "update_expression"
+                        ) && a.child_by_field_name("left").is_none_or(|l| l == p)
+                    })
+            });
+            only_reads &= read;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    starts_at_zero && steps_by_one && uses > 0 && only_reads
+}
+
+/// `a` or `a.b.c`: names and properties, nothing that runs code.
+fn is_name_path(node: Node) -> bool {
+    match node.kind() {
+        "identifier" | "this" => true,
+        "member_expression" => node.child_by_field_name("object").is_some_and(is_name_path),
+        _ => false,
+    }
 }
 
 pub(super) fn scope_text<'a>(node: Node, src: &'a [u8]) -> &'a [u8] {
@@ -1539,16 +1567,20 @@ fn has_escaped_backslashes(string: Node, src: &[u8]) -> bool {
     let mut i = 0;
     while i < body.len() {
         if body[i] == b'\\' {
-            if body.get(i + 1) == Some(&b'\\') {
-                pairs += 1;
-                i += 2;
-                continue;
+            match body.get(i + 1) {
+                Some(b'\\') => pairs += 1,
+                // An escaped quote doesn't stop it (measured on SonarQube 26.7).
+                Some(b'\'' | b'"') => {}
+                _ => return false,
             }
-            return false;
+            i += 2;
+            continue;
         }
         i += 1;
     }
-    pairs >= 2
+    // One is enough: `'\\x3c'`, `"\\'"`. A value ending in a backslash is
+    // skipped, since String.raw can't end with one (measured on SonarQube 26.7).
+    pairs >= 1 && !body.ends_with(b"\\\\")
 }
 
 fn memoizes_many_parameters_without_resolver(call: Node, src: &[u8]) -> bool {
@@ -2137,5 +2169,22 @@ mod tests {
     fn control_characters_as_range_bounds() {
         let src = "const a = /[^\\x00-\\xFF]/g;\nconst b = /\\x00/;\nconst c = /[\\x01]/;\nconst d = /[ -\\x1f]/;\nconst e = /[\\x01-]/;";
         assert_eq!(flagged("js/regex-control-characters", JS, src), [2, 3, 5]);
+    }
+
+    /// Measured on SonarQube 26.7: a value ending in a backslash is left
+    /// alone, since String.raw can't end with one; an escaped quote doesn't
+    /// stop it, another escape does.
+    #[test]
+    fn escaped_backslashes_not_at_the_end() {
+        let src = "const a = '\\\\';\nconst b = 'x\\\\';\nconst c = 'a\\\\b';\nconst d = \"\\\\\\\"\";\nconst e = 'a\\\\b\\n';";
+        assert_eq!(flagged("js/escaped-backslashes", JS, src), [3, 4]);
+    }
+
+    /// Measured on SonarQube 26.7: the array can be a property, and the
+    /// index's name in a string isn't a use of it.
+    #[test]
+    fn for_of_over_a_property_and_strings() {
+        let src = "function v(field) {\n  for (let i = 0; i < field.options.length; i++) {\n    use(field.options[i]);\n  }\n}\nfunction w(forms) {\n  for (var i = 0; i < forms.length; i++) {\n    found = forms[i].querySelector('[name*=\"csrf\" i]');\n  }\n}\nfunction x(a) {\n  for (let i = 0; i < a.length; i++) {\n    use(a[i], i);\n  }\n}";
+        assert_eq!(flagged("js/for-to-for-of", JS, src), [2, 7]);
     }
 }
