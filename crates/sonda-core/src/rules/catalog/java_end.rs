@@ -310,8 +310,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class P { static final P DEFAULT = new C(); }\nclass C extends P {}",
-            good: "class P { static P make() { return new C(); } }\nclass C extends P {}",
+            bad: "class P { static final int SIZE = C.SIZE; }\nclass C extends P { static final int SIZE = 2; }",
+            good: "class P { static final int SIZE = 2; }\nclass C extends P {}",
         }),
     },
     Rule {
@@ -1388,16 +1388,32 @@ fn static_field_creates_a_subclass(field: Node, src: &[u8]) -> bool {
         return false;
     };
     let owner = name_text(class, src);
+    let is_subclass = |name: &[u8]| {
+        find_declared_type(root_of(field), base_type(name), src)
+            .is_some_and(|sub| superclass_name(sub, src) == Some(owner))
+    };
+    // A static member of a subclass (`Sub.FIELD`, `Sub.make()`), as SonarQube
+    // reports it; creating one (`new Sub()`) isn't.
     children_of_kind(field, "variable_declarator")
         .iter()
         .any(|d| {
-            d.child_by_field_name("value")
-                .filter(|v| v.kind() == "object_creation_expression")
-                .and_then(|v| v.child_by_field_name("type"))
-                .is_some_and(|t| {
-                    find_declared_type(root_of(field), base_type(text(t, src)), src)
-                        .is_some_and(|sub| superclass_name(sub, src) == Some(owner))
-                })
+            let Some(value) = d.child_by_field_name("value") else {
+                return false;
+            };
+            let mut found = false;
+            let mut stack = vec![value];
+            while let Some(n) = stack.pop() {
+                if matches!(n.kind(), "field_access" | "method_invocation")
+                    && n.child_by_field_name("object")
+                        .is_some_and(|o| o.kind() == "identifier" && is_subclass(text(o, src)))
+                {
+                    found = true;
+                    break;
+                }
+                let mut c = n.walk();
+                stack.extend(n.named_children(&mut c));
+            }
+            found
         })
 }
 

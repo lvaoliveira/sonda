@@ -83,6 +83,7 @@ pub(crate) fn analyze(
         path,
         src,
         lines: LineIndex::new(src),
+        java_version: cfg.java.version,
     };
     let syn = lang.syntax();
 
@@ -246,6 +247,8 @@ struct Ctx<'a> {
     path: &'a str,
     src: &'a str,
     lines: LineIndex<'a>,
+    /// The Java version the project targets, when known.
+    java_version: Option<u32>,
 }
 
 impl<'a> Ctx<'a> {
@@ -1731,6 +1734,30 @@ fn skipped_for_path(active: &ActiveRule, path: &str) -> bool {
     active.rule.id == "py/wildcard-import" && path.rsplit(['/', '\\']).next() == Some("__init__.py")
 }
 
+/// The Java version each rule's suggestion needs: on code that targets an
+/// older one, the rule is skipped, as SonarQube skips it.
+const JAVA_MIN_VERSION: &[(&str, u32)] = &[
+    // @Deprecated(since, forRemoval)
+    ("java/deprecated-without-reason", 9),
+    // `case A, B:`, switch expressions
+    ("java/ends-with-else-switch-labels", 14),
+    ("java/switch-to-expression", 14),
+    // pattern matching for instanceof, Stream.toList()
+    ("java/instanceof-then-cast", 16),
+    ("java/collectors-to-list", 16),
+    // unnamed variables
+    ("java/unused-exception-parameter", 22),
+];
+
+/// Whether the project targets a Java older than the rule's suggestion needs.
+fn needs_newer_java(active: &ActiveRule, java_version: Option<u32>) -> bool {
+    java_version.is_some_and(|v| {
+        JAVA_MIN_VERSION
+            .iter()
+            .any(|&(id, min)| id == active.rule.id && v < min)
+    })
+}
+
 /// The node a query rule reports for a capture: the capture itself, if its
 /// filter keeps it, or the node its filter finds.
 fn filtered_node<'t>(filter: Option<Filter>, node: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
@@ -1775,7 +1802,10 @@ fn run_queries_in(
     while let Some(m) = matches.next() {
         for &(idx, filter) in &cq.patterns[m.pattern_index] {
             let active = &rules.active[idx];
-            if skipped_in_test_file(active, test_file) || skipped_for_path(active, path) {
+            if skipped_in_test_file(active, test_file)
+                || skipped_for_path(active, path)
+                || needs_newer_java(active, ctx.java_version)
+            {
                 continue;
             }
             let found = m
@@ -1824,6 +1854,7 @@ fn macro_argument_issues(
         path,
         src: &shadow.source,
         lines: LineIndex::new(&shadow.source),
+        java_version: None,
     };
     run_queries_in(
         &ctx,
@@ -2428,6 +2459,8 @@ struct CommentRules<'r, 't> {
     trailing: Option<&'r ActiveRule>,
     nosonar: Option<&'r ActiveRule>,
     python: bool,
+    /// Java has its own rule for this, java/commented-out-code.
+    java: bool,
     /// The row of the last commented-out-code issue: a block of commented
     /// lines is one finding, reported at its first line.
     last_code_comment_row: Option<usize>,
@@ -2487,6 +2520,7 @@ impl<'t> CommentRules<'_, 't> {
                 issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
             }
         } else if let Some(rule) = self.code
+            && !self.java
             && reads_as_code(text, alone, self.python)
         {
             let row = node.start_position().row;
@@ -2498,10 +2532,20 @@ impl<'t> CommentRules<'_, 't> {
             }
         }
         if let Some(rule) = self.todo
-            && let Some(tag) = todo_tag(text)
+            && let Some((tag, at)) = todo_tag_at(text)
         {
+            // On the tag's line, as SonarQube reports it in a block comment.
             let msg = format!("Complete the task associated with this {tag} comment.");
-            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            let before = &text[..at];
+            let row = node.start_position().row + before.matches('\n').count();
+            let column = match before.rfind('\n') {
+                Some(nl) => before[nl + 1..].chars().count(),
+                None => {
+                    ctx.lines.char_column(row, node.start_position().column)
+                        + before.chars().count()
+                }
+            };
+            issues.push(ctx.issue_on_line(rule, row, (column, column + tag.len()), msg));
         }
     }
 }
@@ -2643,6 +2687,7 @@ fn scan_tokens(
         trailing: rules.get(rules::TRAILING_COMMENT),
         nosonar: rules.get(rules::NOSONAR_COMMENT),
         python: std::ptr::eq(syn, Lang::Python.syntax()),
+        java: std::ptr::eq(syn, Lang::Java.syntax()),
         last_code_comment_row: None,
         python_block: Vec::new(),
     };
@@ -3067,13 +3112,21 @@ fn parameter_count(node: Node, syn: &Syntax, src: &[u8]) -> Option<usize> {
     Some(n - usize::from(receiver))
 }
 
+#[cfg(test)]
 fn todo_tag(comment: &str) -> Option<&'static str> {
+    todo_tag_at(comment).map(|(tag, _)| tag)
+}
+
+/// The task tag in a comment, and its byte offset in it.
+fn todo_tag_at(comment: &str) -> Option<(&'static str, usize)> {
     // SonarQube knows TODO and FIXME only; XXX is a note, not a task.
-    ["TODO", "FIXME"].into_iter().find(|tag| {
-        comment.match_indices(tag).any(|(i, _)| {
+    ["TODO", "FIXME"].into_iter().find_map(|tag| {
+        comment.match_indices(tag).find_map(|(i, _)| {
             let before = comment[..i].chars().next_back();
             let after = comment[i + tag.len()..].chars().next();
-            !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+            (!before.is_some_and(char::is_alphanumeric)
+                && !after.is_some_and(char::is_alphanumeric))
+            .then_some((tag, i))
         })
     })
 }
@@ -3822,6 +3875,43 @@ pub(crate) mod tests {
         };
         assert_eq!(wildcard("pkg/__init__.py"), 0);
         assert_eq!(wildcard("pkg/mod.py"), 1);
+    }
+
+    /// A rule whose suggestion needs a newer Java is skipped on older code;
+    /// with the version unknown, it runs.
+    #[test]
+    fn java_rules_follow_the_target_version() {
+        let src = "class A {\n    /** @deprecated use B. */\n    @Deprecated\n    void f() {}\n}\n";
+        let count = |version: Option<u32>| {
+            let mut cfg = Config::default();
+            cfg.java.version = version;
+            let rules = RuleSet::new(&cfg.rules).unwrap();
+            analyze("A.java", Lang::Java, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .filter(|i| i.rule == "java/deprecated-without-reason")
+                .count()
+        };
+        assert_eq!(count(Some(8)), 0);
+        assert_eq!(count(Some(17)), 1);
+        assert_eq!(count(None), 1);
+    }
+
+    /// A TODO in a block comment is reported on its own line.
+    #[test]
+    fn todo_on_its_line() {
+        let a = run(
+            Lang::Java,
+            "class A {\n    /**\n     * Gets it.\n     * TODO Make private in 4.0.\n     */\n    void f() {}\n}\n",
+        );
+        let lines: Vec<usize> = a
+            .issues
+            .iter()
+            .filter(|i| i.rule == rules::TODO_COMMENT)
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(lines, [4]);
     }
 
     #[test]

@@ -30957,14 +30957,14 @@ SonarQube: S2390
 Noncompliant:
 
 ```java
-class P { static final P DEFAULT = new C(); }
-class C extends P {}
+class P { static final int SIZE = C.SIZE; }
+class C extends P { static final int SIZE = 2; }
 ```
 
 Compliant:
 
 ```java
-class P { static P make() { return new C(); } }
+class P { static final int SIZE = 2; }
 class C extends P {}
 ```
 

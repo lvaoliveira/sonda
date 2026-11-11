@@ -22,6 +22,7 @@ the steps, the commands and what was learned along the way.
 | sonda | TypeScript (TSX), Rust | `8b30263` | 51 of 51 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
+| Apache Commons Lang | Java | `5d2715b` | 826 of 918 | 138 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -200,6 +201,38 @@ SonarQube follows:
 
 On ha-budgetthuis-prices, both of sonda's own (S7503 on an options flow
 step, S7632 on a `# noqa` with an explanation) aren't explained.
+
+## Java, measured
+
+Apache Commons Lang at `5d2715b`, compiled (`sonar.java.binaries`) and
+analyzed as Java 8, the version its `pom.xml` targets.
+
+- **The Java version matters.** SonarQube skips a rule whose suggestion
+  needs a newer Java than the project's: `@Deprecated(since, forRemoval)`
+  needs 9, comma-separated case labels 14, `CharSequence.isEmpty()` 15.
+  sonda now reads the version from the build file, or `[java] version`.
+- **Positions and counts.** A TODO in a Javadoc is reported on its line;
+  the use of legacy dates once per file, with no line; a block of
+  commented-out lines once.
+- **Narrower than sonda was.** S2129 is `new String()` or `new
+  String("x")`, not a conversion; S1319 leaves locals; S1452 leaves
+  `Class<?>`; S3014 is a declaration of a `ThreadGroup`, not a type
+  argument or an override's parameter; S3706 is a collection's own
+  `stream()`; S1301 counts `default`; S2390 is a subclass's static member;
+  S1192 leaves exception messages out.
+
+### Still open in Java
+
+- **Known gaps:** S2259 (15, null dereferences need data flow); S1948
+  (14 and 3, whether a field's type is serializable needs other files'
+  types); `java/useless-override` (40, all overrides widening
+  `protected` to `public`, which needs the overridden method's
+  declaration in another file).
+- **To measure:** `java/deprecated-code` (27 sonda only, with no visible
+  difference from the 273 both report); class coupling (13 under two
+  keys, SonarQube reports none at threshold 20 while sonda counts every
+  type name); `java/brain-method` (11); S2245 (11), S2184 (9), S2160 (6),
+  S3878 (6) and about 30 issues of one to three per key.
 
 ## Rules that depend on knowing a type
 
