@@ -202,6 +202,38 @@ describe('Issues', () => {
     }
   })
 
+  it('grows the list with a taller window, not leaving the new space under it', async () => {
+    // A page laid out as the browser does: the panel at 200px, and the frame
+    // around it stretched to the window's bottom, 10px short, with 32px of
+    // padding under the panel. A taller window stretches the frame.
+    const height = window.innerHeight
+    const rect = Element.prototype.getBoundingClientRect
+    const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight')
+    const box = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) })
+    let panel: HTMLElement | null = null
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if (this === panel) return box(200, 200 + (Number.parseFloat(panel.style.height) || 0))
+      if (this === panel?.parentElement) return box(0, window.innerHeight - 10)
+      return rect.call(this)
+    }
+    Object.defineProperty(Element.prototype, 'scrollHeight', { configurable: true, get: () => window.innerHeight })
+    try {
+      window.innerHeight = 700
+      renderAt('/issues')
+      panel = (await screen.findByRole('region', { name: 'Issue list' })).parentElement
+      panel!.parentElement!.style.paddingBottom = '32px'
+      window.dispatchEvent(new Event('resize'))
+      await waitFor(() => expect(panel?.style.height).toBe('458px'))
+      window.innerHeight = 900
+      window.dispatchEvent(new Event('resize'))
+      await waitFor(() => expect(panel?.style.height).toBe('658px'))
+    } finally {
+      window.innerHeight = height
+      Element.prototype.getBoundingClientRect = rect
+      if (scrollHeight) Object.defineProperty(Element.prototype, 'scrollHeight', scrollHeight)
+    }
+  })
+
   it('shows one pane at a time on a phone: the list, then the issue', async () => {
     const user = userEvent.setup()
     // A phone: no min-width query matches.

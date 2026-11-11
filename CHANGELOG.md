@@ -198,8 +198,9 @@ file, the report formats and the public library API.
 
 ### Fixed
 
-- The Issues page fits its panel to the window, and the list, the filters
-  and the issue each scroll inside it. The panel used to grow with its
+- The Issues page fits its panel to the window, and follows the window as
+  it grows or shrinks; the list, the filters and the issue each scroll
+  inside it. The panel used to grow with its
   longest pane, so an issue picked far down the list opened above the
   fold, and Previous and Next sat below it, past the end of the list's own
   scrolling. A new issue starts at its top, and `j`/`k` scroll the list to
