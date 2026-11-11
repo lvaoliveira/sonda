@@ -7,9 +7,7 @@
 use super::java_bugs::{has_annotation, has_modifier, modifiers_of, statements};
 use super::java_extra::{class_members, declared_type, name_text, type_text};
 use super::java_final::{base_type, root_of};
-use super::java_flow::{
-    enclosing_method, find_declared_type, has_method, nodes_in, superclass_name,
-};
+use super::java_flow::{enclosing_method, find_declared_type, has_method, superclass_name};
 use super::java_last::literal_kind;
 use super::java_security::{call_arguments, find_node, method_name, text};
 use super::java_smells::{children_of_kind, count_word, declarator_names, enclosing_class};
@@ -523,14 +521,10 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 60,
         sonar: &[exact("S6539"), exact("S1200")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Keep(depends_on_many_types)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { B1 a1; B2 a2; B3 a3; B4 a4; B5 a5; B6 a6; B7 a7; B8 a8; B9 a9; B10 a10; B11 a11; B12 a12; B13 a13; B14 a14; B15 a15; B16 a16; B17 a17; B18 a18; B19 a19; B20 a20; B21 a21; }",
+            bad: "class A { B1 a1; B2 a2; B3 a3; B4 a4; B5 a5; B6 a6; B7 a7; B8 a8; B9 a9; B10 a10; B11 a11; B12 a12; B13 a13; B14 a14; B15 a15; B16 a16; B17 a17; B18 a18; B19 a19; B20 a20; B21 a21; } class B1 {} class B2 {} class B3 {} class B4 {} class B5 {} class B6 {} class B7 {} class B8 {} class B9 {} class B10 {} class B11 {} class B12 {} class B13 {} class B14 {} class B15 {} class B16 {} class B17 {} class B18 {} class B19 {} class B20 {} class B21 {}",
             good: "class A { B1 a1; }",
         }),
     },
@@ -1607,134 +1601,6 @@ fn operand_is_a_float(binary: Node, src: &[u8]) -> bool {
     is_float(binary.child_by_field_name("left")) || is_float(binary.child_by_field_name("right"))
 }
 
-/// A class that depends on more than 20 of the project's own types, as
-/// SonarQube's S6539 counts them (measured): fields, locals, parameters and
-/// type arguments count; the JDK's types, the class's own type parameters
-/// and nested types, and a type only named in a static call don't.
-fn depends_on_many_types(class: Node, src: &[u8]) -> bool {
-    const JAVA_LANG: &[&[u8]] = &[
-        b"String",
-        b"Object",
-        b"Integer",
-        b"Long",
-        b"Boolean",
-        b"Double",
-        b"Float",
-        b"Short",
-        b"Byte",
-        b"Character",
-        b"Void",
-        b"Number",
-        b"Math",
-        b"StrictMath",
-        b"StringBuilder",
-        b"StringBuffer",
-        b"CharSequence",
-        b"Class",
-        b"ClassLoader",
-        b"Enum",
-        b"Record",
-        b"Iterable",
-        b"Comparable",
-        b"Cloneable",
-        b"AutoCloseable",
-        b"Runnable",
-        b"Thread",
-        b"ThreadLocal",
-        b"ThreadGroup",
-        b"System",
-        b"Runtime",
-        b"Process",
-        b"ProcessBuilder",
-        b"StackTraceElement",
-        b"Throwable",
-        b"Exception",
-        b"Error",
-        b"RuntimeException",
-        b"IllegalArgumentException",
-        b"IllegalStateException",
-        b"NullPointerException",
-        b"UnsupportedOperationException",
-        b"IndexOutOfBoundsException",
-        b"ArrayIndexOutOfBoundsException",
-        b"StringIndexOutOfBoundsException",
-        b"NumberFormatException",
-        b"ClassCastException",
-        b"ArithmeticException",
-        b"CloneNotSupportedException",
-        b"InterruptedException",
-        b"ReflectiveOperationException",
-        b"ClassNotFoundException",
-        b"NoSuchMethodException",
-        b"NoSuchFieldException",
-        b"IllegalAccessException",
-        b"InstantiationException",
-        b"SecurityException",
-        b"AssertionError",
-        b"LinkageError",
-        b"OutOfMemoryError",
-        b"StackOverflowError",
-        b"Appendable",
-        b"Readable",
-        b"Override",
-        b"Deprecated",
-        b"SuppressWarnings",
-        b"FunctionalInterface",
-        b"SafeVarargs",
-    ];
-    let root = root_of(class);
-    let mut jdk: Vec<&[u8]> = Vec::new();
-    let mut cursor = root.walk();
-    for import in root
-        .named_children(&mut cursor)
-        .filter(|n| n.kind() == "import_declaration")
-    {
-        let t = text(import, src);
-        let path = t.strip_prefix(b"import").unwrap_or(t).trim_ascii();
-        let path = path.strip_prefix(b"static").unwrap_or(path).trim_ascii();
-        if path.starts_with(b"java.") || path.starts_with(b"javax.") {
-            let name = path.trim_ascii_end().strip_suffix(b";").unwrap_or(path);
-            jdk.extend(name.rsplit(|b| *b == b'.').next());
-        }
-    }
-    // Declared here: the class, its nested types, its type parameters.
-    let mut own: Vec<&[u8]> = vec![name_text(class, src)];
-    for n in nodes_in(class, &[], |n| {
-        matches!(
-            n.kind(),
-            "class_declaration"
-                | "interface_declaration"
-                | "enum_declaration"
-                | "record_declaration"
-                | "type_parameter"
-        )
-    }) {
-        let name = n
-            .child_by_field_name("name")
-            .or_else(|| n.named_child(0))
-            .map(|x| text(x, src));
-        own.extend(name);
-    }
-    let mut seen: Vec<&[u8]> = Vec::new();
-    for n in nodes_in(class, &[], |n| n.kind() == "type_identifier") {
-        let t = text(n, src);
-        // `java.util.ArrayList` written out is the JDK's too.
-        let qualified_jdk = n.parent().is_some_and(|p| {
-            p.kind() == "scoped_type_identifier" && {
-                let q = text(p, src);
-                q.starts_with(b"java.") || q.starts_with(b"javax.")
-            }
-        });
-        if qualified_jdk {
-            continue;
-        }
-        if !own.contains(&t) && !jdk.contains(&t) && !JAVA_LANG.contains(&t) && !seen.contains(&t) {
-            seen.push(t);
-        }
-    }
-    seen.len() > 20
-}
-
 fn annotates_a_primitive_with_nullability(declaration: Node, src: &[u8]) -> bool {
     let annotated = [
         &b"Nullable"[..],
@@ -2153,13 +2019,18 @@ mod tests {
         assert_eq!(flagged("java/prepared-constant-in-loop", src), [6]);
     }
 
-    /// Measured on SonarQube 26.7: more than 20 of the project's own types.
+    /// Measured on SonarQube 26.7: more than 20 of the project's own types;
+    /// a library's, the JDK's, nested types and type parameters don't count.
     #[test]
     fn class_coupling_counts_own_types() {
         let class = |own: usize| {
             let fields: String = (0..own).map(|k| format!("T{k} f{k};\n")).collect();
+            // Types the project declares, here in the same file; `Lib*` are
+            // a library's.
+            let declared: String = (0..25).map(|k| format!("class T{k} {{}}\n")).collect();
+            let library: String = (0..25).map(|k| format!("Lib{k} g{k};\n")).collect();
             format!(
-                "import java.util.List;\nimport java.util.Map;\nclass A<E> {{\n{fields}List<E> l;\nMap<String, Integer> m;\njava.util.Set<Thread> s;\nInner i;\nclass Inner {{}}\nvoid f() {{ Util.call(); }}\n}}"
+                "import java.util.List;\nimport java.util.Map;\nclass A<E> {{\n{fields}{library}List<E> l;\nMap<String, Integer> m;\njava.util.Set<Thread> s;\nInner i;\nclass Inner {{}}\nvoid f() {{ Util.call(); }}\n}}\n{declared}"
             )
         };
         assert_eq!(flagged("java/class-coupling", &class(21)), [3]);

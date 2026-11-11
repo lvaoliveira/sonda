@@ -457,8 +457,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1165")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_declaration superclass: (superclass (type_identifier) @s (#match? @s "(Exception|Error)$"))) @match"#,
-            filter: Some(Find(non_final_instance_field)),
+            query: r#"(class_declaration superclass: (superclass (type_identifier) @s (#match? @s "(Exception|Error)$")) body: (class_body (field_declaration declarator: (variable_declarator name: (identifier) @match))))"#,
+            filter: Some(Keep(non_final_instance_field)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1599,7 +1599,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_declaration) @match"#,
-            filter: Some(Keep(private_method_returns_a_literal)),
+            filter: Some(Find(private_method_returns_a_literal)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1940,8 +1940,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5993")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(class_declaration) @match"#,
-            filter: Some(Find(public_constructor_of_abstract_class)),
+            query: r#"(constructor_declaration name: (identifier) @match)"#,
+            filter: Some(Keep(public_constructor_of_abstract_class)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2182,14 +2182,13 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1110")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(return_statement (parenthesized_expression) @match)
-(variable_declarator value: (parenthesized_expression) @match)"#,
+            query: r#"(parenthesized_expression . (parenthesized_expression) .) @match"#,
             filter: Some(Keep(parentheses_fit_on_one_line)),
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { int f() { return (1 + 2); } }",
-            good: "class A { int f() { return 1 + 2; } }",
+            bad: "class A { int f() { return ((1 + 2)); } }",
+            good: "class A { int f() { return (1 + 2); } }",
         }),
     },
     Rule {
@@ -2466,8 +2465,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7158")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(binary_expression) @match
-(method_invocation name: (identifier) @n (#eq? @n "equals") arguments: (argument_list (string_literal) @s (#eq? @s "\"\""))) @match"#,
+            query: r#"(binary_expression) @match"#,
             filter: Some(Keep(compares_with_empty_string)),
         },
         example: Some(Example {
@@ -2773,11 +2771,20 @@ fn utility_class_constructor_or_class<'t>(class: Node<'t>, src: &[u8]) -> Option
         return None;
     }
     let body = class.child_by_field_name("body")?;
-    let constructor = members(body)
+    let constructors: Vec<Node> = members(body)
         .into_iter()
-        .find(|m| m.kind() == "constructor_declaration" && !has_modifier(*m, "private"));
+        .filter(|m| m.kind() == "constructor_declaration")
+        .collect();
+    // A protected or package-private constructor is left alone; only a
+    // public one, or none at all, is reported (measured on SonarQube 26.7).
+    if constructors.is_empty() {
+        return class.child_by_field_name("name");
+    }
     // Reported at the name, below any annotation, as SonarQube does.
-    constructor.unwrap_or(class).child_by_field_name("name")
+    constructors
+        .into_iter()
+        .find(|c| has_modifier(*c, "public"))
+        .and_then(|c| c.child_by_field_name("name"))
 }
 
 fn assigns_inside_an_expression(assign: Node, _: &[u8]) -> bool {
@@ -2962,11 +2969,11 @@ fn throw_in_finally<'t>(finally: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-fn non_final_instance_field<'t>(class: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
-    let body = class.child_by_field_name("body")?;
-    members(body).into_iter().find(|m| {
-        m.kind() == "field_declaration" && !has_modifier(*m, "static") && !has_modifier(*m, "final")
-    })
+/// Each instance field of an exception that isn't final, at its name.
+fn non_final_instance_field(name: Node, _: &[u8]) -> bool {
+    name.parent()
+        .and_then(|d| d.parent())
+        .is_some_and(|f| !has_modifier(f, "static") && !has_modifier(f, "final"))
 }
 
 /// The method a `return` belongs to, unless a lambda or inner class intervenes.
@@ -2991,6 +2998,12 @@ fn returns_null_for_collection(statement: Node, src: &[u8]) -> bool {
         .split(|&b| b == b'<')
         .next()
         .unwrap_or(&b""[..]);
+    // `java.util.List<?>` is a List too.
+    let head = head
+        .rsplit(|b| *b == b'.')
+        .next()
+        .unwrap_or(head)
+        .trim_ascii();
     ty.kind() == "array_type"
         || matches!(
             head,
@@ -3122,11 +3135,28 @@ fn concatenates_a_string_in_a_loop(assign: Node, src: &[u8]) -> bool {
     is_text && inside_a_loop(assign, src)
 }
 
+/// An empty method, as SonarQube 26.7 reports one (measured): not one of an
+/// abstract class, a hook for subclasses, nor an interface's default method;
+/// of constructors, only a lone public one without parameters.
 fn method_is_empty(method: Node, _: &[u8]) -> bool {
-    method
-        .child_by_field_name("body")
-        .is_some_and(|b| b.named_child_count() == 0)
-        && (method.kind() != "constructor_declaration" || is_the_only_public_constructor(method))
+    let in_interface = method
+        .parent()
+        .is_some_and(|b| b.kind() == "interface_body");
+    let in_abstract_class = method
+        .parent()
+        .filter(|b| b.kind() == "class_body")
+        .and_then(|b| b.parent())
+        .is_some_and(|c| has_modifier(c, "abstract"));
+    let no_parameters = method
+        .child_by_field_name("parameters")
+        .is_some_and(|p| p.named_child_count() == 0);
+    !in_abstract_class
+        && !in_interface
+        && method
+            .child_by_field_name("body")
+            .is_some_and(|b| b.named_child_count() == 0)
+        && (method.kind() != "constructor_declaration"
+            || is_the_only_public_constructor(method) && no_parameters)
 }
 
 fn imports_from_sun(import: Node, src: &[u8]) -> bool {
@@ -3256,6 +3286,7 @@ fn switch_has_fewer_than_three_cases(switch: Node, src: &[u8]) -> bool {
 /// whose middle type is the collector's own business, and private methods.
 fn wildcard_is_not_a_class(method: Node, src: &[u8]) -> bool {
     !has_modifier(method, "private")
+        && !has_annotation(method, b"Override", src)
         && method
             .child_by_field_name("type")
             .and_then(|t| t.named_child(0))
@@ -3839,9 +3870,15 @@ fn catch_only_rethrows(catch: Node, src: &[u8]) -> bool {
     let Some(name) = param.child_by_field_name("name") else {
         return false;
     };
-    matches!(statements(body).as_slice(), [only]
-        if only.kind() == "throw_statement"
-            && only.named_child(0).is_some_and(|t| text(t, src) == text(name, src)))
+    // Followed by another catch, it keeps that one from catching the
+    // exception (measured on SonarQube 26.7).
+    let later_catch = catch
+        .next_named_sibling()
+        .is_some_and(|n| n.kind() == "catch_clause");
+    !later_catch
+        && matches!(statements(body).as_slice(), [only]
+            if only.kind() == "throw_statement"
+                && only.named_child(0).is_some_and(|t| text(t, src) == text(name, src)))
 }
 
 fn has_static_modifier(declaration: Node, _: &[u8]) -> bool {
@@ -3947,19 +3984,26 @@ fn contains_a_nested_ternary(ternary: Node, _: &[u8]) -> bool {
         || nested(ternary.child_by_field_name("alternative"))
 }
 
-fn private_method_returns_a_literal(method: Node, src: &[u8]) -> bool {
+/// A method nothing overrides that only returns a literal, reported at the
+/// `return`, as SonarQube 26.7 does.
+fn private_method_returns_a_literal<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let sealed = has_modifier(method, "private")
         || has_modifier(method, "static")
         || has_modifier(method, "final")
         || enclosing_class(method).is_some_and(|c| has_modifier(c, "final"));
     if !sealed || has_annotation(method, b"Override", src) {
-        return false;
+        return None;
     }
-    let Some(body) = method.child_by_field_name("body") else {
-        return false;
-    };
-    matches!(statements(body).as_slice(), [only]
-        if only.kind() == "return_statement" && only.named_child(0).is_some_and(is_literal_value))
+    let body = method.child_by_field_name("body")?;
+    match statements(body).as_slice() {
+        [only]
+            if only.kind() == "return_statement"
+                && only.named_child(0).is_some_and(is_literal_value) =>
+        {
+            Some(*only)
+        }
+        _ => None,
+    }
 }
 
 fn logger_names_another_class(call: Node, src: &[u8]) -> bool {
@@ -4168,14 +4212,17 @@ fn asserts_a_comparison(call: Node, src: &[u8]) -> bool {
     }
 }
 
-fn public_constructor_of_abstract_class<'t>(class: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
-    if !has_modifier(class, "abstract") {
-        return None;
-    }
-    let body = class.child_by_field_name("body")?;
-    members(body)
-        .into_iter()
-        .find(|m| m.kind() == "constructor_declaration" && has_modifier(*m, "public"))
+/// Each public constructor of an abstract class, at its name.
+fn public_constructor_of_abstract_class(name: Node, _: &[u8]) -> bool {
+    let Some(constructor) = name.parent() else {
+        return false;
+    };
+    has_modifier(constructor, "public")
+        && constructor
+            .parent()
+            .filter(|b| b.kind() == "class_body")
+            .and_then(|b| b.parent())
+            .is_some_and(|c| c.kind() == "class_declaration" && has_modifier(c, "abstract"))
 }
 
 fn annotates_a_field(annotation: Node, _: &[u8]) -> bool {
@@ -4232,6 +4279,8 @@ fn if_only_wraps_another_if<'t>(statement: Node<'t>, _: &[u8]) -> Option<Node<'t
         .then_some(inner)
 }
 
+/// Doubled parentheses, `((x))`, on one line: single ones around a return
+/// value aren't reported (measured on SonarQube 26.7).
 fn parentheses_fit_on_one_line(paren: Node, _: &[u8]) -> bool {
     paren.start_position().row == paren.end_position().row
 }
@@ -4587,7 +4636,16 @@ type StringCounts = std::collections::HashMap<Vec<u8>, (usize, usize)>;
 /// in an annotation, and not an exception's message (`throw new
 /// IllegalStateException("...")`), which SonarQube leaves out.
 fn countable_string(n: Node, src: &[u8]) -> Option<Vec<u8>> {
+    // A constant's own value isn't a repetition (measured on SonarQube 26.7).
+    let constant = n
+        .parent()
+        .filter(|d| d.kind() == "variable_declarator")
+        .and_then(|d| d.parent())
+        .is_some_and(|f| {
+            f.kind() == "field_declaration" && has_modifier(f, "static") && has_modifier(f, "final")
+        });
     if n.kind() != "string_literal"
+        || constant
         || is_exception_message(n, src)
         || n.parent().is_some_and(|p| {
             matches!(
@@ -4694,10 +4752,9 @@ fn several_constructors_without_autowired<'t>(class: Node<'t>, src: &[u8]) -> Op
     constructors.get(1).copied()
 }
 
+/// `s.length() == 0` on a String; `s.equals("")` isn't S7158's (measured on
+/// SonarQube 26.7).
 fn compares_with_empty_string(node: Node, src: &[u8]) -> bool {
-    if node.kind() == "method_invocation" {
-        return true;
-    }
     let (Some(l), Some(r)) = (
         node.child_by_field_name("left"),
         node.child_by_field_name("right"),
@@ -4729,7 +4786,15 @@ fn compares_with_empty_string(node: Node, src: &[u8]) -> bool {
 /// `AutoCloseable.close`).
 fn generic_exception_reported(node: Node, src: &[u8]) -> bool {
     if node.kind() == "throw_statement" {
-        return true;
+        // Wrapping the caught exception, `throw new RuntimeException(e)`,
+        // isn't reported (measured on SonarQube 26.7).
+        let caught = catch_parameter_around(node, src);
+        let wraps = node.named_child(0).is_some_and(|creation| {
+            call_arguments(creation)
+                .iter()
+                .any(|a| a.kind() == "identifier" && Some(text(*a, src)) == caught)
+        });
+        return !wraps;
     }
     let Some(method) = node
         .parent()
@@ -4756,21 +4821,51 @@ fn generic_exception_reported(node: Node, src: &[u8]) -> bool {
                 .any(|(iface, m)| name == *m && count_word(text(i, src), iface) > 0)
         })
     });
-    // Calls in the body may pass on an `Exception`; `Throwable`,
-    // `RuntimeException` and `Error` are reported anyway.
-    !implements_one
-        && (text(node, src) != b"Exception"
-            || method.child_by_field_name("body").is_some_and(|b| {
-                find_node(b, |n| {
-                    matches!(
-                        n.kind(),
-                        "method_invocation"
-                            | "object_creation_expression"
-                            | "explicit_constructor_invocation"
-                    )
-                })
-                .is_none()
-            }))
+    // A call to a method of the class declared `throws Exception`, or to a
+    // `call()`, passes one on; `Throwable`, `RuntimeException` and `Error`
+    // are reported anyway (measured on SonarQube 26.7).
+    let class_methods_throwing = |name: &[u8]| {
+        enclosing_class(method).is_some_and(|c| {
+            super::java_extra::class_members(c).into_iter().any(|m| {
+                m.kind() == "method_declaration"
+                    && name_text(m, src) == name
+                    && m.children(&mut m.walk())
+                        .any(|t| t.kind() == "throws" && count_word(text(t, src), b"Exception") > 0)
+            })
+        })
+    };
+    let passes_one_on = method.child_by_field_name("body").is_some_and(|b| {
+        find_node(b, |n| {
+            n.kind() == "method_invocation" && {
+                let name = method_name(n, src);
+                // `Callable.call()` and `AutoCloseable.close()` throw `Exception`.
+                matches!(name, b"call" | b"close")
+                    || n.child_by_field_name("object")
+                        .is_none_or(|o| o.kind() == "this")
+                        && class_methods_throwing(name)
+            }
+        })
+        .is_some()
+    });
+    !implements_one && (text(node, src) != b"Exception" || !passes_one_on)
+}
+
+/// The name of the exception the `catch` around `node` caught, if any.
+fn catch_parameter_around<'s>(node: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let mut p = node.parent();
+    while let Some(n) = p {
+        match n.kind() {
+            "catch_clause" => {
+                return n
+                    .named_child(0)
+                    .and_then(|param| param.child_by_field_name("name"))
+                    .map(|x| text(x, src));
+            }
+            "method_declaration" | "lambda_expression" | "class_body" => return None,
+            _ => p = n.parent(),
+        }
+    }
+    None
 }
 
 /// `setAccessible(true)`, or a field written through reflection,
@@ -4995,7 +5090,8 @@ mod tests {
     fn unrelated_checks() {
         let src = "package p;\nclass A {\nObject f(Object o) { if (o instanceof String) { String s = (String) o; return s; } return null; }\nString g(String s) { return s.length() == 0 ? \"\" : s; }\nboolean h(String s) { return s.equals(\"\"); }\nBoolean i() { return null; }\nList<String> j() { return null; }\npublic final int MAX = 3;\n{ init(); }\nvoid k(Map<String, String> m) { for (String key : m.keySet()) { use(m.get(key)); } }\n}";
         assert_eq!(flagged("java/instanceof-then-cast", src), [3]);
-        assert_eq!(flagged("java/empty-string-comparison", src), [4, 5]);
+        // `equals("")` isn't S7158's (measured on SonarQube 26.7).
+        assert_eq!(flagged("java/empty-string-comparison", src), [4]);
         assert_eq!(flagged("java/null-from-boolean-method", src), [6]);
         assert_eq!(flagged("java/null-instead-of-empty", src), [7]);
         assert_eq!(flagged("java/final-field-should-be-static", src), [8]);
@@ -5211,5 +5307,68 @@ mod tests {
         // S1135: each tag's line in a block comment.
         let src = "/**\n * TODO one.\n * Some text.\n * throw new X(\"TODO\");\n */\nclass A {}";
         assert_eq!(flagged("common/todo-comment", src), [2, 4]);
+    }
+
+    /// Measured on SonarQube 26.7 against a Spring application's shapes.
+    #[test]
+    fn java_spring_shapes_measured_on_sonarqube() {
+        // S112: wrapping the caught exception is fine; `throws Exception`
+        // with only calls that can't throw one isn't.
+        let src = "class A {\nvoid g() throws Exception { Thread.sleep(1); }\nvoid f() { try { g(); } catch (Exception e) { throw new RuntimeException(e); } }\nvoid h() { throw new RuntimeException(\"x\"); }\nvoid c(AutoCloseable r) throws Exception { r.close(); }\n}";
+        assert_eq!(flagged("java/generic-exception-thrown", src), [2, 4]);
+        // S1118: a public constructor, or none; not a protected one.
+        let src = "class A { protected A() {} static int f() { return 1; } }\nclass B { B() {} static int f() { return 1; } }\nclass C { public C() {} static int f() { return 1; } }";
+        assert_eq!(flagged("java/utility-class-constructor", src), [3]);
+        // S1110: doubled parentheses only.
+        let src =
+            "class A {\nint a(int x, int y) { return (x + y); }\nint b(int x) { return ((x)); }\n}";
+        assert_eq!(flagged("java/redundant-parentheses", src), [3]);
+        // S899: a file's delete(), not a builder's delete(a, b).
+        let src = "class A { void f(java.io.File file, StringBuilder sb) {\nfile.delete();\nsb.delete(0, 1);\nfile.mkdirs();\n} }";
+        assert_eq!(flagged("java/ignored-status-return", src), [2]);
+        // S2139: rethrowing the same exception only.
+        let src = "class A { void f() {\ntry { g(); } catch (Exception e) { log.error(\"x\", e); throw new IllegalStateException(e); }\ntry { g(); } catch (Exception e) { log.error(\"x\", e); throw e; }\n} }";
+        assert_eq!(flagged("java/log-and-rethrow", src), [3]);
+        // S2737: a rethrow keeping a broader catch from catching it.
+        let src = "class A { void f() {\ntry { g(); } catch (IllegalStateException e) { throw e; } catch (Exception e) { h(e); }\ntry { g(); } catch (IllegalStateException e) { throw e; }\n} }";
+        assert_eq!(flagged("java/catch-only-rethrows", src), [3]);
+        // S1452: an override keeps its parent's type.
+        let src = "import java.util.List;\nclass A implements B {\n@Override public List<?> a() { return null; }\npublic List<?> b() { return null; }\n}";
+        assert_eq!(flagged("java/wildcard-return-type", src), [4]);
+        // S4030: lists and sets the method creates, each; not maps or ones
+        // it was handed.
+        let src = "import java.util.*;\nclass A { void f(Map<String, List<String>> all) {\nList<String> a = new ArrayList<>();\na.add(\"x\");\nSet<String> c = new HashSet<>();\nc.add(\"x\");\nMap<String, String> b = new HashMap<>();\nb.put(\"x\", \"y\");\nList<String> d = all.get(\"k\");\nd.add(\"x\");\n} }";
+        assert_eq!(flagged("java/collection-never-read", src), [3, 5]);
+        // S1450: Lombok's accessors read the field.
+        let src =
+            "@Data\nclass A {\nprivate String name;\nString f() { name = \"x\"; return name; }\n}";
+        assert!(flagged("java/private-field-used-locally", src).is_empty());
+        // S1075: named like a path, or a File's; three parts or a URI.
+        let src = "import java.io.File;\nclass A {\nstatic final String RESOURCES_PATH = \"/src/main/resources\";\nstatic final String MY_DIR = \"/src/main/resources\";\nstatic final String TWO_PATH = \"/a/b\";\nstatic final String URL_PATH = \"http://example.com/a\";\nObject f() { String other = \"/home/me/x\"; return new File(\"/home/me/users.txt\"); }\n}";
+        assert_eq!(flagged("java/hardcoded-path", src), [3, 6, 7]);
+        // S6208: once per group, at its last label; not with default.
+        let src = "class A { int f(String s) {\nswitch (s) {\ncase \"a\":\ncase \"b\":\ncase \"c\":\nreturn 1;\ncase \"d\":\ndefault:\nreturn 2;\n}\n} }";
+        assert_eq!(flagged("java/ends-with-else-switch-labels", src), [5]);
+        // S1165 and S5993: each field, each constructor.
+        let src = "class E extends RuntimeException {\nprivate int a;\nprivate String b;\n}\nabstract class T {\npublic T() {}\npublic T(int x) {}\n}";
+        assert_eq!(flagged("java/exception-field-not-final", src), [2, 3]);
+        assert_eq!(
+            flagged("java/abstract-class-public-constructor", src),
+            [6, 7]
+        );
+        // S1186: an abstract class's empty method is a hook.
+        let src = "abstract class A {\npublic void hook() {}\n}\nclass B {\n@Deprecated\npublic void old() {}\n}";
+        assert_eq!(flagged("java/empty-method", src), [6]);
+        // S1192: a constant's own value isn't a repetition.
+        let src = "class A {\nstatic final String A1 = \"/src/main/x\";\nstatic final String A2 = \"/src/main/x\";\nstatic final String A3 = \"/src/main/x\";\n}";
+        assert!(flagged("java/duplicated-string", src).is_empty());
+        // S3400 at the return; annotated declarations at their name.
+        let src = "class A {\n@Deprecated\nprivate int f() {\nreturn 1;\n}\n}";
+        assert_eq!(flagged("java/method-returns-constant", src), [4]);
+        let src = "class A extends Thread {\n@Override\n@Deprecated\npublic void run() {\n}\n}";
+        assert_eq!(flagged("java/empty-method", src), [4]);
+        // S5869 on a regex in a constant, reported at the constant.
+        let src = "class A {\nprivate static final String P = \"[a-zA-z]+\";\nboolean f(String s) { return s.matches(P); }\n}";
+        assert_eq!(flagged("java/regex-duplicate-class-member", src), [2]);
     }
 }

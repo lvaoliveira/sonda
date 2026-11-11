@@ -168,8 +168,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() { String p = \"/home/app/data\"; } }",
-            good: "class A { void f() { String p = config.dataDir(); } }",
+            bad: "class A { void f() { String dataPath = \"/home/app/data\"; } }",
+            good: "class A { void f() { String dataPath = config.dataDir(); } }",
         }),
     },
     Rule {
@@ -520,13 +520,13 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S899")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "mkdir" "mkdirs" "createNewFile" "renameTo" "tryLock"))) @match"#,
-            filter: None,
+            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "delete" "createNewFile" "renameTo" "tryLock"))) @match"#,
+            filter: Some(Keep(ignores_a_file_status)),
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() { dir.mkdirs(); } }",
-            good: "class A { void f() { if (!dir.mkdirs()) { fail(); } } }",
+            bad: "class A { void f() { file.delete(); } }",
+            good: "class A { void f() { if (!dir.delete()) { fail(); } } }",
         }),
     },
 ];
@@ -668,33 +668,66 @@ fn model_attribute_is_not_an_identifier(annotation: Node, src: &[u8]) -> bool {
     })
 }
 
+/// A hard-coded path or URI, as SonarQube 26.7 reports one (measured): the
+/// value of a variable, field or constant named like a path (`path`,
+/// `filename`), or the argument of `new File(...)`; a URI with a scheme, or
+/// an absolute path of three parts or more (`/a/b` is left alone). A relative
+/// path, `Paths.get(...)` and an annotation's value aren't reported.
 fn is_a_machine_specific_path(string: Node, src: &[u8]) -> bool {
-    // Annotation values such as @GetMapping("/x") are URLs of the service.
-    if string.parent().is_some_and(|p| {
-        matches!(
-            p.kind(),
-            "element_value_pair" | "annotation_argument_list" | "annotation"
-        )
-    }) {
-        return false;
-    }
     let Some(v) = string_value(string, src) else {
         return false;
     };
-    v.starts_with(b"file:/")
-        || v.starts_with(b"jar:file:")
-        || (v.len() > 3 && v[0].is_ascii_alphabetic() && &v[1..3] == b":\\" && v[3] != b'"')
-        || [
-            &b"/usr/"[..],
-            b"/etc/",
-            b"/var/",
-            b"/home/",
-            b"/opt/",
-            b"/tmp/",
-            b"/Users/",
-        ]
-        .iter()
-        .any(|p| v.starts_with(p))
+    let Some(parent) = string.parent() else {
+        return false;
+    };
+    let named_like_a_path = |name: Node| {
+        let n = text(name, src).to_ascii_lowercase();
+        n.windows(4).any(|w| w == b"path") || n.windows(8).any(|w| w == b"filename")
+    };
+    let placed = match parent.kind() {
+        "variable_declarator" => {
+            parent
+                .child_by_field_name("value")
+                .is_some_and(|x| x.id() == string.id())
+                && parent
+                    .child_by_field_name("name")
+                    .is_some_and(named_like_a_path)
+        }
+        "assignment_expression" => {
+            parent
+                .child_by_field_name("right")
+                .is_some_and(|x| x.id() == string.id())
+                && parent.child_by_field_name("left").is_some_and(|l| {
+                    let name = if l.kind() == "field_access" {
+                        l.child_by_field_name("field")
+                    } else {
+                        Some(l)
+                    };
+                    name.is_some_and(named_like_a_path)
+                })
+        }
+        "argument_list" => parent.parent().is_some_and(|c| {
+            c.kind() == "object_creation_expression"
+                && c.child_by_field_name("type")
+                    .is_some_and(|t| matches!(text(t, src), b"File" | b"java.io.File"))
+                && parent.named_child(0).is_some_and(|a| a.id() == string.id())
+        }),
+        _ => false,
+    };
+    if !placed {
+        return false;
+    }
+    let scheme = v.iter().position(|b| *b == b':').is_some_and(|i| {
+        i > 1 && v[..i].iter().all(u8::is_ascii_alphabetic) && v[i..].starts_with(b"://")
+    });
+    let disk =
+        v.len() > 2 && v[0].is_ascii_alphabetic() && v[1] == b':' && matches!(v[2], b'/' | b'\\');
+    let absolute = v.starts_with(b"/") || v.starts_with(b"~/") || v.starts_with(b"\\");
+    let parts = v
+        .split(|b| *b == b'/' || *b == b'\\')
+        .filter(|p| !p.is_empty() && *p != b"~")
+        .count();
+    scheme || disk || (absolute && parts >= 3)
 }
 
 fn casts_to_its_own_type(cast: Node, src: &[u8]) -> bool {
@@ -910,6 +943,16 @@ fn try_ends_with_fail(try_: Node, src: &[u8]) -> bool {
     })
 }
 
+/// `file.delete()` and the like, their status ignored: a `delete` with
+/// arguments is a builder's (`sb.delete(0, n)`), not a file's (measured on
+/// SonarQube 26.7).
+fn ignores_a_file_status(statement: Node, src: &[u8]) -> bool {
+    statement.named_child(0).is_some_and(|call| {
+        call.child_by_field_name("object").is_some()
+            && (method_name(call, src) != b"delete" || call_arguments(call).is_empty())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -955,7 +998,7 @@ mod tests {
 
     #[test]
     fn strings() {
-        let src = "class A {\nDateTimeFormatter a = DateTimeFormatter.ofPattern(\"yyyy-ww\");\nDateTimeFormatter b = DateTimeFormatter.ofPattern(\"yyyy-MM\");\n@ModelAttribute(\"my-name\") Object c() { return null; }\n@ModelAttribute(\"myName\") Object d() { return null; }\nString e = \"/home/app/data\";\nString f = \"C:\\\\data\";\nString g = \"/api/users\";\n@GetMapping(\"/home/x\") String h() { return \"\"; }\nString i = \"SELECT * FROM t\";\nString j = \"select id from t\";\nString k = (String) \"x\";\nObject l = (Object) \"x\";\nLocalDate m = LocalDate.of(2024, 3, 1);\nLocalDate n = LocalDate.of(2024, Month.MARCH, 1);\n}";
+        let src = "class A {\nDateTimeFormatter a = DateTimeFormatter.ofPattern(\"yyyy-ww\");\nDateTimeFormatter b = DateTimeFormatter.ofPattern(\"yyyy-MM\");\n@ModelAttribute(\"my-name\") Object c() { return null; }\n@ModelAttribute(\"myName\") Object d() { return null; }\nString dataPath = \"/home/app/data\";\nString winPath = \"C:\\\\data\";\nString g = \"/api/users\";\n@GetMapping(\"/home/x\") String h() { return \"\"; }\nString i = \"SELECT * FROM t\";\nString j = \"select id from t\";\nString k = (String) \"x\";\nObject l = (Object) \"x\";\nLocalDate m = LocalDate.of(2024, 3, 1);\nLocalDate n = LocalDate.of(2024, Month.MARCH, 1);\n}";
         assert_eq!(flagged("java/week-year-mismatch", src), [2]);
         assert_eq!(flagged("java/model-attribute-name", src), [4]);
         assert_eq!(flagged("java/hardcoded-path", src), [6, 7]);
@@ -974,7 +1017,7 @@ mod tests {
 
     #[test]
     fn test_helpers() {
-        let src = "class T {\n@Test void a() { service.run(); }\n@Test void b() { assertEquals(1, 2); }\n@Test void c() { }\n@Test(expected = X.class) void d() { service.run(); }\nvoid e() {\nassertThat(list.size()).isEqualTo(3);\nassertThat(list).hasSize(3);\nassertThat(a == b).isTrue();\nassertThat(x).isNotNull();\nassertThat(x).isEqualTo(1);\nassertThat(y).isNotNull();\nassertThatThrownBy(() -> f());\nassertThatThrownBy(() -> f()).isInstanceOf(X.class);\nverify(mock, times(1)).run();\nverify(mock).run();\nMockito.when(x).thenReturn(1);\ntry { f(); fail(); } catch (IOException e) { }\ntry { f(); } catch (IOException e) { }\ndir.mkdirs();\nboolean ok = dir.mkdirs();\n}\n}";
+        let src = "class T {\n@Test void a() { service.run(); }\n@Test void b() { assertEquals(1, 2); }\n@Test void c() { }\n@Test(expected = X.class) void d() { service.run(); }\nvoid e() {\nassertThat(list.size()).isEqualTo(3);\nassertThat(list).hasSize(3);\nassertThat(a == b).isTrue();\nassertThat(x).isNotNull();\nassertThat(x).isEqualTo(1);\nassertThat(y).isNotNull();\nassertThatThrownBy(() -> f());\nassertThatThrownBy(() -> f()).isInstanceOf(X.class);\nverify(mock, times(1)).run();\nverify(mock).run();\nMockito.when(x).thenReturn(1);\ntry { f(); fail(); } catch (IOException e) { }\ntry { f(); } catch (IOException e) { }\ndir.delete();\nboolean ok = dir.delete();\n}\n}";
         assert_eq!(flagged("java/test-without-assertion", src), [2]);
         assert_eq!(flagged("java/assertj-simplifiable", src), [7, 9]);
         assert_eq!(flagged("java/assertj-chain", src), [11]);

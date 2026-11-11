@@ -461,7 +461,14 @@ mod tests {
         let rules = RuleSet::new(&cfg.rules).expect("all queries compile");
         for r in RULES.iter() {
             let Some(ex) = &r.example else { continue };
-            let mut bad = analyze("bad", ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
+            // A rule about tests sees its example as a test file.
+            let test_code = crate::analysis::TEST_CODE_RULES.contains(&r.id);
+            let (bad_path, good_path) = if test_code {
+                ("src/test/java/BadTest.java", "src/test/java/GoodTest.java")
+            } else {
+                ("bad", "good")
+            };
+            let mut bad = analyze(bad_path, ex.lang, ex.bad, &rules, &cfg, far_deadline()).unwrap();
             // Project-level rules see the example as a project of one file.
             crate::analysis::cs_project_rules(std::slice::from_mut(&mut bad), &rules);
             crate::analysis::java_project_rules(std::slice::from_mut(&mut bad), &rules);
@@ -472,7 +479,8 @@ mod tests {
                 ex.bad,
                 bad.issues.iter().map(|i| i.rule).collect::<Vec<_>>()
             );
-            let mut good = analyze("good", ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
+            let mut good =
+                analyze(good_path, ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
             crate::analysis::cs_project_rules(std::slice::from_mut(&mut good), &rules);
             crate::analysis::java_project_rules(std::slice::from_mut(&mut good), &rules);
             assert!(

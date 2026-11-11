@@ -377,7 +377,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4030")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_declaration) @match"#,
+            query: r#"(local_variable_declaration) @match"#,
             filter: Some(Find(collection_is_only_written)),
         },
         example: Some(Example {
@@ -718,7 +718,8 @@ fn consecutive_loops_over_one_collection<'t>(block: Node<'t>, src: &[u8]) -> Opt
     })
 }
 
-fn collection_is_only_written<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// Each local collection the method creates and only writes to, at its name.
+fn collection_is_only_written<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     const COLLECTIONS: &[&[u8]] = &[
         b"List",
         b"ArrayList",
@@ -727,23 +728,36 @@ fn collection_is_only_written<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'
         b"HashSet",
         b"TreeSet",
         b"LinkedHashSet",
-        b"Map",
-        b"HashMap",
-        b"TreeMap",
-        b"LinkedHashMap",
+        // A map only written to isn't reported (measured on SonarQube 26.7).
         b"Collection",
         b"Deque",
         b"ArrayDeque",
         b"Queue",
     ];
-    let body = method.child_by_field_name("body")?;
-    let declaration = find_node(body, |n| {
-        n.kind() == "local_variable_declaration"
-            && COLLECTIONS.contains(&base_type(type_text(n.child_by_field_name("type"), src)))
-    })?;
+    let mut scope = declaration.parent();
+    while let Some(p) = scope.filter(|p| {
+        !matches!(
+            p.kind(),
+            "method_declaration" | "constructor_declaration" | "lambda_expression"
+        )
+    }) {
+        scope = p.parent();
+    }
+    let body = scope?.child_by_field_name("body")?;
+    if !COLLECTIONS.contains(&base_type(type_text(
+        declaration.child_by_field_name("type"),
+        src,
+    ))) {
+        return None;
+    }
     let declarator = children_of_kind(declaration, "variable_declarator")
         .into_iter()
         .next()?;
+    // One the method creates: a collection it was handed may be read
+    // elsewhere (measured on SonarQube 26.7).
+    declarator
+        .child_by_field_name("value")
+        .filter(|v| v.kind() == "object_creation_expression")?;
     let name_node = declarator.child_by_field_name("name")?;
     let name = text(name_node, src);
     let uses = count_nodes(body, &[], |n| {

@@ -732,6 +732,57 @@ fn is_regex_receiver(object: Node, src: &[u8]) -> bool {
         .any(|w| lower.windows(w.len()).any(|x| x == w.as_bytes()))
 }
 
+/// A final field of the class the name refers to, by its initializer: the
+/// pattern is judged, and reported, where the constant is written (measured
+/// on SonarQube 26.7). Anything else is itself.
+fn constant_value<'t>(node: Node<'t>, src: &[u8]) -> Node<'t> {
+    if node.kind() != "identifier" {
+        return node;
+    }
+    let name = text(node, src);
+    let mut p = node.parent();
+    while let Some(n) = p {
+        if n.kind() == "class_body" {
+            let mut c = n.walk();
+            let found = n
+                .named_children(&mut c)
+                .filter(|f| {
+                    f.kind() == "field_declaration" && super::java_bugs::has_modifier(*f, "final")
+                })
+                .flat_map(|f| {
+                    let mut c = f.walk();
+                    f.named_children(&mut c)
+                        .filter(|d| d.kind() == "variable_declarator")
+                        .collect::<Vec<_>>()
+                })
+                .find(|d| {
+                    d.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name)
+                })
+                .and_then(|d| d.child_by_field_name("value"));
+            if let Some(value) = found {
+                return value;
+            }
+        }
+        if matches!(
+            n.kind(),
+            "method_declaration" | "constructor_declaration" | "lambda_expression"
+        ) {
+            // A local or a parameter of that name hides the field.
+            let declares = super::java_security::find_node(n, |x| {
+                matches!(x.kind(), "variable_declarator" | "formal_parameter")
+                    && x.child_by_field_name("name")
+                        .is_some_and(|y| text(y, src) == name)
+            });
+            if declares.is_some() {
+                return node;
+            }
+        }
+        p = n.parent();
+    }
+    node
+}
+
 /// The pattern argument of a regex-taking call, with its parsed form.
 fn pattern_of<'t>(
     call: Node<'t>,
@@ -758,7 +809,7 @@ fn pattern_of<'t>(
         }
         _ => return None,
     };
-    let pattern = *args.first()?;
+    let pattern = constant_value(*args.first()?, src);
     let value = java_text(pattern, src, 0)?;
     let flags = flags_of(flag_node, src)?;
     Some((pattern, parse_java(&value, flags)))

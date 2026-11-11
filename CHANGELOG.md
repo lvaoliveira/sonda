@@ -9,6 +9,11 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Java's `@SuppressWarnings` silences issues as SonarQube honors it:
+  `"java:S1186"` (or `"squid:S1186"`) the rules covering that key over the
+  annotated declaration, `"all"` every rule, in the project-level rules
+  too. The compiler's own names (`"unchecked"`) silence nothing.
+
 - Java rules that need another file's declarations read a project index
   (ADR-0020, extended to Java): each file summarizes its types, members and
   calls passing an array, and names resolve through nested types, imports,
@@ -332,6 +337,44 @@ file, the report formats and the public library API.
     anonymous iterators; `java/thread-local-never-removed` a ThreadLocal
     whose own `remove()` is never called; `java/unused-type-parameter` a
     parameter a nested class declares again.
+- Java, compared on a Spring Boot application, apigen.springboot
+  (`ef13838`, Java 21, SonarCloud's built-in profile): sonda raises 121 of
+  its 171 issues, where it raised 100, and 11 it doesn't, where it raised
+  54. Each change was measured on SonarQube 26.7 first.
+  - Issues about an annotated class, method or constructor are reported at
+    its name, below the annotations, in every Java rule.
+  - New on the project index: `java/missing-override` reports an override
+    of a method with a body (a parent's, an interface's default) without
+    `@Override`, not `Object`'s methods it reported before;
+    `java/static-via-subclass` a static method reached through a subclass
+    in another file; `java/class-coupling` counts the project's types only,
+    not a library's, and not one only created with `new`.
+  - Narrower: `java/generic-exception-thrown` leaves wrapping the caught
+    exception, and `throws Exception` is excused only by a call that can
+    throw one; `java/utility-class-constructor` leaves a protected or
+    package-private constructor; `java/redundant-parentheses` is doubled
+    parentheses; `java/empty-string-comparison` leaves `equals("")`;
+    `java/ignored-status-return` is a file's `delete()`, not `mkdirs()`;
+    `java/log-and-rethrow` rethrows the same exception;
+    `java/catch-only-rethrows` leaves a rethrow before a broader catch;
+    `java/private-field-used-locally` leaves Lombok classes;
+    `java/collection-never-read` is a list or set the method creates, each;
+    `java/wildcard-return-type` leaves overrides; `java/empty-method`
+    leaves an abstract class's hooks and constructors with parameters;
+    `java/duplicated-string` leaves constants' values;
+    `java/unused-method-parameter` leaves serialization hooks;
+    `java/incomplete-assertion` runs on test code only;
+    `java/assertion-in-production` reports an assertion called, not a test
+    library imported; `java/hardcoded-path` is a path assigned to a name
+    like `path` or `filename`, or passed to `new File`, of three parts or a
+    URI.
+  - Each one, not one per class: `java/exception-field-not-final`,
+    `java/abstract-class-public-constructor`; `java/ends-with-else-switch-labels`
+    once per group of labels, at its last one; `java/method-returns-constant`
+    at the `return`; regex rules judge a constant passed to `matches`, at
+    the constant; `java/null-instead-of-empty` knows `java.util.List`
+    written out.
+
 
 Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,

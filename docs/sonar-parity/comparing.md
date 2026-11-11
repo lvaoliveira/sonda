@@ -24,7 +24,13 @@ calibrate: measure what SonarQube does on small files, one case at a time.
 
 For a public project analyzed on SonarCloud, the server is
 `https://sonarcloud.io` and reading issues needs no token, but SonarCloud
-must have analyzed the commit you scan.
+must have analyzed the commit you scan. Nothing needs building: the
+project's own analysis had its classes. Check the project's quality
+profile first (`api/qualityprofiles/search?project=...&organization=...`):
+a project with its own profile, or changed rule parameters, measures its
+conventions, not the analyzers; pick one on a built-in profile. SonarCloud
+runs a newer analyzer than a given SonarQube: where they disagree, measure
+the case on your SonarQube, which is the reference.
 
 ## 1. Scan a project at one commit
 
@@ -155,6 +161,14 @@ behavior on the version measured.
   says what to use instead or when it goes, by matching words in the text.
   Only a series of small files, one wording each, showed it: the elements
   it skipped and the ones it reported looked alike.
+- **Calibrating frameworks without building them.** Annotations such as
+  Spring's `@Transactional`, Lombok's `@Data` or JUnit's `@Test` can be
+  small stub files in their real packages: SonarQube recognizes them by
+  name. A library's types go in a jar passed as `sonar.java.libraries`, so
+  SonarQube treats them as a library's, not the project's.
+- **One per class, or each.** Several rules reported the first member of a
+  class where SonarQube reports every field, constructor or label group:
+  a calibration file with two of each catches it.
 - **Counts.** A rule can report once per pattern in sonda and once per
   occurrence in SonarQube; the comparison counts each issue.
 
@@ -172,5 +186,6 @@ On the comparison server, as of 2026-11-11:
 | `sonda-calibrate-py`, `sonda-calibrate-py13`, `sonda-calibrate-py14` | Python calibration | |
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
 | `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration | |
+| `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
 
 Next: C# and C++ on public projects that SonarCloud analyzes.

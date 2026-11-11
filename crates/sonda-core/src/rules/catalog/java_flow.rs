@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use super::java_bugs::{has_annotation, has_modifier, statements};
+use super::java_bugs::{has_annotation, statements};
 use super::java_extra::{class_members, declared_type, name_text, type_text};
 use super::java_final::{base_type, root_of};
 use super::java_last::literal_kind;
@@ -334,11 +334,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 2,
         sonar: &[exact("S3252")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(method_invocation object: (identifier) name: (identifier)) @match"#,
-            filter: Some(Keep(static_member_called_through_subclass)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class B { static void s() {} }\nclass D extends B {}\nclass A { void f() { D.s(); } }",
@@ -1095,29 +1091,6 @@ fn clamp_bounds_are_reversed(call: Node, src: &[u8]) -> bool {
 }
 
 // ---- hierarchy
-
-fn static_member_called_through_subclass(call: Node, src: &[u8]) -> bool {
-    let Some(object) = call.child_by_field_name("object").filter(|o| {
-        o.kind() == "identifier" && text(*o, src).first().is_some_and(u8::is_ascii_uppercase)
-    }) else {
-        return false;
-    };
-    let root = root_of(call);
-    let name = method_name(call, src);
-    let Some(derived) = find_declared_type(root, text(object, src), src)
-        .filter(|d| d.kind() == "class_declaration")
-    else {
-        return false;
-    };
-    let Some(base) = superclass_name(derived, src).and_then(|b| find_declared_type(root, b, src))
-    else {
-        return false;
-    };
-    has_method(derived, name, src).is_empty()
-        && has_method(base, name, src)
-            .iter()
-            .any(|m| has_modifier(*m, "static"))
-}
 
 fn compare_to_takes_another_type(method: Node, src: &[u8]) -> bool {
     let Some(class) = super::java_smells::enclosing_class(method) else {

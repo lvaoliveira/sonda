@@ -23,6 +23,9 @@ pub(crate) const VARARGS_ARRAY: &str = "java/varargs-array";
 pub(crate) const ABSTRACT_REDECLARED: &str = "java/abstract-method-redeclared";
 pub(crate) const DROPS_SYNCHRONIZED: &str = "java/override-drops-synchronized";
 pub(crate) const DEEP_INHERITANCE: &str = "java/inheritance-too-deep";
+pub(crate) const MISSING_OVERRIDE: &str = "java/missing-override";
+pub(crate) const STATIC_VIA_SUBCLASS: &str = "java/static-via-subclass";
+pub(crate) const CLASS_COUPLING: &str = "java/class-coupling";
 
 /// The rules this module checks.
 pub(crate) const RULES: &[&str] = &[
@@ -33,7 +36,14 @@ pub(crate) const RULES: &[&str] = &[
     ABSTRACT_REDECLARED,
     DROPS_SYNCHRONIZED,
     DEEP_INHERITANCE,
+    MISSING_OVERRIDE,
+    STATIC_VIA_SUBCLASS,
+    CLASS_COUPLING,
 ];
+
+/// How many of the project's types a class may depend on (SonarQube's
+/// default for S6539).
+const MAX_COUPLING: usize = 20;
 
 /// How many classes a JDK class is from `Object`, itself and `Object`
 /// included, for the depth of the classes extending it.
@@ -224,7 +234,13 @@ pub(crate) fn run<'f>(
             if on(USELESS_OVERRIDE) {
                 useless_overrides(&index, id, &mut found);
             }
+            if on(MISSING_OVERRIDE) {
+                overrides_without_annotation(&index, id, &mut found);
+            }
             if index.decl(id).kind == "class" {
+                if on(CLASS_COUPLING) && project_types_used(&index, id) > MAX_COUPLING {
+                    found.push((CLASS_COUPLING, f, index.decl(id).span));
+                }
                 if on(ABSTRACT_REDECLARED) {
                     redeclared_abstract_methods(&index, id, &mut found);
                 }
@@ -240,6 +256,13 @@ pub(crate) fn run<'f>(
                 }
                 if on(SUBCLASS_EQUALS) && adds_fields_without_equals(&index, id) {
                     found.push((SUBCLASS_EQUALS, f, index.decl(id).span));
+                }
+            }
+        }
+        if on(STATIC_VIA_SUBCLASS) {
+            for call in &file.static_calls {
+                if static_reached_through_subclass(&index, f, call) {
+                    found.push((STATIC_VIA_SUBCLASS, f, call.span));
                 }
             }
         }
@@ -665,6 +688,150 @@ fn depth(index: &ProjectIndex, id: TypeId) -> usize {
     }
 }
 
+// ---------------------------------------------------------------- S1161
+
+/// Methods overriding a method with a body, in a superclass or an
+/// interface (a default method) the project declares, without `@Override`
+/// (measured on SonarQube 26.7). Implementing an abstract method isn't
+/// reported, nor overriding `Object`'s.
+fn overrides_without_annotation(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
+    let decl = index.decl(id);
+    if !matches!(
+        decl.kind.as_str(),
+        "class" | "enum" | "record" | "interface"
+    ) {
+        return;
+    }
+    // Every supertype the project declares, at any distance.
+    let mut supers: Vec<TypeId> = Vec::new();
+    let mut queue = index.supertypes(id);
+    while let Some(t) = queue.pop() {
+        if t == id || supers.contains(&t) {
+            continue;
+        }
+        supers.push(t);
+        queue.extend(index.supertypes(t));
+    }
+    for m in &decl.methods {
+        if m.constructor
+            || m.annotations.iter().any(|a| a == "Override")
+            || has(&m.modifiers, "static")
+            || has(&m.modifiers, "private")
+            || matches!(
+                m.name.as_str(),
+                "equals" | "hashCode" | "toString" | "clone" | "finalize"
+            )
+        {
+            continue;
+        }
+        let overrides = supers.iter().any(|t| {
+            let parent = index.decl(*t);
+            parent.methods.iter().any(|p| {
+                !p.constructor
+                    && p.body
+                    && p.name == m.name
+                    && same_parameters(m, p, parent)
+                    && !has(&p.modifiers, "static")
+                    && !has(&p.modifiers, "private")
+            })
+        });
+        if overrides {
+            found.push((MISSING_OVERRIDE, id.0, m.span));
+        }
+    }
+}
+
+/// Whether `m` takes what `p`, declared in `parent`, takes: the same types by
+/// name, or any reference type where `p` takes one of `parent`'s type
+/// parameters. `fit(double)` doesn't override `fit(N)`: it overloads it.
+fn same_parameters(m: &MethodDecl, p: &MethodDecl, parent: &TypeDecl) -> bool {
+    m.params.len() == p.params.len()
+        && m.params.iter().zip(&p.params).all(|(a, b)| {
+            let type_var = b.qualifier.is_empty()
+                && b.args.is_empty()
+                && parent.type_params.iter().any(|t| t.name == b.name);
+            if type_var {
+                !a.is_primitive() || a.dims > 0
+            } else {
+                a.name == b.name && a.dims == b.dims
+            }
+        })
+}
+
+// ---------------------------------------------------------------- S3252
+
+/// `Sub.method()` where `method` is a static method of a superclass of
+/// `Sub`, and `Sub` doesn't declare one of that name.
+fn static_reached_through_subclass(
+    index: &ProjectIndex,
+    file: usize,
+    call: &crate::semantic::java_index::Site,
+) -> bool {
+    let (qualifier, name) = call
+        .qualifier
+        .rsplit_once('.')
+        .unwrap_or(("", &call.qualifier));
+    let Some(sub) = index.resolve(file, &call.within, qualifier, name) else {
+        return false;
+    };
+    let declares = |t: TypeId| {
+        index
+            .decl(t)
+            .methods
+            .iter()
+            .any(|m| !m.constructor && m.name == call.callee)
+    };
+    if declares(sub) {
+        return false;
+    }
+    let mut seen = vec![sub];
+    let mut current = index.superclass(sub);
+    while let Some(t) = current.filter(|t| !seen.contains(t)) {
+        seen.push(t);
+        let methods: Vec<&MethodDecl> = index
+            .decl(t)
+            .methods
+            .iter()
+            .filter(|m| !m.constructor && m.name == call.callee)
+            .collect();
+        if !methods.is_empty() {
+            return methods.iter().any(|m| has(&m.modifiers, "static"));
+        }
+        current = index.superclass(t);
+    }
+    false
+}
+
+// ---------------------------------------------------------------- S6539
+
+/// How many of the project's own types a class refers to: the JDK's and
+/// libraries' don't count (measured on SonarQube 26.7, with a library on the
+/// classpath), nor the class itself, its nested types or type parameters.
+fn project_types_used(index: &ProjectIndex, id: TypeId) -> usize {
+    let decl = index.decl(id);
+    let own = crate::semantic::java_index::full_name(index.files()[id.0], decl);
+    let params: Vec<&str> = type_params_in_scope(index, id)
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    let mut seen: Vec<TypeId> = Vec::new();
+    for t in &decl.uses {
+        if t.qualifier.is_empty() && params.contains(&t.name.as_str()) {
+            continue;
+        }
+        let Some(target) = index.resolve_in(id, t) else {
+            continue;
+        };
+        let name =
+            crate::semantic::java_index::full_name(index.files()[target.0], index.decl(target));
+        if name == own || name.starts_with(&format!("{own}.")) || seen.contains(&target) {
+            continue;
+        }
+        seen.push(target);
+    }
+    seen.len()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -849,5 +1016,67 @@ mod tests {
             "package p;\npublic class C extends Base {\n@Override\npublic String shown() { return super.shown(); } // NOSONAR\n}",
         );
         assert!(flagged("java/useless-override", &[BASE, child]).is_empty());
+    }
+
+    /// Measured on SonarQube 26.7, the other declarations in other files.
+    #[test]
+    fn overrides_statics_coupling_and_suppression() {
+        let files = [
+            (
+                "Base.java",
+                "package p;\npublic class Base {\npublic void run() {}\nprotected void hook() {}\npublic static int id() { return 1; }\npublic void fit(Integer n) {}\n}",
+            ),
+            (
+                "Abs.java",
+                "package p;\npublic abstract class Abs { protected abstract void step(); }",
+            ),
+            (
+                "I.java",
+                "package p;\npublic interface I { void go(); default void later() {} }",
+            ),
+            ("Sub.java", "package p;\npublic class Sub extends Base {}"),
+            (
+                "C.java",
+                "package p;\npublic class C extends Base implements I {\npublic void run() {}\nprotected void hook() {}\npublic void go() {}\npublic void later() {}\npublic String toString() { return \"\"; }\npublic void fit(int n) {}\nint f() { return Sub.id(); }\n}",
+            ),
+            (
+                "D.java",
+                "package p;\npublic class D extends Abs { protected void step() {} }",
+            ),
+            (
+                "S.java",
+                "package p;\npublic class S extends Base {\n@SuppressWarnings(\"java:S1161\")\npublic void run() {}\n@SuppressWarnings(\"all\")\nprotected void hook() {}\n}",
+            ),
+        ];
+        assert_eq!(
+            flagged("java/missing-override", &files),
+            [at("C.java", 3), at("C.java", 4), at("C.java", 6)]
+        );
+        assert_eq!(
+            flagged("java/static-via-subclass", &files),
+            [at("C.java", 9)]
+        );
+        // 21 project types declared, used, or only created with `new`.
+        let types: Vec<(String, String)> = (0..22)
+            .map(|k| {
+                (
+                    format!("T{k}.java"),
+                    format!("package p;\npublic class T{k} {{}}"),
+                )
+            })
+            .collect();
+        let locals: String = (0..21).map(|k| format!("T{k} v{k} = null;\n")).collect();
+        let created: String = (0..21)
+            .map(|k| format!("Object n{k} = new T{k}();\n"))
+            .collect();
+        let used = format!("package p;\nclass Used {{\nvoid f() {{\n{locals}}}\n}}");
+        let made = format!("package p;\nclass Made {{\nvoid f() {{\n{created}}}\n}}");
+        let mut all: Vec<(&str, &str)> = types
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        all.push(("Used.java", &used));
+        all.push(("Made.java", &made));
+        assert_eq!(flagged("java/class-coupling", &all), [at("Used.java", 2)]);
     }
 }
