@@ -839,7 +839,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_declaration type: (generic_type (type_arguments (wildcard)))) @match"#,
-            filter: None,
+            filter: Some(Keep(wildcard_is_not_a_class)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1140,7 +1140,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(object_creation_expression type: (type_identifier) @t (#any-of? @t "String" "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character" "BigInteger" "BigDecimal")) @match"#,
-            filter: Some(Keep(has_arguments)),
+            filter: Some(Keep(literal_or_value_of_would_do)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1179,9 +1179,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2143")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(object_creation_expression type: (type_identifier) @t (#any-of? @t "Date" "SimpleDateFormat" "GregorianCalendar")) @match
+            query: r#"((type_identifier) @match (#any-of? @match "Date" "Calendar" "GregorianCalendar" "SimpleDateFormat"))
 (method_invocation object: (identifier) @o name: (identifier) @n (#eq? @o "Calendar") (#eq? @n "getInstance")) @match"#,
-            filter: None,
+            filter: Some(Keep(first_legacy_date_in_file)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1521,7 +1521,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"((type_identifier) @match (#eq? @match "ThreadGroup"))"#,
-            filter: None,
+            filter: Some(Keep(declares_a_thread_group)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1662,7 +1662,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(method_invocation object: (method_invocation name: (identifier) @s (#eq? @s "stream")) name: (identifier) @n (#eq? @n "forEach")) @match"#,
-            filter: None,
+            filter: Some(Keep(streams_a_collection)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -3203,8 +3203,90 @@ fn cases_of(switch: Node, src: &[u8]) -> usize {
         .count()
 }
 
+/// Fewer than three clauses, `default` included, as SonarQube counts them.
 fn switch_has_fewer_than_three_cases(switch: Node, src: &[u8]) -> bool {
-    (1..3).contains(&cases_of(switch, src))
+    let cases = cases_of(switch, src);
+    let clauses = case_labels(switch)
+        .iter()
+        .filter(|l| {
+            let t = text(**l, src);
+            t.starts_with(b"case") || t.starts_with(b"default")
+        })
+        .count();
+    cases >= 1 && clauses < 3
+}
+
+/// `Class<?>` is how a class of unknown type is written; other wildcard
+/// return types aren't exempt.
+fn wildcard_is_not_a_class(method: Node, src: &[u8]) -> bool {
+    method
+        .child_by_field_name("type")
+        .and_then(|t| t.named_child(0))
+        .is_none_or(|base| text(base, src) != b"Class")
+}
+
+/// A field, local or parameter declared `ThreadGroup`, as SonarQube reports
+/// it: not as a type argument (`Predicate<ThreadGroup>`) or a parameter of
+/// a method that overrides one.
+fn declares_a_thread_group(ty: Node, src: &[u8]) -> bool {
+    let Some(declaration) = ty.parent() else {
+        return false;
+    };
+    match declaration.kind() {
+        "local_variable_declaration" | "field_declaration" => true,
+        "formal_parameter" | "spread_parameter" => declaration
+            .parent()
+            .and_then(|params| params.parent())
+            .is_none_or(|method| !has_annotation(method, b"Override", src)),
+        _ => false,
+    }
+}
+
+/// `items.stream().forEach(...)`: a collection's own stream, not a static
+/// helper such as `stream(items)`.
+fn streams_a_collection(call: Node, src: &[u8]) -> bool {
+    call.child_by_field_name("object").is_some_and(|stream| {
+        stream.child_by_field_name("object").is_some()
+            && call_arguments(stream).is_empty()
+            && method_name(stream, src) == b"stream"
+    })
+}
+
+/// The first legacy date or time in a file: SonarQube reports the file once.
+fn first_legacy_date_in_file(node: Node, src: &[u8]) -> bool {
+    // Any use of the types, as SonarQube reports the file.
+    let is_legacy = |n: Node| match n.kind() {
+        "type_identifier" => {
+            matches!(
+                text(n, src),
+                b"Date" | b"Calendar" | b"GregorianCalendar" | b"SimpleDateFormat"
+            )
+        }
+        "method_invocation" => {
+            n.child_by_field_name("object")
+                .is_some_and(|o| text(o, src) == b"Calendar")
+                && method_name(n, src) == b"getInstance"
+        }
+        _ => false,
+    };
+    let mut cursor = super::java_final::root_of(node).walk();
+    loop {
+        let n = cursor.node();
+        if is_legacy(n) {
+            return n.id() == node.id();
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return false;
+            }
+        }
+    }
 }
 
 fn switch_has_many_cases(switch: Node, src: &[u8]) -> bool {
@@ -3218,14 +3300,12 @@ fn is_a_declared_type(ty: Node, _: &[u8]) -> bool {
         node = g;
         parent = g.parent();
     }
+    // A local's type is the method's own business: SonarQube looks at
+    // what other code sees, fields, parameters and return types.
     parent.is_some_and(|p| {
         matches!(
             p.kind(),
-            "local_variable_declaration"
-                | "field_declaration"
-                | "formal_parameter"
-                | "method_declaration"
-                | "spread_parameter"
+            "field_declaration" | "formal_parameter" | "method_declaration" | "spread_parameter"
         ) && p.child_by_field_name("type") == Some(node)
     })
 }
@@ -3442,8 +3522,19 @@ fn class_is_empty(class: Node, _: &[u8]) -> bool {
         })
 }
 
-fn has_arguments(creation: Node, _: &[u8]) -> bool {
-    !call_arguments(creation).is_empty()
+/// `new Integer(5)`, `new BigDecimal("1.5")`, `new String("x")` or
+/// `new String()`: what a literal or `valueOf` says. `new String(chars, 0,
+/// n)` converts, and is left alone.
+fn literal_or_value_of_would_do(creation: Node, src: &[u8]) -> bool {
+    let args = call_arguments(creation);
+    let is_string = creation
+        .child_by_field_name("type")
+        .is_some_and(|t| text(t, src) == b"String");
+    if is_string {
+        return matches!(args.as_slice(), [] | [_])
+            && args.first().is_none_or(|a| a.kind() == "string_literal");
+    }
+    !args.is_empty()
 }
 
 fn catch_with_same_body_as_previous<'t>(try_: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -4268,13 +4359,32 @@ fn is_first_of_a_repeated_string(string: Node, src: &[u8]) -> bool {
     })
 }
 
+/// A literal passed to an exception's constructor, alone or concatenated.
+fn is_exception_message(literal: Node, src: &[u8]) -> bool {
+    let mut n = literal;
+    while let Some(p) = n.parent().filter(|p| p.kind() == "binary_expression") {
+        n = p;
+    }
+    n.parent()
+        .filter(|a| a.kind() == "argument_list")
+        .and_then(|a| a.parent())
+        .filter(|c| c.kind() == "object_creation_expression")
+        .and_then(|c| c.child_by_field_name("type"))
+        .is_some_and(|t| {
+            let t = text(t, src);
+            t.ends_with(b"Exception") || t.ends_with(b"Error")
+        })
+}
+
 /// Each countable string's value: how many times it occurs, and where first.
 type StringCounts = std::collections::HashMap<Vec<u8>, (usize, usize)>;
 
-/// A string literal's value, when it counts: five characters or more, and
-/// not in an annotation.
+/// A string literal's value, when it counts: five characters or more, not
+/// in an annotation, and not an exception's message (`throw new
+/// IllegalStateException("...")`), which SonarQube leaves out.
 fn countable_string(n: Node, src: &[u8]) -> Option<Vec<u8>> {
     if n.kind() != "string_literal"
+        || is_exception_message(n, src)
         || n.parent().is_some_and(|p| {
             matches!(
                 p.kind(),
@@ -4390,10 +4500,18 @@ fn compares_with_empty_string(node: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
+    // A String's: CharSequence.isEmpty() needs Java 15, and the receiver's
+    // type isn't known otherwise.
+    let a_string = |o: Node| {
+        o.kind() == "string_literal"
+            || o.kind() == "identifier"
+                && declared_type(o, text(o, src), src)
+                    .is_some_and(|t| type_text(Some(t), src) == b"String")
+    };
     l.kind() == "method_invocation"
         && method_name(l, src) == b"length"
         && call_arguments(l).is_empty()
-        && l.child_by_field_name("object").is_some()
+        && l.child_by_field_name("object").is_some_and(a_string)
         && matches!(
             (operator_text(node, src), text(r, src)),
             (b"==", b"0") | (b"!=", b"0") | (b">", b"0")
@@ -4476,7 +4594,8 @@ mod tests {
     #[test]
     fn switches() {
         let src = "class A { void f(int x) {\nswitch (x) { case 1: a(); break; case 2: b(); break; default: c(); }\nswitch (x) { case 1: a(); break; case 2: b(); break; case 3: c(); break; default: d(); }\nswitch (x) { case 1: a(); break; case 2: b(); break; case 3: c(); break; }\nswitch (x) { default: a(); break; case 1: b(); break; }\n} }";
-        assert_eq!(flagged("java/switch-too-few-cases", src), [2, 5]);
+        // Two cases and a default are three clauses, as SonarQube counts.
+        assert_eq!(flagged("java/switch-too-few-cases", src), [5]);
         assert_eq!(flagged("java/switch-without-default", src), [4]);
         assert_eq!(flagged("java/default-not-last", src), [5]);
     }
@@ -4605,5 +4724,34 @@ mod tests {
     fn string_names_compared_by_reference() {
         let src = "class A {\nboolean f(String a, String b, int n, int m) { return a == b; }\nboolean g(int n, int m) { return n == m; }\nboolean h(Integer a, String b) { return a == b; }\n}";
         assert_eq!(flagged("java/string-reference-equality", src), [2, 4]);
+    }
+
+    /// As SonarQube 26.7 reports these on Apache Commons Lang.
+    #[test]
+    fn java_cases_measured_on_sonarqube() {
+        // S2129: a literal or valueOf would do; a conversion wouldn't.
+        let src = "class A { Object f(char[] c, Integer i) {\nString a = new String(\"x\");\nString b = new String(c, 0, 2);\nreturn new Integer(5);\n} }";
+        assert_eq!(flagged("java/wrapper-constructor", src), [2, 4]);
+        // S1319: what other code sees, not a local.
+        let src = "import java.util.*;\nclass A {\npublic HashMap<String, Integer> m() {\nHashMap<String, Integer> local = new HashMap<>();\nreturn local;\n}\n}";
+        assert_eq!(flagged("java/concrete-collection-type", src), [3]);
+        // S1452: Class<?> is fine.
+        let src = "import java.util.*;\nclass A {\npublic Class<?> c() { return null; }\npublic List<?> l() { return null; }\n}";
+        assert_eq!(flagged("java/wildcard-return-type", src), [4]);
+        // S3014: a declaration, not a type argument or an override's parameter.
+        let src = "import java.util.function.*;\nclass A implements Predicate<ThreadGroup> {\nThreadGroup g;\n@Override public boolean test(ThreadGroup t) { return true; }\nvoid f(ThreadGroup t) {}\n}";
+        assert_eq!(flagged("java/thread-group", src), [3, 5]);
+        // S3706: a collection's own stream, not a static stream(x).
+        let src = "import java.util.*;\nclass A { void f(List<String> l) {\nl.stream().forEach(System.out::println);\nstream(l).forEach(System.out::println);\n} }";
+        assert_eq!(flagged("java/stream-for-each", src), [3]);
+        // S2143: once per file.
+        let src = "import java.util.*;\nclass A {\nDate d;\nCalendar f() { return Calendar.getInstance(); }\n}";
+        assert_eq!(flagged("java/legacy-date-time", src), [3]);
+        // S7158: a String's length; a CharSequence's needs Java 15.
+        let src = "class A { boolean f(String s, CharSequence cs) {\nreturn s.length() == 0 || cs.length() == 0;\n} }";
+        assert_eq!(flagged("java/empty-string-comparison", src), [2]);
+        // S1192: an exception's message doesn't count.
+        let src = "class A { void f(int i) {\nif (i == 1) throw new IllegalStateException(\"shut down here\");\nif (i == 2) throw new IllegalStateException(\"shut down here\");\nif (i == 3) throw new IllegalStateException(\"shut down here\");\n} }";
+        assert!(flagged("java/duplicated-string", src).is_empty());
     }
 }

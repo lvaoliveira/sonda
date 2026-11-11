@@ -80,6 +80,20 @@ pub(crate) fn scan(
         .map(load_advisories)
         .transpose()?;
     let manifests = load_manifests(&found.dependency_files, cfg);
+    // The Java version the code targets, when sonda.toml doesn't say.
+    let detected;
+    let cfg = match cfg.java.version {
+        Some(_) => cfg,
+        None => {
+            let mut c = cfg.clone();
+            c.java.version = java_version(&opts.root);
+            if let Some(v) = c.java.version {
+                info!(version = v, "Java version from the build file");
+            }
+            detected = c;
+            &detected
+        }
+    };
     let mut analysis = scan_files(opts, cfg, rules, found.files, found.warnings, &manifests)?;
     if let Some((advisories, warnings)) = advisories {
         let mut vulnerabilities = crate::advisories::check(&dependencies, &advisories);
@@ -216,6 +230,80 @@ fn finding_key(v: &crate::advisories::Vulnerability) -> (Ecosystem, String, Stri
         deps::package_key(v.ecosystem, &v.name),
         v.advisory.clone(),
     )
+}
+
+/// The Java version a project targets, from the build file at its root, as
+/// SonarQube's Maven and Gradle scanners pass it: Maven's
+/// `maven.compiler.release`, `<release>`, `maven.compiler.source`,
+/// `<source>` or Spring Boot's `java.version`; Gradle's toolchain,
+/// `jvmToolchain(N)` or `sourceCompatibility`. `1.8` is 8.
+pub(crate) fn java_version(root: &Path) -> Option<u32> {
+    let read = |name: &str| {
+        let path = root.join(name);
+        (std::fs::metadata(&path).ok()?.len() < 1 << 20)
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten()
+    };
+    if let Some(pom) = read("pom.xml") {
+        return maven_java_version(&pom);
+    }
+    ["build.gradle", "build.gradle.kts"]
+        .iter()
+        .find_map(|f| read(f))
+        .and_then(|g| gradle_java_version(&g))
+}
+
+/// `1.8` -> 8, `17` -> 17, `"17"` -> 17.
+fn parse_java_version(v: &str) -> Option<u32> {
+    let v = v.trim().trim_matches(['"', '\'']);
+    let v = v.strip_prefix("1.").unwrap_or(v);
+    v.split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+        .filter(|&n| n >= 5)
+}
+
+fn maven_java_version(pom: &str) -> Option<u32> {
+    let tag = |name: &str| -> Option<String> {
+        let open = format!("<{name}>");
+        let start = pom.find(&open)? + open.len();
+        let end = pom[start..].find('<')? + start;
+        Some(pom[start..end].trim().to_string())
+    };
+    // A value can name a property: `${java.version}`.
+    let resolve = |v: String| -> Option<u32> {
+        match v.strip_prefix("${").and_then(|r| r.strip_suffix('}')) {
+            Some(property) => tag(property).and_then(|p| parse_java_version(&p)),
+            None => parse_java_version(&v),
+        }
+    };
+    [
+        "maven.compiler.release",
+        "release",
+        "maven.compiler.source",
+        "source",
+        "java.version",
+    ]
+    .iter()
+    .find_map(|name| tag(name).and_then(resolve))
+}
+
+fn gradle_java_version(gradle: &str) -> Option<u32> {
+    let after = |marker: &str| -> Option<u32> {
+        let at = gradle.find(marker)? + marker.len();
+        let rest = gradle[at..].trim_start_matches([' ', '=', '(', '\'', '"']);
+        parse_java_version(rest.split([')', '\n', '\'', '"']).next()?)
+    };
+    after("JavaLanguageVersion.of")
+        .or_else(|| after("jvmToolchain"))
+        .or_else(|| {
+            let at = gradle.find("sourceCompatibility")?;
+            let line = gradle[at..].lines().next()?;
+            line.find("VERSION_")
+                .and_then(|v| parse_java_version(&line[v + 8..].replace('_', ".")))
+                .or_else(|| parse_java_version(line.split('=').nth(1)?))
+        })
 }
 
 /// The dependencies the lockfiles found now pinned at the merge base of
@@ -1647,6 +1735,42 @@ mod tests {
             r.warnings
                 .iter()
                 .all(|w| w.contains("replaced after it was listed"))
+        );
+    }
+
+    #[test]
+    fn java_version_from_build_files() {
+        assert_eq!(
+            maven_java_version(
+                "<properties><maven.compiler.source>1.8</maven.compiler.source></properties>"
+            ),
+            Some(8)
+        );
+        assert_eq!(
+            maven_java_version(
+                "<maven.compiler.release>17</maven.compiler.release><maven.compiler.source>1.8</maven.compiler.source>"
+            ),
+            Some(17)
+        );
+        assert_eq!(
+            maven_java_version("<java.version>21</java.version><release>${java.version}</release>"),
+            Some(21)
+        );
+        assert_eq!(maven_java_version("<project></project>"), None);
+        assert_eq!(
+            gradle_java_version(
+                "java {\n    toolchain {\n        languageVersion = JavaLanguageVersion.of(17)\n    }\n}"
+            ),
+            Some(17)
+        );
+        assert_eq!(gradle_java_version("kotlin { jvmToolchain(21) }"), Some(21));
+        assert_eq!(
+            gradle_java_version("sourceCompatibility = JavaVersion.VERSION_1_8\n"),
+            Some(8)
+        );
+        assert_eq!(
+            gradle_java_version("sourceCompatibility = '11'\n"),
+            Some(11)
         );
     }
 }

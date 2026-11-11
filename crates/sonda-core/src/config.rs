@@ -52,6 +52,12 @@ function_lines = 80
 # Parameters a function may have; by default 7, and 13 in Python, as SonarQube.
 # parameters = 7
 
+[java]
+# The Java version the code targets (8, 11, 17...). Rules whose suggestion
+# needs a newer Java are skipped. Unset, it's read from pom.xml or
+# build.gradle at the root; when that says nothing, every rule runs.
+# version = 17
+
 [duplication]
 # A duplicated block must span at least this many tokens and lines.
 min_tokens = 100
@@ -88,17 +94,26 @@ op = "gt"
 threshold = 0
 "#;
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub scan: ScanConfig,
     pub rules: RulesConfig,
     pub thresholds: Thresholds,
+    pub java: JavaConfig,
     pub duplication: DuplicationConfig,
     pub gate: GateConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct JavaConfig {
+    /// The Java version the code targets. None: read from the build file,
+    /// and if it says nothing, every rule runs.
+    pub version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScanConfig {
     pub exclude: Vec<String>,
@@ -142,7 +157,7 @@ pub struct RulesConfig {
     pub severity: HashMap<String, Severity>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
     pub cognitive_complexity: u32,
@@ -161,7 +176,7 @@ impl Default for Thresholds {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DuplicationConfig {
     pub min_tokens: usize,
@@ -177,7 +192,7 @@ impl Default for DuplicationConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GateConfig {
     pub conditions: Vec<Condition>,

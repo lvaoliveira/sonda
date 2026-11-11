@@ -136,6 +136,9 @@ cognitive_complexity = 15
 function_lines = 80
 parameters = 7             # default: 7, and 13 for Python, as SonarQube
 
+[java]
+version = 17               # the Java version targeted; unset, read from pom.xml or build.gradle
+
 [duplication]
 min_tokens = 100
 min_lines = 10

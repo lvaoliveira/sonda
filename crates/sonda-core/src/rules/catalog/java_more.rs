@@ -1231,7 +1231,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S125")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(line_comment) @match"#,
+            query: r#"[(line_comment) (block_comment)] @match"#,
             filter: Some(Keep(looks_like_code)),
         },
         example: Some(Example {
@@ -2199,15 +2199,41 @@ fn second_lifecycle_method_of_a_kind<'t>(class: Node<'t>, src: &[u8]) -> Option<
     None
 }
 
+/// A comment that reads as code, once per block of `//` lines (SonarQube
+/// reports the block), or a one-line `/* ... */`.
 fn looks_like_code(comment: Node, src: &[u8]) -> bool {
+    if comment.kind() == "block_comment" {
+        let t = text(comment, src);
+        let one_line = comment.start_position().row == comment.end_position().row;
+        let body = t.strip_prefix(b"/*").and_then(|b| b.strip_suffix(b"*/"));
+        return one_line && !t.starts_with(b"/**") && body.is_some_and(line_looks_like_code);
+    }
+    // The block's first line of code reports it.
+    let previous_is_code = comment.prev_sibling().is_some_and(|p| {
+        p.kind() == "line_comment"
+            && p.end_position().row + 1 == comment.start_position().row
+            && line_looks_like_code(p_body(p, src))
+    });
+    !previous_is_code && line_looks_like_code(p_body(comment, src))
+}
+
+fn p_body<'s>(comment: Node, src: &'s [u8]) -> &'s [u8] {
     let t = text(comment, src);
-    let body = t.strip_prefix(b"//").unwrap_or(t).trim_ascii();
+    t.strip_prefix(b"//").unwrap_or(t)
+}
+
+fn line_looks_like_code(body: &[u8]) -> bool {
+    let body = body.trim_ascii();
     let starts_like_code = body
         .first()
         .is_some_and(|b| b.is_ascii_lowercase() || *b == b'@' || *b == b'}')
         && !body.starts_with(b"http");
     let ends_like_code = body.ends_with(b";") || body.ends_with(b"{");
-    starts_like_code && ends_like_code && (body.contains(&b'(') || body.contains(&b'='))
+    let has_code = body.contains(&b'(')
+        || body.contains(&b'=')
+        || body.windows(2).any(|w| w == b"&&" || w == b"||")
+        || body.starts_with(b"assert ");
+    starts_like_code && ends_like_code && has_code
 }
 
 fn package_has_uppercase(package: Node, src: &[u8]) -> bool {
@@ -2428,5 +2454,13 @@ mod tests {
     fn a_comment_after_the_body_is_not_guarded() {
         let src = "class A {\n  void f(boolean c) {\n    if (c)\n      a();\n      // note\n    b();\n  }\n}";
         assert!(flagged("java/multiline-without-braces", src).is_empty());
+    }
+
+    /// S125 as SonarQube reports it: a block of `//` lines once, and a
+    /// one-line block comment.
+    #[test]
+    fn commented_out_code_blocks() {
+        let src = "class A { int f(int u) {\n//        final int max = u.length();\n//        if (max > u) {\n//            throw new IllegalStateException();\n/* assert u<0 && u>-9; */\nreturn u;\n} }";
+        assert_eq!(flagged("java/commented-out-code", src), [2, 5]);
     }
 }
