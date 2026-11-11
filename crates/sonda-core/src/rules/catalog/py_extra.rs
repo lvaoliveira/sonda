@@ -83,7 +83,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(expression_statement (call function: (identifier) @f (#any-of? @f "len" "sorted" "reversed" "abs" "min" "max" "sum" "round" "any" "all" "repr" "map" "filter" "zip" "enumerate" "range" "isinstance" "hash" "id" "chr" "ord" "divmod" "pow")) @match)"#,
-            filter: None,
+            filter: Some(Keep(outside_a_try_body)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -1623,6 +1623,19 @@ fn method_ignores_self(function: Node, src: &[u8]) -> bool {
         && count_word(whole, b"__class__") == 0
 }
 
+/// Not in a try body: there, `len(v)` alone asks whether it raises.
+fn outside_a_try_body(node: Node, _: &[u8]) -> bool {
+    let mut n = node;
+    while let Some(p) = n.parent() {
+        match p.kind() {
+            "try_statement" if p.child_by_field_name("body") == Some(n) => return false,
+            "function_definition" | "class_definition" | "module" => return true,
+            _ => n = p,
+        }
+    }
+    true
+}
+
 fn returns_are_all_the_same_constant(function: Node, src: &[u8]) -> bool {
     if is_generator(function) {
         return false;
@@ -1632,6 +1645,20 @@ fn returns_are_all_the_same_constant(function: Node, src: &[u8]) -> bool {
     };
     let returns = collect_in_scope(body, SCOPE_STOPS, |n| n.kind() == "return_statement");
     if returns.len() < 2 {
+        return false;
+    }
+    // Falling off the end returns None, another value: after an if
+    // without else, or a plain statement.
+    let falls_through = statements(body).last().is_some_and(|s| match s.kind() {
+        "if_statement" => !{
+            let mut c = s.walk();
+            s.children_by_field_name("alternative", &mut c)
+                .any(|a| a.kind() == "else_clause")
+        },
+        "expression_statement" | "pass_statement" => true,
+        _ => false,
+    });
+    if falls_through {
         return false;
     }
     let values: Vec<Option<Node>> = returns.iter().map(|r| r.named_child(0)).collect();
@@ -3197,5 +3224,19 @@ mod tests {
     fn exits_swallowed_as_sonarqube_reports_them() {
         let src = "def f(g, log):\n    try:\n        g()\n    except SystemExit as se:\n        log(se)\n    try:\n        g()\n    except (SystemExit, KeyboardInterrupt):\n        raise\n    except BaseException:\n        log()\n    try:\n        g()\n    except BaseException as e:\n        log(e)\n";
         assert_eq!(flagged("py/bare-except", src), [4, 14]);
+    }
+
+    /// Round three, as SonarQube 26.7 reports these.
+    #[test]
+    fn python_cases_round_three() {
+        // S5905: the condition is a tuple, not the message.
+        let src = "def f(a, b):\n    assert a is b, (a, b)\n    assert (a, b)\n";
+        assert_eq!(flagged("py/assert-tuple", src), [3]);
+        // S3516: falling off the end returns None, another value.
+        let src = "def f(h):\n    if h == 1:\n        return 'j'\n    elif h == 2:\n        return 'j'\n\ndef g(h):\n    if h:\n        return 'j'\n    return 'j'\n";
+        assert_eq!(flagged("py/invariant-return", src), [7]);
+        // S2201: alone in a try body, a call asks whether it raises.
+        let src = "def f(v):\n    try:\n        len(v)\n    except TypeError:\n        return 0\n    len(v)\n";
+        assert_eq!(flagged("py/ignored-pure-call", src), [6]);
     }
 }

@@ -2721,9 +2721,17 @@ fn jump_is_redundant(jump: Node, _: &[u8]) -> bool {
             "for_statement" | "while_statement" if jump.kind() != "return_statement" => {
                 return owner.child_by_field_name("body") == Some(block);
             }
-            "if_statement" => current = owner,
+            // Only from the last branch of a chain, as SonarQube reports it.
+            "if_statement" if owner.child_by_field_name("alternative").is_none() => current = owner,
             "elif_clause" | "else_clause" => match owner.parent() {
-                Some(chain) if chain.kind() == "if_statement" => current = chain,
+                Some(chain)
+                    if chain.kind() == "if_statement"
+                        && owner
+                            .next_named_sibling()
+                            .is_none_or(|n| !matches!(n.kind(), "elif_clause" | "else_clause")) =>
+                {
+                    current = chain
+                }
                 _ => return false,
             },
             _ => return false,
@@ -2738,9 +2746,15 @@ fn comment_before_body(owner: Node, block: Node, src: &[u8]) -> bool {
 }
 
 fn function_body_is_only_pass(function: Node, src: &[u8]) -> bool {
+    // An override, left empty on purpose, of a base's method in this file.
+    let name = function
+        .child_by_field_name("name")
+        .map(|n| text(n, src))
+        .unwrap_or_default();
     if function
         .parent()
         .is_some_and(|p| p.kind() == "decorated_definition")
+        || super::py_more::overrides_a_method_of_this_file(function, name, src)
     {
         return false;
     }
@@ -3297,16 +3311,36 @@ fn repeats_startswith(logical: Node, src: &[u8]) -> bool {
     matches!((parts(l), parts(r)), (Some(a), Some(b)) if a == b)
 }
 
+/// An inner loop that binds a name the outer loop binds: `for k, v in`
+/// inside `for h, v in` too.
 fn inner_loop_reuses_variable<'t>(for_: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let left = for_
-        .child_by_field_name("left")
-        .filter(|l| l.kind() == "identifier")?;
+    let outer = loop_names(for_.child_by_field_name("left")?, src);
+    if outer.is_empty() {
+        return None;
+    }
     let body = for_.child_by_field_name("body")?;
     find_in_scope(body, SCOPE_STOPS, |n| {
         n.kind() == "for_statement"
             && n.child_by_field_name("left")
-                .is_some_and(|l| text(l, src) == text(left, src))
+                .is_some_and(|l| loop_names(l, src).iter().any(|name| outer.contains(name)))
     })
+}
+
+/// The names a loop target binds: `x`, or each of `a, (b, c)`.
+fn loop_names<'s>(target: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut names = Vec::new();
+    let mut stack = vec![target];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "identifier" => names.push(text(n, src)),
+            "pattern_list" | "tuple_pattern" | "list_pattern" => {
+                let mut c = n.walk();
+                stack.extend(n.named_children(&mut c));
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 fn asserts_a_comparison(call: Node, src: &[u8]) -> bool {
@@ -3724,5 +3758,25 @@ mod tests {
         // S2772: a function's docstring and pass.
         let src = "def f():\n    \"\"\"Does nothing.\"\"\"\n    pass\n";
         assert!(flagged("py/needless-pass", src).is_empty());
+    }
+
+    /// Round three, as SonarQube 26.7 reports these.
+    #[test]
+    fn python_cases_measured_on_sonarqube_round_three() {
+        // S1871: every repeated branch, not only the first.
+        let src = "def f(a, s):\n    ok = False\n    if a == 1:\n        ok = True\n    elif (\n        a == 2\n    ):\n        ok = True\n    elif (\n        a == 3\n    ):\n        ok = True\n    return ok\n";
+        // Without an else, the same one line in every branch is reported.
+        assert_eq!(flagged("py/duplicated-branch", src), [8, 12]);
+        let src = "def f(a, g, h):\n    if a == 1:\n        g()\n        h()\n    elif a == 2:\n        g()\n        h()\n    elif a == 3:\n        g()\n        h()\n    else:\n        h()\n";
+        assert_eq!(flagged("py/duplicated-branch", src), [6, 9]);
+        // S3626: a jump in a branch another branch follows isn't redundant.
+        let src = "def f(xs, g):\n    for x in xs:\n        if x == 1:\n            g()\n        elif x == 2:\n            continue\n        else:\n            g()\n";
+        assert!(flagged("py/redundant-jump", src).is_empty());
+        // S1186: an empty override of a base's method in this file.
+        let src = "class H:\n    def reinit(self):\n        self.x = 1\nclass N(H):\n    def reinit(self):\n        pass\n    def other(self):\n        pass\n";
+        assert_eq!(flagged("py/empty-function", src), [7]);
+        // S8510: a loop's tuple reusing a name of the outer loop.
+        let src = "def f(hs, ps, g):\n    for h, v in hs:\n        for k, v in ps:\n            g(h, k, v)\n";
+        assert_eq!(flagged("py/loop-variable-reused", src), [3]);
     }
 }

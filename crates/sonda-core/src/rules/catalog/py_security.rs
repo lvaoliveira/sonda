@@ -100,7 +100,7 @@ pub(super) static RULES: &[Rule] = &[
             langs: PYTHON,
             query: r#"(assignment left: (attribute attribute: (identifier) @a (#eq? @a "check_hostname")) right: (false)) @match
 (attribute object: (identifier) @o attribute: (identifier) @a2 (#eq? @o "ssl") (#any-of? @a2 "_create_unverified_context" "_create_stdlib_context")) @match"#,
-            filter: None,
+            filter: Some(Find(context_made_without_hostname_check)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -1170,6 +1170,46 @@ fn empty_password_to_connect(argument: Node, src: &[u8]) -> bool {
 
 fn lacks_weights_only(call: Node, src: &[u8]) -> bool {
     keyword_value(call, "weights_only", src).is_none_or(|v| v.kind() != "true")
+}
+
+/// Where the context whose hostname check is turned off was made
+/// (`ctx = ssl.create_default_context()`), as SonarQube reports it; the
+/// assignment itself when the context comes from elsewhere.
+fn context_made_without_hostname_check<'t>(assignment: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    // `ssl._create_unverified_context` is reported where it's named.
+    if assignment.kind() != "assignment" {
+        return Some(assignment);
+    }
+    let context = assignment
+        .child_by_field_name("left")
+        .and_then(|l| l.child_by_field_name("object"))
+        .map(|o| super::js::text(o, src))?;
+    let mut scope = assignment;
+    while let Some(p) = scope.parent() {
+        scope = p;
+        if scope.kind() == "function_definition" {
+            break;
+        }
+    }
+    let mut found = None;
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "assignment"
+            && n.start_byte() < assignment.start_byte()
+            && n.child_by_field_name("left")
+                .is_some_and(|l| super::js::text(l, src) == context)
+            && n.child_by_field_name("right").is_some_and(|r| {
+                let t = super::js::text(r, src);
+                t.windows(22).any(|w| w == b"create_default_context")
+                    || t.windows(10).any(|w| w == b"SSLContext")
+            })
+        {
+            found = Some(n);
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    Some(found.unwrap_or(assignment))
 }
 
 #[cfg(test)]

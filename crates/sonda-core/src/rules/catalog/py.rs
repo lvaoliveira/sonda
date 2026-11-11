@@ -97,7 +97,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5905")],
         check: Check::Query {
             langs: PYTHON,
-            query: "(assert_statement (tuple) @match)",
+            query: "(assert_statement . (tuple) @match)",
             filter: None,
         },
         example: Some(Example {
