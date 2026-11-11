@@ -368,6 +368,65 @@ file, the report formats and the public library API.
     a Javadoc among statements; `java/invariant-return` is boolean methods;
     `java/constant-name` leaves arrays; `java/close-in-finally` is a
     resource created with `new`; `java/redundant-jump` leaves labeled jumps.
+- Java, the rest of eGovFrame's differences, each measured on SonarQube
+  26.7: sonda raises 3,726 of SonarCloud's 4,878 Java issues, where it
+  raised 3,650, and 868 it doesn't, where it raised 912; every difference
+  is classified.
+  - Rules SonarQube runs only from a Java version, by key (`java9` to
+    `java22`), are skipped on older code: `java/reverse-index-loop`,
+    `java/clamp` and `java/if-chain-to-switch` need 21,
+    `java/string-builder-empty` 15.
+  - A new rule, `java/empty-block` (S108): an empty loop, branch,
+    `synchronized` or `try` block.
+  - `java/nullable-injection` (S6816) reports a `@Nullable` field or
+    parameter injected by `@Value("${name}")` without a default, as
+    SonarQube's rule does; it reported `@Autowired(required = false)`.
+  - `java/field-shadows-parent` finds the parent class in any file.
+  - `@SuppressWarnings("unused")` silences the unused-code rules.
+  - An annotated field is reported at its name.
+  - Broader: `java/unused-local-variable` a local assigned but never read;
+    `java/field-named-like-class` in any case;
+    `java/final-field-should-be-static` `null` or a constant expression;
+    `java/serializable-field-type` a `List<?>`;
+    `java/synchronize-on-public-field` a parameter;
+    `java/field-injection` `@Autowired(required = false)`;
+    `java/bean-method-name` `@Bean("egov.x")`; `java/string-builder-empty`
+    `!= 0` and `> 0`; `java/random-per-call` a `SecureRandom` kept in a
+    local; `java/interrupt-swallowed` an InterruptedException wrapped in
+    another; `java/boxing-roundtrip` `int i = Integer.valueOf(c)`;
+    `java/nested-ternary` each nested one, in a condition too;
+    `java/hardcoded-path` a `"/"` joined into `new File`;
+    `java/local-shadows-field` a for-each variable;
+    `java/utility-class-constructor` a class with a Lombok logger;
+    `java/jump-in-finally` a `throw`; `java/nested-try` a `try` in a catch
+    an outer `try` holds; `java/class-compared-by-name`
+    `getSimpleName()`; `java/static-member-via-instance` and
+    `java/instance-writes-static` `this.field`;
+    `java/control-character-in-literal` a no-break space;
+    `java/log-argument-concatenation` a call with arguments as the
+    message; `java/read-result-ignored` `readLine() != null`;
+    `java/logger-class` `LogFactory.getLog`; `java/identical-methods`
+    bodies differing only in comments; `java/return-boolean-if` with a
+    comment before the second `return`; `java/regex-single-character-class`
+    `[-]` and `[\\]`; `java/regex-polynomial-backtracking` `.*[a-z].*`;
+    `java/concrete-collection-type` `ConcurrentHashMap`;
+    `java/generic-exception-thrown` `java.lang.Exception` written out, and
+    `throws Exception` when only a reader's `close()` is called.
+  - Narrower: `java/string-concatenation-in-loop` leaves a string declared
+    inside the loop; `java/identical-branches-in-chain` an `if`/`else`
+    alike; `java/switch-case-falls-through` a case ending in an `if`/`else`
+    or a `try` that returns every way; `java/synchronize-on-public-field` a
+    field nothing reassigns; `java/return-value-ignored` `parseInt` in a
+    `try` that catches, and `hashCode()`; `java/random-float-as-int` a
+    SecureRandom; `java/index-of-positive` `lastIndexOf`;
+    `java/double-checked-publication` anything but a field behind two null
+    checks; `java/map-get-then-put` an `if` doing more than the put;
+    `java/select-star` a query not passed to a call; `java/jdbc-update-in-loop`
+    an `execute` that isn't JDBC's; `java/concrete-collection-type`
+    `Vector`; `java/hardcoded-credential` a URL or a word in capitals.
+  - Positions: `java/double-checked-locking` at the `synchronized`,
+    `java/map-get-then-put` at the `get`, `java/catch-only-rethrows` at
+    the `throw`.
 - JavaScript, compared on eGovFrame's browser scripts (`var`, globals,
   DOM calls, regexes): sonda raises 450 of SonarCloud's 454 JavaScript
   issues; the 279 it doesn't are `var`, which SonarQube 26.7 reports and

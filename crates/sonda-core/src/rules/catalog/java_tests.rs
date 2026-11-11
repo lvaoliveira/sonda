@@ -445,8 +445,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() { String q = \"SELECT * FROM users\"; } }",
-            good: "class A { void f() { String q = \"SELECT id, name FROM users\"; } }",
+            bad: "class A { Object f(Statement st) throws Exception { return st.executeQuery(\"SELECT * FROM users\"); } }",
+            good: "class A { Object f(Statement st) throws Exception { return st.executeQuery(\"SELECT id, name FROM users\"); } }",
         }),
     },
     Rule {
@@ -712,6 +712,26 @@ fn is_a_machine_specific_path(string: Node, src: &[u8]) -> bool {
                     .is_some_and(|t| matches!(text(t, src), b"File" | b"java.io.File"))
                 && parent.named_child(0).is_some_and(|a| a.id() == string.id())
         }),
+        // A delimiter joined into a `new File(...)` path, `dir + "/" + name`
+        // (measured on SonarQube 26.7).
+        "binary_expression" if matches!(v, b"/" | b"\\") => {
+            let mut top = parent;
+            while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
+                top = p;
+            }
+            return top
+                .parent()
+                .filter(|a| a.kind() == "argument_list")
+                .is_some_and(|args| {
+                    args.named_child(0) == Some(top)
+                        && args.parent().is_some_and(|c| {
+                            c.kind() == "object_creation_expression"
+                                && c.child_by_field_name("type").is_some_and(|t| {
+                                    matches!(text(t, src), b"File" | b"java.io.File")
+                                })
+                        })
+                });
+        }
         _ => false,
     };
     if !placed {
@@ -901,6 +921,15 @@ fn calls_own_proxied_method(call: Node, src: &[u8]) -> bool {
 }
 
 fn selects_all_columns(string: Node, src: &[u8]) -> bool {
+    // Passed to a call, `executeQuery("SELECT * ...")`, not kept in a
+    // variable first (measured on SonarQube 26.7).
+    let mut arg = string;
+    while let Some(p) = arg.parent().filter(|p| p.kind() == "binary_expression") {
+        arg = p;
+    }
+    if !arg.parent().is_some_and(|p| p.kind() == "argument_list") {
+        return false;
+    }
     string_value(string, src).is_some_and(|v| {
         let lower = v.to_ascii_lowercase();
         let t = lower.trim_ascii_start();
@@ -998,7 +1027,7 @@ mod tests {
 
     #[test]
     fn strings() {
-        let src = "class A {\nDateTimeFormatter a = DateTimeFormatter.ofPattern(\"yyyy-ww\");\nDateTimeFormatter b = DateTimeFormatter.ofPattern(\"yyyy-MM\");\n@ModelAttribute(\"my-name\") Object c() { return null; }\n@ModelAttribute(\"myName\") Object d() { return null; }\nString dataPath = \"/home/app/data\";\nString winPath = \"C:\\\\data\";\nString g = \"/api/users\";\n@GetMapping(\"/home/x\") String h() { return \"\"; }\nString i = \"SELECT * FROM t\";\nString j = \"select id from t\";\nString k = (String) \"x\";\nObject l = (Object) \"x\";\nLocalDate m = LocalDate.of(2024, 3, 1);\nLocalDate n = LocalDate.of(2024, Month.MARCH, 1);\n}";
+        let src = "class A {\nDateTimeFormatter a = DateTimeFormatter.ofPattern(\"yyyy-ww\");\nDateTimeFormatter b = DateTimeFormatter.ofPattern(\"yyyy-MM\");\n@ModelAttribute(\"my-name\") Object c() { return null; }\n@ModelAttribute(\"myName\") Object d() { return null; }\nString dataPath = \"/home/app/data\";\nString winPath = \"C:\\\\data\";\nString g = \"/api/users\";\n@GetMapping(\"/home/x\") String h() { return \"\"; }\nObject i = st.executeQuery(\"SELECT * FROM t\");\nString j = \"select id from t\";\nString k = (String) \"x\";\nObject l = (Object) \"x\";\nLocalDate m = LocalDate.of(2024, 3, 1);\nLocalDate n = LocalDate.of(2024, Month.MARCH, 1);\n}";
         assert_eq!(flagged("java/week-year-mismatch", src), [2]);
         assert_eq!(flagged("java/model-attribute-name", src), [4]);
         assert_eq!(flagged("java/hardcoded-path", src), [6, 7]);
@@ -1040,5 +1069,13 @@ mod tests {
         let src = "class A { void f() {\ndouble a = Math.floor(5);\ndouble b = Math.floor(x);\ndouble c = Math.round(2);\nDate d = DateUtils.truncate(now, 1);\n} }";
         assert_eq!(flagged("java/pointless-math", src), [2, 4]);
         assert_eq!(flagged("java/commons-date-truncate", src), [5]);
+    }
+
+    /// Measured on SonarQube 26.7: a delimiter joined into a `new File`
+    /// path.
+    #[test]
+    fn path_delimiter_in_a_file() {
+        let src = "class A {\n    java.io.File f(String dir, String name) {\n        return new java.io.File(dir + \"/\" + name);\n    }\n\n    String g(String a) {\n        return a + \"/\";\n    }\n}";
+        assert_eq!(flagged("java/hardcoded-path", src), [3]);
     }
 }

@@ -268,21 +268,23 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/nullable-injection",
         name: "Nullable injected fields and parameters should provide a default value",
-        description: "An optional dependency that is absent leaves the field null.",
-        message: "Give it a default.",
+        description: "A `@Nullable` field or parameter injected with `@Value(\"${name}\")` \
+                      expects the property may be missing, but without a default Spring \
+                      fails when it is.",
+        message: "Give the @Value a default, as in ${name:default}.",
         category: Bug,
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S6816")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(field_declaration) @match"#,
-            filter: Some(Keep(optional_injection_without_default)),
+            query: r#"[(field_declaration) (formal_parameter)] @match"#,
+            filter: Some(Find(optional_injection_without_default)),
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { @Autowired(required = false) private Helper h; }",
-            good: "class A { @Autowired(required = false) private Helper h = new Helper(); }",
+            bad: "class A { @Nullable @Value(\"${app.name}\") private String name; }",
+            good: "class A { @Nullable @Value(\"${app.name:demo}\") private String name; }",
         }),
     },
     Rule {
@@ -701,15 +703,38 @@ fn opens_a_record_field(call: Node, src: &[u8]) -> bool {
     find_declared_type(root_of(call), name, src).is_some_and(|d| d.kind() == "record_declaration")
 }
 
-fn optional_injection_without_default(field: Node, src: &[u8]) -> bool {
-    let Some(a) = modifiers_of(field).map(|m| text(m, src)) else {
-        return false;
-    };
-    let optional = a.windows(8).any(|w| w == b"required") && a.windows(5).any(|w| w == b"false");
-    optional
-        && children_of_kind(field, "variable_declarator")
-            .iter()
-            .all(|d| d.child_by_field_name("value").is_none())
+/// `@Nullable` with `@Value("${name}")` and no default after a colon: the
+/// property is expected to be missing, and Spring fails when it is.
+/// Reported at the `@Value` (measured on SonarQube 26.7).
+fn optional_injection_without_default<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mods = modifiers_of(declaration)?;
+    let mut nullable = false;
+    let mut value = None;
+    let mut c = mods.walk();
+    for a in mods.children(&mut c) {
+        let Some(name) = a.child_by_field_name("name").map(|n| text(n, src)) else {
+            continue;
+        };
+        match name.rsplit(|b| *b == b'.').next() {
+            Some(b"Nullable") => nullable = true,
+            Some(b"Value") => {
+                value = a
+                    .child_by_field_name("arguments")
+                    .and_then(|args| args.named_child(0))
+                    .filter(|v| v.kind() == "string_literal")
+                    .and_then(|v| string_value(v, src))
+                    .map(|v| (a, v));
+            }
+            _ => {}
+        }
+    }
+    let (annotation, v) = value?;
+    let start = v.windows(2).position(|w| w == b"${")?;
+    let end = v[start..]
+        .iter()
+        .position(|b| *b == b'}')
+        .map_or(v.len(), |e| start + e);
+    (nullable && !v[start..end].contains(&b':')).then_some(annotation)
 }
 
 fn singleton_holds_a_scoped_bean<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -870,7 +895,7 @@ mod tests {
 
     #[test]
     fn spring_and_validation() {
-        let src = "@Scope(\"prototype\") @Component class P {}\n@Service class S {\n @Autowired P p;\n @Autowired(required = false) Q q;\n @NotBlank int age;\n @NotNull Integer n;\n @Min(1) String s;\n}";
+        let src = "@Scope(\"prototype\") @Component class P {}\n@Service class S {\n @Autowired P p;\n @Nullable @Value(\"${q}\") String q;\n @NotBlank int age;\n @NotNull Integer n;\n @Min(1) String s;\n @Nullable @Value(\"${r:x}\") String r;\n @Autowired(required = false) Q t;\n}";
         assert_eq!(flagged("java/scoped-bean-in-singleton", src), [3]);
         assert_eq!(flagged("java/nullable-injection", src), [4]);
         assert_eq!(flagged("java/bean-validation-misplaced", src), [5, 7]);
@@ -882,5 +907,12 @@ mod tests {
         assert_eq!(flagged("java/high-frame-rate", src), [3]);
         assert_eq!(flagged("java/irregular-number-pattern", src), [5]);
         assert_eq!(flagged("java/print-then-readln", src), [7]);
+    }
+
+    /// Reported at the `@Value` (measured on SonarQube 26.7).
+    #[test]
+    fn nullable_value_without_default() {
+        let src = "class A {\n    @Nullable\n    @Value(\"${app.name}\")\n    private String name;\n    @Nullable\n    @Value(\"${app.other:x}\")\n    private String other;\n    @Value(\"${app.plain}\")\n    private String plain;\n}";
+        assert_eq!(flagged("java/nullable-injection", src), [3]);
     }
 }

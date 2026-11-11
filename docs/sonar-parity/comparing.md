@@ -193,6 +193,16 @@ behavior on the version measured.
 - **Check what the reference skips.** SonarCloud, with a newer analyzer,
   reported `var` in a few of eGovFrame's files and not in the others;
   SonarQube 26.7 reports every one. A calibration file decides it.
+- **Version tags.** SonarQube tags the rules it runs only from a Java
+  version, `java9` to `java22` (`api/rules/search?tags=java21`): a
+  project's target version leaves them out, so compare with the version
+  its build file gives.
+- **Once per pattern.** SonarQube reports some regex rules once per
+  occurrence: two `[0-9]` in one pattern are two issues, sonda's one.
+- **Calibrate the shape, not only the case.** A rule can depend on what
+  surrounds the construct: `synchronized` on a field is reported only when
+  the class reassigns the field, `SELECT *` only in a string passed to a
+  call, `parseInt` only outside a `try` that catches its failure.
 - **Check the fetch.** A first count of eGovFrame's issues stopped at the
   search limit and missed about 500 of them; compare the script's total
   with the project's page in SonarQube.
@@ -204,14 +214,14 @@ On the comparison server, as of 2026-11-11:
 | Project key | What | Commit |
 |---|---|---|
 | `lvaoliveira_arandu` | arandu (JavaScript) | `ecb5cc9` |
-| `sonda` | sonda's own code (TypeScript, Rust, Python scripts), by CI | latest `main` (`43ed97a` in the results) |
+| `sonda` | sonda's own code (TypeScript, Rust, Python scripts), by CI | latest `main` (`f9c9bba` in the results) |
 | `sonda-compare-cpython-lib` | CPython: 7 packages of `Lib/` | `bf6623a` |
 | `sonda-compare-budgetthuis` | ha-budgetthuis-prices (Python) | `f563c0d` |
 | `sonda-calibrate-cc` | JavaScript and TypeScript calibration | |
 | `sonda-calibrate-js-browser`, `sonda-calibrate-js-browser2` to `7` | JavaScript calibration: browser scripts, regexes | |
 | `sonda-calibrate-py`, `sonda-calibrate-py13`, `sonda-calibrate-py14` | Python calibration | |
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
-| `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration | |
+| `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration (`-egov`, `-egov2`, `-egov3` for eGovFrame's, Java 17) | |
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 

@@ -28,6 +28,7 @@ pub(crate) const STATIC_VIA_SUBCLASS: &str = "java/static-via-subclass";
 pub(crate) const CLASS_COUPLING: &str = "java/class-coupling";
 pub(crate) const WILDCARD_RETURN: &str = "java/wildcard-return-type";
 pub(crate) const GENERIC_EXCEPTION: &str = "java/generic-exception-thrown";
+pub(crate) const FIELD_SHADOWS_PARENT: &str = "java/field-shadows-parent";
 
 /// The rules this module checks.
 pub(crate) const RULES: &[&str] = &[
@@ -43,6 +44,7 @@ pub(crate) const RULES: &[&str] = &[
     CLASS_COUPLING,
     WILDCARD_RETURN,
     GENERIC_EXCEPTION,
+    FIELD_SHADOWS_PARENT,
 ];
 
 /// How many of the project's types a class may depend on (SonarQube's
@@ -267,6 +269,9 @@ pub(crate) fn run<'f>(
                 if on(SUBCLASS_EQUALS) && adds_fields_without_equals(&index, id) {
                     found.push((SUBCLASS_EQUALS, f, index.decl(id).span));
                 }
+                if on(FIELD_SHADOWS_PARENT) {
+                    fields_shadowing_ancestors(&index, id, &mut found);
+                }
             }
         }
         if on(STATIC_VIA_SUBCLASS) {
@@ -449,13 +454,14 @@ fn non_serializable_fields(index: &ProjectIndex, id: TypeId, found: &mut Vec<Fin
         }
     };
     // What a collection holds: a type variable there may be anything, and
-    // isn't held against it.
+    // isn't held against it; a bare wildcard, `List<?>`, is (measured on
+    // SonarQube 26.7).
     let holds_unserializable = |t: &TypeRef| {
         t.args.iter().any(|a| {
             let a = if a.is_wildcard() {
                 match a.args.first() {
                     Some(bound) => bound,
-                    None => return false,
+                    None => return true,
                 }
             } else {
                 a
@@ -946,8 +952,21 @@ fn generic_exceptions_declared(index: &ProjectIndex, id: TypeId, found: &mut Vec
             continue;
         }
         let passes_one_on = m.calls.iter().any(|c| {
+            // `Callable.call()` and `AutoCloseable.close()` declare it; a
+            // reader's or stream's `close()` doesn't (measured on SonarQube
+            // 26.7). A receiver of unknown type may be either.
             if matches!(c.name.as_str(), "call" | "close") {
-                return true;
+                let generic = c.receiver.as_ref().is_none_or(|r| {
+                    matches!(r.name.as_str(), "Callable" | "AutoCloseable")
+                        || index.resolve_in(id, r).is_some_and(|t| {
+                            methods_of(t, &c.name, c.args)
+                                .into_iter()
+                                .any(throws_generic)
+                        })
+                });
+                if generic {
+                    return true;
+                }
             }
             let target = if c.own {
                 Some(id)
@@ -970,6 +989,34 @@ fn generic_exceptions_declared(index: &ProjectIndex, id: TypeId, found: &mut Vec
 }
 
 /// Every supertype the project declares, at any distance.
+/// A class's instance fields named like a field one of its project
+/// ancestors declares, other than private ones, in any file (measured on
+/// SonarQube 26.7).
+fn fields_shadowing_ancestors(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
+    let ancestors: Vec<TypeId> = all_supertypes(index, id)
+        .into_iter()
+        .filter(|&t| index.decl(t).kind == "class")
+        .collect();
+    if ancestors.is_empty() {
+        return;
+    }
+    for field in &index.decl(id).fields {
+        if has(&field.modifiers, "static") {
+            continue;
+        }
+        let shadows = ancestors.iter().any(|&a| {
+            index.decl(a).fields.iter().any(|p| {
+                p.name == field.name
+                    && !has(&p.modifiers, "private")
+                    && !has(&p.modifiers, "static")
+            })
+        });
+        if shadows {
+            found.push((FIELD_SHADOWS_PARENT, id.0, field.span));
+        }
+    }
+}
+
 fn all_supertypes(index: &ProjectIndex, id: TypeId) -> Vec<TypeId> {
     let mut supers: Vec<TypeId> = Vec::new();
     let mut queue = index.supertypes(id);
@@ -1271,5 +1318,48 @@ mod tests {
             [at("Svc.java", 5), at("Svc.java", 5)]
         );
         assert_eq!(flagged("java/missing-override", &files), [at("Q.java", 2)]);
+    }
+
+    /// Measured on SonarQube 26.7: a field shadowing a parent's in another
+    /// file, not a static one or a private one; and a `List<?>` field of a
+    /// serializable class.
+    #[test]
+    fn shadowing_across_files() {
+        let files = [
+            (
+                "Base.java",
+                "public class Base {\n    public static String shared;\n    private String hidden;\n    protected int count;\n}\n",
+            ),
+            (
+                "Kid.java",
+                "public class Kid extends Base {\n    public static String shared;\n    private String hidden;\n    protected int count;\n}\n",
+            ),
+        ];
+        assert_eq!(
+            flagged("java/field-shadows-parent", &files),
+            [("Kid.java".to_string(), 4)]
+        );
+        let ser = [(
+            "S.java",
+            "import java.io.Serializable;\nimport java.util.List;\npublic class S implements Serializable {\n    private List<?> wild;\n    private List<String> names;\n}\n",
+        )];
+        assert_eq!(
+            flagged("java/serializable-field-type", &ser),
+            [("S.java".to_string(), 4)]
+        );
+    }
+
+    /// Measured on SonarQube 26.7: a reader's `close()` throws an
+    /// IOException, which doesn't pass a generic `throws Exception` on.
+    #[test]
+    fn closing_a_reader_passes_no_exception_on() {
+        let files = [(
+            "A.java",
+            "import java.io.BufferedReader;\npublic class A {\n    public static int f(BufferedReader br) throws Exception {\n        br.close();\n        return 1;\n    }\n\n    public static void g(AutoCloseable c) throws Exception {\n        c.close();\n    }\n}\n",
+        )];
+        assert_eq!(
+            flagged("java/generic-exception-thrown", &files),
+            [("A.java".to_string(), 3)]
+        );
     }
 }

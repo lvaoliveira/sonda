@@ -32,9 +32,20 @@ pub(super) fn has_empty_alternative(r: &Regex) -> bool {
 }
 
 pub(super) fn has_single_character_class(r: &Regex) -> bool {
+    single_character_class_besides(r, ".*+?()[]{}|^$\\ -#&~")
+}
+
+/// Java's S6397 reports `[-]` and `[\\]` too (measured on SonarQube 26.7).
+pub(super) fn has_single_character_class_java(r: &Regex) -> bool {
+    single_character_class_besides(r, ".*+?()[]{}|^$ #&~")
+}
+
+/// A class of one character, other than those `kept` (a class is a common
+/// way to write a metacharacter literally) or whitespace.
+fn single_character_class_besides(r: &Regex, kept: &str) -> bool {
     any_node(r, |n| {
         matches!(n, Rx::Class { negated: false, items }
-                if matches!(items.as_slice(), [ClassItem::Char(c)] if !".*+?()[]{}|^$\\ -#&~".contains(*c) && !c.is_whitespace()))
+                if matches!(items.as_slice(), [ClassItem::Char(c)] if !kept.contains(*c) && !c.is_whitespace()))
     })
 }
 
@@ -468,14 +479,26 @@ pub(super) fn backtracks_polynomially(r: &Regex) -> bool {
 /// from every position; and two repeats separated only by characters both of them
 /// match, `/[^@]+\.[^@]+$/`.
 pub(super) fn backtracks_polynomially_js(r: &Regex) -> bool {
-    if backtracks_polynomially(r) {
-        return true;
-    }
+    backtracks_polynomially(r)
+        || starts_with_an_unanchored_repeat(r)
+        || repeats_share_a_separator(r)
+}
+
+/// Java's S8786 also reports two repetitions separated only by characters
+/// both match, `.*[a-z].*` (measured on SonarQube 26.7); not an unanchored
+/// leading repetition, as JavaScript's does.
+pub(super) fn backtracks_polynomially_java(r: &Regex) -> bool {
+    backtracks_polynomially(r) || repeats_share_a_separator(r)
+}
+
+/// An alternative that starts, unanchored, with an unbounded repetition of
+/// one character set and has more after it, `/\s*$/`.
+fn starts_with_an_unanchored_repeat(r: &Regex) -> bool {
     let alts: &[Rx] = match &r.root {
         Rx::Alt(a) => a,
         other => std::slice::from_ref(other),
     };
-    let leading = alts.iter().any(|alt| {
+    alts.iter().any(|alt| {
         let items: &[Rx] = match alt {
             Rx::Concat(i) => i,
             other => std::slice::from_ref(other),
@@ -483,40 +506,45 @@ pub(super) fn backtracks_polynomially_js(r: &Regex) -> bool {
         items.len() > 1
             && matches!(&items[0], first @ Rx::Repeat { inner, .. }
                 if is_unbounded(first) && single_char_set(inner, &r.flags).is_some())
-    });
-    leading
-        || any_node(r, |n| {
-            let Rx::Concat(items) = n else { return false };
-            (0..items.len()).any(|i| {
-                let Rx::Repeat { inner: a, .. } = &items[i] else {
-                    return false;
-                };
-                let Some(sa) = is_unbounded(&items[i])
-                    .then(|| single_char_set(a, &r.flags))
-                    .flatten()
-                else {
-                    return false;
-                };
-                let mut separators = Vec::new();
-                for later in &items[i + 1..] {
-                    if let Rx::Repeat { inner: b, .. } = later
-                        && is_unbounded(later)
-                    {
-                        return !separators.is_empty()
-                            && single_char_set(b, &r.flags).is_some_and(|sb| {
-                                sa.overlaps(&sb)
-                                    && separators.iter().all(|s: &Set| s.is_subset_of(&sb))
-                            });
-                    }
-                    match single_char_set(later, &r.flags) {
-                        Some(s) if s.is_subset_of(&sa) => separators.push(s),
-                        _ if nullable(later) => {}
-                        _ => return false,
-                    }
+    })
+}
+
+/// Two unbounded repetitions of overlapping sets separated only by
+/// characters both could match, `[^@]+\.[^@]+`.
+fn repeats_share_a_separator(r: &Regex) -> bool {
+    any_node(r, |n| {
+        let Rx::Concat(items) = n else { return false };
+        (0..items.len()).any(|i| {
+            let Rx::Repeat { inner: a, .. } = &items[i] else {
+                return false;
+            };
+            let Some(sa) = is_unbounded(&items[i])
+                .then(|| single_char_set(a, &r.flags))
+                .flatten()
+            else {
+                return false;
+            };
+            let mut separators = Vec::new();
+            for later in &items[i + 1..] {
+                if let Rx::Repeat { inner: b, .. } = later
+                    && is_unbounded(later)
+                {
+                    return !separators.is_empty()
+                        && single_char_set(b, &r.flags).is_some_and(|sb| {
+                            sa.overlaps(&sb) && separators.iter().all(|s: &Set| s.overlaps(&sb))
+                        });
                 }
-                false
-            })
+                // A separator either repetition could also match:
+                // `.*[\r\n;].*` too, though `.` leaves out line ends.
+                match single_char_set(later, &r.flags) {
+                    Some(s) if s.overlaps(&sa) => separators.push(s),
+                    _ if nullable(later) => {}
+                    _ => return false,
+                }
+            }
+            false
         })
+    })
 }
 
 // ---- Java-only analyses

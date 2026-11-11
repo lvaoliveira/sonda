@@ -1,6 +1,7 @@
 //! Java bug rules (ADR-0007, batch 7). Queries stay cheap on deep trees: see
 //! the notes in `js_modern.rs`.
 
+use super::java_extra::{declared_type, type_text};
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, method_name, string_value, text,
 };
@@ -281,8 +282,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1872")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_invocation object: (method_invocation object: (method_invocation name: (identifier) @c (#eq? @c "getClass")) name: (identifier) @g (#any-of? @g "getName" "getSimpleName")) name: (identifier) @n (#eq? @n "equals")) @match"#,
-            filter: None,
+            query: r#"(method_invocation object: (method_invocation object: (method_invocation name: (identifier) @c (#eq? @c "getClass")) name: (identifier) @g (#any-of? @g "getName" "getSimpleName")) name: (identifier) @n (#eq? @n "equals")) @match
+(method_invocation object: (string_literal) name: (identifier) @n (#eq? @n "equals") arguments: (argument_list (method_invocation object: (identifier) name: (identifier) @g (#any-of? @g "getName" "getSimpleName")))) @match"#,
+            filter: Some(Keep(names_a_class)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -381,7 +383,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2119")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_invocation object: (object_creation_expression type: (type_identifier) @t (#eq? @t "Random")) name: (identifier) @n (#match? @n "^next")) @match"#,
+            // A SecureRandom too, and one kept in a local (measured on
+            // SonarQube 26.7): the method makes a new one each call.
+            query: r#"(method_invocation object: (object_creation_expression type: (type_identifier) @t (#any-of? @t "Random" "SecureRandom")) name: (identifier) @n (#match? @n "^next")) @match
+(local_variable_declaration declarator: (variable_declarator value: (object_creation_expression type: (type_identifier) @t (#any-of? @t "Random" "SecureRandom")) @match))"#,
             filter: None,
         },
         example: Some(Example {
@@ -501,8 +506,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2153")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_invocation object: [(method_invocation name: (identifier) @v (#eq? @v "valueOf")) (object_creation_expression type: (type_identifier) @bt (#any-of? @bt "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character"))] name: (identifier) @n (#match? @n "^(int|long|double|float|short|byte|boolean|char)Value$")) @match"#,
-            filter: None,
+            query: r#"(method_invocation object: [(method_invocation name: (identifier) @v (#eq? @v "valueOf")) (object_creation_expression type: (type_identifier) @bt (#any-of? @bt "Integer" "Long" "Double" "Float" "Short" "Byte" "Boolean" "Character"))] name: (identifier) @n (#match? @n "^(int|long|double|float|short|byte|boolean|char)Value$")) @match
+(local_variable_declaration type: [(integral_type) (floating_point_type)] declarator: (variable_declarator value: (method_invocation object: (identifier) @w (#any-of? @w "Integer" "Long" "Double" "Float" "Short" "Byte") name: (identifier) @v (#eq? @v "valueOf")) @match))"#,
+            filter: Some(Keep(boxes_to_unbox)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -542,7 +548,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(if_statement) @match"#,
-            filter: Some(Keep(is_double_checked_locking)),
+            filter: Some(Find(is_double_checked_locking)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -762,7 +768,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2674"), exact("S2677")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "read" "readLine"))) @match"#,
+            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "read" "readLine"))) @match
+(binary_expression left: (method_invocation name: (identifier) @n (#eq? @n "readLine")) right: (null_literal)) @match"#,
             filter: Some(Keep(read_discards_result)),
         },
         example: Some(Example {
@@ -1652,6 +1659,45 @@ fn thread_has_no_run(class: Node, src: &[u8]) -> bool {
     !overrides_run && !text(body, src).windows(6).any(|w| w == b"super(")
 }
 
+/// `Integer.valueOf(c).intValue()`, or `int i = Integer.valueOf(c)` with a
+/// primitive `c`, boxed only to be unboxed (measured on SonarQube 26.7); a
+/// `String` argument is parsing, not boxing.
+fn boxes_to_unbox(call: Node, src: &[u8]) -> bool {
+    if call
+        .child_by_field_name("name")
+        .is_some_and(|n| text(n, src) != b"valueOf")
+    {
+        return true;
+    }
+    let Some(arg) = call_arguments(call).first().copied() else {
+        return false;
+    };
+    arg.kind() == "identifier"
+        && declared_type(call, text(arg, src), src).is_some_and(|t| {
+            matches!(
+                t.kind(),
+                "integral_type" | "floating_point_type" | "boolean_type"
+            )
+        })
+}
+
+/// `"Size".equals(type.getSimpleName())` where `type` is declared a
+/// `Class` (measured on SonarQube 26.7), or `x.getClass().getName()`.
+fn names_a_class(call: Node, src: &[u8]) -> bool {
+    let Some(arg) = call_arguments(call).first().copied() else {
+        return false;
+    };
+    if call
+        .child_by_field_name("object")
+        .is_some_and(|o| o.kind() == "method_invocation")
+    {
+        return true;
+    }
+    arg.child_by_field_name("object").is_some_and(|o| {
+        type_text(declared_type(call, text(o, src), src), src).starts_with(b"Class")
+    })
+}
+
 fn swallows_interrupt(catch: Node, src: &[u8]) -> bool {
     let Some(param) = catch
         .named_child(0)
@@ -1668,9 +1714,17 @@ fn swallows_interrupt(catch: Node, src: &[u8]) -> bool {
     let Some(body) = catch.child_by_field_name("body") else {
         return false;
     };
+    // Rethrowing means throwing the caught exception itself: wrapping it in
+    // another doesn't count (measured on SonarQube 26.7).
+    let caught = param.child_by_field_name("name").map(|n| text(n, src));
     let t = text(body, src);
     !t.windows(11).any(|w| w == b"interrupt()")
-        && find_node(body, |n| n.kind() == "throw_statement").is_none()
+        && find_node(body, |n| {
+            n.kind() == "throw_statement"
+                && n.named_child(0)
+                    .is_some_and(|e| Some(text(e, src)) == caught)
+        })
+        .is_none()
 }
 
 fn returns_min_value<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1963,6 +2017,13 @@ fn regex_is_a_bare_metacharacter(call: Node, src: &[u8]) -> bool {
 }
 
 fn read_discards_result(call: Node, src: &[u8]) -> bool {
+    // `while (in.readLine() != null)` only counts lines (measured on
+    // SonarQube 26.7).
+    if call.kind() == "binary_expression" {
+        return call
+            .child_by_field_name("left")
+            .is_some_and(|l| call_arguments(l).is_empty());
+    }
     let Some(invocation) = call.named_child(0) else {
         return false;
     };
@@ -2334,12 +2395,13 @@ fn shift_amount_is_out_of_range(binary: Node, src: &[u8]) -> bool {
             .is_ok_and(|n| n == 0 || n >= 64)
 }
 
-fn is_double_checked_locking(statement: Node, src: &[u8]) -> bool {
+/// Reported at the `synchronized` (measured on SonarQube 26.7).
+fn is_double_checked_locking<'t>(statement: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let (Some(condition), Some(body)) = (
         statement.child_by_field_name("condition"),
         statement.child_by_field_name("consequence"),
     ) else {
-        return false;
+        return None;
     };
     let is_null_check = |c: Node| {
         let inner = if c.kind() == "parenthesized_expression" {
@@ -2355,7 +2417,7 @@ fn is_double_checked_locking(statement: Node, src: &[u8]) -> bool {
         })
     };
     if !is_null_check(condition) {
-        return false;
+        return None;
     }
     let field = condition
         .named_child(0)
@@ -2367,17 +2429,15 @@ fn is_double_checked_locking(statement: Node, src: &[u8]) -> bool {
             && line.windows(field.len().max(1)).any(|w| w == field)
     });
     if volatile {
-        return false;
+        return None;
     }
-    let Some(sync) = find_node(body, |n| n.kind() == "synchronized_statement") else {
-        return false;
-    };
+    let sync = find_node(body, |n| n.kind() == "synchronized_statement")?;
     find_node(sync, |n| {
         n.kind() == "if_statement"
             && n.child_by_field_name("condition")
                 .is_some_and(|c| text(c, src) == text(condition, src))
     })
-    .is_some()
+    .map(|_| sync)
 }
 
 /// An anonymous class that is only an initializer block: one with fields or
@@ -2456,7 +2516,8 @@ mod tests {
     #[test]
     fn interrupts_and_locks() {
         let src = "class A { void f() {\ntry { w(); } catch (InterruptedException e) { log(e); }\ntry { w(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }\ntry { w(); } catch (InterruptedException e) { throw new RuntimeException(e); }\nsynchronized (lock) { Thread.sleep(1); }\nThread.sleep(1);\nsynchronized (\"x\") { }\nsynchronized (lock) { }\n} }";
-        assert_eq!(flagged("java/interrupt-swallowed", src), [2]);
+        // Wrapping isn't rethrowing (measured on SonarQube 26.7).
+        assert_eq!(flagged("java/interrupt-swallowed", src), [2, 4]);
         assert_eq!(flagged("java/sleep-while-locked", src), [5]);
         assert_eq!(flagged("java/synchronized-on-literal", src), [7]);
     }
@@ -2464,7 +2525,8 @@ mod tests {
     #[test]
     fn double_checked_locking_needs_a_non_volatile_field() {
         let bad = "class A {\nstatic Object inst;\nstatic Object get() {\nif (inst == null) {\nsynchronized (A.class) {\nif (inst == null) { inst = new Object(); }\n}\n}\nreturn inst;\n}\n}";
-        assert_eq!(flagged("java/double-checked-locking", bad), [4]);
+        // At the `synchronized` (measured on SonarQube 26.7).
+        assert_eq!(flagged("java/double-checked-locking", bad), [5]);
         let good = bad.replace("static Object inst;", "static volatile Object inst;");
         assert!(flagged("java/double-checked-locking", &good).is_empty());
     }
@@ -2561,5 +2623,18 @@ mod tests {
     fn logger_formats() {
         let src = "class A { void f(String x, Object y) {\ntry { g(); } catch (java.io.IOException ce) {\nlog.debug(\"a\" + x);\nlog.debug(\"a {}\", x);\nlog.error(\"a {}\", x, y);\nlog.warn(\"a {} b {}\", x, ce);\nlog.warn(\"a {}\", x, ce);\nlog.error(\"d {}\", ce);\nlog.debug(\"c {}\", ce.getCause());\nlog.debug(\"Failed\", ce);\nlog.info(\"a {}\", y.toString());\n}\n} }";
         assert_eq!(flagged("java/logger-format", src), [3, 5, 8, 9, 11]);
+    }
+
+    /// Measured on SonarQube 26.7: a SecureRandom kept in a local is made
+    /// per call; `int i = Integer.valueOf(c)` boxes to unbox; a class
+    /// compared by `getSimpleName()`; `readLine() != null` drops the line;
+    /// double-checked locking reported at the `synchronized`.
+    #[test]
+    fn egov_bug_shapes() {
+        let src = "class A {\n    int f(char c, Class<?> type, java.io.BufferedReader buf) throws Exception {\n        SecureRandom r = new SecureRandom();\n        int i = Integer.valueOf(c);\n        int j = Integer.valueOf(\"5\");\n        boolean s = \"Size\".equals(type.getSimpleName());\n        while (buf.readLine() != null) {\n            i++;\n        }\n        return r.nextInt(10) + i + j;\n    }\n}";
+        assert_eq!(flagged("java/random-per-call", src), [3]);
+        assert_eq!(flagged("java/boxing-roundtrip", src), [4]);
+        assert_eq!(flagged("java/class-compared-by-name", src), [6]);
+        assert_eq!(flagged("java/read-result-ignored", src), [7]);
     }
 }

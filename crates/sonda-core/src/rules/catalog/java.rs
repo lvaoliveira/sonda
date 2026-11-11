@@ -70,6 +70,36 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "java/empty-block",
+        name: "Blocks of code should not be left empty",
+        description: "An empty loop or branch does nothing: unfinished code, or code left over \
+                      after its body was removed. A comment inside says it's intended.",
+        message: "Fill in this block, remove it, or add a comment saying why it's empty.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S108")],
+        check: Check::Query {
+            langs: JAVA,
+            // Loops, branches, `synchronized` and `try` (measured on SonarQube
+            // 26.7); a catch is java/empty-catch's.
+            query: "(for_statement body: (block) @match)
+(enhanced_for_statement body: (block) @match)
+(while_statement body: (block) @match)
+(do_statement body: (block) @match)
+(if_statement consequence: (block) @match)
+(if_statement alternative: (block) @match)
+(synchronized_statement body: (block) @match)
+(try_statement body: (block) @match)",
+            filter: Some(Keep(empty_block)),
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: "class A { void f(String[] ids) { for (String id : ids) {} } }",
+            good: "class A { void f(String[] ids) { for (String id : ids) { use(id); } } }",
+        }),
+    },
+    Rule {
         id: "java/print-stack-trace",
         name: "printStackTrace() should not be used",
         description: "Stack traces printed to stderr bypass logging and may leak internals.",

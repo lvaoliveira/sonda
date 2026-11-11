@@ -478,11 +478,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S2387")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(program) @match"#,
-            filter: Some(Find(field_shadows_parent_field)),
-        },
+        // In the project pass: the parent is often in another file (measured
+        // on SonarQube 26.7).
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class P { int x; }\nclass C extends P { int x; }",
@@ -532,7 +530,8 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/synchronize-on-public-field",
         name: "Blocks should be synchronized on private final fields",
-        description: "Other code can reassign or lock on a non-private field, breaking mutual exclusion.",
+        description: "A lock that changes, a field the class reassigns or a parameter each \
+                      caller passes, lets two threads hold different locks at once.",
         message: "Lock on a private final field.",
         category: Bug,
         severity: Major,
@@ -545,7 +544,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { Object lock = new Object(); void f() { synchronized (lock) { g(); } } }",
+            bad: "class A { Object lock = new Object(); void f() { lock = new Object(); synchronized (lock) { g(); } } }",
             good: "class A { private final Object lock = new Object(); void f() { synchronized (lock) { g(); } } }",
         }),
     },
@@ -698,10 +697,11 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 1,
-        sonar: &[exact("S3033")],
+        // SonarQube 26.7 reports these as S7158, with `!= 0` and `> 0` too.
+        sonar: &[exact("S7158"), related("S3033")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(binary_expression left: (method_invocation object: (identifier) @o name: (identifier) @n (#eq? @n "length")) operator: "==" right: (decimal_integer_literal) @z (#eq? @z "0")) @match"#,
+            query: r#"(binary_expression left: (method_invocation object: (identifier) @o name: (identifier) @n (#eq? @n "length")) operator: ["==" "!=" ">"] right: (decimal_integer_literal) @z (#eq? @z "0")) @match"#,
             filter: Some(Keep(builder_length_compared_to_zero)),
         },
         example: Some(Example {
@@ -1618,9 +1618,19 @@ fn casts_random_double(cast: Node, src: &[u8]) -> bool {
         return false;
     };
     let t = text(value, src);
-    t.windows(11).any(|w| w == b"Math.random")
-        || count_word(t, b"nextDouble") > 0
-        || count_word(t, b"nextFloat") > 0
+    // A SecureRandom's isn't reported (measured on SonarQube 26.7).
+    let secure = find_node(value, |x| {
+        x.kind() == "method_invocation"
+            && x.child_by_field_name("object").is_some_and(|o| {
+                o.kind() == "identifier"
+                    && type_text(declared_type(cast, text(o, src), src), src) == b"SecureRandom"
+            })
+    })
+    .is_some();
+    !secure
+        && (t.windows(11).any(|w| w == b"Math.random")
+            || count_word(t, b"nextDouble") > 0
+            || count_word(t, b"nextFloat") > 0)
 }
 
 fn final_class_protected_member<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1766,41 +1776,28 @@ fn returns_private_mutable_field<'t>(method: Node<'t>, src: &[u8]) -> Option<Nod
     })
 }
 
-fn field_shadows_parent_field<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let classes = children_of_kind(program, "class_declaration");
-    for child in &classes {
-        let Some(sup) = child.child_by_field_name("superclass") else {
-            continue;
-        };
-        let Some(parent) = classes
-            .iter()
-            .find(|c| count_word(text(sup, src), name_text(**c, src)) > 0 && **c != *child)
-        else {
-            continue;
-        };
-        let inherited: Vec<&[u8]> = class_members(*parent)
-            .iter()
-            .filter(|m| m.kind() == "field_declaration" && !has_modifier(**m, "private"))
-            .flat_map(|m| declarator_names(*m, src))
-            .collect();
-        let hit = class_members(*child).into_iter().find(|m| {
-            m.kind() == "field_declaration"
-                && declarator_names(*m, src)
-                    .iter()
-                    .any(|n| inherited.contains(n))
-        });
-        if hit.is_some() {
-            return hit;
-        }
-    }
-    None
-}
-
 fn is_lock_variable(ident: Node, src: &[u8]) -> bool {
     matches!(
         type_text(declared_type(ident, text(ident, src), src), src),
         b"Lock" | b"ReentrantLock" | b"ReadWriteLock" | b"ReentrantReadWriteLock" | b"StampedLock"
     )
+}
+
+/// Whether anything in the class assigns `name`, or `this.name`, after its
+/// declaration.
+fn reassigned(class: Node, name: &[u8], src: &[u8]) -> bool {
+    find_node(class, |x| {
+        x.kind() == "assignment_expression"
+            && x.child_by_field_name("left").is_some_and(|l| {
+                let target = if l.kind() == "field_access" {
+                    l.child_by_field_name("field")
+                } else {
+                    Some(l)
+                };
+                target.is_some_and(|t| text(t, src) == name)
+            })
+    })
+    .is_some()
 }
 
 fn is_unsafe_lock_field(ident: Node, src: &[u8]) -> bool {
@@ -1820,13 +1817,27 @@ fn is_unsafe_lock_field(ident: Node, src: &[u8]) -> bool {
                 })
                 .is_some()
             });
+            // A parameter is reported, a local isn't (measured on SonarQube
+            // 26.7).
+            let parameter = n.child_by_field_name("parameters").is_some_and(|ps| {
+                named_children(ps).iter().any(|fp| {
+                    fp.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name)
+                })
+            });
+            if parameter {
+                return true;
+            }
             if local {
                 return false;
             }
         }
         if n.kind() == "class_declaration" {
+            // A field the class assigns again, whatever its visibility; one
+            // nothing reassigns is as good as final (measured on SonarQube
+            // 26.7).
             return declared_field(n, name, src)
-                .is_some_and(|f| !(has_modifier(f, "private") && has_modifier(f, "final")));
+                .is_some_and(|f| !has_modifier(f, "final") && reassigned(n, name, src));
         }
         p = n.parent();
     }
@@ -1875,15 +1886,23 @@ fn writes_static<'t>(body: Node<'t>, class: Node, src: &[u8]) -> Option<Node<'t>
             "identifier" => names
                 .get_or_init(|| static_field_names(class, src))
                 .contains(&text(t, src)),
-            // `Type.field = x`, where Type is declared in this file.
+            // `Type.field = x`, where Type is declared in this file, or
+            // `this.field = x` (measured on SonarQube 26.7).
             "field_access" => {
                 let (Some(object), Some(field)) = (
-                    t.child_by_field_name("object")
-                        .filter(|o| o.kind() == "identifier"),
+                    t.child_by_field_name("object"),
                     t.child_by_field_name("field"),
                 ) else {
                     return false;
                 };
+                if object.kind() == "this" {
+                    return names
+                        .get_or_init(|| static_field_names(class, src))
+                        .contains(&text(field, src));
+                }
+                if object.kind() != "identifier" {
+                    return false;
+                }
                 super::java_flow::find_declared_type(
                     super::java_final::root_of(t),
                     text(object, src),
@@ -2310,5 +2329,31 @@ mod tests {
     fn restricted_identifiers_everywhere() {
         let src = "class A {\nint var;\nvoid f(int yield) {\nfor (String record : xs) {}\ntry { g(); } catch (RuntimeException var) {}\nint sealed = 1;\n}\n}";
         assert_eq!(flagged("java/future-keyword-name", src), [2, 3, 4, 5, 6]);
+    }
+
+    /// Measured on SonarQube 26.7: a parameter, and a field the class
+    /// reassigns, are unsafe locks; a field nothing reassigns, public or
+    /// not, isn't; a SecureRandom's double isn't a random int.
+    #[test]
+    fn locks_and_secure_random() {
+        let src = "class A {\n    public Object open = new Object();\n    private Object reset = new Object();\n    void f(Object session) {\n        synchronized (session) { g(); }\n        synchronized (open) { g(); }\n        synchronized (reset) { reset = new Object(); }\n    }\n}";
+        assert_eq!(flagged("java/synchronize-on-public-field", src), [5, 7]);
+        let rnd = "class A {\n    int f() {\n        SecureRandom s = new SecureRandom();\n        Random r = new Random();\n        return (int) (s.nextDouble() * 10) + (int) (r.nextDouble() * 10);\n    }\n}";
+        assert_eq!(flagged("java/random-float-as-int", rnd), [5]);
+    }
+
+    /// Measured on SonarQube 26.7: `this.field = x` writes a static field.
+    #[test]
+    fn instance_writes_static_through_this() {
+        let src = "class A {\n    private static Object service;\n    public void set(Object s) {\n        this.service = s;\n    }\n}";
+        assert_eq!(flagged("java/instance-writes-static", src), [4]);
+    }
+
+    /// Measured on SonarQube 26.7: `!= 0` and `> 0` too, for StringBuilder
+    /// and StringBuffer.
+    #[test]
+    fn builder_length_compared() {
+        let src = "class A {\n    void f(StringBuilder sb, StringBuffer b) {\n        if (sb.length() > 0) { g(); }\n        if (b.length() != 0) { g(); }\n        if (sb.length() == 0) { g(); }\n    }\n}";
+        assert_eq!(flagged("java/string-builder-empty", src), [3, 4, 5]);
     }
 }

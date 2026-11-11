@@ -19,12 +19,12 @@ the steps, the commands and what was learned along the way.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `43ed97a` | 68 of 68 | 0 |
+| sonda | TypeScript (TSX), Rust | `f9c9bba` | 69 of 69 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 121 of 171 | 11 |
-| eGovFrame common components² | Java (Spring) | `14313bc` | 3,650 of 4,878 | 912 |
+| eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
 | eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
@@ -405,6 +405,52 @@ SonarQube 26.7 the same way:
   labeled jump; S5361 reads the Java string (an escaped metacharacter is
   plain text).
 
+Then the rest of eGovFrame's differences, a few issues per key, in three
+calibration projects compiled for Java 17:
+
+- **Java versions.** SonarQube tags the rules it runs only from a Java
+  version (`java9` to `java22`): `List.reversed()` (S6876), `Math.clamp`
+  (S6885) and a `switch` over an `if` chain (S6880) need 21. sonda skips
+  each by its key when the build file targets an older Java, and
+  `StringBuilder.isEmpty()` (S7158) before 15.
+- **Across files.** S2387 is a field named like an ancestor's, in any file,
+  other than a static or private one. A reader's or stream's `close()`
+  throws an `IOException`, which doesn't pass `throws Exception` on (S112);
+  `AutoCloseable.close()` does.
+- **Suppressions.** `@SuppressWarnings("unused")` silences S1481, S1068,
+  S1144 and S1172.
+- **Broader.** S108 is every empty block: loops, branches, `synchronized`
+  and `try`. S1481 includes a local assigned but never read; S1700 a field
+  named like its class in any case; S1170 a `null` or constant expression;
+  S1948 a `List<?>`; S2445 a parameter; S6813 `@Autowired(required =
+  false)`; S6830 `@Bean("egov.x")`; S7158 a StringBuilder's length; S2119 a
+  `SecureRandom` kept in a local; S2142 an InterruptedException wrapped in
+  another; S2153 `int i = Integer.valueOf(c)`; S3358 each nested ternary,
+  in a condition too; S1075 `dir + "/" + name` in `new File`; S1117 a
+  for-each variable; S1118 a class with a Lombok logger; S1143 a `throw`,
+  in a catch inside the `finally` too; S1141 a `try` in a catch when an
+  outer `try` holds it all; S1872 `getSimpleName()`; S2209 and S2696
+  `this.field` for a static one; S2479 a no-break space; S2629 a call with
+  arguments as the message; S2677 `readLine() != null`; S3416
+  `LogFactory.getLog`; S4144 methods differing only in comments; S1126 a
+  comment before the second `return`; S6397 `[-]` and `[\\]`; S8786 two
+  repetitions around characters both could match (`.*[a-z].*`); S1319
+  `ConcurrentHashMap`.
+- **Narrower.** S1643 leaves a string declared inside the loop; S1871 an
+  `if`/`else` alike (S3923's); S128 a case ending in an `if`/`else` or a
+  `try` that returns every way; S2445 a field nothing reassigns; S2201
+  `parseInt` in a `try` that catches; S2140 a SecureRandom; S2692
+  `lastIndexOf`; S3064 anything but a field behind two null checks; S3824
+  an `if` doing more than the put; S6905 a query not passed to a call;
+  S6912 an `execute` that isn't JDBC's; S1319 `Vector`; S2629 a bare
+  `toString()` as the message.
+- **Positions.** An annotated field is reported at its name; S2168 at the
+  `synchronized`, S3824 at the `get`, S2737 at the `throw`, S6816 at the
+  `@Value`.
+- **A rule that checked something else.** S6816 is a `@Nullable` field
+  injected by `@Value("${name}")` without a default; sonda's rule checked
+  `@Autowired(required = false)` instead.
+
 ### Still open in Java
 
 On Commons Lang, 28 of SonarQube's issues and 2 of sonda's:
@@ -434,24 +480,41 @@ On apigen.springboot, 50 of SonarCloud's issues and 11 of sonda's:
   reports, all in files without anything unusual; and one of two S5869
   issues on the same constant, which sonda reports once.
 
-On eGovFrame's common components, 1,228 of SonarCloud's Java issues and
-912 of sonda's:
+On eGovFrame's common components, 1,152 of SonarCloud's Java issues and
+868 of sonda's:
 
-- **SonarCloud's newer rules and profile (1,008):** S9438 (968), added after
-  26.7; S7476 and S6201 (40), off in Sonar way.
+- **SonarCloud's newer rules and profile (1,020):** S9438 (968), S9396,
+  S9439, S9355 and S9436 (11), added after 26.7; S7476, S6201 and S6204
+  (41), off in Sonar way.
 - **Autoscan or a newer analyzer, where SonarQube 26.7 reports what sonda
-  reports:** S3752 (414), S112 (135, calls into a library it couldn't
-  resolve), S117 (58), S1452 (33, supertypes in a library), S2629, S3457,
-  S1192 and S2093, S115 on enum constants, S2143 on an import, S4488 (28,
-  not explained: 26.7 doesn't report it in small files either).
-- **Known gaps:** S1130 (53), whether a checked exception is thrown needs
-  the libraries' signatures; S5411 (11), a `Boolean` returned by another
-  file's method; S2259 (10), data flow.
-- **Deliberate:** S6035 (44), one issue per pattern, not one per group, as
-  for Python's S6353.
-- **Not yet looked into (about 100 SonarCloud only, 140 sonda only):** a
-  few issues each across some 60 keys, which the earlier fetch, stopped at
-  SonarCloud's search limit, didn't return.
+  reports (783):** S3752 (414), S112 (136, calls into a library it couldn't
+  resolve, or a library's exception thrown), S117 (58), S1452 (33,
+  supertypes in a library), S2629, S3457, S1192 and S2093, S115 on enum
+  constants, S2143 on an import, S4488 (28, not explained: 26.7 doesn't
+  report it in small files either).
+- **Not measured, needing a library's types (7):** S3753 (5) on
+  `@SessionAttributes`, S1989 on a servlet's `doGet`, S1130 on a library's
+  exception.
+- **SonarCloud differs from SonarQube 26.7, each measured on 26.7 (70 sonda
+  only, 4 SonarCloud only):** 26.7 reports unused imports (S1128, 23,
+  SonarCloud none under `upstream/`), `replaceAll` on a getter's string
+  (S5361, 16), catches with the same body (S2147, 11, a subclass's too),
+  `File.delete()` (S4042, 8), an override that only calls `super` (S1185),
+  a lambda with one statement in braces (S1602), `return null` for an array
+  (S1168), `new BigDecimal("100")` (S2129), `while (true)` left by an
+  exception (S2189), a static field set from an instance method (S2696),
+  `setAccessible` (S3011), a volatile `SecureRandom` (S3077), a method
+  always returning `true` (S3516) and a charset by name (S4719). It
+  doesn't report `throws NullPointerException` (S1695, 2), a Javadoc before
+  a local (S8491) or an email pattern given to `Pattern.compile` (S8786).
+- **Known gaps (75):** S1130 (53), whether a checked exception is thrown
+  needs the libraries' signatures; S5411 (11), a `Boolean` returned by
+  another file's method; S2259 (10), data flow; S3252 (1), a library's
+  constant reached through a subclass.
+- **Deliberate (61):** S6035 (44), S6353 (7) and S6397 (2), one issue per
+  pattern, not one per occurrence, as for Python's S6353; S5332 (7) and a
+  password passed to `setPassword` (1), sonda's rules only related to
+  SonarQube's, which check a URL or credential reaching an API.
 
 eGovFrame's JavaScript, measured [above](#javascript-in-the-browser-measured):
 4 of SonarCloud's issues and 279 of sonda's remain.

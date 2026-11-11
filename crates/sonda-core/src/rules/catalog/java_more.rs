@@ -128,8 +128,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2201")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "toLowerCase" "toUpperCase" "trim" "strip" "substring" "repeat" "toCharArray" "equals" "equalsIgnoreCase" "isEmpty" "startsWith" "endsWith" "hashCode" "toString" "parseInt" "parseLong" "parseDouble" "parseFloat" "parseBoolean" "length" "charAt" "concat" "compareTo" "isBlank" "matches"))) @match"#,
-            filter: None,
+            query: r#"(expression_statement (method_invocation name: (identifier) @n (#any-of? @n "toLowerCase" "toUpperCase" "trim" "strip" "substring" "repeat" "toCharArray" "equals" "equalsIgnoreCase" "isEmpty" "startsWith" "endsWith" "toString" "parseInt" "parseLong" "parseDouble" "parseFloat" "parseBoolean" "length" "charAt" "concat" "compareTo" "isBlank" "matches"))) @match"#,
+            filter: Some(Keep(result_matters)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1287,7 +1287,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1117")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(local_variable_declaration) @match"#,
+            // A for-each variable too (measured on SonarQube 26.7).
+            query: r#"(local_variable_declaration) @match
+(enhanced_for_statement name: (identifier) @match)"#,
             filter: Some(Keep(local_shadows_a_field)),
         },
         example: Some(Example {
@@ -1361,7 +1363,9 @@ fn jump_in_finally<'t>(finally: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     while let Some((node, in_loop)) = stack.pop() {
         match node.kind() {
             "lambda_expression" | "class_body" => continue,
-            "return_statement" => found.push(node),
+            // A throw too, in a catch inside the finally as well (measured on
+            // SonarQube 26.7).
+            "return_statement" | "throw_statement" => found.push(node),
             "break_statement" | "continue_statement" if !in_loop => found.push(node),
             _ => {}
         }
@@ -2327,6 +2331,64 @@ fn package_has_uppercase(package: Node, src: &[u8]) -> bool {
     name.iter().any(u8::is_ascii_uppercase)
 }
 
+/// `Integer.parseInt(s);` in a `try` that catches is a validation: whether
+/// it throws is the result (measured on SonarQube 26.7).
+fn result_matters(statement: Node, src: &[u8]) -> bool {
+    let parses = statement
+        .named_child(0)
+        .and_then(|call| call.child_by_field_name("name"))
+        .is_some_and(|n| text(n, src).starts_with(b"parse"));
+    if !parses {
+        return true;
+    }
+    let mut child = statement;
+    while let Some(parent) = child.parent() {
+        match parent.kind() {
+            "try_statement" if parent.child_by_field_name("body") == Some(child) => {
+                let mut c = parent.walk();
+                return !parent
+                    .named_children(&mut c)
+                    .any(|k| k.kind() == "catch_clause");
+            }
+            "method_declaration" | "lambda_expression" | "class_body" => return true,
+            _ => child = parent,
+        }
+    }
+    true
+}
+
+/// Whether control can't run past the statement: a jump, a block ending in
+/// one, an `if` with an `else` whose branches both do (measured on
+/// SonarQube 26.7), or a `try` whose body and catches all do.
+fn ends_in_a_jump(statement: Node) -> bool {
+    match statement.kind() {
+        "break_statement" | "return_statement" | "throw_statement" | "continue_statement" => true,
+        "block" => statements(statement)
+            .last()
+            .is_some_and(|l| ends_in_a_jump(*l)),
+        "if_statement" => {
+            statement
+                .child_by_field_name("consequence")
+                .is_some_and(ends_in_a_jump)
+                && statement
+                    .child_by_field_name("alternative")
+                    .is_some_and(ends_in_a_jump)
+        }
+        // A `try` whose body and every catch end in one.
+        "try_statement" => {
+            let mut c = statement.walk();
+            statement
+                .child_by_field_name("body")
+                .is_some_and(ends_in_a_jump)
+                && statement
+                    .named_children(&mut c)
+                    .filter(|k| k.kind() == "catch_clause")
+                    .all(|k| k.child_by_field_name("body").is_some_and(ends_in_a_jump))
+        }
+        _ => false,
+    }
+}
+
 fn case_falls_through<'t>(switch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let block = switch.child_by_field_name("body")?;
     let mut cursor = block.walk();
@@ -2340,21 +2402,7 @@ fn case_falls_through<'t>(switch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .find_map(|g| {
             let items = statements(*g);
             let last = items.iter().rev().find(|n| n.kind() != "switch_label")?;
-            let jumps = matches!(
-                last.kind(),
-                "break_statement" | "return_statement" | "throw_statement" | "continue_statement"
-            ) || last.kind() == "block" && {
-                let inner = statements(*last);
-                inner.last().is_some_and(|l| {
-                    matches!(
-                        l.kind(),
-                        "break_statement"
-                            | "return_statement"
-                            | "throw_statement"
-                            | "continue_statement"
-                    )
-                })
-            };
+            let jumps = ends_in_a_jump(*last);
             let has_body = items.iter().any(|n| n.kind() != "switch_label");
             // A comment on the case saying it falls through is deliberate.
             let after = g
@@ -2398,6 +2446,9 @@ fn local_shadows_a_field(declaration: Node, src: &[u8]) -> bool {
             return false;
         }
         owner = n.parent();
+    }
+    if declaration.kind() == "identifier" {
+        return fields.contains(&text(declaration, src));
     }
     declarator_names(declaration, src)
         .iter()
@@ -2548,5 +2599,29 @@ mod tests {
     fn commented_out_code_blocks() {
         let src = "class A { int f(int u) {\n//        final int max = u.length();\n//        if (max > u) {\n//            throw new IllegalStateException();\n/* assert u<0 && u>-9; */\nreturn u;\n} }";
         assert_eq!(flagged("java/commented-out-code", src), [2, 5]);
+    }
+
+    /// Measured on SonarQube 26.7: a for-each variable shadows a field; a
+    /// throw in a catch inside a `finally` jumps out of it; a case ending
+    /// in an `if`/`else` that returns both ways doesn't fall through;
+    /// `parseInt` in a `try` that catches is a validation.
+    #[test]
+    fn egov_more_shapes() {
+        let src = "class A {\n    private String item;\n    void f(java.util.List<String> items) {\n        for (String item : items) {\n            use(item);\n        }\n    }\n}";
+        assert_eq!(flagged("java/local-shadows-field", src), [4]);
+        let fin = "class A {\n    void f(AutoCloseable c) {\n        try {\n            c.hashCode();\n        } finally {\n            try {\n                c.close();\n            } catch (Exception ignore) {\n                throw new IllegalStateException(\"x\");\n            }\n        }\n    }\n}";
+        assert_eq!(flagged("java/jump-in-finally", fin), [9]);
+        let sw = "class A {\n    String f(int t, double v) {\n        switch (t) {\n            case 1:\n                if (v > 0) {\n                    return \"a\";\n                } else {\n                    return \"b\";\n                }\n            case 2:\n                g();\n            default:\n                return \"\";\n        }\n    }\n}";
+        assert_eq!(flagged("java/switch-case-falls-through", sw), [10]);
+        let parse = "class A {\n    boolean f(String s) {\n        try {\n            Integer.parseInt(s);\n        } catch (NumberFormatException e) {\n            return false;\n        }\n        Integer.parseInt(s);\n        s.hashCode();\n        return true;\n    }\n}";
+        assert_eq!(flagged("java/return-value-ignored", parse), [8]);
+    }
+
+    /// A case ending in a `try` whose body and catches all return doesn't
+    /// fall through.
+    #[test]
+    fn case_ending_in_a_returning_try() {
+        let src = "class A {\n    String f(int t) {\n        switch (t) {\n            case 1:\n                try {\n                    return g();\n                } catch (IllegalStateException e) {\n                    return \"\";\n                }\n            case 2:\n                h();\n            default:\n                return \"\";\n        }\n    }\n}";
+        assert_eq!(flagged("java/switch-case-falls-through", src), [10]);
     }
 }
