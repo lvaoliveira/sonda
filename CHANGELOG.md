@@ -164,6 +164,10 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- Duplication detection needs less than half the memory: a scan of VS
+  Code (4 million lines) peaked at 4.4 GB in its main process, now 1.7 GB,
+  and CPython's (1.7 million) at 1.4 GB, now 550 MB. Both scans are about
+  15% faster, with the same results.
 - The issue list answers about three times faster on a large project
   (0.26 s instead of 0.85 s for 20,000 issues): whether each issue's rule
   is turned off was asked once per issue, in each of the list's eight
