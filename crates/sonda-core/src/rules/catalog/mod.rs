@@ -34,6 +34,7 @@ mod java_flow;
 mod java_last;
 mod java_last2;
 mod java_more;
+pub(crate) mod java_project;
 mod java_regex;
 mod java_rest;
 mod java_security;

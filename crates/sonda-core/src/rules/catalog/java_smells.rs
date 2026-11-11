@@ -5,7 +5,7 @@ use super::java_bugs::{
     find_in_scope, has_annotation, has_modifier, modifiers_of, no_arguments, operator_text,
     owning_declaration, parameter_types, statements,
 };
-use super::java_extra::{declared_type, type_text};
+use super::java_extra::{declared_type, name_text, type_text};
 use super::java_security::{
     call_arguments, contains_ignoring_case, find_node, is_all_literals, method_name, string_value,
     text,
@@ -555,15 +555,11 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 2,
         sonar: &[exact("S1185")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(method_declaration) @match"#,
-            filter: Some(Keep(override_only_calls_super)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { @Override public String toString() { return super.toString(); } }",
-            good: "class A { @Override public String toString() { return \"A\"; } }",
+            bad: "class A extends B { @Override public void run() { super.run(); } }",
+            good: "class A extends B { @Override public void run() { log(); super.run(); } }",
         }),
     },
     Rule {
@@ -1501,8 +1497,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S3011")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_invocation name: (identifier) @n (#eq? @n "setAccessible") arguments: (argument_list (true))) @match"#,
-            filter: None,
+            query: r#"(method_invocation name: (identifier) @n (#eq? @n "setAccessible") arguments: (argument_list (true))) @match
+(method_invocation object: (_) name: (identifier) @n (#any-of? @n "set" "setInt" "setLong" "setBoolean" "setByte" "setChar" "setShort" "setFloat" "setDouble")) @match"#,
+            filter: Some(Keep(changes_accessibility_or_a_field)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -1546,8 +1543,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f(StringBuilder sb, int id) { sb.append(\"id=\" + id); } }",
-            good: "class A { void f(StringBuilder sb, int id) { sb.append(\"id=\").append(id); } }",
+            bad: "class A { void f(StringBuilder sb, int[] ids) { for (int id : ids) { sb.append(\"id=\" + id); } } }",
+            good: "class A { void f(StringBuilder sb, int[] ids) { for (int id : ids) { sb.append(\"id=\").append(id); } } }",
         }),
     },
     Rule {
@@ -1822,7 +1819,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4276")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(generic_type (type_identifier) @t (#any-of? @t "Function" "BiFunction" "Supplier")) @match"#,
+            query: r#"(generic_type (type_identifier) @t (#any-of? @t "Function" "BiFunction" "Supplier")) @match
+(generic_type (scoped_type_identifier (type_identifier) @s .) (#any-of? @s "Function" "BiFunction" "Supplier")) @match"#,
             filter: Some(Keep(has_a_specialised_form)),
         },
         example: Some(Example {
@@ -2124,8 +2122,8 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(throw_statement (object_creation_expression type: (type_identifier) @t (#any-of? @t "Exception" "RuntimeException" "Throwable" "Error"))) @match
-(throws (type_identifier) @match (#any-of? @match "Throwable" "RuntimeException" "Error"))"#,
-            filter: None,
+(throws (type_identifier) @match (#any-of? @match "Exception" "Throwable" "RuntimeException" "Error"))"#,
+            filter: Some(Keep(generic_exception_reported)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -3052,43 +3050,6 @@ fn catches_throwable(catch: Node, src: &[u8]) -> bool {
         })
 }
 
-fn override_only_calls_super(method: Node, src: &[u8]) -> bool {
-    if !has_annotation(method, b"Override", src) {
-        return false;
-    }
-    let Some(body) = method.child_by_field_name("body") else {
-        return false;
-    };
-    let items = statements(body);
-    let [only] = items.as_slice() else {
-        return false;
-    };
-    let call = match only.kind() {
-        "expression_statement" | "return_statement" => only.named_child(0),
-        _ => None,
-    };
-    let Some(call) = call.filter(|c| c.kind() == "method_invocation") else {
-        return false;
-    };
-    let name = method
-        .child_by_field_name("name")
-        .map_or(&b""[..], |n| text(n, src));
-    let params: Vec<&[u8]> = method
-        .child_by_field_name("parameters")
-        .map(|p| {
-            let mut c = p.walk();
-            p.named_children(&mut c)
-                .filter_map(|x| x.child_by_field_name("name").map(|n| text(n, src)))
-                .collect()
-        })
-        .unwrap_or_default();
-    let args: Vec<&[u8]> = call_arguments(call).iter().map(|a| text(*a, src)).collect();
-    call.child_by_field_name("object")
-        .is_some_and(|o| o.kind() == "super")
-        && method_name(call, src) == name
-        && args == params
-}
-
 /// An empty constructor is only redundant when it stands alone: next to
 /// others it is the no-argument variant callers can pick.
 fn is_the_only_public_constructor(ctor: Node) -> bool {
@@ -3316,6 +3277,12 @@ fn declares_a_thread_group(ty: Node, src: &[u8]) -> bool {
     };
     match declaration.kind() {
         "local_variable_declaration" | "field_declaration" => true,
+        "method_declaration" => {
+            declaration
+                .child_by_field_name("type")
+                .is_some_and(|t| t.id() == ty.id())
+                && !has_annotation(declaration, b"Override", src)
+        }
         "formal_parameter" | "spread_parameter" => declaration
             .parent()
             .and_then(|params| params.parent())
@@ -3493,6 +3460,22 @@ fn single_parenthesized_parameter(lambda: Node, src: &[u8]) -> bool {
 }
 
 fn lambda_only_forwards_its_parameter(lambda: Node, src: &[u8]) -> bool {
+    // `() -> x.run()`, `() -> A.B.get()`, `() -> xs[i].run()`: a method
+    // reference would do (measured on SonarQube 26.7).
+    let no_parameters = lambda
+        .child_by_field_name("parameters")
+        .is_some_and(|p| p.kind() == "formal_parameters" && p.named_child_count() == 0);
+    if no_parameters {
+        return lambda
+            .child_by_field_name("body")
+            .filter(|b| b.kind() == "method_invocation")
+            .is_some_and(|b| {
+                call_arguments(b).is_empty()
+                    && b.child_by_field_name("object").is_some_and(|o| {
+                        matches!(o.kind(), "identifier" | "field_access" | "array_access")
+                    })
+            });
+    }
     let Some((names, _)) = lambda_parameter_names(lambda, src) else {
         return false;
     };
@@ -3895,10 +3878,41 @@ fn takes_no_parameters(method: Node, src: &[u8]) -> bool {
     parameter_types(method, src).is_empty()
 }
 
+/// `sb.append(a + b)` in a loop, where it's repeated (measured on
+/// SonarQube 26.7); an unqualified `append` is the class's own method, and a
+/// lambda isn't a loop.
 fn appends_a_concatenation(call: Node, src: &[u8]) -> bool {
-    call_arguments(call)
-        .first()
-        .is_some_and(|a| concatenates_text(*a, src))
+    let mut in_loop = false;
+    let mut p = call.parent();
+    while let Some(n) = p {
+        match n.kind() {
+            "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" => {
+                in_loop = true;
+                break;
+            }
+            "lambda_expression"
+            | "method_declaration"
+            | "constructor_declaration"
+            | "class_body" => break,
+            _ => p = n.parent(),
+        }
+    }
+    // Any String `+`: literals alone too, or a String variable.
+    let string_concat = |a: Node| {
+        a.kind() == "binary_expression"
+            && operator_text(a, src) == b"+"
+            && find_node(a, |n| {
+                n.kind() == "string_literal"
+                    || n.kind() == "identifier"
+                        && type_text(declared_type(n, text(n, src), src), src) == b"String"
+            })
+            .is_some()
+    };
+    in_loop
+        && call.child_by_field_name("object").is_some()
+        && call_arguments(call)
+            .first()
+            .is_some_and(|a| string_concat(*a))
 }
 
 fn mutable_public_enum_field<'t>(enum_: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
@@ -3910,15 +3924,23 @@ fn mutable_public_enum_field<'t>(enum_: Node<'t>, _: &[u8]) -> Option<Node<'t>> 
         .find(|f| has_modifier(*f, "public") && !has_modifier(*f, "final"))
 }
 
+/// A ternary in a branch of another, at any depth short of a lambda or a
+/// class body: inside a call's argument too (measured on SonarQube 26.7).
 fn contains_a_nested_ternary(ternary: Node, _: &[u8]) -> bool {
     let nested = |n: Option<Node>| {
         n.is_some_and(|n| {
-            let inner = if n.kind() == "parenthesized_expression" {
-                n.named_child(0)
-            } else {
-                Some(n)
-            };
-            inner.is_some_and(|i| i.kind() == "ternary_expression")
+            let mut stack = vec![n];
+            while let Some(x) = stack.pop() {
+                match x.kind() {
+                    "ternary_expression" => return true,
+                    "lambda_expression" | "class_body" => continue,
+                    _ => {
+                        let mut c = x.walk();
+                        stack.extend(x.named_children(&mut c));
+                    }
+                }
+            }
+            false
         })
     };
     nested(ternary.child_by_field_name("consequence"))
@@ -4022,8 +4044,15 @@ fn method_duplicates_another(method: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
-    let substantial =
-        |b: Node| b.named_child_count() >= 2 && b.end_position().row - b.start_position().row >= 2;
+    // Single-statement methods aren't compared (measured on SonarQube 26.7).
+    let substantial = |b: Node| {
+        let mut c = b.walk();
+        b.named_children(&mut c)
+            .filter(|s| !s.kind().ends_with("comment"))
+            .count()
+            >= 2
+            && b.end_position().row - b.start_position().row >= 2
+    };
     if !substantial(body) {
         return false;
     }
@@ -4075,13 +4104,15 @@ fn has_a_specialised_form(generic: Node, src: &[u8]) -> bool {
     };
     let mut c = args.walk();
     let types: Vec<&[u8]> = args.named_children(&mut c).map(|t| text(t, src)).collect();
-    match (
-        text(generic.named_child(0).unwrap_or(generic), src),
-        types.as_slice(),
-    ) {
-        (b"Function", [a, b]) => *b == b"Boolean" || a == b,
-        (b"BiFunction", [a, b, c]) => a == b && b == c,
-        (b"Supplier", [a]) => *a == b"Boolean",
+    // A boxed primitive in or out has a primitive form (`IntFunction`,
+    // `ToIntFunction`, `IntSupplier`...), measured on SonarQube 26.7.
+    let number = |t: &[u8]| matches!(t, b"Integer" | b"Long" | b"Double");
+    let base = text(generic.named_child(0).unwrap_or(generic), src);
+    let base = base.rsplit(|b| *b == b'.').next().unwrap_or(base);
+    match (base, types.as_slice()) {
+        (b"Function", [a, b]) => number(a) || number(b) || *b == b"Boolean" || a == b,
+        (b"BiFunction", [a, b, c]) => a == b && b == c || number(c) || *c == b"Boolean",
+        (b"Supplier", [a]) => number(a) || *a == b"Boolean",
         _ => false,
     }
 }
@@ -4691,6 +4722,91 @@ fn compares_with_empty_string(node: Node, src: &[u8]) -> bool {
         )
 }
 
+/// A generic exception thrown, or declared by a method that has nothing to
+/// pass it on from (measured on SonarQube 26.7): one whose body calls
+/// nothing, and that doesn't override a method whose signature it must keep
+/// (`@Override`, `InvocationHandler.invoke`, `Callable.call`,
+/// `AutoCloseable.close`).
+fn generic_exception_reported(node: Node, src: &[u8]) -> bool {
+    if node.kind() == "throw_statement" {
+        return true;
+    }
+    let Some(method) = node
+        .parent()
+        .and_then(|t| t.parent())
+        .filter(|m| m.kind() == "method_declaration")
+    else {
+        return false;
+    };
+    if has_annotation(method, b"Override", src) {
+        return false;
+    }
+    let name = name_text(method, src);
+    let implements_one = enclosing_class(method).is_some_and(|c| {
+        let mut cur = c.walk();
+        c.children(&mut cur).any(|i| {
+            i.kind() == "super_interfaces"
+                && [
+                    (&b"InvocationHandler"[..], &b"invoke"[..]),
+                    (b"Callable", b"call"),
+                    (b"AutoCloseable", b"close"),
+                    (b"Closeable", b"close"),
+                ]
+                .iter()
+                .any(|(iface, m)| name == *m && count_word(text(i, src), iface) > 0)
+        })
+    });
+    // Calls in the body may pass on an `Exception`; `Throwable`,
+    // `RuntimeException` and `Error` are reported anyway.
+    !implements_one
+        && (text(node, src) != b"Exception"
+            || method.child_by_field_name("body").is_some_and(|b| {
+                find_node(b, |n| {
+                    matches!(
+                        n.kind(),
+                        "method_invocation"
+                            | "object_creation_expression"
+                            | "explicit_constructor_invocation"
+                    )
+                })
+                .is_none()
+            }))
+}
+
+/// `setAccessible(true)`, or a field written through reflection,
+/// `field.set(target, value)` on a `Field` the file shows (measured on
+/// SonarQube 26.7): a variable declared as one, or a call to the file's
+/// method returning one.
+fn changes_accessibility_or_a_field(call: Node, src: &[u8]) -> bool {
+    if method_name(call, src) == b"setAccessible" {
+        return true;
+    }
+    if call_arguments(call).len() != 2 {
+        return false;
+    }
+    let Some(object) = call.child_by_field_name("object") else {
+        return false;
+    };
+    let is_field = |t: &[u8]| matches!(t, b"Field" | b"java.lang.reflect.Field");
+    match object.kind() {
+        "identifier" => is_field(type_text(
+            declared_type(object, text(object, src), src),
+            src,
+        )),
+        "method_invocation" if object.child_by_field_name("object").is_none() => {
+            let name = method_name(object, src);
+            enclosing_class(object).is_some_and(|c| {
+                super::java_extra::class_members(c).into_iter().any(|m| {
+                    m.kind() == "method_declaration"
+                        && name_text(m, src) == name
+                        && is_field(type_text(m.child_by_field_name("type"), src))
+                })
+            })
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -4707,7 +4823,8 @@ mod tests {
             "java/collectors-to-list".into(),
         ];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
@@ -4798,7 +4915,7 @@ mod tests {
 
     #[test]
     fn strings_and_logging() {
-        let src = "class A { void f(int id) {\nlogger.debug(\"id=\" + id);\nlogger.debug(\"id={}\", id);\nlogger.debug(\"a\" + \"b\");\nsb.append(a + \"x\");\nsb.append(\"x\");\ns.replaceAll(\"a\", \"b\");\ns.replaceAll(\"a+\", \"b\");\ns.getBytes(\"UTF-8\");\nString t = \"a\tb\";\nString u = \"\" + String.valueOf(id);\nObject o = new Integer(3);\nObject p = new Integer();\n} }";
+        let src = "class A { void f(int id) {\nlogger.debug(\"id=\" + id);\nlogger.debug(\"id={}\", id);\nlogger.debug(\"a\" + \"b\");\nfor (A a : as) { sb.append(a + \"x\"); }\nsb.append(\"x\" + a);\ns.replaceAll(\"a\", \"b\");\ns.replaceAll(\"a+\", \"b\");\ns.getBytes(\"UTF-8\");\nString t = \"a\tb\";\nString u = \"\" + String.valueOf(id);\nObject o = new Integer(3);\nObject p = new Integer();\n} }";
         assert_eq!(flagged("java/log-argument-concatenation", src), [2]);
         assert_eq!(flagged("java/append-concatenation", src), [5]);
         assert_eq!(flagged("java/replace-all-literal", src), [7]);
@@ -5011,5 +5128,88 @@ mod tests {
         assert_eq!(flagged("java/legacy-date-time", src), [1]);
         let src = "import java.text.SimpleDateFormat;\nclass A { Object f(java.util.Calendar c) { return new SimpleDateFormat(\"y\"); } }";
         assert!(flagged("java/legacy-date-time", src).is_empty());
+    }
+
+    /// Measured on SonarQube 26.7 in a third round, one case a file.
+    #[test]
+    fn java_singles_measured_on_sonarqube() {
+        // S125: a line is code by its ending, an opening, or a keyword,
+        // `&&` or camelCase before a `;`; once per block.
+        for (line, code) in [
+            ("buffer.append(x);", false),
+            ("x = 1;", false),
+            ("new Foo();", false),
+            ("return;", false),
+            ("int x;", true),
+            ("return x;", true),
+            ("fooBar();", true),
+            ("a && b;", true),
+            ("if (x)", true),
+            ("}", true),
+            ("do not wrap a long word;", true),
+        ] {
+            let src = format!("class A {{ void f() {{\n// {line}\ng(); }} }}");
+            assert_eq!(
+                !flagged("java/commented-out-code", &src).is_empty(),
+                code,
+                "{line}"
+            );
+        }
+        // S1193: the catch's first statement, reported at the `if`.
+        let src = "class A { void f() {\ntry { g(); } catch (Exception e) {\nif (e instanceof X) { throw (X) e; }\n}\ntry { g(); } catch (Exception e) {\nh();\nif (e instanceof X) { throw (X) e; }\n}\n} }";
+        assert_eq!(flagged("java/instanceof-in-catch", src), [3]);
+        // S3024: in a loop, on a StringBuilder; not the class's own append.
+        let src = "class A { void append(String s) {}\nvoid f(java.util.List<String> xs, String y) {\nStringBuilder sb = new StringBuilder();\nfor (String x : xs) { sb.append(\"a\" + x); }\nfor (String x : xs) { sb.append(x + y); }\nfor (String x : xs) { append(\"a\" + x); }\nsb.append(\"a\" + y);\nxs.forEach(x -> sb.append(\"a\" + x));\n} }";
+        assert_eq!(flagged("java/append-concatenation", src), [4, 5]);
+        // S4144: single-statement methods aren't compared.
+        let src = "class A {\nint a(int x) { return x * 2; }\nint b(int x) { return x * 2; }\nint c(int x) {\nint y = x + 1;\nreturn y * 2;\n}\nint d(int x) {\nint y = x + 1;\nreturn y * 2;\n}\n}";
+        assert_eq!(flagged("java/identical-methods", src), [8]);
+        // S112: `throws Exception` with nothing to pass on; overrides kept.
+        let src = "class A implements java.lang.reflect.InvocationHandler {\npublic Object invoke(Object p, java.lang.reflect.Method m, Object[] a) throws Throwable { return null; }\nvoid g() throws Exception {}\nvoid f() throws Exception { g(); }\nvoid h() throws Throwable { g(); }\n}";
+        assert_eq!(flagged("java/generic-exception-thrown", src), [3, 5]);
+        // S106: any use of System.out or System.err.
+        let src = "class A { void f() {\np(System.err);\nSystem.out.println();\n} }";
+        assert_eq!(flagged("java/system-out", src), [2, 3]);
+        // S1612: a lambda without parameters calling a method on something.
+        let src = "class A { void f(Runnable r, Runnable[] rs) {\nRunnable a = () -> r.run();\nRunnable b = () -> rs[0].run();\nRunnable c = () -> run();\n} }";
+        assert_eq!(flagged("java/lambda-to-method-reference", src), [2, 3]);
+        // S3358: a ternary inside a call in another's branch.
+        let src = "class A { Object f(boolean a, boolean b) {\nreturn a ? \"x\" : g(b ? \"y\" : \"z\");\n} }";
+        assert_eq!(flagged("java/nested-ternary", src), [2]);
+        // S4276: a boxed primitive in or out.
+        let src = "import java.util.function.*;\nclass A {\nvoid f(Function<Integer, String> a) {}\nvoid g(Function<String, Long> b) {}\nvoid h(Function<String, Object> c) {}\n}";
+        assert_eq!(
+            flagged("java/specialised-functional-interface", src),
+            [3, 4]
+        );
+        // S3014: a method's return type.
+        let src = "class A {\nstatic ThreadGroup g() { return null; }\n}";
+        assert_eq!(flagged("java/thread-group", src), [2]);
+        // S3011: a field written through reflection.
+        let src = "import java.lang.reflect.Field;\nclass A {\nField get() { return null; }\nvoid f(Field fld, Object o) throws Exception {\nfld.setInt(o, 1);\nget().set(o, 2);\nmap.set(o, 3);\n}\n}";
+        assert_eq!(flagged("java/set-accessible", src), [5, 6]);
+    }
+
+    /// Measured on SonarQube 26.7, the rest of the third round.
+    #[test]
+    fn java_singles_measured_on_sonarqube_more() {
+        // S1182: a clone that doesn't call super.clone() itself, at its name.
+        let src = "class A implements Cloneable {\nObject copy() throws CloneNotSupportedException { return super.clone(); }\n@Override\npublic Object clone() { try { return copy(); } catch (CloneNotSupportedException e) { return null; } }\n}\nclass B implements Cloneable {\n@Override\npublic Object clone() throws CloneNotSupportedException { return super.clone(); }\n}";
+        assert_eq!(flagged("java/clone-without-cloneable", src), [4]);
+        // S2272: an anonymous iterator too; delegating to another's next() is fine.
+        let src = "class A { java.util.Iterator<String> f(java.util.Iterator<String> it) {\nreturn new java.util.Iterator<String>() {\npublic boolean hasNext() { return true; }\npublic String next() { return \"x\"; }\n};\n}\nclass B implements java.util.Iterator<String> {\njava.util.Iterator<String> it;\npublic boolean hasNext() { return it.hasNext(); }\npublic String next() { return it.next(); }\n}\n}";
+        assert_eq!(flagged("java/iterator-next-exception", src), [4]);
+        // S5164: its own remove(), not another ThreadLocal's.
+        let src = "class A {\nstatic final ThreadLocal<String> KEPT = new ThreadLocal<>();\nstatic final ThreadLocal<String> GONE = new ThreadLocal<>();\nvoid f() { GONE.remove(); }\n}";
+        assert_eq!(flagged("java/thread-local-never-removed", src), [2]);
+        // S2326: a nested class's own <V> isn't a use.
+        let src = "/** @param <V> Unused. */\nabstract class A<V> {\nstatic final class B<V> extends A<V> { V v; }\n}";
+        assert_eq!(flagged("java/unused-type-parameter", src), [2]);
+        // S3599: only an initializer block.
+        let src = "class A { Object f() {\nObject a = new java.util.HashMap<String, String>() {{ put(\"a\", \"b\"); }};\nObject b = new java.util.ArrayList<String>() { static final long serialVersionUID = 1L; { add(\"a\"); } };\nreturn a;\n} }";
+        assert_eq!(flagged("java/double-brace-initialization", src), [2]);
+        // S1135: each tag's line in a block comment.
+        let src = "/**\n * TODO one.\n * Some text.\n * throw new X(\"TODO\");\n */\nclass A {}";
+        assert_eq!(flagged("common/todo-comment", src), [2, 4]);
     }
 }

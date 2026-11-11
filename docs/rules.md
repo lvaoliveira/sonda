@@ -22403,13 +22403,13 @@ SonarQube: S1185
 Noncompliant:
 
 ```java
-class A { @Override public String toString() { return super.toString(); } }
+class A extends B { @Override public void run() { super.run(); } }
 ```
 
 Compliant:
 
 ```java
-class A { @Override public String toString() { return "A"; } }
+class A extends B { @Override public void run() { log(); super.run(); } }
 ```
 
 ## java/empty-method
@@ -23288,13 +23288,13 @@ SonarQube: S3024
 Noncompliant:
 
 ```java
-class A { void f(StringBuilder sb, int id) { sb.append("id=" + id); } }
+class A { void f(StringBuilder sb, int[] ids) { for (int id : ids) { sb.append("id=" + id); } } }
 ```
 
 Compliant:
 
 ```java
-class A { void f(StringBuilder sb, int id) { sb.append("id=").append(id); } }
+class A { void f(StringBuilder sb, int[] ids) { for (int id : ids) { sb.append("id=").append(id); } } }
 ```
 
 ## java/enum-public-mutable-field
@@ -25527,13 +25527,13 @@ SonarQube: S1948
 Noncompliant:
 
 ```java
-class A implements Serializable { private List<String> items; }
+class A implements Serializable { public List<String> items; }
 ```
 
 Compliant:
 
 ```java
-class A implements Serializable { private transient List<String> items; }
+class A implements Serializable { public transient List<String> items; }
 ```
 
 ## java/read-resolve-visibility
@@ -25923,7 +25923,7 @@ SonarQube: S1130
 Noncompliant:
 
 ```java
-class A { void g() throws IOException, RuntimeException {} }
+class A { void g() throws Exception, IOException {} }
 ```
 
 Compliant:

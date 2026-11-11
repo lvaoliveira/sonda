@@ -121,8 +121,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S106")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(method_invocation
-                        object: (field_access object: (identifier) @o field: (identifier) @f)
+            query: r#"((field_access object: (identifier) @o field: (identifier) @f)
                         (#eq? @o "System") (#any-of? @f "out" "err")) @match"#,
             filter: None,
         },

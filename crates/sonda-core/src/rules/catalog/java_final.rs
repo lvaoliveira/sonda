@@ -869,11 +869,7 @@ pub(super) static RULES: &[Rule] = &[
         severity: Minor,
         effort_minutes: 2,
         sonar: &[exact("S3878")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(method_invocation name: (identifier) @n (#any-of? @n "format" "printf" "asList")) @match"#,
-            filter: Some(Keep(passes_an_explicit_array)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
             bad: "class A { void f() { String s = String.format(\"%s\", new Object[] {x}); } }",
@@ -2051,13 +2047,6 @@ fn is_value_based_variable(ident: Node, src: &[u8]) -> bool {
     )
 }
 
-fn passes_an_explicit_array(call: Node, _: &[u8]) -> bool {
-    call_arguments(call).last().is_some_and(|a| {
-        a.kind() == "array_creation_expression"
-            && find_node(*a, |n| n.kind() == "array_initializer").is_some()
-    })
-}
-
 fn accessor_touches_another_field<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let members = class_members(class);
     let fields: Vec<&[u8]> = members
@@ -2294,7 +2283,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)

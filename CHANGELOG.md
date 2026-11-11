@@ -9,6 +9,20 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Java rules that need another file's declarations read a project index
+  (ADR-0020, extended to Java): each file summarizes its types, members and
+  calls passing an array, and names resolve through nested types, imports,
+  the package and on-demand imports. Seven rules use it, each measured on
+  SonarQube 26.7 with the parent or the callee in another file:
+  `java/useless-override` (S1185) knows the overridden method's
+  visibility, `java/serializable-field-type` (S1948) whether a class or a
+  field's type is serializable through its supertypes,
+  `java/subclass-adds-fields-not-equals` (S2160) an `equals` at any
+  distance, `java/varargs-array` (S3878) any constructor or method taking
+  varargs, `java/abstract-method-redeclared` (S3038) the interfaces
+  implemented, `java/override-drops-synchronized` (S3551) the overridden
+  method, and `java/inheritance-too-deep` (S110) the depth from `Object`.
+
 - Java rules follow the Java version a project targets: `[java] version`
   in `sonda.toml`, or, unset, what the root `pom.xml`
   (`maven.compiler.release`, `<release>`, `maven.compiler.source`,
@@ -233,8 +247,8 @@ file, the report formats and the public library API.
   references are reported as before.
 
 - Java, compared with SonarQube 26.7 on Apache Commons Lang (`5d2715b`,
-  Java 8): sonda raises 842 of SonarQube's 918 issues, where it raised
-  762, and 56 SonarQube doesn't, where it raised 683.
+  Java 8): sonda raises 889 of SonarQube's 918 issues, where it raised
+  762, and 2 SonarQube doesn't, where it raised 683.
   - `common/todo-comment` reports a TODO in a block comment (a Javadoc)
     on the tag's line, in every language.
   - `java/wrapper-constructor` reports `new String()` and `new
@@ -284,6 +298,32 @@ file, the report formats and the public library API.
     leaves `SimpleDateFormat` and counts an import.
   - `java/unused-private-field` no longer reports a field read into a
     local (`String result = cached;`).
+  - `java/commented-out-code` judges a line as SonarQube does for Java: a
+    closing or opening brace, `if(`, `for(` or the like, or a `;` after a
+    keyword, `&&` or a camelCase word; `buffer.append(x);` isn't code, a
+    line of prose ending in `;` after "long" is. Once per block.
+  - `common/todo-comment` reports each line with a tag in a block comment,
+    not only the first.
+  - Narrower: `java/instanceof-in-catch` is the catch's first statement,
+    reported at the `if`; `java/append-concatenation` is in a loop, on a
+    qualified `append`; `java/identical-methods` leaves single-statement
+    methods; `java/superfluous-throws` leaves unchecked exceptions;
+    `java/double-brace-initialization` is an anonymous class that is only
+    an initializer; `java/private-method-for-inner-class` is used by one
+    inner class, and is reported for each method; `java/varargs-called-with-null`
+    leaves a call a non-varargs overload takes; `java/iterator-next-exception`
+    leaves a `next()` that calls another iterator's.
+  - Broader: `java/generic-exception-thrown` reports `throws Exception` on
+    a method with nothing to pass it on from; `java/system-out` any use of
+    `System.out` or `System.err`; `java/clone-without-cloneable` a `clone()`
+    not calling `super.clone()` itself; `java/lambda-to-method-reference`
+    `() -> x.run()`; `java/thread-group` a return type; `java/nested-ternary`
+    a ternary inside a call in a branch; `java/specialised-functional-interface`
+    a boxed primitive in or out of a `Function`; `java/set-accessible` a
+    field written through reflection; `java/iterator-next-exception`
+    anonymous iterators; `java/thread-local-never-removed` a ThreadLocal
+    whose own `remove()` is never called; `java/unused-type-parameter` a
+    parameter a nested class declares again.
 
 Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,

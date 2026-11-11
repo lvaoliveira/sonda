@@ -201,15 +201,11 @@ pub(super) static RULES: &[Rule] = &[
         severity: Critical,
         effort_minutes: 10,
         sonar: &[exact("S1948")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(field_declaration) @match"#,
-            filter: Some(Keep(non_serializable_field)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A implements Serializable { private List<String> items; }",
-            good: "class A implements Serializable { private transient List<String> items; }",
+            bad: "class A implements Serializable { public List<String> items; }",
+            good: "class A implements Serializable { public transient List<String> items; }",
         }),
     },
     Rule {
@@ -717,50 +713,6 @@ fn casts_to_its_own_type(cast: Node, src: &[u8]) -> bool {
     }
 }
 
-fn non_serializable_field(field: Node, src: &[u8]) -> bool {
-    let Some(class) = enclosing_class(field) else {
-        return false;
-    };
-    if !implements(class, src, b"Serializable")
-        || has_modifier(field, "static")
-        || has_modifier(field, "transient")
-        || field.parent().and_then(|b| b.parent()) != Some(class)
-    {
-        return false;
-    }
-    let Some(ty) = field.child_by_field_name("type") else {
-        return false;
-    };
-    let head = text(ty, src)
-        .split(|&b| b == b'<')
-        .next()
-        .unwrap_or(&b""[..]);
-    // a bare type parameter of the class may be bound to anything
-    let is_type_parameter = ty.kind() == "type_identifier"
-        && class
-            .child_by_field_name("type_parameters")
-            .is_some_and(|tp| {
-                children_of_kind(tp, "type_parameter")
-                    .iter()
-                    .any(|p| p.named_child(0).is_some_and(|n| text(n, src) == head))
-            });
-    is_type_parameter
-        || matches!(
-            head,
-            b"List"
-                | b"Map"
-                | b"Set"
-                | b"Collection"
-                | b"Queue"
-                | b"Deque"
-                | b"Optional"
-                | b"Iterator"
-                | b"Stream"
-                | b"Thread"
-                | b"Comparator"
-        )
-}
-
 fn private_in_extensible_class(method: Node, src: &[u8]) -> bool {
     has_modifier(method, "private")
         && enclosing_class(method)
@@ -969,7 +921,8 @@ mod tests {
     fn flagged(rule: &str, src: &str) -> Vec<usize> {
         let cfg = Config::default();
         let rules = RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        let mut file = analyze("t", Lang::Java, src, &rules, &cfg, far_deadline()).unwrap();
+        crate::analysis::java_project_rules(std::slice::from_mut(&mut file), &rules);
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
@@ -1013,7 +966,7 @@ mod tests {
 
     #[test]
     fn serialization_and_types() {
-        let src = "class A implements Serializable {\nprivate List<String> items;\nprivate transient List<String> cache;\nprivate static List<String> shared;\nprivate String name;\nprivate Object readResolve() { return this; }\n}\nfinal class B implements Serializable { private Object readResolve() { return this; } }\nclass C { @Nullable int a() { return 0; } @Nullable Integer b() { return null; } void c(@CheckForNull boolean x) {} }";
+        let src = "class A implements Serializable {\npublic List<String> items;\nprivate transient List<String> cache;\nprivate static List<String> shared;\nprivate String name;\nprivate Object readResolve() { return this; }\n}\nfinal class B implements Serializable { private Object readResolve() { return this; } }\nclass C { @Nullable int a() { return 0; } @Nullable Integer b() { return null; } void c(@CheckForNull boolean x) {} }";
         assert_eq!(flagged("java/serializable-field-type", src), [2]);
         assert_eq!(flagged("java/read-resolve-visibility", src), [6]);
         assert_eq!(flagged("java/nullable-primitive", src), [9, 9]);
