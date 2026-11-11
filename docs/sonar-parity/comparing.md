@@ -203,6 +203,11 @@ behavior on the version measured.
   surrounds the construct: `synchronized` on a field is reported only when
   the class reassigns the field, `SELECT *` only in a string passed to a
   call, `parseInt` only outside a `try` that catches its failure.
+- **Libraries by version.** Some Java rules run only when a library of a
+  given version is on the classpath, which SonarQube reads from the jar's
+  name: S4488 needs `spring-web` 4.3 or later. A calibration jar named
+  `stubs.jar` turns such a rule off; name it like the library
+  (`spring-web-5.3.30.jar`).
 - **Check the fetch.** A first count of eGovFrame's issues stopped at the
   search limit and missed about 500 of them; compare the script's total
   with the project's page in SonarQube.

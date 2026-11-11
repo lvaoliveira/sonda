@@ -82,7 +82,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(class_declaration) @match"#,
-            filter: Some(Keep(session_attributes_never_completed)),
+            filter: Some(Find(session_attributes_never_completed)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -266,10 +266,22 @@ fn stores_a_non_serializable_object(call: Node, src: &[u8]) -> bool {
     .is_some()
 }
 
-fn session_attributes_never_completed(class: Node, src: &[u8]) -> bool {
-    (has_annotation(class, b"Controller", src) || has_annotation(class, b"RestController", src))
-        && has_annotation(class, b"SessionAttributes", src)
-        && count_word(text(class, src), b"setComplete") == 0
+/// Reported at the `@SessionAttributes` (measured on SonarQube 26.7).
+fn session_attributes_never_completed<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !(has_annotation(class, b"Controller", src) || has_annotation(class, b"RestController", src))
+        || count_word(text(class, src), b"setComplete") != 0
+    {
+        return None;
+    }
+    let mods = class
+        .children(&mut class.walk())
+        .find(|c| c.kind() == "modifiers")?;
+    let mut c = mods.walk();
+    mods.children(&mut c).find(|a| {
+        matches!(a.kind(), "annotation" | "marker_annotation")
+            && a.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"SessionAttributes")
+    })
 }
 
 fn single_line_is_not_indented(body: Node, _: &[u8]) -> bool {
@@ -345,5 +357,12 @@ mod tests {
             flagged("java/session-attribute-not-serializable", src),
             [4, 4]
         );
+    }
+
+    /// Reported at the `@SessionAttributes` (measured on SonarQube 26.7).
+    #[test]
+    fn session_attributes_at_the_annotation() {
+        let src = "@Controller\n@SessionAttributes(types = String.class)\npublic class Sess {\n    @RequestMapping(\"/c.do\")\n    public String c() {\n        return \"c\";\n    }\n}";
+        assert_eq!(flagged("java/session-attributes-not-completed", src), [2]);
     }
 }
