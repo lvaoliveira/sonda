@@ -151,6 +151,10 @@ behavior on the version measured.
   line isn't analyzed.
 - **Zero isn't a value.** SonarQube omits a measure that is 0, such as the
   cognitive complexity of a file without branches.
+- **Wording counts.** Java's S1133 skips a deprecation whose Javadoc tag
+  says what to use instead or when it goes, by matching words in the text.
+  Only a series of small files, one wording each, showed it: the elements
+  it skipped and the ones it reported looked alike.
 - **Counts.** A rule can report once per pattern in sonda and once per
   occurrence in SonarQube; the comparison counts each issue.
 
@@ -166,6 +170,7 @@ On the comparison server, as of 2026-11-11:
 | `sonda-compare-budgetthuis` | ha-budgetthuis-prices (Python) | `f563c0d` |
 | `sonda-calibrate-cc` | JavaScript and TypeScript calibration | |
 | `sonda-calibrate-py`, `sonda-calibrate-py13`, `sonda-calibrate-py14` | Python calibration | |
+| `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
+| `sonda-calibrate-java`, `sonda-calibrate-java-deprecated-*` | Java calibration | |
 
-Next: Java on Apache Commons Lang, then C# and C++ on public projects that
-SonarCloud analyzes.
+Next: C# and C++ on public projects that SonarCloud analyzes.

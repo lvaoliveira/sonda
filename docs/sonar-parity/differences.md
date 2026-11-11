@@ -22,7 +22,7 @@ the steps, the commands and what was learned along the way.
 | sonda | TypeScript (TSX), Rust | `8b30263` | 51 of 51 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
-| Apache Commons Lang | Java | `5d2715b` | 826 of 918 | 138 |
+| Apache Commons Lang | Java | `5d2715b` | 826 of 918 | 89 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -220,6 +220,20 @@ analyzed as Java 8, the version its `pom.xml` targets.
   argument or an override's parameter; S3706 is a collection's own
   `stream()`; S1301 counts `default`; S2390 is a subclass's static member;
   S1192 leaves exception messages out.
+- **Deprecated code (S1133).** An element deprecated by its Javadoc tag
+  alone is reported. One whose tag says what to do isn't: the tag's text,
+  in any case, holds both "use" and "instead", even inside other words
+  ("because", "Insteadly"), or "will be removed in" or "to be removed in"
+  on one line. "May be removed in", "Removed in 4" and "Prefer x instead"
+  are still reported, and the rest of the Javadoc doesn't count.
+- **Brain methods (S6541).** All four at once: 65 lines of code or more
+  (comments and blank lines don't count), a cyclomatic complexity of 15 or
+  more, control structures nested 3 deep (an `else if` doesn't nest), and
+  7 or more parameters, locals and fields used.
+- **Class coupling (S6539).** More than 20 of the project's own types:
+  fields, locals, parameters and type arguments. The JDK's types, the
+  class's nested types and type parameters, and a class only named in a
+  static call don't count.
 
 ### Still open in Java
 
@@ -228,11 +242,8 @@ analyzed as Java 8, the version its `pom.xml` targets.
   types); `java/useless-override` (40, all overrides widening
   `protected` to `public`, which needs the overridden method's
   declaration in another file).
-- **To measure:** `java/deprecated-code` (27 sonda only, with no visible
-  difference from the 273 both report); class coupling (13 under two
-  keys, SonarQube reports none at threshold 20 while sonda counts every
-  type name); `java/brain-method` (11); S2245 (11), S2184 (9), S2160 (6),
-  S3878 (6) and about 30 issues of one to three per key.
+- **To measure:** `java/brain-method` (2 sonda only), S2245 (11), S2184
+  (9), S2160 (6), S3878 (6) and about 30 issues of one to three per key.
 
 ## Rules that depend on knowing a type
 
