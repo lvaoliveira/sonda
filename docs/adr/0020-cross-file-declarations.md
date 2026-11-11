@@ -96,11 +96,16 @@ a constructor taking varargs. Java uses the same scheme:
   in `rules/catalog/java_project.rs`, with the same ids: useless overrides
   (S1185), non-serializable fields (S1948), subclasses adding fields to an
   `equals` (S2160), arrays passed as varargs (S3878), abstract methods an
-  interface declares (S3038), overrides dropping `synchronized` (S3551)
-  and inheritance depth (S110). Each was measured on SonarQube 26.7 with
-  files of their own, the parent or the callee in another file.
+  interface declares (S3038), overrides dropping `synchronized` (S3551),
+  inheritance depth (S110), and, after a Spring Boot application's
+  comparison, overrides without `@Override` (S1161), static methods
+  reached through a subclass (S3252) and class coupling (S6539), which
+  counts the project's types and not a library's. Each was measured on
+  SonarQube 26.7 with files of their own, the parent or the callee in
+  another file.
 - **Suppressions**: the summary's file also reports its lines with
-  `NOSONAR` or `sonda-ignore`, which silence what the project pass finds.
+  `NOSONAR` or `sonda-ignore`, and the declarations `@SuppressWarnings`
+  covers, which silence what the project pass finds.
 
 On Commons Lang, the seven rules went from 73 differences to none. Its scan
 (638 Java files) takes 3.9 s where it took 3.7 s, median of five on 12

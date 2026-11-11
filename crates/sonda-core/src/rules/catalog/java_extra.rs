@@ -1089,7 +1089,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JAVA,
             query: r#"(switch_block_statement_group) @match"#,
-            filter: Some(Keep(group_has_only_labels)),
+            filter: Some(Find(group_has_only_labels)),
         },
         example: Some(Example {
             lang: Lang::Java,
@@ -2091,21 +2091,28 @@ fn has_too_many_fields(class: Node, src: &[u8]) -> bool {
         > 20
 }
 
-fn group_has_only_labels(group: Node, src: &[u8]) -> bool {
+/// Labels that could be one comma-separated label: a run of `case`
+/// labels sharing the statements that follow, reported once at the last
+/// label, as SonarQube 26.7 does ("merge the previous cases into this one").
+/// A run with `default` can't be merged.
+fn group_has_only_labels<'t>(group: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let labels = children_of_kind(group, "switch_label");
-    let case_labels = labels
-        .iter()
-        .filter(|l| text(**l, src).starts_with(b"case"))
-        .count();
-    if labels.len() >= 2 && case_labels == labels.len() {
-        return true;
+    // Only the group that holds the statements reports the run.
+    if named_children(group).len() == labels.len() {
+        return None;
     }
-    labels.len() == 1
-        && case_labels == 1
-        && named_children(group).len() == 1
-        && group
-            .next_named_sibling()
-            .is_some_and(|n| n.kind() == "switch_block_statement_group")
+    let mut run = labels.clone();
+    let mut previous = group.prev_named_sibling();
+    while let Some(p) = previous.filter(|p| {
+        p.kind() == "switch_block_statement_group"
+            && named_children(*p).len() == children_of_kind(*p, "switch_label").len()
+    }) {
+        run.extend(children_of_kind(p, "switch_label"));
+        previous = p.prev_named_sibling();
+    }
+    (run.len() >= 2 && run.iter().all(|l| text(*l, src).starts_with(b"case")))
+        .then(|| labels.last().copied())
+        .flatten()
 }
 
 fn has_no_arguments(call: Node, _: &[u8]) -> bool {

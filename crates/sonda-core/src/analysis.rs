@@ -129,6 +129,8 @@ pub(crate) fn analyze(
         Lang::CSharp => suppressed_regions(src, root),
         // Rust's `#[allow(clippy::...)]`, which silences SonarQube's Clippy-based rules.
         Lang::Rust => crate::rust_suppress::regions(src, root),
+        // `@SuppressWarnings("java:S1234")` and `("all")`.
+        Lang::Java => java_suppressed_regions(src, root),
         _ => Vec::new(),
     };
     if lang == Lang::Rust {
@@ -345,6 +347,12 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node, deadline: Instant) -> Vec<(Stri
         && let Ok(json) = serde_json::to_string(&suppressing)
     {
         facts.push((JAVA_SUPPRESSED_LINES.to_string(), json));
+    }
+    let regions = java_suppressed_regions(ctx.src, root);
+    if !regions.is_empty()
+        && let Ok(json) = serde_json::to_string(&regions)
+    {
+        facts.push((SUPPRESSION_FACT.to_string(), json));
     }
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
@@ -680,6 +688,54 @@ pub(crate) fn cs_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
     apply_suppressions(files);
 }
 
+/// The declarations `@SuppressWarnings` silences, as SonarQube honors it:
+/// `"all"` every rule, `"java:S1234"` (or `"squid:S1234"`) the rules with that
+/// key; the compiler's own names (`"unchecked"`) silence nothing here.
+fn java_suppressed_regions(src: &str, root: Node) -> Vec<SuppressedRegion> {
+    let mut regions = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "annotation"
+            && n.child_by_field_name("name").is_some_and(|a| {
+                matches!(
+                    &src[a.byte_range()],
+                    "SuppressWarnings" | "java.lang.SuppressWarnings"
+                )
+            })
+            && let Some(declaration) = n
+                .parent()
+                .filter(|m| m.kind() == "modifiers")
+                .and_then(|m| m.parent())
+        {
+            let start = declaration.start_position().row + 1;
+            let end = declaration.end_position().row + 1;
+            let mut values = Vec::new();
+            let mut inner = vec![n];
+            while let Some(x) = inner.pop() {
+                if x.kind() == "string_literal" {
+                    values.push(src[x.byte_range()].trim_matches('"'));
+                    continue;
+                }
+                let mut c = x.walk();
+                inner.extend(x.named_children(&mut c));
+            }
+            for v in values {
+                let key = match v.split_once(':') {
+                    Some(("java" | "squid", key)) => Some(Some(key.to_string())),
+                    None if v == "all" => Some(None),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    regions.push(SuppressedRegion::new(key, start, end));
+                }
+            }
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    regions
+}
+
 /// The fact listing a Java file's lines with a suppression comment.
 const JAVA_SUPPRESSED_LINES: &str = "java-suppressed-lines";
 
@@ -708,7 +764,13 @@ pub(crate) fn java_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                     .iter()
                     .any(|(line, text)| *line == span.line && Suppression::of(text).covers(rule))
             });
-        if !suppressed {
+        let regions: Vec<SuppressedRegion> = f
+            .facts
+            .iter()
+            .find(|(k, _)| k == SUPPRESSION_FACT)
+            .and_then(|(_, json)| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        if !suppressed && !silenced_in(&regions, span.line, rule) {
             let issue = project_issue_at(r, &f.path, span, r.rule.message.to_string());
             f.issues.push(issue);
         }
@@ -1191,15 +1253,54 @@ fn tests_in_main(ctx: &Ctx, children: &[Node], rules: &RuleSet, issues: &mut Vec
         }
     }
     if let Some(rule) = rules.get(rules::JAVA_ASSERTION_IN_MAIN) {
+        // A call to a test library's assertion, not its import: a generator
+        // naming `Test.class` uses the library without asserting anything
+        // (measured on SonarQube 26.7).
+        let mut classes: Vec<&str> = Vec::new();
+        let mut functions: Vec<&str> = Vec::new();
         for import in children.iter().filter(|n| n.kind() == "import_declaration") {
             let t = ctx.text(*import);
-            if t.contains("org.junit.") || t.contains("org.assertj.") || t.contains("org.testng.") {
-                let msg = "Remove the test library from production code.".to_string();
-                issues.push(ctx.issue(rule, *import, msg, rule.rule.effort_minutes));
+            if !TEST_LIBRARIES.iter().any(|l| t.contains(l)) {
+                continue;
             }
+            let path = t
+                .trim_start_matches("import")
+                .trim()
+                .trim_end_matches(';')
+                .trim();
+            match path.strip_prefix("static") {
+                Some(member) => functions.extend(member.trim().rsplit('.').next()),
+                None => classes.extend(path.rsplit('.').next()),
+            }
+        }
+        if classes.is_empty() && functions.is_empty() {
+            return;
+        }
+        let asserts = |name: &str| name.starts_with("assert") || name == "fail";
+        let mut stack: Vec<Node> = children.to_vec();
+        while let Some(n) = stack.pop() {
+            if n.kind() == "method_invocation"
+                && let Some(name) = n.child_by_field_name("name").map(|x| ctx.text(x))
+            {
+                let on_class = n
+                    .child_by_field_name("object")
+                    .is_some_and(|o| classes.contains(&ctx.text(o)));
+                // `import static ...Assertions.assertThat;`, or `...Assert.*;`.
+                let imported = n.child_by_field_name("object").is_none()
+                    && (functions.contains(&name) || functions.contains(&"*"));
+                if (on_class || imported) && asserts(name) {
+                    let msg = "Remove this assertion from production code.".to_string();
+                    issues.push(ctx.issue(rule, n, msg, rule.rule.effort_minutes));
+                }
+            }
+            let mut c = n.walk();
+            stack.extend(n.named_children(&mut c));
         }
     }
 }
+
+/// Test libraries whose assertions don't belong in production code.
+const TEST_LIBRARIES: &[&str] = &["org.junit.", "org.assertj.", "org.testng.", "org.hamcrest."];
 
 /// The first part of the file the parser couldn't read, in source order.
 fn parse_failure(ctx: &Ctx, root: Node, rule: &ActiveRule, issues: &mut Vec<Issue>) {
@@ -1782,8 +1883,12 @@ fn run_queries(
 /// vulnerabilities, so vulnerability rules skip test files (as SonarQube
 /// does with test code).
 fn skipped_in_test_file(active: &ActiveRule, test_file: bool) -> bool {
-    test_file && active.rule.category == Category::Vulnerability
+    (test_file && active.rule.category == Category::Vulnerability)
+        || (!test_file && TEST_CODE_RULES.contains(&active.rule.id))
 }
+
+/// Rules about tests, which SonarQube runs on test code only.
+pub(crate) const TEST_CODE_RULES: &[&str] = &["java/incomplete-assertion"];
 
 /// Rules a file's name says don't apply: a package's `__init__.py` gathers
 /// its modules' names with `from .mod import *`, as SonarQube allows.
@@ -1828,6 +1933,37 @@ fn filtered_node<'t>(
         Some(Filter::Keep(keep)) => keep(node, bytes).then_some((node, None)),
         Some(Filter::Find(find)) => find(node, bytes).map(|n| (n, None)),
         Some(Filter::FindSaying(find)) => find(node, bytes).map(|(n, m)| (n, Some(m))),
+    }
+}
+
+/// Where SonarQube reports an issue about a Java declaration that has
+/// annotations: at its name, below them (measured on SonarQube 26.7, for
+/// classes, methods and constructors), not at the first annotation.
+fn java_anchor(node: Node) -> Node {
+    const DECLARATIONS: &[&str] = &[
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+        "annotation_type_declaration",
+        "method_declaration",
+        "constructor_declaration",
+    ];
+    if !DECLARATIONS.contains(&node.kind()) {
+        return node;
+    }
+    let mut cursor = node.walk();
+    let annotated = node
+        .children(&mut cursor)
+        .find(|c| c.kind() == "modifiers")
+        .is_some_and(|m| {
+            let mut c = m.walk();
+            m.children(&mut c)
+                .any(|a| matches!(a.kind(), "marker_annotation" | "annotation"))
+        });
+    match node.child_by_field_name("name") {
+        Some(name) if annotated => name,
+        _ => node,
     }
 }
 
@@ -1879,6 +2015,11 @@ fn run_queries_in(
                 .filter(|(node, _)| within.is_none_or(|w| w.covers(node.start_byte())));
             for (node, message) in found {
                 let msg = message.unwrap_or_else(|| active.rule.message.to_string());
+                let node = if lang == Lang::Java {
+                    java_anchor(node)
+                } else {
+                    node
+                };
                 issues.push(ctx.issue(active, node, msg, active.rule.effort_minutes));
             }
         }
@@ -4316,6 +4457,45 @@ pub(crate) mod tests {
         );
         let nosonar = "class A { int x; // NOSONAR\n}\n";
         assert_eq!(hits("a/A.java", nosonar), [rules::NOSONAR_COMMENT]);
+    }
+
+    /// Measured on SonarQube 26.7: an assertion called in production code,
+    /// not a test library imported or named (`Test.class` in a generator).
+    #[test]
+    fn assertions_in_production_code() {
+        let mut cfg = Config::default();
+        cfg.rules.enabled = vec![rules::JAVA_ASSERTION_IN_MAIN.to_string()];
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let lines = |path: &str, src: &str| -> Vec<usize> {
+            analyze(path, Lang::Java, src, &rules, &cfg, far_deadline())
+                .unwrap()
+                .issues
+                .iter()
+                .filter(|i| i.rule == rules::JAVA_ASSERTION_IN_MAIN)
+                .map(|i| i.line)
+                .collect()
+        };
+        let src = "package a;\nimport org.junit.jupiter.api.Test;\nimport org.junit.jupiter.api.Assertions;\nimport static org.assertj.core.api.Assertions.assertThat;\nclass A {\nObject t() { return Test.class; }\nvoid f(Object x) { Assertions.assertEquals(1, x); }\nvoid g(Object x) { assertThat(x); }\n}\n";
+        assert_eq!(lines("src/main/java/a/A.java", src), [7, 8]);
+        assert!(lines("src/test/java/a/A.java", src).is_empty());
+    }
+
+    /// `@SuppressWarnings` silences what its declaration covers, as SonarQube
+    /// honors it: "all", or the rule's key.
+    #[test]
+    fn java_suppress_warnings() {
+        let mut cfg = Config::default();
+        cfg.rules.enabled = vec!["java/empty-method".to_string()];
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let src = "class A {\n@SuppressWarnings(\"java:S1186\")\nvoid a() {}\n@SuppressWarnings({\"unchecked\", \"all\"})\nvoid b() {}\n@SuppressWarnings(\"unchecked\")\nvoid c() {}\nvoid d() {}\n}\n";
+        let lines: Vec<usize> = analyze("a/A.java", Lang::Java, src, &rules, &cfg, far_deadline())
+            .unwrap()
+            .issues
+            .iter()
+            .filter(|i| i.rule == "java/empty-method")
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(lines, [7, 8]);
     }
 
     #[test]

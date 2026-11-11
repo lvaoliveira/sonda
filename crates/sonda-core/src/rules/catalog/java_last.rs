@@ -1660,6 +1660,13 @@ fn public_member_lacks_javadoc<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t
 }
 
 fn private_field_used_in_one_method<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    // Lombok's accessors read the fields too (measured on SonarQube 26.7).
+    if [&b"Data"[..], b"Getter", b"Setter", b"Value"]
+        .iter()
+        .any(|a| has_annotation(class, a, src))
+    {
+        return None;
+    }
     let members = class_members(class);
     let whole = text(class, src);
     members.iter().find_map(|f| {

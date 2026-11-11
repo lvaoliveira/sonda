@@ -587,15 +587,11 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 2,
         sonar: &[exact("S1161")],
-        check: Check::Query {
-            langs: JAVA,
-            query: r#"(method_declaration) @match"#,
-            filter: Some(Keep(object_method_lacks_override)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { public String toString() { return \"\"; } }",
-            good: "class A { @Override public String toString() { return \"\"; } }",
+            bad: "class B { public void run() {} } class A extends B { public void run() {} }",
+            good: "class B { public void run() {} } class A extends B { @Override public void run() {} }",
         }),
     },
     Rule {
@@ -1730,31 +1726,19 @@ pub(super) fn is_routable_ipv4(string: Node, src: &[u8]) -> bool {
         && octets != [255, 255, 255, 255]
 }
 
-fn object_method_lacks_override(method: Node, src: &[u8]) -> bool {
-    if has_annotation(method, b"Override", src)
-        || has_modifier(method, "static")
-        || !method.parent().is_some_and(|b| {
-            b.kind() == "class_body" && b.parent().is_some_and(|c| c.kind() == "class_declaration")
-        })
-    {
-        return false;
-    }
-    let name = method
-        .child_by_field_name("name")
-        .map_or(&b""[..], |n| text(n, src));
-    let params = parameter_types(method, src);
-    match name {
-        b"toString" | b"hashCode" => params.is_empty() && has_modifier(method, "public"),
-        b"equals" => matches!(params.as_slice(), [t] if *t == b"Object"),
-        _ => false,
-    }
-}
-
 fn private_method_has_unused_parameter(method: Node, src: &[u8]) -> bool {
-    if method
-        .child_by_field_name("name")
-        .is_some_and(|n| text(n, src) == b"main")
-    {
+    // `main`, and the serialization hooks whose signature is fixed.
+    if method.child_by_field_name("name").is_some_and(|n| {
+        matches!(
+            text(n, src),
+            b"main"
+                | b"readObject"
+                | b"writeObject"
+                | b"readObjectNoData"
+                | b"readResolve"
+                | b"writeReplace"
+        )
+    }) {
         return false;
     }
     // Only methods nothing can override: callers and the body are all in view.
@@ -1874,8 +1858,17 @@ fn logs_then_throws(catch: Node, src: &[u8]) -> bool {
                 .is_some_and(|o| contains_ignoring_case(text(o, src), b"log"))
     })
     .is_some();
+    // The caught exception itself, `throw e`: wrapping it, or throwing
+    // another, isn't (measured on SonarQube 26.7).
+    let Some(name) = catch
+        .named_child(0)
+        .and_then(|p| p.child_by_field_name("name"))
+        .map(|n| text(n, src))
+    else {
+        return false;
+    };
     logs && find_in_scope(body, &["lambda_expression", "class_body"], |n| {
-        n.kind() == "throw_statement"
+        n.kind() == "throw_statement" && n.named_child(0).is_some_and(|t| text(t, src) == name)
     })
     .is_some()
 }
@@ -2516,7 +2509,8 @@ mod tests {
         assert_eq!(flagged("java/jdbc-driver-for-name", src), [9]);
         assert_eq!(flagged("java/aws-region-hardcoded", src), [10]);
         assert_eq!(flagged("java/region-not-set", src), [10]);
-        assert_eq!(flagged("java/missing-override", src), [11]);
+        // Object's methods aren't reported (measured on SonarQube 26.7).
+        assert!(flagged("java/missing-override", src).is_empty());
     }
 
     #[test]

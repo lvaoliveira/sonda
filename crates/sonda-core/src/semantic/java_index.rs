@@ -91,6 +91,9 @@ pub(crate) struct MethodDecl {
     /// parameters, and returns what that returns.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) only_calls_super: bool,
+    /// It has a body: not abstract, or an interface's default method.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) body: bool,
     /// The name, where issues about the method are reported.
     pub(crate) span: Span,
     /// The first and last lines of the whole declaration, annotations
@@ -119,6 +122,10 @@ pub(crate) struct TypeDecl {
     pub(crate) fields: Vec<FieldDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) methods: Vec<MethodDecl>,
+    /// The types it refers to anywhere in it, nested types included, each
+    /// once; not those it only creates with `new`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) uses: Vec<TypeRef>,
     /// The name.
     pub(crate) span: Span,
 }
@@ -157,6 +164,10 @@ pub(crate) struct FileIndex {
     pub(crate) types: Vec<TypeDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) sites: Vec<Site>,
+    /// Calls on a capitalized name, `Type.method(...)`, which may be a
+    /// static method reached through a subclass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) static_calls: Vec<Site>,
 }
 
 struct Extractor<'s> {
@@ -351,6 +362,7 @@ impl<'s> Extractor<'s> {
             modifiers,
             annotations,
             only_calls_super: self.only_calls_super(m, name_text, &names),
+            body: m.child_by_field_name("body").is_some(),
             span: name.map(|n| self.span(n)).unwrap_or_default(),
             lines: (m.start_position().row + 1, m.end_position().row + 1),
         }
@@ -461,6 +473,7 @@ impl<'s> Extractor<'s> {
             span: name.map(|n| self.span(n)).unwrap_or_default(),
             ..TypeDecl::default()
         };
+        decl.uses = self.uses(t);
         let in_interface = kind == "interface" || kind == "annotation";
         if let Some(body) = t.child_by_field_name("body") {
             let members = named(body).into_iter().flat_map(|m| {
@@ -497,6 +510,64 @@ impl<'s> Extractor<'s> {
             }
         }
         decl
+    }
+
+    /// Every type named in the declaration, each once, as written.
+    fn uses(&self, t: Node) -> Vec<TypeRef> {
+        let mut out: Vec<TypeRef> = Vec::new();
+        let mut stack = vec![t];
+        while let Some(n) = stack.pop() {
+            let found = match n.kind() {
+                "scoped_type_identifier" => Some(self.type_ref(n)),
+                "type_identifier"
+                    if n.parent()
+                        .is_none_or(|p| p.kind() != "scoped_type_identifier") =>
+                {
+                    Some(self.type_ref(n))
+                }
+                _ => None,
+            };
+            if let Some(r) = found {
+                if !out.contains(&r) {
+                    out.push(r);
+                }
+                continue;
+            }
+            // A type only created, `new X()`, isn't a dependency SonarQube
+            // counts (measured on 26.7); its arguments and body are.
+            let created = (n.kind() == "object_creation_expression")
+                .then(|| n.child_by_field_name("type").map(|t| t.id()))
+                .flatten();
+            let mut c = n.walk();
+            stack.extend(n.named_children(&mut c).filter(|k| Some(k.id()) != created));
+        }
+        out
+    }
+
+    /// `Type.method(...)` on a capitalized name.
+    fn static_call(&self, n: Node, within: &[String]) -> Option<Site> {
+        let object = n.child_by_field_name("object")?;
+        let qualifier = self.text(object);
+        let last = qualifier.rsplit('.').next()?;
+        if !matches!(object.kind(), "identifier" | "field_access")
+            || !last.chars().next().is_some_and(char::is_uppercase)
+        {
+            return None;
+        }
+        let args = n.child_by_field_name("arguments").map_or(0, |a| {
+            named(a)
+                .into_iter()
+                .filter(|x| !x.kind().ends_with("comment"))
+                .count()
+        });
+        Some(Site {
+            callee: self.text(n.child_by_field_name("name")?).to_string(),
+            qualifier: qualifier.split_whitespace().collect(),
+            constructor: false,
+            args,
+            within: within.to_vec(),
+            span: self.span(n),
+        })
     }
 
     fn site(&self, n: Node, within: &[String]) -> Option<Site> {
@@ -605,10 +676,15 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
             let decl = x.type_decl(n, &outer);
             inner.push(decl.name.clone());
             index.types.push(decl);
-        } else if matches!(n.kind(), "object_creation_expression" | "method_invocation")
-            && let Some(site) = x.site(n, &outer)
-        {
-            index.sites.push(site);
+        } else if matches!(n.kind(), "object_creation_expression" | "method_invocation") {
+            if let Some(site) = x.site(n, &outer) {
+                index.sites.push(site);
+            }
+            if n.kind() == "method_invocation"
+                && let Some(call) = x.static_call(n, &outer)
+            {
+                index.static_calls.push(call);
+            }
         }
         let mut c = n.walk();
         let kids: Vec<Node> = n.named_children(&mut c).collect();

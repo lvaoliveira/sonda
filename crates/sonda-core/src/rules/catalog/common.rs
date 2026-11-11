@@ -204,7 +204,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: crate::rules::JAVA_ASSERTION_IN_MAIN,
         name: "Assertions should not be used in production code",
-        description: "Test assertion libraries imported under src/main end up in production. Java files only.",
+        description: "A test library's assertion called under src/main runs in production. Java files only.",
         message: "",
         category: Bug,
         severity: Major,

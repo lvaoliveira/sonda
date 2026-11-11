@@ -2190,7 +2190,7 @@ SonarQube: S3414
 
 ## java/assertion-in-production
 
-**Assertions should not be used in production code.** Test assertion libraries imported under src/main end up in production. Java files only.
+**Assertions should not be used in production code.** A test library's assertion called under src/main runs in production. Java files only.
 
 SonarQube: S5960
 
@@ -23884,13 +23884,13 @@ SonarQube: S1110
 Noncompliant:
 
 ```java
-class A { int f() { return (1 + 2); } }
+class A { int f() { return ((1 + 2)); } }
 ```
 
 Compliant:
 
 ```java
-class A { int f() { return 1 + 2; } }
+class A { int f() { return (1 + 2); } }
 ```
 
 ## java/finalize-overridden
@@ -24674,13 +24674,13 @@ SonarQube: S1161
 Noncompliant:
 
 ```java
-class A { public String toString() { return ""; } }
+class B { public void run() {} } class A extends B { public void run() {} }
 ```
 
 Compliant:
 
 ```java
-class A { @Override public String toString() { return ""; } }
+class B { public void run() {} } class A extends B { @Override public void run() {} }
 ```
 
 ## java/unused-method-parameter
@@ -25491,13 +25491,13 @@ SonarQube: S1075
 Noncompliant:
 
 ```java
-class A { void f() { String p = "/home/app/data"; } }
+class A { void f() { String dataPath = "/home/app/data"; } }
 ```
 
 Compliant:
 
 ```java
-class A { void f() { String p = config.dataDir(); } }
+class A { void f() { String dataPath = config.dataDir(); } }
 ```
 
 ## java/redundant-cast
@@ -25815,13 +25815,13 @@ SonarQube: S899
 Noncompliant:
 
 ```java
-class A { void f() { dir.mkdirs(); } }
+class A { void f() { file.delete(); } }
 ```
 
 Compliant:
 
 ```java
-class A { void f() { if (!dir.mkdirs()) { fail(); } } }
+class A { void f() { if (!dir.delete()) { fail(); } } }
 ```
 
 ## java/instanceof-in-catch
@@ -31163,7 +31163,7 @@ SonarQube: S6539, S1200
 Noncompliant:
 
 ```java
-class A { B1 a1; B2 a2; B3 a3; B4 a4; B5 a5; B6 a6; B7 a7; B8 a8; B9 a9; B10 a10; B11 a11; B12 a12; B13 a13; B14 a14; B15 a15; B16 a16; B17 a17; B18 a18; B19 a19; B20 a20; B21 a21; }
+class A { B1 a1; B2 a2; B3 a3; B4 a4; B5 a5; B6 a6; B7 a7; B8 a8; B9 a9; B10 a10; B11 a11; B12 a12; B13 a13; B14 a14; B15 a15; B16 a16; B17 a17; B18 a18; B19 a19; B20 a20; B21 a21; } class B1 {} class B2 {} class B3 {} class B4 {} class B5 {} class B6 {} class B7 {} class B8 {} class B9 {} class B10 {} class B11 {} class B12 {} class B13 {} class B14 {} class B15 {} class B16 {} class B17 {} class B18 {} class B19 {} class B20 {} class B21 {}
 ```
 
 Compliant:

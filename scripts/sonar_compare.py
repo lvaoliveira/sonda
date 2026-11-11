@@ -93,14 +93,23 @@ class Sonar:
             out += self.pages(ISSUES, "issues", rules=value["val"], **query)
         return out
 
+    def organization(self, project):
+        """The project's organization on SonarCloud, which its profile and rule
+        searches need; None on a SonarQube server."""
+        component = self.get("/api/components/show", component=project)["component"]
+        return component.get("organization")
+
     def active_keys(self, project):
         """Language -> the rule keys (`S1234`) its quality profile has active."""
+        org = self.organization(project)
+        extra = {"organization": org} if org else {}
         out = {}
-        for profile in self.get("/api/qualityprofiles/search", project=project)["profiles"]:
+        for profile in self.get("/api/qualityprofiles/search", project=project,
+                                **extra)["profiles"]:
             out[profile["language"]] = {
                 r["key"].split(":", 1)[1]
                 for r in self.pages("/api/rules/search", "rules", qprofile=profile["key"],
-                                    activation="true", f="internalKey")
+                                    activation="true", f="internalKey", **extra)
             }
         return out
 
@@ -129,7 +138,9 @@ def match(sonar_lines, sonda_lines, tolerance):
     for distance in range(tolerance + 1):
         rest = []
         for a in left:
-            j = next((j for j, b in enumerate(right) if abs(a[0] - b[0]) == distance), None)
+            # A SonarQube issue without a line is on the file: any line will do.
+            j = next((j for j, b in enumerate(right)
+                      if abs(a[0] - b[0]) == distance or a[0] == 0 and distance == 0), None)
             if j is None:
                 rest.append(a)
             else:

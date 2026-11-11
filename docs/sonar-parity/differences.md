@@ -23,11 +23,16 @@ the steps, the commands and what was learned along the way.
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 889 of 918 | 2 |
+| apigen.springboot² | Java (Spring Boot) | `ef13838` | 121 of 171 | 11 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
 new in Python 3.15), so those are left out: the script skips any file
 SonarQube indexed without lines of code.
+
+² Compared with SonarCloud's analysis of the same commit, its built-in
+"Sonar way comprehensive" profile and a newer analyzer than SonarQube 26.7:
+where the two disagreed, SonarQube 26.7 was measured and is the reference.
 
 On sonda's own code, SonarQube raises nothing on the Python scripts, and
 its Rust issues are all cognitive complexity (33, every one matched). The
@@ -291,6 +296,40 @@ And in a third, with the other files' declarations
   not calling `super.clone()` itself; S1612 `() -> x.run()` too; S4276 a
   boxed primitive in or out; S3011 a field written by reflection.
 
+And on a Spring Boot application, apigen.springboot, each difference
+measured on SonarQube 26.7 with small files, Spring, Lombok and JUnit
+annotations as stubs, and a library as a jar on the classpath:
+
+- **Positions.** An issue about an annotated class, method or
+  constructor is on its name, below the annotations.
+- **Across files.** S1161 is an override of a method with a body without
+  `@Override`, not `Object`'s methods nor an abstract one implemented, and
+  `fit(double)` doesn't override `fit(N)`. S3252 is a static method reached
+  through a subclass. S6539 counts the project's own types: not a
+  library's, and not one only created with `new`.
+- **Narrower than sonda was:**
+  - S112 leaves `throw new RuntimeException(e)` in a catch; `throws
+    Exception` is excused only by a call that throws one (`call()`,
+    `close()`, a method of the class declaring it).
+  - S1118 leaves protected and package-private constructors.
+  - S1110 is doubled parentheses; S7158 leaves `equals("")`.
+  - S899 is a file's `delete()` and `createNewFile()`, not `mkdirs()`.
+  - S2139 is logging then `throw e`; S2737 leaves a rethrow before a broader
+    catch.
+  - S1450 leaves classes with Lombok's `@Data`, `@Getter`, `@Setter` or
+    `@Value`; S4030 is a list or set the method creates, not a map.
+  - S1452 leaves overrides; S1186 leaves an abstract class's empty methods
+    and constructors with parameters; S1192 leaves constants' own values;
+    S1172 leaves serialization hooks; S2970 is test code only; S5960 is an
+    assertion called, not a test library imported.
+  - S1075 is a path assigned to a name containing `path` or `filename`, or
+    passed to `new File`, absolute with three parts or more, or a URI.
+- **Each one.** S1165 every field, S5993 every constructor, S6208 every
+  group of labels at its last one, S4030 every collection, S3400 at the
+  `return`, and a regex in a constant passed to `matches` at the constant.
+- **`@SuppressWarnings`** silences as SonarQube honors it: `"all"` or a rule
+  key, over the annotated declaration.
+
 ### Still open in Java
 
 On Commons Lang, 29 of SonarQube's issues and 2 of sonda's:
@@ -307,6 +346,19 @@ On Commons Lang, 29 of SonarQube's issues and 2 of sonda's:
   line comment; `java/brain-method` (2), reported by SonarQube when their
   file is scanned alone or copied into a file of its own, but not in the
   whole project.
+
+On apigen.springboot, 50 of SonarCloud's issues and 11 of sonda's:
+
+- **SonarCloud's profile and version (45):** rules off in Sonar way and in
+  sonda by default (S6204, S6201: 24); rules added after SonarQube 26.7
+  (S9391, S9149, S9397: 14); S6096, from the commercial security analyzer
+  (7). Not counted against sonda.
+- **SonarCloud differs from SonarQube 26.7 (8 sonda only):** S6809 (4),
+  S3011 (2), S1481 and S3516, each measured to be reported by 26.7.
+- **Known gap, data flow (3):** S2259.
+- **Not explained (5):** three unused imports SonarCloud leaves and one it
+  reports, all in files without anything unusual; and one of two S5869
+  issues on the same constant, which sonda reports once.
 
 ## Rules that depend on knowing a type
 
