@@ -75,7 +75,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: r#"[(call_expression) (member_expression)] @match"#,
-            filter: Some(Find(uses_deprecated_api)),
+            filter: Some(FindSaying(uses_deprecated_api)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -1201,33 +1201,70 @@ fn enclosing_function_of(node: Node) -> Option<Node> {
 
 // ------------------------------------------------------------- S1874
 
-/// A deprecated member of a module or global object: `fs.exists`,
-/// `document.execCommand`.
-fn deprecated_member_of(object: &[u8], member: &[u8]) -> bool {
-    match (object, member) {
-        (b"util", m) => m.starts_with(b"is") && m != b"isDeepStrictEqual",
-        (b"fs", b"exists")
-        | (b"crypto", b"createCipher" | b"createDecipher")
-        | (b"url", b"parse")
-        | (b"process", b"binding")
-        | (b"ReactDOM", b"render" | b"hydrate" | b"findDOMNode" | b"unmountComponentAtNode")
-        | (b"React", b"createClass")
-        | (b"document", b"execCommand") => true,
-        _ => false,
-    }
+/// What replaces a deprecated member of a module or global object
+/// (`fs.exists`, `document.execCommand`), or None when it isn't one.
+fn member_replacement(object: &[u8], member: &[u8]) -> Option<&'static str> {
+    Some(match (object, member) {
+        (b"util", b"isArray") => "Array.isArray",
+        (b"util", m) if m.starts_with(b"is") && m != b"isDeepStrictEqual" => {
+            "a typeof or instanceof check"
+        }
+        (b"fs", b"exists") => "fs.access or fs.stat",
+        (b"crypto", b"createCipher") => "crypto.createCipheriv",
+        (b"crypto", b"createDecipher") => "crypto.createDecipheriv",
+        (b"url", b"parse") => "new URL()",
+        (b"process", b"binding") => "a public Node.js API",
+        (b"ReactDOM", b"render") => "createRoot from react-dom/client",
+        (b"ReactDOM", b"hydrate") => "hydrateRoot from react-dom/client",
+        (b"ReactDOM", b"findDOMNode") => "a ref",
+        (b"ReactDOM", b"unmountComponentAtNode") => "the root's unmount()",
+        (b"React", b"createClass") => "a class or function component",
+        (b"document", b"execCommand") => "navigator.clipboard to copy and paste",
+        _ => return None,
+    })
 }
 
-/// A deprecated API: called, or, for one of a module or global object, also
-/// referred to without a call (`typeof document.execCommand`), as SonarQube
-/// reports any use.
-fn uses_deprecated_api<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// What replaces a deprecated method of any object (`s.substr`), or None.
+fn method_replacement(method: &[u8]) -> Option<&'static str> {
+    Some(match method {
+        b"substr" => "slice or substring",
+        b"getYear" => "getFullYear",
+        b"setYear" => "setFullYear",
+        b"toGMTString" => "toUTCString",
+        b"__defineGetter__" | b"__defineSetter__" => "Object.defineProperty",
+        b"__lookupGetter__" | b"__lookupSetter__" => "Object.getOwnPropertyDescriptor",
+        _ => return None,
+    })
+}
+
+/// "NAME is deprecated: use REPLACEMENT.", the issue's message.
+fn deprecated(name: &[u8], replacement: &str) -> String {
+    format!(
+        "{} is deprecated: use {replacement}.",
+        String::from_utf8_lossy(name)
+    )
+}
+
+/// A deprecated API, with what replaces it: called, or, for one of a module
+/// or global object, also referred to without a call (`typeof
+/// document.execCommand`), as SonarQube reports any use. Assigning to one,
+/// as a test does to put a double in its place, doesn't use it.
+fn uses_deprecated_api<'t>(node: Node<'t>, src: &[u8]) -> Option<(Node<'t>, String)> {
     if node.kind() == "member_expression" {
-        let called = node.parent().is_some_and(|p| {
-            p.kind() == "call_expression" && p.child_by_field_name("function") == Some(node)
-        });
-        let part = |f| node.child_by_field_name(f).map(|n| text(n, src));
-        return (!called && deprecated_member_of(part("object")?, part("property")?))
-            .then_some(node);
+        let is = |kind, field| {
+            node.parent()
+                .is_some_and(|p| p.kind() == kind && p.child_by_field_name(field) == Some(node))
+        };
+        if is("call_expression", "function") || is("assignment_expression", "left") {
+            return None;
+        }
+        let object = text(node.child_by_field_name("object")?, src);
+        let member = text(node.child_by_field_name("property")?, src);
+        let replacement = member_replacement(object, member)?;
+        return Some((
+            node,
+            deprecated(&[object, b".", member].concat(), replacement),
+        ));
     }
     let call = node;
     let function = call.child_by_field_name("function")?;
@@ -1240,19 +1277,21 @@ fn uses_deprecated_api<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .child_by_field_name("object")
         .map(|o| text(o, src))
         .unwrap_or_default();
-    let deprecated = match (object, member) {
-        (o, m) if deprecated_member_of(o, m) => true,
-        (b"Object" | b"Reflect", _) => false,
-        (_, b"substr") => true,
-        (_, b"getYear" | b"setYear" | b"toGMTString") => true,
-        (
-            _,
-            b"__defineGetter__" | b"__defineSetter__" | b"__lookupGetter__" | b"__lookupSetter__",
-        ) => true,
-        _ => false,
-    };
-    if deprecated || matches!(t, b"escape" | b"unescape") {
-        return Some(call);
+    if let Some(replacement) = member_replacement(object, member) {
+        return Some((
+            call,
+            deprecated(&[object, b".", member].concat(), replacement),
+        ));
+    }
+    if !matches!(object, b"Object" | b"Reflect")
+        && let Some(replacement) = method_replacement(member)
+    {
+        return Some((call, deprecated(member, replacement)));
+    }
+    match t {
+        b"escape" => return Some((call, deprecated(t, "encodeURIComponent"))),
+        b"unescape" => return Some((call, deprecated(t, "decodeURIComponent"))),
+        _ => {}
     }
     // Same-file functions marked @deprecated.
     if function.kind() == "identifier"
@@ -1260,7 +1299,11 @@ fn uses_deprecated_api<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             .iter()
             .any(|n| n.as_slice() == t)
     {
-        return Some(call);
+        let name = String::from_utf8_lossy(t);
+        return Some((
+            call,
+            format!("{name} is marked @deprecated: use what its comment says replaces it."),
+        ));
     }
     None
 }
@@ -2607,5 +2650,52 @@ mod tests {
     fn deprecated_members_referred_to() {
         let src = "function copy(t) {\n  if (typeof document.execCommand !== 'function') return false;\n  return document.execCommand('copy');\n}\nconst s = x.substr;";
         assert_eq!(flagged("js/deprecated-api", src), [2, 3]);
+    }
+
+    /// A test that puts a double in a deprecated API's place, to test the
+    /// code that falls back to it, doesn't use it.
+    #[test]
+    fn deprecated_member_assigned_to_is_not_used() {
+        let src = "document.execCommand = () => false;\nconst ok = document.execCommand('copy');";
+        assert_eq!(flagged("js/deprecated-api", src), [2]);
+    }
+
+    /// Each issue names what replaces the API it found.
+    #[test]
+    fn deprecated_api_names_its_replacement() {
+        let src = "typeof document.execCommand;\n\
+            fs.exists(p, cb);\n\
+            s.substr(1, 2);\n\
+            d.getYear();\n\
+            escape(s);\n\
+            /** @deprecated use g */\n\
+            function f() {}\n\
+            f();";
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let file = analyze("t", Lang::JavaScript, src, &rules, &cfg, far_deadline()).unwrap();
+        let messages: Vec<_> = file
+            .issues
+            .iter()
+            .filter(|i| i.rule == "js/deprecated-api")
+            .map(|i| (i.line, i.message.as_str()))
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                (
+                    1,
+                    "document.execCommand is deprecated: use navigator.clipboard to copy and paste."
+                ),
+                (2, "fs.exists is deprecated: use fs.access or fs.stat."),
+                (3, "substr is deprecated: use slice or substring."),
+                (4, "getYear is deprecated: use getFullYear."),
+                (5, "escape is deprecated: use encodeURIComponent."),
+                (
+                    8,
+                    "f is marked @deprecated: use what its comment says replaces it."
+                ),
+            ]
+        );
     }
 }

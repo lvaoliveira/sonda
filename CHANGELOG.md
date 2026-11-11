@@ -225,6 +225,13 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- `js/deprecated-api` names what replaces the API it found
+  ("document.execCommand is deprecated: use navigator.clipboard to copy
+  and paste.") in place of "Use the replacement.", and no longer reports
+  an assignment to a deprecated member, such as a test putting a double in
+  `document.execCommand`'s place: that doesn't use it. Calls and other
+  references are reported as before.
+
 - Java, compared with SonarQube 26.7 on Apache Commons Lang (`5d2715b`,
   Java 8): sonda raises 826 of SonarQube's 918 issues, where it raised
   762, and 89 SonarQube doesn't, where it raised 683.
