@@ -156,8 +156,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S6213"), related("S1190")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(local_variable_declaration declarator: (variable_declarator name: (identifier) @match (#any-of? @match "yield" "record" "sealed")))
-(formal_parameter name: (identifier) @match (#any-of? @match "yield" "record" "sealed"))"#,
+            query: r#"(variable_declarator name: (identifier) @match (#any-of? @match "var" "yield" "record" "sealed"))
+(formal_parameter name: (identifier) @match (#any-of? @match "var" "yield" "record" "sealed"))
+(catch_formal_parameter name: (identifier) @match (#any-of? @match "var" "yield" "record" "sealed"))
+(enhanced_for_statement name: (identifier) @match (#any-of? @match "var" "yield" "record" "sealed"))"#,
             filter: None,
         },
         example: Some(Example {
@@ -2281,5 +2283,12 @@ mod tests {
         assert_eq!(flagged("java/octal-literal", src), [6]);
         assert_eq!(flagged("java/missing-braces", src), [7]);
         assert_eq!(flagged("java/if-else-if-without-else", src), [7]);
+    }
+
+    /// Measured on SonarQube 26.7: any name, not only a local's.
+    #[test]
+    fn restricted_identifiers_everywhere() {
+        let src = "class A {\nint var;\nvoid f(int yield) {\nfor (String record : xs) {}\ntry { g(); } catch (RuntimeException var) {}\nint sealed = 1;\n}\n}";
+        assert_eq!(flagged("java/future-keyword-name", src), [2, 3, 4, 5, 6]);
     }
 }

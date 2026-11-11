@@ -171,6 +171,6 @@ On the comparison server, as of 2026-11-11:
 | `sonda-calibrate-cc` | JavaScript and TypeScript calibration | |
 | `sonda-calibrate-py`, `sonda-calibrate-py13`, `sonda-calibrate-py14` | Python calibration | |
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
-| `sonda-calibrate-java`, `sonda-calibrate-java-deprecated-*` | Java calibration | |
+| `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration | |
 
 Next: C# and C++ on public projects that SonarCloud analyzes.

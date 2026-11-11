@@ -22,7 +22,7 @@ the steps, the commands and what was learned along the way.
 | sonda | TypeScript (TSX), Rust | `8b30263` | 51 of 51 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
-| Apache Commons Lang | Java | `5d2715b` | 826 of 918 | 89 |
+| Apache Commons Lang | Java | `5d2715b` | 842 of 918 | 56 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -235,15 +235,53 @@ analyzed as Java 8, the version its `pom.xml` targets.
   class's nested types and type parameters, and a class only named in a
   static call don't count.
 
+And in a second round:
+
+- **Loop counters (S127).** A write in the body to a variable the `for`
+  header declares, each one, at any depth; not a variable declared before
+  the loop, even one the header updates or compares.
+- **Restricted names (S6213).** `var`, `yield` and `record` as any name: a
+  local, a field, a parameter, a catch or for-each variable.
+- **Int arithmetic widened (S2184).** Declared, assigned with `=`,
+  returned, or passed where a long is expected; a division only when the
+  result becomes a `double` or `float`. `r += x * y` isn't reported.
+- **Narrower than sonda was:**
+  - S1118 leaves a private nested class and a class with a nested enum or
+    interface.
+  - S1452 leaves private methods and `Collector<T, ?, R>`.
+  - S1319 is public fields and public methods' types; protected and
+    package-private ones aren't reported.
+  - S1845 leaves a getter with its field's name. A field and a method
+    differing by case are left when the field is less visible than the
+    method: fitted to what was observed, not understood.
+  - S117 leaves a final variable named like a constant (`MAX_SIZE`).
+  - S116 leaves static fields, constant or not.
+  - S1488 leaves an annotated local and is reported at the declaration.
+  - S2129 reports a `BigInteger` or `BigDecimal` from a string literal only.
+  - S1121 leaves `(x = f()) != 0` wherever it is.
+  - S2143 counts `Date` and `Calendar`, an import included, not
+    `SimpleDateFormat`, `DateFormat`, `java.sql` or a name written out.
+
 ### Still open in Java
 
-- **Known gaps:** S2259 (15, null dereferences need data flow); S1948
-  (14 and 3, whether a field's type is serializable needs other files'
-  types); `java/useless-override` (40, all overrides widening
-  `protected` to `public`, which needs the overridden method's
-  declaration in another file).
-- **To measure:** `java/brain-method` (2 sonda only), S2245 (11), S2184
-  (9), S2160 (6), S3878 (6) and about 30 issues of one to three per key.
+- **Known gaps**, needing other files' declarations, which sonda indexes
+  for C# only ([ADR-0020](../adr/0020-cross-file-declarations.md)):
+  - `java/useless-override` (40 sonda only): overrides widening
+    `protected` to `public`; whether that is all they do depends on the
+    overridden method.
+  - S1948 (14 and 3): whether a field's type is serializable.
+  - S2160 (6): a subclass adding fields to a parent, in another file, that
+    defines `equals`.
+  - S3878 (6): an array passed to a constructor's varargs, declared in
+    another file.
+- **Known gap, data flow:** S2259 (15), null dereferences.
+- **Deliberate:** S2245 (11). `java/random-secret` reports a random value
+  that becomes a secret; SonarQube asks for a review of every
+  `ThreadLocalRandom` and random-utility call.
+- **Not explained:** `java/brain-method` (2). Both methods are reported
+  when their file is scanned alone, or copied as they are into a file of
+  their own; in the whole project they aren't, with or without the tests.
+- About 30 issues of one or two per key, still to measure.
 
 ## Rules that depend on knowing a type
 

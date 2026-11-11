@@ -226,8 +226,8 @@ file, the report formats and the public library API.
 ### Changed rule results
 
 - Java, compared with SonarQube 26.7 on Apache Commons Lang (`5d2715b`,
-  Java 8): sonda raises 826 of SonarQube's 918 issues, where it raised
-  762, and 89 SonarQube doesn't, where it raised 683.
+  Java 8): sonda raises 842 of SonarQube's 918 issues, where it raised
+  762, and 56 SonarQube doesn't, where it raised 683.
   - `common/todo-comment` reports a TODO in a block comment (a Javadoc)
     on the tag's line, in every language.
   - `java/wrapper-constructor` reports `new String()` and `new
@@ -254,6 +254,29 @@ file, the report formats and the public library API.
   - `java/class-coupling` counts the project's own types, not the JDK's,
     the class's nested types or its type parameters, and is reported past
     20 of them.
+  - `java/loop-bound-changes` reports each write, in a `for` loop's body,
+    to a counter its header declares, and no longer a variable declared
+    before the loop. `java/future-keyword-name` reports `var` too, and
+    fields, catch and for-each variables named `var`, `yield` or `record`.
+  - `java/multiplication-overflow` also reports int arithmetic returned as
+    a long, passed as one (to a method of the file, `Math.min`/`max` beside
+    a long, `TimeUnit`), and a division that becomes a `double`; operands
+    include `Calendar.get`, the file's int methods, `Integer.MAX_VALUE`
+    and nested arithmetic. A compound `+=` isn't reported.
+  - Narrower, as SonarQube is: `java/utility-class-constructor` leaves a
+    private nested class and a class with a nested enum or interface;
+    `java/wildcard-return-type` leaves private methods and `Collector`;
+    `java/concrete-collection-type` reports public fields and methods only;
+    `java/names-differ-by-case` leaves a field's getter of the same name,
+    and a field less visible than the method; `java/local-variable-name`
+    leaves a final variable named like a constant; `java/field-name` leaves
+    static fields; `java/return-after-assignment` leaves an annotated
+    local; `java/wrapper-constructor` reports a `BigInteger` or
+    `BigDecimal` from a string literal only; `java/assignment-in-subexpression`
+    leaves an assignment compared in parentheses; `java/legacy-date-time`
+    leaves `SimpleDateFormat` and counts an import.
+  - `java/unused-private-field` no longer reports a field read into a
+    local (`String result = cached;`).
 
 Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,

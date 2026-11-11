@@ -149,20 +149,20 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/loop-bound-changes",
         name: "for loop stop conditions should be invariant",
-        description: "Changing the bound inside the body makes the loop's length hard to predict.",
-        message: "Compute the bound once, before the loop.",
+        description: "Changing a counter the loop's header declares, inside its body, makes the loop hard to follow.",
+        message: "Don't change the loop's counter in its body.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S127")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(for_statement) @match"#,
-            filter: Some(Find(body_modifies_the_loop_bound)),
+            query: r#"[(assignment_expression) (update_expression)] @match"#,
+            filter: Some(Keep(writes_a_loop_counter)),
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f(int n) { for (int i = 0; i < n; i++) { n--; } } }",
+            bad: "class A { void f(int n) { for (int i = 0; i < n; i++) { i++; } } }",
             good: "class A { void f(int n) { for (int i = 0; i < n; i++) { g(); } } }",
         }),
     },
@@ -468,55 +468,33 @@ fn keyword_follows_the_brace(keyword: Node, _: &[u8]) -> bool {
     preceding_brace_row(keyword).is_some_and(|row| row == keyword.start_position().row)
 }
 
-fn body_modifies_the_loop_bound<'t>(for_statement: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let condition = for_statement.child_by_field_name("condition")?;
-    let mut cursor = for_statement.walk();
-    let has_updates = for_statement
-        .children_by_field_name("update", &mut cursor)
-        .next()
-        .is_some();
-    // The counter itself (compared and updated by the loop header) is also
-    // off limits inside the body.
-    let mut bound = compared_variables(condition, src);
-    // Every variable the header declares is off limits in the body, and a
-    // loop with no update clause only guards what it declares.
-    let declared = header_declarations(for_statement, src);
-    if !has_updates {
-        bound.retain(|b| declared.contains(b));
-    }
-    for d in declared {
-        if !bound.contains(&d) {
-            bound.push(d);
+/// A write, in a `for` loop's body, to a variable the loop's header
+/// declares: SonarQube 26.7 reports each one (measured), and leaves
+/// variables declared before the loop, even when the header updates them.
+fn writes_a_loop_counter(write: Node, src: &[u8]) -> bool {
+    let mut child = write;
+    let mut parent = write.parent();
+    while let Some(p) = parent {
+        match p.kind() {
+            "lambda_expression"
+            | "class_body"
+            | "method_declaration"
+            | "constructor_declaration" => {
+                return false;
+            }
+            "for_statement"
+                if p.child_by_field_name("body")
+                    .is_some_and(|b| b.id() == child.id())
+                    && writes_one_of(write, &header_declarations(p, src), src) =>
+            {
+                return true;
+            }
+            _ => {}
         }
+        child = p;
+        parent = p.parent();
     }
-    let body = for_statement.child_by_field_name("body")?;
-    find_node(body, |n| writes_one_of(n, &bound, src))
-}
-
-/// The variables a comparison in the condition reads directly: method calls
-/// (`list.size()`) aren't plain variables, and a bare flag is a different
-/// idiom.
-fn compared_variables(condition: Node, src: &[u8]) -> Vec<Vec<u8>> {
-    let mut compared: Vec<Vec<u8>> = Vec::new();
-    let mut stack = vec![condition];
-    while let Some(x) = stack.pop() {
-        if x.kind() == "binary_expression"
-            && x.child_by_field_name("operator").is_some_and(|o| {
-                matches!(text(o, src), b"<" | b"<=" | b">" | b">=" | b"!=" | b"==")
-            })
-        {
-            compared.extend(
-                ["left", "right"]
-                    .into_iter()
-                    .filter_map(|side| x.child_by_field_name(side))
-                    .filter(|s| s.kind() == "identifier")
-                    .map(|s| text(s, src).to_vec()),
-            );
-        }
-        let mut c = x.walk();
-        stack.extend(x.named_children(&mut c));
-    }
-    compared
+    false
 }
 
 /// The variables the loop's header declares.
@@ -857,7 +835,7 @@ mod tests {
 
     #[test]
     fn loops_and_collections() {
-        let src = "class A {\n void f(int n, List<String> l) {\n  for (int i = 0; i < n; i++) { n--; }\n  for (int i = 0; i < n; i++) { g(i); }\n  for (String s : l) { a(s); }\n  for (String s : l) { b(s); }\n  List<String> tmp = new ArrayList<>();\n  tmp.add(\"x\");\n  String t = s.substring(3, 1);\n  String u = s.substring(1, 3);\n }\n}";
+        let src = "class A {\n void f(int n, List<String> l) {\n  for (int i = 0; i < n; i++) { i++; }\n  for (int i = 0; i < n; i++) { g(i); }\n  for (String s : l) { a(s); }\n  for (String s : l) { b(s); }\n  List<String> tmp = new ArrayList<>();\n  tmp.add(\"x\");\n  String t = s.substring(3, 1);\n  String u = s.substring(1, 3);\n }\n}";
         assert_eq!(flagged("java/loop-bound-changes", src), [3]);
         assert_eq!(flagged("java/loops-over-same-collection", src), [6]);
         assert_eq!(flagged("java/collection-never-read", src), [7]);
@@ -872,5 +850,16 @@ mod tests {
         assert_eq!(flagged("java/wait-on-condition", src), [10]);
         assert_eq!(flagged("java/inner-class-static", src), [4]);
         assert_eq!(flagged("java/member-order", src), [12]);
+    }
+
+    /// Measured on SonarQube 26.7: a counter the header declares, each
+    /// write in the body, and nothing declared before the loop.
+    #[test]
+    fn loop_counters_written_in_the_body() {
+        let src = "class A { void f(int n, Object x, Object y) {\nint k = 0;\nfor (; k < n; k++) { k++; }\nfor (int i = 0; i < n;) { i += 2; }\nfor (int i = 0, j = 0; i < n; i++) { j++; }\nfor (int i = 0; i < n && x != y; i++) { x = y; }\nfor (int i = 0; i < n; i++) {\ni++;\ni--;\n}\nfor (int i = 0; i < n; i++) { while (++i < n) { g(); } }\nfor (int i = 0; i < n; i++) { for (int j = 0; j < 3; j++) { i++; } }\nfor (int i = 0; i < n; i++) { run(() -> { int i2 = 0; i2++; }); }\n} }";
+        assert_eq!(
+            flagged("java/loop-bound-changes", src),
+            [4, 5, 8, 9, 11, 12]
+        );
     }
 }
