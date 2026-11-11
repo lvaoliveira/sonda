@@ -783,7 +783,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/multiplication-overflow",
         name: "Math operands should be cast before assignment",
-        description: "The multiplication is done in int and only then widened, so it overflows first.",
+        description: "The arithmetic is done in int and only then widened, so it overflows, or divides as integers, first.",
         message: "Cast an operand to long.",
         category: Bug,
         severity: Major,
@@ -791,8 +791,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2184")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"(local_variable_declaration type: (_) @t declarator: (variable_declarator value: (binary_expression operator: ["*" "<<" "+" "-"]) @match))
-(assignment_expression left: (identifier) @t right: (binary_expression operator: ["*" "<<" "+" "-"]) @match)"#,
+            query: r#"(binary_expression operator: ["*" "<<" "+" "-" "/"]) @match"#,
             filter: Some(Keep(widens_after_int_arithmetic)),
         },
         example: Some(Example {
@@ -1817,50 +1816,185 @@ fn equality_between_literals(binary: Node, _: &[u8]) -> bool {
     }
 }
 
+/// Int arithmetic whose result becomes a long, a float or a double, as
+/// SonarQube 26.7 reports it (measured): assigned with `=`, declared,
+/// returned or passed as such an argument. A division counts only when the
+/// result becomes a floating type; a compound `+=` doesn't count.
 fn widens_after_int_arithmetic(binary: Node, src: &[u8]) -> bool {
-    let Some(parent) = binary.parent() else {
-        return false;
+    let target = widened_to(binary, src);
+    let wide = match binary.child_by_field_name("operator").map(|o| text(o, src)) {
+        Some(b"/") => matches!(target, Some(b"double" | b"float")),
+        _ => matches!(target, Some(b"long" | b"double" | b"float")),
     };
-    let target = if parent.kind() == "assignment_expression" {
-        parent
-            .child_by_field_name("left")
-            .filter(|l| l.kind() == "identifier")
-            .and_then(|l| declared_type(binary, text(l, src), src))
-    } else {
-        parent.parent().and_then(|d| d.child_by_field_name("type"))
-    };
-    if !matches!(type_text(target, src), b"long" | b"double" | b"float") {
+    if !wide {
         return false;
     }
-    let int_operand = |n: Option<Node>| {
-        n.is_some_and(|n| match n.kind() {
-            "decimal_integer_literal" => {
-                !text(n, src).ends_with(b"L") && !text(n, src).ends_with(b"l")
-            }
-            "identifier" => matches!(
-                type_text(declared_type(binary, text(n, src), src), src),
-                b"int" | b"short" | b"byte" | b"char"
-            ),
-            "method_invocation" => {
-                n.child_by_field_name("arguments")
-                    .is_some_and(|a| a.named_child_count() == 0)
-                    && matches!(
-                        n.child_by_field_name("name").map(|m| text(m, src)),
-                        Some(b"size" | b"length" | b"ordinal")
-                    )
-            }
-            "field_access" => text(n, src).ends_with(b".length"),
-            _ => false,
-        })
-    };
     let (l, r) = (
         binary.child_by_field_name("left"),
         binary.child_by_field_name("right"),
     );
-    int_operand(l)
-        && int_operand(r)
-        && (l.is_some_and(|n| n.kind() != "decimal_integer_literal")
-            || r.is_some_and(|n| n.kind() != "decimal_integer_literal"))
+    let literal = |n: Option<Node>| n.is_some_and(|n| n.kind() == "decimal_integer_literal");
+    is_int(l, binary, src) && is_int(r, binary, src) && !(literal(l) && literal(r))
+}
+
+/// The type the value of `expr` becomes where it's used, when it's known.
+fn widened_to<'s>(expr: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let parent = expr.parent()?;
+    let is = |field: &str| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|c| c.id() == expr.id())
+    };
+    match parent.kind() {
+        "variable_declarator" if is("value") => parent
+            .parent()
+            .filter(|d| matches!(d.kind(), "local_variable_declaration" | "field_declaration"))
+            .and_then(|d| d.child_by_field_name("type"))
+            .map(|t| text(t, src)),
+        "assignment_expression" if is("right") => {
+            let plain = parent
+                .child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == b"=");
+            let left = parent
+                .child_by_field_name("left")
+                .filter(|l| l.kind() == "identifier")?;
+            plain
+                .then(|| declared_type(expr, text(left, src), src))
+                .flatten()
+                .map(|t| text(t, src))
+        }
+        "return_statement" => super::java_flow::enclosing_method(expr)
+            .filter(|m| m.kind() == "method_declaration")
+            .and_then(|m| m.child_by_field_name("type"))
+            .map(|t| text(t, src)),
+        "argument_list" => parameter_type(parent.parent()?, expr, src),
+        _ => None,
+    }
+}
+
+/// The declared type of the parameter `arg` is passed to, for calls whose
+/// signature the file shows: a method of the same file, `Math.min` and
+/// `Math.max` beside a long, and `TimeUnit`'s conversions.
+fn parameter_type<'s>(call: Node, arg: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    if call.kind() != "method_invocation" {
+        return None;
+    }
+    let args = call_arguments(call);
+    let index = args.iter().position(|a| a.id() == arg.id())?;
+    let name = method_name(call, src);
+    let object = call.child_by_field_name("object");
+    match object {
+        Some(o) if text(o, src) == b"Math" && matches!(name, b"min" | b"max") => {
+            let long = args.iter().any(|a| {
+                a.id() != arg.id()
+                    && match a.kind() {
+                        "decimal_integer_literal" => {
+                            text(*a, src).ends_with(b"L") || text(*a, src).ends_with(b"l")
+                        }
+                        "identifier" => {
+                            type_text(declared_type(*a, text(*a, src), src), src) == b"long"
+                        }
+                        _ => false,
+                    }
+            });
+            long.then_some(&b"long"[..])
+        }
+        Some(o) => {
+            let time_unit = text(o, src).windows(9).any(|w| w == b"TimeUnit.")
+                || o.kind() == "identifier"
+                    && matches!(
+                        type_text(declared_type(o, text(o, src), src), src),
+                        b"TimeUnit" | b"java.util.concurrent.TimeUnit"
+                    );
+            let converts = matches!(
+                name,
+                b"convert"
+                    | b"toNanos"
+                    | b"toMicros"
+                    | b"toMillis"
+                    | b"toSeconds"
+                    | b"toMinutes"
+                    | b"toHours"
+                    | b"toDays"
+                    | b"sleep"
+            );
+            (time_unit && converts && index == 0).then_some(&b"long"[..])
+        }
+        None => {
+            let class = super::java_smells::enclosing_class(call)?;
+            let method = class_members(class).into_iter().find(|m| {
+                m.kind() == "method_declaration"
+                    && name_text(*m, src) == name
+                    && m.child_by_field_name("parameters")
+                        .is_some_and(|p| p.named_child_count() == args.len())
+            })?;
+            let params = method.child_by_field_name("parameters")?;
+            let param = params.named_child(u32::try_from(index).ok()?)?;
+            (param.kind() == "formal_parameter")
+                .then(|| param.child_by_field_name("type"))
+                .flatten()
+                .map(|t| text(t, src))
+        }
+    }
+}
+
+/// Whether `n` is an int (or a narrower integer) as far as the file shows.
+fn is_int(n: Option<Node>, at: Node, src: &[u8]) -> bool {
+    let Some(n) = n else {
+        return false;
+    };
+    let narrow = |t: &[u8]| matches!(t, b"int" | b"short" | b"byte" | b"char");
+    match n.kind() {
+        "decimal_integer_literal" => !text(n, src).ends_with(b"L") && !text(n, src).ends_with(b"l"),
+        "identifier" => narrow(type_text(declared_type(at, text(n, src), src), src)),
+        "parenthesized_expression" | "unary_expression" => is_int(n.named_child(0), at, src),
+        "cast_expression" => narrow(type_text(n.child_by_field_name("type"), src)),
+        "binary_expression" => {
+            matches!(
+                n.child_by_field_name("operator").map(|o| text(o, src)),
+                Some(b"+" | b"-" | b"*" | b"/" | b"%" | b"<<" | b">>" | b"&" | b"|" | b"^")
+            ) && is_int(n.child_by_field_name("left"), at, src)
+                && is_int(n.child_by_field_name("right"), at, src)
+        }
+        "field_access" => {
+            let t = text(n, src);
+            t.ends_with(b".length")
+                || matches!(
+                    t,
+                    b"Integer.MAX_VALUE"
+                        | b"Integer.MIN_VALUE"
+                        | b"Short.MAX_VALUE"
+                        | b"Short.MIN_VALUE"
+                        | b"Byte.MAX_VALUE"
+                        | b"Byte.MIN_VALUE"
+                        | b"Character.MAX_VALUE"
+                        | b"Character.MIN_VALUE"
+                )
+        }
+        "method_invocation" => {
+            let name = method_name(n, src);
+            let args = call_arguments(n);
+            match n.child_by_field_name("object") {
+                _ if args.is_empty() && matches!(name, b"size" | b"length" | b"ordinal") => true,
+                // `Calendar.get(int)` returns an int.
+                Some(o) if name == b"get" && o.kind() == "identifier" => matches!(
+                    type_text(declared_type(at, text(o, src), src), src),
+                    b"Calendar" | b"GregorianCalendar" | b"java.util.Calendar"
+                ),
+                None => super::java_smells::enclosing_class(n).is_some_and(|class| {
+                    class_members(class).into_iter().any(|m| {
+                        m.kind() == "method_declaration"
+                            && name_text(m, src) == name
+                            && narrow(type_text(m.child_by_field_name("type"), src))
+                            && m.child_by_field_name("parameters")
+                                .is_some_and(|p| p.named_child_count() == args.len())
+                    })
+                }),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 fn shifts_a_byte_variable(binary: Node, src: &[u8]) -> bool {
@@ -2200,5 +2334,17 @@ mod tests {
         let src = "class A {\n private int a;\n private int b;\n int getA() { return b; }\n int getB() { return b; }\n void f() { StringBuilder sb = new StringBuilder(); sb.append(\"x\"); }\n String g() { StringBuilder sb = new StringBuilder(); sb.append(\"x\"); return sb.toString(); }\n}";
         assert_eq!(flagged("java/getter-wrong-field", src), [4]);
         assert_eq!(flagged("java/builder-never-read", src), [6]);
+    }
+
+    /// Measured on SonarQube 26.7: int arithmetic widened where it's
+    /// declared, assigned with `=`, returned or passed as a long; a division
+    /// only when it becomes a floating type.
+    #[test]
+    fn int_arithmetic_widened() {
+        let src = "import java.util.Calendar;\nclass A {\nstatic final int K = 8;\nint g() { return 1; }\nlong take(long v) { return v; }\nlong f(int x, int y, long l, Calendar c, java.util.concurrent.TimeUnit u) {\nlong a = c.get(Calendar.YEAR) - c.get(Calendar.MONTH);\nlong b = g() - y;\nlong m = Math.min(l, x + y);\nlong t = u.convert(x - y, u);\ntake(x * y);\ndouble d = x / y;\nlong q = x / y;\nlong r = 0;\nr += x * y;\nlong v = Integer.MAX_VALUE / K + 3;\nreturn x * y;\n}\n}";
+        assert_eq!(
+            flagged("java/multiplication-overflow", src),
+            [7, 8, 9, 10, 11, 12, 16, 17]
+        );
     }
 }

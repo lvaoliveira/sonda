@@ -221,8 +221,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { void f() { int x; if ((x = g()) > 0) {} } }",
-            good: "class A { void f() { int x = g(); if (x > 0) {} } }",
+            bad: "class A { void f() { int x; if (ready(x = g())) {} } }",
+            good: "class A { void f() { int x = g(); if (ready(x)) {} } }",
         }),
     },
     Rule {
@@ -823,8 +823,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Java,
-            bad: "class A { ArrayList<String> items; }",
-            good: "class A { List<String> items; }",
+            bad: "public class A { public ArrayList<String> items; }",
+            good: "public class A { public List<String> items; }",
         }),
     },
     Rule {
@@ -1179,8 +1179,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2143")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"((type_identifier) @match (#any-of? @match "Date" "Calendar" "GregorianCalendar" "SimpleDateFormat"))
-(method_invocation object: (identifier) @o name: (identifier) @n (#eq? @o "Calendar") (#eq? @n "getInstance")) @match"#,
+            query: r#"((type_identifier) @match (#any-of? @match "Date" "Calendar" "GregorianCalendar"))
+(method_invocation object: (identifier) @o name: (identifier) @n (#eq? @o "Calendar") (#eq? @n "getInstance")) @match
+(import_declaration) @match"#,
             filter: Some(Keep(first_legacy_date_in_file)),
         },
         example: Some(Example {
@@ -2636,7 +2637,8 @@ fn is_camel_case(name: &[u8]) -> bool {
 }
 
 fn field_name_not_camel_case(field: Node, src: &[u8]) -> bool {
-    if has_modifier(field, "static") && has_modifier(field, "final") {
+    // Static fields are named under another rule (S3008), constants or not.
+    if has_modifier(field, "static") {
         return false;
     }
     declarator_names(field, src)
@@ -2645,6 +2647,22 @@ fn field_name_not_camel_case(field: Node, src: &[u8]) -> bool {
 }
 
 fn local_name_not_camel_case(node: Node, src: &[u8]) -> bool {
+    // A final variable may be named like a constant, `MAX_SIZE` (measured
+    // on 26.7); `AmPm` still isn't camel case.
+    let declaration = match node.kind() {
+        "variable_declarator" => node.parent(),
+        "formal_parameter" => Some(node),
+        _ => None,
+    };
+    let constant_case = node.child_by_field_name("name").is_some_and(|n| {
+        let t = text(n, src);
+        t.first().is_some_and(u8::is_ascii_uppercase)
+            && t.iter()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
+    });
+    if constant_case && declaration.is_some_and(|d| has_modifier(d, "final")) {
+        return false;
+    }
     if node.kind() == "identifier" {
         let t = text(node, src);
         return t != b"_" && !is_camel_case(t);
@@ -2685,6 +2703,11 @@ fn utility_class_is_instantiable(class: Node, src: &[u8]) -> bool {
     let mut has_member = false;
     let mut constructors = Vec::new();
     for member in members(body) {
+        // A nested enum or interface makes it more than a utility class
+        // (measured on SonarQube 26.7); a nested class doesn't.
+        if matches!(member.kind(), "enum_declaration" | "interface_declaration") {
+            return false;
+        }
         match member_kind(member, src) {
             MemberKind::Constructor => constructors.push(member),
             MemberKind::Static => has_member = true,
@@ -2746,14 +2769,17 @@ fn member_kind(member: Node, src: &[u8]) -> MemberKind {
 /// SonarQube reports a visible constructor where there is one, and the class
 /// itself when the implicit constructor is the problem.
 fn utility_class_constructor_or_class<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if !utility_class_is_instantiable(class, src) {
+    // A private nested class can't be instantiated from outside anyway.
+    let nested = class.parent().is_some_and(|p| p.kind() == "class_body");
+    if !utility_class_is_instantiable(class, src) || nested && has_modifier(class, "private") {
         return None;
     }
     let body = class.child_by_field_name("body")?;
     let constructor = members(body)
         .into_iter()
         .find(|m| m.kind() == "constructor_declaration" && !has_modifier(*m, "private"));
-    Some(constructor.unwrap_or(class))
+    // Reported at the name, below any annotation, as SonarQube does.
+    constructor.unwrap_or(class).child_by_field_name("name")
 }
 
 fn assigns_inside_an_expression(assign: Node, _: &[u8]) -> bool {
@@ -2764,6 +2790,17 @@ fn assigns_inside_an_expression(assign: Node, _: &[u8]) -> bool {
         parent.kind(),
         "expression_statement" | "lambda_expression" | "assignment_expression" | "for_statement"
     ) {
+        return false;
+    }
+    // `if ((n = read()) != 0)`: an assignment in parentheses that is
+    // compared, in any condition (measured on SonarQube 26.7).
+    if parent.kind() == "parenthesized_expression"
+        && parent.parent().is_some_and(|b| {
+            b.kind() == "binary_expression"
+                && b.child_by_field_name("operator")
+                    .is_some_and(|o| matches!(o.kind(), "==" | "!=" | "<" | ">" | "<=" | ">="))
+        })
+    {
         return false;
     }
     // `while ((line = in.readLine()) != null)` is the accepted idiom.
@@ -3254,11 +3291,20 @@ fn switch_has_fewer_than_three_cases(switch: Node, src: &[u8]) -> bool {
 
 /// `Class<?>` is how a class of unknown type is written; other wildcard
 /// return types aren't exempt.
+/// SonarQube 26.7 (measured) leaves `Class<?>`, `Collector<T, ?, R>`,
+/// whose middle type is the collector's own business, and private methods.
 fn wildcard_is_not_a_class(method: Node, src: &[u8]) -> bool {
-    method
-        .child_by_field_name("type")
-        .and_then(|t| t.named_child(0))
-        .is_none_or(|base| text(base, src) != b"Class")
+    !has_modifier(method, "private")
+        && method
+            .child_by_field_name("type")
+            .and_then(|t| t.named_child(0))
+            .is_none_or(|base| {
+                let name = text(base, src)
+                    .rsplit(|b| *b == b'.')
+                    .next()
+                    .unwrap_or_default();
+                !matches!(name, b"Class" | b"Collector")
+            })
 }
 
 /// A field, local or parameter declared `ThreadGroup`, as SonarQube reports
@@ -3290,12 +3336,21 @@ fn streams_a_collection(call: Node, src: &[u8]) -> bool {
 
 /// The first legacy date or time in a file: SonarQube reports the file once.
 fn first_legacy_date_in_file(node: Node, src: &[u8]) -> bool {
-    // Any use of the types, as SonarQube reports the file.
+    // Any use of the types, an import included, as SonarQube reports the
+    // file (measured on 26.7); `SimpleDateFormat` and `java.sql` aren't.
     let is_legacy = |n: Node| match n.kind() {
+        // Written out (`java.util.Calendar`), it isn't counted.
         "type_identifier" => {
+            matches!(text(n, src), b"Date" | b"Calendar" | b"GregorianCalendar")
+                && n.parent()
+                    .is_none_or(|p| p.kind() != "scoped_type_identifier")
+        }
+        "import_declaration" => {
+            let t = text(n, src);
+            let path = t.strip_prefix(b"import").unwrap_or(t).trim_ascii();
             matches!(
-                text(n, src),
-                b"Date" | b"Calendar" | b"GregorianCalendar" | b"SimpleDateFormat"
+                path.strip_suffix(b";").unwrap_or(path).trim_ascii_end(),
+                b"java.util.Date" | b"java.util.Calendar" | b"java.util.GregorianCalendar"
             )
         }
         "method_invocation" => {
@@ -3329,20 +3384,39 @@ fn switch_has_many_cases(switch: Node, src: &[u8]) -> bool {
     cases_of(switch, src) > 30
 }
 
+/// Public, by its modifier or as an interface's member.
+fn is_public(member: Node) -> bool {
+    has_modifier(member, "public")
+        || member
+            .parent()
+            .is_some_and(|b| b.kind() == "interface_body")
+}
+
 fn is_a_declared_type(ty: Node, _: &[u8]) -> bool {
     let mut node = ty;
     let mut parent = ty.parent();
+    // `java.util.HashMap` written out.
+    if let Some(q) = parent.filter(|p| p.kind() == "scoped_type_identifier") {
+        node = q;
+        parent = q.parent();
+    }
     if let Some(g) = parent.filter(|p| p.kind() == "generic_type") {
         node = g;
         parent = g.parent();
     }
-    // A local's type is the method's own business: SonarQube looks at
-    // what other code sees, fields, parameters and return types.
+    // A local's type is the method's own business: SonarQube looks at what
+    // other code sees (measured on 26.7): public fields, and the parameters
+    // and return types of public methods.
     parent.is_some_and(|p| {
-        matches!(
-            p.kind(),
-            "field_declaration" | "formal_parameter" | "method_declaration" | "spread_parameter"
-        ) && p.child_by_field_name("type") == Some(node)
+        let visible = match p.kind() {
+            "field_declaration" | "method_declaration" => is_public(p),
+            "formal_parameter" | "spread_parameter" => p
+                .parent()
+                .and_then(|params| params.parent())
+                .is_some_and(is_public),
+            _ => false,
+        };
+        visible && p.child_by_field_name("type") == Some(node)
     })
 }
 
@@ -3361,9 +3435,15 @@ fn variable_returned_immediately<'t>(block: Node<'t>, src: &[u8]) -> Option<Node
         };
         let name = only.child_by_field_name("name")?;
         only.child_by_field_name("value")?;
+        // An annotation (`@SuppressWarnings`) needs the variable to sit on.
+        let annotated = modifiers_of(declaration).is_some_and(|m| {
+            let mut c = m.walk();
+            m.children(&mut c)
+                .any(|k| matches!(k.kind(), "marker_annotation" | "annotation"))
+        });
         let returned = pair[1].named_child(0)?;
-        (returned.kind() == "identifier" && text(returned, src) == text(name, src))
-            .then_some(pair[1])
+        (!annotated && returned.kind() == "identifier" && text(returned, src) == text(name, src))
+            .then_some(name)
     })
 }
 
@@ -3488,6 +3568,23 @@ fn field_named_like_its_class(field: Node, src: &[u8]) -> bool {
 /// A member whose name matches an earlier one in the class: the same name
 /// for a field and a method, or names differing only by case. Private fields
 /// only clash with other fields.
+/// Whether `method` only returns the field `name`: `return name;` or
+/// `return this.name;`.
+fn returns_the_field(method: Node, name: &[u8], src: &[u8]) -> bool {
+    let Some(body) = method.child_by_field_name("body") else {
+        return false;
+    };
+    let items = statements(body);
+    let [only] = items.as_slice() else {
+        return false;
+    };
+    only.kind() == "return_statement"
+        && only.named_child(0).is_some_and(|v| {
+            let t = text(v, src);
+            t == name || t.strip_prefix(b"this.") == Some(name)
+        })
+}
+
 fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     let Some(body) = member
         .parent()
@@ -3507,25 +3604,52 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
         }
     };
     let mine = names_of(member);
+    let in_interface = body.kind() == "interface_body";
+    let visibility = |m: Node| {
+        if in_interface || has_modifier(m, "public") {
+            3
+        } else if has_modifier(m, "protected") {
+            2
+        } else if has_modifier(m, "private") {
+            0
+        } else {
+            1
+        }
+    };
     members(body)
         .into_iter()
         .filter(|m| m.id() != member.id())
         .filter(|m| {
-            // a method and a private field do not clash
-            is_method(*m) == is_method(member)
-                || !(has_modifier(*m, "private") && !is_method(*m)
-                    || has_modifier(member, "private") && !is_method(member))
+            // A method and a field clash only when the field is as visible
+            // as the method (measured on SonarQube 26.7, fitted rather than
+            // understood): a private field never does.
+            if is_method(*m) == is_method(member) {
+                return true;
+            }
+            let (field, method) = if is_method(member) {
+                (*m, member)
+            } else {
+                (member, *m)
+            };
+            visibility(field) > 0 && visibility(field) >= visibility(method)
         })
         .flat_map(|m| {
             let earlier = m.start_byte() < member.start_byte();
             let method_vs_field = is_method(m) != is_method(member);
+            let method = if is_method(m) { m } else { member };
             names_of(m)
                 .into_iter()
-                .map(move |n| (n, earlier, method_vs_field))
+                .map(move |n| (n, earlier, method_vs_field, method))
         })
-        .any(|(other, earlier, method_vs_field)| {
+        .any(|(other, earlier, method_vs_field, method)| {
             mine.iter().any(|n| {
-                earlier && n.eq_ignore_ascii_case(other) && (method_vs_field || *n != other)
+                // A field's getter of the same name (`size()` returning
+                // `size`) isn't reported; another method of its name is.
+                let getter = *n == other && returns_the_field(method, n, src);
+                earlier
+                    && n.eq_ignore_ascii_case(other)
+                    && (method_vs_field || *n != other)
+                    && !getter
             })
         })
 }
@@ -3569,6 +3693,14 @@ fn literal_or_value_of_would_do(creation: Node, src: &[u8]) -> bool {
     if is_string {
         return matches!(args.as_slice(), [] | [_])
             && args.first().is_none_or(|a| a.kind() == "string_literal");
+    }
+    // A big number from a string literal; from a variable or a radix there
+    // is no `valueOf` to use instead (measured on SonarQube 26.7).
+    let big = creation
+        .child_by_field_name("type")
+        .is_some_and(|t| matches!(text(t, src), b"BigInteger" | b"BigDecimal"));
+    if big {
+        return matches!(args.as_slice(), [a] if a.kind() == "string_literal");
     }
     !args.is_empty()
 }
@@ -4243,7 +4375,12 @@ enum FieldUse {
 /// it, reads it, or neither (it declares the field, or a local shadows it).
 fn field_use(n: Node, name: &[u8], src: &[u8]) -> Option<FieldUse> {
     let parent = n.parent();
-    if parent.is_some_and(|p| p.kind() == "variable_declarator") {
+    // The declared name isn't a use; a declaration's value (`T x = field;`) is.
+    if parent.is_some_and(|p| {
+        p.kind() == "variable_declarator"
+            && p.child_by_field_name("name")
+                .is_some_and(|d| d.id() == n.id())
+    }) {
         return None;
     }
     let is_this_field = parent.is_some_and(|p| {
@@ -4598,7 +4735,7 @@ mod tests {
 
     #[test]
     fn assignments_in_expressions() {
-        let src = "class A { void f() {\nint x;\nx = 1;\nint a, b;\na = b = 2;\nif ((x = g()) > 0) {}\nwhile ((x = g()) > 0) {}\nfor (x = 0; x < 3; x = x + 1) {}\nrun(() -> x = 4);\n} }";
+        let src = "class A { void f() {\nint x;\nx = 1;\nint a, b;\na = b = 2;\nif (ready(x = g())) {}\nwhile ((x = g()) > 0) {}\nfor (x = 0; x < 3; x = x + 1) {}\nrun(() -> x = 4);\n} }";
         assert_eq!(flagged("java/assignment-in-subexpression", src), [6]);
     }
 
@@ -4831,5 +4968,48 @@ mod tests {
         // The rest of the Javadoc doesn't count, and the tag alone deprecates.
         let src = "class A {\n/**\n * Use one instead.\n * @deprecated Old.\n */\n@Deprecated\nint old() { return 1; }\n/**\n * @deprecated Old.\n */\nint older() { return 1; }\n}";
         assert_eq!(flagged("java/deprecated-code", src), [7, 11]);
+    }
+
+    /// Measured on SonarQube 26.7, one case a file, in a second round.
+    #[test]
+    fn java_tail_measured_on_sonarqube() {
+        // S1118: a private nested class, or a class with a nested enum or
+        // interface, isn't a utility class; the constructor is reported at
+        // its name.
+        let src = "public class A {\n@Deprecated\npublic A() {}\npublic static int f() { return 1; }\n}\nclass B { int x; private static final class H { static final int V = 1; } }\nclass C { public C() {} static int f() { return 1; } enum K { X } }";
+        assert_eq!(flagged("java/utility-class-constructor", src), [3]);
+        // S1452: not a private method, not a Collector.
+        let src = "import java.util.*;\nclass A {\nprivate List<?> a() { return null; }\npublic java.util.stream.Collector<Object, ?, String> b() { return null; }\npublic Map<String, ?> c() { return null; }\n}";
+        assert_eq!(flagged("java/wildcard-return-type", src), [5]);
+        // S1319: public fields and public methods only, written out or not.
+        let src = "import java.util.*;\nclass A {\nprivate final HashMap<String, String> a = new HashMap<>();\nprotected HashMap<String, String> b;\npublic java.util.HashMap<String, String> c;\nprotected int d(ArrayList<String> l) { return 0; }\npublic int e(ArrayList<String> l) { return 0; }\n}";
+        assert_eq!(flagged("java/concrete-collection-type", src), [5, 7]);
+        // S1845: a getter of the same name isn't reported; another method of
+        // that name is, and a field less visible than the method isn't.
+        let src = "class A {\nprotected int size;\npublic int size() { return size; }\npublic final int left;\npublic static A left(int l) { return null; }\nstatic final int CAPACITY = 32;\npublic int capacity() { return 1; }\npublic static final int NOP = 1;\npublic static int nop() { return NOP; }\n}";
+        assert_eq!(flagged("java/names-differ-by-case", src), [5, 9]);
+        // S117: a final variable named like a constant is fine.
+        let src = "class A { void f(final String ID, String Bad) {\nfinal double DEFAULT_X = 0.1;\nfinal String[] AmPm = null;\ndouble OTHER = 1;\n} }";
+        assert_eq!(flagged("java/local-variable-name", src), [1, 3, 4]);
+        // S116: static fields are another rule's.
+        let src = "class A {\npublic static int SOFT_MAX = 1;\npublic int SOFT = 1;\n}";
+        assert_eq!(flagged("java/field-name", src), [3]);
+        // S1488: at the declaration, and not an annotated one.
+        let src = "class A {\nObject f(Object o) {\nfinal String r = o.toString();\nreturn r;\n}\nObject g(Object o) {\n@SuppressWarnings(\"unchecked\")\nfinal java.util.List<String> r = (java.util.List<String>) o;\nreturn r;\n}\n}";
+        assert_eq!(flagged("java/return-after-assignment", src), [3]);
+        // S2129: a big number from a string literal only.
+        let src = "import java.math.*;\nclass A { Object f(String s, long l) {\nnew BigInteger(\"5\");\nnew BigDecimal(s);\nnew BigInteger(s, 16);\nreturn new BigDecimal(l);\n} }";
+        assert_eq!(flagged("java/wrapper-constructor", src), [3]);
+        // S1121: an assignment compared in parentheses is fine anywhere.
+        let src = "class A { boolean f(boolean b) {\nint x;\nif (b && (x = g()) != 0) {}\nint y = (x = g()) + 1;\nif (b = ok()) {}\nreturn (x = g()) != 0;\n} }";
+        assert_eq!(flagged("java/assignment-in-subexpression", src), [4, 5]);
+        // S1068: a field read into a local is used.
+        let src = "class A {\nprivate transient String cached;\npublic String toString() {\nString result = cached;\nif (result == null) { result = \"x\"; cached = result; }\nreturn result;\n}\n}";
+        assert!(flagged("java/unused-private-field", src).is_empty());
+        // S2143: an import counts; SimpleDateFormat and a written-out name don't.
+        let src = "import java.util.Date;\nclass A { int f() { return 1; } }";
+        assert_eq!(flagged("java/legacy-date-time", src), [1]);
+        let src = "import java.text.SimpleDateFormat;\nclass A { Object f(java.util.Calendar c) { return new SimpleDateFormat(\"y\"); } }";
+        assert!(flagged("java/legacy-date-time", src).is_empty());
     }
 }

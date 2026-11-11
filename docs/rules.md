@@ -22095,13 +22095,13 @@ SonarQube: S1121
 Noncompliant:
 
 ```java
-class A { void f() { int x; if ((x = g()) > 0) {} } }
+class A { void f() { int x; if (ready(x = g())) {} } }
 ```
 
 Compliant:
 
 ```java
-class A { void f() { int x = g(); if (x > 0) {} } }
+class A { void f() { int x = g(); if (ready(x)) {} } }
 ```
 
 ## java/modifier-order
@@ -22640,13 +22640,13 @@ SonarQube: S1319
 Noncompliant:
 
 ```java
-class A { ArrayList<String> items; }
+public class A { public ArrayList<String> items; }
 ```
 
 Compliant:
 
 ```java
-class A { List<String> items; }
+public class A { public List<String> items; }
 ```
 
 ## java/wildcard-return-type
@@ -29246,7 +29246,7 @@ class A { boolean f(int x) { return x == 1; } }
 
 ## java/multiplication-overflow
 
-**Math operands should be cast before assignment.** The multiplication is done in int and only then widened, so it overflows first.
+**Math operands should be cast before assignment.** The arithmetic is done in int and only then widened, so it overflows, or divides as integers, first.
 
 SonarQube: S2184
 
@@ -29834,14 +29834,14 @@ class A { void f() {
 
 ## java/loop-bound-changes
 
-**for loop stop conditions should be invariant.** Changing the bound inside the body makes the loop's length hard to predict.
+**for loop stop conditions should be invariant.** Changing a counter the loop's header declares, inside its body, makes the loop hard to follow.
 
 SonarQube: S127
 
 Noncompliant:
 
 ```java
-class A { void f(int n) { for (int i = 0; i < n; i++) { n--; } } }
+class A { void f(int n) { for (int i = 0; i < n; i++) { i++; } } }
 ```
 
 Compliant:
