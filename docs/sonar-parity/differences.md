@@ -30,6 +30,12 @@ its default profile (Sonar way) and sonda its default rules.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
+| sonda | TypeScript (TSX), Rust | `f5a07dd` | 44 of 44 | 0 |
+
+On sonda's own code, SonarQube raises nothing on the Python scripts, and
+its Rust issues are all cognitive complexity (33, every one matched). The
+TypeScript ones led to the accessibility and key rules measured
+[below](#accessibility-and-keys-measured).
 
 ## SonarQube issues sonda does not raise
 
@@ -72,6 +78,24 @@ specification in two ways, found by scanning small files with SonarQube
 
 sonda does the same. On arandu, every file's total equals SonarQube's
 (2,353 in all), and the functions over the threshold are the same 31.
+
+## Accessibility and keys, measured
+
+Scanned the same way, one JSX element per file, on SonarQube 26.7:
+
+- **S6819, a role a native tag has.** Reported on a `div`, `span` or `svg`
+  for each role with a native element (`button`, `img`, `status`,
+  `option`, `listbox`, `heading`, `list`, `textbox`, `progressbar`,
+  `separator`, `dialog`, `group`, `row`, `navigation` and others), with a
+  role chosen by a ternary taken as written. Not reported: `role="img"` on
+  an element with content or on a named `svg`; `role="status"` with
+  `aria-live`; an `option` inside a `listbox`, a `row` inside a `table`,
+  and a listbox or table written with them (a list with its items is
+  reported). The last is fitted to what was observed, not understood.
+- **S6479 and S6477, keys in a `map`.** Elements returned through a
+  ternary or `&&` count. A key is the index when it is nothing else: `i`,
+  `` `row-${i}` ``, `i.toString()`, on the returned element or one inside
+  it. `` `${x.id}-${i}` ``, `x.id + i` and `'row' + i` aren't reported.
 
 ## Rules that depend on knowing a type
 

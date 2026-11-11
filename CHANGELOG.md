@@ -224,6 +224,26 @@ where it raised 142, and 4 issues SonarQube doesn't, where it raised 14.
   `||` in their conditions score lower and may no longer be reported.
   Other languages are unchanged.
 
+- On sonda's own TypeScript and Rust (`f5a07dd`), sonda raises all 44 of
+  SonarQube's issues, where it raised 35, and none it doesn't. The
+  accessibility and key rules below were measured on SonarQube 26.7 one
+  case at a time.
+- `js/prefer-semantic-tag` knows more roles with a native tag (`img`,
+  `status`, `option`, `listbox`, `textbox`, `progressbar`, `separator`,
+  `dialog`, `group`, `row`), looks at `svg` as well as `div` and `span`,
+  and takes a role chosen by a ternary as written. It leaves alone, as
+  SonarQube does, `role="img"` on an element with content or a named
+  `svg`, `role="status"` with `aria-live`, an option inside a listbox, a
+  row inside a table, and those containers written with them. It reports
+  at the element, not its `role`.
+- `js/jsx-missing-key` and `js/jsx-index-key` look at the elements a
+  `map` callback returns through a ternary or `&&`, not only directly.
+  `js/jsx-index-key` reports a key that is only the index anywhere in them:
+  `i`, `` `row-${i}` ``, `i.toString()`, also on a nested element. Mixed
+  with the item's data (`` `${x.id}-${i}` ``), it isn't.
+- `js/deprecated-api` reports a deprecated member of a module or global
+  object wherever it's used (`typeof document.execCommand`), not only when
+  called.
 - `js/multiline-without-braces` (and `java/`) no longer takes a comment
   after a one-line body for a second statement: `if (c) await c.read(); //
   fresh` was reported.

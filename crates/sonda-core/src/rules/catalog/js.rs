@@ -4220,7 +4220,7 @@ pub(super) fn static_value<'s>(attr: Node, src: &'s [u8]) -> Option<&'s [u8]> {
 
 /// Whether an element has children worth announcing: text, expressions or
 /// elements, not just whitespace or a comment.
-fn has_content(element: Node, src: &[u8]) -> bool {
+pub(super) fn has_content(element: Node, src: &[u8]) -> bool {
     if element.kind() != "jsx_element" {
         return false;
     }
@@ -4269,20 +4269,36 @@ fn mapped_elements<'t>(map: Node<'t>) -> Option<(Node<'t>, Vec<Node<'t>>)> {
     } else {
         vec![body]
     };
-    let elements = returned
-        .into_iter()
-        .map(|mut e| {
-            while e.kind() == "parenthesized_expression" {
-                match e.named_child(0) {
-                    Some(inner) => e = inner,
-                    None => break,
-                }
-            }
-            e
-        })
-        .filter(|e| matches!(e.kind(), "jsx_element" | "jsx_self_closing_element"))
-        .collect();
+    let mut elements = Vec::new();
+    for e in returned {
+        returned_elements(e, &mut elements);
+    }
     Some((callback, elements))
+}
+
+/// The JSX elements an expression evaluates to: itself, or either branch of
+/// a ternary, or the right of `&&` / `||` (`x && <li />`), through
+/// parentheses.
+fn returned_elements<'t>(expr: Node<'t>, out: &mut Vec<Node<'t>>) {
+    let mut pending = vec![expr];
+    while let Some(e) = pending.pop() {
+        match e.kind() {
+            "jsx_element" | "jsx_self_closing_element" => out.push(e),
+            "parenthesized_expression" => pending.extend(e.named_child(0)),
+            "ternary_expression" => pending.extend(
+                ["consequence", "alternative"]
+                    .iter()
+                    .filter_map(|f| e.child_by_field_name(f)),
+            ),
+            "binary_expression"
+                if e.child_by_field_name("operator")
+                    .is_some_and(|o| matches!(o.kind(), "&&" | "||")) =>
+            {
+                pending.extend(e.child_by_field_name("right"));
+            }
+            _ => {}
+        }
+    }
 }
 
 fn mapped_element_without_key<'t>(map: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -4292,6 +4308,9 @@ fn mapped_element_without_key<'t>(map: Node<'t>, src: &[u8]) -> Option<Node<'t>>
     })
 }
 
+/// A `key` in what a `map` callback returns that is built from the
+/// callback's index: `key={i}`, `` key={`row-${i}`} ``, or on an element
+/// nested in the returned one.
 fn mapped_element_keyed_by_index<'t>(map: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let (callback, elements) = mapped_elements(map)?;
     let index = callback
@@ -4299,16 +4318,52 @@ fn mapped_element_keyed_by_index<'t>(map: Node<'t>, src: &[u8]) -> Option<Node<'
         .named_child(1)
         .map(|p| p.child_by_field_name("pattern").unwrap_or(p))
         .filter(|p| p.kind() == "identifier")?;
-    elements.into_iter().find_map(|e| {
-        let key = attribute(opening_tag(e)?, "key", src)?;
-        let value = key
-            .named_child(1)
-            .filter(|v| v.kind() == "jsx_expression")?;
-        value
-            .named_child(0)
-            .is_some_and(|v| same_text(v, index, src))
-            .then_some(key)
-    })
+    let index = text(index, src);
+    let mut found = None;
+    for element in elements {
+        super::js_syntax::walk(element, &mut |n| {
+            if found.is_some() {
+                return false;
+            }
+            if n.kind() == "jsx_attribute"
+                && n.named_child(0).is_some_and(|a| text(a, src) == b"key")
+                && n.named_child(1)
+                    .filter(|v| v.kind() == "jsx_expression")
+                    .and_then(|v| v.named_child(0))
+                    .is_some_and(|v| is_only_index(v, index, src))
+            {
+                found = Some(n);
+            }
+            true
+        });
+    }
+    found
+}
+
+/// Whether a key's value is the index and nothing else, as SonarQube
+/// reports it: `i`, `` `row-${i}` ``, `i.toString()`. Mixed with the item's
+/// data (`` `${x.id}-${i}` ``, `x.id + i`) it identifies the item, and
+/// SonarQube leaves it alone; so does `'row' + i`.
+fn is_only_index(value: Node, index: &[u8], src: &[u8]) -> bool {
+    let is_index = |n: Node| n.kind() == "identifier" && text(n, src) == index;
+    match value.kind() {
+        "identifier" => is_index(value),
+        "template_string" => {
+            let mut cursor = value.walk();
+            let parts: Vec<Node> = value
+                .named_children(&mut cursor)
+                .filter(|c| c.kind() == "template_substitution")
+                .collect();
+            !parts.is_empty() && parts.iter().all(|p| p.named_child(0).is_some_and(is_index))
+        }
+        "call_expression" => value.child_by_field_name("function").is_some_and(|f| {
+            f.kind() == "member_expression"
+                && f.child_by_field_name("object").is_some_and(is_index)
+                && f.child_by_field_name("property")
+                    .is_some_and(|p| text(p, src) == b"toString")
+        }),
+        _ => false,
+    }
 }
 
 fn element_also_has_children(attr: Node, src: &[u8]) -> bool {
@@ -6205,5 +6260,15 @@ let // the value
     fn identical_branches_need_an_else() {
         let src = "if (a) { f(); } else if (b) { f(); } else { f(); }\nif (a) { f(); } else if (b) { f(); }\nx = c ? 1 : 1;";
         assert_eq!(flagged("js/identical-branches", JS, src), [1, 3]);
+    }
+
+    /// Elements returned through a ternary or `&&` need keys too, and a key
+    /// that is only the index, alone, in a template or as a string, is
+    /// reported anywhere in them; mixed with the item's data it isn't.
+    #[test]
+    fn keys_in_conditional_and_nested_elements() {
+        let src = "const a = xs.map((x, i) => (i % 2 ? <b key={i}>{x}</b> : x));\nconst b = xs.map((x) => x && <b>{x}</b>);\nconst c = xs.map((x, i) => { return x ? <b key={`k${i}`}>{x}</b> : null; });\nconst d = xs.map((x, i) => <b key={x.id}><i key={i.toString()}>{x}</i></b>);\nconst e = xs.map((x, i) => <b key={`${x.id}-${i}`}>{x}</b>);\nconst f = xs.map((x, i) => <b key={x.id + i}>{x}</b>);\nconst g = xs.map((x, i) => <b key={'row' + i}>{x}</b>);";
+        assert_eq!(flagged("js/jsx-index-key", TSX, src), [1, 3, 4]);
+        assert_eq!(flagged("js/jsx-missing-key", TSX, src), [2]);
     }
 }
