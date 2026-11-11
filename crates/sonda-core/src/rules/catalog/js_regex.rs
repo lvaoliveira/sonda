@@ -590,25 +590,51 @@ fn has_empty_class(_: &str, r: &Regex) -> bool {
     found
 }
 
+/// A control character in a pattern, other than tab, line feed and carriage
+/// return. One that bounds a range in a class (`[^\x00-\x7f]`) is there on
+/// purpose, and SonarQube leaves it alone.
 fn text_has_control_characters(pattern: &str, _: &Regex) -> bool {
     let chars: Vec<char> = pattern.chars().collect();
     let is_control = |c: char| (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r');
+    let mut in_class = false;
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '\\' {
+        let (control, len) = if chars[i] == '\\' {
             let rest: String = chars[i + 1..].iter().take(8).collect();
-            if escape_is_control(&rest) {
-                return true;
-            }
-            i += 2;
+            (escape_is_control(&rest), 1 + escape_len(&rest))
         } else {
-            if is_control(chars[i]) {
+            match chars[i] {
+                '[' if !in_class => in_class = true,
+                ']' if in_class => in_class = false,
+                _ => {}
+            }
+            (is_control(chars[i]), 1)
+        };
+        if control {
+            let starts_range = chars.get(i + len) == Some(&'-')
+                && chars.get(i + len + 1).is_some_and(|&c| c != ']');
+            let ends_range = i >= 2 && chars[i - 1] == '-' && !matches!(chars[i - 2], '[' | '^');
+            if !(in_class && (starts_range || ends_range)) {
                 return true;
             }
-            i += 1;
         }
+        i += len;
     }
     false
+}
+
+/// How many characters an escape takes after its backslash: `xhh`,
+/// `uhhhh`, `u{h...}`, or one.
+fn escape_len(rest: &str) -> usize {
+    if rest.starts_with('x') && rest.len() >= 3 {
+        3
+    } else if let Some(d) = rest.strip_prefix("u{") {
+        d.find('}').map_or(1, |end| end + 3)
+    } else if rest.starts_with('u') && rest.len() >= 5 {
+        5
+    } else {
+        1
+    }
 }
 
 /// Whether the escape after a backslash, `\\xhh`, `\\uhhhh` or `\\u{h...}`,

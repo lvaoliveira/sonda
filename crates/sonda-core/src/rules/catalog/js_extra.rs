@@ -1465,10 +1465,69 @@ fn array_only_asks_includes(declarator: Node, src: &[u8]) -> bool {
             return false;
         }
     }
+    // Every use of the name in its scope, comments and property names aside,
+    // calls includes() on it.
     let n = text(name, src);
-    let scope = scope_text(declarator, src);
-    let asks = count_pattern(scope, &[n, b".includes("].concat());
-    asks >= 1 && count_word(scope, n) == asks + 1
+    let Some(scope) = scope_node(declarator) else {
+        return false;
+    };
+    let (mut asks, mut other) = (0, 0);
+    super::js_syntax::walk(scope, &mut |node| {
+        if matches!(node.kind(), "identifier" | "shorthand_property_identifier")
+            && node.id() != name.id()
+            && text(node, src) == n
+        {
+            if asks_includes(node, src) {
+                asks += 1;
+            } else {
+                other += 1;
+            }
+        }
+        other == 0
+    });
+    asks >= 1 && other == 0
+}
+
+/// `name.includes(...)`, with `name` the identifier given.
+fn asks_includes(name: Node, src: &[u8]) -> bool {
+    let Some(member) = name
+        .parent()
+        .filter(|m| m.kind() == "member_expression")
+        .filter(|m| {
+            m.child_by_field_name("object")
+                .is_some_and(|o| o.id() == name.id())
+        })
+    else {
+        return false;
+    };
+    member
+        .child_by_field_name("property")
+        .is_some_and(|p| text(p, src) == b"includes")
+        && member.parent().is_some_and(|c| {
+            c.kind() == "call_expression"
+                && c.child_by_field_name("function")
+                    .is_some_and(|f| f.id() == member.id())
+        })
+}
+
+/// The function, or the program, a node is declared in.
+fn scope_node(node: Node) -> Option<Node> {
+    let mut p = node.parent();
+    while let Some(n) = p {
+        if matches!(
+            n.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "program"
+                | "generator_function_declaration"
+        ) {
+            return Some(n);
+        }
+        p = n.parent();
+    }
+    None
 }
 
 fn has_escaped_backslashes(string: Node, src: &[u8]) -> bool {
@@ -2061,5 +2120,22 @@ mod tests {
         assert_eq!(flagged("ts/aliased-binding", TS, src), [7]);
         assert_eq!(flagged("ts/metadata-bindings", TS, src), [1]);
         assert_eq!(flagged("ts/output-named-like-dom-event", TS, src), [7, 7]);
+    }
+
+    /// Comments and property names that mention the array aren't uses.
+    #[test]
+    fn array_for_existence_ignores_comments() {
+        let src = "// HOURS: when to refresh.\nconst HOURS = [10, 17];\nclass A {\n  // see HOURS above\n  run(h) { return this.HOURS || HOURS.includes(h); }\n}";
+        assert_eq!(flagged("js/array-for-existence", JS, src), [2]);
+        let used =
+            "const HOURS = [10, 17];\nfunction f(h) { return HOURS.includes(h) ? HOURS[0] : 0; }";
+        assert!(flagged("js/array-for-existence", JS, used).is_empty());
+    }
+
+    /// A control character that bounds a range in a class is deliberate.
+    #[test]
+    fn control_characters_as_range_bounds() {
+        let src = "const a = /[^\\x00-\\xFF]/g;\nconst b = /\\x00/;\nconst c = /[\\x01]/;\nconst d = /[ -\\x1f]/;\nconst e = /[\\x01-]/;";
+        assert_eq!(flagged("js/regex-control-characters", JS, src), [2, 3, 5]);
     }
 }

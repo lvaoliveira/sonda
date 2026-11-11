@@ -600,6 +600,9 @@ fn unused_locals<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
                         | DeclKind::Class
                 )
                 && d.reads == 0
+                // Written again but never read: a dead store, which
+                // js/unused-assignment reports where it happens.
+                && d.writes == 0
                 && !d.rest_sibling
                 && !d.name.starts_with('_')
                 // A function expression's own name is there for stack traces.
@@ -824,5 +827,13 @@ mod tests {
         let src = "const a = 1;\n[a] = [2];\nlet b;\n({ b } = o);\n({ c } = o);";
         assert_eq!(flagged("js/const-reassigned", Lang::JavaScript, src), [2]);
         assert_eq!(flagged("js/implicit-global", Lang::JavaScript, src), [5]);
+    }
+
+    /// A local written again but never read is a dead store, reported by
+    /// js/unused-assignment, not an unused local.
+    #[test]
+    fn reassigned_locals_are_left_to_unused_assignment() {
+        let src = "function f(s) {\n  let a = null;\n  a = s.x;\n  let b = 1;\n}";
+        assert_eq!(flagged("js/unused-variable", Lang::JavaScript, src), [4]);
     }
 }

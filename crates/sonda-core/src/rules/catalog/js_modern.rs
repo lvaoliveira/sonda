@@ -2063,20 +2063,34 @@ fn is_bare_node_builtin(string: Node, src: &[u8]) -> bool {
     NODE_BUILTINS.contains(&string_content(string, src))
 }
 
+/// A `throw` that is the only statement of an `if`'s block (or its `else`
+/// block), whose condition is a type check. Without braces, or next to other
+/// statements, the throw isn't simply the check's answer, and SonarQube
+/// leaves it alone.
 fn throw_follows_type_check(throw: Node, src: &[u8]) -> bool {
-    let mut p = throw.parent();
-    while let Some(n) = p {
-        if kind_in(n, FUNCTION_KINDS) {
-            return false;
-        }
-        if n.kind() == "if_statement" {
-            return n
-                .child_by_field_name("condition")
-                .is_some_and(|c| is_only_type_checks(c, src));
-        }
-        p = n.parent();
+    let Some(block) = throw.parent().filter(|b| b.kind() == "statement_block") else {
+        return false;
+    };
+    let mut cursor = block.walk();
+    if block
+        .named_children(&mut cursor)
+        .any(|s| s.kind() != "comment" && s.id() != throw.id())
+    {
+        return false;
     }
-    false
+    let Some(mut owner) = block.parent() else {
+        return false;
+    };
+    if owner.kind() == "else_clause" {
+        let Some(p) = owner.parent() else {
+            return false;
+        };
+        owner = p;
+    }
+    owner.kind() == "if_statement"
+        && owner
+            .child_by_field_name("condition")
+            .is_some_and(|c| is_only_type_checks(c, src))
 }
 
 /// Whether every part of a condition checks a value's type: `typeof`,
@@ -2086,8 +2100,14 @@ fn is_only_type_checks(node: Node, src: &[u8]) -> bool {
         "parenthesized_expression" => node
             .named_child(0)
             .is_some_and(|c| is_only_type_checks(c, src)),
-        // `!Array.isArray(x)` is not one: SonarQube leaves negations alone.
-        "unary_expression" => text(node, src).starts_with(b"typeof"),
+        "unary_expression" => {
+            let operator = node.child_by_field_name("operator").map(|o| text(o, src));
+            operator == Some(b"typeof")
+                || operator == Some(b"!")
+                    && node
+                        .child_by_field_name("argument")
+                        .is_some_and(|a| is_only_type_checks(a, src))
+        }
         "binary_expression" => {
             let op = node
                 .child_by_field_name("operator")
@@ -2099,9 +2119,10 @@ fn is_only_type_checks(node: Node, src: &[u8]) -> bool {
                         .is_some_and(|c| is_only_type_checks(c, src))
                 }),
                 b"instanceof" => true,
+                // `typeof x !== 'string'`, `Array.isArray(x) === false`.
                 _ => ["left", "right"].iter().any(|f| {
                     node.child_by_field_name(f)
-                        .is_some_and(|c| text(c, src).starts_with(b"typeof"))
+                        .is_some_and(|c| is_only_type_checks(c, src))
                 }),
             }
         }
@@ -2476,7 +2497,12 @@ fn next_line_looks_guarded(parent: Node, _: &[u8]) -> bool {
     if parent.kind() == "if_statement" && parent.child_by_field_name("alternative").is_some() {
         return false;
     }
-    let Some(next) = parent.next_named_sibling() else {
+    // A comment after the body, on its line or the next, guards nothing.
+    let mut next = parent.next_named_sibling();
+    while next.is_some_and(|n| n.kind() == "comment") {
+        next = next.and_then(|n| n.next_named_sibling());
+    }
+    let Some(next) = next else {
         return false;
     };
     // `if (x) a(); b();` on one line reads the same way: b() looks guarded.
@@ -2570,10 +2596,45 @@ fn in_playwright_action(pair: Node, src: &[u8]) -> bool {
         })
 }
 
+/// `s.replace(/x/g, ...)` where `s` is known to be a string and `/x/g`
+/// matches one fixed string, so `replaceAll('x', ...)` says the same. A
+/// character class or any other pattern is left alone, as SonarQube does.
 fn replaces_all_in_a_known_string(call: Node, src: &[u8]) -> bool {
-    call.child_by_field_name("function")
-        .and_then(|f| f.child_by_field_name("object"))
-        .is_some_and(|o| is_provably_string(o, src, 0))
+    let fixed = arguments_of(call)
+        .and_then(|args| args.named_child(0))
+        .is_some_and(|regex| {
+            let part = |field| regex.child_by_field_name(field).map(|n| text(n, src));
+            part("flags") == Some(b"g") && part("pattern").is_some_and(matches_one_string)
+        });
+    fixed
+        && call
+            .child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("object"))
+            .is_some_and(|o| is_provably_string(o, src, 0))
+}
+
+/// Whether a regex pattern matches one fixed string: no metacharacter, and
+/// escapes only of single characters (`\.`, `\0`, `\n`, `\x41`), not of
+/// classes (`\d`), boundaries (`\b`) or back-references (`\1`).
+fn matches_one_string(pattern: &[u8]) -> bool {
+    let mut bytes = pattern.iter();
+    while let Some(&b) = bytes.next() {
+        match b {
+            b'\\' => match bytes.next() {
+                Some(c) if c.is_ascii_alphanumeric() => {
+                    if !matches!(c, b'0' | b'n' | b'r' | b't' | b'f' | b'v' | b'x' | b'u') {
+                        return false;
+                    }
+                }
+                Some(_) => {}
+                None => return false,
+            },
+            b'.' | b'^' | b'$' | b'|' | b'?' | b'*' | b'+' | b'(' | b')' | b'[' | b']' | b'{'
+            | b'}' => return false,
+            _ => {}
+        }
+    }
+    !pattern.is_empty()
 }
 
 #[cfg(test)]
@@ -2764,5 +2825,28 @@ class G extends A { constructor() { super(...arguments); } }";
     fn throw_after_a_type_check() {
         let src = "function f(x) {\n  if (typeof x !== 'string') {\n    throw new Error('bad');\n  }\n  if (!x) {\n    throw new Error('empty');\n  }\n}";
         assert_eq!(flagged("js/type-error-after-check", JS, src), [3]);
+    }
+
+    /// A comment after a one-line body is not a second statement.
+    #[test]
+    fn a_comment_after_the_body_is_not_guarded() {
+        let src = "if (c) await c.read(); // fresh\n\nfor (const b of bs) { f(b); }\nif (d)\n  g();\n  // note\nh();";
+        assert!(flagged("js/multiline-without-braces", JS, src).is_empty());
+    }
+
+    /// Only a pattern that matches one fixed string can become replaceAll's
+    /// string; a class like `[ab]` can't.
+    #[test]
+    fn replace_all_only_for_a_fixed_string() {
+        let src = "const a = String(v).replace(/\"/g, '\"\"');\nconst b = String(v).replace(/[ab]/g, '-');\nconst c = String(v).replace(/\\0/g, '');\nconst d = String(v).replace(/a/gi, 'b');\nconst e = String(v).replace(/a.b/g, 'c');\nconst f = String(v).replace(/\\./g, ',');";
+        assert_eq!(flagged("js/replace-all", JS, src), [1, 3, 6]);
+    }
+
+    /// The throw must be the only statement of the `if`'s block; a negated
+    /// type check still counts.
+    #[test]
+    fn type_error_only_for_a_lone_throw_in_a_block() {
+        let src = "function f(x) {\n  if (typeof x !== 'number' || !Number.isFinite(x)) {\n    throw new Error('a');\n  }\n  if (!Array.isArray(x)) throw new Error('b');\n  if (!Array.isArray(x)) {\n    log(x);\n    throw new Error('c');\n  }\n  if (!Array.isArray(x)) {\n    // why\n    throw new Error('d');\n  }\n  if (!Array.isArray(x) || x.length === 0) {\n    throw new Error('e');\n  }\n}";
+        assert_eq!(flagged("js/type-error-after-check", JS, src), [3, 12]);
     }
 }

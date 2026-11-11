@@ -208,6 +208,32 @@ file, the report formats and the public library API.
   the triage buttons wrap: it goes to the start of the next line, under
   them. When everything fits on one line, it stays on the right.
 
+### Changed rule results
+
+Compared with SonarQube's issues on the same commit of a JavaScript
+project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,
+where it raised 142, and 8 issues SonarQube doesn't, where it raised 14.
+
+- `js/multiline-without-braces` (and `java/`) no longer takes a comment
+  after a one-line body for a second statement: `if (c) await c.read(); //
+  fresh` was reported.
+- `js/type-error-after-check` reports a `throw new Error` that is the only
+  statement of the `if`'s block, as SonarQube does, and a negated type check
+  (`|| !Number.isFinite(x)`) counts. Without braces (`if (!Array.isArray(x))
+  throw ...`) or next to other statements, it's left alone.
+- `js/replace-all` asks for `replaceAll()` only when the global regex
+  matches one fixed string (`/"/g`, `/\./g`), not for a class like `/[ab]/g`.
+- `js/array-for-existence` no longer counts comments and property names
+  that mention the array as uses of it.
+- `js/regex-control-characters` leaves alone a control character that bounds
+  a range in a class: `[^\x00-\xFF]`.
+- `js/unused-assignment` ignores a trivial starting value (`null`, `0`,
+  `false`, `''`, `[]`, `{}` and the like, and such a default in a
+  destructuring), and reports a variable written but never read at its
+  first real write: `let x = null; ... x = y;` at `x = y`.
+- `js/unused-variable` leaves a local that is written again but never read
+  to `js/unused-assignment`, instead of both reporting it.
+
 ### Security
 
 - The server sends a Content Security Policy and framing, sniffing and
