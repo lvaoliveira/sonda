@@ -3,7 +3,10 @@
 # (docs/install.md). Each release attaches this script with its own version
 # filled in, so the latest release's installs the latest:
 #
-#   curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh | sh
+#   curl -fsSL https://sonda.sh/install | sh
+#
+# sonda.sh/install redirects to the latest release's copy:
+# https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh
 #
 # It picks the binary for this system, checks it against the release's
 # SHA256SUMS (and its attestation, when `gh` is installed and signed in),

@@ -43,8 +43,10 @@ Quality gate: FAILED
 Each [release](https://github.com/lvaoliveira/sonda/releases/latest) has a CLI binary for Linux (x86_64, arm64), macOS (Apple Silicon) and Windows (x86_64). On Linux and macOS, the install script picks yours, checks it against the release's checksums and installs it in `~/.local/bin`:
 
 ```sh
-curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh | sh
+curl -fsSL https://sonda.sh/install | sh
 ```
+
+`sonda.sh/install` redirects to the latest release's `install.sh` on GitHub, which you can also fetch directly.
 
 [docs/install.md](docs/install.md) covers the rest: Windows, installing by hand, building from source, CI, the server, verifying a release, upgrading and uninstalling.
 

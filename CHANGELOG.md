@@ -161,6 +161,11 @@ file, the report formats and the public library API.
 - The guides clone a release with `--depth 1` (a few megabytes instead of
   hundreds), and upgrade with `git fetch origin tag v<next>`, which works
   in such a clone and fetches only the new release.
+- The install command is now `curl -fsSL https://sonda.sh/install | sh`.
+  It redirects to the latest release's `install.sh` on GitHub, which still
+  works directly, and lets the project count installs: the site records
+  the kind of client and the country, never an IP address
+  (docs/install.md).
 
 ### Fixed
 

@@ -12,17 +12,24 @@ arm64), macOS (Apple Silicon) and Windows (x86_64).
 Linux and macOS:
 
 ```sh
-curl -fsSL https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh | sh
+curl -fsSL https://sonda.sh/install | sh
 ```
 
 The script picks the binary for your system, checks it against the
 release's checksums, and installs it in `~/.local/bin`. If that directory
 isn't on your `PATH` (macOS leaves it out), it prints two commands for your
-shell: run them, and `sonda` is found in this terminal and in new ones. To
-read the script before it runs, download it first:
+shell: run them, and `sonda` is found in this terminal and in new ones.
+
+`https://sonda.sh/install` redirects to the latest release's script,
+`https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh`,
+which works the same if you'd rather fetch it from GitHub directly. The
+site counts requests to `/install`, recording only the kind of client
+(such as curl) and the country, never an IP address: that's how the
+project knows how many installs there are. To read the script before it
+runs, download it first:
 
 ```sh
-curl -fsSLO https://github.com/lvaoliveira/sonda/releases/latest/download/install.sh
+curl -fsSL -o install.sh https://sonda.sh/install
 less install.sh
 sh install.sh
 ```
