@@ -179,6 +179,11 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- The Issues page fits its list to the window: the list, the filters and
+  the issue each scroll inside it, and Previous and Next stay under the
+  list. The panel used to grow with a long issue, leaving the pager below
+  the fold, past the end of the list's own scrolling.
+
 - Duplication detection needs less than half the memory: a scan of VS
   Code (4 million lines) peaked at 4.4 GB in its main process, now 1.7 GB,
   and CPython's (1.7 million) at 1.4 GB, now 550 MB. Both scans are about
