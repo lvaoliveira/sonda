@@ -29,7 +29,7 @@ its default profile (Sonar way) and sonda its default rules.
 
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
-| arandu | JavaScript | `ecb5cc9` | 145 of 150 | 8 |
+| arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
 
 ## SonarQube issues sonda does not raise
 
@@ -47,17 +47,31 @@ its default profile (Sonar way) and sonda its default rules.
 
 ## sonda issues SonarQube does not raise
 
-- **`common/cognitive-complexity` (4), cause not known.** Four functions at
-  16 or 17, over the threshold of 15, that SonarQube scores at most 15.
-  Per file, sonda's total equals SonarQube's on 36 of 65 files; the others
-  differ in both directions, by up to 26. Scoring the functions by hand from
-  the published specification gives sonda's numbers or more, so SonarQube
-  departs from it somewhere. Measuring SonarQube's score on small files, one
-  construct at a time, is the next step.
 - **`js/sql-built-dynamically` (4), deliberate.** It reports `prepare()`
   with an interpolated table name. SonarQube's rule covers `query` and
   `execute` of `mysql`, `pg` and similar drivers, not `better-sqlite3`.
   sonda's rule is labelled as only related to `S2077`.
+
+## Cognitive complexity, measured
+
+SonarQube's JavaScript and TypeScript analyzer departs from the published
+specification in two ways, found by scanning small files with SonarQube
+26.7, one construct each, and reading back each file's
+`cognitive_complexity` and the rule's issues:
+
+- **`||` adds nothing.** `if (a || b)` scores 1, `if (a && b)` 2,
+  `(a && b) || (!a && d)` 2. Its Python (`or`) and Java (`||`) analyzers
+  count both, as the specification does.
+- **A file's total counts callbacks one level deeper**, as the
+  specification nests functions, except directly in an outermost function
+  with no structure of its own (a wrapper such as
+  `return xs.map((x) => ...)`). Logical operators don't make it more than
+  a wrapper. The rule itself scores each function on its own, flat: a
+  callback with 8 `if`s inside a function with one more is 1 and 8 for the
+  rule, 17 for the file.
+
+sonda does the same. On arandu, every file's total equals SonarQube's
+(2,353 in all), and the functions over the threshold are the same 31.
 
 ## Rules that depend on knowing a type
 

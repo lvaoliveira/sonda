@@ -131,6 +131,17 @@ pub(crate) struct Syntax {
     /// Whether a `_ =>` arm is a default case, which costs no cyclomatic
     /// complexity: C#'s discard is, Rust's wildcard isn't.
     pub(crate) wildcard_arm_is_default: bool,
+    /// Whether `||` sequences add nothing to cognitive complexity.
+    /// SonarQube's JavaScript and TypeScript analyzer counts `&&` and not
+    /// `||`, measured on SonarQube 26.7 (docs/sonar-parity/differences.md);
+    /// its other analyzers count both, as the specification does.
+    pub(crate) cognitive_skips_or: bool,
+    /// Whether the file's cognitive complexity counts a function nested in
+    /// another (a callback) one level deeper, as SonarQube's JavaScript and
+    /// TypeScript analyzer measures it, except directly in an outermost
+    /// function with no structure of its own (a wrapper). Each function's
+    /// own score, which the rule checks, stays flat either way.
+    pub(crate) file_cognitive_nests_functions: bool,
     /// Loops, catches and ternaries: +1 cyclomatic, +1 (+nesting) cognitive.
     pub(crate) branches: &'static [&'static str],
     /// Switch/match constructs: +1 (+nesting) cognitive once per switch, and
@@ -154,6 +165,8 @@ static JS_SYNTAX: Syntax = Syntax {
     ],
     closures: &[],
     wildcard_arm_is_default: false,
+    cognitive_skips_or: true,
+    file_cognitive_nests_functions: true,
     branches: &[
         "for_statement",
         "for_in_statement",
@@ -172,6 +185,8 @@ static PYTHON_SYNTAX: Syntax = Syntax {
     functions: &["function_definition"],
     closures: &[],
     wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
     branches: &[
         "for_statement",
         "while_statement",
@@ -197,6 +212,8 @@ static JAVA_SYNTAX: Syntax = Syntax {
     ],
     closures: &[],
     wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
     branches: &[
         "for_statement",
         "enhanced_for_statement",
@@ -215,6 +232,8 @@ static C_SYNTAX: Syntax = Syntax {
     functions: &["function_definition", "lambda_expression"],
     closures: &[],
     wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
     branches: &[
         "for_statement",
         "for_range_loop",
@@ -243,6 +262,8 @@ static CSHARP_SYNTAX: Syntax = Syntax {
     ],
     closures: &[],
     wildcard_arm_is_default: true,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
     branches: &[
         "for_statement",
         "foreach_statement",
@@ -261,6 +282,8 @@ static RUST_SYNTAX: Syntax = Syntax {
     functions: &["function_item"],
     closures: &["closure_expression"],
     wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
     branches: &["for_expression", "while_expression"],
     // `loop` has no condition, so no decision: it only nests, like a match.
     switches: &["match_expression", "loop_expression"],

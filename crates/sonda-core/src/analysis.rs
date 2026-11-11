@@ -2250,7 +2250,9 @@ fn measure_functions(
         }
         let c = complexity(node, syn, ctx.src.as_bytes());
         metrics.complexity += c.cyclomatic;
-        metrics.cognitive_complexity += c.cognitive;
+        if !syn.file_cognitive_nests_functions {
+            metrics.cognitive_complexity += c.cognitive;
+        }
         metrics.functions += 1;
 
         let name = function_name(node, ctx);
@@ -2288,6 +2290,29 @@ fn measure_functions(
         // Keep descending: nested functions are measured on their own.
         true
     });
+    if syn.file_cognitive_nests_functions {
+        walk(root, |node| {
+            if !node.is_named() || !syn.functions.contains(&node.kind()) {
+                return true;
+            }
+            metrics.cognitive_complexity += file_cognitive(node, syn, ctx.src.as_bytes());
+            false // its nested functions are part of it
+        });
+    }
+}
+
+/// An outermost function's share of its file's cognitive complexity, with
+/// the functions nested in it: each one level deeper, unless the outermost
+/// has no structure of its own, as a wrapper around callbacks doesn't.
+fn file_cognitive(func: Node, syn: &Syntax, src: &[u8]) -> u32 {
+    let own = complexity(func, syn, src);
+    let all = complexity_with(func, syn, src, true);
+    if own.structures == 0 {
+        // One level less for everything in its nested functions.
+        all.cognitive - (all.structures - own.structures)
+    } else {
+        all.cognitive
+    }
 }
 
 struct TokenScan {
@@ -2495,6 +2520,9 @@ fn walk<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
 struct Complexity {
     cyclomatic: u32,
     cognitive: u32,
+    /// The increments that grow with nesting: branches, loops, switches,
+    /// catches, ternaries.
+    structures: u32,
 }
 
 /// Cyclomatic complexity plus an approximation of SonarSource's cognitive
@@ -2506,14 +2534,22 @@ struct Complexity {
 /// arbitrarily deep, and recursion would overflow the stack and abort the
 /// whole scan.
 fn complexity(func: Node, syn: &Syntax, src: &[u8]) -> Complexity {
+    complexity_with(func, syn, src, false)
+}
+
+/// `complexity`, or with `nested`, also the functions nested in `func`, each
+/// one level deeper than where it is.
+fn complexity_with(func: Node, syn: &Syntax, src: &[u8], nested: bool) -> Complexity {
     let mut w = ComplexityWalker {
         syn,
         src,
         c: Complexity {
             cyclomatic: 1,
             cognitive: 0,
+            structures: 0,
         },
         stack: Vec::new(),
+        nested,
     };
     w.children(func, 0, None);
     while let Some(step) = w.stack.pop() {
@@ -2544,6 +2580,8 @@ struct ComplexityWalker<'a, 't> {
     src: &'a [u8],
     c: Complexity,
     stack: Vec<Step<'a, 't>>,
+    /// Whether nested functions are walked too, one level deeper.
+    nested: bool,
 }
 
 impl<'a, 't> ComplexityWalker<'a, 't> {
@@ -2558,6 +2596,9 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
     fn visit(&mut self, node: Node<'t>, nesting: u32, parent_op: Option<&'a str>) {
         let kind = node.kind();
         if self.syn.functions.contains(&kind) {
+            if self.nested {
+                self.children(node, nesting + 1, None);
+            }
             return;
         }
         if self.syn.closures.contains(&kind) {
@@ -2571,10 +2612,12 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         if self.syn.branches.contains(&kind) {
             self.c.cyclomatic += 1;
             self.c.cognitive += 1 + nesting;
+            self.c.structures += 1;
             return self.children(node, nesting + 1, None);
         }
         if self.syn.switches.contains(&kind) {
             self.c.cognitive += 1 + nesting;
+            self.c.structures += 1;
             return self.children(node, nesting + 1, None);
         }
         if self.syn.cases.contains(&kind)
@@ -2588,7 +2631,7 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         let op = logical_operator(node, self.src);
         if let Some(op) = op {
             self.c.cyclomatic += 1;
-            if parent_op != Some(op) {
+            if parent_op != Some(op) && !(op == "||" && self.syn.cognitive_skips_or) {
                 self.c.cognitive += 1;
             }
         }
@@ -2598,6 +2641,7 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
     fn visit_if(&mut self, node: Node<'t>, nesting: u32, flat: bool) {
         self.c.cyclomatic += 1;
         self.c.cognitive += if flat { 1 } else { 1 + nesting };
+        self.c.structures += u32::from(!flat);
         let mut cursor = node.walk();
         if !cursor.goto_first_child() {
             return;
@@ -3267,6 +3311,105 @@ pub(crate) mod tests {
         assert_eq!(a.metrics.ncloc, 3);
         assert_eq!(a.code_lines, vec![3, 4, 5]);
         assert_eq!(a.metrics.comment_lines, 2);
+    }
+
+    /// SonarQube 26.7's JavaScript and TypeScript analyzer counts `&&` and
+    /// not `||`, measured file by file (docs/sonar-parity/differences.md);
+    /// Python's `or` and Java's `||` count as the specification says.
+    #[test]
+    fn javascript_cognitive_complexity_leaves_or_out() {
+        let cognitive = |lang, src| run(lang, src).metrics.cognitive_complexity;
+        let js = Lang::JavaScript;
+        assert_eq!(
+            cognitive(js, "function f(a, b) { if (a || b) { g(); } }"),
+            1
+        );
+        assert_eq!(
+            cognitive(js, "function f(a, b) { if (a && b) { g(); } }"),
+            2
+        );
+        assert_eq!(
+            cognitive(js, "function f(a, b, d) { return (a && b) || (!a && d); }"),
+            2
+        );
+        assert_eq!(
+            cognitive(js, "function f(a, b, c) { if (a || b && c) { g(); } }"),
+            2
+        );
+        assert_eq!(
+            cognitive(
+                Lang::TypeScript,
+                "function f(a: any, b: any) { return a || b; }"
+            ),
+            0
+        );
+        assert_eq!(
+            cognitive(Lang::Python, "def f(a, b):\n    if a or b:\n        g()\n"),
+            2
+        );
+        let java = "class J { void f(boolean a, boolean b) { if (a || b) { g(); } } void g() {} }";
+        assert_eq!(cognitive(Lang::Java, java), 2);
+    }
+
+    /// The file's measure counts a callback one level deeper, unless the
+    /// function around it has no structure of its own; each function's own
+    /// score, which the rule checks, stays flat. Each case is SonarQube
+    /// 26.7's measure of the same code.
+    #[test]
+    fn javascript_file_cognitive_complexity_nests_callbacks() {
+        let cognitive = |src| run(Lang::JavaScript, src).metrics.cognitive_complexity;
+        // A wrapper: the callback counts as if on its own.
+        assert_eq!(
+            cognitive("function f(xs) { return xs.map((x) => (x ? 1 : 2)); }"),
+            1
+        );
+        assert_eq!(
+            cognitive(
+                "function f(a, b, xs) { const z = a && b; return xs.map((x) => (x ? z : 2)); }"
+            ),
+            2
+        );
+        // Not a wrapper: one level deeper, and another per callback inside.
+        assert_eq!(
+            cognitive("function f(a, xs) { if (a) { g(); } return xs.map((x) => (x ? 1 : 2)); }"),
+            3
+        );
+        assert_eq!(
+            cognitive(
+                "function f(a, xs) { if (a) { g(); } return xs.map((x) => x.ys.map((y) => (y ? 1 : 2))); }"
+            ),
+            4
+        );
+        assert_eq!(
+            cognitive("function f(xs) { for (const x of xs) { x.ys.map((y) => (y ? 1 : 2)); } }"),
+            4
+        );
+        // Only the outermost wrapper is left out.
+        assert_eq!(
+            cognitive("function f(xs) { return xs.map((x) => xs.filter((y) => (y ? 1 : 2))); }"),
+            2
+        );
+        assert_eq!(
+            cognitive(
+                "class A { m(a, xs) { if (a) { g(); } return xs.map((x) => (x ? 1 : 2)); } }"
+            ),
+            3
+        );
+
+        // The rule scores each function flat: 1 + 8 here, not 17.
+        let mut src =
+            String::from("function outer(a, xs) {\n  if (a) { g(); }\n  return xs.map((x) => {\n");
+        for i in 0..8 {
+            src += &format!("    if (x.k{i}) {{ g(); }}\n");
+        }
+        src += "    return x;\n  });\n}\n";
+        let a = run(Lang::JavaScript, &src);
+        assert_eq!(a.metrics.cognitive_complexity, 17);
+        assert!(
+            !a.issues
+                .iter()
+                .any(|i| i.rule == crate::rules::COGNITIVE_COMPLEXITY)
+        );
     }
 
     #[test]

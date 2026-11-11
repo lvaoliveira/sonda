@@ -212,7 +212,17 @@ file, the report formats and the public library API.
 
 Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,
-where it raised 142, and 8 issues SonarQube doesn't, where it raised 14.
+where it raised 142, and 4 issues SonarQube doesn't, where it raised 14.
+
+- Cognitive complexity in JavaScript and TypeScript counts as SonarQube's
+  analyzer does, measured on SonarQube 26.7 one construct at a time: `||`
+  sequences add nothing (`&&` still adds 1), and a file's total counts a
+  callback one level deeper than where it is, unless the function around
+  it has no structure of its own. Each function's own score, which
+  `common/cognitive-complexity` checks, stays flat. On a 65-file project,
+  every file's total now equals SonarQube's, where 36 did; functions with
+  `||` in their conditions score lower and may no longer be reported.
+  Other languages are unchanged.
 
 - `js/multiline-without-braces` (and `java/`) no longer takes a comment
   after a one-line body for a second statement: `if (c) await c.read(); //

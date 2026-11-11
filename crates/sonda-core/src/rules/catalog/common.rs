@@ -33,7 +33,8 @@ pub(super) static RULES: &[Rule] = &[
         name: "Cognitive complexity of functions should not be too high",
         description: "Deeply nested and heavily branched functions are hard to understand and change. \
                       Cognitive complexity adds 1 per branch, loop, catch or boolean-operator sequence, \
-                      plus the current nesting depth for nested structures. Threshold: `thresholds.cognitive_complexity`.",
+                      plus the current nesting depth for nested structures. In JavaScript and TypeScript, \
+                      `||` sequences add nothing, as in SonarQube. Threshold: `thresholds.cognitive_complexity`.",
         message: "",
         category: CodeSmell,
         severity: Critical,
