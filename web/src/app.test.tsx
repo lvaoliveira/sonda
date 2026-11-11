@@ -180,6 +180,28 @@ describe('Issues', () => {
     expect(within(list).getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('fits the list to the window, so its pager stays in view', async () => {
+    // jsdom lays nothing out: the panel starts at the top, nothing below it.
+    const height = window.innerHeight
+    try {
+      for (const [inner, expected] of [
+        [900, '900px'],
+        [300, '420px'],
+      ] as const) {
+        window.innerHeight = inner
+        const { unmount } = renderAt('/issues')
+        const panel = (await screen.findByRole('region', { name: 'Issue list' })).parentElement
+        // A fixed height, not a minimum: the list, the filters and the detail
+        // scroll inside it, and the pager under the list stays on screen.
+        await waitFor(() => expect(panel?.style.height).toBe(expected))
+        expect(panel?.style.gridTemplateRows).toBe('minmax(0, 1fr)')
+        unmount()
+      }
+    } finally {
+      window.innerHeight = height
+    }
+  })
+
   it('shows one pane at a time on a phone: the list, then the issue', async () => {
     const user = userEvent.setup()
     // A phone: no min-width query matches.

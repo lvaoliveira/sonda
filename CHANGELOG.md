@@ -193,12 +193,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
-- The Issues page keeps the picked issue in view. The list and the issue
-  each scroll on their own, in a grid that fits the window, so an issue
-  picked far down the list no longer opens above the fold; a new issue
-  starts at its top, and `j`/`k` scroll the list to the row they select.
-  On a phone, an issue opens at the top of the page, and going back
-  returns to where the list was.
+- The Issues page fits its panel to the window, and the list, the filters
+  and the issue each scroll inside it. The panel used to grow with its
+  longest pane, so an issue picked far down the list opened above the
+  fold, and Previous and Next sat below it, past the end of the list's own
+  scrolling. A new issue starts at its top, and `j`/`k` scroll the list to
+  the row they select. On a phone, an issue opens at the top of the page,
+  and going back returns to where the list was.
 
 - Duplication detection needs less than half the memory: a scan of VS
   Code (4 million lines) peaked at 4.4 GB in its main process, now 1.7 GB,

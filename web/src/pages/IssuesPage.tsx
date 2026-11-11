@@ -81,6 +81,38 @@ function useWide(min: number) {
   return wide
 }
 
+/**
+ * A height that ends the panel at the window's bottom, above the page's own
+ * bottom margin, so the list, the filters and the detail scroll inside it and
+ * the list's pager stays in view. Never less than `min`: on a short window the
+ * page scrolls instead.
+ */
+function useFitToWindow(min: number) {
+  // A callback ref: the panel mounts after the first load, not with the page.
+  const [el, setEl] = useState<HTMLDivElement | null>(null)
+  const [height, setHeight] = useState<number>()
+  useEffect(() => {
+    if (!el) return
+    const fit = () => {
+      const rect = el.getBoundingClientRect()
+      const top = rect.top + window.scrollY
+      const below = document.documentElement.scrollHeight - (rect.bottom + window.scrollY)
+      const next = Math.max(min, Math.floor(window.innerHeight - top - Math.max(0, below)))
+      setHeight((h) => (h === next ? h : next))
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    // What sits above the panel (a drill-down, an error) moves it.
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(fit)
+    if (el.parentElement) observer?.observe(el.parentElement)
+    return () => {
+      window.removeEventListener('resize', fit)
+      observer?.disconnect()
+    }
+  }, [el, min])
+  return [setEl, height] as const
+}
+
 /** Triage changes made on this page, laid over the server's list until it reloads. */
 type Overrides = Record<number, Pick<IssueSummary, 'status' | 'assignee'>>
 
@@ -106,6 +138,7 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
   // Where the phone's list was scrolled to, for coming back from an issue.
   const listScroll = useRef(0)
   const [showFacets, setShowFacets] = useFacets(wide)
+  const [panel, panelHeight] = useFitToWindow(420)
 
   const loaded = useAsync(() => api.issues(toQuery(filter, me ?? '', offset)), [api, filter, offset, me])
   const page = useLastLoaded(loaded)
@@ -217,12 +250,13 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
       )}
       {loaded.state === 'error' && <p role="alert">Could not load issues: {loaded.error.message}</p>}
 
-      {/* Side by side, the grid fits the window and each column scrolls on its
-          own, so the issue stays in view however far down the list it was
-          picked. On a phone, one pane at a time, the page scrolls. */}
+      {/* Ends at the window's bottom, so each pane scrolls on its own: the
+          issue stays in view however far down the list it was picked, and
+          the pager stays under the list. */}
       <div
-        className={`grid gap-px overflow-hidden rounded-xl bg-line ${narrow ? 'min-h-[calc(100vh-220px)]' : 'h-[calc(100dvh-220px)] min-h-[480px]'}`}
-        style={{ gridTemplateColumns: columns, gridTemplateRows: narrow ? undefined : 'minmax(0,1fr)', boxShadow: '0 0 0 1px var(--sd-line)' }}
+        ref={panel}
+        className="grid min-h-[420px] gap-px overflow-hidden rounded-xl bg-line"
+        style={{ gridTemplateColumns: columns, gridTemplateRows: 'minmax(0, 1fr)', height: panelHeight, boxShadow: '0 0 0 1px var(--sd-line)' }}
       >
         {showFacets && !listHidden && <Facets page={page} filter={filter} base={base} me={me} toggleIn={toggleIn} changeFilter={changeFilter} />}
 
