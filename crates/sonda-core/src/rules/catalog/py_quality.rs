@@ -877,7 +877,8 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/empty-nested-block",
         name: "Nested blocks of code should not be left empty",
-        description: "An empty if, loop or except hides whether the case was forgotten.",
+        description: "An empty if, loop or with hides whether the case was forgotten. An except clause \
+                      that only passes is left to the exception rules, as SonarQube does.",
         message: "Fill this block, or say why it is empty.",
         category: CodeSmell,
         severity: Major,
@@ -890,8 +891,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "try:\n    f()\nexcept ValueError:\n    pass\n",
-            good: "try:\n    f()\nexcept ValueError:\n    log.warning('ignored')\n",
+            bad: "for item in items:\n    pass\n",
+            good: "for item in items:\n    handle(item)\n",
         }),
     },
     Rule {
@@ -958,24 +959,22 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/redundant-parentheses",
         name: "Unnecessary parentheses should be removed",
-        description: "Parentheses around a whole condition add noise.",
-        message: "Remove the parentheses.",
+        description: "A second pair of parentheses around an expression changes nothing and suggests \
+                      something else was meant.",
+        message: "Remove the extra parentheses.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 2,
         sonar: &[exact("S1110")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(if_statement condition: (parenthesized_expression) @match)
-(elif_clause condition: (parenthesized_expression) @match)
-(while_statement condition: (parenthesized_expression) @match)
-(return_statement (parenthesized_expression) @match)"#,
-            filter: Some(Keep(parentheses_fit_on_one_line)),
+            query: r#"(parenthesized_expression . (parenthesized_expression) .) @match"#,
+            filter: None,
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "if (x > 1):\n    pass\n",
-            good: "if x > 1:\n    pass\n",
+            bad: "y = ((x + 1))\n",
+            good: "y = x + 1\n",
         }),
     },
     Rule {
@@ -990,7 +989,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(if_statement) @match"#,
-            filter: Some(Keep(if_only_wraps_another_if)),
+            filter: Some(Find(if_only_wraps_another_if)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -1304,8 +1303,8 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "py/dict-keys-iteration",
-        name: "The .keys() method should not be called when testing or iterating over a dictionary",
-        description: "A dictionary already tests and iterates its keys.",
+        name: "The .keys() method should not be called when testing membership in a dictionary",
+        description: "`k in d` already tests d's keys. Reported where d is known to be a dictionary.",
         message: "Drop .keys().",
         category: CodeSmell,
         severity: Minor,
@@ -1313,14 +1312,36 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S8521")],
         check: Check::Query {
             langs: PYTHON,
-            query: r#"(comparison_operator (call function: (attribute attribute: (identifier) @k (#eq? @k "keys")))) @match
-(for_statement right: (call function: (attribute attribute: (identifier) @k2 (#eq? @k2 "keys")))) @match"#,
+            query: r#"(comparison_operator (call function: (attribute attribute: (identifier) @k (#eq? @k "keys")))) @match"#,
             filter: Some(Keep(keys_call_is_redundant)),
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "if k in d.keys():\n    pass\n",
-            good: "if k in d:\n    pass\n",
+            bad: "d = {'a': 1}\nif k in d.keys():\n    pass\n",
+            good: "d = {'a': 1}\nif k in d:\n    pass\n",
+        }),
+    },
+    Rule {
+        id: "py/dict-unpacked-without-items",
+        name: "A dictionary's keys should not be unpacked as key-value pairs",
+        description: "Iterating a dictionary gives its keys, so `for k, v in d` unpacks each key \
+                      (a two-character string becomes two characters), or fails. Reported where d \
+                      is known to be a dictionary.",
+        message: "Iterate over .items() to get keys and values.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 2,
+        sonar: &[exact("S7517")],
+        check: Check::Query {
+            langs: PYTHON,
+            query: r#"(for_statement left: [(pattern_list) (tuple_pattern)] right: (_) @r) @match
+(for_in_clause left: [(pattern_list) (tuple_pattern)] right: (_) @r) @match"#,
+            filter: Some(Keep(iterates_a_known_dict)),
+        },
+        example: Some(Example {
+            lang: Lang::Python,
+            bad: "prices = {'gas': 1.2}\nfor name, price in prices:\n    print(name, price)\n",
+            good: "prices = {'gas': 1.2}\nfor name, price in prices.items():\n    print(name, price)\n",
         }),
     },
     Rule {
@@ -1987,7 +2008,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/logging-error-in-except",
         name: "logging.exception() should be used instead of logging.error() in exception handlers",
-        description: "exception() logs the traceback too.",
+        description: "In an except clause, error(..., exc_info=True) is what exception() says.",
         message: "Use exception().",
         category: CodeSmell,
         severity: Minor,
@@ -1996,11 +2017,11 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: PYTHON,
             query: r#"(call function: (attribute object: (identifier) @o attribute: (identifier) @a (#match? @o "(?i)log") (#eq? @a "error"))) @match"#,
-            filter: Some(Keep(inside_except_clause)),
+            filter: Some(Keep(error_with_exc_info_in_except)),
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "try:\n    f()\nexcept ValueError:\n    logger.error('failed')\n",
+            bad: "try:\n    f()\nexcept ValueError:\n    logger.error('failed', exc_info=True)\n",
             good: "try:\n    f()\nexcept ValueError:\n    logger.exception('failed')\n",
         }),
     },
@@ -2634,6 +2655,19 @@ fn pass_with_other_statements<'t>(block: Node<'t>, _: &[u8]) -> Option<Node<'t>>
     if items.len() < 2 {
         return None;
     }
+    // `class E(Exception):` with a docstring and `pass`: SonarQube leaves it.
+    let docstring = |s: &Node| {
+        s.kind() == "expression_statement" && s.named_child(0).is_some_and(|c| c.kind() == "string")
+    };
+    if block
+        .parent()
+        .is_some_and(|p| p.kind() == "class_definition")
+        && items
+            .iter()
+            .all(|s| s.kind() == "pass_statement" || docstring(s))
+    {
+        return None;
+    }
     items.into_iter().find(|s| s.kind() == "pass_statement")
 }
 
@@ -2726,7 +2760,6 @@ fn statement_block_is_only_pass(block: Node, src: &[u8]) -> bool {
                 | "for_statement"
                 | "while_statement"
                 | "try_statement"
-                | "except_clause"
                 | "finally_clause"
                 | "with_statement"
         )
@@ -2786,7 +2819,10 @@ fn countable_string(n: Node, src: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let v = string_value(n, src).filter(|v| v.len() >= 5)?;
-    let identifier_like = v.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
+    // `encoded-word`: SonarQube counts hyphenated words as word-like too.
+    let identifier_like = v
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-');
     (!identifier_like).then(|| v.to_vec())
 }
 
@@ -2835,26 +2871,21 @@ fn negates_a_simple_comparison(not: Node, src: &[u8]) -> bool {
         })
 }
 
-fn parentheses_fit_on_one_line(paren: Node, _: &[u8]) -> bool {
-    paren.start_position().row == paren.end_position().row
-        && paren.named_child(0).is_some_and(|c| {
-            !matches!(
-                c.kind(),
-                "generator_expression" | "yield" | "tuple" | "list_splat" | "named_expression"
-            )
-        })
-}
-
-fn if_only_wraps_another_if(statement: Node, _: &[u8]) -> bool {
+/// The inner `if` of an `if` that only wraps it, where SonarQube reports it.
+fn if_only_wraps_another_if<'t>(statement: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
     if statement.child_by_field_name("alternative").is_some() {
-        return false;
+        return None;
     }
-    let Some(body) = statement.child_by_field_name("consequence") else {
-        return false;
-    };
-    let items = statements(body);
-    matches!(items.as_slice(), [only]
-        if only.kind() == "if_statement" && only.child_by_field_name("alternative").is_none())
+    let body = statement.child_by_field_name("consequence")?;
+    match statements(body).as_slice() {
+        [only]
+            if only.kind() == "if_statement"
+                && only.child_by_field_name("alternative").is_none() =>
+        {
+            Some(*only)
+        }
+        _ => None,
+    }
 }
 
 fn method_lacks_self(function: Node, src: &[u8]) -> bool {
@@ -3030,18 +3061,88 @@ fn collection_call_is_redundant(outer: Node, src: &[u8]) -> bool {
     )
 }
 
+/// `k in d.keys()` where `d` is known to be a dictionary, as SonarQube
+/// reports it: not a parameter or an attribute of unknown type.
 fn keys_call_is_redundant(node: Node, src: &[u8]) -> bool {
-    let is_keys = |c: Node| {
+    let keys_of_a_dict = |c: Node| {
         c.kind() == "call"
             && call_arguments(c).is_empty()
-            && c.child_by_field_name("function")
-                .and_then(|f| f.child_by_field_name("attribute"))
-                .is_some_and(|a| text(a, src) == b"keys")
+            && c.child_by_field_name("function").is_some_and(|f| {
+                f.child_by_field_name("attribute")
+                    .is_some_and(|a| text(a, src) == b"keys")
+                    && f.child_by_field_name("object")
+                        .is_some_and(|o| is_known_dict(o, src))
+            })
     };
-    if node.kind() == "for_statement" {
-        return node.child_by_field_name("right").is_some_and(is_keys);
+    two_operands(node, src)
+        .is_some_and(|(_, op, r)| matches!(op, b"in" | b"not in") && keys_of_a_dict(r))
+}
+
+/// A loop or comprehension unpacking pairs from what is known to be a dict.
+fn iterates_a_known_dict(node: Node, src: &[u8]) -> bool {
+    node.child_by_field_name("right")
+        .is_some_and(|r| is_known_dict(r, src))
+}
+
+/// Whether an expression is a dictionary: a literal, a comprehension, a
+/// `dict(...)` call, a name assigned one of those in its scope, or a
+/// parameter annotated `dict`.
+pub(super) fn is_known_dict(expr: Node, src: &[u8]) -> bool {
+    let literal = |v: Node| {
+        matches!(v.kind(), "dictionary" | "dictionary_comprehension")
+            || v.kind() == "call"
+                && v.child_by_field_name("function")
+                    .is_some_and(|f| text(f, src) == b"dict")
+    };
+    if literal(expr) {
+        return true;
     }
-    two_operands(node, src).is_some_and(|(_, op, r)| matches!(op, b"in" | b"not in") && is_keys(r))
+    if expr.kind() != "identifier" {
+        return false;
+    }
+    let name = text(expr, src);
+    let scope = nearest_function(expr, 64).or_else(|| {
+        let mut root = expr;
+        while let Some(p) = root.parent() {
+            root = p;
+        }
+        Some(root)
+    });
+    let Some(scope) = scope else {
+        return false;
+    };
+    let annotated = scope.child_by_field_name("parameters").is_some_and(|ps| {
+        let mut cursor = ps.walk();
+        ps.named_children(&mut cursor).any(|p| {
+            matches!(p.kind(), "typed_parameter" | "typed_default_parameter")
+                && p.named_child(0).is_some_and(|n| text(n, src) == name)
+                && p.child_by_field_name("type").is_some_and(|t| {
+                    let t = text(t, src);
+                    t == b"dict" || t.starts_with(b"dict[") || t.starts_with(b"Dict")
+                })
+        })
+    });
+    if annotated {
+        return true;
+    }
+    let mut found = false;
+    let mut cursor = scope.walk();
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "assignment"
+            && n.child_by_field_name("left")
+                .is_some_and(|l| text(l, src) == name)
+            && n.child_by_field_name("right").is_some_and(literal)
+        {
+            found = true;
+            break;
+        }
+        if n.id() != scope.id() && matches!(n.kind(), "function_definition" | "class_definition") {
+            continue;
+        }
+        stack.extend(n.named_children(&mut cursor));
+    }
+    found
 }
 
 fn indexes_first_or_last(subscript: Node, src: &[u8]) -> bool {
@@ -3219,6 +3320,22 @@ fn tests_membership_in_empty_literal(cmp: Node, src: &[u8]) -> bool {
     })
 }
 
+/// `log.error(..., exc_info=True)` in an except clause: what
+/// `log.exception(...)` says. Without `exc_info`, SonarQube leaves it alone.
+fn error_with_exc_info_in_except(call: Node, src: &[u8]) -> bool {
+    let exc_info = call.child_by_field_name("arguments").is_some_and(|args| {
+        let mut cursor = args.walk();
+        args.named_children(&mut cursor).any(|a| {
+            a.kind() == "keyword_argument"
+                && a.child_by_field_name("name")
+                    .is_some_and(|n| text(n, src) == b"exc_info")
+                && a.child_by_field_name("value")
+                    .is_some_and(|v| text(v, src) == b"True")
+        })
+    });
+    exc_info && inside_except_clause(call, src)
+}
+
 fn inside_except_clause(call: Node, _: &[u8]) -> bool {
     let mut p = call.parent();
     let mut hops = 0;
@@ -3332,7 +3449,7 @@ mod tests {
         let src = "def f():\n    g()\n    return\ndef h():\n    return\n    g()\nfor x in xs:\n    g()\n    continue\ndef e():\n    pass\n@overload\ndef o():\n    pass\ntry:\n    f()\nexcept ValueError:\n    pass\ndef c():\n    # intentional\n    pass";
         assert_eq!(flagged("py/redundant-jump", src), [3, 9]);
         assert_eq!(flagged("py/empty-function", src), [10]);
-        assert_eq!(flagged("py/empty-nested-block", src), [18]);
+        assert!(flagged("py/empty-nested-block", src).is_empty());
     }
 
     #[test]
@@ -3350,7 +3467,7 @@ mod tests {
         assert_eq!(flagged("py/reversed-wrapper", src), [6]);
         assert_eq!(flagged("py/empty-literal", src), [7]);
         assert_eq!(flagged("py/comprehension-copy", src), [8]);
-        assert_eq!(flagged("py/dict-keys-iteration", src), [10, 11]);
+        assert!(flagged("py/dict-keys-iteration", src).is_empty());
         assert_eq!(flagged("py/list-first-element", src), [13]);
         assert_eq!(flagged("py/sorted-for-extreme", src), [14]);
         assert_eq!(flagged("py/sum-concatenates-lists", src), [16]);
@@ -3374,7 +3491,7 @@ mod tests {
     fn strings_and_parens() {
         let src = "a = ['x' 'y', 'z']\nb = 'x' 'y'\nif (x > 1):\n    pass\nif (\n    x > 1\n):\n    pass\nx = 'a long literal'\ny = 'a long literal'\nz = 'a long literal'\ns = 'short'";
         assert_eq!(flagged("py/implicit-string-concatenation", src), [1]);
-        assert_eq!(flagged("py/redundant-parentheses", src), [3]);
+        assert!(flagged("py/redundant-parentheses", src).is_empty());
         assert_eq!(flagged("py/duplicated-string", src), [9]);
     }
 
@@ -3389,7 +3506,7 @@ mod tests {
     fn conditions_and_merging() {
         let src = "if True:\n    pass\nif a:\n    if b:\n        f()\nif a:\n    if b:\n        f()\n    else:\n        g()\nx = a if p else (b if q else c)";
         assert_eq!(flagged("py/constant-condition", src), [1]);
-        assert_eq!(flagged("py/mergeable-if", src), [3]);
+        assert_eq!(flagged("py/mergeable-if", src), [4]);
         assert_eq!(flagged("py/nested-conditional", src), [11]);
     }
 
@@ -3434,5 +3551,34 @@ mod tests {
         assert_eq!(flagged("py/dict-fromkeys-comprehension", src), [5]);
         assert_eq!(flagged("py/typevar-name", src), [8]);
         assert_eq!(flagged("py/dataloader-workers", src), [10]);
+    }
+
+    /// Each case as SonarQube 26.7 reports it, measured one file at a time.
+    #[test]
+    fn python_cases_measured_on_sonarqube() {
+        // S108: an except clause that only passes is left alone; an if isn't.
+        let src = "def f(g, x):\n    try:\n        g()\n    except OSError:\n        pass\n    if x:\n        pass\n";
+        assert_eq!(flagged("py/empty-nested-block", src), [7]);
+        // S2772: a class with a docstring and pass.
+        let src = "class E(Exception):\n    \"\"\"Raised.\"\"\"\n    pass\n\ndef f(g):\n    g()\n    pass\n";
+        assert_eq!(flagged("py/needless-pass", src), [7]);
+        // S1110: doubled parentheses only.
+        let src = "def f(x, y):\n    a = (x + 1)\n    b = ((y / 2)) + 1\n    return ((x + 1))\n";
+        assert_eq!(flagged("py/redundant-parentheses", src), [3, 4]);
+        // S1066: reported at the inner if.
+        let src = "def f(a, b, g):\n    if a:\n        if b and a:\n            g()\n";
+        assert_eq!(flagged("py/mergeable-if", src), [3]);
+        // S8572: only with exc_info=True.
+        let src = "def f(g):\n    try:\n        g()\n    except OSError:\n        logger.error('a')\n        logger.error('b', exc_info=True)\n";
+        assert_eq!(flagged("py/logging-error-in-except", src), [6]);
+        // S8521: a membership test on a known dictionary; not a loop or a parameter.
+        let src = "def f(k, p):\n    d = {'a': 1}\n    for x in d.keys():\n        g(x)\n    return k in d.keys() or k in p.keys()\n";
+        assert_eq!(flagged("py/dict-keys-iteration", src), [5]);
+        // S7517: unpacking a known dictionary's keys.
+        let src = "def f(g, p: dict, q):\n    d = {'ab': 1}\n    for k, v in d:\n        g(k, v)\n    for k, v in p:\n        g(k, v)\n    for k, v in q:\n        g(k, v)\n    for k, v in d.items():\n        g(k, v)\n    return {k: v for k, v in d}\n";
+        assert_eq!(flagged("py/dict-unpacked-without-items", src), [3, 5, 11]);
+        // S1192: hyphenated words are word-like; words with spaces count.
+        let src = "def f(g):\n    g('encoded-word')\n    g('encoded-word')\n    g('encoded-word')\n    g('two words')\n    g('two words')\n    g('two words')\n";
+        assert_eq!(flagged("py/duplicated-string", src), [5]);
     }
 }

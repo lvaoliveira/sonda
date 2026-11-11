@@ -49,7 +49,8 @@ disabled = []
 [thresholds]
 cognitive_complexity = 15
 function_lines = 80
-parameters = 7
+# Parameters a function may have; by default 7, and 13 in Python, as SonarQube.
+# parameters = 7
 
 [duplication]
 # A duplicated block must span at least this many tokens and lines.
@@ -146,7 +147,8 @@ pub struct RulesConfig {
 pub struct Thresholds {
     pub cognitive_complexity: u32,
     pub function_lines: u32,
-    pub parameters: u32,
+    /// None: each language's default (7, 13 in Python).
+    pub parameters: Option<u32>,
 }
 
 impl Default for Thresholds {
@@ -154,7 +156,7 @@ impl Default for Thresholds {
         Thresholds {
             cognitive_complexity: 15,
             function_lines: 80,
-            parameters: 7,
+            parameters: None,
         }
     }
 }
@@ -230,7 +232,7 @@ impl Config {
                 t.cognitive_complexity as u64,
             ),
             ("thresholds.function_lines", t.function_lines as u64),
-            ("thresholds.parameters", t.parameters as u64),
+            ("thresholds.parameters", t.parameters.map_or(1, u64::from)),
             ("scan.file_timeout_secs", self.scan.file_timeout_secs),
             ("scan.git_timeout_secs", self.scan.git_timeout_secs),
             ("duplication.min_tokens", self.duplication.min_tokens as u64),
@@ -280,7 +282,7 @@ mod tests {
     #[test]
     fn partial_config_keeps_other_defaults() {
         let cfg = Config::parse("[thresholds]\nparameters = 4\n").unwrap();
-        assert_eq!(cfg.thresholds.parameters, 4);
+        assert_eq!(cfg.thresholds.parameters, Some(4));
         assert_eq!(cfg.thresholds.function_lines, 80);
         assert_eq!(cfg.gate, GateConfig::default());
     }

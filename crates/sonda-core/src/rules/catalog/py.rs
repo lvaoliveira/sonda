@@ -78,7 +78,7 @@ pub(super) static RULES: &[Rule] = &[
             langs: PYTHON,
             query: r#"[(default_parameter value: [(list) (dictionary) (set)] @match)
                        (typed_default_parameter value: [(list) (dictionary) (set)] @match)]"#,
-            filter: None,
+            filter: Some(Keep(default_left_unmodified)),
         },
         example: Some(Example {
             lang: Lang::Python,
@@ -109,7 +109,9 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/bare-except",
         name: "Bare except clauses should not be used",
-        description: "`except:` also catches SystemExit and KeyboardInterrupt. Catch a specific exception.",
+        description: "`except:` and `except BaseException:` also catch SystemExit and \
+                      KeyboardInterrupt, and `except SystemExit:` catches the request to exit: \
+                      re-raise it. A catch-all after a clause that re-raises SystemExit is fine.",
         message: "Catch a specific exception (at least 'Exception') instead of a bare except.",
         category: CodeSmell,
         severity: Major,
@@ -150,20 +152,51 @@ pub(super) static RULES: &[Rule] = &[
 
 /// `except:` and `except BaseException` that never re-raise: they also catch
 /// SystemExit and KeyboardInterrupt.
+/// A mutable default the body doesn't change: py/default-parameter-modified
+/// reports the ones it does.
+fn default_left_unmodified(value: Node, src: &[u8]) -> bool {
+    value
+        .parent()
+        .and_then(|p| p.child_by_field_name("name"))
+        .is_none_or(|name| !super::py_final::default_is_modified_in_the_body(name, src))
+}
+
+/// The exception types an except clause names: `E`, `E as e`, `(A, B)`.
+fn caught_types<'s>(clause: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let Some(mut c) = clause.named_child(0).filter(|c| c.kind() != "block") else {
+        return Vec::new();
+    };
+    if c.kind() == "as_pattern"
+        && let Some(v) = c.named_child(0)
+    {
+        c = v;
+    }
+    if matches!(c.kind(), "tuple" | "parenthesized_expression") {
+        let mut cursor = c.walk();
+        return c
+            .named_children(&mut cursor)
+            .map(|t| text_of(t, src))
+            .collect();
+    }
+    vec![text_of(c, src)]
+}
+
 fn catches_everything_without_reraising(clause: Node, src: &[u8]) -> bool {
     let bare = bare_except(clause, src);
-    let base_exception = clause
-        .named_child(0)
-        .map(|c| {
-            let t = text_of(c, src);
-            t == b"BaseException"
-                || (c.kind() == "as_pattern"
-                    && c.named_child(0)
-                        .is_some_and(|v| text_of(v, src) == b"BaseException"))
-        })
-        .unwrap_or(false);
-    if !bare && !base_exception {
+    let types = caught_types(clause, src);
+    let base_exception = types.contains(&b"BaseException".as_slice());
+    let system_exit = types.contains(&b"SystemExit".as_slice());
+    if !bare && !base_exception && !system_exit {
         return false;
+    }
+    // After `except (SystemExit, KeyboardInterrupt): raise`, a catch-all
+    // no longer swallows the request to exit.
+    let mut earlier = clause.prev_named_sibling();
+    while let Some(e) = earlier.filter(|e| e.kind() == "except_clause") {
+        if !system_exit && caught_types(e, src).contains(&b"SystemExit".as_slice()) {
+            return false;
+        }
+        earlier = e.prev_named_sibling();
     }
     let Some(body) = clause
         .named_children(&mut clause.walk())

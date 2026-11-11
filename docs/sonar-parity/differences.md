@@ -30,7 +30,14 @@ its default profile (Sonar way) and sonda its default rules.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `f5a07dd` | 44 of 44 | 0 |
+| sonda | TypeScript (TSX), Rust | `bb310b2` | 47 of 47 | 0 |
+| CPython, 7 packages¹ | Python | `bf6623a` | 456 of 510 | 134 |
+| ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
+
+¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
+under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
+new in Python 3.15), so those are left out: the script skips any file
+SonarQube indexed without lines of code.
 
 On sonda's own code, SonarQube raises nothing on the Python scripts, and
 its Rust issues are all cognitive complexity (33, every one matched). The
@@ -96,6 +103,45 @@ Scanned the same way, one JSX element per file, on SonarQube 26.7:
   ternary or `&&` count. A key is the index when it is nothing else: `i`,
   `` `row-${i}` ``, `i.toString()`, on the returned element or one inside
   it. `` `${x.id}-${i}` ``, `x.id + i` and `'row' + i` aren't reported.
+
+## Python, measured
+
+Small files on SonarQube 26.7, one case each. Where SonarQube departs from
+what sonda did, sonda now does the same:
+
+- **Cognitive complexity (S3776).** A function nested in another is part
+  of it, one level deeper unless the one around it only wraps it (defines
+  functions and returns one), and the rule reports the outermost function
+  only. A loop's `else` costs 1; `match` costs nothing.
+- **Names (S100, S116, S117).** Not reported: methods and fields of a class
+  with a base, CONSTANT_CASE locals, a parameter assigned again (reported
+  at the parameter).
+- **Unused (S1481, S1172).** Not reported: the halves of a loop's tuple.
+  Unused parameters of a method of a class with a base are still reported
+  when the base is known.
+- **Exceptions (S5754, S7497, S108).** `except SystemExit` that doesn't
+  re-raise is reported, and a catch-all after a clause that re-raises
+  SystemExit isn't. Swallowing a cancellation counts in a coroutine only,
+  a `return` included; `exceptions.CancelledError` through a relative
+  import isn't followed. `except ...: pass` isn't an empty block.
+- **Other rules.** S1110 is doubled parentheses only; S1066 is reported at
+  the inner `if`; S8572 needs `exc_info=True`; S8521 is a membership test
+  on a known dictionary; S7517 is unpacking a dictionary's keys; S5717 is a
+  mutable default changed in place (`append`, `d[k] = ...`), not `+=`;
+  S1192 treats hyphenated words as identifiers; S107 allows 13 parameters,
+  not counting `self`; S1135 and S1134 know TODO and FIXME, not XXX.
+
+### Still open in Python
+
+On CPython, 54 of SonarQube's issues and 134 of sonda's remain, spread over
+about 30 keys, none yet classified one by one. The largest:
+`common/commented-out-code` (33: sonda reports example code indented in a
+comment, and a lone `# print(x)`; SonarQube reported a grammar line in a
+docstring), `py/local-name` (13), `py/unused-parameter` (12),
+`py/mergeable-if` (11, with an `and` in the outer condition) and S1110 (12
+multi-line parenthesized expressions SonarQube reports that don't look
+doubled). Deliberate: `py/mutable-default` also reports a mutable default
+the function doesn't change, which SonarQube doesn't.
 
 ## Rules that depend on knowing a type
 

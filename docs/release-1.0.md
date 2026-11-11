@@ -124,6 +124,7 @@ built.
       deliberate change. `scripts/sonar_compare.py` pairs the two;
       [differences.md](sonar-parity/differences.md) has each language's
       result. Done: JavaScript (arandu), TypeScript and Rust (sonda).
+      Python: compared and partly aligned, a tail still open.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

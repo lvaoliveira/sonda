@@ -111,7 +111,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (py::RULES, &[]),
     (py_security::RULES, &[]),
     (py_quality::RULES, &[]),
-    (py_more::RULES, &[]),
+    (py_more::RULES, py_more::OFF_BY_DEFAULT),
     (py_extra::RULES, py_extra::OFF_BY_DEFAULT),
     (py_cdk::RULES, &[]),
     (py_regex::RULES, &[]),
