@@ -19,12 +19,13 @@ the steps, the commands and what was learned along the way.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `8b30263` | 51 of 51 | 0 |
+| sonda | TypeScript (TSX), Rust | `43ed97a` | 68 of 68 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
-| Apache Commons Lang | Java | `5d2715b` | 889 of 918 | 2 |
+| Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 121 of 171 | 11 |
-| eGovFrame common components² | Java (Spring) | `14313bc` | 3,636 of 4,858 | 1,535 |
+| eGovFrame common components² | Java (Spring) | `14313bc` | 3,650 of 4,878 | 912 |
+| eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -103,6 +104,49 @@ Scanned the same way, one JSX element per file, on SonarQube 26.7:
   ternary or `&&` count. A key is the index when it is nothing else: `i`,
   `` `row-${i}` ``, `i.toString()`, on the returned element or one inside
   it. `` `${x.id}-${i}` ``, `x.id + i` and `'row' + i` aren't reported.
+
+## JavaScript in the browser, measured
+
+eGovFrame's common components ship plain browser scripts: `var`, globals,
+`document.write`, DOM calls and regexes, unlike arandu's modules. Every
+difference there was measured on SonarQube 26.7, small files one case
+each, and sonda now does the same:
+
+- **Lines.** A carriage return alone ends a line, as in files saved on old
+  Macs; sonda read such a file as one line, with every issue on line 1. A
+  method call in a chain over several lines is reported on its method's
+  line.
+- **Each one.** S4144 reports every copy of a function, comparing
+  declarations, methods and functions given to a variable anywhere in the
+  file, nested ones too, but not an object's properties, with a body of
+  three lines or more. S2392 is reported at the declaration, once; a `var`
+  declared again in another branch is the same variable, not an unused one
+  (S1481). S2703 reports a name once, where it's first assigned.
+- **Broader.** S1854 includes the last value given to a local that nothing
+  reads after, an empty string too. S6535 reads a regex's escapes: outside
+  a class only a metacharacter or `/` needs one; in a class, `^` only
+  first and `-` only between two characters. S6557 includes
+  `/^abc/.test(s)`, in parentheses too; S7781 `split(a).join(b)`, and in
+  plain JavaScript any receiver of `replace`. S8786 includes an unanchored
+  pattern starting with a repetition with more after it (`/\s+$/`,
+  `/\d+x/`), and two repetitions separated by characters both match
+  (`/[^@]+\.[^@]+$/`). S6397 includes a class of one escaped character
+  (`[\.]`). S7740 includes `self = this`, S6660 an `if` after a comment,
+  S4138 a loop over a property (`field.options`). S2681 includes a body on
+  the `if`'s line followed by a line indented under it, a tab counting as
+  one column, reported at that line. S1126 includes an `if` returning a
+  boolean before a `return` of one, the same value or not. S1481 includes
+  names starting with `_`. S1874 includes `document.write`, `writeln` and
+  `all`.
+- **Narrower.** S5148 is a URL written as a string, not one in a variable;
+  S7721 leaves a function inside an IIFE; S7768 is `insertBefore` or
+  `replaceChild` on plain names (not `x.parentNode`, `this` or
+  `p.firstChild`), and not `appendChild`; S5850 leaves `^a|b$`, where each
+  alternative has an anchor; S7780 leaves a string ending in a backslash,
+  which `String.raw` can't hold, and one escaped backslash is enough.
+- **A key.** `js/global-isnan` is S7773, which covers `isNaN` with the
+  other globals that `Number` has; S6679 is something else, a value
+  compared with itself.
 
 ## Python, measured
 
@@ -363,7 +407,7 @@ SonarQube 26.7 the same way:
 
 ### Still open in Java
 
-On Commons Lang, 29 of SonarQube's issues and 2 of sonda's:
+On Commons Lang, 28 of SonarQube's issues and 2 of sonda's:
 
 - **Known gap, data flow (15):** S2259, null dereferences SonarQube finds by
   following calls (`getLength(array) < 2` before `array[0]`) and paths.
@@ -373,10 +417,9 @@ On Commons Lang, 29 of SonarQube's issues and 2 of sonda's:
 - **Known gap, the JDK's declarations (2):** S1161, a method overriding
   `CharSequence.isEmpty()`, a default method of the JDK; S3014, a lambda's
   parameter whose type is inferred as `ThreadGroup`.
-- **Not explained (3):** S8491 on a field whose Javadoc is followed by a
-  line comment; `java/brain-method` (2), reported by SonarQube when their
-  file is scanned alone or copied into a file of its own, but not in the
-  whole project.
+- **Not explained (2 sonda only):** `java/brain-method`, reported by
+  SonarQube when their file is scanned alone or copied into a file of its
+  own, but not in the whole project.
 
 On apigen.springboot, 50 of SonarCloud's issues and 11 of sonda's:
 
@@ -391,8 +434,8 @@ On apigen.springboot, 50 of SonarCloud's issues and 11 of sonda's:
   reports, all in files without anything unusual; and one of two S5869
   issues on the same constant, which sonda reports once.
 
-On eGovFrame's common components, 1,222 of SonarCloud's Java issues and
-934 of sonda's (and 613 JavaScript issues of sonda's, below):
+On eGovFrame's common components, 1,228 of SonarCloud's Java issues and
+912 of sonda's:
 
 - **SonarCloud's newer rules and profile (1,008):** S9438 (968), added after
   26.7; S7476 and S6201 (40), off in Sonar way.
@@ -402,12 +445,24 @@ On eGovFrame's common components, 1,222 of SonarCloud's Java issues and
   S1192 and S2093, S115 on enum constants, S2143 on an import, S4488 (28,
   not explained: 26.7 doesn't report it in small files either).
 - **Known gaps:** S1130 (53), whether a checked exception is thrown needs
-  the libraries' signatures; S5411 (10), a `Boolean` returned by another
+  the libraries' signatures; S5411 (11), a `Boolean` returned by another
   file's method; S2259 (10), data flow.
 - **Deliberate:** S6035 (44), one issue per pattern, not one per group, as
   for Python's S6353.
-- **JavaScript (613 sonda only):** SonarCloud raised none of `var` (320) and
-  other JavaScript rules on the project's scripts; not looked into yet.
+- **Not yet looked into (about 100 SonarCloud only, 140 sonda only):** a
+  few issues each across some 60 keys, which the earlier fetch, stopped at
+  SonarCloud's search limit, didn't return.
+
+eGovFrame's JavaScript, measured [above](#javascript-in-the-browser-measured):
+4 of SonarCloud's issues and 279 of sonda's remain.
+
+- **SonarCloud differs from SonarQube 26.7 (279 sonda only, 1 SonarCloud
+  only):** S3504, `var`: 26.7 reports each one; SonarCloud reports them in
+  a few files and none in the files with many, a newer analyzer's choice
+  not worked out. S1874 on an `onkeypress` handler, which 26.7 doesn't
+  report.
+- **Known gap, taint (3):** S5696, a script's `src` set from a parameter:
+  sonda doesn't follow tainted values into the DOM.
 
 ## Rules that depend on knowing a type
 

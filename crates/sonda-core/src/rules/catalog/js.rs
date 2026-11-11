@@ -1394,8 +1394,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S6660")],
         check: Check::Query {
             langs: JS_TS,
-            query: "(else_clause (statement_block . (if_statement) @match .))",
-            filter: None,
+            query: "(else_clause (statement_block (if_statement) @match))",
+            filter: Some(Keep(only_statement_of_its_block)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -1479,7 +1479,7 @@ pub(super) static RULES: &[Rule] = &[
         category: CodeSmell,
         severity: Major,
         effort_minutes: 2,
-        sonar: &[exact("S6679")],
+        sonar: &[exact("S7773")],
         check: Check::Query {
             langs: JS_TS,
             query: r#"(call_expression function: (identifier) @f (#eq? @f "isNaN")) @match"#,
@@ -2946,8 +2946,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "window.open(link, '_blank');",
-            good: "window.open(link, '_blank', 'noopener,noreferrer');",
+            bad: "window.open('https://example.com/help', '_blank');",
+            good: "window.open('https://example.com/help', '_blank', 'noopener,noreferrer');",
         }),
     },
     Rule {
@@ -3876,19 +3876,50 @@ fn returned_boolean(branch: Node) -> Option<bool> {
     }
 }
 
+/// The block's only statement, comments aside: a comment above the `if`
+/// doesn't keep it from merging (measured on SonarQube 26.7).
+fn only_statement_of_its_block(statement: Node, _: &[u8]) -> bool {
+    statement.parent().is_some_and(|block| {
+        let mut cursor = block.walk();
+        block
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() != "comment")
+            .count()
+            == 1
+    })
+}
+
+fn first_non_comment(node: Node) -> Option<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|c| c.kind() != "comment")
+}
+
 fn returns_boolean_from_both_branches(if_statement: Node, _: &[u8]) -> bool {
-    let then = if_statement
+    // The branch first: finding a sibling climbs from the root, which is
+    // slow in deeply nested code.
+    if if_statement
         .child_by_field_name("consequence")
-        .and_then(returned_boolean);
-    let otherwise = if_statement
-        .child_by_field_name("alternative")
-        .and_then(|e| {
-            let mut cursor = e.walk();
-            e.named_children(&mut cursor)
-                .find(|c| c.kind() != "comment")
-        })
-        .and_then(returned_boolean);
-    matches!((then, otherwise), (Some(a), Some(b)) if a != b)
+        .and_then(returned_boolean)
+        .is_none()
+    {
+        return false;
+    }
+    // Even the same value twice counts (measured on SonarQube 26.7).
+    match if_statement.child_by_field_name("alternative") {
+        Some(alternative) => first_non_comment(alternative)
+            .and_then(returned_boolean)
+            .is_some(),
+        // `if (c) return true; return false;`, with comments between
+        // (measured on SonarQube 26.7).
+        None => {
+            let mut next = if_statement.next_named_sibling();
+            while let Some(n) = next.filter(|n| n.kind() == "comment") {
+                next = n.next_named_sibling();
+            }
+            next.and_then(returned_boolean).is_some()
+        }
+    }
 }
 
 fn has_empty_body(function: Node, src: &[u8]) -> bool {
@@ -5752,6 +5783,14 @@ fn open_without_noopener<'t>(callee: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         c.kind() == "call_expression" && c.child_by_field_name("function") == Some(callee)
     })?;
     let args = arguments_of(call);
+    // Only a URL written in the code: one from a variable isn't reported
+    // (measured on SonarQube 26.7).
+    if !args
+        .first()
+        .is_some_and(|u| matches!(u.kind(), "string" | "template_string"))
+    {
+        return None;
+    }
     let safe = args.get(2).is_some_and(|features| {
         features.kind() == "string" && {
             let f = string_content(*features, src);
@@ -6270,5 +6309,32 @@ let // the value
         let src = "const a = xs.map((x, i) => (i % 2 ? <b key={i}>{x}</b> : x));\nconst b = xs.map((x) => x && <b>{x}</b>);\nconst c = xs.map((x, i) => { return x ? <b key={`k${i}`}>{x}</b> : null; });\nconst d = xs.map((x, i) => <b key={x.id}><i key={i.toString()}>{x}</i></b>);\nconst e = xs.map((x, i) => <b key={`${x.id}-${i}`}>{x}</b>);\nconst f = xs.map((x, i) => <b key={x.id + i}>{x}</b>);\nconst g = xs.map((x, i) => <b key={'row' + i}>{x}</b>);";
         assert_eq!(flagged("js/jsx-index-key", TSX, src), [1, 3, 4]);
         assert_eq!(flagged("js/jsx-missing-key", TSX, src), [2]);
+    }
+
+    /// Measured on SonarQube 26.7: a `return` after the `if` counts as its
+    /// else, with comments between, and the same value twice still counts; a
+    /// branch with more than the return, or an `else if`, doesn't.
+    #[test]
+    fn boolean_returns_without_else() {
+        let src = "function a(x) {\n  if (x) return true;\n  return false;\n}\nfunction b(x) {\n  if (x) {\n    return true;\n  }\n  // no\n  return true;\n}\nfunction c(x) {\n  if (x) {\n    log(x);\n    return true;\n  }\n  return false;\n}\nfunction d(x, y) {\n  if (x) {\n    return 1;\n  } else if (y) {\n    return true;\n  }\n  return false;\n}";
+        assert_eq!(
+            flagged("js/return-boolean-if", Lang::JavaScript, src),
+            [2, 6]
+        );
+    }
+
+    /// Measured on SonarQube 26.7: only a URL written in the code.
+    #[test]
+    fn window_open_with_a_literal_url() {
+        let src = "window.open('https://example.com/x');\nwindow.open(url, '_blank');\nwindow.open('https://example.com/x', 'n', 'noopener');";
+        assert_eq!(flagged("js/window-open-opener", Lang::JavaScript, src), [1]);
+    }
+
+    /// A comment above the `if` doesn't keep it from merging (measured on
+    /// SonarQube 26.7).
+    #[test]
+    fn lonely_if_after_a_comment() {
+        let src = "if (a) {\n  x();\n} else {\n  // start\n  if (b) {\n    y();\n  }\n}\nif (a) {\n  x();\n} else {\n  if (b) {\n    y();\n  }\n  z();\n}";
+        assert_eq!(flagged("js/lonely-if", Lang::JavaScript, src), [5]);
     }
 }

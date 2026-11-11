@@ -125,13 +125,16 @@ built.
       [differences.md](sonar-parity/differences.md) has each language's
       result. Done: JavaScript (arandu), TypeScript and Rust (sonda).
       Python: compared, every difference classified; about 40 issues on
-      CPython are listed as not explained. Java (Apache Commons Lang): 889
-      of 918 raised and 2 extra, every difference classified; 3 not
+      CPython are listed as not explained. Java (Apache Commons Lang): 890
+      of 918 raised and 2 extra, every difference classified; 2 not
       explained. Java on a Spring Boot application (apigen.springboot,
       against SonarCloud): 121 of 171 and 11 extra, every difference
       classified; 45 come from SonarCloud's profile and newer rules. And on
-      eGovFrame's common components (against SonarCloud): 3,636 of 4,858,
-      every Java difference classified; JavaScript's not yet.
+      eGovFrame's common components (against SonarCloud): Java 3,650 of
+      4,878 and 912 extra, the large differences classified and about 240
+      small ones not yet; JavaScript 450 of 454 and 279 extra, every
+      difference classified (the extra ones are `var`, which SonarQube
+      26.7 reports).
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

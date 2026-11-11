@@ -3574,7 +3574,7 @@ const p = Object.getPrototypeOf(obj);
 
 **Number.isNaN() should be used instead of isNaN().** The global isNaN() converts its argument first, so `isNaN('abc')` is true. Number.isNaN() only says whether the value is NaN.
 
-SonarQube: S6679
+SonarQube: S7773
 
 Noncompliant:
 
@@ -4873,13 +4873,13 @@ Standards: [CWE-1022](https://cwe.mitre.org/data/definitions/1022.html), OWASP A
 Noncompliant:
 
 ```javascript
-window.open(link, '_blank');
+window.open('https://example.com/help', '_blank');
 ```
 
 Compliant:
 
 ```javascript
-window.open(link, '_blank', 'noopener,noreferrer');
+window.open('https://example.com/help', '_blank', 'noopener,noreferrer');
 ```
 
 ## js/jsx-target-blank
@@ -6499,13 +6499,13 @@ SonarQube: S7768
 Noncompliant:
 
 ```javascript
-parent.appendChild(child);
+parent.insertBefore(child, next);
 ```
 
 Compliant:
 
 ```javascript
-parent.append(child);
+next.before(child);
 ```
 
 ## js/legacy-math
@@ -7036,11 +7036,13 @@ Noncompliant:
 ```javascript
 function a() {
   const x = 1;
-  return x + 1;
+  const y = x * 2;
+  return x + y;
 }
 function b() {
   const x = 1;
-  return x + 1;
+  const y = x * 2;
+  return x + y;
 }
 ```
 
@@ -7049,7 +7051,8 @@ Compliant:
 ```javascript
 function a() {
   const x = 1;
-  return x + 1;
+  const y = x * 2;
+  return x + y;
 }
 function b() {
   return 2;
@@ -8769,7 +8772,7 @@ enum E { A = 1, B = 2 }
 
 ## js/unused-variable
 
-**Unused local variables and functions should be removed.** A local that is never read is dead code, or a sign that something meant to use it doesn't. Names starting with `_`, and names that only leave a property out of a `...rest` destructuring, are ignored.
+**Unused local variables and functions should be removed.** A local that is never read is dead code, or a sign that something meant to use it doesn't. Names that only leave a property out of a `...rest` destructuring are ignored.
 
 SonarQube: S1481
 
@@ -8784,7 +8787,7 @@ Compliant:
 ```javascript
 function total(items) { const tax = 0.2; return items.length * tax; }
 function pick({ secret, ...rest }) { return rest; }
-function f(_unused) { let _ignored = 1; }
+function f(_unused) { return 1; }
 ```
 
 ## js/unused-import
@@ -10273,7 +10276,7 @@ SonarQube: S5850
 Noncompliant:
 
 ```javascript
-const r = /^a|b$/;
+const r = /^a|b|c$/;
 ```
 
 Compliant:
@@ -10320,7 +10323,7 @@ const r = /(a|b)+/;
 
 ## js/regex-polynomial-backtracking
 
-**Regular expressions should not cause non-linear backtracking.** Adjacent repetitions over the same characters take polynomial time on input that almost matches.
+**Regular expressions should not cause non-linear backtracking.** Repetitions that can match the same characters, or an unanchored pattern that starts with a repetition, take time growing with the square of the input on text that almost matches.
 
 SonarQube: S8786
 
@@ -10333,7 +10336,7 @@ const r = /\d*\d*x/;
 Compliant:
 
 ```javascript
-const r = /\d+x/;
+const r = /^\d+x/;
 ```
 
 ## js/regex-catastrophic-backtracking

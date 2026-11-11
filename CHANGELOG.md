@@ -339,9 +339,8 @@ file, the report formats and the public library API.
     parameter a nested class declares again.
 - Java, compared on eGovFrame's common components, a Korean government
   framework (Spring, Java 17, about 100,000 lines with its submodule):
-  sonda raises 3,636 of SonarCloud's 4,858 issues, where it raised 2,933,
-  and 1,535 it doesn't, where it raised 2,473. Each change was measured on
-  SonarQube 26.7 first.
+  sonda raises 3,650 of SonarCloud's 4,878 Java issues, and 912 it
+  doesn't. Each change was measured on SonarQube 26.7 first.
   - On the project index: `java/generic-exception-thrown` excuses `throws
     Exception` when a call in the body reaches a method of another file
     declaring it, and leaves implementations of a supertype's method;
@@ -369,6 +368,42 @@ file, the report formats and the public library API.
     a Javadoc among statements; `java/invariant-return` is boolean methods;
     `java/constant-name` leaves arrays; `java/close-in-finally` is a
     resource created with `new`; `java/redundant-jump` leaves labeled jumps.
+- JavaScript, compared on eGovFrame's browser scripts (`var`, globals,
+  DOM calls, regexes): sonda raises 450 of SonarCloud's 454 JavaScript
+  issues; the 279 it doesn't are `var`, which SonarQube 26.7 reports and
+  SonarCloud's newer analyzer mostly leaves. Each change was measured on
+  SonarQube 26.7 first.
+  - A file whose lines end with a carriage return alone, as old Mac files
+    do, is read line by line: every issue was on line 1.
+  - A method call in a chain over several lines is reported on its
+    method's line, in every JavaScript and TypeScript rule.
+  - `js/global-isnan` carries SonarQube key S7773, not S6679, which is
+    another rule.
+  - `js/identical-functions` reports every copy, compares nested functions
+    and functions given to a variable, and leaves bodies under three lines;
+    `js/var-outside-block` is reported at the declaration, once.
+  - Broader: `js/unused-assignment` reports the last value given to a local
+    that nothing reads after; `js/unnecessary-escape` checks regexes;
+    `js/prefer-starts-ends-with` reports `/^abc/.test(s)`; `js/replace-all`
+    reports `split(a).join(b)`, and any receiver of `replace` in
+    JavaScript; `js/regex-polynomial-backtracking` an unanchored pattern
+    starting with a repetition, and repetitions separated by characters
+    both match; `js/regex-single-character-class` `[\.]`; `js/this-alias`
+    `self = this`; `js/lonely-if` an `if` after a comment;
+    `js/for-to-for-of` a loop over a property, or with the index's name in
+    a string; `js/multiline-without-braces` a body on the `if`'s line with
+    the next line indented under it; `js/return-boolean-if` without an
+    `else` and with the same value twice; `js/unused-variable` names
+    starting with `_`; `js/deprecated-api` `document.write`, `writeln` and
+    `all`; `js/escaped-backslashes` one escaped backslash, or with an
+    escaped quote.
+  - Narrower: `js/window-open-opener` is a URL written as a string;
+    `js/function-can-move-up` leaves functions inside an IIFE;
+    `js/legacy-dom-insert` is `insertBefore` or `replaceChild` on plain
+    names, and not `appendChild`; `js/regex-anchor-alternation` leaves
+    `^a|b$`; `js/escaped-backslashes` leaves a string ending in a
+    backslash; `js/unused-variable` leaves a `var` declared again in
+    another branch; `js/implicit-global` reports a name once.
 - Java, compared on a Spring Boot application, apigen.springboot
   (`ef13838`, Java 21, SonarCloud's built-in profile): sonda raises 121 of
   its 171 issues, where it raised 100, and 11 it doesn't, where it raised

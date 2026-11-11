@@ -18,8 +18,8 @@ pub(super) static RULES: &[Rule] = &[
         id: "js/unused-variable",
         name: "Unused local variables and functions should be removed",
         description: "A local that is never read is dead code, or a sign that something meant \
-                      to use it doesn't. Names starting with `_`, and names that only leave a \
-                      property out of a `...rest` destructuring, are ignored.",
+                      to use it doesn't. Names that only leave a property out of a `...rest` \
+                      destructuring are ignored.",
         message: "Remove this unused local, or use it.",
         category: CodeSmell,
         severity: Minor,
@@ -34,7 +34,7 @@ pub(super) static RULES: &[Rule] = &[
             bad: "function total(items) { const tax = 0.2; return items.length; }",
             good: "function total(items) { const tax = 0.2; return items.length * tax; }\n\
                    function pick({ secret, ...rest }) { return rest; }\n\
-                   function f(_unused) { let _ignored = 1; }",
+                   function f(_unused) { return 1; }",
         }),
     },
     Rule {
@@ -188,7 +188,7 @@ pub(super) static RULES: &[Rule] = &[
         description: "A `var` declared in a block is visible in the whole function, but using \
                       it outside that block relies on hoisting and is easy to misread. \
                       Declare it where it is used, or use `let`.",
-        message: "Move this variable's declaration: it is declared in a block this use is outside of.",
+        message: "Move this variable's declaration: it is used outside the block it is declared in.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
@@ -387,8 +387,9 @@ fn var_outside_block<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
             refs[i]
                 .iter()
                 .map(|&r| &m.refs[r])
-                .find(|r| !m.within(r.scope, d.block))
-                .map(|r| r.node)
+                .any(|r| !m.within(r.scope, d.block))
+                // At the declaration, once (measured on SonarQube 26.7).
+                .then_some(d.node)
         })
         .collect()
 }
@@ -603,8 +604,16 @@ fn unused_locals<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
                 // Written again but never read: a dead store, which
                 // js/unused-assignment reports where it happens.
                 && d.writes == 0
+                // `var m` again in the same function is the same variable,
+                // read through the first declaration.
+                && !(d.kind == DeclKind::Var
+                    && m.decls.iter().any(|o| {
+                        o.kind == DeclKind::Var
+                            && o.scope == d.scope
+                            && o.name == d.name
+                            && o.reads > 0
+                    }))
                 && !d.rest_sibling
-                && !d.name.starts_with('_')
                 // A function expression's own name is there for stack traces.
                 && !d.node.parent().is_some_and(|p| {
                     matches!(p.kind(), "function_expression" | "function" | "generator_function")
@@ -658,12 +667,22 @@ fn import_reassigned<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
 /// declaration.
 const COMMONJS: &[&str] = &["exports", "module", "require", "__filename", "__dirname"];
 
+/// Names assigned without a declaration, each once, where first assigned
+/// (measured on SonarQube 26.7: `for (i = 0; ...; i++)` is one issue).
 fn implicit_globals<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
-    m.refs
+    let mut seen: Vec<&str> = Vec::new();
+    let mut found = Vec::new();
+    for r in m
+        .refs
         .iter()
         .filter(|r| r.write && r.decl.is_none() && !COMMONJS.contains(&r.name.as_str()))
-        .map(|r| r.node)
-        .collect()
+    {
+        if !seen.contains(&r.name.as_str()) {
+            seen.push(r.name.as_str());
+            found.push(r.node);
+        }
+    }
+    found
 }
 
 /// Every declaration of a name after the first in the same scope. Type
@@ -769,10 +788,21 @@ mod tests {
         assert_eq!(flagged("js/shadowed-variable", Lang::TypeScript, src), [2]);
     }
 
+    /// Reported at the declaration, once (measured on SonarQube 26.7).
     #[test]
     fn var_used_outside_its_block() {
-        let src = "function f(c) {\n  if (c) { var a = 1; a++; }\n  var b = 2;\n  return a + b;\n}";
-        assert_eq!(flagged("js/var-outside-block", Lang::JavaScript, src), [4]);
+        let src =
+            "function f(c) {\n  if (c) { var a = 1; a++; }\n  var b = 2;\n  return a + b + a;\n}";
+        assert_eq!(flagged("js/var-outside-block", Lang::JavaScript, src), [2]);
+    }
+
+    /// `var m` declared again in another branch is the same variable: not
+    /// unused, and reported once, at the first (measured on SonarQube 26.7).
+    #[test]
+    fn var_declared_in_two_branches() {
+        let src = "function cb(a, o) {\n  if (a) {\n    var m = o.get();\n    use(m);\n  } else {\n    var m = o.other();\n    use(m);\n  }\n}";
+        assert!(flagged("js/unused-variable", Lang::JavaScript, src).is_empty());
+        assert_eq!(flagged("js/var-outside-block", Lang::JavaScript, src), [3]);
     }
 
     #[test]
@@ -835,5 +865,21 @@ mod tests {
     fn reassigned_locals_are_left_to_unused_assignment() {
         let src = "function f(s) {\n  let a = null;\n  a = s.x;\n  let b = 1;\n}";
         assert_eq!(flagged("js/unused-variable", Lang::JavaScript, src), [4]);
+    }
+
+    /// Each undeclared name once, where first assigned (measured on
+    /// SonarQube 26.7).
+    #[test]
+    fn implicit_global_once_per_name() {
+        let src = "for (i = 0; i < 3; i++) {}\ni = 4;\nj = 1;";
+        assert_eq!(flagged("js/implicit-global", Lang::JavaScript, src), [1, 3]);
+    }
+
+    /// A name starting with `_` is still reported (measured on SonarQube
+    /// 26.7).
+    #[test]
+    fn underscore_locals_are_reported() {
+        let src = "function c(id) {\n  var _q = f(id);\n  return 1;\n}";
+        assert_eq!(flagged("js/unused-variable", Lang::JavaScript, src), [2]);
     }
 }

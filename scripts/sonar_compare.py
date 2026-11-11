@@ -82,15 +82,28 @@ class Sonar:
         extra = {"branch": branch} if branch else {}
         query = dict(componentKeys=project, issueStatuses=RAISED, **extra)
         head = self.get(ISSUES, ps=1, facets="rules", **query)
-        if head["paging"]["total"] <= SEARCH_LIMIT:
+        # SonarCloud reports a total past the limit as the limit itself.
+        if head["paging"]["total"] < SEARCH_LIMIT:
             return list(self.pages(ISSUES, "issues", **query))
-        # Past the search limit: one query per rule.
+        # Past the search limit: one query per language, and per rule within
+        # a language still past it. A facet lists 100 values at most, so a
+        # project's rules alone could leave some out.
         out = []
-        for value in head["facets"][0]["values"]:
-            if value["count"] > SEARCH_LIMIT:
-                print(f"warning: {value['val']} has {value['count']} issues; "
-                      f"only {SEARCH_LIMIT} are compared", file=sys.stderr)
-            out += self.pages(ISSUES, "issues", rules=value["val"], **query)
+        languages = self.get(ISSUES, ps=1, facets="languages", **query)["facets"][0]["values"]
+        for language in languages:
+            if language["count"] <= SEARCH_LIMIT:
+                out += self.pages(ISSUES, "issues", languages=language["val"], **query)
+                continue
+            rules = self.get(ISSUES, ps=1, facets="rules", languages=language["val"],
+                             **query)["facets"][0]["values"]
+            if sum(v["count"] for v in rules) < language["count"]:
+                print(f"warning: {language['val']} has more rules than one facet lists; "
+                      "some of its issues aren't compared", file=sys.stderr)
+            for value in rules:
+                if value["count"] > SEARCH_LIMIT:
+                    print(f"warning: {value['val']} has {value['count']} issues; "
+                          f"only {SEARCH_LIMIT} are compared", file=sys.stderr)
+                out += self.pages(ISSUES, "issues", rules=value["val"], **query)
         return out
 
     def organization(self, project):
@@ -185,9 +198,11 @@ def sonda_by_key(report, main_files, active, refs, unparsed):
     return by_key, elsewhere
 
 
-def pair_up(sonar, sonda, tolerance):
-    """Per key: how many issues both raised, and what only one side did."""
+def pair_up(sonar, sonda, tolerance, language=lambda path: None):
+    """Per key: how many issues both raised, and what only one side did; and
+    per language, how many both raised."""
     matched = collections.Counter()
+    matched_by_language = collections.Counter()
     only_sonar, only_sonda = collections.defaultdict(list), collections.defaultdict(list)
     # The sonda issues that matched under one of their keys.
     paired = set()
@@ -195,13 +210,14 @@ def pair_up(sonar, sonda, tolerance):
         pairs, left, right = match(sonar.get((path, key), []), sonda.get((path, key), []),
                                    tolerance)
         matched[key] += len(pairs)
+        matched_by_language[language(path)] += len(pairs)
         paired |= {id(b[1]) for _, b in pairs}
         only_sonar[key] += [(path, line, i) for line, i in left]
         only_sonda[key] += [(path, line, i) for line, i in right]
     # A sonda issue matched under another of its keys isn't a difference.
     for key, items in only_sonda.items():
         only_sonda[key] = [d for d in items if id(d[2]) not in paired]
-    return matched, only_sonar, only_sonda
+    return matched, only_sonar, only_sonda, matched_by_language
 
 
 def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
@@ -210,6 +226,13 @@ def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
     main_files = {prefix + p: lang for p, (q, lang) in files.items() if q == "FIL"}
     tests = {prefix + p for p, (q, _) in files.items() if q == "UTS"}
     unparsed = {prefix + p for p, (q, _) in files.items() if q == "UNPARSED"}
+    # A key SonarQube raised on a language's files is active for it, whatever
+    # its profile search says: SonarCloud's leaves some active rules out.
+    active = {lang: set(keys) for lang, keys in active.items()}
+    for i in issues:
+        path = prefix + i["component"].split(":", 1)[1]
+        if path in main_files:
+            active.setdefault(main_files[path], set()).add(i["rule"].split(":", 1)[1])
     analyzed = {f["path"] for f in report["files"]}
     report_rules = set(report.get("active_rules") or on_by_default)
     # SonarQube key -> the sonda rules that cover it.
@@ -219,7 +242,8 @@ def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
             covering[key].add(rule)
     sonar, sonar_elsewhere = sonar_by_key(issues, main_files, tests, analyzed, prefix)
     sonda, sonda_elsewhere = sonda_by_key(report, main_files, active, refs, unparsed)
-    matched, only_sonar, only_sonda = pair_up(sonar, sonda, tolerance)
+    matched, only_sonar, only_sonda, matched_by_language = pair_up(
+        sonar, sonda, tolerance, main_files.get)
 
     def why_missing(key):
         rules = covering.get(key)
@@ -231,7 +255,8 @@ def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
 
     return {"matched": matched, "only_sonar": only_sonar, "only_sonda": only_sonda,
             "sonar_elsewhere": sonar_elsewhere, "sonda_elsewhere": sonda_elsewhere,
-            "why_missing": why_missing, "covering": covering, "main_files": main_files}
+            "why_missing": why_missing, "covering": covering, "main_files": main_files,
+            "matched_by_language": matched_by_language}
 
 
 def totals(result, only_sonar, only_sonda):
@@ -254,6 +279,30 @@ def totals(result, only_sonar, only_sonda):
     return out
 
 
+def per_language(result, only_sonar, only_sonda):
+    """For a project in several languages: the first table's two counts for
+    each language."""
+    language = result["main_files"].get
+    sonar_total, sonda_only = collections.Counter(), collections.defaultdict(set)
+    for items in only_sonar.values():
+        for path, _, _ in items:
+            sonar_total[language(path)] += 1
+    for items in only_sonda.values():
+        for path, _, i in items:
+            sonda_only[language(path)].add(id(i))
+    matched = result["matched_by_language"]
+    languages = sorted({lang for lang in set(matched) | set(sonar_total) | set(sonda_only)
+                        if lang}, key=str)
+    if len(languages) < 2:
+        return []
+    out = ["| Language | SonarQube's, also raised by sonda | sonda's, not raised by SonarQube |",
+           "|---|---|---|"]
+    for lang in languages:
+        out += [f"| {lang} | {matched[lang]} of {matched[lang] + sonar_total[lang]} "
+                f"| {len(sonda_only[lang])} |"]
+    return out
+
+
 def per_key(result, only_sonar, only_sonda):
     """The summary's second table: each key with a difference, most first."""
     def size(k):
@@ -273,6 +322,9 @@ def summary(result, project, revision):
     out = [f"# {project} at {revision or 'an unknown revision'}", ""]
     out += [f"{len(result['main_files'])} files SonarQube analyzed as main code.", ""]
     out += totals(result, only_sonar, only_sonda)
+    by_language = per_language(result, only_sonar, only_sonda)
+    if by_language:
+        out += [""] + by_language
     out += [""] + per_key(result, only_sonar, only_sonda)
     return "\n".join(out)
 
