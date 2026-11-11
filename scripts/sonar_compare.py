@@ -62,12 +62,15 @@ class Sonar:
             page += 1
 
     def files(self, project, branch):
-        """Path -> (qualifier, language) of every file SonarQube indexed."""
+        """Path -> (qualifier, language) of every file SonarQube indexed. A file
+        it couldn't parse has no lines of code; its qualifier is "UNPARSED"."""
         extra = {"branch": branch} if branch else {}
         return {
-            c["path"]: (c["qualifier"], c.get("language"))
-            for c in self.pages("/api/components/tree", "components",
-                                component=project, qualifiers="FIL,UTS", **extra)
+            c["path"]: (c["qualifier"] if any(m["metric"] == "ncloc" for m in c["measures"])
+                        else "UNPARSED", c.get("language"))
+            for c in self.pages("/api/measures/component_tree", "components",
+                                component=project, qualifiers="FIL,UTS", metricKeys="ncloc",
+                                **extra)
         }
 
     def issues(self, project, branch):
@@ -145,14 +148,16 @@ def sonar_by_key(issues, main_files, tests, analyzed, prefix):
     return by_key, elsewhere
 
 
-def sonda_by_key(report, main_files, active, refs):
+def sonda_by_key(report, main_files, active, refs, unparsed):
     """sonda's issues that SonarQube's profile could have raised, by (path,
     key) for each key their rule covers, and a count of the others."""
     by_key, elsewhere = collections.defaultdict(list), collections.Counter()
     for i in report["issues"]:
         exact, related = refs.get(i["rule"], (set(), set()))
         keys = exact | related
-        if i["path"] not in main_files:
+        if i["path"] in unparsed:
+            elsewhere["files SonarQube couldn't parse"] += 1
+        elif i["path"] not in main_files:
             elsewhere["files SonarQube doesn't analyze as main code"] += 1
         elif not keys:
             elsewhere["rules with no SonarQube key"] += 1
@@ -188,6 +193,7 @@ def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
     issues, files, active = sonar_data
     main_files = {prefix + p: lang for p, (q, lang) in files.items() if q == "FIL"}
     tests = {prefix + p for p, (q, _) in files.items() if q == "UTS"}
+    unparsed = {prefix + p for p, (q, _) in files.items() if q == "UNPARSED"}
     analyzed = {f["path"] for f in report["files"]}
     report_rules = set(report.get("active_rules") or on_by_default)
     # SonarQube key -> the sonda rules that cover it.
@@ -196,7 +202,7 @@ def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
         for key in exact | related:
             covering[key].add(rule)
     sonar, sonar_elsewhere = sonar_by_key(issues, main_files, tests, analyzed, prefix)
-    sonda, sonda_elsewhere = sonda_by_key(report, main_files, active, refs)
+    sonda, sonda_elsewhere = sonda_by_key(report, main_files, active, refs, unparsed)
     matched, only_sonar, only_sonda = pair_up(sonar, sonda, tolerance)
 
     def why_missing(key):

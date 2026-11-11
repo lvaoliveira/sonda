@@ -913,8 +913,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::Python,
-            bad: "try:\n    await f()\nexcept asyncio.CancelledError:\n    cleanup()\n",
-            good: "try:\n    await f()\nexcept asyncio.CancelledError:\n    cleanup()\n    raise\n",
+            bad: "async def run():\n    try:\n        await f()\n    except asyncio.CancelledError:\n        cleanup()\n",
+            good: "async def run():\n    try:\n        await f()\n    except asyncio.CancelledError:\n        cleanup()\n        raise\n",
         }),
     },
     Rule {
@@ -2639,16 +2639,72 @@ fn cancel_scope_has_no_await(with: Node, src: &[u8]) -> bool {
         })
 }
 
+/// An except clause in a coroutine that catches the cancellation and doesn't
+/// raise again, as SonarQube reports it: a `return` swallows it too, and a
+/// plain function isn't cancelled. `exceptions.CancelledError` through a
+/// relative import (`from . import exceptions`) is left alone: SonarQube
+/// doesn't resolve it to asyncio's.
 fn cancelled_error_is_swallowed(clause: Node, src: &[u8]) -> bool {
     let head = head_of(clause, src);
-    if !(contains_ignoring_case(head, b"CancelledError")
-        || contains_ignoring_case(head, b"trio.Cancelled"))
-    {
+    let cancelled = contains_ignoring_case(head, b"CancelledError")
+        || contains_ignoring_case(head, b"trio.Cancelled");
+    if !cancelled || !in_coroutine(clause) || through_relative_import(clause, src) {
         return false;
     }
     body_of(clause).is_some_and(|b| {
         find_in_scope(b, NESTED_STOPS, |n| n.kind() == "raise_statement").is_none()
-            && find_in_scope(b, NESTED_STOPS, |n| n.kind() == "return_statement").is_none()
+    })
+}
+
+/// Whether the nearest function around `node` is `async def`.
+fn in_coroutine(node: Node) -> bool {
+    let mut n = node.parent();
+    while let Some(p) = n {
+        if p.kind() == "function_definition" {
+            let mut cursor = p.walk();
+            return p.children(&mut cursor).any(|c| c.kind() == "async");
+        }
+        if matches!(p.kind(), "class_definition" | "lambda") {
+            return false;
+        }
+        n = p.parent();
+    }
+    false
+}
+
+/// `except mod.CancelledError` where `mod` comes from a relative import.
+fn through_relative_import(clause: Node, src: &[u8]) -> bool {
+    let head = head_of(clause, src);
+    let Some(dot) = head.windows(15).position(|w| w == b".CancelledError") else {
+        return false;
+    };
+    let start = head[..dot]
+        .iter()
+        .rposition(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+        .map_or(0, |i| i + 1);
+    let module = &head[start..dot];
+    let mut root = clause;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut cursor = root.walk();
+    root.named_children(&mut cursor).any(|stmt| {
+        stmt.kind() == "import_from_statement"
+            && stmt
+                .child_by_field_name("module_name")
+                .is_some_and(|m| m.kind() == "relative_import")
+            && {
+                // The names it binds: `exceptions`, or `x as exceptions_mod`.
+                let mut c = stmt.walk();
+                stmt.children_by_field_name("name", &mut c).any(|n| {
+                    let bound = if n.kind() == "aliased_import" {
+                        n.child_by_field_name("alias")
+                    } else {
+                        Some(n)
+                    };
+                    bound.is_some_and(|b| text(b, src) == module)
+                })
+            }
     })
 }
 
@@ -3124,5 +3180,22 @@ mod tests {
         let src = "import os\n__all__ = ['f', 'Missing', 'sub']\ndef f():\n    pass\nprint(os.name, nothing_here, len, frozendict)";
         assert_eq!(flagged("py/all-undefined-name", src), [2]);
         assert_eq!(flagged("py/undefined-name", src), [5]);
+    }
+
+    /// S7497 as SonarQube 26.7 reports it: in a coroutine only, a return
+    /// swallows the cancellation too, and a name from a relative import
+    /// isn't followed.
+    #[test]
+    fn cancellation_as_sonarqube_reports_it() {
+        let src = "import asyncio\nfrom . import exceptions\nasync def a(t):\n    try:\n        await t\n    except asyncio.CancelledError:\n        return None\nasync def b(t):\n    try:\n        await t\n    except asyncio.CancelledError:\n        raise\ndef c(t, s):\n    try:\n        t.result()\n    except asyncio.CancelledError:\n        s.close()\nasync def d(t):\n    try:\n        await t\n    except exceptions.CancelledError:\n        return None\n";
+        assert_eq!(flagged("py/cancellation-swallowed", src), [6]);
+    }
+
+    /// S5754 as SonarQube 26.7 reports it: SystemExit swallowed is reported,
+    /// and a catch-all after a clause that re-raises SystemExit isn't.
+    #[test]
+    fn exits_swallowed_as_sonarqube_reports_them() {
+        let src = "def f(g, log):\n    try:\n        g()\n    except SystemExit as se:\n        log(se)\n    try:\n        g()\n    except (SystemExit, KeyboardInterrupt):\n        raise\n    except BaseException:\n        log()\n    try:\n        g()\n    except BaseException as e:\n        log(e)\n";
+        assert_eq!(flagged("py/bare-except", src), [4, 14]);
     }
 }

@@ -1725,6 +1725,12 @@ fn skipped_in_test_file(active: &ActiveRule, test_file: bool) -> bool {
     test_file && active.rule.category == Category::Vulnerability
 }
 
+/// Rules a file's name says don't apply: a package's `__init__.py` gathers
+/// its modules' names with `from .mod import *`, as SonarQube allows.
+fn skipped_for_path(active: &ActiveRule, path: &str) -> bool {
+    active.rule.id == "py/wildcard-import" && path.rsplit(['/', '\\']).next() == Some("__init__.py")
+}
+
 /// The node a query rule reports for a capture: the capture itself, if its
 /// filter keeps it, or the node its filter finds.
 fn filtered_node<'t>(filter: Option<Filter>, node: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
@@ -1759,6 +1765,7 @@ fn run_queries_in(
         return Ok(issues);
     };
     let test_file = is_test_file(ctx.path);
+    let path = ctx.path;
     // Declarations by name, for the filters that look one up.
     let _declarations = crate::lang::JS_TS
         .contains(&lang)
@@ -1768,7 +1775,7 @@ fn run_queries_in(
     while let Some(m) = matches.next() {
         for &(idx, filter) in &cq.patterns[m.pattern_index] {
             let active = &rules.active[idx];
-            if skipped_in_test_file(active, test_file) {
+            if skipped_in_test_file(active, test_file) || skipped_for_path(active, path) {
                 continue;
             }
             let found = m
@@ -2250,7 +2257,8 @@ fn measure_functions(
         }
         let c = complexity(node, syn, ctx.src.as_bytes());
         metrics.complexity += c.cyclomatic;
-        if !syn.file_cognitive_nests_functions {
+        let whole = syn.cognitive_includes_nested_functions;
+        if !syn.file_cognitive_nests_functions && !whole {
             metrics.cognitive_complexity += c.cognitive;
         }
         metrics.functions += 1;
@@ -2258,6 +2266,7 @@ fn measure_functions(
         let name = function_name(node, ctx);
         let anchor = name_node(node).unwrap_or(node);
         if let Some(rule) = cognitive_rule
+            && !whole
             && c.cognitive > t.cognitive_complexity
         {
             let msg = format!(
@@ -2277,13 +2286,13 @@ fn measure_functions(
             );
             issues.push(ctx.issue(rule, anchor, msg, rule.rule.effort_minutes));
         }
+        let max_parameters = t.parameters.unwrap_or(syn.max_parameters);
         if let Some(rule) = params_rule
-            && let Some(n) = parameter_count(node, syn)
-            && n > t.parameters as usize
+            && let Some(n) = parameter_count(node, syn, ctx.src.as_bytes())
+            && n > max_parameters as usize
         {
             let msg = format!(
-                "'{name}' has {n} parameters, which is more than the {} allowed.",
-                t.parameters
+                "'{name}' has {n} parameters, which is more than the {max_parameters} allowed."
             );
             issues.push(ctx.issue(rule, anchor, msg, rule.rule.effort_minutes));
         }
@@ -2299,6 +2308,56 @@ fn measure_functions(
             false // its nested functions are part of it
         });
     }
+    if syn.cognitive_includes_nested_functions {
+        // Each outermost function (a method too), with its nested ones.
+        walk(root, |node| {
+            if !node.is_named() || !syn.functions.contains(&node.kind()) {
+                return true;
+            }
+            let cognitive = complexity_with(node, syn, ctx.src.as_bytes(), true).cognitive;
+            metrics.cognitive_complexity += cognitive;
+            if let Some(rule) = cognitive_rule
+                && cognitive > t.cognitive_complexity
+            {
+                let name = function_name(node, ctx);
+                let msg = format!(
+                    "Refactor '{name}' to reduce its cognitive complexity from {cognitive} to the {} allowed.",
+                    t.cognitive_complexity
+                );
+                let effort = rule.rule.effort_minutes + (cognitive - t.cognitive_complexity);
+                issues.push(ctx.issue(rule, name_node(node).unwrap_or(node), msg, effort));
+            }
+            false
+        });
+    }
+}
+
+/// Whether a nested function's enclosing function only wraps it: its body
+/// holds nothing but function definitions, a docstring and a `return` of a
+/// name, as a decorator does.
+fn encloses_only_functions(nested: Node) -> bool {
+    let mut n = nested;
+    if n.parent()
+        .is_some_and(|p| p.kind() == "decorated_definition")
+    {
+        n = n.parent().unwrap_or(n);
+    }
+    let Some(body) = n.parent().filter(|b| b.kind() == "block") else {
+        return false;
+    };
+    if !body
+        .parent()
+        .is_some_and(|f| f.kind() == "function_definition")
+    {
+        return false;
+    }
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor).all(|s| match s.kind() {
+        "function_definition" | "decorated_definition" | "comment" => true,
+        "return_statement" => s.named_child(0).is_none_or(|v| v.kind() == "identifier"),
+        "expression_statement" => s.named_child(0).is_some_and(|c| c.kind() == "string"),
+        _ => false,
+    })
 }
 
 /// An outermost function's share of its file's cognitive complexity, with
@@ -2597,7 +2656,9 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         let kind = node.kind();
         if self.syn.functions.contains(&kind) {
             if self.nested {
-                self.children(node, nesting + 1, None);
+                let deeper = !(self.syn.cognitive_includes_nested_functions
+                    && encloses_only_functions(node));
+                self.children(node, nesting + u32::from(deeper), None);
             }
             return;
         }
@@ -2613,6 +2674,12 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
             self.c.cyclomatic += 1;
             self.c.cognitive += 1 + nesting;
             self.c.structures += 1;
+            // Python's `for ... else` and `while ... else`: +1, as an if's else.
+            if matches!(kind, "for_statement" | "while_statement")
+                && node.child_by_field_name("alternative").is_some()
+            {
+                self.c.cognitive += 1;
+            }
             return self.children(node, nesting + 1, None);
         }
         if self.syn.switches.contains(&kind) {
@@ -2763,7 +2830,7 @@ fn raw_function_name<'s>(node: Node, ctx: &Ctx<'s>) -> &'s str {
     named_by.map_or("<anonymous>", |n| ctx.text(n))
 }
 
-fn parameter_count(node: Node, syn: &Syntax) -> Option<usize> {
+fn parameter_count(node: Node, syn: &Syntax, src: &[u8]) -> Option<usize> {
     if node.child_by_field_name("parameter").is_some() {
         return Some(1); // JS `x => ...`
     }
@@ -2785,11 +2852,17 @@ fn parameter_count(node: Node, syn: &Syntax) -> Option<usize> {
         .named_children(&mut cursor)
         .filter(|c| !syn.comments.contains(&c.kind()))
         .count();
-    Some(n)
+    // A method's `self` or `cls` isn't one the caller passes.
+    let receiver = params
+        .named_child(0)
+        .and_then(|p| p.utf8_text(src).ok())
+        .is_some_and(|p| syn.receivers.contains(&p));
+    Some(n - usize::from(receiver))
 }
 
 fn todo_tag(comment: &str) -> Option<&'static str> {
-    ["TODO", "FIXME", "XXX"].into_iter().find(|tag| {
+    // SonarQube knows TODO and FIXME only; XXX is a note, not a task.
+    ["TODO", "FIXME"].into_iter().find(|tag| {
         comment.match_indices(tag).any(|(i, _)| {
             let before = comment[..i].chars().next_back();
             let after = comment[i + tag.len()..].chars().next();
@@ -3410,6 +3483,115 @@ pub(crate) mod tests {
                 .iter()
                 .any(|i| i.rule == crate::rules::COGNITIVE_COMPLEXITY)
         );
+    }
+
+    /// SonarQube 26.7's Python analyzer, measured file by file: a nested
+    /// function is part of the one around it, one level deeper unless that
+    /// one only wraps it; a loop's else costs 1; match costs nothing.
+    #[test]
+    fn python_cognitive_complexity_includes_nested_functions() {
+        let cognitive = |src| run(Lang::Python, src).metrics.cognitive_complexity;
+        let nested = "def outer(a, xs):\n    if a:\n        return 0\n    def inner(x):\n        if x:\n            return 1\n        return 0\n    return [inner(x) for x in xs]\n";
+        assert_eq!(cognitive(nested), 3);
+        let wrapper = "def outer(g):\n    def inner(x):\n        if x:\n            return 1\n        return 0\n    return inner\n";
+        assert_eq!(cognitive(wrapper), 1);
+        let in_loop = "def outer(xs):\n    for x in xs:\n        def inner(y):\n            if y:\n                return 1\n            return 0\n        inner(x)\n";
+        assert_eq!(cognitive(in_loop), 4);
+        let two = "def outer(a):\n    if a:\n        return 0\n    def mid():\n        def inner(x):\n            if x:\n                return 1\n            return 0\n        return inner\n    return mid\n";
+        assert_eq!(cognitive(two), 3);
+        assert_eq!(
+            cognitive(
+                "def f(a):\n    while a:\n        a -= 1\n    else:\n        return 1\n    return 0\n"
+            ),
+            2
+        );
+        assert_eq!(
+            cognitive(
+                "def f(a):\n    match a:\n        case 1:\n            return 1\n        case _:\n            return 0\n"
+            ),
+            0
+        );
+
+        // The rule reports the outermost function, with its nested ones: 1 +
+        // 8 * 2 here, and not the nested function on its own.
+        let mut src = String::from("def outer(g, a):\n    if a:\n        g()\n    def inner(x):\n");
+        for i in 0..8 {
+            src += &format!("        if x.k{i}:\n            g()\n");
+        }
+        src += "    return inner\n";
+        let a = run(Lang::Python, &src);
+        let lines: Vec<usize> = a
+            .issues
+            .iter()
+            .filter(|i| i.rule == crate::rules::COGNITIVE_COMPLEXITY)
+            .map(|i| i.line)
+            .collect();
+        assert_eq!(lines, [1]);
+        assert_eq!(a.metrics.cognitive_complexity, 17);
+    }
+
+    /// Python allows 13 parameters, as SonarQube does, not counting `self`;
+    /// JavaScript 7. An explicit threshold applies to every language.
+    #[test]
+    fn parameter_limits_per_language() {
+        let params = |n: usize| {
+            (0..n)
+                .map(|i| format!("a{i}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let count = |lang, src: &str| {
+            run(lang, src)
+                .issues
+                .iter()
+                .filter(|i| i.rule == crate::rules::TOO_MANY_PARAMETERS)
+                .count()
+        };
+        assert_eq!(
+            count(Lang::Python, &format!("def f({}):\n    pass\n", params(13))),
+            0
+        );
+        assert_eq!(
+            count(Lang::Python, &format!("def f({}):\n    pass\n", params(14))),
+            1
+        );
+        let method = format!("class C:\n    def f(self, {}):\n        pass\n", params(13));
+        assert_eq!(count(Lang::Python, &method), 0);
+        assert_eq!(
+            count(Lang::JavaScript, &format!("function f({}) {{}}", params(8))),
+            1
+        );
+    }
+
+    /// A package's `__init__.py` gathers names with `from .mod import *`.
+    #[test]
+    fn wildcard_imports_are_fine_in_a_package_init() {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let wildcard = |path| {
+            analyze(
+                path,
+                Lang::Python,
+                "from .mod import *\n",
+                &rules,
+                &cfg,
+                far_deadline(),
+            )
+            .unwrap()
+            .issues
+            .iter()
+            .filter(|i| i.rule == "py/wildcard-import")
+            .count()
+        };
+        assert_eq!(wildcard("pkg/__init__.py"), 0);
+        assert_eq!(wildcard("pkg/mod.py"), 1);
+    }
+
+    #[test]
+    fn todo_comments_are_todo_and_fixme() {
+        assert_eq!(todo_tag("# TODO: later"), Some("TODO"));
+        assert_eq!(todo_tag("// FIXME"), Some("FIXME"));
+        assert_eq!(todo_tag("# XXX handle this later"), None);
     }
 
     #[test]

@@ -12,6 +12,9 @@ use super::py_security::{
     keyword_value, string_value, text,
 };
 
+/// Rules with no SonarQube key in Sonar way: opt-in (ADR-0007).
+pub(super) static OFF_BY_DEFAULT: &[&str] = &["py/dict-lookup-in-loop"];
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "py/except-only-reraises",
@@ -1569,13 +1572,13 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "py/dict-lookup-in-loop",
-        name: "Iteration over a dictionary key value pairs should be done with the items() method call",
+        name: "Dictionary values read in a loop over its keys should come from items()",
         description: "Looking each key up again costs a hash per iteration.",
         message: "Use .items().",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 2,
-        sonar: &[exact("S7517")],
+        sonar: &[],
         check: Check::Query {
             langs: PYTHON,
             query: r#"(for_statement) @match"#,
@@ -2414,6 +2417,16 @@ fn format_arguments_do_not_match(node: Node, src: &[u8]) -> bool {
 }
 
 fn fstring_has_no_field(string: Node, src: &[u8]) -> bool {
+    // A part of `f"{a} " f"b"`: the concatenation is one f-string with a field.
+    if let Some(concat) = string
+        .parent()
+        .filter(|p| p.kind() == "concatenated_string")
+    {
+        let mut cursor = concat.walk();
+        if concat.named_children(&mut cursor).any(has_interpolation) {
+            return false;
+        }
+    }
     let t = text(string, src);
     let prefix_end = t.iter().position(|&b| b == b'"' || b == b'\'').unwrap_or(0);
     t[..prefix_end]
@@ -2869,6 +2882,30 @@ fn method_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
         && !is_dunder(n)
         && !FRAMEWORK_METHODS.contains(&n)
         && !is_snake_case(n.strip_prefix(b"_").unwrap_or(n))
+        && !in_class_with_bases(function, src)
+}
+
+/// Whether the class around `node` derives from another (not `object`): its
+/// methods, fields and parameters may be named by that base, so SonarQube's
+/// naming and unused-parameter rules leave them alone.
+pub(super) fn in_class_with_bases(node: Node, src: &[u8]) -> bool {
+    let mut n = node.parent();
+    while let Some(p) = n {
+        match p.kind() {
+            "class_definition" => {
+                let Some(bases) = p.child_by_field_name("superclasses") else {
+                    return false;
+                };
+                let mut cursor = bases.walk();
+                return bases
+                    .named_children(&mut cursor)
+                    .any(|b| b.kind() != "keyword_argument" && text(b, src) != b"object");
+            }
+            "module" => return false,
+            _ => n = p.parent(),
+        }
+    }
+    false
 }
 
 fn function_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
@@ -2887,7 +2924,11 @@ fn name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
     let constant = !t.is_empty()
         && t.iter()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_');
-    !is_dunder(n) && !t.is_empty() && !is_snake_case(t) && !constant
+    !is_dunder(n)
+        && !t.is_empty()
+        && !is_snake_case(t)
+        && !constant
+        && !in_class_with_bases(name, src)
 }
 
 fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
@@ -2900,7 +2941,13 @@ fn local_name_is_not_snake_case(name: Node, src: &[u8]) -> bool {
         // module and class level names are constants, not locals
         Some(
             "assignment" | "for_statement" | "for_in_clause" | "pattern_list" | "tuple_pattern",
-        ) => nearest_function(name, 20).is_some(),
+        ) => nearest_function(name, 20).is_some_and(|f| {
+            // CONSTANT_CASE is a constant even in a function, and a
+            // parameter assigned again is reported where it's declared.
+            !t.iter()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
+                && !plain_parameters(f, src).0.iter().any(|(_, p)| *p == n)
+        }),
         Some(_) => true,
         None => false,
     }
@@ -3025,7 +3072,18 @@ fn local_is_never_read(name: Node, src: &[u8]) -> bool {
         up.is_some_and(|g| matches!(g.kind(), "assignment" | "for_statement"))
     };
     let loop_variable = kind == "for_statement";
-    if n.starts_with(b"_") || !(kind == "assignment" || unpacked || loop_variable) {
+    // `for a, b in pairs:` names both halves to unpack them, used or not.
+    let unpacked_by_a_loop = unpacked && {
+        let mut up = name.parent();
+        while up.is_some_and(|p| matches!(p.kind(), "pattern_list" | "tuple_pattern")) {
+            up = up.and_then(|p| p.parent());
+        }
+        up.is_some_and(|g| g.kind() == "for_statement")
+    };
+    if n.starts_with(b"_")
+        || unpacked_by_a_loop
+        || !(kind == "assignment" || unpacked || loop_variable)
+    {
         return false;
     }
     let Some(function) = nearest_function(name, 20) else {
@@ -3532,7 +3590,7 @@ fn async_function_takes_timeout<'t>(function: Node<'t>, src: &[u8]) -> Option<No
     plain_parameters(function, src)
         .0
         .into_iter()
-        .find(|(_, n)| *n == b"timeout" || n.ends_with(b"_timeout") || n.starts_with(b"timeout_"))
+        .find(|(_, n)| *n == b"timeout")
         .map(|(p, _)| p)
 }
 
@@ -3934,7 +3992,8 @@ mod tests {
         let src = "for i in r:\n    a.append(lambda: i)\n    b.append(lambda i=i: i)\nfor k, v in d.items():\n    use(k)\nfor k in d:\n    use(d[k])\nfor i, x in enumerate(xs):\n    use(xs[i])\nfor x in xs:\n    s.add(x)";
         assert_eq!(flagged("py/loop-variable-closure", src), [2]);
         assert_eq!(flagged("py/items-unused-half", src), [4]);
-        assert_eq!(flagged("py/dict-lookup-in-loop", src), [7]);
+        // Opt-in: it isn't SonarQube's S7517 (the examples test runs it).
+        assert!(flagged("py/dict-lookup-in-loop", src).is_empty());
         assert_eq!(flagged("py/enumerate-index-lookup", src), [9]);
         assert_eq!(flagged("py/set-update-loop", src), [10]);
     }
@@ -3957,5 +4016,26 @@ mod tests {
         assert_eq!(flagged("py/datetime-range", src), [8]);
         assert_eq!(flagged("py/dataframe-values", src), [10]);
         assert_eq!(flagged("py/read-csv-dtype", src), [12]);
+    }
+
+    /// Each case as SonarQube 26.7 reports it, measured one file at a time.
+    #[test]
+    fn python_names_and_unused_as_sonarqube_reports_them() {
+        // S100 and S116: a class with a base may be named by it.
+        let src = "class A:\n    def isReserved(self):\n        self.myField = 1\nclass B(dict):\n    def isReserved(self):\n        self.myField = 1\n";
+        assert_eq!(flagged("py/method-name", src), [2]);
+        assert_eq!(flagged("py/field-name", src), [3]);
+        // S117: CONSTANT_CASE locals, and a parameter assigned again.
+        let src = "def f(a):\n    WHITE, GREY = 0, 1\n    MAX = 3\n    a = a.lower()\n    myVar = 1\n    return WHITE + GREY + MAX + myVar\n";
+        assert_eq!(flagged("py/local-name", src), [5]);
+        // S1481: the halves of a loop's tuple are named to unpack them.
+        let src = "def f(xs, g, t):\n    for a, b in xs:\n        g(a)\n    c, d = t\n    g(c)\n";
+        assert_eq!(flagged("py/unused-local", src), [4]);
+        // S3457: one part of an f-string concatenation with a field.
+        let src = "def f(v):\n    a = (f'a {v} '\n         f'b c')\n    return a + f'd'\n";
+        assert_eq!(flagged("py/fstring-without-fields", src), [4]);
+        // S7483: the parameter named timeout, not ssl_handshake_timeout.
+        let src = "async def f(timeout=None):\n    return timeout\nasync def g(ssl_handshake_timeout=None):\n    return ssl_handshake_timeout\n";
+        assert_eq!(flagged("py/async-timeout-parameter", src), [1]);
     }
 }

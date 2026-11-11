@@ -142,6 +142,18 @@ pub(crate) struct Syntax {
     /// function with no structure of its own (a wrapper). Each function's
     /// own score, which the rule checks, stays flat either way.
     pub(crate) file_cognitive_nests_functions: bool,
+    /// Whether a function's cognitive complexity, for the rule and the file,
+    /// includes the functions nested in it, each one level deeper unless the
+    /// function around it only wraps them (defines them and returns one), and
+    /// nested functions aren't scored on their own: SonarQube's Python
+    /// analyzer, measured on SonarQube 26.7 (docs/sonar-parity/differences.md).
+    pub(crate) cognitive_includes_nested_functions: bool,
+    /// The most parameters a function has before common/too-many-parameters
+    /// reports it, unless `thresholds.parameters` says otherwise: SonarQube's
+    /// defaults, 13 in Python and 7 elsewhere.
+    pub(crate) max_parameters: u32,
+    /// A method's first parameter that isn't counted: Python's `self`, `cls`.
+    pub(crate) receivers: &'static [&'static str],
     /// Loops, catches and ternaries: +1 cyclomatic, +1 (+nesting) cognitive.
     pub(crate) branches: &'static [&'static str],
     /// Switch/match constructs: +1 (+nesting) cognitive once per switch, and
@@ -167,6 +179,9 @@ static JS_SYNTAX: Syntax = Syntax {
     wildcard_arm_is_default: false,
     cognitive_skips_or: true,
     file_cognitive_nests_functions: true,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    receivers: &[],
     branches: &[
         "for_statement",
         "for_in_statement",
@@ -187,13 +202,17 @@ static PYTHON_SYNTAX: Syntax = Syntax {
     wildcard_arm_is_default: false,
     cognitive_skips_or: false,
     file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: true,
+    max_parameters: 13,
+    receivers: &["self", "cls"],
     branches: &[
         "for_statement",
         "while_statement",
         "except_clause",
         "conditional_expression",
     ],
-    switches: &["match_statement"],
+    // SonarQube's Python analyzer gives match nothing (measured, 26.7).
+    switches: &[],
     cases: &["case_clause"],
     comments: &["comment"],
     dup_ignore: &[
@@ -214,6 +233,9 @@ static JAVA_SYNTAX: Syntax = Syntax {
     wildcard_arm_is_default: false,
     cognitive_skips_or: false,
     file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    receivers: &[],
     branches: &[
         "for_statement",
         "enhanced_for_statement",
@@ -234,6 +256,9 @@ static C_SYNTAX: Syntax = Syntax {
     wildcard_arm_is_default: false,
     cognitive_skips_or: false,
     file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    receivers: &[],
     branches: &[
         "for_statement",
         "for_range_loop",
@@ -264,6 +289,9 @@ static CSHARP_SYNTAX: Syntax = Syntax {
     wildcard_arm_is_default: true,
     cognitive_skips_or: false,
     file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    receivers: &[],
     branches: &[
         "for_statement",
         "foreach_statement",
@@ -284,6 +312,9 @@ static RUST_SYNTAX: Syntax = Syntax {
     wildcard_arm_is_default: false,
     cognitive_skips_or: false,
     file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    receivers: &[],
     branches: &["for_expression", "while_expression"],
     // `loop` has no condition, so no decision: it only nests, like a match.
     switches: &["match_expression", "loop_expression"],

@@ -132,7 +132,7 @@ disabled = ["js/no-console"]
 [thresholds]
 cognitive_complexity = 15
 function_lines = 80
-parameters = 7
+parameters = 7             # default: 7, and 13 for Python, as SonarQube
 
 [duplication]
 min_tokens = 100

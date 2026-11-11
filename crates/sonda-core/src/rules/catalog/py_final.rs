@@ -1208,7 +1208,7 @@ fn method_unittest_will_not_run(name_node: Node, src: &[u8]) -> bool {
     mentions <= 1
 }
 
-fn default_is_modified_in_the_body(name: Node, src: &[u8]) -> bool {
+pub(super) fn default_is_modified_in_the_body(name: Node, src: &[u8]) -> bool {
     let Some(function) = name
         .parent()
         .and_then(|p| p.parent())
@@ -1283,7 +1283,7 @@ fn mutates(n: Node, param: &[u8], src: &[u8]) -> bool {
                 .is_some_and(|left| match left.kind() {
                     "attribute" => is_param(left.child_by_field_name("object")),
                     "subscript" => is_param(left.child_by_field_name("value")),
-                    "identifier" => n.kind() == "augmented_assignment" && is_param(Some(left)),
+                    // `seen += [x]` and `n -= 1`: SonarQube leaves them alone.
                     _ => false,
                 })
         }
@@ -1452,5 +1452,13 @@ mod tests {
         assert_eq!(flagged("py/similar-tests", src), [1]);
         let ts = "from typing import TypeVar\n_T = TypeVar('_T')\ntype A = set[_T]\ntype B[T] = set[T]\ntype C = set[int]\n";
         assert_eq!(flagged("py/typevar-in-type-statement", ts), [3]);
+    }
+
+    /// S5717 as SonarQube 26.7 reports it: a mutable default changed in
+    /// place, not one rebound with `+=` or a number counted down.
+    #[test]
+    fn defaults_changed_in_place() {
+        let src = "def a(xs=[]):\n    xs.append(1)\ndef b(d={}):\n    d['k'] = 1\ndef c(xs=[]):\n    xs += [1]\ndef e(n=1):\n    n -= 1\n    return n\n";
+        assert_eq!(flagged("py/default-parameter-modified", src), [1, 3]);
     }
 }

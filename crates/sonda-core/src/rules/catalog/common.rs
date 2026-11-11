@@ -59,7 +59,8 @@ pub(super) static RULES: &[Rule] = &[
         id: crate::rules::TOO_MANY_PARAMETERS,
         name: "Functions should not have too many parameters",
         description: "Many parameters make calls hard to read; group them into an object. \
-                      Threshold: `thresholds.parameters`.",
+                      Threshold: `thresholds.parameters`; by default 7, and 13 in Python, as SonarQube, \
+                      not counting a method's `self` or `cls`.",
         message: "",
         category: CodeSmell,
         severity: Major,
@@ -71,7 +72,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: crate::rules::TODO_COMMENT,
         name: "Track TODO and FIXME comments",
-        description: "TODO, FIXME and XXX comments mark unfinished work that should be tracked.",
+        description: "TODO and FIXME comments mark unfinished work that should be tracked.",
         message: "",
         category: CodeSmell,
         severity: Info,

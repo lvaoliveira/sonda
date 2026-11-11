@@ -214,6 +214,42 @@ Compared with SonarQube's issues on the same commit of a JavaScript
 project (`scripts/sonar_compare.py`): sonda now raises 145 of its 150,
 where it raised 142, and 4 issues SonarQube doesn't, where it raised 14.
 
+- Python, compared on seven standard-library packages of CPython and on a
+  Home Assistant integration, and measured on SonarQube 26.7 one case at a
+  time: sonda raises 456 of SonarQube's 510 issues on the 87 files
+  SonarQube could parse, where it raised 438, and 134 that SonarQube
+  doesn't, where it raised 579. What changed:
+  - Cognitive complexity counts a nested function in the one around it,
+    one level deeper unless that one only wraps it, and the rule reports
+    the outermost function only. A loop's `else` costs 1, `match` nothing.
+  - `common/too-many-parameters` allows 13 in Python by default, as
+    SonarQube, and doesn't count `self` or `cls`; `thresholds.parameters`,
+    when set, still applies to every language. `common/todo-comment` no
+    longer takes `XXX` for a task, in any language.
+  - Methods and fields of a class with a base (`py/method-name`,
+    `py/field-name`) may be named by the base and aren't reported;
+    CONSTANT_CASE locals and parameters assigned again aren't
+    `py/local-name`'s; the halves of a loop's tuple aren't unused locals.
+  - `py/empty-nested-block` leaves an `except: pass` to the exception
+    rules; `py/needless-pass` leaves a class's docstring and `pass`;
+    `py/fstring-without-fields` leaves a part of a concatenation with a
+    field; `py/async-timeout-parameter` is about `timeout` itself.
+  - `py/bare-except` reports `except SystemExit` that doesn't re-raise,
+    and not a catch-all after a clause that re-raises SystemExit.
+    `py/cancellation-swallowed` reports in coroutines only, a `return`
+    included.
+  - `py/mergeable-if` reports the inner `if`. `py/redundant-parentheses`
+    reports doubled parentheses (`((x))`), which is what S1110 is in
+    Python, not one pair around a condition.
+  - `py/logging-error-in-except` reports `error(..., exc_info=True)`, not
+    every `error()`. `py/dict-keys-iteration` reports `k in d.keys()`
+    where d is known to be a dictionary. `py/default-parameter-modified`
+    leaves `xs += [...]` and `n -= 1`, and `py/mutable-default` leaves the
+    defaults that rule reports. `py/duplicated-string` takes hyphenated
+    words for identifiers, as SonarQube.
+  - New: `py/dict-unpacked-without-items` (S7517), `for k, v in d` over a
+    dictionary's keys. `py/dict-lookup-in-loop` was labelled S7517 but
+    isn't that rule: it is now opt-in, with no SonarQube key.
 - Cognitive complexity in JavaScript and TypeScript counts as SonarQube's
   analyzer does, measured on SonarQube 26.7 one construct at a time: `||`
   sequences add nothing (`&&` still adds 1), and a file's total counts a
