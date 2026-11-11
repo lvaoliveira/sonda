@@ -209,12 +209,29 @@ jobs:
         with:
           prefix-key: v1-rust
       - run: cargo build -p sonda-server --locked
+      - name: The last release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" >> "$GITHUB_OUTPUT"
+      # Cached by tag: each run's download counted on the release page, so
+      # its download counts measured this CI rather than users. SHA256SUMS
+      # is downloaded every run, so a cached binary is still checked.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        with:
+          path: ${{ runner.temp }}/old
+          key: last-release-${{ steps.release.outputs.tag }}-x86_64-linux
       - name: The last release's CLI
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          CACHED: ${{ steps.cache.outputs.cache-hit }}
         run: |
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'sonda-*-x86_64-linux' --dir "$RUNNER_TEMP/old"
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'SHA256SUMS' --dir "$RUNNER_TEMP/old"
+          if [ "$CACHED" != true ]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'sonda-*-x86_64-linux' --dir "$RUNNER_TEMP/old"
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP/old" --clobber
           cd "$RUNNER_TEMP/old"
           sha256sum -c --ignore-missing SHA256SUMS
           chmod +x sonda-*-x86_64-linux
@@ -248,9 +265,25 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" >> "$GITHUB_OUTPUT"
+      # Cached by tag: each run's download counted on the release page, so
+      # its download counts measured this CI rather than users. SHA256SUMS
+      # is downloaded every run, so a cached binary is still checked.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        with:
+          path: ${{ runner.temp }}/old
+          key: last-release-${{ steps.release.outputs.tag }}-x86_64-linux
+      - name: The last release's CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          CACHED: ${{ steps.cache.outputs.cache-hit }}
         run: |
-          echo "tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" >> "$GITHUB_OUTPUT"
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'sonda-*-x86_64-linux' --pattern SHA256SUMS --dir "$RUNNER_TEMP/old"
+          if [ "$CACHED" != true ]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'sonda-*-x86_64-linux' --dir "$RUNNER_TEMP/old"
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP/old" --clobber
           cd "$RUNNER_TEMP/old"
           sha256sum -c --ignore-missing SHA256SUMS
           chmod +x sonda-*-x86_64-linux
