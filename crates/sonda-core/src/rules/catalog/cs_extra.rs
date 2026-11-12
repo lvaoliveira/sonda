@@ -630,7 +630,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S6667")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(catch_clause (catch_declaration name: (identifier)) body: (block)) @match",
+            query: "(catch_clause body: (block)) @match",
             filter: Some(Find(log_without_exception)),
         },
         example: Some(Example {
@@ -1594,20 +1594,70 @@ fn oddly_named_logger<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     })
 }
 
+/// A call to a logger's method of Microsoft's, Serilog's, NLog's or
+/// log4net's, whatever its message: a literal, an interpolated string or a
+/// concatenation (seen on SonarCloud's analysis of Prowlarr, NLog's).
+fn is_logging_call(call: Node, src: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let (Some(method), Some(receiver)) = (
+        function.child_by_field_name("name"),
+        function.child_by_field_name("expression"),
+    ) else {
+        return false;
+    };
+    let method = text(method, src);
+    let mel = matches!(
+        method,
+        b"Log"
+            | b"LogTrace"
+            | b"LogDebug"
+            | b"LogInformation"
+            | b"LogWarning"
+            | b"LogError"
+            | b"LogCritical"
+    );
+    let others = matches!(
+        method,
+        b"Trace"
+            | b"Verbose"
+            | b"Debug"
+            | b"Info"
+            | b"Information"
+            | b"Warn"
+            | b"Warning"
+            | b"Error"
+            | b"Fatal"
+    ) && super::java_security::contains_ignoring_case(text(receiver, src), b"log");
+    (mel || others) && !cs_call_arguments(call).is_empty()
+}
+
+/// The first log call in a catch that doesn't pass the caught exception
+/// itself, its message isn't it (seen on SonarCloud's analysis of
+/// Prowlarr): one per catch, in a catch without a variable too, unless the
+/// catch rethrows with a statement of its own or another log call there
+/// passes it.
 fn log_without_exception<'t>(catch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut cursor = catch.walk();
     let name = catch
         .named_children(&mut cursor)
         .find(|c| c.kind() == "catch_declaration")
         .and_then(|d| d.child_by_field_name("name"))
-        .map(|n| text(n, src))?;
+        .map(|n| text(n, src));
     let body = catch.child_by_field_name("body")?;
-    // Only when no log call in the block passes the exception.
-    let is_log = |n: Node| n.kind() == "invocation_expression" && log_template(n, src).is_some();
+    let rethrows = body.named_children(&mut body.walk()).any(|st| {
+        st.kind() == "throw_statement"
+            && st.named_child(0).is_none_or(|e| Some(text(e, src)) == name)
+    });
+    if rethrows {
+        return None;
+    }
+    let is_log = |n: Node| n.kind() == "invocation_expression" && is_logging_call(n, src);
     let passes_it = |n: Node| {
         cs_call_arguments(n)
             .iter()
-            .any(|a| count_word(text(*a, src), name) > 0)
+            .any(|a| Some(text(*a, src)) == name)
     };
     if find_in_scope(body, CS_SCOPE_STOPS, |n| is_log(n) && passes_it(n)).is_some() {
         return None;
@@ -1848,7 +1898,9 @@ mod tests {
     fn logging() {
         let src = "namespace N;\nclass A {\nprivate readonly ILogger<A> output;\nprivate readonly ILogger<A> _logger;\nprivate static ILogger Log;\nprivate readonly Logger _output;\nvoid F(int from, int to) {\ntry { G(); } catch (IOException e) { _logger.LogError(\"failed\"); }\ntry { G(); } catch (IOException e) { _logger.LogError(e, \"failed\"); }\ntry { G(); } catch (IOException e) { _logger.LogWarning(\"failed {Message}\", e.Message); }\n_logger.LogInformation(\"Moved {From} to {To}\", to, from);\n_logger.LogInformation(\"Moved {From} to {To}\", from, to);\n_logger.LogInformation(\"Moved {From} to {To}\", a.X, from);\n}\n}";
         assert_eq!(flagged("cs/logger-field-name", src), [3]);
-        assert_eq!(flagged("cs/log-exception-not-passed", src), [8]);
+        // Its message isn't the exception (seen on SonarCloud's analysis of
+        // Prowlarr).
+        assert_eq!(flagged("cs/log-exception-not-passed", src), [8, 10]);
         assert_eq!(flagged("cs/log-template-argument-order", src), [11]);
     }
 

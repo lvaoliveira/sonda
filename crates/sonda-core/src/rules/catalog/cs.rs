@@ -1727,4 +1727,71 @@ pub(super) mod tests {
         assert_eq!(flagged("cs/mergeable-if", &src), [3, 4]);
         assert_eq!(flagged("cs/empty-string-comparison", &src), [9, 10, 11]);
     }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: a target-typed `new(...)`
+    /// builds a Regex too, from a field or an array's type.
+    #[test]
+    fn regex_target_typed() {
+        let src = "using System.Text.RegularExpressions;\nclass A\n{\n    static readonly Regex R = new(\"a+\", RegexOptions.Compiled);\n    static readonly Regex[] All = { new(\"b+\") };\n    static readonly Regex T = new(\"c+\", RegexOptions.None, System.TimeSpan.FromSeconds(1));\n}";
+        assert_eq!(flagged("cs/regex-without-timeout", src), [4, 5]);
+    }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: reported at the loop, the
+    /// type check, the type; each separated overload group at its first
+    /// declaration.
+    #[test]
+    fn prowlarr_positions() {
+        let src = "class A\n{\n    void F(int[] xs)\n    {\n        foreach (var x in xs)\n        {\n            if (x > 0) { G(x); }\n        }\n    }\n    string H(object o)\n    {\n        if (o is string)\n        {\n            return (string)o;\n        }\n        return null;\n    }\n}";
+        assert_eq!(flagged("cs/loop-could-be-where", src), [5]);
+        assert_eq!(flagged("cs/duplicate-cast", src), [12]);
+        let eq = "class P\n{\n    public bool Equals(P other) { return other != null; }\n}";
+        assert_eq!(flagged("cs/equals-without-iequatable", eq), [1]);
+        let overloads = "class A\n{\n    void F(int x) { }\n    void G(int x) { }\n    void F(string s) { }\n    void G(string s) { }\n    void H() { }\n}";
+        assert_eq!(flagged("cs/overloads-not-adjacent", overloads), [3, 4]);
+    }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: logging the exception
+    /// itself and rethrowing, with NLog's `Warn` too; a log in a branch, a
+    /// message without the exception, or NLog's `InternalLogger` isn't.
+    #[test]
+    fn log_and_rethrow_shapes() {
+        let src = "class A\n{\n    void F()\n    {\n        try { G(); }\n        catch (System.Exception ex)\n        {\n            _logger.Warn(ex, \"failed\");\n            throw;\n        }\n        try { G(); }\n        catch (System.Exception ex)\n        {\n            if (x) { _logger.Error(ex, \"failed\"); }\n            throw;\n        }\n        try { G(); }\n        catch (System.Exception ex)\n        {\n            InternalLogger.Error(\"failed {0}\", ex);\n            throw;\n        }\n    }\n}";
+        assert_eq!(flagged("cs/log-and-rethrow", src), [6]);
+    }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: the first log call of a
+    /// catch that doesn't pass the exception itself, a catch without a
+    /// variable too; not a catch that rethrows.
+    #[test]
+    fn log_exception_not_passed_shapes() {
+        let src = "class A\n{\n    void F()\n    {\n        try { G(); }\n        catch (System.Exception ex)\n        {\n            _logger.Debug(\"failed ({0})\", ex.Message);\n            _logger.Trace(\"again\");\n        }\n        try { G(); }\n        catch (System.Exception)\n        {\n            Logger.Error(\"failed\");\n        }\n        try { G(); }\n        catch (System.Exception e)\n        {\n            _logger.Trace(\"failed {0}\", e.Message);\n            throw;\n        }\n        try { G(); }\n        catch (System.Exception e)\n        {\n            _logger.Warn(e, \"failed\");\n        }\n    }\n}";
+        assert_eq!(flagged("cs/log-exception-not-passed", src), [8, 14]);
+    }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: an array given for the
+    /// `params` parameter binds only one overload.
+    #[test]
+    fn params_given_an_array() {
+        let src = "class A\n{\n    string F(string format, params object[] args)\n    {\n        return string.Format(format, args);\n    }\n}";
+        assert!(flagged("cs/ambiguous-params-overload", src).is_empty());
+    }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: localhost and constants
+    /// too; an argument whose parameter, declared in the file, names a
+    /// location; `new Uri(...)`; a delimiter joined into a location, not
+    /// one compared or returned.
+    #[test]
+    fn hardcoded_uri_shapes() {
+        let src = "class A\n{\n    private const string BaseUrl = \"https://api.example.com\";\n    void F(string urlBase, string path)\n    {\n        var serverUrl = \"http://localhost:9696\";\n        G(\"https://example.com/x\");\n        var u = new System.Uri(\"https://example.com/y\");\n        urlBase = \"/\" + urlBase;\n        var same = path != \"/\";\n    }\n    void G(string baseUrl) { }\n    string H(string urlBase) { return \"/\" + urlBase; }\n}";
+        assert_eq!(flagged("cs/hardcoded-uri", src), [3, 6, 7, 8, 9]);
+    }
+
+    /// Seen on SonarCloud's analysis of Prowlarr: an unresolved `IParser`
+    /// is an interface, not a base class; `MemberwiseClone()` and an object
+    /// initializer count as using the instance.
+    #[test]
+    fn could_be_static_shapes() {
+        let src = "class A : IParser\n{\n    private static readonly int N = 2;\n    private int Twice(int x) { return x * N; }\n    public A Copy() { return (A)MemberwiseClone(); }\n    private B Make(int x) { return new B { Value = x }; }\n}";
+        assert_eq!(flagged("cs/could-be-static", src), [4]);
+    }
 }

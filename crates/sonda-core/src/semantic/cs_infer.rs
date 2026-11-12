@@ -927,7 +927,12 @@ impl<'m, 't> Infer<'m, 't> {
                     } else {
                         Some(b)
                     };
-                    b.and_then(|b| self.written(b)).is_some()
+                    // Unresolved, `IParser` is an interface by .NET's naming
+                    // convention, not a base class that may declare names.
+                    b.is_some_and(|b| {
+                        self.written(b).is_some()
+                            || named_like_an_interface(&self.src[b.byte_range()])
+                    })
                 })
             }
             Ty::Named { local: false, .. } | Ty::Array(_) => true,
@@ -2111,6 +2116,14 @@ fn settled(t: &Ty) -> bool {
         Ty::Array(e) => settled(e),
         _ => false,
     }
+}
+
+/// `IParser`, `IEnumerable<T>`, `N.IFoo`: an `I` then a capital, .NET's
+/// convention for an interface.
+fn named_like_an_interface(name: &[u8]) -> bool {
+    let simple = name.split(|b| *b == b'<').next().unwrap_or(name);
+    let simple = simple.rsplit(|b| *b == b'.').next().unwrap_or(simple);
+    matches!(simple, [b'I', second, ..] if second.is_ascii_uppercase())
 }
 
 #[cfg(test)]

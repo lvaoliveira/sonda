@@ -193,20 +193,21 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/duplicated-string",
         name: "String literals should not be duplicated",
-        description: "A literal repeated across a file is easy to change in one place and miss in the others.",
-        message: "Define a constant for this string, which appears three times or more.",
+        description: "A literal repeated in a class is easy to change in one place and miss in \
+                      the others. Literals under five characters, attribute arguments and a \
+                      parameter's name (which nameof says) are left alone.",
+        message: "Define a constant for this string, which appears four times or more in this class.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 10,
         sonar: &[exact("S1192")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(compilation_unit) @match",
-            filter: Some(Find(string_repeated_often)),
+            find: strings_repeated_in_a_class,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string a = \"connection failed\"; string b = \"connection failed\"; string c = \"connection failed\"; }",
+            bad: "class A { string a = \"connection failed\"; string b = \"connection failed\"; string c = \"connection failed\"; string d = \"connection failed\"; }",
             good: "class A { const string Failed = \"connection failed\"; string a = Failed; string b = Failed; }",
         }),
     },
@@ -350,7 +351,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { public static readonly string[] Codes = { \"a\", \"b\" }; }",
+            bad: "class A { public static readonly List<string> Codes = new() { \"a\", \"b\" }; }",
             good: "class A { public static readonly IReadOnlyList<string> Codes = new[] { \"a\", \"b\" }; }",
         }),
     },
@@ -948,8 +949,11 @@ const MUTABLE_COLLECTIONS: &[&[u8]] = &[
     b"Hashtable",
 ];
 
+/// A mutable collection, not an array (seen on SonarCloud's analysis of
+/// Prowlarr: its public static readonly arrays aren't reported, its lists
+/// are).
 fn is_mutable_collection_type(ty: Node, src: &[u8]) -> bool {
-    ty.kind() == "array_type" || MUTABLE_COLLECTIONS.contains(&simple_name(ty, src))
+    MUTABLE_COLLECTIONS.contains(&simple_name(ty, src))
 }
 
 pub(super) fn declared_type(field: Node) -> Option<Node> {
@@ -1149,8 +1153,8 @@ fn assertion_side_effect<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 fn visible_readonly_collection<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    // A static field too (seen on SonarCloud's analysis of Prowlarr).
     if !cs_has_modifier(field, "readonly", src)
-        || cs_has_modifier(field, "static", src)
         || cs_has_modifier(field, "private", src)
         || !["public", "protected", "internal"]
             .iter()
@@ -1206,53 +1210,82 @@ fn grants_everyone(node: Node, src: &[u8]) -> bool {
         .is_some_and(|v| v.eq_ignore_ascii_case(b"Everyone"))
 }
 
-fn string_repeated_often<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut counts: std::collections::HashMap<&[u8], (usize, Node<'t>)> =
-        std::collections::HashMap::new();
-    let mut cursor = unit.walk();
-    if !cursor.goto_first_child() {
-        return None;
+/// Each literal of five characters or more used four times or more in a
+/// class, reported at its first use, as SonarQube does for C# (seen on
+/// Prowlarr's SonarCloud analysis): counted per class, leaving out
+/// attribute arguments and a literal naming a parameter of its method.
+fn strings_repeated_in_a_class<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    const TYPES: &[&str] = &[
+        "class_declaration",
+        "struct_declaration",
+        "record_declaration",
+        "record_struct_declaration",
+        "interface_declaration",
+    ];
+    let Some(root) = m.root else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut types = vec![root];
+    while let Some(scope) = types.pop() {
+        // The literals of this type, not of the types nested in it.
+        let mut uses: Vec<(&[u8], Vec<Node<'t>>)> = Vec::new();
+        let mut stack: Vec<(Node<'t>, Option<Node<'t>>)> = Vec::new();
+        let mut c = scope.walk();
+        stack.extend(scope.named_children(&mut c).map(|n| (n, None)));
+        while let Some((n, method)) = stack.pop() {
+            if TYPES.contains(&n.kind()) {
+                types.push(n);
+                continue;
+            }
+            if n.kind() == "attribute_list" {
+                continue;
+            }
+            let method = if matches!(
+                n.kind(),
+                "method_declaration"
+                    | "constructor_declaration"
+                    | "local_function_statement"
+                    | "operator_declaration"
+            ) {
+                Some(n)
+            } else {
+                method
+            };
+            if matches!(n.kind(), "string_literal" | "verbatim_string_literal") {
+                if scope.id() != root.id()
+                    && let Some(value) = cs_string_value(n, src).filter(|v| v.len() >= 5)
+                    && !method.is_some_and(|f| names_a_parameter(f, value, src))
+                {
+                    match uses.iter_mut().find(|(v, _)| *v == value) {
+                        Some((_, nodes)) => nodes.push(n),
+                        None => uses.push((value, vec![n])),
+                    }
+                }
+                continue;
+            }
+            let mut c = n.walk();
+            stack.extend(n.named_children(&mut c).map(|k| (k, method)));
+        }
+        found.extend(
+            uses.into_iter()
+                .filter(|(_, nodes)| nodes.len() >= 4)
+                .filter_map(|(_, nodes)| nodes.into_iter().min_by_key(|n| n.start_byte())),
+        );
     }
-    loop {
-        let n = cursor.node();
-        // Attribute arguments are often the same on purpose: [Category("Slow")].
-        let attributes = n.kind() == "attribute_list";
-        if !attributes
-            && matches!(n.kind(), "string_literal" | "verbatim_string_literal")
-            && let Some(value) = cs_string_value(n, src).filter(|v| v.len() >= 10)
-        {
-            counts
-                .entry(value)
-                .and_modify(|e| e.0 += 1)
-                .or_insert((1, n));
-        }
-        if !attributes && cursor.goto_first_child() {
-            continue;
-        }
-        if !next_node(&mut cursor) {
-            return smallest(&counts);
-        }
-    }
+    found.sort_by_key(|n| n.start_byte());
+    found
 }
 
-/// Moves the cursor to the next node that isn't below it; false at the end.
-fn next_node(cursor: &mut tree_sitter::TreeCursor) -> bool {
-    while !cursor.goto_next_sibling() {
-        if !cursor.goto_parent() {
-            return false;
-        }
-    }
-    true
-}
-
-/// The first literal (by position) that occurs three times or more.
-/// HashMap order never reaches the output: the minimum is unique.
-fn smallest<'t>(counts: &std::collections::HashMap<&[u8], (usize, Node<'t>)>) -> Option<Node<'t>> {
-    counts
-        .values()
-        .filter(|(count, _)| *count >= 3)
-        .map(|(_, node)| *node)
-        .min_by_key(|n| n.start_byte())
+/// Whether a method has a parameter with this name.
+fn names_a_parameter(method: Node, name: &[u8], src: &[u8]) -> bool {
+    method.child_by_field_name("parameters").is_some_and(|ps| {
+        let mut c = ps.walk();
+        ps.named_children(&mut c).any(|p| {
+            p.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == name)
+        })
+    })
 }
 
 fn local_is_never_used(name: Node, src: &[u8]) -> bool {
@@ -1361,12 +1394,36 @@ fn logs_and_rethrows(catch: Node, src: &[u8]) -> bool {
     let Some(body) = catch.child_by_field_name("body") else {
         return false;
     };
+    // A log call that is a statement of the catch block itself, not one in a
+    // branch (seen on SonarCloud's analysis of Prowlarr).
+    let direct = |n: Node| {
+        n.parent()
+            .filter(|s| s.kind() == "expression_statement")
+            .and_then(|s| s.parent())
+            .is_some_and(|b| b.id() == body.id())
+    };
+    // The exception itself passed to a logger, not its message, and not
+    // NLog's static `InternalLogger` (seen on SonarCloud's analysis of
+    // Prowlarr).
+    let passes_exception = |n: Node| cs_call_arguments(n).iter().any(|a| text(*a, src) == name);
+    let internal = |n: Node| {
+        n.child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("expression"))
+            .is_some_and(|e| text(e, src) == b"InternalLogger")
+    };
     let logs = find_in_scope(body, CS_SCOPE_STOPS, |n| {
-        n.kind() == "invocation_expression" && log_template(n, src).is_some()
+        n.kind() == "invocation_expression"
+            && direct(n)
+            && !internal(n)
+            && passes_exception(n)
+            && log_template(n, src).is_some()
             || n.kind() == "invocation_expression"
+                && direct(n)
+                && !internal(n)
                 && n.child_by_field_name("function")
                     .and_then(|f| f.child_by_field_name("name"))
                     .is_some_and(|m| {
+                        // NLog's `Warn` too.
                         matches!(
                             text(m, src),
                             b"LogError"
@@ -1375,6 +1432,7 @@ fn logs_and_rethrows(catch: Node, src: &[u8]) -> bool {
                                 | b"Error"
                                 | b"Fatal"
                                 | b"Warning"
+                                | b"Warn"
                         )
                     })
                 && cs_call_arguments(n).iter().any(|a| text(*a, src) == name)
@@ -1683,27 +1741,31 @@ fn typed_equals_without_interface<'t>(declaration: Node<'t>, src: &[u8]) -> Opti
         return None;
     }
     let own = text(declaration.child_by_field_name("name")?, src);
-    members(declaration).into_iter().find_map(|m| {
-        let name = m.child_by_field_name("name")?;
-        if m.kind() != "method_declaration"
-            || text(name, src) != b"Equals"
-            || !cs_has_modifier(m, "public", src)
-        {
-            return None;
-        }
-        let params = m.child_by_field_name("parameters")?;
-        let mut cursor = params.walk();
-        let types: Vec<&[u8]> = params
-            .named_children(&mut cursor)
-            .filter(|p| p.kind() == "parameter")
-            .filter_map(|p| p.child_by_field_name("type"))
-            .map(|t| {
-                let t = text(t, src);
-                t.strip_suffix(b"?").unwrap_or(t)
-            })
-            .collect();
-        (types == [own]).then_some(name)
-    })
+    members(declaration)
+        .into_iter()
+        .find_map(|m| {
+            let name = m.child_by_field_name("name")?;
+            if m.kind() != "method_declaration"
+                || text(name, src) != b"Equals"
+                || !cs_has_modifier(m, "public", src)
+            {
+                return None;
+            }
+            let params = m.child_by_field_name("parameters")?;
+            let mut cursor = params.walk();
+            let types: Vec<&[u8]> = params
+                .named_children(&mut cursor)
+                .filter(|p| p.kind() == "parameter")
+                .filter_map(|p| p.child_by_field_name("type"))
+                .map(|t| {
+                    let t = text(t, src);
+                    t.strip_suffix(b"?").unwrap_or(t)
+                })
+                .collect();
+            (types == [own]).then_some(name)
+        })
+        // Reported at the type (seen on SonarCloud's analysis of Prowlarr).
+        .and_then(|_| declaration.child_by_field_name("name"))
 }
 
 fn unsealed_equatable<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1847,8 +1909,10 @@ mod tests {
         let src = class(
             "public readonly List<int> A = new();\npublic readonly int[] B;\nprivate readonly List<int> C;\npublic readonly IReadOnlyList<int> D;\npublic static readonly string[] E = { };\nprotected static readonly Dictionary<int, int> F = new();\ninternal static readonly int[] G;\npublic static readonly IReadOnlyList<int> H;",
         );
-        assert_eq!(flagged("cs/public-readonly-mutable", &src), [3, 4]);
-        assert_eq!(flagged("cs/public-static-mutable-collection", &src), [7, 8]);
+        // Lists, not arrays, static or not (seen on SonarCloud's analysis
+        // of Prowlarr).
+        assert_eq!(flagged("cs/public-readonly-mutable", &src), [3, 8]);
+        assert_eq!(flagged("cs/public-static-mutable-collection", &src), [8]);
     }
 
     #[test]
@@ -1874,7 +1938,10 @@ mod tests {
         );
         assert_eq!(flagged("cs/world-permissions", &src), [4, 5, 6]);
         assert_eq!(flagged("cs/hardcoded-ip", &src), [7]);
-        let dup = "namespace N;\nclass A {\n[Category(\"integration\")] void A1() { G(\"connection failed\"); }\n[Category(\"integration\")] void A2() { G(\"connection failed\"); }\n[Category(\"integration\")] void A3() { G(\"connection failed\"); }\nvoid A4() { G(\"short\"); G(\"short\"); G(\"short\"); }\n}";
+        // Four uses in a class, five characters or more, attribute
+        // arguments and a parameter's name aside (seen on SonarCloud's
+        // analysis of Prowlarr).
+        let dup = "namespace N;\nclass A {\n[Category(\"integration\")] void A1() { G(\"connection failed\"); }\n[Category(\"integration\")] void A2() { G(\"connection failed\"); }\n[Category(\"integration\")] void A3() { G(\"connection failed\"); G(\"connection failed\"); }\nvoid A4() { G(\"tiny\"); G(\"tiny\"); G(\"tiny\"); G(\"tiny\"); }\nvoid A5(string label) { G(\"label\"); G(\"label\"); G(\"label\"); G(\"label\"); }\n}\nclass B {\nvoid B1() { G(\"connection failed\"); }\n}";
         assert_eq!(flagged("cs/duplicated-string", dup), [3]);
     }
 

@@ -116,6 +116,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "[(object_creation_expression arguments: (argument_list)) \
+                     (implicit_object_creation_expression) \
                      (invocation_expression function: (member_access_expression))] @match",
             filter: Some(Keep(regex_without_timeout)),
         },
@@ -881,6 +882,35 @@ fn regex_without_timeout(node: Node, src: &[u8]) -> bool {
     if non_backtracking {
         return false;
     }
+    // `new(...)` takes its type from what it initializes: `Regex A = new(...)`,
+    // or an element of `Regex[] All = { new(...) }`.
+    if node.kind() == "implicit_object_creation_expression" {
+        // Its argument list isn't a named field.
+        let args = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "argument_list")
+            .map_or(0, |l| {
+                l.named_children(&mut l.walk())
+                    .filter(|a| a.kind() == "argument")
+                    .count()
+            });
+        let mut up = node.parent();
+        for _ in 0..6 {
+            let Some(n) = up else { break };
+            if matches!(n.kind(), "variable_declaration" | "property_declaration") {
+                let regex = n.child_by_field_name("type").is_some_and(|t| {
+                    let t = text(t, src);
+                    t == b"Regex"
+                        || t == b"Regex[]"
+                        || t.ends_with(b"<Regex>")
+                        || t.ends_with(b".Regex")
+                });
+                return regex && args > 0 && args < 3;
+            }
+            up = n.parent();
+        }
+        return false;
+    }
     if node.kind() == "object_creation_expression" {
         let is_regex = node
             .child_by_field_name("type")
@@ -961,24 +991,15 @@ fn random_feeds_secret(node: Node, src: &[u8]) -> bool {
         && !v.windows(21).any(|x| x == b"RandomNumberGenerator")
 }
 
+/// Seen on SonarCloud's analysis of Prowlarr: an absolute URI or path,
+/// localhost and constants included, given to a name that says it's a
+/// location (a variable, field, property or the parameter it's passed to,
+/// when declared in this file, or `new Uri`); or a `"/"` or `"\\"` joined
+/// with `+` into a value given to such a name.
 fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
     let Some(value) = cs_string_value(literal, src) else {
         return false;
     };
-    let is_uri = value.windows(3).any(|w| w == b"://")
-        && !value.starts_with(b"http://localhost")
-        && !value.starts_with(b"https://localhost");
-    let is_path = (value.len() > 3 && value[1] == b':' && matches!(value[2], b'\\' | b'/') && value[0].is_ascii_alphabetic())
-        // Unix paths under a filesystem root; "/Account/Login" is a route.
-        || ([&b"/var/"[..], b"/usr/", b"/etc/", b"/home/", b"/opt/", b"/srv/", b"/mnt/", b"/tmp/", b"/Users/", b"/data/"]
-            .iter()
-            .any(|root| value.starts_with(root)))
-        || value.starts_with(b"\\\\");
-    if !(is_uri || is_path) || value.contains(&b'{') {
-        return false;
-    }
-    // Only when the code says it's a location: assigned to, or passed as, a
-    // name such as `url`, `uri`, `path`, `file`, `folder` or `dir`.
     let location = |n: &[u8]| {
         let l = n.to_ascii_lowercase();
         [&b"url"[..], b"uri", b"path", b"file", b"folder", b"dir"]
@@ -988,18 +1009,103 @@ fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
     let Some(parent) = literal.parent() else {
         return false;
     };
+    // A delimiter joined into a location: `basePath + "/"`.
+    // `"\\"` holds two backslashes as written, `@"\"` one.
+    let delimiter = value == b"/"
+        || (literal.kind() == "string_literal" && value == b"\\\\")
+        || (literal.kind() == "verbatim_string_literal" && value == b"\\");
+    if delimiter {
+        // Joined with `+` into a value given to a location's name, not
+        // returned or compared (seen on SonarCloud's analysis of Prowlarr).
+        if parent.kind() != "binary_expression"
+            || parent
+                .child_by_field_name("operator")
+                .is_none_or(|o| text(o, src) != b"+")
+        {
+            return false;
+        }
+        let mut top = parent;
+        while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
+            top = p;
+        }
+        let target = top.parent().and_then(|p| match p.kind() {
+            "assignment_expression" => p.child_by_field_name("left"),
+            "variable_declarator" => p.child_by_field_name("name"),
+            "equals_value_clause" => p.parent().and_then(|d| d.child_by_field_name("name")),
+            "argument" => p
+                .child_by_field_name("name")
+                .or_else(|| parameter_for(p, src)),
+            _ => None,
+        });
+        return target.is_some_and(|t| location(text(t, src)));
+    }
+    let is_uri = value.windows(3).any(|w| w == b"://");
+    let is_path = (value.len() > 3 && value[1] == b':' && matches!(value[2], b'\\' | b'/') && value[0].is_ascii_alphabetic())
+        // Unix paths under a filesystem root; "/Account/Login" is a route.
+        || ([&b"/var/"[..], b"/usr/", b"/etc/", b"/home/", b"/opt/", b"/srv/", b"/mnt/", b"/tmp/", b"/Users/", b"/data/"]
+            .iter()
+            .any(|root| value.starts_with(root)))
+        || value.starts_with(b"\\\\");
+    if !(is_uri || is_path) || value.contains(&b'{') {
+        return false;
+    }
     let name = match parent.kind() {
         "variable_declarator" => parent.child_by_field_name("name"),
+        "equals_value_clause" => parent.parent().and_then(|d| d.child_by_field_name("name")),
         "assignment_expression" => parent.child_by_field_name("left"),
-        "argument" => parent.child_by_field_name("name"),
+        "argument" => parent
+            .child_by_field_name("name")
+            .or_else(|| parameter_for(parent, src)),
         _ => None,
     };
-    // Constants are already named and in one place.
-    let in_const = parent
-        .parent()
-        .and_then(|d| d.parent())
-        .is_some_and(|f| f.kind() == "field_declaration" && cs_has_modifier(f, "const", src));
-    name.is_some_and(|n| location(text(n, src))) && !in_const
+    name.is_some_and(|n| location(text(n, src)))
+}
+
+/// The parameter an argument goes to, when the method or constructor is
+/// declared in this file, or `new Uri(...)`'s.
+fn parameter_for<'t>(argument: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let list = argument.parent()?;
+    let call = list.parent()?;
+    let position = list
+        .named_children(&mut list.walk())
+        .filter(|a| a.kind() == "argument")
+        .position(|a| a.id() == argument.id())?;
+    let (name, constructor) = match call.kind() {
+        "object_creation_expression" => (call.child_by_field_name("type")?, true),
+        "invocation_expression" => {
+            let f = call.child_by_field_name("function")?;
+            (f.child_by_field_name("name").unwrap_or(f), false)
+        }
+        _ => return None,
+    };
+    let name = text(name, src);
+    let name = name.rsplit(|b| *b == b'.').next().unwrap_or(name);
+    if constructor && matches!(name, b"Uri" | b"HttpUri") && position == 0 {
+        return call.child_by_field_name("type");
+    }
+    let mut root = call;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let declares = match n.kind() {
+            "method_declaration" if !constructor => n.child_by_field_name("name"),
+            "constructor_declaration" if constructor => n.child_by_field_name("name"),
+            _ => None,
+        };
+        if declares.is_some_and(|d| text(d, src) == name)
+            && let Some(param) = n.child_by_field_name("parameters").and_then(|ps| {
+                ps.named_children(&mut ps.walk())
+                    .filter(|p| p.kind() == "parameter")
+                    .nth(position)
+            })
+        {
+            return param.child_by_field_name("name");
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    None
 }
 
 fn unused_private_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

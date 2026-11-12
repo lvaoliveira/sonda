@@ -702,8 +702,10 @@ fn loops_simplifiable<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             return;
         }
         let name = text(variable, src);
-        if let Some(statement) = filtering_if(body, name, src) {
-            found.push(statement);
+        // Reported at the `foreach` (seen on SonarCloud's analysis of
+        // Prowlarr).
+        if filtering_if(body, name, src).is_some() {
+            found.push(foreach);
         } else if selects_one_member(body, name, src) {
             found.push(variable);
         }
