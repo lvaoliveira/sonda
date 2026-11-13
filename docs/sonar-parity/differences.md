@@ -19,7 +19,7 @@ the steps, the commands and what was learned along the way.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `57f6e9b` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `900999a` | 76 of 76 | 0 |
+| sonda | TypeScript (TSX), Rust | `8252a7b` | 85 of 85 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
@@ -29,6 +29,8 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
+| qutepart-cpp⁴ | C++ (Qt) | `1099377` | 238 of 748 | 32 |
+| roo_display⁴ | C++ (embedded), C | `f139977` | 1,525 of 2,958 | 124 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -47,6 +49,11 @@ SonarQube's with `sonar.java.binaries` on rules that need types.
 scanner: unlike automatic analysis, the project's and its libraries' types
 are resolved. Built-in "Sonar way comprehensive" profile; where SonarCloud
 disagreed with SonarQube 26.7, 26.7 was measured and is the reference.
+
+⁴ Compared with SonarCloud's analyses, built-in "Sonar way comprehensive"
+profile. SonarQube 26.7 here has no C/C++ analyzer, so no C++ shape was
+measured: each rule follows what SonarCloud reported on these projects, and
+didn't.
 
 Security hotspots count as issues in every row: the comparison fetches
 them since this C# work, and none of the earlier results changed but
@@ -724,6 +731,74 @@ read them).
   each, among them dead stores (S1854, 3) and regular expressions with
   super-linear runtime that `js/regex-polynomial-backtracking` misses
   (S8786, 3).
+
+## C and C++, from SonarCloud's results
+
+Compared on qutepart-cpp (a Qt text editor component) and roo_display (an
+embedded display library with a vendored zlib), against SonarCloud. Our
+SonarQube 26.7 has no C/C++ analyzer, so nothing here was measured: each
+rule's conditions and position are what SonarCloud's issues on the two
+projects show, and what they leave out. sonda had 4 C rules and the shared
+ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
+2,958.
+
+- **Headers.** A `.h` file written in C++ (a class, a namespace, a
+  template, `::`) is read as C++ when the project has C++ sources, as
+  SonarCloud analyzes a header with the files that include it.
+- **Cognitive complexity (S3776).** The C and C++ threshold is 25, not 15
+  (`thresholds.cognitive_complexity`, unset, is each language's default).
+  A lambda counts in the function around it; `else { if ... }`, the if
+  alone in its block, is an else-if; a test macro's body
+  (`TEST(Suite, Name) { ... }`) and an old-style (K&R) definition aren't
+  scored.
+- **Commented-out code (S125).** A block of `//` lines is one issue, at its
+  first line, prose or not, when a line reads as code or the lines parse as
+  C++; a commented preprocessor directive (`// #endif`) and a lone brace
+  are code.
+- **TODO and FIXME (S1134, S1135).** In any case (`// Fixme:`), once per
+  comment, at its first line.
+- **Parameters (S107).** An `override` isn't counted.
+- **New rules**, each inferred from both projects:
+  - `cpp/c-style-array` (S5945): arrays of pointers too, and
+    `std::unique_ptr<T[]>`; not a character array spelled as a string, nor
+    code in a macro's arguments.
+  - `cpp/implicit-constructor` (S1709): at the declaration in the class,
+    not again at `C::C(...)`; not a copy or move constructor.
+  - `cpp/nesting-depth` (S134), `cpp/mergeable-if` (S1066, not with a
+    declaration in the condition or `if constexpr`),
+    `cpp/one-declaration-per-statement` (S1659), `cpp/nested-conditional`
+    (S3358), `cpp/assignment-in-expression` (S1121), also in C.
+  - `cpp/redundant-static` (S3609): constexpr at namespace scope, and
+    anything in an unnamed namespace; not `static const`.
+  - `cpp/mutable-global` (S5421): `extern` too; a pointer must be const at
+    every level.
+  - `cpp/typedef` (S5416), `cpp/unscoped-enum` (S3642),
+    `cpp/inline-constexpr` (S5408), `cpp/redundant-virtual` (S3471),
+    `cpp/deprecated-code` (S1133), `cpp/default-special-member` (S3490),
+    `cpp/empty-function` (S1186, not a constructor or destructor),
+    `cpp/redundant-type` (S5827), `cpp/make-unique` (S5950).
+  - `cpp/init-statement` (S6004) is off by default: SonarCloud reported
+    about a third of what it finds, and nothing visible told them apart.
+
+### Still open in C and C++
+
+On the two projects, 1,943 of SonarCloud's issues and 156 of sonda's:
+
+- **No sonda rule yet:** the largest, S3230 (202, members set in a
+  constructor's body or its initializer list), S6022 (169, `std::byte`),
+  S1172 (88, unused parameters), S5817 (83, const member functions), S5025
+  (74, `new` and `delete`), S6177 (74, `using enum`), S1198, S5350, S859,
+  S2807, S1242; then about a hundred keys with fewer.
+- **Off by default:** S6004 (126).
+- **SonarCloud's commented-out code in generated tables (140):** roo_display's
+  font files comment each glyph, `// "&" (U+0026), uncompressed`, which
+  SonarCloud reports as code.
+- **Code the build doesn't compile:** sonda can't know which `#if` branch is
+  live or which files a build includes; SonarCloud analyzes only what the
+  compilation database compiles (zlib's inactive fast paths, an ESP32-only
+  source).
+- **sonda only, not pinned down (156):** S125 (45), S5421 (31), S5950 (17),
+  S1186 (16), S5827 (12), a few each for the rest.
 
 ## Rules that depend on knowing a type
 

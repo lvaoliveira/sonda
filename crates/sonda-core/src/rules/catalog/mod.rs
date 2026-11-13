@@ -3,6 +3,7 @@
 
 mod c;
 mod common;
+mod cpp;
 mod cs;
 mod cs_bugs;
 mod cs_classes;
@@ -76,7 +77,9 @@ pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, FindAll, FindSaying, Keep};
 pub(super) use super::{Check, Example, Rule, exact, related};
-pub(super) use crate::lang::{C_CPP, C_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, RUST, TS};
+pub(super) use crate::lang::{
+    C_CPP, C_ONLY, CPP_ONLY, CSHARP, JAVA, JS_TS, JSX, Lang, PYTHON, RUST, TS,
+};
 pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
 pub(super) use crate::model::Severity::{Blocker, Critical, Info, Major, Minor};
 use std::sync::LazyLock;
@@ -87,10 +90,10 @@ pub(super) use tree_sitter::Node;
 /// the one Rust and SonarQube allow (a module named `prelude`).
 mod prelude {
     pub(super) use super::{
-        Blocker, Bug, C_CPP, C_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find, FindAll,
-        FindSaying, Info, JAVA, JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, RUST, Rule, TS,
-        Vulnerability, bare_except, empty_block, exact, has_equality_operator, no_arguments,
-        not_nullish_comparison, related,
+        Blocker, Bug, C_CPP, C_ONLY, CPP_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find,
+        FindAll, FindSaying, Info, JAVA, JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, RUST,
+        Rule, TS, Vulnerability, bare_except, empty_block, exact, has_equality_operator,
+        no_arguments, not_nullish_comparison, related,
     };
 }
 
@@ -141,6 +144,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (java_last2::RULES, java_last2::OFF_BY_DEFAULT),
     (java_final2::RULES, java_final2::OFF_BY_DEFAULT),
     (c::RULES, &[]),
+    (cpp::RULES, cpp::OFF_BY_DEFAULT),
     (cs::RULES, cs::OFF_BY_DEFAULT),
     (cs_security::RULES, &[]),
     (cs_bugs::RULES, &[]),
