@@ -25,7 +25,9 @@ change any of it, and says so in the [changelog](../CHANGELOG.md).
   version 1 until then. The SARIF report follows SARIF 2.1.0.
 - **The upload protocol.** What `sonda upload` and `sonda scan --upload`
   send to `POST /api/analyses` and what the server answers (status codes
-  and `analysis_id`, `issues`, `gate`). The window is below.
+  and `analysis_id`, `issues`, `gate`), and the file `sonda scan
+  --save-upload` writes, that same body gzipped, for `sonda upload
+  --saved`. The window is below.
 - **The `sonda-core` library.** The items exported from `sonda_core` that
   the crate's documentation shows, such as `load_config`, `run`, `report`
   and `ScanOptions`. Items marked `#[doc(hidden)]` (the fuzzing hooks)

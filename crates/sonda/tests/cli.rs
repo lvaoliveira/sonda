@@ -1263,6 +1263,222 @@ fn scan_upload(dir: &Path, server: &str) -> Command {
 }
 
 #[test]
+fn scan_save_upload_writes_what_upload_would_send_without_a_server() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let out = tempfile::tempdir().unwrap();
+    let file = out.path().join("sonda-upload.json.gz");
+    // No server, no token: none is needed (ADR-0028).
+    let result = sonda()
+        .args(["scan", "--no-gate", "-f", "text", "--save-upload"])
+        .arg(&file)
+        .args(["--project", "payments", "--branch", "fix/login"])
+        .args(["--commit", "0123abc"])
+        .arg(dir.path())
+        .env_remove("SONDA_TOKEN")
+        .env_remove("SONDA_SERVER")
+        .env_remove("GITHUB_ACTIONS")
+        .output()
+        .unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains("saved the upload of 1 files for payments"),
+        "{}",
+        stderr(&result)
+    );
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(&std::fs::read(&file).unwrap()[..]),
+        &mut json,
+    )
+    .unwrap();
+    let body: Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(
+        (&body["project"], &body["branch"], &body["commit"]),
+        (&json!("payments"), &json!("fix/login"), &json!("0123abc"))
+    );
+    // The full JSON report, whatever this run printed, and its sources.
+    assert_eq!(body["report"]["tool"], "sonda");
+    assert_eq!(body["sources"][0]["path"], "app.js");
+    assert!(body["scan_duration_ms"].is_u64());
+}
+
+#[test]
+fn scan_save_upload_needs_what_upload_needs_and_not_both() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let out = tempfile::tempdir().unwrap();
+    let file = out.path().join("u.json.gz");
+    let missing = sonda()
+        .args(["scan", "--save-upload"])
+        .arg(&file)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("--project"),
+        "{}",
+        stderr(&missing)
+    );
+    let both = sonda()
+        .args(["scan", "--upload", "--save-upload"])
+        .arg(&file)
+        .args(["--project", "p", "--branch", "b", "--commit", "0123abc"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&both), 2, "{}", stderr(&both));
+    assert!(
+        stderr(&both).contains("cannot be used with"),
+        "{}",
+        stderr(&both)
+    );
+    assert!(!file.exists());
+}
+
+/// What `scan --save-upload` wrote for `dir`, as JSON, with `edit` applied,
+/// gzipped again into `out/saved.json.gz`.
+fn saved_upload(dir: &Path, out: &Path, edit: impl FnOnce(&mut Value)) -> std::path::PathBuf {
+    let file = out.join("saved.json.gz");
+    let status = sonda()
+        .args(["scan", "--no-gate", "-f", "json", "-o"])
+        .arg(out.join("report.json"))
+        .arg("--save-upload")
+        .arg(&file)
+        .args(["--project", "payments", "--branch", "fix/login"])
+        .args(["--commit", "0123abc"])
+        .arg(dir)
+        .env_remove("GITHUB_ACTIONS")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(&std::fs::read(&file).unwrap()[..]),
+        &mut json,
+    )
+    .unwrap();
+    let mut body: Value = serde_json::from_slice(&json).unwrap();
+    edit(&mut body);
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut gz, body.to_string().as_bytes()).unwrap();
+    std::fs::write(&file, gz.finish().unwrap()).unwrap();
+    file
+}
+
+/// `sonda upload --saved FILE` as a workflow_run job runs it (ADR-0028).
+fn upload_saved(file: &Path, server: &str) -> Command {
+    let mut cmd = sonda();
+    cmd.args(["upload", "--saved"])
+        .arg(file)
+        .args(["--server", server, "--project", "payments"])
+        .args(["--branch", "fix/login", "--commit", &"c".repeat(40)])
+        .args(["--pull-request", "12", "--pull-request-base", "main"])
+        .args(["--pull-request-head-sha", &"C".repeat(40)])
+        .args(["--repository", "acme/payments"])
+        .env("SONDA_TOKEN", "s3cret")
+        .env_remove("SONDA_TOKEN_FILE")
+        .env_remove("SONDA_SERVER")
+        .env_remove("GITHUB_ACTIONS");
+    for var in [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
+#[test]
+fn upload_saved_sends_the_file_with_its_own_pull_request_not_the_files() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let out = tempfile::tempdir().unwrap();
+    // The file comes from the pull request's CI: whatever it claims is
+    // replaced by what the uploading workflow says.
+    let file = saved_upload(dir.path(), out.path(), |body| {
+        body["project"] = json!("someone-elses");
+        body["version"] = json!("9.9.9");
+        body["pull_request"] = json!({
+            "number": 999, "base": "evil", "head": "x",
+            "head_sha": "e".repeat(40), "repository": "someone/else",
+        });
+    });
+    let (url, server) = fake_server(
+        "201 Created",
+        r#"{"analysis_id":7,"issues":{"open":1,"new":1,"reopened":0,"fixed":0}}"#,
+    );
+    let result = upload_saved(&file, &url).output().unwrap();
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains("uploaded 1 files for payments/pull request #12"),
+        "{}",
+        stderr(&result)
+    );
+    let body = uploaded(&server.join().unwrap());
+    assert_eq!(
+        (&body["project"], &body["branch"], &body["commit"]),
+        (
+            &json!("payments"),
+            &json!("fix/login"),
+            &json!("c".repeat(40))
+        )
+    );
+    assert_eq!(
+        body["pull_request"],
+        json!({
+            "number": 12, "base": "main", "head": "fix/login",
+            "head_sha": "c".repeat(40), "repository": "acme/payments",
+        })
+    );
+    assert!(body.get("version").is_none(), "{}", body["version"]);
+    // The rest as scanned.
+    assert_eq!(body["report"]["tool"], "sonda");
+    assert_eq!(body["sources"][0]["path"], "app.js");
+}
+
+#[test]
+fn upload_saved_refuses_what_save_upload_didnt_write() {
+    let dir = project(&[("app.js", "var x = 1;\n")]);
+    let out = tempfile::tempdir().unwrap();
+    let unknown = saved_upload(dir.path(), out.path(), |body| {
+        body["token"] = json!("steal me");
+    });
+    let result = upload_saved(&unknown, "http://127.0.0.1:9")
+        .output()
+        .unwrap();
+    assert_eq!(code(&result), 2, "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains(r#"a field "token" sonda doesn't write"#),
+        "{}",
+        stderr(&result)
+    );
+    let plain = out.path().join("plain.json");
+    std::fs::write(&plain, "{}").unwrap();
+    let result = upload_saved(&plain, "http://127.0.0.1:9").output().unwrap();
+    assert!(
+        stderr(&result).contains("isn't gzip"),
+        "{}",
+        stderr(&result)
+    );
+    // A report or --saved, never both.
+    let both = sonda()
+        .args(["upload", "report.json", "--saved"])
+        .arg(&plain)
+        .args(["--server", "http://127.0.0.1:9", "--project", "p"])
+        .args(["--branch", "b", "--commit", "0123abc"])
+        .output()
+        .unwrap();
+    assert!(
+        stderr(&both).contains("cannot be used with"),
+        "{}",
+        stderr(&both)
+    );
+}
+
+#[test]
 fn scan_upload_sends_the_full_report_and_how_long_the_scan_took() {
     let dir = project(&[("app.js", "var x = 1;\n")]);
     let (url, server) = fake_server_seq(vec![

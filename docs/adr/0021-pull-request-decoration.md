@@ -110,7 +110,8 @@ Skipped for now. A fork's CI usually has no secrets, so it can't upload
 with a project token. The CLI recognizes a fork pull request (the
 event's head repository isn't the base repository), says it won't upload,
 and still scans: the gate, the exit code and SARIF work as without a
-server.
+server. ([ADR-0028](0028-scan-then-upload-apart.md) later uploads them
+from a separate workflow.)
 
 ## Consequences
 
@@ -132,7 +133,8 @@ server.
 - GitLab (merge request notes, diff discussions, commit statuses) and
   Bitbucket (Code Insights reports and annotations, build statuses): one
   ADR or PR each, on this design.
-- Pull requests from forks.
+- Pull requests from forks: built in
+  [ADR-0028](0028-scan-then-upload-apart.md).
 - Review comments threaded on the diff, instead of annotations.
 - Webhooks: noticing a pull request merged or closed to remove its
   analyses earlier, or re-posting when someone edits sonda's comment.

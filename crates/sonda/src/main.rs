@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use sonda_core::config;
 use sonda_core::report::{self, Format};
 use sonda_core::rules::{self, RULES};
@@ -51,6 +51,8 @@ enum Command {
 }
 
 #[derive(Args)]
+// Where the analysis goes: the server, or a file for CI to keep (ADR-0028).
+#[command(group(ArgGroup::new("uploading").args(["upload", "save_upload"])))]
 struct ScanArgs {
     /// Project directory to analyze.
     #[arg(default_value = ".")]
@@ -100,20 +102,30 @@ struct ScanArgs {
     /// took (as `sonda upload` does with a report; see its options).
     #[arg(long, help_heading = "Upload", requires_all = ["project", "branch", "commit"])]
     upload: bool,
+    /// Write what --upload would send to FILE instead, for CI to keep as an
+    /// artifact the server fetches from GitHub: no server or token needed.
+    #[arg(
+        long,
+        value_name = "FILE",
+        help_heading = "Upload",
+        conflicts_with = "upload",
+        requires_all = ["project", "branch", "commit"]
+    )]
+    save_upload: Option<PathBuf>,
     /// Server URL (default: SONDA_SERVER).
     #[arg(long, help_heading = "Upload", requires = "upload")]
     server: Option<String>,
     /// Project key on the server.
-    #[arg(long, help_heading = "Upload", requires = "upload")]
+    #[arg(long, help_heading = "Upload", requires = "uploading")]
     project: Option<String>,
     /// Branch the analysis belongs to.
-    #[arg(long, help_heading = "Upload", requires = "upload")]
+    #[arg(long, help_heading = "Upload", requires = "uploading")]
     branch: Option<String>,
     /// Analyzed commit, as hex (in GitHub Actions: $GITHUB_SHA).
-    #[arg(long, help_heading = "Upload", requires = "upload")]
+    #[arg(long, help_heading = "Upload", requires = "uploading")]
     commit: Option<String>,
     /// The project's version, such as 2.3.0.
-    #[arg(long, help_heading = "Upload", requires = "upload")]
+    #[arg(long, help_heading = "Upload", requires = "uploading")]
     project_version: Option<String>,
     /// The pull request the analysis belongs to, outside GitHub Actions
     /// (where it's read from the event); --branch is its head branch.
@@ -121,7 +133,7 @@ struct ScanArgs {
         long,
         value_name = "NUMBER",
         help_heading = "Upload",
-        requires_all = ["upload", "pull_request_base"]
+        requires_all = ["uploading", "pull_request_base"]
     )]
     pull_request: Option<u64>,
     /// The branch the pull request merges into.
@@ -334,6 +346,8 @@ fn upload_target(args: &ScanArgs) -> Result<Option<upload::Checked>> {
             .or_else(|| env("SONDA_CA_CERT").map(PathBuf::from)),
         pull_request: args.pull_request,
         pull_request_base: args.pull_request_base.clone(),
+        pull_request_head_sha: None,
+        repository: None,
     }
     .check()
 }
@@ -366,8 +380,31 @@ fn apply_server_rules(
     Ok(Some(server.applied()))
 }
 
+/// Where `sonda scan --save-upload` writes the upload, checked before
+/// scanning; `None` without it.
+fn save_target(args: &ScanArgs) -> Result<Option<upload::Saved>> {
+    let Some(path) = args.save_upload.clone() else {
+        return Ok(None);
+    };
+    let target = upload::Target {
+        server: String::new(),
+        project: args.project.clone().unwrap_or_default(),
+        branch: args.branch.clone().unwrap_or_default(),
+        commit: args.commit.clone().unwrap_or_default(),
+        project_version: args.project_version.clone(),
+        token_file: None,
+        ca_cert: None,
+        pull_request: args.pull_request,
+        pull_request_base: args.pull_request_base.clone(),
+        pull_request_head_sha: None,
+        repository: None,
+    };
+    upload::Saved::check(path, target).map(Some)
+}
+
 fn scan(args: ScanArgs) -> Result<ExitCode> {
     let upload = upload_target(&args)?;
+    let saved = save_target(&args)?;
     let started = std::time::Instant::now();
     let mut cfg = sonda_core::load_config(args.config.as_deref(), &args.path)?;
     // An uploading scan applies the server's rule settings, where they set a
@@ -422,6 +459,10 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
     // When uploading, the server's gate decides, reviews included (ADR-0014);
     // an older server that sends none leaves the local one deciding.
     let mut passed = passed;
+    if let Some(saved) = saved {
+        let report = report::render(&build(false), report::Format::Json);
+        saved.write(report.as_bytes(), &root, Some(scan_duration))?;
+    }
     if let Some(target) = upload {
         // The server gets the full JSON report, whatever --format and
         // --only-new chose for this one.

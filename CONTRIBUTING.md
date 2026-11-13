@@ -263,6 +263,15 @@ Setting it up on the server:
 4. Add the repository secrets `SONDA_TOKEN`, `SONAR_TOKEN` and
    `SONAR_HOST_URL` (such as `http://localhost:9000`).
 
+**Pull requests are analyzed too, apart**
+([ADR-0028](docs/adr/0028-scan-then-upload-apart.md)):
+`.github/workflows/pr-scan.yml` scans each one on GitHub's runner, without
+secrets, and `.github/workflows/pr-upload.yml`, which runs as `main` has
+it, sends the scan to sonda on the same runner, with the CLI built from
+`main`. sonda then decorates the pull request, with the project linked to
+the repository and the GitHub App installed on it (docs/server.md). For
+Dependabot's pull requests, add `SONDA_TOKEN` as a Dependabot secret too.
+
 ## Commits and pull requests
 
 - Keep each change small and focused, with a message that explains *why*.

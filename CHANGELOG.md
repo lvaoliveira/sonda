@@ -9,6 +9,20 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Pull requests whose CI can't upload are decorated too: a fork's or
+  Dependabot's, which have no token, and any whose server GitHub's
+  runners can't reach, on a LAN or a tailnet
+  ([ADR-0028](docs/adr/0028-scan-then-upload-apart.md)). Two workflows
+  split the work. The scan runs on GitHub's runner without secrets, and
+  `sonda scan --save-upload FILE` writes what `--upload` would send, kept
+  as an artifact. The upload runs on `workflow_run`, as the default branch
+  has it, with the token and a runner that reaches the server, and sends
+  the artifact with `sonda upload --saved FILE`. The pull request and its
+  head commit come from GitHub's event, through the new
+  `--pull-request-head-sha` and `--repository`, never from the file. Both
+  ship as reusable workflows, `scan-pull-request.yml` and
+  `upload-pull-request.yml`, and sonda's own pull requests use them.
+
 - Java's `@SuppressWarnings` silences issues as SonarQube honors it:
   `"java:S1186"` (or `"squid:S1186"`) the rules covering that key over the
   annotated declaration, `"all"` every rule, in the project-level rules
