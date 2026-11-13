@@ -209,19 +209,42 @@ pub(super) static RULES: &[Rule] = &[
         category: Vulnerability,
         severity: Blocker,
         effort_minutes: 30,
-        sonar: &[related("S2068"), related("S6418")],
+        sonar: &[exact("S2068")],
         check: Check::Query {
             langs: CSHARP,
             query: "[(variable_declarator name: (identifier) [(string_literal) (verbatim_string_literal)]) \
                      (assignment_expression left: [(identifier) (member_access_expression)] \
                        right: [(string_literal) (verbatim_string_literal)]) \
                      (string_literal) (verbatim_string_literal)] @match",
-            filter: Some(Keep(is_hardcoded_credential)),
+            filter: Some(Keep(is_hardcoded_password)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { const string ApiKey = \"k3y-8f2a9c\"; }",
-            good: "class A { string PasswordLabel = \"Password\"; string Key(IConfiguration c) => c[\"ApiKey\"]; }",
+            bad: "class A { const string DbPassword = \"hunter2xyz\"; }",
+            good: "class A { string PasswordLabel = \"Password\"; string Key(IConfiguration c) => c[\"Password\"]; }",
+        }),
+    },
+    Rule {
+        id: "cs/hardcoded-secret",
+        name: "Secrets should not be hard-coded",
+        description: "An API key, token or other secret in source code is readable by everyone with the code, \
+                      ends up in version history, and can't be rotated without a release.",
+        message: "Read this secret from configuration or a secret store.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S6418")],
+        check: Check::Query {
+            langs: CSHARP,
+            query: "[(variable_declarator name: (identifier) [(string_literal) (verbatim_string_literal)]) \
+                     (assignment_expression left: [(identifier) (member_access_expression)] \
+                       right: [(string_literal) (verbatim_string_literal)])] @match",
+            filter: Some(Keep(is_hardcoded_secret)),
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "class A { const string ApiKey = \"a8f5f167f44f4964e6c998dee827110c\"; }",
+            good: "class A { const string ApiKeyName = \"X-Api-Key\"; string Token = \"MyToken\"; }",
         }),
     },
     Rule {
@@ -453,9 +476,9 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/xxe",
         name: "XML parsers should not resolve external entities",
-        description: "Processing DTDs or resolving external resources lets a crafted document read local files \
-                      or make requests from the server (XXE).",
-        message: "Leave DTD processing prohibited and XmlResolver unset (null).",
+        description: "An XML resolver lets a crafted document's external entities read local files or make \
+                      requests from the server (XXE). On .NET Core and later a parser has none unless given one.",
+        message: "Leave XmlResolver unset (null).",
         category: Vulnerability,
         severity: Blocker,
         effort_minutes: 15,
@@ -467,8 +490,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { XmlReaderSettings F() { return new XmlReaderSettings { DtdProcessing = DtdProcessing.Parse }; } }",
-            good: "class A { XmlReaderSettings F() { return new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit }; } }",
+            bad: "class A { XmlReaderSettings F() { return new XmlReaderSettings { DtdProcessing = DtdProcessing.Parse, XmlResolver = new XmlUrlResolver() }; } }",
+            good: "class A { XmlReaderSettings F() { return new XmlReaderSettings { DtdProcessing = DtdProcessing.Parse, XmlResolver = null }; } }",
         }),
     },
     Rule {
@@ -910,7 +933,39 @@ fn has_empty_password(node: Node, src: &[u8]) -> bool {
 
 // ---------------------------------------------------- batch 2 filters
 
-fn is_hardcoded_credential(node: Node, src: &[u8]) -> bool {
+/// A password (SonarQube's words: password, passwd, pwd, passphrase) given
+/// a literal that doesn't contain that word (`Password = "Password1"` is a
+/// placeholder), or a connection string's (measured on SonarQube 26.7).
+fn is_hardcoded_password(node: Node, src: &[u8]) -> bool {
+    hardcoded_credential(
+        node,
+        src,
+        &[b"password", b"passwd", b"pwd", b"passphrase"],
+        true,
+    )
+}
+
+/// A secret (an API key, auth, credential, secret or token) given a literal
+/// that looks generated (measured on SonarQube 26.7: `"MySecretToken"`
+/// isn't reported, a 32-digit hex key is).
+fn is_hardcoded_secret(node: Node, src: &[u8]) -> bool {
+    hardcoded_credential(
+        node,
+        src,
+        &[
+            b"apikey",
+            b"api_key",
+            b"api-key",
+            b"auth",
+            b"credential",
+            b"secret",
+            b"token",
+        ],
+        false,
+    )
+}
+
+fn hardcoded_credential(node: Node, src: &[u8], words: &[&[u8]], password: bool) -> bool {
     let (name, value) = match node.kind() {
         "variable_declarator" => {
             let name = node.child_by_field_name("name");
@@ -926,7 +981,7 @@ fn is_hardcoded_credential(node: Node, src: &[u8]) -> bool {
             node.child_by_field_name("right"),
         ),
         // A connection string: "...;Password=s3cret;...".
-        _ => return has_connection_password(node, src),
+        _ => return password && has_connection_password(node, src),
     };
     let (Some(name), Some(value)) = (name, value) else {
         return false;
@@ -938,21 +993,18 @@ fn is_hardcoded_credential(node: Node, src: &[u8]) -> bool {
         return false;
     };
     let lowered = name.to_ascii_lowercase();
-    let credential_name = [
-        &b"password"[..],
-        b"passwd",
-        b"pwd",
-        b"secret",
-        b"apikey",
-        b"api_key",
-        b"accesskey",
-        b"access_key",
-        b"privatekey",
-        b"private_key",
-        b"token",
-    ]
-    .iter()
-    .any(|w| lowered.windows(w.len()).any(|x| x == *w));
+    let Some(word) = words
+        .iter()
+        .find(|w| lowered.windows(w.len()).any(|x| x == **w))
+    else {
+        return false;
+    };
+    let value_lowered = literal.to_ascii_lowercase();
+    let value_fits = if password {
+        !value_lowered.windows(word.len()).any(|x| x == *word)
+    } else {
+        super::js::random_looking(literal)
+    };
     // PasswordLabel, TokenUrl, SecretName and the like describe a credential.
     let describes_it = [
         &b"url"[..],
@@ -991,7 +1043,7 @@ fn is_hardcoded_credential(node: Node, src: &[u8]) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':'))
         && literal.iter().any(|b| matches!(b, b'.' | b':'))
         && !literal.iter().any(u8::is_ascii_digit);
-    credential_name
+    value_fits
         && !describes_it
         && !looks_like_key
         && literal.len() >= 4
@@ -1021,6 +1073,61 @@ fn has_connection_password(node: Node, src: &[u8]) -> bool {
             && !secret.starts_with(b"%")
             && !secret.iter().all(|&b| b == b'*')
     })
+}
+
+/// Dapper's `conn.Execute($"DELETE FROM {t}")`, `Query<T>(...)`: a
+/// connection's extension methods given SQL built from values (measured on
+/// SonarQube 26.7). The text has to start like SQL, since other libraries
+/// name methods `Execute` too.
+fn dapper_query(call: Node, src: &[u8]) -> bool {
+    let named = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_access_expression")
+        .and_then(|f| f.child_by_field_name("name"))
+        .is_some_and(|n| {
+            let n = simple_name(n, src);
+            let n = n.strip_suffix(b"Async").unwrap_or(n);
+            matches!(
+                n,
+                b"Execute"
+                    | b"ExecuteScalar"
+                    | b"ExecuteReader"
+                    | b"Query"
+                    | b"QueryFirst"
+                    | b"QueryFirstOrDefault"
+                    | b"QuerySingle"
+                    | b"QuerySingleOrDefault"
+                    | b"QueryMultiple"
+            )
+        });
+    named
+        && first_argument(call)
+            .is_some_and(|q| is_dynamic_string(q, src) && starts_like_sql(q, src))
+}
+
+/// Whether a string expression's first text is an SQL statement's keyword.
+fn starts_like_sql(expr: Node, src: &[u8]) -> bool {
+    let t: Vec<u8> = text(expr, src)
+        .iter()
+        .skip_while(|b| matches!(b, b'$' | b'@' | b'"' | b' ' | b'('))
+        .take(8)
+        .map(u8::to_ascii_uppercase)
+        .collect();
+    [
+        &b"SELECT"[..],
+        b"INSERT",
+        b"UPDATE",
+        b"DELETE",
+        b"WITH",
+        b"CREATE",
+        b"DROP",
+        b"ALTER",
+        b"MERGE",
+        b"EXEC",
+        b"TRUNCATE",
+    ]
+    .iter()
+    .any(|k| t.starts_with(k))
 }
 
 /// A query built by concatenation, interpolation or `string.Format`.
@@ -1126,6 +1233,7 @@ fn sql_built_dynamically(node: Node, src: &[u8]) -> bool {
                     )
                 })
                 && first_argument(node).is_some_and(|q| is_dynamic_string(q, src))
+                || dapper_query(node, src)
         }
         _ => {
             operator_text(node, src) == b"="
@@ -1192,9 +1300,10 @@ fn enables_external_entities(node: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
+    // On .NET Core and later a reader resolves no external entity unless
+    // given a resolver, so parsing DTDs alone is safe (measured on
+    // SonarQube 26.7, on .NET 8).
     match simple_name(left, src) {
-        b"DtdProcessing" => simple_name(right, src) == b"Parse",
-        b"ProhibitDtd" => text(right, src) == b"false",
         b"XmlResolver" => {
             right.kind() == "object_creation_expression"
                 && right.child_by_field_name("type").is_some_and(|t| {
@@ -1484,8 +1593,11 @@ mod tests {
 
     #[test]
     fn credentials() {
-        let src = "namespace N;\nclass A {\nconst string Password = \"hunter22\";\nstring passwordLabel = \"Password\";\nstring ApiKey = \"k3y-8f2a9c\";\nstring SecretName = \"db-secret\";\nstring pwd = \"\";\nstring token = \"App:Auth:Token\";\nconst string Db = \"Server=x;User Id=a;Password=s3cr3t;\";\nconst string Db2 = \"Server=x;Password={0};\";\nvoid F() { o.Password = \"letmein1\"; }\nstring Token = \"****\";\nstring PasswordHash = \"VHdlZXQgJ1F1aWNr\";\n}";
-        assert_eq!(flagged("cs/hardcoded-credential", src), [3, 5, 9, 11]);
+        let src = "namespace N;\nclass A {\nconst string Password = \"hunter22\";\nstring passwordLabel = \"Password\";\nstring ApiKey = \"k3y-8f2a9c\";\nstring SecretName = \"db-secret\";\nstring pwd = \"\";\nstring token = \"App:Auth:Token\";\nconst string Db = \"Server=x;User Id=a;Password=s3cr3t;\";\nconst string Db2 = \"Server=x;Password={0};\";\nvoid F() { o.Password = \"letmein1\"; }\nstring Token = \"****\";\nstring PasswordHash = \"VHdlZXQgJ1F1aWNr\";\nstring AuthToken = \"a8f5f167f44f4964e6c998dee827110c\";\nstring apiKey = \"MySecretToken\";\nstring Password2 = \"Password1\";\n}";
+        // Passwords, unless the value holds the word itself, a placeholder;
+        // secrets when they look generated (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/hardcoded-credential", src), [3, 9, 11]);
+        assert_eq!(flagged("cs/hardcoded-secret", src), [14]);
     }
 
     #[test]
@@ -1503,7 +1615,9 @@ mod tests {
         );
         assert_eq!(flagged("cs/cookie-not-secure", &src), [4]);
         assert_eq!(flagged("cs/cookie-not-httponly", &src), [4, 6]);
-        assert_eq!(flagged("cs/xxe", &src), [7, 9, 11]);
+        // A resolver only: on .NET Core and later, parsing a DTD without
+        // one is safe (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/xxe", &src), [9]);
     }
 
     #[test]

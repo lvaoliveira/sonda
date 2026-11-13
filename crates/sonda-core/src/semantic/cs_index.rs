@@ -905,8 +905,40 @@ impl<'t> Indexer<'_, 't> {
         let (Some(last), Some(function)) = (written, node.child_by_field_name("function")) else {
             return;
         };
+        // `new object[] { x }`: an object array given for `params object[]`
+        // isn't reported (measured on SonarQube 26.7); x may be an array.
+        if last.child_by_field_name("type").is_some_and(|t| {
+            matches!(
+                self.x.text(t).as_str(),
+                "object[]" | "Object[]" | "System.Object[]"
+            )
+        }) {
+            return;
+        }
         let mut site = self.site("params-array", String::new(), 0, self.x.span(*last));
         site.count = args.len();
+        // `s.Split(new[] { '.', '-' })`, `TrimStart(new char[] { '/' })`:
+        // string's params methods, told by the characters they're given.
+        if function.kind() == "member_access_expression" && args.len() == 1 {
+            let method = function
+                .child_by_field_name("name")
+                .map(|n| self.x.simple(n))
+                .unwrap_or_default();
+            let chars = last
+                .named_children(&mut last.walk())
+                .filter(|c| c.kind() == "initializer_expression")
+                .flat_map(|i| i.named_children(&mut i.walk()).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            if matches!(method.as_str(), "Split" | "Trim" | "TrimStart" | "TrimEnd")
+                && !chars.is_empty()
+                && chars.iter().all(|c| c.kind() == "character_literal")
+            {
+                site.name = method;
+                site.receiver = Some("string".to_string());
+                self.index.sites.push(site);
+                return;
+            }
+        }
         match function.kind() {
             "identifier" | "generic_name" => {
                 site.name = self.x.simple(function);

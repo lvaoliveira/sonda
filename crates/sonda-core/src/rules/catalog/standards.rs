@@ -235,6 +235,7 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("cs/empty-db-password", &[521], &[A07]),
     ("cs/cleartext-url", &[319], &[A02]),
     ("cs/hardcoded-credential", &[259, 798], &[A07]),
+    ("cs/hardcoded-secret", &[798], &[A07]),
     ("cs/sql-built-dynamically", &[89, 943], &[A03]),
     ("cs/sql-injection", &[89, 943], &[A03]),
     ("cs/command-injection", &[78, 88], &[A03]),

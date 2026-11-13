@@ -119,10 +119,11 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/override-changes-default",
-        name: "Overrides should not change parameter defaults",
-        description: "Defaults come from the static type: the same call passes different values depending on \
-                      whether the variable is typed as the base or the derived class.",
-        message: "Use the same default value as the base declaration.",
+        name: "Overrides and implementations should keep parameter defaults",
+        description: "Defaults come from the static type: the same call passes different values, or needs an \
+                      argument, depending on whether the variable is typed as the base class or interface or \
+                      as the derived class.",
+        message: "Use the same default value as the base or interface declaration.",
         category: CodeSmell,
         severity: Critical,
         effort_minutes: 5,
@@ -1159,7 +1160,9 @@ mod tests {
 
     #[test]
     fn deep_inheritance() {
-        let src = "namespace N;\nclass Options : Options<object> { }\nclass A2 : External { }\nclass A3 : A2 { }\nclass A4 : A3 { }\nclass A5 : A4 { }\nclass A6 : A5 { }\nclass A7 : A6 { }\nclass B : IThing { }";
-        assert_eq!(flagged("cs/deep-inheritance", src), [8]);
+        let src = "namespace N;\nclass Options : Options<object> { }\nclass A2 : External { }\nclass A3 : A2 { }\nclass A4 : A3 { }\nclass A5 : A4 { }\nclass A6 : A5 { }\nclass A7 : A6 { }\nclass A8 : A7 { }\nclass B : IThing { }";
+        // Six base classes of the project's; External doesn't count
+        // (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/deep-inheritance", src), [9]);
     }
 }

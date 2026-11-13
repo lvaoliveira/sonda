@@ -62,6 +62,9 @@ pub(crate) enum Filter {
     /// whose fix depends on what it found, such as which API replaces a
     /// deprecated one.
     FindSaying(FindSayingFn),
+    /// `Find`, for every node the function returns: a rule that captures a
+    /// container and reports each offending child (each field of a class).
+    FindAll(for<'t> fn(Node<'t>, &[u8]) -> Vec<Node<'t>>),
 }
 
 /// A `Filter::FindSaying`: the node to report, and its message.

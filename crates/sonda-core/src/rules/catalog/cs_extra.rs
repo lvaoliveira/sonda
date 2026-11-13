@@ -570,7 +570,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { TimeSpan F(DateTime start) { return DateTime.Now - start; } }",
+            bad: "class A { TimeSpan F() { var start = DateTime.Now; G(); return DateTime.Now - start; } }",
             good: "class A { TimeSpan F(Stopwatch watch) { return watch.Elapsed; } }",
         }),
     },
@@ -662,23 +662,23 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/action-route-leading-slash",
-        name: "Action route templates should not start with /",
-        description: "A template starting with `/` ignores the controller's [Route], so the action ends up at \
-                      a URL its controller doesn't suggest.",
-        message: "Remove the leading '/' so the action's route builds on the controller's.",
+        name: "Controllers should not give every action an absolute route",
+        description: "When every action's template starts with `/`, the controller's own [Route] can't \
+                      say what they share, and each action repeats it.",
+        message: "Make this controller's action routes relative, and put their shared prefix in a [Route] on it.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 2,
         sonar: &[exact("S6931")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(class_declaration (attribute_list) name: (identifier) body: (declaration_list)) @match",
+            query: "(class_declaration name: (identifier) body: (declaration_list)) @match",
             filter: Some(Find(absolute_action_route)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "[Route(\"api/orders\")] class C : ControllerBase { [HttpGet(\"/all\")] public IActionResult All() => Ok(); }",
-            good: "[Route(\"api/orders\")] class C : ControllerBase { [HttpGet(\"all\")] public IActionResult All() => Ok(); }",
+            bad: "class C : ControllerBase { [HttpGet(\"/api/orders\")] public IActionResult All() => Ok(); }",
+            good: "[Route(\"api/orders\")] class C : ControllerBase { [HttpGet] public IActionResult All() => Ok(); }",
         }),
     },
     Rule {
@@ -726,8 +726,8 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/new-httpclient",
         name: "HttpClient should not be created per call",
-        description: "Each new HttpClient opens its own connections, which exhausts sockets under load and \
-                      misses DNS changes. Use IHttpClientFactory or one shared instance.",
+        description: "In a controller, each new HttpClient opens its own connections, which exhausts sockets \
+                      under load and misses DNS changes. Use IHttpClientFactory or one shared instance.",
         message: "Get this HttpClient from IHttpClientFactory, or reuse a shared instance.",
         category: CodeSmell,
         severity: Major,
@@ -740,8 +740,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { async Task<string> F() { using var http = new HttpClient(); return await http.GetStringAsync(\"https://a.example\"); } }",
-            good: "class A { static readonly HttpClient Http = new HttpClient(); Task<string> F() => Http.GetStringAsync(\"https://a.example\"); }",
+            bad: "class AController : ControllerBase { public async Task<string> F() { using var http = new HttpClient(); return await http.GetStringAsync(\"https://a.example\"); } }",
+            good: "class AController : ControllerBase { static readonly HttpClient Http = new HttpClient(); public Task<string> F() => Http.GetStringAsync(\"https://a.example\"); }",
         }),
     },
     Rule {
@@ -778,12 +778,12 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "(class_declaration (attribute_list) name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(undescribed_action)),
+            filter: Some(FindAll(undescribed_actions)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "[ApiController] class OrdersController : ControllerBase { [HttpGet] public IActionResult List() => Ok(); }",
-            good: "[ApiController] class OrdersController : ControllerBase { [HttpGet] public ActionResult<Order[]> List() => Ok(); }",
+            bad: "[ApiController] class OrdersController : ControllerBase { [HttpGet] public IActionResult List() => Ok(new Order[0]); }",
+            good: "[ApiController] class OrdersController : ControllerBase { [HttpGet] public ActionResult<Order[]> List() => Ok(new Order[0]); }",
         }),
     },
 ];
@@ -1111,8 +1111,24 @@ fn route_with_backslash<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         }
         *cs_call_arguments(node).first()?
     };
+    // Not inside a parameter's braces, where `\.` escapes a regex
+    // constraint (measured on SonarQube 26.7).
     cs_string_value(template, src)
-        .is_some_and(|v| v.contains(&b'\\'))
+        .is_some_and(|v| {
+            let mut depth = 0usize;
+            v.iter().any(|b| match b {
+                b'{' => {
+                    depth += 1;
+                    false
+                }
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    false
+                }
+                b'\\' => depth == 0,
+                _ => false,
+            })
+        })
         .then_some(template)
 }
 
@@ -1154,25 +1170,41 @@ fn nested_assignment<'t>(parent: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let assignment = parent
         .named_children(&mut cursor)
         .find(|c| c.kind() == "assignment_expression" && operator_text(*c, src) != b"??=")?;
-    let nested = match parent.kind() {
+    let statement_like = matches!(
+        parent.kind(),
         "expression_statement"
-        | "for_statement"
-        | "assignment_expression"
-        | "lambda_expression"
-        | "arrow_expression_clause"
-        | "initializer_expression"
-        | "with_initializer"
-        | "anonymous_object_creation_expression"
-        | "argument"
-        | "attribute_argument" => false,
-        // `while ((line = reader.ReadLine()) != null)` is an accepted idiom.
-        "parenthesized_expression" => !parent
-            .parent()
-            .and_then(|b| b.parent())
-            .is_some_and(|w| matches!(w.kind(), "while_statement" | "do_statement")),
-        _ => true,
-    };
-    nested.then_some(assignment)
+            | "for_statement"
+            | "assignment_expression"
+            | "lambda_expression"
+            | "arrow_expression_clause"
+            | "initializer_expression"
+            | "with_initializer"
+            | "anonymous_object_creation_expression"
+            | "argument"
+            | "attribute_argument"
+    );
+    if statement_like {
+        return None;
+    }
+    // Anywhere in a loop's condition, `while (!found && (dir = dir.Parent)
+    // != null)` (measured on SonarQube 26.7).
+    let mut up = Some(parent);
+    for _ in 0..64 {
+        let Some(n) = up else { break };
+        if matches!(n.kind(), "while_statement" | "do_statement") {
+            if n.child_by_field_name("condition").is_some_and(|c| {
+                c.start_byte() <= assignment.start_byte() && assignment.end_byte() <= c.end_byte()
+            }) {
+                return None;
+            }
+            break;
+        }
+        if n.kind().ends_with("_statement") || n.kind() == "block" {
+            break;
+        }
+        up = n.parent();
+    }
+    Some(assignment)
 }
 
 fn comparable_without_operators<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1347,6 +1379,15 @@ fn static_fields<'s>(declaration: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
 /// An assignment or increment that changes one of `fields` (by its bare
 /// name, or `this.`-less `Type.name`) inside `body`.
 fn write_to<'t>(body: Node<'t>, fields: &[&[u8]], src: &[u8]) -> Option<Node<'t>> {
+    write_to_within(body, fields, CS_SCOPE_STOPS, src)
+}
+
+fn write_to_within<'t>(
+    body: Node<'t>,
+    fields: &[&[u8]],
+    stops: &[&str],
+    src: &[u8],
+) -> Option<Node<'t>> {
     let target_is_field = |t: Node| {
         let name = match t.kind() {
             "identifier" => text(t, src),
@@ -1354,7 +1395,7 @@ fn write_to<'t>(body: Node<'t>, fields: &[&[u8]], src: &[u8]) -> Option<Node<'t>
         };
         fields.contains(&name)
     };
-    find_in_scope(body, CS_SCOPE_STOPS, |n| match n.kind() {
+    find_in_scope(body, stops, |n| match n.kind() {
         "assignment_expression" => n.child_by_field_name("left").is_some_and(target_is_field),
         "postfix_unary_expression" | "prefix_unary_expression" => {
             let t = text(n, src);
@@ -1382,7 +1423,14 @@ fn instance_writes_static<'t>(member: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
     if fields.is_empty() {
         return None;
     }
-    write_to(member.child_by_field_name("body")?, &fields, src)
+    // In a lambda the method creates too, which runs for this instance
+    // (measured on SonarQube 26.7).
+    let stops: Vec<&str> = CS_SCOPE_STOPS
+        .iter()
+        .copied()
+        .filter(|k| !matches!(*k, "lambda_expression" | "anonymous_method_expression"))
+        .collect();
+    write_to_within(member.child_by_field_name("body")?, &fields, &stops, src)
 }
 
 fn constructor_writes_static<'t>(constructor: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1568,29 +1616,93 @@ fn in_static_member(n: Node, src: &[u8]) -> bool {
 }
 
 fn subtracts_from_now(node: Node, src: &[u8]) -> bool {
+    let now = |t: &[u8]| {
+        matches!(
+            t,
+            b"DateTime.Now"
+                | b"DateTime.UtcNow"
+                | b"System.DateTime.Now"
+                | b"System.DateTime.UtcNow"
+        )
+    };
+    // `DateTime.Now - start`, with start a local that was `DateTime.Now`
+    // too: a field, a property or a TimeSpan isn't a measurement (measured
+    // on SonarQube 26.7).
     operator_text(node, src) == b"-"
-        && node.child_by_field_name("left").is_some_and(|l| {
-            matches!(
-                text(l, src),
-                b"DateTime.Now"
-                    | b"DateTime.UtcNow"
-                    | b"System.DateTime.Now"
-                    | b"System.DateTime.UtcNow"
-            )
-        })
+        && node
+            .child_by_field_name("left")
+            .is_some_and(|l| now(text(l, src)))
+        && node
+            .child_by_field_name("right")
+            .filter(|r| r.kind() == "identifier")
+            .is_some_and(|r| {
+                let name = text(r, src);
+                let mut owner = node.parent();
+                while let Some(o) = owner {
+                    if matches!(
+                        o.kind(),
+                        "method_declaration"
+                            | "constructor_declaration"
+                            | "local_function_statement"
+                            | "lambda_expression"
+                            | "accessor_declaration"
+                    ) {
+                        break;
+                    }
+                    owner = o.parent();
+                }
+                let Some(owner) = owner else {
+                    return false;
+                };
+                let mut stack = vec![owner];
+                while let Some(n) = stack.pop() {
+                    let value = match n.kind() {
+                        "variable_declarator"
+                            if n.child_by_field_name("name")
+                                .is_some_and(|x| text(x, src) == name) =>
+                        {
+                            n.named_children(&mut n.walk()).last()
+                        }
+                        "assignment_expression"
+                            if n.child_by_field_name("left")
+                                .is_some_and(|x| text(x, src) == name) =>
+                        {
+                            n.child_by_field_name("right")
+                        }
+                        _ => None,
+                    };
+                    if value.is_some_and(|v| {
+                        let v = if v.kind() == "equals_value_clause" {
+                            v.named_child(0).unwrap_or(v)
+                        } else {
+                            v
+                        };
+                        now(text(v, src))
+                    }) {
+                        return true;
+                    }
+                    stack.extend(n.named_children(&mut n.walk()));
+                }
+                false
+            })
 }
 
 fn oddly_named_logger<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let ty = declared_type(field)?;
-    // Logging abstractions only: a class merely named Logger may be anything.
-    if !matches!(simple_name(ty, src), b"ILogger" | b"ILog") {
+    // Logging abstractions, and NLog's Logger when NLog makes it (measured on
+    // SonarQube 26.7): a class merely named Logger may be anything.
+    let nlog = simple_name(ty, src) == b"Logger"
+        && contains_ignoring_case(text(field, src), b"LogManager.Get");
+    if !matches!(simple_name(ty, src), b"ILogger" | b"ILog") && !nlog {
         return None;
     }
+    // SonarQube's `^_?[Ll]og(ger)?$`.
     declarators(field).into_iter().find_map(|d| {
         let name = d.child_by_field_name("name")?;
-        let n = text(name, src).to_ascii_lowercase();
-        let n = n.strip_prefix(b"_").unwrap_or(&n);
-        (!matches!(n, b"logger" | b"log")).then_some(name)
+        let n = text(name, src);
+        let n = n.strip_prefix(b"_").unwrap_or(n);
+        let ok = matches!(n.first(), Some(b'L' | b'l')) && matches!(&n[1..], b"og" | b"ogger");
+        (!ok).then_some(name)
     })
 }
 
@@ -1680,15 +1792,28 @@ fn arguments_out_of_order<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     (all_named && misplaced).then_some(template)
 }
 
+/// A controller whose actions' templates all start with `/`, reported at
+/// the controller, with or without a [Route] of its own (measured on
+/// SonarQube 26.7).
 fn absolute_action_route<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if route_templates(class, src).is_empty() {
+    if !is_controller(class, src) {
         return None;
     }
-    actions(class, src).into_iter().find_map(|a| {
-        route_templates(a, src).into_iter().find(|t| {
-            cs_string_value(*t, src).is_some_and(|v| v.starts_with(b"/") || v.starts_with(b"~/"))
-        })
-    })
+    let templates: Vec<Vec<u8>> = action_templates(class, src);
+    (!templates.is_empty()
+        && templates
+            .iter()
+            .all(|v| v.starts_with(b"/") || v.starts_with(b"~/")))
+    .then(|| class.child_by_field_name("name"))?
+}
+
+/// The route templates of a controller's actions.
+fn action_templates(class: Node, src: &[u8]) -> Vec<Vec<u8>> {
+    actions(class, src)
+        .into_iter()
+        .flat_map(|a| route_templates(a, src))
+        .filter_map(|t| cs_string_value(t, src).map(|v| v.to_vec()))
+        .collect()
 }
 
 fn is_controller(class: Node, src: &[u8]) -> bool {
@@ -1698,22 +1823,26 @@ fn is_controller(class: Node, src: &[u8]) -> bool {
 }
 
 fn controller_without_route<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if !is_controller(class, src) || !route_templates(class, src).is_empty() {
+    // Not an abstract one, whose subclasses carry the route (measured on
+    // SonarQube 26.7); nor one with an attribute named like a route
+    // provider, `[V1ApiController("system")]`, whose type is elsewhere.
+    let custom_route = attribute_names(class, src).iter().any(|(_, n)| {
+        let n = n.strip_suffix(b"Attribute").unwrap_or(n);
+        n != b"ApiController" && (n.ends_with(b"ApiController") || n.ends_with(b"Route"))
+    });
+    if !is_controller(class, src)
+        || cs_has_modifier(class, "abstract", src)
+        || custom_route
+        || !route_templates(class, src).is_empty()
+    {
         return None;
     }
-    // Two or more actions with templates that share their first segment.
-    let firsts: Vec<Vec<u8>> = actions(class, src)
-        .into_iter()
-        .flat_map(|a| route_templates(a, src))
-        .filter_map(|t| {
-            cs_string_value(t, src)
-                .map(|v| v.split(|&b| b == b'/').next().unwrap_or_default().to_vec())
-        })
-        .filter(|s| !s.is_empty() && !s.starts_with(b"{"))
-        .collect();
-    let shared = firsts.len() >= 2 && firsts.iter().all(|f| *f == firsts[0]);
-    let single = firsts.len() == 1 && actions(class, src).len() == 1;
-    (shared || single).then(|| class.child_by_field_name("name"))?
+    // An action with a relative template of its own (measured on SonarQube
+    // 26.7).
+    action_templates(class, src)
+        .iter()
+        .any(|v| !v.is_empty() && !v.starts_with(b"/") && !v.starts_with(b"~/"))
+        .then(|| class.child_by_field_name("name"))?
 }
 
 fn api_controller_with_views<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1746,11 +1875,10 @@ fn created_in_a_method(creation: Node, src: &[u8]) -> bool {
             {
                 return false;
             }
-            "method_declaration"
-            | "local_function_statement"
-            | "lambda_expression"
-            | "accessor_declaration"
-            | "global_statement" => return true,
+            "global_statement" => return true,
+            // In a controller only, where the app has IHttpClientFactory to
+            // inject (measured on SonarQube 26.7).
+            "class_declaration" => return is_controller(n, src),
             _ => current = n.parent(),
         }
     }
@@ -1767,25 +1895,57 @@ fn action_without_verb<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .and_then(|a| a.child_by_field_name("name"))
 }
 
-fn undescribed_action<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// Each action of an API controller returning `IActionResult` that
+/// returns a value through `Ok(value)` and declares no response type
+/// (measured on SonarQube 26.7, which also needs the project to reference an
+/// API explorer such as Swashbuckle; sonda doesn't read the project file). An
+/// async action isn't reported there.
+fn undescribed_actions<'t>(class: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     if !is_api_controller(class, src) || has_attribute(class, &[b"ProducesResponseType"], src) {
-        return None;
+        return Vec::new();
     }
-    actions(class, src).into_iter().find_map(|a| {
-        let returns = text(a.child_by_field_name("returns")?, src);
-        let untyped = matches!(
-            returns,
-            b"IActionResult"
-                | b"ActionResult"
-                | b"Task<IActionResult>"
-                | b"Task<ActionResult>"
-                | b"ValueTask<IActionResult>"
-                | b"IResult"
-                | b"Task<IResult>"
-        );
-        (untyped && !has_attribute(a, &[b"ProducesResponseType", b"Produces"], src))
-            .then(|| a.child_by_field_name("name"))?
-    })
+    actions(class, src)
+        .into_iter()
+        .filter(|a| {
+            a.child_by_field_name("returns").is_some_and(|r| {
+                matches!(
+                    text(r, src),
+                    b"IActionResult" | b"ActionResult" | b"IResult"
+                )
+            }) && !has_attribute(*a, &[b"ProducesResponseType", b"Produces"], src)
+                && a.child_by_field_name("body")
+                    .is_some_and(|b| returns_a_value(b, src))
+        })
+        .filter_map(|a| a.child_by_field_name("name"))
+        .collect()
+}
+
+/// Whether a body returns `Ok(value)` or `new OkObjectResult(value)`.
+fn returns_a_value(body: Node, src: &[u8]) -> bool {
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        let valued = match n.kind() {
+            "invocation_expression" => {
+                n.child_by_field_name("function")
+                    .is_some_and(|f| text(f, src) == b"Ok")
+                    && !cs_call_arguments(n).is_empty()
+            }
+            "object_creation_expression" => n
+                .child_by_field_name("type")
+                .is_some_and(|t| matches!(text(t, src), b"OkObjectResult" | b"ObjectResult")),
+            "lambda_expression" | "local_function_statement" | "anonymous_method_expression" => {
+                false
+            }
+            _ => {
+                stack.extend(n.named_children(&mut n.walk()));
+                false
+            }
+        };
+        if valued {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1882,11 +2042,13 @@ mod tests {
     #[test]
     fn expressions() {
         let src = method(
-            "b = o != null && o is string;\nb = o != null && o is string s;\nb = p != null && o is string;\nt = DateTime.Now - start;\nt = DateTime.UtcNow - start;\nt = end - start;\nTrace.WriteLine(\"x\");\nTrace.TraceInformation(\"x\");",
+            "b = o != null && o is string;\nb = o != null && o is string s;\nb = p != null && o is string;\nvar start = DateTime.Now;\nt = DateTime.Now - start;\nt = DateTime.UtcNow - start;\nt = end - start;\nt = DateTime.Now - span;\nt = DateTime.UtcNow - _last;\nTrace.WriteLine(\"x\");\nTrace.TraceInformation(\"x\");",
         );
         assert_eq!(flagged("cs/null-check-before-is", &src), [4, 5]);
-        assert_eq!(flagged("cs/datetime-now-benchmark", &src), [7, 8]);
-        assert_eq!(flagged("cs/trace-write", &src), [10]);
+        // A local that was Now itself, not a TimeSpan or a field (measured
+        // on SonarQube 26.7).
+        assert_eq!(flagged("cs/datetime-now-benchmark", &src), [8, 9]);
+        assert_eq!(flagged("cs/trace-write", &src), [13]);
     }
 
     #[test]
@@ -1908,12 +2070,14 @@ mod tests {
 
     #[test]
     fn aspnet() {
-        let src = "namespace N;\n[Route(\"api/orders\")] class C1 : ControllerBase { [HttpGet(\"/all\")] public IActionResult All() => Ok(); [HttpGet(\"{id}\")] public ActionResult<int> One(int id) => 1; }\nclass C2Controller : Controller { [HttpGet(\"orders/{id}\")] public IActionResult Get(int id) => Ok(); [HttpPost(\"orders\")] public IActionResult Post() => Ok(); }\n[ApiController] class C3 : Controller { [HttpGet] public IActionResult List() => Ok(); public IActionResult NoVerb() => Ok(); [NonAction] public void Helper() { } }\n[ApiController, ProducesResponseType(200)] class C4 : ControllerBase { [HttpGet] public IActionResult A() => Ok(); }\nclass H { static readonly HttpClient Shared = new HttpClient(); async Task F() { using var c = new HttpClient(); } }";
-        assert_eq!(flagged("cs/action-route-leading-slash", src), [2]);
+        let src = "namespace N;\n[Route(\"api/orders\")] class C1 : ControllerBase { [HttpGet(\"/all\")] public IActionResult All() => Ok(); [HttpGet(\"{id}\")] public ActionResult<int> One(int id) => 1; }\nclass C2Controller : Controller { [HttpGet(\"orders/{id}\")] public IActionResult Get(int id) => Ok(); [HttpPost(\"orders\")] public IActionResult Post() => Ok(); }\n[ApiController] class C3 : Controller { [HttpGet] public IActionResult List() => Ok(new[] { 1 }); public IActionResult NoVerb() => Ok(); [NonAction] public void Helper() { } }\n[ApiController, ProducesResponseType(200)] class C4 : ControllerBase { [HttpGet] public IActionResult A() => Ok(); }\nclass H { static readonly HttpClient Shared = new HttpClient(); async Task F() { using var c = new HttpClient(); } }";
+        // C1 mixes an absolute route with a relative one.
+        assert!(flagged("cs/action-route-leading-slash", src).is_empty());
         assert_eq!(flagged("cs/controller-route-missing", src), [3]);
         assert_eq!(flagged("cs/api-controller-derives-controller", src), [4]);
         assert_eq!(flagged("cs/action-without-http-verb", src), [4]);
         assert_eq!(flagged("cs/produces-response-type-missing", src), [4]);
-        assert_eq!(flagged("cs/new-httpclient", src), [6]);
+        // Outside a controller (measured on SonarQube 26.7).
+        assert!(flagged("cs/new-httpclient", src).is_empty());
     }
 }
