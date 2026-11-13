@@ -511,13 +511,13 @@ impl<'t> Builder<'_, 't, '_> {
         let try_end = self.blocks.len();
         // An exception can leave any block of the try for a handler or
         // the finally, and any block of a handler for the finally.
-        for i in try_start..try_end {
-            self.blocks[i].succ.extend(handlers.iter().copied());
-            self.blocks[i].succ.extend(finally_entry);
+        for block in &mut self.blocks[try_start..try_end] {
+            block.succ.extend(handlers.iter().copied());
+            block.succ.extend(finally_entry);
         }
         if let Some(f) = finally_entry {
-            for i in catch_start..catch_end {
-                self.blocks[i].succ.push(f);
+            for block in &mut self.blocks[catch_start..catch_end] {
+                block.succ.push(f);
             }
         }
         body

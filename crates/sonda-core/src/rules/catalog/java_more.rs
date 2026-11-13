@@ -1827,14 +1827,10 @@ fn transient_field_of_plain_class(field: Node, src: &[u8]) -> bool {
                 && p.child_by_field_name("superclass").is_none()
                 && p.child_by_field_name("interfaces").is_none()
         });
-    if (class.child_by_field_name("superclass").is_some() && !plain_parent)
+    !((class.child_by_field_name("superclass").is_some() && !plain_parent)
         || implements(class, src, b"Serializable")
         || implements(class, src, b"Externalizable")
-        || class.child_by_field_name("interfaces").is_some()
-    {
-        return false;
-    }
-    true
+        || class.child_by_field_name("interfaces").is_some())
 }
 
 /// A resource created with `new` and closed in `finally`: one obtained from a
