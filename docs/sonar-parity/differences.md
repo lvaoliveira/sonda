@@ -18,14 +18,15 @@ the steps, the commands and what was learned along the way.
 
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
-| arandu | JavaScript | `ecb5cc9` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `f9c9bba` | 69 of 69 | 0 |
+| arandu | JavaScript | `57f6e9b` | 145 of 150 | 4 |
+| sonda | TypeScript (TSX), Rust | `c8bd04a` | 70 of 70 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
-| apigen.springboot² | Java (Spring Boot) | `ef13838` | 122 of 171 | 15 |
+| apigen.springboot² | Java (Spring Boot) | `ef13838` | 124 of 173 | 15 |
 | eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
 | eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
+| Prowlarr³ | C# | `d2d1fc0` | 1,361 of 1,787 | 94 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -39,6 +40,15 @@ Both projects use SonarCloud's automatic analysis ("Autoscan for Java"),
 which doesn't build: without the compiled classes and the libraries, it
 leaves out what needs a type it can't resolve, so its results differ from
 SonarQube's with `sonar.java.binaries` on rules that need types.
+
+³ Compared with SonarCloud's analysis of its CI build, with the .NET
+scanner: unlike automatic analysis, the project's and its libraries' types
+are resolved. Built-in "Sonar way comprehensive" profile; where SonarCloud
+disagreed with SonarQube 26.7, 26.7 was measured and is the reference.
+
+Security hotspots count as issues in every row: the comparison fetches
+them since this C# work, and none of the earlier results changed but
+apigen's, two hotspots more, both raised by sonda.
 
 On sonda's own code, SonarQube raises nothing on the Python scripts, and
 its Rust issues are all cognitive complexity (33, every one matched). The
@@ -378,6 +388,9 @@ annotations as stubs, and a library as a jar on the classpath:
   `return`, and a regex in a constant passed to `matches` at the constant.
 - **`@SuppressWarnings`** silences as SonarQube honors it: `"all"` or a rule
   key, over the annotated declaration.
+- **Temporary files (S5443).** `Files.createTempDirectory("x")` and
+  `Files.createTempFile("a", ".b")`, without a directory or permissions,
+  besides a `/tmp` path.
 
 And on eGovFrame's common components, each difference measured on
 SonarQube 26.7 the same way:
@@ -530,6 +543,67 @@ eGovFrame's JavaScript, measured [above](#javascript-in-the-browser-measured):
   report.
 - **Known gap, taint (3):** S5696, a script's `src` set from a parameter:
   sonda doesn't follow tainted values into the DOM.
+
+## C#, measured
+
+Compared on Prowlarr, a .NET indexer manager, against SonarCloud's
+analysis of its CI build (built-in profile, the project's types
+resolved). Each difference was then measured on SonarQube 26.7, which
+analyzes C# during a build: small projects built with the .NET SDK in a
+container, with SonarScanner for .NET, one case per method.
+
+- **Duplicated strings (S1192).** A literal of five characters or more,
+  used four times or more in one class, each such literal at its first
+  use. Attribute arguments and a literal naming a parameter of its method
+  (which `nameof` says) are left out. sonda counted a file, from three uses
+  of ten characters, once.
+- **Each one.** S1144 reports every unused private member: fields,
+  properties, methods, a private nested type, its constructors and
+  members (only the class around it reaches them), and a setter nothing
+  assigns through. S4136 reports every overload group split by other
+  members, at its first declaration. S6667 reports the first log call of a
+  catch that doesn't pass the exception itself, a catch without a variable
+  too, rethrown or not.
+- **Positions.** S3267 at the `foreach`, S3247 at the type check, S3897 at
+  the type, S3400 at the method's name.
+- **Broader.** S6444 includes a target-typed `new(...)` building a Regex.
+  S1075 includes localhost and constants, an argument whose parameter
+  (declared in the file, or `new Uri`'s) names a location, and a `"/"`
+  joined into such a value. S1104 includes static fields, S3887 static
+  readonly ones. S108, S1186 and S3237 include an empty `set` accessor.
+  S1481 includes an unused `out var`. S1643 includes `var s = ""` and
+  `s = x + s`. S5332 includes a placeholder host, `http://[host]/api`.
+  S2139 and S6667 know NLog's methods (`Warn`, `Trace`).
+- **Narrower.** S2386 and S3887 leave arrays. S3220 leaves an array given
+  for the `params` parameter (`string.Format(f, args)`). S2325 leaves
+  empty methods and a method with an object initializer
+  (`new T { Name = x }`), which SonarQube counts as using the instance, and
+  counts `MemberwiseClone()` as using it. S2139 counts a log call that is a
+  statement of the catch itself and passes the exception, not NLog's
+  static `InternalLogger`.
+- **Without a resolved base type.** sonda can't tell a base class from an
+  interface it can't resolve; `IParser`, named like an interface, is taken
+  for one, so its implementers' private members are checked (S2325).
+
+### Still open in C#
+
+On Prowlarr, 426 of SonarCloud's C# issues and 94 of sonda's:
+
+- **Known gap, data flow (155):** S2259 (125), S2583 (22), S2589 (8).
+- **Known gap, types from other files (78):** S2325 (46), a class whose
+  base class is declared in another file, which may declare what its
+  members use; S6608 (32), `First()` on a list whose type another file
+  declares.
+- **Known gaps, libraries (20):** S6966 (11), a method with an async
+  variant in a library; S6549 (9), from the commercial security analyzer.
+- **SonarCloud differs from SonarQube 26.7 (6 sonda only):** S6667 on a
+  catch that logs the exception's message and rethrows, which 26.7
+  reports.
+- **Not yet looked into (173 SonarCloud only, 88 sonda only):** a few
+  issues each across some 70 keys.
+
+Prowlarr's JavaScript and TypeScript (a React frontend) aren't classified
+yet: 209 of 588 and 126 of 150.
 
 ## Rules that depend on knowing a type
 

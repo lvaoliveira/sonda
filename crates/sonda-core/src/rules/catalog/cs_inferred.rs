@@ -1287,11 +1287,10 @@ impl InstanceUses<'_, '_, '_> {
             || self.counted_as_instance(member)
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: an unqualified call to one
+    /// Measured on SonarQube 26.7: an unqualified call to one
     /// of `object`'s instance methods, `MemberwiseClone()`, uses the
     /// instance; and SonarQube counts a method with an object initializer,
-    /// `new T { Name = x }`, as one using it (none of its 132 issues there
-    /// has one).
+    /// `new T { Name = x }`, as one using it.
     fn counted_as_instance(&self, member: Node) -> bool {
         let mut stack = vec![member];
         while let Some(n) = stack.pop() {
@@ -1444,7 +1443,12 @@ pub(super) fn could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             let Some(has_body) = has_own_body(member, src) else {
                 continue;
             };
+            // An empty method is S1186's (measured on SonarQube 26.7).
+            let empty = member
+                .child_by_field_name("body")
+                .is_some_and(|b| b.kind() == "block" && b.named_child_count() == 0);
             if has_body
+                && !empty
                 && may_be_static(&infer, &owner, member, member_name, entry_points, src)
                 && !uses.uses_instance(member)
             {
@@ -2685,7 +2689,7 @@ pub(super) fn ambiguous_params_calls<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
         |infer, call, args, b| {
             // An array passed for the `params` parameter binds the normal
             // form, which nothing else matches: `string.Format(f, args)`
-            // (seen on SonarCloud's analysis of Prowlarr).
+            // (measured on SonarQube 26.7).
             let array_given = args.len() == b.params.len()
                 && args
                     .last()

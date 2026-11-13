@@ -934,8 +934,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4136")],
         check: Check::Query {
             langs: CSHARP,
-            // Each separated group, at its first declaration (seen on
-            // SonarCloud's analysis of Prowlarr).
+            // Each separated group, at its first declaration (measured on SonarQube 26.7).
             query: "[(class_declaration body: (declaration_list (method_declaration) @match)) \
                      (struct_declaration body: (declaration_list (method_declaration) @match)) \
                      (interface_declaration body: (declaration_list (method_declaration) @match))]",
@@ -1219,7 +1218,7 @@ fn is_plain_goto(node: Node, src: &[u8]) -> bool {
 
 fn is_public_instance_field(field: Node, src: &[u8]) -> bool {
     // A static field too, which cs/visible-mutable-static-field also
-    // reports (seen on SonarCloud's analysis of Prowlarr).
+    // reports (measured on SonarQube 26.7).
     cs_has_modifier(field, "public", src)
         && !["const", "readonly"]
             .iter()
@@ -1694,8 +1693,7 @@ fn cast_after_type_check<'t>(statement: Node<'t>, src: &[u8]) -> Option<Node<'t>
     };
     let ty = text(ty, src);
     let body = statement.child_by_field_name("consequence")?;
-    // Reported at the type check (seen on SonarCloud's analysis of
-    // Prowlarr).
+    // Reported at the type check (measured on SonarQube 26.7).
     find_in_scope(body, CS_SCOPE_STOPS, |n| {
         n.kind() == "cast_expression"
             && n.child_by_field_name("type")
@@ -2168,7 +2166,7 @@ mod tests {
     #[test]
     fn fields_and_utility_classes() {
         let src = "namespace N;\nclass A { public int X; public const int Y = 1; public readonly int Z; private int w; public static int S; }\nstruct P { public int X; }\nclass U { public static int F() => 1; }\nclass V { private V() { } public static int F() => 1; }\nstatic class W { public static int F() => 1; }\nclass X2 { public static int Y; }\nclass Y2 : Base { public static int F() => 1; }";
-        // Static fields too (seen on SonarCloud's analysis of Prowlarr).
+        // Static fields too (measured on SonarQube 26.7).
         assert_eq!(flagged("cs/public-field", src), [2, 2, 7]);
         assert_eq!(flagged("cs/instantiable-utility-class", src), [4]);
     }
@@ -2295,8 +2293,7 @@ mod tests {
     #[test]
     fn overloads_and_comments() {
         let src = "namespace N;\nclass A {\nvoid F(int x) { }\n// the string one\nvoid F(string s) { }\nvoid G() { }\nvoid F(bool b) { }\nvoid I.F(char c) { }\n//\n\n// note\n//\n// more\n\n/* */\n\n///\n}";
-        // At the group's first declaration (seen on SonarCloud's analysis
-        // of Prowlarr).
+        // At the group's first declaration (measured on SonarQube 26.7).
         assert_eq!(flagged("cs/overloads-not-adjacent", src), [3]);
         assert_eq!(flagged("cs/empty-comment", src), [9, 15, 17]);
     }

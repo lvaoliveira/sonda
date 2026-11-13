@@ -668,6 +668,7 @@ fn methods_returning_constants<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
                     _ => return None,
                 },
             };
+            // Reported at the method's name (measured on SonarQube 26.7).
             matches!(
                 unparenthesized(value).kind(),
                 "integer_literal"
@@ -676,7 +677,8 @@ fn methods_returning_constants<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
                     | "boolean_literal"
                     | "character_literal"
             )
-            .then_some(value)
+            .then(|| method.child_by_field_name("name"))
+            .flatten()
         })
         .collect()
 }
@@ -702,8 +704,7 @@ fn loops_simplifiable<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             return;
         }
         let name = text(variable, src);
-        // Reported at the `foreach` (seen on SonarCloud's analysis of
-        // Prowlarr).
+        // Reported at the `foreach` (measured on SonarQube 26.7).
         if filtering_if(body, name, src).is_some() {
             found.push(foreach);
         } else if selects_one_member(body, name, src) {

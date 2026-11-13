@@ -337,7 +337,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1186")],
         check: Check::Query {
             langs: CSHARP,
-            query: "[(method_declaration body: (block) @b) (local_function_statement body: (block) @b)] @match",
+            // A `set`, `init`, `add` or `remove` accessor too, at its keyword
+            // (measured on SonarQube 26.7).
+            query: "[(method_declaration body: (block) @b) (local_function_statement body: (block) @b) \
+                     (accessor_declaration body: (block) @b)] @match",
             filter: Some(Find(empty_method_name)),
         },
         example: Some(Example {
@@ -1072,10 +1075,11 @@ fn accessor_ignores_value(node: Node, src: &[u8]) -> bool {
     let Some(body) = node.child_by_field_name("body") else {
         return false;
     };
+    // An empty one is reported too (measured on SonarQube 26.7).
     let only_throws = match body.kind() {
         "block" => {
             let stmts = cs_statements(body);
-            stmts.is_empty() || (stmts.len() == 1 && stmts[0].kind() == "throw_statement")
+            stmts.len() == 1 && stmts[0].kind() == "throw_statement"
         }
         _ => operand(body).is_some_and(|e| e.kind() == "throw_expression"),
     };
@@ -1238,6 +1242,8 @@ fn is_empty_nested_block(node: Node, _: &[u8]) -> bool {
                 | "checked_statement"
                 | "unsafe_statement"
                 | "block"
+                // An accessor's body (measured on SonarQube 26.7).
+                | "accessor_declaration"
         )
     })
 }
@@ -1635,7 +1641,8 @@ pub(super) mod tests {
     #[test]
     fn accessors() {
         let src = "class A {\nint X { get => x; set { x = 1; } }\nint Y { get; set; }\nint Z { set { } }\nint W { set => throw new NotSupportedException(); }\nint V { init => x = value; }\nevent EventHandler E { add { } remove { h -= value; } }\nevent EventHandler E2 { add { Log(); } remove { } }\n}";
-        assert_eq!(flagged("cs/accessor-ignores-value", src), [2, 8]);
+        // An empty `set`, `add` or `remove` too (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/accessor-ignores-value", src), [2, 4, 7, 8, 8]);
     }
 
     #[test]
@@ -1728,7 +1735,7 @@ pub(super) mod tests {
         assert_eq!(flagged("cs/empty-string-comparison", &src), [9, 10, 11]);
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: a target-typed `new(...)`
+    /// Measured on SonarQube 26.7: a target-typed `new(...)`
     /// builds a Regex too, from a field or an array's type.
     #[test]
     fn regex_target_typed() {
@@ -1736,7 +1743,7 @@ pub(super) mod tests {
         assert_eq!(flagged("cs/regex-without-timeout", src), [4, 5]);
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: reported at the loop, the
+    /// Measured on SonarQube 26.7: reported at the loop, the
     /// type check, the type; each separated overload group at its first
     /// declaration.
     #[test]
@@ -1750,7 +1757,7 @@ pub(super) mod tests {
         assert_eq!(flagged("cs/overloads-not-adjacent", overloads), [3, 4]);
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: logging the exception
+    /// Measured on SonarQube 26.7: logging the exception
     /// itself and rethrowing, with NLog's `Warn` too; a log in a branch, a
     /// message without the exception, or NLog's `InternalLogger` isn't.
     #[test]
@@ -1759,16 +1766,16 @@ pub(super) mod tests {
         assert_eq!(flagged("cs/log-and-rethrow", src), [6]);
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: the first log call of a
-    /// catch that doesn't pass the exception itself, a catch without a
-    /// variable too; not a catch that rethrows.
+    /// Measured on SonarQube 26.7: the first log call of a catch that
+    /// doesn't pass the exception itself, a catch without a variable too, a
+    /// catch that rethrows too.
     #[test]
     fn log_exception_not_passed_shapes() {
         let src = "class A\n{\n    void F()\n    {\n        try { G(); }\n        catch (System.Exception ex)\n        {\n            _logger.Debug(\"failed ({0})\", ex.Message);\n            _logger.Trace(\"again\");\n        }\n        try { G(); }\n        catch (System.Exception)\n        {\n            Logger.Error(\"failed\");\n        }\n        try { G(); }\n        catch (System.Exception e)\n        {\n            _logger.Trace(\"failed {0}\", e.Message);\n            throw;\n        }\n        try { G(); }\n        catch (System.Exception e)\n        {\n            _logger.Warn(e, \"failed\");\n        }\n    }\n}";
-        assert_eq!(flagged("cs/log-exception-not-passed", src), [8, 14]);
+        assert_eq!(flagged("cs/log-exception-not-passed", src), [8, 14, 19]);
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: an array given for the
+    /// Measured on SonarQube 26.7: an array given for the
     /// `params` parameter binds only one overload.
     #[test]
     fn params_given_an_array() {
@@ -1776,7 +1783,7 @@ pub(super) mod tests {
         assert!(flagged("cs/ambiguous-params-overload", src).is_empty());
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: localhost and constants
+    /// Measured on SonarQube 26.7: localhost and constants
     /// too; an argument whose parameter, declared in the file, names a
     /// location; `new Uri(...)`; a delimiter joined into a location, not
     /// one compared or returned.
@@ -1786,12 +1793,39 @@ pub(super) mod tests {
         assert_eq!(flagged("cs/hardcoded-uri", src), [3, 6, 7, 8, 9]);
     }
 
-    /// Seen on SonarCloud's analysis of Prowlarr: an unresolved `IParser`
+    /// Measured on SonarQube 26.7: an unresolved `IParser`
     /// is an interface, not a base class; `MemberwiseClone()` and an object
     /// initializer count as using the instance.
     #[test]
     fn could_be_static_shapes() {
         let src = "class A : IParser\n{\n    private static readonly int N = 2;\n    private int Twice(int x) { return x * N; }\n    public A Copy() { return (A)MemberwiseClone(); }\n    private B Make(int x) { return new B { Value = x }; }\n}";
         assert_eq!(flagged("cs/could-be-static", src), [4]);
+    }
+
+    /// Measured on SonarQube 26.7: each unused private member; a private
+    /// nested type, its constructor and members; a setter nothing assigns.
+    #[test]
+    fn unused_private_members_measured() {
+        let src = "namespace Cal\n{\n    public class Unused\n    {\n        private int _count;\n        private int _used;\n        private string Name { get; set; }\n        private int Visible { get; }\n\n        public int Run()\n        {\n            _used = Visible;\n            return _used + Helper();\n        }\n\n        private int Helper() { return 1; }\n\n        private int Dead() { return 2; }\n\n        private class Inner\n        {\n            public Inner(int x) { Size = x; }\n\n            public int Size { get; set; }\n            public string Label { get; set; }\n            public int Read { get; set; }\n\n            public int Get() { return Read; }\n        }\n    }\n\n    public class Setters\n    {\n        private int _x;\n\n        public int A\n        {\n            get { return _x; }\n            private set { _x = value; }\n        }\n    }\n}";
+        assert_eq!(
+            flagged("cs/unused-private-member", src),
+            [5, 7, 18, 20, 22, 25, 26, 28, 39]
+        );
+    }
+
+    /// Measured on SonarQube 26.7: an unused `out var`; an empty accessor is
+    /// an empty block and an empty method; a constant method at its name; a
+    /// `[host]` placeholder URL.
+    #[test]
+    fn calibrated_csharp_shapes() {
+        let locals = "class A\n{\n    bool F(string a)\n    {\n        return Parse(a, out var x, out var y) && x > 0;\n    }\n    static bool Parse(string a, out int x, out int y) { x = 1; y = 2; return true; }\n}";
+        assert_eq!(flagged("cs/unused-local-variable", locals), [5]);
+        let setter = "class A\n{\n    private int _x;\n    public int B\n    {\n        get { return _x; }\n        set\n        {\n        }\n    }\n}";
+        assert_eq!(flagged("cs/empty-block", setter), [8]);
+        assert_eq!(flagged("cs/empty-method", setter), [7]);
+        let constant = "class A\n{\n    private int Two()\n    {\n        return 2;\n    }\n}";
+        assert_eq!(flagged("cs/method-returns-constant", constant), [3]);
+        let attr = "class S\n{\n    [Token(\"url\", \"http://[host]:[port]/api\")]\n    public string UrlBase { get; set; }\n    private const string Loop = \"http://[::1]/x\";\n}";
+        assert_eq!(flagged("cs/cleartext-url", attr), [3]);
     }
 }
