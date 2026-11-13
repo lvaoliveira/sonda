@@ -396,6 +396,196 @@ pub(super) static RULES: &[Rule] = &[
             good: "static const int kLimit = 10;",
         }),
     },
+    Rule {
+        id: "cpp/initializer-list-constant",
+        name: "Members initialized to a constant should use an in-class initializer",
+        description: "A member every constructor sets to the same constant reads better, and can't be \
+                      forgotten, as `int count_ = 0;` in the class.",
+        message: "Initialize this member in the class instead of in the constructor's initializer list.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S3230")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(field_initializer) @match",
+            filter: Some(Keep(initializes_to_a_constant)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "class A { public: A(int x) : x_(x), count_(0) {} private: int x_; int count_; };",
+            good: "class A { public: explicit A(int x) : x_(x) {} private: int x_; int count_ = 0; };",
+        }),
+    },
+    Rule {
+        id: "cpp/unused-parameter",
+        name: "Unused function parameters should be removed",
+        description: "A parameter the body never reads misleads callers; leave it unnamed, or mark it \
+                      [[maybe_unused]], when a signature needs it.",
+        message: "Remove this unused parameter, make it unnamed, or declare it [[maybe_unused]].",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S1172")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "[(function_definition) (lambda_expression)] @match",
+            filter: Some(FindAll(unused_parameters)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "int f(int a, int b) { return a; }",
+            good: "int f(int a, int) { return a; }",
+        }),
+    },
+    Rule {
+        id: "cpp/manual-memory",
+        name: "Memory should not be managed manually",
+        description: "`new` and `delete` leak or double-free on the paths a reviewer misses; containers and \
+                      smart pointers release what they own.",
+        message: "Replace this \"new\" or \"delete\" with an object that manages the memory, such as \
+                  std::unique_ptr or a container.",
+        category: CodeSmell,
+        severity: Critical,
+        effort_minutes: 15,
+        sonar: &[exact("S5025")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "[(new_expression) (delete_expression)] @match",
+            filter: Some(Keep(manual_memory)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "void f() { int* p = new int(1); delete p; }",
+            good: "void f() { auto p = std::make_unique<int>(1); }",
+        }),
+    },
+    Rule {
+        id: "cpp/old-style-parameters",
+        name: "Parameter types should be declared in the parameter list",
+        description: "An old-style (K&R) definition declares its parameters' types after the parentheses, \
+                      which C23 no longer allows and which hides mismatched calls.",
+        message: "Move the declarations of the parameters' types into the parameter list.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S1198")],
+        check: Check::Query {
+            langs: C_CPP,
+            query: "(function_definition (declaration) @match)",
+            filter: Some(Keep(first_parameter_declaration)),
+        },
+        example: Some(Example {
+            lang: Lang::C,
+            bad: "int add(a, b)\nint a;\nint b;\n{ return a + b; }",
+            good: "int add(int a, int b) { return a + b; }",
+        }),
+    },
+    Rule {
+        id: "cpp/cast-drops-const",
+        name: "Casts should not drop const from a string literal",
+        description: "A string literal is const; casting it to `char*` invites a write, which is undefined \
+                      behaviour.",
+        message: "Don't cast away this string literal's const.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S859")],
+        check: Check::Query {
+            langs: C_CPP,
+            query: "(cast_expression value: (string_literal)) @match",
+            filter: Some(Keep(casts_to_mutable_chars)),
+        },
+        example: Some(Example {
+            lang: Lang::C,
+            bad: "struct s { char* msg; }; void f(struct s* p) { p->msg = (char *)\"bad input\"; }",
+            good: "struct s { const char* msg; }; void f(struct s* p) { p->msg = \"bad input\"; }",
+        }),
+    },
+    Rule {
+        id: "cpp/operator-hidden-friend",
+        name: "Comparison operators should be hidden friends",
+        description: "A free `operator==` takes part in every overload resolution in its namespace; a \
+                      hidden friend is found only for its class.",
+        message: "Make this overloaded operator a hidden friend of its class.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S2807")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(function_definition declarator: (function_declarator declarator: (operator_name))) @match",
+            filter: Some(Keep(free_symmetric_operator)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "struct P { int x; };\nbool operator==(const P& a, const P& b) { return a.x == b.x; }",
+            good: "struct P { int x; friend bool operator==(const P& a, const P& b) { return a.x == b.x; } };",
+        }),
+    },
+    Rule {
+        id: "cpp/void-pointer",
+        name: "void* should not be used",
+        description: "A void pointer loses the type it points to; a template, a typed pointer or std::any \
+                      keeps it.",
+        message: "Replace this use of \"void *\" with a more meaningful type.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S5008")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "[(parameter_declaration type: (primitive_type) @t (#eq? @t \"void\") declarator: (pointer_declarator)) (optional_parameter_declaration type: (primitive_type) @t2 (#eq? @t2 \"void\") declarator: (pointer_declarator)) (function_definition type: (primitive_type) @t3 (#eq? @t3 \"void\") declarator: (pointer_declarator declarator: (function_declarator)))] @match",
+            filter: Some(Keep(void_pointer_in_a_definition)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "void copy(void* dst, int n) {}",
+            good: "template <typename T> void copy(T* dst, int n) {}",
+        }),
+    },
+    Rule {
+        id: "cpp/switch-fallthrough",
+        name: "Switch cases should not fall through without saying so",
+        description: "A case that runs on into the next one is easy to mistake for a missing break; \
+                      [[fallthrough]] says it's meant.",
+        message: "End this case with a break, or mark the fall-through with [[fallthrough]].",
+        category: CodeSmell,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S128")],
+        check: Check::Query {
+            langs: C_CPP,
+            query: "(case_statement) @match",
+            filter: Some(Keep(falls_into_next_case)),
+        },
+        example: Some(Example {
+            lang: Lang::C,
+            bad: "int f(int x) { int y = 0; switch (x) { case 1: y = 1; case 2: y += 2; break; } return y; }",
+            good: "int f(int x) { int y = 0; switch (x) { case 1: y = 1; break; case 2: y += 2; break; } return y; }",
+        }),
+    },
+    Rule {
+        id: "cpp/protected-member-variable",
+        name: "Member variables should not be protected",
+        description: "A protected field is part of the class's interface to every subclass, which can then \
+                      break its invariants; protected accessors keep them.",
+        message: "Make this class's protected member variables private, with protected accessors if needed.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S3656")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "[(class_specifier name: (_) body: (field_declaration_list)) (struct_specifier name: (_) body: (field_declaration_list))] @match",
+            filter: Some(Find(class_with_protected_fields)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "class Base { protected: int count_; };",
+            good: "class Base { protected: int count() const { return count_; } private: int count_; };",
+        }),
+    },
 ];
 
 /// Its direct children's texts: specifiers and qualifiers.
@@ -1082,6 +1272,528 @@ fn mutable_global<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     })
 }
 
+/// A member's initializer that doesn't depend on the constructor's
+/// parameters, the first such one for that member in the class: the same
+/// value every time, which an in-class initializer states once.
+fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
+    let Some(constructor) = init.parent().and_then(|list| list.parent()) else {
+        return false;
+    };
+    let Some(member) = independent_member(init, &parameter_names(constructor, src), src) else {
+        return false;
+    };
+    let scope = class_scope(constructor, src);
+    let container = match constructor.parent() {
+        Some(t) if t.kind() == "template_declaration" => t.parent(),
+        p => p,
+    };
+    let Some(container) = container else {
+        return true;
+    };
+    let mut cursor = container.walk();
+    for earlier in container.named_children(&mut cursor) {
+        let earlier = if earlier.kind() == "template_declaration" {
+            match earlier
+                .named_children(&mut earlier.walk())
+                .find(|c| c.kind() == "function_definition")
+            {
+                Some(f) => f,
+                None => continue,
+            }
+        } else {
+            earlier
+        };
+        if earlier.start_byte() >= constructor.start_byte() {
+            break;
+        }
+        if earlier.kind() != "function_definition" || class_scope(earlier, src) != scope {
+            continue;
+        }
+        let params = parameter_names(earlier, src);
+        let Some(list) = earlier
+            .named_children(&mut earlier.walk())
+            .find(|c| c.kind() == "field_initializer_list")
+        else {
+            continue;
+        };
+        if list
+            .named_children(&mut list.walk())
+            .any(|other| independent_member(other, &params, src) == Some(member))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// The member a `member_(value)` initializer sets, when the value uses
+/// none of the constructor's parameters: not a base class, which starts
+/// with a capital.
+fn independent_member<'s>(init: Node, params: &[&[u8]], src: &'s [u8]) -> Option<&'s [u8]> {
+    let name = init
+        .named_child(0)
+        .filter(|n| n.kind() == "field_identifier")?;
+    let member = text(name, src);
+    if member.first().is_some_and(u8::is_ascii_uppercase) {
+        return None;
+    }
+    let args = init
+        .named_children(&mut init.walk())
+        .find(|c| matches!(c.kind(), "argument_list" | "initializer_list"))?;
+    let template_params = template_parameter_names(init, src);
+    let mut stack = vec![args];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "this" | "lambda_expression" => return None,
+            // `ns::kValue`, `Type::Default()`: named constants.
+            "qualified_identifier" => {}
+            "identifier" => {
+                let name = text(n, src);
+                if params.contains(&name)
+                    || !(constant_name(name) || template_params.contains(&name))
+                {
+                    return None;
+                }
+            }
+            _ => stack.extend(n.named_children(&mut n.walk())),
+        }
+    }
+    Some(member)
+}
+
+/// `kSize` or `MAX_SIZE`: how constants are named, unlike members and
+/// locals.
+fn constant_name(name: &[u8]) -> bool {
+    let k_prefixed = name.len() > 1 && name[0] == b'k' && name[1].is_ascii_uppercase();
+    let all_caps = name
+        .iter()
+        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_');
+    k_prefixed || all_caps
+}
+
+/// The names of the template parameters around a node.
+fn template_parameter_names<'s>(node: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut names = Vec::new();
+    let mut up = node.parent();
+    while let Some(n) = up {
+        if let Some(params) = (n.kind() == "template_declaration")
+            .then(|| n.child_by_field_name("parameters"))
+            .flatten()
+        {
+            let mut stack = vec![params];
+            while let Some(p) = stack.pop() {
+                if matches!(p.kind(), "identifier" | "type_identifier") {
+                    names.push(text(p, src));
+                } else if let Some(d) = p.child_by_field_name("declarator") {
+                    stack.push(d);
+                } else {
+                    stack.extend(p.named_children(&mut p.walk()));
+                }
+            }
+        }
+        up = n.parent();
+    }
+    names
+}
+
+/// The names of a function's parameters.
+fn parameter_names<'s>(function: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let Some(params) =
+        function_declarator(function).and_then(|d| d.child_by_field_name("parameters"))
+    else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut stack: Vec<Node> = params.named_children(&mut params.walk()).collect();
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" {
+            names.push(text(n, src));
+        } else if let Some(d) = n.child_by_field_name("declarator") {
+            stack.push(d);
+        } else if !matches!(
+            n.kind(),
+            "parameter_declaration" | "optional_parameter_declaration"
+        ) {
+            stack.extend(
+                n.named_children(&mut n.walk())
+                    .filter(|c| c.kind() == "identifier"),
+            );
+        }
+    }
+    names
+}
+
+/// `A` for an out-of-class `A::A(...)`, empty inside the class.
+fn class_scope<'s>(function: Node, src: &'s [u8]) -> &'s [u8] {
+    function_declarator(function)
+        .and_then(|d| d.child_by_field_name("declarator"))
+        .filter(|n| n.kind() == "qualified_identifier")
+        .and_then(|n| n.child_by_field_name("scope"))
+        .map_or(&b""[..], |n| text(n, src))
+}
+
+/// Each named parameter the body never mentions: not of a virtual function
+/// or an override, whose signature isn't its own, nor [[maybe_unused]].
+fn unused_parameters<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let (Some(body), params) = (
+        function.child_by_field_name("body"),
+        if function.kind() == "lambda_expression" {
+            function
+                .child_by_field_name("declarator")
+                .and_then(|d| d.child_by_field_name("parameters"))
+        } else {
+            function_declarator(function).and_then(|d| d.child_by_field_name("parameters"))
+        },
+    ) else {
+        return Vec::new();
+    };
+    let Some(params) = params else {
+        return Vec::new();
+    };
+    // `Class::method(...)` defines a member declared elsewhere, whose
+    // signature the declaration (perhaps a virtual one) fixes; `f<T>(...)`
+    // specializes a template, whose signature the template fixes.
+    if function_declarator(function)
+        .and_then(|d| d.child_by_field_name("declarator"))
+        .is_some_and(|n| matches!(n.kind(), "qualified_identifier" | "template_function"))
+    {
+        return Vec::new();
+    }
+    if function.kind() == "function_definition"
+        && (has_word(function, b"virtual", src)
+            || function_declarator(function).is_some_and(|d| {
+                d.named_children(&mut d.walk()).any(|c| {
+                    c.kind() == "virtual_specifier"
+                        && matches!(text(c, src), b"override" | b"final")
+                })
+            }))
+    {
+        return Vec::new();
+    }
+    let body_text = text(body, src);
+    let mentions = |name: &[u8]| {
+        body_text.windows(name.len()).enumerate().any(|(i, w)| {
+            w == name
+                && !body_text
+                    .get(i.wrapping_sub(1))
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                && !body_text
+                    .get(i + name.len())
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        })
+    };
+    // A constructor's initializer list reads its parameters too.
+    let initializers = function
+        .named_children(&mut function.walk())
+        .find(|c| c.kind() == "field_initializer_list")
+        .map_or(&b""[..], |l| text(l, src));
+    params
+        .named_children(&mut params.walk())
+        .filter(|p| {
+            matches!(
+                p.kind(),
+                "parameter_declaration" | "optional_parameter_declaration"
+            )
+        })
+        // `T* PROGMEM name`: a macro the parser takes for the name.
+        .filter(|p| !p.has_error() && p.next_sibling().is_none_or(|n| !n.is_error()))
+        .filter(|p| !text(*p, src).windows(12).any(|w| w == b"maybe_unused"))
+        .filter_map(|p| {
+            let mut d = p.child_by_field_name("declarator")?;
+            for _ in 0..6 {
+                if d.kind() == "identifier" {
+                    break;
+                }
+                d = d
+                    .child_by_field_name("declarator")
+                    .or_else(|| d.named_children(&mut d.walk()).last())?;
+            }
+            (d.kind() == "identifier").then_some(d)
+        })
+        .filter(|name| {
+            let n = text(*name, src);
+            !mentions(n) && !initializers.windows(n.len()).any(|w| w == n)
+        })
+        .collect()
+}
+
+/// A `void*` parameter or return type of a function defined here: not a
+/// declaration (the definition is reported), nor an `operator new` or
+/// `operator delete`, whose signatures the language fixes.
+fn void_pointer_in_a_definition(node: Node, src: &[u8]) -> bool {
+    if node.kind() == "function_definition" {
+        return !allocation_operator(function_declarator(node), src);
+    }
+    if in_macro_arguments(node, src) {
+        return false;
+    }
+    let Some(declarator) = node.parent().and_then(|list| list.parent()) else {
+        return false;
+    };
+    if declarator.kind() != "function_declarator" {
+        return true;
+    }
+    if allocation_operator(Some(declarator), src) {
+        return false;
+    }
+    let mut up = declarator.parent();
+    while let Some(n) = up {
+        match n.kind() {
+            "pointer_declarator" | "reference_declarator" => up = n.parent(),
+            kind => return kind == "function_definition",
+        }
+    }
+    false
+}
+
+/// `operator new`, `operator delete` and their array forms.
+fn allocation_operator(declarator: Option<Node>, src: &[u8]) -> bool {
+    declarator
+        .and_then(|d| d.child_by_field_name("declarator"))
+        .is_some_and(|n| {
+            let t = text(n, src);
+            n.kind() == "operator_name"
+                && (t.ends_with(b"new") || t.ends_with(b"delete") || t.ends_with(b"[]"))
+        })
+}
+
+/// `new` and `delete`, not a placement `new` and not inside a macro's
+/// arguments.
+fn manual_memory(node: Node, src: &[u8]) -> bool {
+    if in_macro_arguments(node, src) {
+        return false;
+    }
+    node.kind() != "new_expression"
+        || !(node.child_by_field_name("placement").is_some()
+            || node.has_error()
+            || under_error(node)
+            || handed_to_an_owner(node)
+            || given_a_parent(node, src))
+}
+
+/// Inside a parse error, such as code disabled by `#if 0`.
+fn under_error(node: Node) -> bool {
+    let mut up = node.parent();
+    while let Some(n) = up {
+        if n.is_error() {
+            return true;
+        }
+        up = n.parent();
+    }
+    false
+}
+
+/// `owner(new T)` or `owner.reset(new T)`: the new object goes straight
+/// into a call or a declared object, which takes it over.
+fn handed_to_an_owner(new: Node) -> bool {
+    new.parent().is_some_and(|args| {
+        args.kind() == "argument_list"
+            && args
+                .parent()
+                .is_some_and(|p| matches!(p.kind(), "call_expression" | "init_declarator"))
+    })
+}
+
+/// `new QTimer(this)`: a Qt object given a parent, which deletes it.
+fn given_a_parent(new: Node, src: &[u8]) -> bool {
+    let Some(args) = new.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let mut has_args = false;
+    for arg in args.named_children(&mut cursor) {
+        has_args = true;
+        if arg.kind() == "this" {
+            return true;
+        }
+    }
+    let name = new
+        .child_by_field_name("type")
+        .map(|t| text(t, src))
+        .unwrap_or_default();
+    has_args && name.len() > 1 && name[0] == b'Q' && name[1].is_ascii_uppercase()
+}
+
+/// An old-style definition's first parameter declaration.
+fn first_parameter_declaration(declaration: Node, _: &[u8]) -> bool {
+    declaration
+        .prev_named_sibling()
+        .is_none_or(|p| p.kind() != "declaration")
+}
+
+/// `(char *)"text"`: a cast to a pointer to non-const characters.
+fn casts_to_mutable_chars(cast: Node, src: &[u8]) -> bool {
+    cast.child_by_field_name("type").is_some_and(|t| {
+        let t = text(t, src);
+        t.contains(&b'*') && !t.windows(5).any(|w| w == b"const")
+    })
+}
+
+/// A comparison or equality operator defined outside the classes it
+/// compares, taking two parameters.
+fn free_symmetric_operator(function: Node, src: &[u8]) -> bool {
+    // Not in a class: a member, or a friend already.
+    let mut up = function.parent();
+    while let Some(n) = up {
+        if matches!(n.kind(), "field_declaration_list" | "friend_declaration") {
+            return false;
+        }
+        up = n.parent();
+    }
+    let Some(d) = function_declarator(function) else {
+        return false;
+    };
+    let op = d
+        .child_by_field_name("declarator")
+        .map_or(&b""[..], |n| text(n, src));
+    let comparison = [
+        &b"operator=="[..],
+        b"operator!=",
+        b"operator<",
+        b"operator>",
+        b"operator<=",
+        b"operator>=",
+    ]
+    .iter()
+    .any(|o| {
+        let squeezed: Vec<u8> = op
+            .iter()
+            .filter(|b| !b.is_ascii_whitespace())
+            .copied()
+            .collect();
+        squeezed == *o
+    });
+    let two = d.child_by_field_name("parameters").is_some_and(|p| {
+        p.named_children(&mut p.walk())
+            .filter(|c| c.kind() == "parameter_declaration")
+            .count()
+            == 2
+    });
+    comparison && two
+}
+
+/// A case whose statements don't end in a jump, followed by another case.
+fn falls_into_next_case(case: Node, src: &[u8]) -> bool {
+    let Some(next) = case.next_named_sibling() else {
+        return false;
+    };
+    if next.kind() != "case_statement" {
+        return false;
+    }
+    let statements: Vec<Node> = case
+        .named_children(&mut case.walk())
+        .filter(|c| c.kind() != "comment" && Some(*c) != case.child_by_field_name("value"))
+        .collect();
+    let Some(last) = statements.last() else {
+        // `case 1: case 2:` share one body.
+        return false;
+    };
+    !ends_in_jump(*last, src) && !only_jumps(next)
+}
+
+/// `case X: return;` or `default: break;`: falling into it does what a
+/// jump would.
+fn only_jumps(case: Node) -> bool {
+    let mut statements = case
+        .named_children(&mut case.walk())
+        .filter(|c| c.kind() != "comment" && Some(*c) != case.child_by_field_name("value"))
+        .collect::<Vec<_>>();
+    while statements.len() == 1 && statements[0].kind() == "compound_statement" {
+        let block = statements[0];
+        statements = block
+            .named_children(&mut block.walk())
+            .filter(|c| c.kind() != "comment")
+            .collect();
+    }
+    statements.len() == 1
+        && matches!(
+            statements[0].kind(),
+            "break_statement"
+                | "return_statement"
+                | "continue_statement"
+                | "goto_statement"
+                | "throw_statement"
+        )
+}
+
+fn ends_in_jump(statement: Node, src: &[u8]) -> bool {
+    match statement.kind() {
+        "break_statement" | "return_statement" | "continue_statement" | "goto_statement"
+        | "throw_statement" => true,
+        "expression_statement" => {
+            let t = text(statement, src);
+            // `[[fallthrough]];`, `exit(1);`, `abort();`
+            t.windows(11).any(|w| w == b"fallthrough")
+                || t.starts_with(b"exit(")
+                || t.starts_with(b"abort(")
+                || t.starts_with(b"std::abort(")
+        }
+        "attributed_statement" => text(statement, src)
+            .windows(11)
+            .any(|w| w == b"fallthrough"),
+        "compound_statement" => statement
+            .named_children(&mut statement.walk())
+            .filter(|c| c.kind() != "comment")
+            .last()
+            .is_some_and(|l| ends_in_jump(l, src)),
+        // A switch with a default whose every case leaves the function.
+        "switch_statement" => statement.child_by_field_name("body").is_some_and(|body| {
+            let cases: Vec<Node> = body
+                .named_children(&mut body.walk())
+                .filter(|c| c.kind() == "case_statement")
+                .collect();
+            cases
+                .iter()
+                .any(|c| c.child_by_field_name("value").is_none())
+                && cases.iter().all(|c| {
+                    c.named_children(&mut c.walk())
+                        .filter(|s| {
+                            s.kind() != "comment" && Some(*s) != c.child_by_field_name("value")
+                        })
+                        .last()
+                        .is_none_or(|l| l.kind() != "break_statement" && ends_in_jump(l, src))
+                })
+        }),
+        "if_statement" => {
+            statement
+                .child_by_field_name("consequence")
+                .is_some_and(|c| ends_in_jump(c, src))
+                && statement
+                    .child_by_field_name("alternative")
+                    .and_then(|e| e.named_child(0))
+                    .is_some_and(|e| ends_in_jump(e, src))
+        }
+        _ => false,
+    }
+}
+
+/// A class with a non-static data member under `protected:`.
+fn class_with_protected_fields<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let body = class.child_by_field_name("body")?;
+    let mut access = if class.kind() == "class_specifier" {
+        &b"private"[..]
+    } else {
+        &b"public"[..]
+    };
+    for member in body.named_children(&mut body.walk()) {
+        match member.kind() {
+            "access_specifier" => {
+                let t = text(member, src).trim_ascii_end();
+                access = t.strip_suffix(b":").unwrap_or(t).trim_ascii_end();
+            }
+            "field_declaration"
+                if access == b"protected"
+                    && function_declarator(member).is_none()
+                    && !has_word(member, b"static", src) =>
+            {
+                return class.child_by_field_name("name");
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -1163,5 +1875,36 @@ mod tests {
         assert!(flagged("common/cognitive-complexity", &tests).is_empty());
         let params = "struct B { virtual void f(int, int, int, int, int, int, int, int); };\nstruct D : B { void f(int a, int b, int c, int d, int e, int f, int g, int h) override {} };\nvoid g(int a, int b, int c, int d, int e, int f, int g, int h) {}";
         assert_eq!(flagged("common/too-many-parameters", params), [3]);
+    }
+
+    /// The second batch of shapes, from the same two analyses.
+    #[test]
+    fn more_shapes_from_sonarcloud() {
+        // The first constructor setting a member to a value that doesn't
+        // depend on its parameters: literals, named constants, template
+        // parameters, value-initialization.
+        let inits = "template <int W>\nclass A {\n public:\n  A(int a) : a_(a), b_(0), c_(kSize), d_(W), e_() {}\n  A(double) : a_(1), b_(0), c_(other_), d_(f(x_)) {}\n private:\n  int a_, b_, c_, d_, e_;\n};";
+        assert_eq!(
+            flagged("cpp/initializer-list-constant", inits),
+            [4, 4, 4, 4, 5]
+        );
+        let params = "struct S { void m(int x); virtual void v(int x) {} };\nvoid S::m(int x) {}\ntemplate <> int pick<1>(int x) { return 0; }\nstatic int read(const char* PROGMEM p) { return 0; }\nint add(int a, int b, int c) { return a + b; }\nauto l = [](int x, int y) { return x; };";
+        assert_eq!(flagged("cpp/unused-parameter", params), [5, 6]);
+        let memory = "struct W : QWidget {\n  W() : t_(new QTimer(this)), q_(new Thing()) {\n    a_ = new QAction(\"x\", menu);\n    p_.reset(new Thing());\n    v_.emplace_back(new Thing());\n    std::unique_ptr<Thing> u(new Thing());\n    Thing* raw = new Thing();\n    delete raw;\n  }\n};";
+        assert_eq!(flagged("cpp/manual-memory", memory), [2, 7, 8]);
+        let voids = "void f(void* p);\nvoid f(void* p) {}\nvoid* g(int n) { return nullptr; }\nvoid* operator new(size_t n) { return malloc(n); }\nvoid operator delete(void* p) noexcept {}";
+        assert_eq!(flagged("cpp/void-pointer", voids), [2, 3]);
+        let cases = "int f(int k, int m) {\n  switch (k) {\n    case 1:\n      g();\n    case 2:\n      h();\n    case 3: {\n      switch (m) {\n        case 0: return 1;\n        default: return 2;\n      }\n    }\n    case 4:\n      g();\n    default:\n      break;\n  }\n  return 0;\n}";
+        assert_eq!(flagged("cpp/switch-fallthrough", cases), [3, 5]);
+        let protected_fields = "class P {\n protected:\n  int count_;\n  void f();\n};\nclass Q {\n protected:\n  void g();\n};";
+        assert_eq!(
+            flagged("cpp/protected-member-variable", protected_fields),
+            [1]
+        );
+        let operators = "struct V { bool operator==(const V&) const; };\nbool operator<(const V& a, const V& b) { return true; }\nstruct F { friend bool operator==(const F&, const F&) { return true; } };";
+        assert_eq!(flagged("cpp/operator-hidden-friend", operators), [2]);
+        let old = "int sum(a, b)\n  int a;\n  int b;\n{ return a + b; }\nvoid w() { char* s = (char*)\"text\"; const char* t = (const char*)\"x\"; }";
+        assert_eq!(flagged_in("cpp/old-style-parameters", Lang::C, old), [2]);
+        assert_eq!(flagged_in("cpp/cast-drops-const", Lang::C, old), [5]);
     }
 }
