@@ -735,7 +735,11 @@ An upload can belong to a pull request
 its `number`, `base` and `head` branches, and from GitHub Actions its
 `head_sha` and `repository` (`owner/name`). `sonda` sends it in a GitHub
 Actions `pull_request` job, or with `--pull-request` and
-`--pull-request-base`.
+`--pull-request-base`, and `sonda upload`'s `--pull-request-head-sha` and
+`--repository` for the rest. A pull request whose CI can't upload, from a
+fork, from Dependabot or to a server GitHub's runners can't reach, is
+scanned and uploaded by [separate
+workflows](#pull-requests-ci-cant-upload-scan-then-upload-apart).
 
 - **Stored apart from branches**, under the branch key `pr:<number>`
   (which no git branch can have, since git refuses `:` in branch names;
@@ -838,6 +842,95 @@ code. Without an App, the server makes none of these calls.
 | `POST /api/github/app` `{"code", "state"}` | Admins: the code GitHub sent back, within the hour, by the admin who started it; `201` and the App. |
 | `GET /api/github/app/installations` | Admins: where the App is installed, asked of GitHub: `[{"account", "settingsUrl", "repositories"}]`, `repositories` `null` for all of the account's. |
 | `DELETE /api/github/app` | Admins: forgets an App created here. `422` for a configured one. |
+
+#### Pull requests CI can't upload: scan, then upload apart
+
+A pull request's CI can't upload when it can't reach the server (one on a
+LAN or a tailnet, from GitHub's hosted runners) or has no token (a fork's
+pull request). And a public repository must never run a pull request's
+code on a self-hosted runner, since the pull request's author decides what
+its workflows run. Two workflows split the work
+([ADR-0028](adr/0028-scan-then-upload-apart.md)):
+
+1. **The scan**, on `pull_request`, on GitHub's runner, with no secrets:
+   `sonda scan --save-upload FILE` writes what `--upload` would send, kept
+   as the artifact `sonda-upload`.
+2. **The upload**, on `workflow_run`, when the scan completes. GitHub runs
+   this file as it is on the default branch, never as the pull request has
+   it, so it can hold the token and run on a runner that reaches the
+   server. It downloads the artifact as data, never checks out the pull
+   request's code, and sends it with `sonda upload --saved FILE`, with the
+   pull request, its head commit and repository taken from GitHub's event,
+   not from the file.
+
+sonda ships both as reusable workflows. In your repository:
+
+```yaml
+# .github/workflows/sonda-scan.yml
+name: sonda scan
+on: pull_request
+permissions: {}
+jobs:
+  scan:
+    permissions:
+      contents: read
+    uses: lvaoliveira/sonda/.github/workflows/scan-pull-request.yml@vX.Y.Z
+    with:
+      project: shop
+      # args: --coverage coverage/lcov.info   # more sonda scan options
+```
+
+```yaml
+# .github/workflows/sonda-upload.yml
+name: sonda upload
+on:
+  workflow_run:
+    workflows: [sonda scan]   # the scan workflow's name
+    types: [completed]
+permissions: {}
+jobs:
+  upload:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: lvaoliveira/sonda/.github/workflows/upload-pull-request.yml@vX.Y.Z
+    with:
+      project: shop
+      server: http://localhost:9300
+      runs-on: '["self-hosted"]'   # a runner that reaches the server
+      # ca-cert: /path/to/caddy-root.crt   # for an https server with its own CA
+    secrets:
+      SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}
+```
+
+Then, once per repository:
+
+- **A runner that reaches the server**, for the upload. On a personal
+  account, a runner serves one repository (its Settings → Actions →
+  Runners); an organization's serves all of them.
+- **`SONDA_TOKEN`**, the project's analysis token, as a repository secret,
+  and as a Dependabot secret too (Settings → Secrets and variables →
+  Dependabot): GitHub gives Dependabot's pull requests, and the upload
+  they trigger, only Dependabot secrets.
+- **The project linked to the repository**, and the App installed on it,
+  as above.
+- The upload workflow runs only once it's on the default branch: merge it
+  before expecting pull requests decorated.
+
+Two limits:
+
+- **The server's rule profile isn't applied:** the scan can't ask the
+  server for it, so it uses `sonda.toml`'s rules, which the analysis
+  records.
+- **Trust it as you trust the pull request's CI.** Its author controls the
+  scan, so a fork's analysis is as trustworthy as any check the fork runs.
+
+`sonda upload --saved FILE` takes the same options as `sonda upload`, and
+`--pull-request-head-sha SHA` and `--repository OWNER/NAME`, which a
+`pull_request` event would give. The file's own project, branch, commit,
+version and pull request are replaced with the command's, and a file with
+any field `--save-upload` doesn't write is refused.
 
 ## New code on the main branch
 

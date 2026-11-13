@@ -1,0 +1,88 @@
+name: sonda pull request scan
+
+# Reusable (ADR-0028): scans a pull request on GitHub's runner and keeps what
+# `sonda upload` would send as the artifact `sonda-upload`, for
+# upload-pull-request.yml to send to the server. It gets no secrets and
+# never runs on a self-hosted runner: a pull request's author decides what
+# its workflows run.
+#
+#   on: pull_request
+#   jobs:
+#     scan:
+#       permissions:
+#         contents: read
+#       uses: lvaoliveira/sonda/.github/workflows/scan-pull-request.yml@vX.Y.Z
+#       with:
+#         project: shop
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: The project's key on the server.
+        type: string
+        required: true
+      sonda-version:
+        description: >-
+          The sonda release to scan with, such as 0.3.0 (default: the
+          latest), or `source` to build it from the checkout (sonda's own
+          repository).
+        type: string
+        default: ''
+      args:
+        description: More `sonda scan` options, such as `--coverage lcov.info`.
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # New code: the pull request's changes, from its base.
+          fetch-depth: 0
+          persist-credentials: false
+      - if: inputs.sonda-version == 'source'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - if: inputs.sonda-version == 'source'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: v1-rust
+      - name: Install sonda
+        env:
+          VERSION: ${{ inputs.sonda-version }}
+        run: |
+          if [ "$VERSION" = source ]; then
+            cargo build --release --locked -p sonda
+            mkdir -p "$RUNNER_TEMP/bin"
+            cp target/release/sonda "$RUNNER_TEMP/bin/"
+          else
+            curl -fsSL https://sonda.sh/install | sh -s -- --dir "$RUNNER_TEMP/bin" ${VERSION:+--version "$VERSION"}
+          fi
+      # --no-gate: the server's gate, with its reviews, decides in the
+      # `sonda` check it posts, not this job.
+      - name: Scan
+        env:
+          PROJECT: ${{ inputs.project }}
+          ARGS: ${{ inputs.args }}
+          HEAD: ${{ github.head_ref }}
+        # ARGS is options, split on spaces.
+        run: |
+          # shellcheck disable=SC2086
+          "$RUNNER_TEMP/bin/sonda" scan . --no-gate $ARGS \
+            --save-upload "$RUNNER_TEMP/sonda-upload.json.gz" \
+            --project "$PROJECT" --branch "$HEAD" --commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sonda-upload
+          path: ${{ runner.temp }}/sonda-upload.json.gz
+          if-no-files-found: error
+          # Sent minutes later, by the upload workflow.
+          retention-days: 1

@@ -216,7 +216,11 @@ Download the release binary rather than building it on each run:
 ```
 
 The [README](../README.md#github-actions) shows sending the results to
-GitHub's code scanning as SARIF.
+GitHub's code scanning as SARIF. To decorate pull requests from a server
+GitHub's runners can't reach, or from forks or Dependabot, which have no
+token, call sonda's reusable `scan-pull-request.yml` and
+`upload-pull-request.yml` workflows instead ([Pull requests CI can't
+upload](server.md#pull-requests-ci-cant-upload-scan-then-upload-apart)).
 
 ### If `sonda` isn't found
 

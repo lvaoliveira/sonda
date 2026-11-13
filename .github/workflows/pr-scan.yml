@@ -1,0 +1,24 @@
+name: Pull request scan
+
+# sonda on a pull request's own code, on GitHub's runner, saved for
+# pr-upload.yml to send to the maintainer's server (ADR-0028). No secrets
+# and no self-hosted runner: a pull request's author decides what this runs,
+# which is why self-analysis.yml never runs on one.
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: pr-scan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/scan-pull-request.yml
+    with:
+      project: sonda
+      # The CLI from this pull request, so it analyzes itself, as main does.
+      sonda-version: source

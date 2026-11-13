@@ -1,0 +1,29 @@
+name: Pull request upload
+
+# Sends pr-scan.yml's saved scan to the maintainer's server, which
+# decorates the pull request (ADR-0028). `workflow_run` runs this file as it
+# is on main, on main's commit: never the pull request's, so it may run on
+# the self-hosted runner with the token. It never runs the pull request's
+# code; upload-pull-request.yml explains.
+on:
+  workflow_run:
+    workflows: [Pull request scan]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  upload:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/upload-pull-request.yml
+    with:
+      project: sonda
+      server: http://localhost:9300
+      runs-on: '["self-hosted", "sonda"]'
+      # main's CLI, built as self-analysis.yml builds it.
+      sonda-version: source
+    secrets:
+      SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}

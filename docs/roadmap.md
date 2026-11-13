@@ -243,7 +243,10 @@ SBOM), then match that list against published vulnerabilities.
 pull request analyses and their decoration on GitHub are built, and
 follow triage without a new scan. The GitHub App is created
 from the web app, rather than by hand
-([ADR-0024](adr/0024-creating-the-github-app.md)). As SonarQube does, the
+([ADR-0024](adr/0024-creating-the-github-app.md)). Pull requests whose CI
+can't upload, from forks, from Dependabot, or to a server GitHub's
+runners can't reach, are scanned and uploaded by separate workflows
+([ADR-0028](adr/0028-scan-then-upload-apart.md)). As SonarQube does, the
 result of analyzing a pull request (or GitLab merge request) shows on the
 pull request itself: a summary comment, inline comments on new issues, and
 a status check that can block merging when the gate fails. Today only
@@ -306,9 +309,12 @@ server's gate.
   advisory sync is turned on; a deployment without a connection stays
   that way.
 - **Pull requests from forks:** CI for a fork's pull request usually has
-  no secrets, so it can't upload with a project token. Decide between
-  skipping forks, a separate upload-only token kind, or the server
-  fetching the result some other way.
+  no secrets, so it can't upload with a project token. Built as two
+  workflows: the scan on GitHub's runner without secrets, saved as an
+  artifact, and the upload by the default branch's `workflow_run`
+  workflow, which has the token and a runner that reaches the server. It
+  also covers Dependabot's pull requests and servers GitHub's runners
+  can't reach ([ADR-0028](adr/0028-scan-then-upload-apart.md)).
 - **Noise:** the inline-comment cap, whether to comment at all when the
   gate passes, and whether minor and info issues get inline comments.
 - **Idempotence:** find sonda's own comment (by a hidden marker) to edit
