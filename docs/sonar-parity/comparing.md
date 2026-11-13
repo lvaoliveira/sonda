@@ -242,6 +242,18 @@ behavior on the version measured.
   30 or have only one statement per case": every 30-case switch measured
   before had one statement per case, so none was reported. The message
   named the condition the calibration had missed.
+- **Install what the code imports.** SonarJS reads TypeScript's types,
+  for JavaScript too: whether `substr` is deprecated depends on the value
+  being a string, a Lodash call on whether its argument is an array, and
+  `ReactDOM.findDOMNode` on React's version. A JavaScript calibration
+  project has a `package.json` and installs React, PropTypes and Lodash.
+  SonarQube skips a large file it takes for a bundle; set
+  `sonar.javascript.detectBundles=false` to measure one.
+- **Count only compared keys.** A sonda issue on a key the server's profile
+  has off isn't a match, even when no difference lists it: eGovFrame's
+  SonarCloud profile has S1226 off, so its 147 issues there were never
+  compared. Read the summary's "not compared" lines before calling a rule
+  calibrated by a project.
 - **Rerun after each change.** A rule measured on invented cases can still
   be too broad on the project: an empty class deriving from another was
   reported on SonarQube 26.7, but Prowlarr's twelve new extras all derived
@@ -260,6 +272,7 @@ On the comparison server, as of 2026-11-11:
 | `sonda-compare-cpython-lib` | CPython: 7 packages of `Lib/` | `bf6623a` |
 | `sonda-compare-budgetthuis` | ha-budgetthuis-prices (Python) | `f563c0d` |
 | `sonda-calibrate-cc` | JavaScript and TypeScript calibration | |
+| `sonda-calibrate-js8` to `js13` | JavaScript and TypeScript calibration for Prowlarr's React frontend (`js8` with React, PropTypes and Lodash installed) | |
 | `sonda-calibrate-js-browser`, `sonda-calibrate-js-browser2` to `7` | JavaScript calibration: browser scripts, regexes | |
 | `sonda-calibrate-py`, `sonda-calibrate-py13`, `sonda-calibrate-py14` | Python calibration | |
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
@@ -269,4 +282,4 @@ On the comparison server, as of 2026-11-11:
 | `sonda-calibrate-cs1` to `cs15` | C# calibration, built with SonarScanner for .NET (`cs7`, `cs8`, `cs11` to `cs13` with ASP.NET Core, `cs8` with Swashbuckle) | |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: Prowlarr's JavaScript and TypeScript, and C++ on a public project that SonarCloud analyzes.
+Next: C++ on a public project that SonarCloud analyzes.

@@ -1300,16 +1300,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S3626")],
         check: Check::Query {
             langs: JS_TS,
-            query: "(function_declaration body: (statement_block (return_statement) @match .))
-                    (function_expression body: (statement_block (return_statement) @match .))
-                    (arrow_function body: (statement_block (return_statement) @match .))
-                    (method_definition body: (statement_block (return_statement) @match .))
-                    (generator_function_declaration body: (statement_block (return_statement) @match .))
-                    (generator_function body: (statement_block (return_statement) @match .))
-                    (for_statement body: (statement_block (continue_statement) @match .))
-                    (for_in_statement body: (statement_block (continue_statement) @match .))
-                    (while_statement body: (statement_block (continue_statement) @match .))
-                    (do_statement body: (statement_block (continue_statement) @match .))",
+            query: "[(return_statement) (continue_statement)] @match",
             filter: Some(Keep(is_bare_jump)),
         },
         example: Some(Example {
@@ -3922,7 +3913,18 @@ fn returns_boolean_from_both_branches(if_statement: Node, _: &[u8]) -> bool {
     }
 }
 
+/// An empty function declaration or class method; not a function
+/// expression or an object literal's method, which stand in for a callback
+/// or a no-op value (measured on SonarQube 26.7).
 fn has_empty_body(function: Node, src: &[u8]) -> bool {
+    let declared = match function.kind() {
+        "method_definition" => function.parent().is_some_and(|p| p.kind() == "class_body"),
+        "function_expression" | "generator_function" => false,
+        _ => true,
+    };
+    if !declared {
+        return false;
+    }
     let is_constructor = function.kind() == "method_definition"
         && function
             .child_by_field_name("name")
@@ -4118,8 +4120,66 @@ fn separates_ternaries(n: Node) -> bool {
 }
 
 /// `return;` or `continue;`, with no value or label.
+/// A bare `return;` or `continue;` that ends its function or loop body,
+/// directly or as the last statement of an `if` branch that ends it (measured
+/// on SonarQube 26.7); not a function's only statement.
 fn is_bare_jump(jump: Node, _: &[u8]) -> bool {
-    jump.named_child_count() == 0
+    if jump.named_child_count() != 0 {
+        return false;
+    }
+    let last = |n: Node| {
+        let mut next = n.next_named_sibling();
+        while let Some(s) = next {
+            if s.kind() != "comment" {
+                return false;
+            }
+            next = s.next_named_sibling();
+        }
+        true
+    };
+    let is_return = jump.kind() == "return_statement";
+    let mut current = jump;
+    for _ in 0..256 {
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            "statement_block" if last(current) => {
+                let owner = parent.parent();
+                let function = owner.is_some_and(|o| {
+                    matches!(
+                        o.kind(),
+                        "function_declaration"
+                            | "function_expression"
+                            | "arrow_function"
+                            | "method_definition"
+                            | "generator_function_declaration"
+                            | "generator_function"
+                    )
+                });
+                if function {
+                    let statements = parent
+                        .named_children(&mut parent.walk())
+                        .filter(|c| c.kind() != "comment")
+                        .count();
+                    return is_return && (current.id() != jump.id() || statements > 1);
+                }
+                if owner.is_some_and(|o| {
+                    matches!(
+                        o.kind(),
+                        "for_statement" | "for_in_statement" | "while_statement" | "do_statement"
+                    )
+                }) {
+                    return !is_return;
+                }
+                current = parent;
+            }
+            // A branch: what follows it in the if is the other branch.
+            "if_statement" | "else_clause" => current = parent,
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn has_hole(array: Node, _: &[u8]) -> bool {
@@ -4492,17 +4552,59 @@ fn set_state_reading_state<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .parent()
         .filter(|c| c.child_by_field_name("function") == Some(member))?;
     let update = call.child_by_field_name("arguments")?.named_child(0)?;
-    if update.kind() != "object" {
-        return None;
-    }
-    find_below(update, false, |n| {
+    let reads_state = |n: Node| {
         n.kind() == "member_expression"
             && n.child_by_field_name("object")
                 .is_some_and(|o| o.kind() == "this")
             && n.child_by_field_name("property")
                 .is_some_and(|p| text(p, src) == b"state")
+    };
+    if update.kind() != "object" {
+        // `this.setState(select(this.state.x))` (measured on SonarQube 26.7).
+        return (update.kind() == "call_expression")
+            .then(|| find_below(update, false, reads_state))
+            .flatten()
+            .map(|_| call);
+    }
+    if let Some(found) = find_below(update, false, reads_state).map(|_| call) {
+        return Some(found);
+    }
+    // `const filters = [...this.state.filters]; ... this.setState({ filters })`:
+    // at the read (measured on SonarQube 26.7).
+    let values: Vec<&[u8]> = update
+        .named_children(&mut update.walk())
+        .filter_map(|p| match p.kind() {
+            "shorthand_property_identifier" => Some(text(p, src)),
+            "pair" => p
+                .child_by_field_name("value")
+                .filter(|v| v.kind() == "identifier")
+                .map(|v| text(v, src)),
+            _ => None,
+        })
+        .collect();
+    if values.is_empty() {
+        return None;
+    }
+    let mut function = call.parent();
+    while let Some(f) = function {
+        if matches!(
+            f.kind(),
+            "arrow_function" | "function_expression" | "function_declaration" | "method_definition"
+        ) {
+            break;
+        }
+        function = f.parent();
+    }
+    let body = function?.child_by_field_name("body")?;
+    find_below(body, false, |n| {
+        n.kind() == "variable_declarator"
+            && n.end_byte() <= call.start_byte()
+            && n.child_by_field_name("name")
+                .is_some_and(|x| values.contains(&text(x, src)))
+            && n.child_by_field_name("value")
+                .is_some_and(|v| find_below(v, false, reads_state).is_some())
     })
-    .map(|_| call)
+    .and_then(|d| d.child_by_field_name("value"))
 }
 
 /// For `const [value, setValue] = useState(...)`: both names.
@@ -4573,7 +4675,51 @@ fn setter_called_with_own_state<'t>(declarator: Node<'t>, src: &[u8]) -> Option<
                     && a.named_child(0)
                         .is_some_and(|v| v.kind() == "identifier" && same_text(v, value, src))
             })
+            && !shadowed_between(n, body, text(value, src), src)
     })
+}
+
+/// Whether a function between `node` and `outer` declares `name` again, a
+/// parameter or a local, so that `name` there isn't the outer one.
+fn shadowed_between(node: Node, outer: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(f) = current {
+        if f.id() == outer.id() {
+            return false;
+        }
+        if matches!(
+            f.kind(),
+            "arrow_function" | "function_expression" | "function_declaration" | "method_definition"
+        ) {
+            let mut declares = false;
+            super::js_syntax::walk(f, &mut |d| {
+                if (d.kind() == "variable_declarator"
+                    && d.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name))
+                    || (d.kind() == "identifier"
+                        && text(d, src) == name
+                        && d.parent().is_some_and(|p| {
+                            matches!(
+                                p.kind(),
+                                "formal_parameters"
+                                    | "arrow_function"
+                                    | "required_parameter"
+                                    | "optional_parameter"
+                            ) && p.child_by_field_name("body") != Some(d)
+                                && p.child_by_field_name("value") != Some(d)
+                        }))
+                {
+                    declares = true;
+                }
+                !declares
+            });
+            if declares {
+                return true;
+            }
+        }
+        current = f.parent();
+    }
+    false
 }
 
 fn setter_called_in_render<'t>(declarator: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -5852,7 +5998,14 @@ fn command_by_name<'t>(name: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 fn looks_like_a_secret_value(string: Node, src: &[u8]) -> bool {
     let v = string_content(string, src);
-    v.len() >= 4
+    // A value holding a credential word names the field, `PASSWORD =
+    // 'password'` (as measured for C# on SonarQube 26.7).
+    let lower = v.to_ascii_lowercase();
+    let names_itself = [&b"password"[..], b"passwd", b"pwd", b"passphrase"]
+        .iter()
+        .any(|w| lower.windows(w.len()).any(|x| x == *w));
+    !names_itself
+        && v.len() >= 4
         && !v.iter().any(u8::is_ascii_whitespace)
         && !matches!(v.first(), Some(b'$' | b'<' | b'{' | b'/' | b'.' | b'*'))
         && !v.windows(2).all(|w| w[0] == w[1])
@@ -5866,7 +6019,9 @@ fn looks_random(string: Node, src: &[u8]) -> bool {
 
 /// Long, mixed letters and digits, and varied.
 pub(super) fn random_looking(v: &[u8]) -> bool {
+    // `{ImdbId:tt1234567}` is a placeholder to fill in.
     if v.len() < 16
+        || v.contains(&b'{')
         || v.iter().any(u8::is_ascii_whitespace)
         || v.windows(3).any(|w| w == b"://")
         || !v.iter().any(u8::is_ascii_digit)
@@ -6095,6 +6250,49 @@ class B implements I {}
         let generic = "const t = make<{\n  a: string;\n}>();";
         assert!(flagged("js/call-arguments-new-line", TS, generic).is_empty());
     }
+
+    /// React and Lodash shapes measured on SonarQube 26.7 for Prowlarr's
+    /// frontend; the lines SonarQube reported.
+    #[test]
+    fn measured_react_and_lodash_shapes() {
+        let reexports = "import { faBan as fasBan } from './lib';\nimport Plain from './plain';\nimport * as all from './lib';\nexport const BAN = fasBan;\nexport const PLAIN = Plain;\nexport const ALL = all;\nexport { all, Plain, fasBan };";
+        assert_eq!(flagged("js/reexport-by-hand", JS, reexports), [4, 6, 7, 7]);
+        let defaults = "class Card extends Component { render() { return <div>{this.props.a}{this.props.b}{this.props.c}</div>; } }\nCard.propTypes = {\n  a: PropTypes.string.isRequired,\n  b: PropTypes.string.isRequired,\n  c: PropTypes.string\n};\nCard.defaultProps = {\n  a: 'x',\n  b: 'y',\n  c: '',\n  d: 1\n};";
+        assert_eq!(
+            flagged("js/default-prop-is-required", JSX_LANG, defaults),
+            [8, 9, 11]
+        );
+        let unused = "class Info extends Component {\n  render() {\n    const { value } = this.props;\n    return <span {...other}>{value}</span>;\n  }\n}\nInfo.propTypes = {\n  value: PropTypes.string,\n  name: PropTypes.string,\n  onChange: PropTypes.func\n};\nfunction Fn({ a }) { return <b kind={a} />; }\nFn.propTypes = {\n  a: PropTypes.string,\n  kind: PropTypes.string\n};";
+        assert_eq!(
+            flagged("js/proptypes-unused", JSX_LANG, unused),
+            [9, 10, 15]
+        );
+        let members = "class C extends Component {\n  constructor(props) {\n    super(props);\n    this._y = null;\n  }\n  used = () => 1;\n  unused = () => 2;\n  helper() { return 3; }\n  render() { return <div onClick={this.used} />; }\n}";
+        assert_eq!(
+            flagged("js/unused-component-method", JSX_LANG, members),
+            [4, 7, 8]
+        );
+        let lodash = "import _ from 'lodash';\nimport uniq from 'lodash/uniq';\nconst list = [1, 2];\nfunction f(items, p) {\n  uniq(items);\n  _.reduce(items, g, []);\n  _.map(p.items, g);\n  _.map([1, 2], g);\n  _.find(list, g);\n  _.find(list, { id: 1 });\n  _.cloneDeep(items);\n  items.some((v) => v === p);\n  _.indexOf(items, p) === -1;\n  return _.isArray(p);\n}";
+        assert_eq!(flagged("js/lodash-native", JS, lodash), [5, 8, 9, 14]);
+        assert_eq!(flagged("js/structured-clone", JS, lodash), [11]);
+        assert_eq!(flagged("js/index-of-existence", JS, lodash), [12]);
+        let shapes = "function a(age) { age = Math.round(age); return age; }\nfunction b(data) { data = 1; return data; }\nfunction c(o, k) { return o.hasOwnProperty(k) || Object.prototype.hasOwnProperty.call(o, k); }\nfunction d(p) { return p.substr(1) + 'abc'.substr(1); }\nfunction e(i, q) { return [i.host ? i.host : 'x', q ? q : '-']; }\nconst o = { f: function () {}, g() {} };\nclass K { m() {} }\nfunction h() {}\nfunction i(a, s) { if (a && a.b) {} if (!s || s.status !== 400) {} return a && a.v !== 'none'; }\nfunction j(x) { return; }\nfunction k(x) { if (x) { g(); return; } }";
+        assert_eq!(flagged("js/parameter-reassigned", JS, shapes), [2]);
+        assert_eq!(flagged("js/has-own-property", JS, shapes), [3]);
+        assert_eq!(flagged("js/deprecated-api", JS, shapes), [4]);
+        assert_eq!(flagged("js/ternary-simplifiable", JS, shapes), [5]);
+        assert_eq!(flagged("js/empty-function", JS, shapes), [7, 8]);
+        assert_eq!(
+            flagged("js/optional-chaining-preferred", JS, shapes),
+            [9, 9]
+        );
+        assert_eq!(flagged("js/redundant-jump", JS, shapes), [11]);
+        let arrow =
+            "const f = (\n  a,\n  b,\n  c,\n  d,\n  e,\n  g,\n  h,\n  i\n) => {\n  return a;\n};";
+        assert_eq!(flagged("common/too-many-parameters", JS, arrow), [10]);
+    }
+
+    const JSX_LANG: Lang = Lang::JavaScript;
 
     #[test]
     fn small_syntax_rules() {

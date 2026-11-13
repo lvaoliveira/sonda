@@ -127,7 +127,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JSX,
             query: r#"(program) @match"#,
-            filter: Some(Find(declares_unused_prop_type)),
+            filter: Some(FindAll(declares_unused_prop_types)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -435,12 +435,11 @@ fn ref_has_no_type(call: Node, src: &[u8]) -> bool {
 
 // ------------------------------------------------------------- PropTypes
 
-fn declares_unused_prop_type<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut found = None;
+/// Each prop type no code of its component reads, a class component's
+/// through `this.props` too (measured on SonarQube 26.7).
+fn declares_unused_prop_types<'t>(program: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
     walk(program, &mut |n| {
-        if found.is_some() {
-            return false;
-        }
         if n.kind() == "assignment_expression"
             && let (Some(left), Some(right)) = (
                 n.child_by_field_name("left"),
@@ -453,25 +452,114 @@ fn declares_unused_prop_type<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'
                 .is_some_and(|p| text(p, src) == b"propTypes")
             && let Some(component) = left.child_by_field_name("object")
         {
-            found = unused_prop_in(program, text(component, src), right, src);
+            found.extend(unused_props_in(program, text(component, src), right, src));
         }
-        found.is_none()
+        true
     });
     found
 }
 
-fn unused_prop_in<'t>(
+/// A class component's prop types it never reads: through `this.props.x`,
+/// destructuring `this.props`, or a lifecycle method's `prevProps.x`. Passing
+/// `this.props` on whole, or a rest of it, may use any (measured on
+/// SonarQube 26.7).
+fn unused_class_props<'t>(class: Node<'t>, prop_types: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut used: Vec<&[u8]> = Vec::new();
+    let mut whole = false;
+    let props_object = |n: Node| {
+        let t = text(n, src);
+        t == b"this.props" || matches!(t, b"props" | b"prevProps" | b"nextProps")
+    };
+    super::js_syntax::walk(class, &mut |n| {
+        // A name destructured from anything counts too (SonarCloud, on
+        // Prowlarr: `const { path } = this.state`).
+        if n.kind() == "shorthand_property_identifier_pattern" {
+            used.push(text(n, src));
+        }
+        if props_object(n) && n.kind() != "property_identifier" {
+            match n.parent() {
+                Some(p)
+                    if p.kind() == "member_expression"
+                        && p.child_by_field_name("object") == Some(n) =>
+                {
+                    if let Some(k) = p.child_by_field_name("property") {
+                        used.push(text(k, src));
+                    }
+                }
+                Some(p)
+                    if p.kind() == "variable_declarator"
+                        && p.child_by_field_name("value") == Some(n) =>
+                {
+                    match p.child_by_field_name("name") {
+                        Some(pattern) if pattern.kind() == "object_pattern" => {
+                            for c in named(pattern) {
+                                match c.kind() {
+                                    "shorthand_property_identifier_pattern" => {
+                                        used.push(text(c, src))
+                                    }
+                                    "pair_pattern" | "object_assignment_pattern" => {
+                                        if let Some(k) = c
+                                            .child_by_field_name("key")
+                                            .or_else(|| c.child_by_field_name("left"))
+                                        {
+                                            used.push(text(k, src));
+                                        }
+                                    }
+                                    "rest_pattern" => whole = true,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => whole = true,
+                    }
+                }
+                // `this.props` passed on whole, or spread; not a parameter,
+                // `super(props)` or a comparison.
+                Some(p) => {
+                    let declared = matches!(
+                        p.kind(),
+                        "formal_parameters"
+                            | "required_parameter"
+                            | "optional_parameter"
+                            | "assignment_pattern"
+                    );
+                    let to_super = p.kind() == "arguments"
+                        && p.parent()
+                            .and_then(|c| c.child_by_field_name("function"))
+                            .is_some_and(|f| f.kind() == "super");
+                    let compared = p.kind() == "binary_expression";
+                    if !declared && !to_super && !compared && p.kind() != "member_expression" {
+                        whole = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        !whole
+    });
+    if whole {
+        return Vec::new();
+    }
+    named(prop_types)
+        .into_iter()
+        .filter(|p| p.kind() == "pair" && key_text(*p, src).is_some_and(|k| !used.contains(&k)))
+        .collect()
+}
+
+fn unused_props_in<'t>(
     program: Node<'t>,
     component: &[u8],
     prop_types: Node<'t>,
     src: &[u8],
-) -> Option<Node<'t>> {
+) -> Vec<Node<'t>> {
     let mut function = None;
     walk(program, &mut |n| {
         if function.is_none() {
             let named_it = |name: Option<Node>| name.is_some_and(|x| text(x, src) == component);
             match n.kind() {
-                "function_declaration" if named_it(n.child_by_field_name("name")) => {
+                "function_declaration" | "class_declaration"
+                    if named_it(n.child_by_field_name("name")) =>
+                {
                     function = Some(n);
                 }
                 "variable_declarator" if named_it(n.child_by_field_name("name")) => {
@@ -484,19 +572,71 @@ fn unused_prop_in<'t>(
         }
         function.is_none()
     });
-    let body = text(function?.child_by_field_name("body")?, src);
-    // The whole props object, or a spread, may hand any prop on.
-    let hands_on = body.windows(3).any(|w| w == b"...")
+    if let Some(class) = function.filter(|f| f.kind() == "class_declaration") {
+        return unused_class_props(class, prop_types, src);
+    }
+    let Some(body) = function
+        .and_then(|f| f.child_by_field_name("body"))
+        .map(|b| text(b, src))
+    else {
+        return Vec::new();
+    };
+    // The whole props object, or the rest of it, may hand any prop on: a
+    // JSX spread attribute (`<div {...x} />`), `...this.props`, `...props`,
+    // or a rest element taking the other props, in the parameters or
+    // destructured from the props. An array spread (`[...this.state.list]`)
+    // doesn't (measured on SonarQube 26.7).
+    let jsx_spread_or_rest = function.is_some_and(|f| {
+        let mut found = false;
+        super::js_syntax::walk(f, &mut |n| {
+            let spread_attribute = n.kind() == "spread_element"
+                && n.parent().is_some_and(|p| p.kind() == "jsx_expression");
+            let rest_parameter = n.kind() == "rest_pattern"
+                && f.child_by_field_name("parameters").is_some_and(|ps| {
+                    ps.start_byte() <= n.start_byte() && n.end_byte() <= ps.end_byte()
+                });
+            found |= spread_attribute || rest_parameter;
+            !found
+        });
+        found
+    });
+    let rest_of_props = jsx_spread_or_rest
+        || body.windows(3).enumerate().any(|(i, w)| {
+            w == b"..."
+                && (body[i + 3..].starts_with(b"this.props")
+                    || body[i + 3..].starts_with(b"props")
+                    || {
+                        // `const { a, ...rest } = this.props` or `= props`.
+                        let after = &body[i..];
+                        after
+                            .iter()
+                            .position(|b| *b == b'}')
+                            .and_then(|close| {
+                                let tail = after[close + 1..].trim_ascii_start();
+                                tail.strip_prefix(b"=").map(|t| t.trim_ascii_start())
+                            })
+                            .is_some_and(|t| {
+                                t.starts_with(b"this.props") || t.starts_with(b"props")
+                            })
+                    })
+        });
+    let hands_on = rest_of_props
         || body
             .windows(6)
             .enumerate()
             .any(|(i, w)| w == b"props)" || (w == b"props," && i > 0));
     if hands_on {
-        return None;
+        return Vec::new();
     }
+    // A JSX attribute's name (`kind={...}`) isn't a read (measured on
+    // SonarCloud, on Prowlarr).
     let word_in_body = |word: &[u8]| {
         body.windows(word.len()).enumerate().any(|(i, w)| {
+            let after = &body[i + word.len()..];
+            let attribute =
+                after.first() == Some(&b'=') && !matches!(after.get(1), Some(b'=' | b'>'));
             w == word
+                && !attribute
                 && !body
                     .get(i.wrapping_sub(1))
                     .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
@@ -507,5 +647,6 @@ fn unused_prop_in<'t>(
     };
     named(prop_types)
         .into_iter()
-        .find(|p| p.kind() == "pair" && key_text(*p, src).is_some_and(|k| !word_in_body(k)))
+        .filter(|p| p.kind() == "pair" && key_text(*p, src).is_some_and(|k| !word_in_body(k)))
+        .collect()
 }
