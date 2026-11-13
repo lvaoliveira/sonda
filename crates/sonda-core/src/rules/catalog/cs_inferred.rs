@@ -1284,6 +1284,41 @@ impl InstanceUses<'_, '_, '_> {
             || count_word(body, b"base") > 0
             || self.refs_use_instance(member)
             || self.generic_call_uses_instance(member)
+            || self.counted_as_instance(member)
+    }
+
+    /// Measured on SonarQube 26.7: an unqualified call to one
+    /// of `object`'s instance methods, `MemberwiseClone()`, uses the
+    /// instance; and SonarQube counts a method with an object initializer,
+    /// `new T { Name = x }`, as one using it.
+    fn counted_as_instance(&self, member: Node) -> bool {
+        let mut stack = vec![member];
+        while let Some(n) = stack.pop() {
+            let initializer = n.kind() == "initializer_expression"
+                && n.parent().is_some_and(|p| {
+                    matches!(
+                        p.kind(),
+                        "object_creation_expression" | "implicit_object_creation_expression"
+                    )
+                })
+                && n.named_children(&mut n.walk())
+                    .any(|c| c.kind() == "assignment_expression");
+            let object_method = n.kind() == "invocation_expression"
+                && n.child_by_field_name("function").is_some_and(|f| {
+                    f.kind() == "identifier"
+                        && match text(f, self.src) {
+                            b"MemberwiseClone" | b"GetType" | b"GetHashCode" | b"ToString" => true,
+                            // `Equals(a, b)` is the static one.
+                            b"Equals" => cs_call_arguments(n).len() == 1,
+                            _ => false,
+                        }
+                });
+            if initializer || object_method {
+                return true;
+            }
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+        false
     }
 
     fn inherited(&self, name: &str) -> bool {
@@ -1408,7 +1443,12 @@ pub(super) fn could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             let Some(has_body) = has_own_body(member, src) else {
                 continue;
             };
+            // An empty method is S1186's (measured on SonarQube 26.7).
+            let empty = member
+                .child_by_field_name("body")
+                .is_some_and(|b| b.kind() == "block" && b.named_child_count() == 0);
             if has_body
+                && !empty
                 && may_be_static(&infer, &owner, member, member_name, entry_points, src)
                 && !uses.uses_instance(member)
             {
@@ -2646,8 +2686,16 @@ pub(super) fn ambiguous_params_calls<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
                 lists.iter().any(takes) && lists.iter().any(|ps| !takes(ps))
             }
         },
-        |_, call, _, b| {
-            if b.rivals > 0 && b.params.iter().any(|p| p.params) {
+        |infer, call, args, b| {
+            // An array passed for the `params` parameter binds the normal
+            // form, which nothing else matches: `string.Format(f, args)`
+            // (measured on SonarQube 26.7).
+            let array_given = args.len() == b.params.len()
+                && args
+                    .last()
+                    .and_then(|a| infer.type_of(a.value))
+                    .is_some_and(|t| matches!(t, crate::semantic::cs_infer::Ty::Array(_)));
+            if b.rivals > 0 && b.params.iter().any(|p| p.params) && !array_given {
                 found.push(call);
             }
         },

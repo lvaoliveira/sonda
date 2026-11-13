@@ -1233,13 +1233,30 @@ fn cleartext_url(n: Node, src: &[u8]) -> bool {
         .iter()
         .any(|p| lower.starts_with(p));
     scheme
-        && url_host(value).is_some_and(|h| {
-            !super::java_security::is_private_host(&h)
-                && !super::java_security::is_namespace_host(&h)
-                && h != "tempuri.org"
-                && h != "schema.org"
-                && !h.starts_with("schemas.")
-        })
+        && (placeholder_host(value)
+            || url_host(value).is_some_and(|h| {
+                !super::java_security::is_private_host(&h)
+                    && !super::java_security::is_namespace_host(&h)
+                    && h != "tempuri.org"
+                    && h != "schema.org"
+                    && !h.starts_with("schemas.")
+            }))
+}
+
+/// `http://[host]:[port]/api`: a placeholder for whatever host is
+/// configured, which may be a public one (measured on SonarQube 26.7). An
+/// IPv6 address, `[::1]`, isn't one.
+fn placeholder_host(url: &[u8]) -> bool {
+    let Some(at) = url.windows(3).position(|w| w == b"://") else {
+        return false;
+    };
+    let rest = &url[at + 3..];
+    rest.strip_prefix(b"[").is_some_and(|inner| {
+        inner
+            .iter()
+            .position(|&b| b == b']')
+            .is_some_and(|close| close > 0 && !inner[..close].contains(&b':'))
+    })
 }
 
 /// A Telnet client, or an SmtpClient whose `EnableSsl` is set neither in

@@ -106,6 +106,20 @@ class Sonar:
                 out += self.pages(ISSUES, "issues", rules=value["val"], **query)
         return out
 
+    def hotspots(self, project, branch):
+        """Security hotspots, which the issue search leaves out, as issues:
+        to review and reviewed alike, since the analyzer raised both."""
+        extra = {"branch": branch} if branch else {}
+        seen, out = set(), []
+        for status in ({}, {"status": "REVIEWED"}):
+            for h in self.pages("/api/hotspots/search", "hotspots", projectKey=project,
+                                **status, **extra):
+                if h["key"] not in seen:
+                    seen.add(h["key"])
+                    out.append({"rule": h["ruleKey"], "component": h["component"],
+                                "line": h.get("line"), "message": h.get("message")})
+        return out
+
     def organization(self, project):
         """The project's organization on SonarCloud, which its profile and rule
         searches need; None on a SonarQube server."""
@@ -365,7 +379,12 @@ def main():
             and not args.commit.startswith(revision):
         print(f"warning: SonarQube's last analysis is of {revision}, not {args.commit}",
               file=sys.stderr)
-    sonar_data = (sonar.issues(args.project, args.branch), sonar.files(args.project, args.branch),
+    # An external analyzer's issues (`external_roslyn:IDE0028`, imported from
+    # .NET's own analyzers) aren't SonarQube's rules.
+    issues = [i for i in sonar.issues(args.project, args.branch)
+              if not i["rule"].startswith("external_")]
+    issues += sonar.hotspots(args.project, args.branch)
+    sonar_data = (issues, sonar.files(args.project, args.branch),
                   sonar.active_keys(args.project))
     result = compare(report, sonar_data, refs, on_by_default, args.path_prefix, args.tolerance)
     print(summary(result, args.project, revision))

@@ -934,8 +934,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4136")],
         check: Check::Query {
             langs: CSHARP,
-            query: "[(class_declaration body: (declaration_list)) (struct_declaration body: (declaration_list)) \
-                     (interface_declaration body: (declaration_list))] @match",
+            // Each separated group, at its first declaration (measured on SonarQube 26.7).
+            query: "[(class_declaration body: (declaration_list (method_declaration) @match)) \
+                     (struct_declaration body: (declaration_list (method_declaration) @match)) \
+                     (interface_declaration body: (declaration_list (method_declaration) @match))]",
             filter: Some(Find(separated_overload)),
         },
         example: Some(Example {
@@ -1215,9 +1217,10 @@ fn is_plain_goto(node: Node, src: &[u8]) -> bool {
 }
 
 fn is_public_instance_field(field: Node, src: &[u8]) -> bool {
-    // Static fields are cs/visible-mutable-static-field's concern.
+    // A static field too, which cs/visible-mutable-static-field also
+    // reports (measured on SonarQube 26.7).
     cs_has_modifier(field, "public", src)
-        && !["const", "readonly", "static"]
+        && !["const", "readonly"]
             .iter()
             .any(|m| cs_has_modifier(field, m, src))
 }
@@ -1690,6 +1693,7 @@ fn cast_after_type_check<'t>(statement: Node<'t>, src: &[u8]) -> Option<Node<'t>
     };
     let ty = text(ty, src);
     let body = statement.child_by_field_name("consequence")?;
+    // Reported at the type check (measured on SonarQube 26.7).
     find_in_scope(body, CS_SCOPE_STOPS, |n| {
         n.kind() == "cast_expression"
             && n.child_by_field_name("type")
@@ -1697,6 +1701,7 @@ fn cast_after_type_check<'t>(statement: Node<'t>, src: &[u8]) -> Option<Node<'t>
             && n.child_by_field_name("value")
                 .is_some_and(|v| same_code(v, subject, src))
     })
+    .map(|_| check)
 }
 
 fn namespace_is_empty(name: Node, _: &[u8]) -> bool {
@@ -1941,34 +1946,35 @@ fn is_outdated_base(base: Node, src: &[u8]) -> bool {
     ) && base.kind() != "generic_name"
 }
 
-fn separated_overload<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let members = type_members(declaration);
-    let mut seen: Vec<&[u8]> = Vec::new();
-    let mut last: Option<&[u8]> = None;
-    for member in members {
-        if member.kind() != "method_declaration" {
-            // Other members between overloads separate them too.
-            last = None;
-            continue;
-        }
-        // `void IFoo.F()` implements an interface member; it isn't an overload.
-        let mut cursor = member.walk();
-        if member
-            .named_children(&mut cursor)
+/// The first declaration of a method whose overloads aren't all next to
+/// each other: another member, or an interface member's implementation,
+/// comes between two of them.
+fn separated_overload<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let declaration = method.parent()?.parent()?;
+    let implements = |m: Node| {
+        let mut cursor = m.walk();
+        m.named_children(&mut cursor)
             .any(|c| c.kind() == "explicit_interface_specifier")
-        {
-            continue;
-        }
-        let name = name_text(member, src);
-        if last != Some(name) && seen.contains(&name) {
-            return member.child_by_field_name("name");
-        }
-        if !seen.contains(&name) {
-            seen.push(name);
-        }
-        last = Some(name);
+    };
+    if implements(method) {
+        return None;
     }
-    None
+    let name = name_text(method, src);
+    let members = type_members(declaration);
+    let same = |m: &Node| {
+        m.kind() == "method_declaration" && !implements(*m) && name_text(*m, src) == name
+    };
+    let positions: Vec<usize> = members
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| same(m))
+        .map(|(i, _)| i)
+        .collect();
+    let (first, last) = (*positions.first()?, *positions.last()?);
+    let separated = last - first + 1 != positions.len();
+    (separated && members[first].id() == method.id())
+        .then(|| method.child_by_field_name("name"))
+        .flatten()
 }
 
 fn default_in_the_middle<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -2160,7 +2166,8 @@ mod tests {
     #[test]
     fn fields_and_utility_classes() {
         let src = "namespace N;\nclass A { public int X; public const int Y = 1; public readonly int Z; private int w; public static int S; }\nstruct P { public int X; }\nclass U { public static int F() => 1; }\nclass V { private V() { } public static int F() => 1; }\nstatic class W { public static int F() => 1; }\nclass X2 { public static int Y; }\nclass Y2 : Base { public static int F() => 1; }";
-        assert_eq!(flagged("cs/public-field", src), [2]);
+        // Static fields too (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/public-field", src), [2, 2, 7]);
         assert_eq!(flagged("cs/instantiable-utility-class", src), [4]);
     }
 
@@ -2286,7 +2293,8 @@ mod tests {
     #[test]
     fn overloads_and_comments() {
         let src = "namespace N;\nclass A {\nvoid F(int x) { }\n// the string one\nvoid F(string s) { }\nvoid G() { }\nvoid F(bool b) { }\nvoid I.F(char c) { }\n//\n\n// note\n//\n// more\n\n/* */\n\n///\n}";
-        assert_eq!(flagged("cs/overloads-not-adjacent", src), [7]);
+        // At the group's first declaration (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/overloads-not-adjacent", src), [3]);
         assert_eq!(flagged("cs/empty-comment", src), [9, 15, 17]);
     }
 }
