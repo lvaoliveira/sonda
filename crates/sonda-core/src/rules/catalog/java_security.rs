@@ -355,21 +355,27 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/public-tmp",
         name: "Temporary files should not be created in publicly writable directories",
-        description: "Other users can pre-create or swap files in /tmp, so a predictable path can be hijacked.",
-        message: "Use Files.createTempFile to create the file.",
+        description: "Other users can pre-create or swap files in /tmp, so a predictable path \
+                      can be hijacked. Files.createTempFile and createTempDirectory without a \
+                      directory or permissions use that shared directory too.",
+        message: "Create it in a directory only this application can write to, or give it permissions.",
         category: Vulnerability,
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S5443")],
         check: Check::Query {
             langs: JAVA,
-            query: r#"((string_literal) @match (#match? @match "^\"/(tmp|var/tmp|dev/shm)(/|\")"))"#,
-            filter: None,
+            // `Files.createTempDirectory("x")` and `Files.createTempFile("a",
+            // ".b")`: no directory, no permissions (measured on SonarQube
+            // 26.7).
+            query: r#"((string_literal) @match (#match? @match "^\"/(tmp|var/tmp|dev/shm)(/|\")"))
+(method_invocation object: (identifier) @o (#eq? @o "Files") name: (identifier) @n (#any-of? @n "createTempDirectory" "createTempFile")) @match"#,
+            filter: Some(Keep(in_the_shared_directory)),
         },
         example: Some(Example {
             lang: Lang::Java,
             bad: "class A { void f() { String p = \"/tmp/report.csv\"; } }",
-            good: "class A { void f() { Path p = Files.createTempFile(\"report\", \".csv\"); } }",
+            good: "class A { void f(Path ownDir) { Path p = Files.createTempFile(ownDir, \"report\", \".csv\"); } }",
         }),
     },
     Rule {
@@ -1164,6 +1170,21 @@ fn broadcast_lacks_permission(call: Node, src: &[u8]) -> bool {
     }
 }
 
+/// A `/tmp` path, or a temporary file or directory created without a
+/// directory and without permissions: `createTempDirectory` with one
+/// argument, `createTempFile` with two.
+fn in_the_shared_directory(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "method_invocation" {
+        return true;
+    }
+    let args = call_arguments(node).len();
+    match method_name(node, src) {
+        b"createTempDirectory" => args == 1,
+        b"createTempFile" => args == 2,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::analysis::analyze;
@@ -1255,5 +1276,13 @@ mod tests {
     fn db_passwords() {
         let src = "class A { void f() throws Exception {\nDriverManager.getConnection(url, u, \"\");\nDriverManager.getConnection(url, u, pw);\nDriverManager.getConnection(url);\n} }";
         assert_eq!(flagged("java/empty-db-password", src), [2]);
+    }
+
+    /// Measured on SonarQube 26.7: a temporary directory or file without a
+    /// directory and without permissions, and a `/tmp` path.
+    #[test]
+    fn temporary_files_in_the_shared_directory() {
+        let src = "class Tmp {\n    Object a() throws Exception { return Files.createTempDirectory(\"x\"); }\n    Object b(Path dir) throws Exception { return Files.createTempDirectory(dir, \"x\"); }\n    Object c() throws Exception { return Files.createTempFile(\"a\", \".b\"); }\n    Object d() throws Exception { return Files.createTempFile(\"a\", \".b\", attrs); }\n    Object e() { return new File(\"/tmp/x\"); }\n}";
+        assert_eq!(flagged("java/public-tmp", src), [2, 4, 6]);
     }
 }

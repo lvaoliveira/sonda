@@ -116,6 +116,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "[(object_creation_expression arguments: (argument_list)) \
+                     (implicit_object_creation_expression) \
                      (invocation_expression function: (member_access_expression))] @match",
             filter: Some(Keep(regex_without_timeout)),
         },
@@ -200,8 +201,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1643")],
         check: Check::Query {
             langs: CSHARP,
-            query: "[(for_statement body: (_) @b) (foreach_statement body: (_) @b) (while_statement body: (_) @b) (do_statement body: (_) @b)] @match",
-            filter: Some(Find(string_appended_in_loop)),
+            // Each append in a loop (measured on SonarQube 26.7).
+            query: "(assignment_expression) @match",
+            filter: Some(Keep(string_appended_in_loop)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -881,6 +883,35 @@ fn regex_without_timeout(node: Node, src: &[u8]) -> bool {
     if non_backtracking {
         return false;
     }
+    // `new(...)` takes its type from what it initializes: `Regex A = new(...)`,
+    // or an element of `Regex[] All = { new(...) }`.
+    if node.kind() == "implicit_object_creation_expression" {
+        // Its argument list isn't a named field.
+        let args = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "argument_list")
+            .map_or(0, |l| {
+                l.named_children(&mut l.walk())
+                    .filter(|a| a.kind() == "argument")
+                    .count()
+            });
+        let mut up = node.parent();
+        for _ in 0..6 {
+            let Some(n) = up else { break };
+            if matches!(n.kind(), "variable_declaration" | "property_declaration") {
+                let regex = n.child_by_field_name("type").is_some_and(|t| {
+                    let t = text(t, src);
+                    t == b"Regex"
+                        || t == b"Regex[]"
+                        || t.ends_with(b"<Regex>")
+                        || t.ends_with(b".Regex")
+                });
+                return regex && args > 0 && args < 3;
+            }
+            up = n.parent();
+        }
+        return false;
+    }
     if node.kind() == "object_creation_expression" {
         let is_regex = node
             .child_by_field_name("type")
@@ -961,24 +992,15 @@ fn random_feeds_secret(node: Node, src: &[u8]) -> bool {
         && !v.windows(21).any(|x| x == b"RandomNumberGenerator")
 }
 
+/// Measured on SonarQube 26.7: an absolute URI or path,
+/// localhost and constants included, given to a name that says it's a
+/// location (a variable, field, property or the parameter it's passed to,
+/// when declared in this file, or `new Uri`); or a `"/"` or `"\\"` joined
+/// with `+` into a value given to such a name.
 fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
     let Some(value) = cs_string_value(literal, src) else {
         return false;
     };
-    let is_uri = value.windows(3).any(|w| w == b"://")
-        && !value.starts_with(b"http://localhost")
-        && !value.starts_with(b"https://localhost");
-    let is_path = (value.len() > 3 && value[1] == b':' && matches!(value[2], b'\\' | b'/') && value[0].is_ascii_alphabetic())
-        // Unix paths under a filesystem root; "/Account/Login" is a route.
-        || ([&b"/var/"[..], b"/usr/", b"/etc/", b"/home/", b"/opt/", b"/srv/", b"/mnt/", b"/tmp/", b"/Users/", b"/data/"]
-            .iter()
-            .any(|root| value.starts_with(root)))
-        || value.starts_with(b"\\\\");
-    if !(is_uri || is_path) || value.contains(&b'{') {
-        return false;
-    }
-    // Only when the code says it's a location: assigned to, or passed as, a
-    // name such as `url`, `uri`, `path`, `file`, `folder` or `dir`.
     let location = |n: &[u8]| {
         let l = n.to_ascii_lowercase();
         [&b"url"[..], b"uri", b"path", b"file", b"folder", b"dir"]
@@ -988,18 +1010,103 @@ fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
     let Some(parent) = literal.parent() else {
         return false;
     };
+    // A delimiter joined into a location: `basePath + "/"`.
+    // `"\\"` holds two backslashes as written, `@"\"` one.
+    let delimiter = value == b"/"
+        || (literal.kind() == "string_literal" && value == b"\\\\")
+        || (literal.kind() == "verbatim_string_literal" && value == b"\\");
+    if delimiter {
+        // Joined with `+` into a value given to a location's name, not
+        // returned or compared (measured on SonarQube 26.7).
+        if parent.kind() != "binary_expression"
+            || parent
+                .child_by_field_name("operator")
+                .is_none_or(|o| text(o, src) != b"+")
+        {
+            return false;
+        }
+        let mut top = parent;
+        while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
+            top = p;
+        }
+        let target = top.parent().and_then(|p| match p.kind() {
+            "assignment_expression" => p.child_by_field_name("left"),
+            "variable_declarator" => p.child_by_field_name("name"),
+            "equals_value_clause" => p.parent().and_then(|d| d.child_by_field_name("name")),
+            "argument" => p
+                .child_by_field_name("name")
+                .or_else(|| parameter_for(p, src)),
+            _ => None,
+        });
+        return target.is_some_and(|t| location(text(t, src)));
+    }
+    let is_uri = value.windows(3).any(|w| w == b"://");
+    let is_path = (value.len() > 3 && value[1] == b':' && matches!(value[2], b'\\' | b'/') && value[0].is_ascii_alphabetic())
+        // Unix paths under a filesystem root; "/Account/Login" is a route.
+        || ([&b"/var/"[..], b"/usr/", b"/etc/", b"/home/", b"/opt/", b"/srv/", b"/mnt/", b"/tmp/", b"/Users/", b"/data/"]
+            .iter()
+            .any(|root| value.starts_with(root)))
+        || value.starts_with(b"\\\\");
+    if !(is_uri || is_path) || value.contains(&b'{') {
+        return false;
+    }
     let name = match parent.kind() {
         "variable_declarator" => parent.child_by_field_name("name"),
+        "equals_value_clause" => parent.parent().and_then(|d| d.child_by_field_name("name")),
         "assignment_expression" => parent.child_by_field_name("left"),
-        "argument" => parent.child_by_field_name("name"),
+        "argument" => parent
+            .child_by_field_name("name")
+            .or_else(|| parameter_for(parent, src)),
         _ => None,
     };
-    // Constants are already named and in one place.
-    let in_const = parent
-        .parent()
-        .and_then(|d| d.parent())
-        .is_some_and(|f| f.kind() == "field_declaration" && cs_has_modifier(f, "const", src));
-    name.is_some_and(|n| location(text(n, src))) && !in_const
+    name.is_some_and(|n| location(text(n, src)))
+}
+
+/// The parameter an argument goes to, when the method or constructor is
+/// declared in this file, or `new Uri(...)`'s.
+fn parameter_for<'t>(argument: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let list = argument.parent()?;
+    let call = list.parent()?;
+    let position = list
+        .named_children(&mut list.walk())
+        .filter(|a| a.kind() == "argument")
+        .position(|a| a.id() == argument.id())?;
+    let (name, constructor) = match call.kind() {
+        "object_creation_expression" => (call.child_by_field_name("type")?, true),
+        "invocation_expression" => {
+            let f = call.child_by_field_name("function")?;
+            (f.child_by_field_name("name").unwrap_or(f), false)
+        }
+        _ => return None,
+    };
+    let name = text(name, src);
+    let name = name.rsplit(|b| *b == b'.').next().unwrap_or(name);
+    if constructor && matches!(name, b"Uri" | b"HttpUri") && position == 0 {
+        return call.child_by_field_name("type");
+    }
+    let mut root = call;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let declares = match n.kind() {
+            "method_declaration" if !constructor => n.child_by_field_name("name"),
+            "constructor_declaration" if constructor => n.child_by_field_name("name"),
+            _ => None,
+        };
+        if declares.is_some_and(|d| text(d, src) == name)
+            && let Some(param) = n.child_by_field_name("parameters").and_then(|ps| {
+                ps.named_children(&mut ps.walk())
+                    .filter(|p| p.kind() == "parameter")
+                    .nth(position)
+            })
+        {
+            return param.child_by_field_name("name");
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    None
 }
 
 fn unused_private_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1061,14 +1168,39 @@ fn unused_private_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
     })
 }
 
-fn string_appended_in_loop<'t>(loop_node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let owner = enclosing_member(loop_node)?;
-    let strings = strings_declared_before(owner.child_by_field_name("body")?, loop_node, src);
-    if strings.is_empty() {
-        return None;
+fn string_appended_in_loop(assignment: Node, src: &[u8]) -> bool {
+    // The shape first, `s += x` or `s = ... + ...`: climbing to the loop
+    // from every assignment of a long chain would be slow.
+    let appends = match operator_text(assignment, src) {
+        b"+=" => true,
+        b"=" => assignment
+            .child_by_field_name("right")
+            .is_some_and(|r| r.kind() == "binary_expression" && operator_text(r, src) == b"+"),
+        _ => false,
+    };
+    if !appends {
+        return false;
     }
-    let body = loop_node.child_by_field_name("body")?;
-    find_in_scope(body, CS_SCOPE_STOPS, |n| appends_to(n, &strings, src))
+    // The innermost loop around it, in the same member.
+    let mut up = assignment.parent();
+    let loop_node = loop {
+        let Some(n) = up else { return false };
+        if matches!(
+            n.kind(),
+            "for_statement" | "foreach_statement" | "while_statement" | "do_statement"
+        ) {
+            break n;
+        }
+        if CS_SCOPE_STOPS.contains(&n.kind()) {
+            return false;
+        }
+        up = n.parent();
+    };
+    let Some(body) = enclosing_member(loop_node).and_then(|o| o.child_by_field_name("body")) else {
+        return false;
+    };
+    let strings = strings_declared_before(body, loop_node, src);
+    appends_to(assignment, &strings, src)
 }
 
 /// The member a loop is in, up to 64 levels up.
@@ -1100,14 +1232,18 @@ fn strings_declared_before<'s>(body: Node, loop_node: Node, src: &'s [u8]) -> Ve
         if n.start_byte() >= loop_node.start_byte() {
             continue;
         }
-        if n.kind() == "variable_declaration"
-            && n.child_by_field_name("type")
-                .is_some_and(|t| text(t, src) == b"string")
-        {
+        // `string s = ...`, or `var s = ""` / `string.Empty` (measured on
+        // SonarQube 26.7).
+        if n.kind() == "variable_declaration" {
+            let declared = n.child_by_field_name("type").map(|t| text(t, src));
             let mut c = n.walk();
             out.extend(
                 n.named_children(&mut c)
                     .filter(|d| d.kind() == "variable_declarator")
+                    .filter(|d| {
+                        declared == Some(b"string")
+                            || declared == Some(b"var") && starts_as_a_string(*d, src)
+                    })
                     .filter_map(|d| d.child_by_field_name("name").map(|x| text(x, src))),
             );
         }
@@ -1121,6 +1257,28 @@ fn strings_declared_before<'s>(body: Node, loop_node: Node, src: &'s [u8]) -> Ve
 }
 
 /// `s += ...` or `s = s + ...`, with s one of `strings`.
+/// A declarator whose value is a string literal or `string.Empty`.
+fn starts_as_a_string(declarator: Node, src: &[u8]) -> bool {
+    let mut c = declarator.walk();
+    let value = declarator
+        .named_children(&mut c)
+        .filter(|v| v.kind() != "identifier")
+        .last();
+    value.is_some_and(|v| {
+        let v = if v.kind() == "equals_value_clause" {
+            v.named_child(0)
+        } else {
+            Some(v)
+        };
+        v.is_some_and(|v| {
+            matches!(
+                v.kind(),
+                "string_literal" | "verbatim_string_literal" | "interpolated_string_expression"
+            ) || text(v, src) == b"string.Empty"
+        })
+    })
+}
+
 fn appends_to(n: Node, strings: &[&[u8]], src: &[u8]) -> bool {
     n.kind() == "assignment_expression"
         && n.child_by_field_name("left")
@@ -1128,10 +1286,14 @@ fn appends_to(n: Node, strings: &[&[u8]], src: &[u8]) -> bool {
         && (operator_text(n, src) == b"+="
             || operator_text(n, src) == b"="
                 && n.child_by_field_name("right").is_some_and(|r| {
+                    // `s = s + x` or `s = x + s`.
                     r.kind() == "binary_expression"
                         && operator_text(r, src) == b"+"
-                        && n.child_by_field_name("left")
-                            .is_some_and(|l| text(r, src).starts_with(text(l, src)))
+                        && n.child_by_field_name("left").is_some_and(|l| {
+                            text(r, src).starts_with(text(l, src))
+                                || r.child_by_field_name("right")
+                                    .is_some_and(|last| text(last, src) == text(l, src))
+                        })
                 }))
 }
 
@@ -1748,7 +1910,8 @@ mod tests {
     #[test]
     fn loops_and_abstract_classes() {
         let src = "namespace N;\nclass A {\nstring F(int[] xs) {\nstring s = \"\";\nforeach (var x in xs) { s += x; }\nvar t = \"\";\nforeach (var x in xs) { t += x; }\nstring u = \"\";\nfor (int i = 0; i < 3; i++) { u = u + i; }\nreturn s + t + u;\n}\n}\nabstract class Shape { public abstract double Area(); }\nabstract class Base { public abstract double Area(); protected int x; }\nabstract class Derived : Shape { public abstract double Volume(); }";
-        assert_eq!(flagged("cs/string-concat-in-loop", src), [5, 9]);
+        // `var t = ""` is a string too (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/string-concat-in-loop", src), [5, 7, 9]);
         assert_eq!(flagged("cs/abstract-class-only-abstract", src), [13]);
     }
 

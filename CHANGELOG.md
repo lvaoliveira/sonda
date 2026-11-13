@@ -369,6 +369,44 @@ file, the report formats and the public library API.
     a Javadoc among statements; `java/invariant-return` is boolean methods;
     `java/constant-name` leaves arrays; `java/close-in-finally` is a
     resource created with `new`; `java/redundant-jump` leaves labeled jumps.
+- C#, compared on Prowlarr (`d2d1fc0`, SonarCloud's analysis of its CI
+  build), each change measured on SonarQube 26.7: sonda raises 1,361 of
+  SonarCloud's 1,787 C# issues, where it raised 959, and 94 it doesn't,
+  where it raised 214.
+  - `cs/duplicated-string` reports each literal of five characters or more
+    used four times in a class, at its first use, not one per file from
+    three uses; attribute arguments and parameter names are left out.
+  - `cs/unused-private-member` reports each unused member, a private
+    nested type's members and constructors, and a setter nothing assigns
+    through; `cs/overloads-not-adjacent` every split group, at its first
+    declaration; `cs/log-exception-not-passed` a catch without a variable,
+    a catch that rethrows, and a log call passing only the message.
+  - Broader: `cs/regex-without-timeout` a target-typed `new(...)`;
+    `cs/hardcoded-uri` localhost, constants, an argument to a location
+    parameter declared in the file or `new Uri`, a `"/"` joined into a
+    location; `cs/public-field` and `cs/public-readonly-mutable` static
+    fields; `cs/empty-block`, `cs/empty-method` and
+    `cs/accessor-ignores-value` an empty `set`; `cs/unused-local-variable`
+    an unused `out var`; `cs/string-concat-in-loop` `var s = ""` and
+    `s = x + s`, each append; `cs/cleartext-url` a placeholder host;
+    `cs/log-and-rethrow` NLog's `Warn`.
+  - Narrower: the mutable-collection rules leave arrays;
+    `cs/ambiguous-params-overload` leaves an array given for `params`;
+    `cs/could-be-static` leaves empty methods and methods with an object
+    initializer, and counts `MemberwiseClone()` as using the instance;
+    `cs/log-and-rethrow` counts only a log call of the catch itself passing
+    the exception, not NLog's `InternalLogger`.
+  - Positions: `cs/loop-could-be-where` at the `foreach`,
+    `cs/duplicate-cast` at the type check, `cs/equals-without-iequatable`
+    at the type, `cs/method-returns-constant` at the method's name.
+  - `cs/could-be-static` takes an unresolved base type named like an
+    interface (`IParser`) for one, and checks its implementers.
+- The SonarQube comparison script fetches security hotspots, which the
+  issue search leaves out, and skips issues imported from other analyzers
+  (`external_roslyn:IDE0028`).
+- `java/public-tmp` (S5443) also reports `Files.createTempDirectory("x")`
+  and `Files.createTempFile("a", ".b")`: a temporary file or directory
+  without a directory or permissions (measured on SonarQube 26.7).
 - Java, the rest of eGovFrame's differences, each measured on SonarQube
   26.7: sonda raises 3,726 of SonarCloud's 4,878 Java issues, where it
   raised 3,650, and 868 it doesn't, where it raised 912; every difference

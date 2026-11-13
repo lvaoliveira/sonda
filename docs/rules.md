@@ -20603,7 +20603,7 @@ class A { void f() { PosixFilePermissions.fromString("rw-------"); } }
 
 ## java/public-tmp
 
-**Temporary files should not be created in publicly writable directories.** Other users can pre-create or swap files in /tmp, so a predictable path can be hijacked.
+**Temporary files should not be created in publicly writable directories.** Other users can pre-create or swap files in /tmp, so a predictable path can be hijacked. Files.createTempFile and createTempDirectory without a directory or permissions use that shared directory too.
 
 SonarQube: S5443
 
@@ -20618,7 +20618,7 @@ class A { void f() { String p = "/tmp/report.csv"; } }
 Compliant:
 
 ```java
-class A { void f() { Path p = Files.createTempFile("report", ".csv"); } }
+class A { void f(Path ownDir) { Path p = Files.createTempFile(ownDir, "report", ".csv"); } }
 ```
 
 ## java/create-temp-file
@@ -35950,14 +35950,14 @@ class A { string Host(IConfiguration c) => c["Host"]; string Local() => "127.0.0
 
 ## cs/duplicated-string
 
-**String literals should not be duplicated.** A literal repeated across a file is easy to change in one place and miss in the others.
+**String literals should not be duplicated.** A literal repeated in a class is easy to change in one place and miss in the others. Literals under five characters, attribute arguments and a parameter's name (which nameof says) are left alone.
 
 SonarQube: S1192
 
 Noncompliant:
 
 ```csharp
-class A { string a = "connection failed"; string b = "connection failed"; string c = "connection failed"; }
+class A { string a = "connection failed"; string b = "connection failed"; string c = "connection failed"; string d = "connection failed"; }
 ```
 
 Compliant:
@@ -36083,7 +36083,7 @@ SonarQube: S2386
 Noncompliant:
 
 ```csharp
-class A { public static readonly string[] Codes = { "a", "b" }; }
+class A { public static readonly List<string> Codes = new() { "a", "b" }; }
 ```
 
 Compliant:

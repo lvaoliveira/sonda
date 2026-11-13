@@ -19,7 +19,20 @@ calibrate: measure what SonarQube does on small files, one case at a time.
   Java, C# and Rust; C and C++ need a commercial edition or SonarCloud.
 - SonarSource's scanner, pinned: `npx --yes @sonar/scan@5.0.2`. It needs
   Node.js and downloads a Java runtime on first use. C# is the exception:
-  SonarQube analyzes it during a build, with SonarScanner for .NET.
+  SonarQube analyzes it during a build, with SonarScanner for .NET. A
+  container image with the .NET SDK, a Java runtime and the scanner builds
+  a calibration project:
+
+  ```dockerfile
+  FROM mcr.microsoft.com/dotnet/sdk:8.0
+  RUN apt-get update -qq && apt-get install -y -qq openjdk-17-jre-headless
+  RUN dotnet tool install --global dotnet-sonarscanner --version 10.3.0
+  ENV PATH="${PATH}:/root/.dotnet/tools"
+  ```
+
+  and inside it, `dotnet sonarscanner begin /k:KEY /d:sonar.host.url=...
+  /d:sonar.token=...`, `dotnet build`, `dotnet sonarscanner end
+  /d:sonar.token=...`. The container must reach the server.
 - A release build of sonda, from the branch you're checking.
 
 For a public project analyzed on SonarCloud, the server is
@@ -94,6 +107,11 @@ field lists) and line, at most one apart (`--tolerance`). The summary has:
   or whose key is off there.
 - For a project in more than one language, both counts per language.
 - A table per key, most differences first.
+
+It compares security hotspots too, which the issue search leaves out
+(`api/hotspots/search`), and leaves out issues imported from other
+analyzers (`external_roslyn:IDE0028` and the like, from .NET's own),
+which aren't SonarQube's rules.
 
 Past 10,000 issues, the most one search returns, the script fetches them
 language by language, and rule by rule within a language still past it.
@@ -208,6 +226,15 @@ behavior on the version measured.
   name: S4488 needs `spring-web` 4.3 or later. A calibration jar named
   `stubs.jar` turns such a rule off; name it like the library
   (`spring-web-5.3.30.jar`).
+- **Real libraries for C#.** A stub of a logger in its namespace isn't
+  enough for C#'s logging rules: they fired only with NLog's and
+  Microsoft.Extensions.Logging's packages referenced. A NuGet reference in
+  the calibration project gives the real types.
+- **Infer, then measure.** A project's own results can say much about a
+  rule before calibrating: over Prowlarr's 113 duplicated-string issues,
+  none had fewer than four uses or under five characters, and literals
+  naming a parameter were never reported. Calibration then confirmed each
+  point, and found the one SonarCloud's newer analyzer does differently.
 - **Check the fetch.** A first count of eGovFrame's issues stopped at the
   search limit and missed about 500 of them; compare the script's total
   with the project's page in SonarQube.
@@ -228,6 +255,8 @@ On the comparison server, as of 2026-11-11:
 | `sonda-compare-commons-lang-3` | Apache Commons Lang (Java 8), compiled first | `5d2715b` |
 | `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration (`-egov`, `-egov2`, `-egov3` for eGovFrame's, Java 17) | |
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
+| `Prowlarr_Prowlarr` on SonarCloud | Prowlarr (C#, from a CI build; JavaScript and TypeScript) | `d2d1fc0` |
+| `sonda-calibrate-cs1` to `cs5` | C# calibration, built with SonarScanner for .NET | |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: C# and C++ on public projects that SonarCloud analyzes.
+Next: the rest of C#, and C++ on a public project that SonarCloud analyzes.

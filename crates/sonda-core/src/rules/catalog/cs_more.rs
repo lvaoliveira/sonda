@@ -193,20 +193,21 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/duplicated-string",
         name: "String literals should not be duplicated",
-        description: "A literal repeated across a file is easy to change in one place and miss in the others.",
-        message: "Define a constant for this string, which appears three times or more.",
+        description: "A literal repeated in a class is easy to change in one place and miss in \
+                      the others. Literals under five characters, attribute arguments and a \
+                      parameter's name (which nameof says) are left alone.",
+        message: "Define a constant for this string, which appears four times or more in this class.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 10,
         sonar: &[exact("S1192")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(compilation_unit) @match",
-            filter: Some(Find(string_repeated_often)),
+            find: strings_repeated_in_a_class,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { string a = \"connection failed\"; string b = \"connection failed\"; string c = \"connection failed\"; }",
+            bad: "class A { string a = \"connection failed\"; string b = \"connection failed\"; string c = \"connection failed\"; string d = \"connection failed\"; }",
             good: "class A { const string Failed = \"connection failed\"; string a = Failed; string b = Failed; }",
         }),
     },
@@ -221,7 +222,9 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S1481")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(local_declaration_statement (variable_declaration (variable_declarator name: (identifier) @match)))",
+            // An `out var x` too (measured on SonarQube 26.7).
+            query: "(local_declaration_statement (variable_declaration (variable_declarator name: (identifier) @match)))
+(declaration_expression name: (identifier) @match)",
             filter: Some(Keep(local_is_never_used)),
         },
         example: Some(Example {
@@ -259,10 +262,9 @@ pub(super) static RULES: &[Rule] = &[
         severity: Major,
         effort_minutes: 5,
         sonar: &[exact("S1144")],
-        check: Check::Query {
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(class_declaration name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(unused_private_member)),
+            find: unused_private_members,
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -350,7 +352,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { public static readonly string[] Codes = { \"a\", \"b\" }; }",
+            bad: "class A { public static readonly List<string> Codes = new() { \"a\", \"b\" }; }",
             good: "class A { public static readonly IReadOnlyList<string> Codes = new[] { \"a\", \"b\" }; }",
         }),
     },
@@ -948,8 +950,10 @@ const MUTABLE_COLLECTIONS: &[&[u8]] = &[
     b"Hashtable",
 ];
 
+/// A mutable collection, not an array (measured on SonarQube 26.7: its public static readonly arrays aren't reported, its lists
+/// are).
 fn is_mutable_collection_type(ty: Node, src: &[u8]) -> bool {
-    ty.kind() == "array_type" || MUTABLE_COLLECTIONS.contains(&simple_name(ty, src))
+    MUTABLE_COLLECTIONS.contains(&simple_name(ty, src))
 }
 
 pub(super) fn declared_type(field: Node) -> Option<Node> {
@@ -967,6 +971,11 @@ pub(super) fn log_template<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let function = call.child_by_field_name("function")?;
     let method = text(function.child_by_field_name("name")?, src);
     let receiver = function.child_by_field_name("expression")?;
+    // NLog's static `InternalLogger` isn't a logger SonarQube knows
+    // (measured on SonarQube 26.7).
+    if text(receiver, src).ends_with(b"InternalLogger") {
+        return None;
+    }
     let mel = matches!(
         method,
         b"Log"
@@ -1149,8 +1158,8 @@ fn assertion_side_effect<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 fn visible_readonly_collection<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    // A static field too (measured on SonarQube 26.7).
     if !cs_has_modifier(field, "readonly", src)
-        || cs_has_modifier(field, "static", src)
         || cs_has_modifier(field, "private", src)
         || !["public", "protected", "internal"]
             .iter()
@@ -1206,53 +1215,82 @@ fn grants_everyone(node: Node, src: &[u8]) -> bool {
         .is_some_and(|v| v.eq_ignore_ascii_case(b"Everyone"))
 }
 
-fn string_repeated_often<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let mut counts: std::collections::HashMap<&[u8], (usize, Node<'t>)> =
-        std::collections::HashMap::new();
-    let mut cursor = unit.walk();
-    if !cursor.goto_first_child() {
-        return None;
+/// Each literal of five characters or more used four times or more in a
+/// class, reported at its first use, as SonarQube does for C# (measured on
+/// SonarQube 26.7): counted per class, leaving out attribute arguments and
+/// a literal naming a parameter of its method.
+fn strings_repeated_in_a_class<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    const TYPES: &[&str] = &[
+        "class_declaration",
+        "struct_declaration",
+        "record_declaration",
+        "record_struct_declaration",
+        "interface_declaration",
+    ];
+    let Some(root) = m.root else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut types = vec![root];
+    while let Some(scope) = types.pop() {
+        // The literals of this type, not of the types nested in it.
+        let mut uses: Vec<(&[u8], Vec<Node<'t>>)> = Vec::new();
+        let mut stack: Vec<(Node<'t>, Option<Node<'t>>)> = Vec::new();
+        let mut c = scope.walk();
+        stack.extend(scope.named_children(&mut c).map(|n| (n, None)));
+        while let Some((n, method)) = stack.pop() {
+            if TYPES.contains(&n.kind()) {
+                types.push(n);
+                continue;
+            }
+            if n.kind() == "attribute_list" {
+                continue;
+            }
+            let method = if matches!(
+                n.kind(),
+                "method_declaration"
+                    | "constructor_declaration"
+                    | "local_function_statement"
+                    | "operator_declaration"
+            ) {
+                Some(n)
+            } else {
+                method
+            };
+            if matches!(n.kind(), "string_literal" | "verbatim_string_literal") {
+                if scope.id() != root.id()
+                    && let Some(value) = cs_string_value(n, src).filter(|v| v.len() >= 5)
+                    && !method.is_some_and(|f| names_a_parameter(f, value, src))
+                {
+                    match uses.iter_mut().find(|(v, _)| *v == value) {
+                        Some((_, nodes)) => nodes.push(n),
+                        None => uses.push((value, vec![n])),
+                    }
+                }
+                continue;
+            }
+            let mut c = n.walk();
+            stack.extend(n.named_children(&mut c).map(|k| (k, method)));
+        }
+        found.extend(
+            uses.into_iter()
+                .filter(|(_, nodes)| nodes.len() >= 4)
+                .filter_map(|(_, nodes)| nodes.into_iter().min_by_key(|n| n.start_byte())),
+        );
     }
-    loop {
-        let n = cursor.node();
-        // Attribute arguments are often the same on purpose: [Category("Slow")].
-        let attributes = n.kind() == "attribute_list";
-        if !attributes
-            && matches!(n.kind(), "string_literal" | "verbatim_string_literal")
-            && let Some(value) = cs_string_value(n, src).filter(|v| v.len() >= 10)
-        {
-            counts
-                .entry(value)
-                .and_modify(|e| e.0 += 1)
-                .or_insert((1, n));
-        }
-        if !attributes && cursor.goto_first_child() {
-            continue;
-        }
-        if !next_node(&mut cursor) {
-            return smallest(&counts);
-        }
-    }
+    found.sort_by_key(|n| n.start_byte());
+    found
 }
 
-/// Moves the cursor to the next node that isn't below it; false at the end.
-fn next_node(cursor: &mut tree_sitter::TreeCursor) -> bool {
-    while !cursor.goto_next_sibling() {
-        if !cursor.goto_parent() {
-            return false;
-        }
-    }
-    true
-}
-
-/// The first literal (by position) that occurs three times or more.
-/// HashMap order never reaches the output: the minimum is unique.
-fn smallest<'t>(counts: &std::collections::HashMap<&[u8], (usize, Node<'t>)>) -> Option<Node<'t>> {
-    counts
-        .values()
-        .filter(|(count, _)| *count >= 3)
-        .map(|(_, node)| *node)
-        .min_by_key(|n| n.start_byte())
+/// Whether a method has a parameter with this name.
+fn names_a_parameter(method: Node, name: &[u8], src: &[u8]) -> bool {
+    method.child_by_field_name("parameters").is_some_and(|ps| {
+        let mut c = ps.walk();
+        ps.named_children(&mut c).any(|p| {
+            p.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == name)
+        })
+    })
 }
 
 fn local_is_never_used(name: Node, src: &[u8]) -> bool {
@@ -1297,55 +1335,189 @@ fn shadows_member(name: Node, src: &[u8]) -> bool {
     })
 }
 
-fn unused_private_member<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // Partial classes are spread over files, and attributes such as
-    // [Serializable] or [DataContract] mean members are used by reflection.
-    // A parse error (an #if splitting the class) hides part of its text.
-    if cs_has_modifier(class, "partial", src) || class.has_error() {
-        return None;
-    }
-    let mut cursor = class.walk();
-    if class
-        .named_children(&mut cursor)
-        .any(|c| c.kind() == "attribute_list")
-    {
-        return None;
-    }
-    let whole = text(class, src);
-    members(class).into_iter().find_map(|m| {
-        if !matches!(
-            m.kind(),
-            "method_declaration" | "field_declaration" | "property_declaration"
-        ) {
-            return None;
+/// Each unused private member of a class, as SonarQube 26.7 reports them
+/// (measured): fields, properties, methods and nested types nothing else
+/// names; the members of a private nested type, which only the class around
+/// it can reach, its constructors when nothing creates one; and a setter
+/// nothing assigns through (a `private set`, or any of a private property).
+/// Left out: partial types and types with attributes, which reflection or
+/// other files may use, members with attributes, overrides and interface
+/// implementations, `Main` and `Deconstruct`.
+fn unused_private_members<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(root) = m.root else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut stack = vec![(root, None::<Node<'t>>)];
+    while let Some((n, outer)) = stack.pop() {
+        let is_type = matches!(
+            n.kind(),
+            "class_declaration" | "struct_declaration" | "record_declaration"
+        );
+        // The outermost type: what it holds may use a nested type's members.
+        let outer = if is_type { outer.or(Some(n)) } else { outer };
+        if is_type
+            && let Some(scope) = outer
+            && !cs_has_modifier(n, "partial", src)
+            && !n.has_error()
+            && !scope.has_error()
+            && !n
+                .named_children(&mut n.walk())
+                .any(|c| c.kind() == "attribute_list")
+        {
+            unused_members_of(n, scope, src, &mut found);
         }
-        let mut c = m.walk();
+        stack.extend(n.named_children(&mut n.walk()).map(|c| (c, outer)));
+    }
+    found.sort_by_key(|n| n.start_byte());
+    found
+}
+
+fn unused_members_of<'t>(class: Node<'t>, scope: Node<'t>, src: &[u8], found: &mut Vec<Node<'t>>) {
+    let whole = text(scope, src);
+    let nested_private = class.id() != scope.id()
+        && !["public", "protected", "internal"]
+            .iter()
+            .any(|v| cs_has_modifier(class, v, src));
+    let class_name = class.child_by_field_name("name").map(|n| text(n, src));
+    for member in members(class) {
+        let attributed = member
+            .named_children(&mut member.walk())
+            .any(|x| matches!(x.kind(), "attribute_list" | "explicit_interface_specifier"));
+        let special = ["override", "virtual", "abstract", "extern", "partial"]
+            .iter()
+            .any(|v| cs_has_modifier(member, v, src));
+        // The runtime runs a static constructor.
+        let static_constructor =
+            member.kind() == "constructor_declaration" && cs_has_modifier(member, "static", src);
+        if attributed || special || static_constructor {
+            continue;
+        }
         let visible = ["public", "protected", "internal"]
             .iter()
-            .any(|v| cs_has_modifier(m, v, src));
-        let special = m
-            .named_children(&mut c)
-            .any(|x| matches!(x.kind(), "attribute_list" | "explicit_interface_specifier"))
-            || ["override", "virtual", "abstract", "extern", "partial"]
-                .iter()
-                .any(|v| cs_has_modifier(m, v, src));
-        if visible || special {
-            return None;
+            .any(|v| cs_has_modifier(member, v, src));
+        let private = !visible || nested_private;
+        match member.kind() {
+            "field_declaration" if private => {
+                for d in declarators(member) {
+                    if let Some(name) = d.child_by_field_name("name")
+                        && count_word(whole, text(name, src)) == 1
+                    {
+                        found.push(name);
+                    }
+                }
+            }
+            "method_declaration" if private => {
+                if let Some(name) = member.child_by_field_name("name")
+                    && !matches!(text(name, src), b"Main" | b"Deconstruct")
+                    && count_word(whole, text(name, src)) == 1
+                {
+                    found.push(name);
+                }
+            }
+            "property_declaration" => {
+                let Some(name) = member.child_by_field_name("name") else {
+                    continue;
+                };
+                if private && count_word(whole, text(name, src)) == 1 {
+                    found.push(name);
+                    continue;
+                }
+                // A setter nothing assigns through.
+                let setter = member
+                    .child_by_field_name("accessors")
+                    .into_iter()
+                    .flat_map(|list| list.named_children(&mut list.walk()).collect::<Vec<_>>())
+                    .find(|a| {
+                        a.kind() == "accessor_declaration"
+                            && a.child_by_field_name("name")
+                                .is_some_and(|k| text(k, src) == b"set")
+                    });
+                if let Some(setter) = setter
+                    && (private || cs_has_modifier(setter, "private", src))
+                    && !assigned_in(scope, text(name, src), src)
+                {
+                    found.push(setter);
+                }
+            }
+            "constructor_declaration" if nested_private => {
+                if let (Some(name), Some(class_name)) =
+                    (member.child_by_field_name("name"), class_name)
+                    && !created_in(scope, class_name, src)
+                {
+                    found.push(name);
+                }
+            }
+            "class_declaration" | "struct_declaration" | "record_declaration" if private => {
+                if let Some(name) = member.child_by_field_name("name") {
+                    let constructors = members(member)
+                        .iter()
+                        .filter(|c| c.kind() == "constructor_declaration")
+                        .count();
+                    if count_word(whole, text(name, src)) == 1 + constructors {
+                        found.push(name);
+                    }
+                }
+            }
+            _ => {}
         }
-        let names: Vec<Node<'t>> = if m.kind() == "field_declaration" {
-            declarators(m)
-                .into_iter()
-                .filter_map(|d| d.child_by_field_name("name"))
-                .collect()
-        } else {
-            m.child_by_field_name("name").into_iter().collect()
-        };
-        names.into_iter().find(|n| {
-            let name = text(*n, src);
-            // An entry point or a deconstructor is called by the runtime.
-            !matches!(name, b"Main" | b"Deconstruct") && count_word(whole, name) == 1
-        })
-    })
+    }
+}
+
+/// Whether anything in `scope` assigns to `name`: `name = x`, `x.name = y`,
+/// `name++`, an object initializer's `name = x`, `out name`.
+fn assigned_in(scope: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && text(n, src) == name {
+            let mut target = n;
+            if let Some(p) = n
+                .parent()
+                .filter(|p| p.kind() == "member_access_expression")
+                && p.child_by_field_name("name") == Some(n)
+            {
+                target = p;
+            }
+            let writes = target.parent().is_some_and(|p| match p.kind() {
+                "assignment_expression" => p.child_by_field_name("left") == Some(target),
+                "postfix_unary_expression" | "prefix_unary_expression" => {
+                    let t = text(p, src);
+                    t.starts_with(b"++")
+                        || t.starts_with(b"--")
+                        || t.ends_with(b"++")
+                        || t.ends_with(b"--")
+                }
+                "argument" => p
+                    .children(&mut p.walk())
+                    .any(|c| matches!(c.kind(), "out" | "ref")),
+                _ => false,
+            });
+            if writes {
+                return true;
+            }
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    false
+}
+
+/// Whether `scope` creates a `name`: `new name(...)`, `new name { ... }`, or
+/// a target-typed `new(...)` given to something declared as one.
+fn created_in(scope: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "object_creation_expression"
+            && n.child_by_field_name("type")
+                .is_some_and(|t| text(t, src) == name)
+        {
+            return true;
+        }
+        if n.kind() == "implicit_object_creation_expression" {
+            return true;
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    false
 }
 
 fn logs_and_rethrows(catch: Node, src: &[u8]) -> bool {
@@ -1361,12 +1533,35 @@ fn logs_and_rethrows(catch: Node, src: &[u8]) -> bool {
     let Some(body) = catch.child_by_field_name("body") else {
         return false;
     };
+    // A log call that is a statement of the catch block itself, not one in a
+    // branch (measured on SonarQube 26.7).
+    let direct = |n: Node| {
+        n.parent()
+            .filter(|s| s.kind() == "expression_statement")
+            .and_then(|s| s.parent())
+            .is_some_and(|b| b.id() == body.id())
+    };
+    // The exception itself passed to a logger, not its message, and not
+    // NLog's static `InternalLogger` (measured on SonarQube 26.7).
+    let passes_exception = |n: Node| cs_call_arguments(n).iter().any(|a| text(*a, src) == name);
+    let internal = |n: Node| {
+        n.child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("expression"))
+            .is_some_and(|e| text(e, src) == b"InternalLogger")
+    };
     let logs = find_in_scope(body, CS_SCOPE_STOPS, |n| {
-        n.kind() == "invocation_expression" && log_template(n, src).is_some()
+        n.kind() == "invocation_expression"
+            && direct(n)
+            && !internal(n)
+            && passes_exception(n)
+            && log_template(n, src).is_some()
             || n.kind() == "invocation_expression"
+                && direct(n)
+                && !internal(n)
                 && n.child_by_field_name("function")
                     .and_then(|f| f.child_by_field_name("name"))
                     .is_some_and(|m| {
+                        // NLog's `Warn` too.
                         matches!(
                             text(m, src),
                             b"LogError"
@@ -1375,6 +1570,7 @@ fn logs_and_rethrows(catch: Node, src: &[u8]) -> bool {
                                 | b"Error"
                                 | b"Fatal"
                                 | b"Warning"
+                                | b"Warn"
                         )
                     })
                 && cs_call_arguments(n).iter().any(|a| text(*a, src) == name)
@@ -1683,27 +1879,31 @@ fn typed_equals_without_interface<'t>(declaration: Node<'t>, src: &[u8]) -> Opti
         return None;
     }
     let own = text(declaration.child_by_field_name("name")?, src);
-    members(declaration).into_iter().find_map(|m| {
-        let name = m.child_by_field_name("name")?;
-        if m.kind() != "method_declaration"
-            || text(name, src) != b"Equals"
-            || !cs_has_modifier(m, "public", src)
-        {
-            return None;
-        }
-        let params = m.child_by_field_name("parameters")?;
-        let mut cursor = params.walk();
-        let types: Vec<&[u8]> = params
-            .named_children(&mut cursor)
-            .filter(|p| p.kind() == "parameter")
-            .filter_map(|p| p.child_by_field_name("type"))
-            .map(|t| {
-                let t = text(t, src);
-                t.strip_suffix(b"?").unwrap_or(t)
-            })
-            .collect();
-        (types == [own]).then_some(name)
-    })
+    members(declaration)
+        .into_iter()
+        .find_map(|m| {
+            let name = m.child_by_field_name("name")?;
+            if m.kind() != "method_declaration"
+                || text(name, src) != b"Equals"
+                || !cs_has_modifier(m, "public", src)
+            {
+                return None;
+            }
+            let params = m.child_by_field_name("parameters")?;
+            let mut cursor = params.walk();
+            let types: Vec<&[u8]> = params
+                .named_children(&mut cursor)
+                .filter(|p| p.kind() == "parameter")
+                .filter_map(|p| p.child_by_field_name("type"))
+                .map(|t| {
+                    let t = text(t, src);
+                    t.strip_suffix(b"?").unwrap_or(t)
+                })
+                .collect();
+            (types == [own]).then_some(name)
+        })
+        // Reported at the type (measured on SonarQube 26.7).
+        .and_then(|_| declaration.child_by_field_name("name"))
 }
 
 fn unsealed_equatable<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1847,8 +2047,9 @@ mod tests {
         let src = class(
             "public readonly List<int> A = new();\npublic readonly int[] B;\nprivate readonly List<int> C;\npublic readonly IReadOnlyList<int> D;\npublic static readonly string[] E = { };\nprotected static readonly Dictionary<int, int> F = new();\ninternal static readonly int[] G;\npublic static readonly IReadOnlyList<int> H;",
         );
-        assert_eq!(flagged("cs/public-readonly-mutable", &src), [3, 4]);
-        assert_eq!(flagged("cs/public-static-mutable-collection", &src), [7, 8]);
+        // Lists, not arrays, static or not (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/public-readonly-mutable", &src), [3, 8]);
+        assert_eq!(flagged("cs/public-static-mutable-collection", &src), [8]);
     }
 
     #[test]
@@ -1874,7 +2075,9 @@ mod tests {
         );
         assert_eq!(flagged("cs/world-permissions", &src), [4, 5, 6]);
         assert_eq!(flagged("cs/hardcoded-ip", &src), [7]);
-        let dup = "namespace N;\nclass A {\n[Category(\"integration\")] void A1() { G(\"connection failed\"); }\n[Category(\"integration\")] void A2() { G(\"connection failed\"); }\n[Category(\"integration\")] void A3() { G(\"connection failed\"); }\nvoid A4() { G(\"short\"); G(\"short\"); G(\"short\"); }\n}";
+        // Four uses in a class, five characters or more, attribute
+        // arguments and a parameter's name aside (measured on SonarQube 26.7).
+        let dup = "namespace N;\nclass A {\n[Category(\"integration\")] void A1() { G(\"connection failed\"); }\n[Category(\"integration\")] void A2() { G(\"connection failed\"); }\n[Category(\"integration\")] void A3() { G(\"connection failed\"); G(\"connection failed\"); }\nvoid A4() { G(\"tiny\"); G(\"tiny\"); G(\"tiny\"); G(\"tiny\"); }\nvoid A5(string label) { G(\"label\"); G(\"label\"); G(\"label\"); G(\"label\"); }\n}\nclass B {\nvoid B1() { G(\"connection failed\"); }\n}";
         assert_eq!(flagged("cs/duplicated-string", dup), [3]);
     }
 
@@ -1889,7 +2092,9 @@ mod tests {
         let src = "namespace N;\nclass A {\nint count;\nint Total { get; set; }\nprivate int Helper() => 1;\nprivate int used;\nint unusedField;\nprivate void Unused() { }\n[Obsolete] private void Kept() { }\npublic int F() {\nint x = 1;\nint y = 2;\nint count = 3;\nusing var lease = Acquire();\nvar _ = G();\nint Total = 4;\nreturn y + used + Helper() + Total;\n}\n}";
         assert_eq!(flagged("cs/unused-local-variable", src), [11, 13]);
         assert_eq!(flagged("cs/local-shadows-field", src), [13, 16]);
-        assert_eq!(flagged("cs/unused-private-member", src), [7]);
+        // Each one, a property nothing reads or writes too (measured on
+        // SonarQube 26.7).
+        assert_eq!(flagged("cs/unused-private-member", src), [4, 7, 8]);
     }
 
     #[test]

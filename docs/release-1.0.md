@@ -128,12 +128,15 @@ built.
       CPython are listed as not explained. Java (Apache Commons Lang): 890
       of 918 raised and 2 extra, every difference classified; 2 not
       explained. Java on a Spring Boot application (apigen.springboot,
-      against SonarCloud): 122 of 171 and 15 extra, every difference
+      against SonarCloud): 124 of 173 and 15 extra, every difference
       classified; 45 come from SonarCloud's profile and newer rules. And on
       eGovFrame's common components (against SonarCloud): Java 3,726 of
       4,878 and 868 extra, every difference classified; JavaScript 450 of 454 and 279 extra, every
       difference classified (the extra ones are `var`, which SonarQube
-      26.7 reports).
+      26.7 reports). C# (Prowlarr, against SonarCloud): 1,361 of 1,787
+      and 94 extra after a first pass, every change measured on SonarQube
+      26.7; data flow and types from other files are the large gaps,
+      about 170 small differences not yet looked into. C++: not started.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).
