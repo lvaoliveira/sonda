@@ -401,6 +401,34 @@ file, the report formats and the public library API.
     at the type, `cs/method-returns-constant` at the method's name.
   - `cs/could-be-static` takes an unresolved base type named like an
     interface (`IParser`) for one, and checks its implementers.
+- JavaScript and TypeScript, Prowlarr's React frontend (`d2d1fc0`, against
+  SonarCloud), each change measured on SonarQube 26.7: sonda raises 563 of
+  SonarCloud's 588 JavaScript issues, where it raised 209, and 8 it
+  doesn't, where it raised 175; TypeScript 137 of 150, where it raised 126,
+  and 3, where it raised 15.
+  - Each one, not one per file or component: `js/reexport-by-hand` (each
+    re-exported import, `export const A = a` too), `js/default-prop-is-required`
+    (each default, at the default, and defaults no propTypes declare),
+    `js/proptypes-unused` and `js/props-unused` (class components through
+    `this.props`, TypeScript components through a `props` parameter),
+    `js/unused-component-method` (arrow-function properties and unread
+    `this._x` fields too).
+  - `js/lodash-native` needs an argument known to be an array, and reports
+    `uniq`; `js/deprecated-api` reports `substr` on a known string;
+    `js/ternary-simplifiable` a name's ternary only.
+  - Narrower: `js/parameter-reassigned` (overwritten before it's read),
+    `js/empty-function` (declarations and class methods),
+    `js/has-own-property` (`Object.prototype.hasOwnProperty.call`),
+    `js/optional-chaining-preferred` (not where the chain would change the
+    result), `js/hardcoded-secret` (placeholders), `js/hardcoded-password`
+    (a value naming itself), `js/selector-parameter` (else-if chains),
+    `js/state-setter-same-value` (shadowed state).
+  - Broader: `js/redundant-jump` (ending an if that ends the function or
+    loop), `js/optional-chaining-preferred` (`f && f().x`, `!a || a.b !==
+    x`), `js/set-state-from-state` (copies of `this.state`),
+    `js/index-of-existence` (`some((v) => v === x)`), `js/structured-clone`
+    (`_.cloneDeep`).
+  - `common/too-many-parameters` reports an arrow function at its `=>`.
 - C#, the rest of Prowlarr's differences, each measured on SonarQube 26.7:
   sonda raises 1,433 of SonarCloud's 1,787 C# issues, where it raised
   1,361, and 29 it doesn't, where it raised 94.

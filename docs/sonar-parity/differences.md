@@ -19,7 +19,7 @@ the steps, the commands and what was learned along the way.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `57f6e9b` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `e747206` | 73 of 73 | 0 |
+| sonda | TypeScript (TSX), Rust | `900999a` | 76 of 76 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
@@ -27,6 +27,8 @@ the steps, the commands and what was learned along the way.
 | eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
 | eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
 | Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
+| Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
+| Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -664,8 +666,64 @@ On Prowlarr, 354 of SonarCloud's C# issues and 29 of sonda's:
 - **Not yet looked into (58 SonarCloud only):** one to three issues each
   across 42 keys.
 
-Prowlarr's JavaScript and TypeScript (a React frontend) aren't classified
-yet: 209 of 588 and 126 of 150.
+## Prowlarr's frontend, measured
+
+Prowlarr's React frontend, JavaScript and TypeScript, against SonarCloud;
+each difference measured on SonarQube 26.7 with a calibration project that
+installs React, PropTypes and Lodash (their types matter: several rules
+read them).
+
+- **Each one.** S7763 reports each re-export of a named or namespace
+  import, in `export { a }` and as `export const A = a`, not of a default
+  import. S6775 reports each default of a required prop, at the default,
+  and each default no propTypes declare. S6767 reports each unused prop
+  type: a class component's read through `this.props.x`, destructuring of
+  `this.props` or `prevProps.x`, a function component's in its body, a
+  TypeScript component's from its props type, destructured or read from a
+  `props` parameter. S6441 reports each unused method or arrow-function
+  property, and each assignment to a `this._x` field nothing reads; a
+  dynamic `this[name]` doesn't count.
+- **What hands props on.** A spread of `this.props`, a rest element of the
+  props, and for a function component any JSX spread attribute; an array
+  spread doesn't. A JSX attribute's name isn't a read; a name destructured
+  from anything is.
+- **Types.** S8907 reports a Lodash collection helper only on what is known
+  to be an array (a literal, `Object.keys(...)`, a constant array, another
+  helper's result), never with a property shorthand (`{ id }`); `isArray`
+  and `uniq` always. S1874 reports `substr` on a known string. S6644 is a
+  name's ternary, `q ? q : '-'`, not a member's.
+- **Narrower than sonda was.** S1226 is a parameter overwritten before its
+  value is read (`data = 1`), not `age = Math.round(age)`. S1186 is an empty
+  function declaration or class method, not a function expression or an
+  object literal's method. S6653 is `Object.prototype.hasOwnProperty.call`,
+  not `o.hasOwnProperty(k)`. S6582 leaves `a && a.b !== x` and `!a ||
+  a.b === x`, which an optional chain would change. S6418 leaves a
+  `{placeholder}`; S2068 a value naming itself (`PASSWORD = 'password'`).
+  S2301 leaves an else-if chain over several flags. S6443 leaves a local or
+  parameter that shadows the state.
+- **Broader.** S3626 reports a `return` or `continue` ending an `if` that
+  ends the function or loop (not a function's only statement). S6582
+  includes `f && f().x` and `!a || a.b !== x`. S6756 includes
+  `this.setState(select(this.state.x))` and a copy of `this.state` passed
+  to `setState`, at the read. S7765 includes `xs.some((v) => v === x)`,
+  not Lodash's `_.indexOf`. S7784 includes `_.cloneDeep`.
+- **Positions.** S107 reports an arrow function at its `=>`.
+
+### Still open in Prowlarr's frontend
+
+38 of SonarCloud's issues and 11 of sonda's:
+
+- **Known gap, types (8 and 2):** S6759 (6 and 2), whether a component's
+  props type, often from another file, is read-only; S8907 (2), Lodash on
+  an array TypeScript infers (`link.children`).
+- **No sonda rule (4):** S9379 (3), `autoFocus`; S9381 (1).
+- **SonarCloud differs from SonarQube 26.7:** S1874 (2 sonda only) on
+  `ReactDOM.findDOMNode`, which 26.7 reports with React 18's types; S1481
+  (1 sonda only) on an unused rest element, which 26.7 reports with S1854.
+- **Not yet looked into (26 SonarCloud only, 6 sonda only):** one to three
+  each, among them dead stores (S1854, 3) and regular expressions with
+  super-linear runtime that `js/regex-polynomial-backtracking` misses
+  (S8786, 3).
 
 ## Rules that depend on knowing a type
 

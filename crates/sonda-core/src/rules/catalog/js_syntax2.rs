@@ -337,8 +337,23 @@ fn reassigned_parameter<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             return false;
         }
         if n.kind() == "identifier" && names.contains(&text(n, src)) {
+            // `x = f(x)` reads x first (measured on SonarQube 26.7).
             let plain_write = n.parent().is_some_and(|p| {
-                p.kind() == "assignment_expression" && p.child_by_field_name("left") == Some(n)
+                p.kind() == "assignment_expression"
+                    && p.child_by_field_name("left") == Some(n)
+                    && !p.child_by_field_name("right").is_some_and(|r| {
+                        let t = text(r, src);
+                        let name = text(n, src);
+                        t.windows(name.len()).enumerate().any(|(i, w)| {
+                            w == name
+                                && !t.get(i.wrapping_sub(1)).is_some_and(|b| {
+                                    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'.')
+                                })
+                                && !t.get(i + name.len()).is_some_and(|b| {
+                                    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$')
+                                })
+                        })
+                    })
             });
             mentions.push((n.start_byte(), n, plain_write));
         }

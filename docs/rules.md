@@ -6069,7 +6069,7 @@ SonarQube: S6653
 Noncompliant:
 
 ```javascript
-if (obj.hasOwnProperty(key)) {}
+if (Object.prototype.hasOwnProperty.call(obj, key)) {}
 ```
 
 Compliant:
@@ -7244,7 +7244,7 @@ function Page() { return <ul><Row /></ul>; }
 
 ## js/unused-component-method
 
-**Unused methods of React components should be removed.** A method nothing calls is dead code that readers still have to understand.
+**Unused methods of React components should be removed.** A method, property or field nothing reads is dead code that readers still have to understand.
 
 SonarQube: S6441 (related)
 
@@ -7685,20 +7685,20 @@ const p = String.raw`C:\\Users\\me`;
 
 ## js/lodash-native
 
-**Native APIs should be preferred over Lodash and Underscore.js methods.** Array and string natives cover what these helpers do.
+**Native APIs should be preferred over Lodash and Underscore.js methods.** Array and string natives cover what these helpers do, and a Set removes duplicates.
 
 SonarQube: S8907
 
 Noncompliant:
 
 ```javascript
-const a = _.map(list, fn);
+const a = _.map([1, 2], fn);
 ```
 
 Compliant:
 
 ```javascript
-const a = list.map(fn);
+const a = [1, 2].map(fn);
 ```
 
 ## js/memoize-without-resolver
