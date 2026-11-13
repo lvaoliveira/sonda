@@ -401,6 +401,27 @@ file, the report formats and the public library API.
     at the type, `cs/method-returns-constant` at the method's name.
   - `cs/could-be-static` takes an unresolved base type named like an
     interface (`IParser`) for one, and checks its implementers.
+- C and C++, compared with SonarCloud on qutepart-cpp and roo_display (our
+  SonarQube 26.7 has no C/C++ analyzer, so each rule follows what SonarCloud
+  reported): sonda raises 238 of qutepart-cpp's 748 C and C++ issues, where
+  it raised 62, and 1,525 of roo_display's 2,958, where it raised 152.
+  - 19 C++ rules, `cpp/*`: C-style arrays, implicit converting
+    constructors, nesting depth, mergeable ifs, several declarations per
+    statement, nested conditionals, assignments in expressions, redundant
+    `static`, mutable globals, `typedef`, unscoped enums, `inline
+    constexpr`, redundant `virtual`, deprecated code, `= default`, empty
+    functions, redundant types, `std::make_unique`, and the init-statement
+    (off by default).
+  - A `.h` written in C++ is read as C++ in a project with C++ sources.
+  - Cognitive complexity's threshold is each language's default unless
+    `thresholds.cognitive_complexity` sets it: 25 in C and C++, 15
+    elsewhere. In C and C++ a lambda counts in its function, `else { if }`
+    is an else-if, and a `TEST(...)` body or an old-style definition isn't
+    scored.
+  - Commented-out C and C++ is one issue per block, at its first line; a
+    commented directive or a lone brace is code. TODO and FIXME match in
+    any case, once per comment. An `override` isn't counted against
+    `common/too-many-parameters`.
 - JavaScript and TypeScript, Prowlarr's React frontend (`d2d1fc0`, against
   SonarCloud), each change measured on SonarQube 26.7: sonda raises 563 of
   SonarCloud's 588 JavaScript issues, where it raised 209, and 8 it

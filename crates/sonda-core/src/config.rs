@@ -47,7 +47,9 @@ disabled = []
 # "js/no-console" = "info"
 
 [thresholds]
-cognitive_complexity = 15
+# Cognitive complexity a function may have; by default 15, and 25 in C and
+# C++, as SonarQube.
+# cognitive_complexity = 15
 function_lines = 80
 # Parameters a function may have; by default 7, and 13 in Python, as SonarQube.
 # parameters = 7
@@ -160,7 +162,8 @@ pub struct RulesConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
-    pub cognitive_complexity: u32,
+    /// None: each language's default (15, 25 in C and C++).
+    pub cognitive_complexity: Option<u32>,
     pub function_lines: u32,
     /// None: each language's default (7, 13 in Python).
     pub parameters: Option<u32>,
@@ -169,7 +172,7 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Thresholds {
-            cognitive_complexity: 15,
+            cognitive_complexity: None,
             function_lines: 80,
             parameters: None,
         }
@@ -244,7 +247,7 @@ impl Config {
         let positive = [
             (
                 "thresholds.cognitive_complexity",
-                t.cognitive_complexity as u64,
+                t.cognitive_complexity.map_or(1, u64::from),
             ),
             ("thresholds.function_lines", t.function_lines as u64),
             ("thresholds.parameters", t.parameters.map_or(1, u64::from)),
