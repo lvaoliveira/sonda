@@ -132,7 +132,7 @@ disabled = ["js/no-console"]
 "common/function-length" = "minor"
 
 [thresholds]
-cognitive_complexity = 15
+cognitive_complexity = 15  # default: 15, and 25 for C and C++, as SonarQube
 function_lines = 80
 parameters = 7             # default: 7, and 13 for Python, as SonarQube
 
