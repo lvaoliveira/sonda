@@ -373,6 +373,17 @@ fn overrides_and_implementations(
                 override_parameter_findings(mine, theirs, file, on, found);
             }
         }
+        // A default the overridden or implemented member declares and this
+        // one leaves out: callers get it or not depending on the type they
+        // call through (measured on SonarQube 26.7, for an interface's
+        // member too).
+        if on("cs/override-changes-default") && !method.has("partial") {
+            for (mine, theirs) in &pairs {
+                if theirs.default.is_some() && mine.default.is_none() {
+                    found.push(("cs/override-changes-default", file, mine.span));
+                }
+            }
+        }
     }
 }
 
@@ -454,14 +465,11 @@ fn base_of(index: &ProjectIndex, id: TypeId) -> Base {
 /// Classes more than five levels from Object, the platform's base classes
 /// and Object included. A base from another library counts as one level:
 /// the least it can be.
+/// More than five base classes declared in the project: .NET's own
+/// (`Controller`, `ControllerBase`) and `object` don't count (measured on
+/// SonarQube 26.7).
 fn deep_inheritance(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
-    let ancestors = index.ancestors(id);
-    let last = *ancestors.last().unwrap_or(&id);
-    let rest = match base_of(index, last) {
-        Base::Platform(p) => dotnet::platform().base_chain(&p.name).len(),
-        _ => 1,
-    };
-    if ancestors.len() + rest > 5 {
+    if index.ancestors(id).len() > 5 {
         let (file, decl) = index.decl(id);
         found.push(("cs/deep-inheritance", file, decl.span));
     }
@@ -859,6 +867,13 @@ fn interface_downcast(index: &ProjectIndex, file: usize, site: &Site) -> bool {
 /// An array written out for a call that binds to a `params` method: no
 /// overload of its arity takes the array as a plain parameter.
 fn array_for_params(index: &ProjectIndex, file: usize, site: &Site) -> bool {
+    // .NET's own: string's character methods and Path.Combine (measured on
+    // SonarQube 26.7).
+    match (site.receiver.as_deref(), site.name.as_str()) {
+        (Some("string" | "String"), "Split" | "Trim" | "TrimStart" | "TrimEnd") => return true,
+        (Some("Path" | "System.IO.Path"), "Combine") => return true,
+        _ => {}
+    }
     let target = match &site.receiver {
         None => index.type_named(&site.owner),
         Some(t) => index.resolve_in(
@@ -1114,7 +1129,7 @@ mod tests {
 
     #[test]
     fn hierarchies_across_files() {
-        let mut files: Vec<(String, String)> = (1..=6)
+        let mut files: Vec<(String, String)> = (1..=7)
             .map(|i| {
                 let base = if i == 1 {
                     "External".to_string()
@@ -1136,8 +1151,8 @@ mod tests {
             .iter()
             .map(|(p, s)| (p.as_str(), s.as_str()))
             .collect();
-        // L6 has five project ancestors and an external one.
-        assert_eq!(project("cs/deep-inheritance", &refs), [("L6.cs".into(), 2)]);
+        // L7 has six project ancestors; L6, five and an external one.
+        assert_eq!(project("cs/deep-inheritance", &refs), [("L7.cs".into(), 2)]);
         assert_eq!(
             project("cs/field-differs-from-base-by-case", &refs),
             [("Raspberry.cs".into(), 3)]
@@ -1161,14 +1176,14 @@ mod tests {
             ),
             (
                 "Plain.cs",
-                "namespace N;\npublic class P1 { }\npublic class P2 : P1 { }\npublic class P3 : P2 { }\npublic class P4 : P3 { }\npublic class P5 : P4 { }\npublic class P6 : P5 { }\n",
+                "namespace N;\npublic class P1 { }\npublic class P2 : P1 { }\npublic class P3 : P2 { }\npublic class P4 : P3 { }\npublic class P5 : P4 { }\npublic class P6 : P5 { }\npublic class P7 : P6 { }\n",
             ),
         ];
-        // MemoryStream, Stream, MarshalByRefObject and Object: S3 is six
-        // levels deep, P6 too, Object included.
+        // Only the project's classes count: not MemoryStream's chain, nor
+        // Object.
         assert_eq!(
             project("cs/deep-inheritance", &files),
-            [("Plain.cs".into(), 7), ("Streams.cs".into(), 5)]
+            [("Plain.cs".into(), 8)]
         );
     }
 
@@ -1297,6 +1312,31 @@ mod tests {
         );
         // The pattern is complete across the two parts.
         assert_eq!(project("cs/dispose-pattern", &files), []);
+    }
+
+    /// Measured on SonarQube 26.7: an implementation leaving out its
+    /// interface's default is reported; .NET's params methods given an array
+    /// are, an object array isn't.
+    #[test]
+    fn defaults_and_params_measured() {
+        let files = [
+            (
+                "Agent.cs",
+                "namespace N;\npublic interface IAgent {\n  string Get(bool simplified = false);\n  string Other(string a, int b = 0);\n}\npublic class Agent : IAgent {\n  public string Get(bool simplified) => \"a\";\n  public string Other(string a, int b = 0) => a;\n}\n",
+            ),
+            (
+                "Use.cs",
+                "namespace N;\npublic class Use {\n  string F(string s, object[] row) {\n    var a = s.TrimStart(new char[] { '/', '\\\\' });\n    var b = s.Split(new[] { '.', '-' })[0];\n    var c = System.IO.Path.Combine(new[] { s, s });\n    Run(\"m\", new object[] { row[0] });\n    return a + b + c;\n  }\n  static void Run(string m, params object[] args) { }\n}\n",
+            ),
+        ];
+        assert_eq!(
+            project("cs/override-changes-default", &files),
+            [("Agent.cs".into(), 7)]
+        );
+        assert_eq!(
+            project("cs/array-for-params", &files),
+            [("Use.cs".into(), 4), ("Use.cs".into(), 5)]
+        );
     }
 
     #[test]

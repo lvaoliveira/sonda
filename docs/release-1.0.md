@@ -133,10 +133,10 @@ built.
       eGovFrame's common components (against SonarCloud): Java 3,726 of
       4,878 and 868 extra, every difference classified; JavaScript 450 of 454 and 279 extra, every
       difference classified (the extra ones are `var`, which SonarQube
-      26.7 reports). C# (Prowlarr, against SonarCloud): 1,361 of 1,787
-      and 94 extra after a first pass, every change measured on SonarQube
-      26.7; data flow and types from other files are the large gaps,
-      about 170 small differences not yet looked into. C++: not started.
+      26.7 reports). C# (Prowlarr, against SonarCloud): 1,433 of 1,787
+      and 29 extra, every change measured on SonarQube 26.7; data flow and
+      types from other files are the large gaps, 58 small
+      differences not yet looked into. C++: not started.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

@@ -6,6 +6,7 @@ use super::cs::{
     simple_name,
 };
 use super::cs_bugs::{attribute_names, cs_call_arguments, cs_integer, find_attribute};
+use super::cs_more::implements_iequatable;
 use super::java_bugs::{find_in_scope, operator_text};
 use super::java_security::text;
 use super::java_smells::count_word;
@@ -245,8 +246,8 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/too-many-switch-cases",
         name: "switch statements should not have too many cases",
-        description: "More than 30 cases are hard to read; a dictionary or polymorphism usually expresses the \
-                      mapping better.",
+        description: "More than 30 cases, some doing several things, are hard to read; a dictionary or \
+                      polymorphism usually expresses the mapping better.",
         message: "Reduce the number of cases in this switch (more than 30).",
         category: CodeSmell,
         severity: Major,
@@ -259,11 +260,8 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "class A { int F(int x) { switch (x) { case 0: case 1: case 2: case 3: case 4: case 5: case 6: case 7: \
-                  case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16: case 17: case 18: case 19: \
-                  case 20: case 21: case 22: case 23: case 24: case 25: case 26: case 27: case 28: case 29: case 30: return 1; \
-                  default: return 0; } } }",
-            good: "class A { int F(int x) { switch (x) { case 0: return 1; default: return 0; } } }",
+            bad: "class A { int F(int x) { switch (x) { case 31: G(); return 31; case 0: return 0; case 1: return 1; case 2: return 2; case 3: return 3; case 4: return 4; case 5: return 5; case 6: return 6; case 7: return 7; case 8: return 8; case 9: return 9; case 10: return 10; case 11: return 11; case 12: return 12; case 13: return 13; case 14: return 14; case 15: return 15; case 16: return 16; case 17: return 17; case 18: return 18; case 19: return 19; case 20: return 20; case 21: return 21; case 22: return 22; case 23: return 23; case 24: return 24; case 25: return 25; case 26: return 26; case 27: return 27; case 28: return 28; case 29: return 29; case 30: return 30; default: return 0; } } void G() { } }",
+            good: "class A { int F(int x) { switch (x) { case 0: return 0; case 1: return 1; case 2: return 2; case 3: return 3; case 4: return 4; case 5: return 5; case 6: return 6; case 7: return 7; case 8: return 8; case 9: return 9; case 10: return 10; case 11: return 11; case 12: return 12; case 13: return 13; case 14: return 14; case 15: return 15; case 16: return 16; case 17: return 17; case 18: return 18; case 19: return 19; case 20: return 20; case 21: return 21; case 22: return 22; case 23: return 23; case 24: return 24; case 25: return 25; case 26: return 26; case 27: return 27; case 28: return 28; case 29: return 29; case 30: return 30; default: return 0; } } }",
         }),
     },
     Rule {
@@ -424,7 +422,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S2326")],
         check: Check::Query {
             langs: CSHARP,
-            query: "[(method_declaration type_parameters: (_)) (class_declaration (type_parameter_list))] @match",
+            query: "[(method_declaration type_parameters: (_)) (class_declaration (type_parameter_list)) (interface_declaration (type_parameter_list))] @match",
             filter: Some(Find(unused_type_parameter)),
         },
         example: Some(Example {
@@ -841,9 +839,9 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/argument-exception-param-name",
         name: "ArgumentException parameter names should name a parameter",
-        description: "The parameter name tells the caller which argument was wrong; one that doesn't exist \
-                      points them nowhere.",
-        message: "Pass the name of one of this method's parameters, preferably with nameof().",
+        description: "The parameter name tells the caller which argument was wrong; one that doesn't exist, \
+                      or none at all, points them nowhere.",
+        message: "Pass the name of one of this method's parameters, preferably with nameof(), and a message.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 2,
@@ -934,9 +932,10 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4136")],
         check: Check::Query {
             langs: CSHARP,
-            // Each separated group, at its first declaration (measured on SonarQube 26.7).
-            query: "[(class_declaration body: (declaration_list (method_declaration) @match)) \
-                     (struct_declaration body: (declaration_list (method_declaration) @match)) \
+            // Each separated group, at its first declaration; constructors
+            // too (measured on SonarQube 26.7).
+            query: "[(class_declaration body: (declaration_list [(method_declaration) (constructor_declaration)] @match)) \
+                     (struct_declaration body: (declaration_list [(method_declaration) (constructor_declaration)] @match)) \
                      (interface_declaration body: (declaration_list (method_declaration) @match))]",
             filter: Some(Find(separated_overload)),
         },
@@ -1218,11 +1217,30 @@ fn is_plain_goto(node: Node, src: &[u8]) -> bool {
 
 fn is_public_instance_field(field: Node, src: &[u8]) -> bool {
     // A static field too, which cs/visible-mutable-static-field also
-    // reports (measured on SonarQube 26.7).
+    // reports (measured on SonarQube 26.7); not one of a private nested
+    // class, which nothing outside sees.
     cs_has_modifier(field, "public", src)
         && !["const", "readonly"]
             .iter()
             .any(|m| cs_has_modifier(field, m, src))
+        && !in_private_type(field, src)
+}
+
+/// Whether `n` is inside a type declared private (a nested class only its
+/// outer class sees).
+pub(super) fn in_private_type(n: Node, src: &[u8]) -> bool {
+    let mut current = n.parent();
+    while let Some(p) = current {
+        if matches!(
+            p.kind(),
+            "class_declaration" | "struct_declaration" | "record_declaration"
+        ) && cs_has_modifier(p, "private", src)
+        {
+            return true;
+        }
+        current = p.parent();
+    }
+    false
 }
 
 fn utility_class_name<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1357,13 +1375,31 @@ fn only_condition(node: Node, _: &[u8]) -> bool {
         && node.child_by_field_name("update").is_none()
 }
 
+/// More than 30 cases, one of which does more than one thing: a switch
+/// that only maps each case to one statement isn't reported (measured on
+/// SonarQube 26.7).
 fn has_too_many_cases(node: Node, src: &[u8]) -> bool {
     node.child_by_field_name("body").is_some_and(|b| {
         let mut cursor = b.walk();
-        b.named_children(&mut cursor)
-            .filter(|s| s.kind() == "switch_section" && !text(*s, src).starts_with(b"default"))
-            .count()
-            > 30
+        let sections: Vec<Node> = b
+            .named_children(&mut cursor)
+            .filter(|s| s.kind() == "switch_section")
+            .collect();
+        let cases = sections
+            .iter()
+            .filter(|s| !text(**s, src).starts_with(b"default"))
+            .count();
+        let busy = sections.iter().any(|s| {
+            let mut c = s.walk();
+            s.named_children(&mut c)
+                .filter(|x| {
+                    x.kind().ends_with("_statement") && x.kind() != "break_statement"
+                        || x.kind() == "block"
+                })
+                .count()
+                > 1
+        });
+        cases > 30 && busy
     })
 }
 
@@ -1466,7 +1502,16 @@ fn empty_class_name<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         || cs_has_modifier(class, "partial", src)
         // An empty static class is a marker, such as the IsExternalInit polyfill.
         || cs_has_modifier(class, "static", src)
-        || !base_types(class).is_empty()
+    {
+        return None;
+    }
+    // One deriving from a concrete class is reported; not from an abstract
+    // one, which it implements, an exception or attribute, which are named
+    // that way, a generic base's closed form, nor an interface's
+    // implementation (measured on SonarQube 26.7). A base declared in
+    // another file of the project can't be told concrete from here.
+    if let Some(base) = base_types(class).first()
+        && !concrete_base(class, *base, src)
     {
         return None;
     }
@@ -1480,6 +1525,54 @@ fn empty_class_name<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         return None;
     }
     class.child_by_field_name("name")
+}
+
+/// Whether an empty class's base is a concrete class: declared in this file
+/// without `abstract`, or a .NET class the file's usings name that isn't
+/// abstract.
+fn concrete_base(class: Node, base: Node, src: &[u8]) -> bool {
+    let name = simple_name(base, src);
+    if text(base, src).contains(&b'<')
+        || name.ends_with(b"Exception")
+        || name.ends_with(b"Attribute")
+        || crate::semantic::cs_infer::named_like_an_interface(name)
+    {
+        return false;
+    }
+    let mut root = class;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut stack = vec![root];
+    let mut usings: Vec<String> = vec!["System".to_string()];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "class_declaration"
+                if n.child_by_field_name("name")
+                    .is_some_and(|x| text(x, src) == name) =>
+            {
+                return !cs_has_modifier(n, "abstract", src);
+            }
+            "using_directive" => {
+                if let Some(ns) = n.named_child(0).and_then(|x| x.utf8_text(src).ok())
+                    && n.named_child_count() == 1
+                {
+                    usings.push(ns.to_string());
+                }
+            }
+            _ => {}
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    let platform = crate::semantic::dotnet::platform();
+    let Ok(name) = std::str::from_utf8(name) else {
+        return false;
+    };
+    usings.iter().any(|ns| {
+        platform.get(&format!("{ns}.{name}")).is_some_and(|t| {
+            t.kind == "class" && !t.tags.iter().any(|a| a == "abstract" || a == "static")
+        })
+    })
 }
 
 fn class_has_no_base(name: Node, src: &[u8]) -> bool {
@@ -1560,7 +1653,7 @@ fn is_public_multidimensional(array: Node, src: &[u8]) -> bool {
 
 fn getter_throw<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let allowed = |t: Node| {
-        let created = if t.kind() == "throw_statement" || t.kind() == "throw_expression" {
+        let created = if t.kind() == "throw_statement" {
             operand(t)
         } else {
             None
@@ -1587,10 +1680,11 @@ fn getter_throw<'t>(property: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             .copied()
             .chain(["try_statement"])
             .collect();
+        // A throw statement: `get => throw ...` isn't reported (measured on
+        // SonarQube 26.7).
         find_in_scope(body, &stops, |n| {
-            matches!(n.kind(), "throw_statement" | "throw_expression") && !allowed(n)
+            n.kind() == "throw_statement" && !allowed(n)
         })
-        .or_else(|| (body.kind() == "throw_expression" && !allowed(body)).then_some(body))
     };
     if let Some(value) = property
         .child_by_field_name("value")
@@ -1677,8 +1771,9 @@ fn tests_this(node: Node, src: &[u8]) -> bool {
 
 fn cast_after_type_check<'t>(statement: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let check = statement.child_by_field_name("condition")?;
-    // `x is string` is an is_expression; `x is Foo` a constant pattern. A
-    // declaration pattern (`x is Foo f`) already binds the value.
+    // `x is string` is an is_expression; `x is Foo` a constant pattern; a
+    // declaration pattern (`x is Foo f`) binds the value, so a cast of `x`
+    // after it is the one to remove (measured on SonarQube 26.7).
     let (subject, ty) = if check.kind() == "is_expression" {
         (
             check.child_by_field_name("left")?,
@@ -1686,20 +1781,31 @@ fn cast_after_type_check<'t>(statement: Node<'t>, src: &[u8]) -> Option<Node<'t>
         )
     } else {
         let pattern = check.child_by_field_name("pattern")?;
-        if pattern.kind() != "constant_pattern" {
-            return None;
-        }
-        (check.child_by_field_name("expression")?, pattern)
+        let ty = match pattern.kind() {
+            "constant_pattern" => pattern,
+            "declaration_pattern" => pattern.child_by_field_name("type")?,
+            _ => return None,
+        };
+        (check.child_by_field_name("expression")?, ty)
     };
     let ty = text(ty, src);
     let body = statement.child_by_field_name("consequence")?;
-    // Reported at the type check (measured on SonarQube 26.7).
+    // `(T)x` or `x as T`. Reported at the type check (measured on SonarQube
+    // 26.7).
     find_in_scope(body, CS_SCOPE_STOPS, |n| {
-        n.kind() == "cast_expression"
-            && n.child_by_field_name("type")
-                .is_some_and(|t| text(t, src) == ty)
-            && n.child_by_field_name("value")
-                .is_some_and(|v| same_code(v, subject, src))
+        let (value, cast_to) = match n.kind() {
+            "cast_expression" => (
+                n.child_by_field_name("value"),
+                n.child_by_field_name("type"),
+            ),
+            "as_expression" => (
+                n.child_by_field_name("left"),
+                n.child_by_field_name("right"),
+            ),
+            _ => return false,
+        };
+        cast_to.is_some_and(|t| text(t, src) == ty)
+            && value.is_some_and(|v| same_code(v, subject, src))
     })
     .map(|_| check)
 }
@@ -1814,9 +1920,15 @@ fn non_public_exception_name<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>
 
 fn overloads_equality(operator: Node, src: &[u8]) -> bool {
     let mut cursor = operator.walk();
+    // A type implementing IEquatable<T> compares by value on purpose
+    // (measured on SonarQube 26.7).
     operator
         .children(&mut cursor)
         .any(|c| !c.is_named() && text(c, src) == b"==")
+        && !operator
+            .parent()
+            .and_then(|l| l.parent())
+            .is_some_and(|class| implements_iequatable(class, src))
 }
 
 fn throw_in_safe_method<'t>(member: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1869,6 +1981,11 @@ fn unknown_parameter_name<'t>(creation: Node<'t>, src: &[u8]) -> Option<Node<'t>
     }
     let ty = simple_name(creation.child_by_field_name("type")?, src);
     let args = cs_call_arguments(creation);
+    // No argument at all says nothing about what was wrong (measured on
+    // SonarQube 26.7).
+    if args.is_empty() {
+        return Some(creation);
+    }
     // ArgumentException(message, paramName); the others take paramName first.
     let position = if ty == b"ArgumentException" { 1 } else { 0 };
     let arg = *args.get(position)?;
@@ -1918,7 +2035,10 @@ fn suppress_finalize_call<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
 }
 
 fn attribute_without_usage<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    if first_base_name(class, src) != Some(b"Attribute") || cs_has_modifier(class, "abstract", src)
+    // Deriving from another attribute too, which the name tells (measured on
+    // SonarQube 26.7).
+    if !first_base_name(class, src).is_some_and(|b| b.ends_with(b"Attribute"))
+        || cs_has_modifier(class, "abstract", src)
     {
         return None;
     }
@@ -1959,10 +2079,27 @@ fn separated_overload<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if implements(method) {
         return None;
     }
-    let name = name_text(method, src);
+    // Overloads differing in accessibility or in being static are separate
+    // groups (measured on SonarQube 26.7): a public `F` and a private `F`
+    // can sit apart.
+    fn group<'s>(m: Node, src: &'s [u8]) -> (u16, &'s [u8], Vec<&'static str>, bool) {
+        let access: Vec<&'static str> = ["public", "protected", "internal", "private"]
+            .into_iter()
+            .filter(|a| cs_has_modifier(m, a, src))
+            .collect();
+        (
+            m.kind_id(),
+            name_text(m, src),
+            access,
+            cs_has_modifier(m, "static", src),
+        )
+    }
+    let key = group(method, src);
     let members = type_members(declaration);
     let same = |m: &Node| {
-        m.kind() == "method_declaration" && !implements(*m) && name_text(*m, src) == name
+        matches!(m.kind(), "method_declaration" | "constructor_declaration")
+            && !implements(*m)
+            && group(*m, src) == key
     };
     let positions: Vec<usize> = members
         .iter()
@@ -2190,9 +2327,11 @@ mod tests {
 
     #[test]
     fn switches() {
-        let cases: String = (0..31).map(|i| format!("case {i}: ")).collect();
+        // 31 sections, one of them doing two things (measured on SonarQube
+        // 26.7).
+        let cases: String = (0..31).map(|i| format!("case {i}: return; ")).collect();
         let src = method(&format!(
-            "switch (x) {{ {cases}return; default: return; }}\nswitch (x) {{ case 1: return; case 2: default: return; }}\nswitch (x) {{ case 1: return; default: return; case 2: return; }}\nswitch (x) {{ default: return; case 1: return; }}"
+            "switch (x) {{ {cases}case 99: G(); return; default: return; }}\nswitch (x) {{ case 1: return; case 2: default: return; }}\nswitch (x) {{ case 1: return; default: return; case 2: return; }}\nswitch (x) {{ default: return; case 1: return; }}"
         ));
         assert_eq!(flagged("cs/too-many-switch-cases", &src), [4]);
         assert_eq!(flagged("cs/empty-case-before-default", &src), [5]);
@@ -2216,7 +2355,10 @@ mod tests {
     #[test]
     fn class_shapes() {
         let src = "namespace N;\nclass Empty { }\nstatic class IsExternalInit { }\npartial class P { }\nclass Sub : Base { }\n[Serializable] class Tagged { }\nclass ParseException { int code; }\nclass GoodException : Exception { }\nclass Retry : Attribute { }\nclass Changed : EventArgs { }\nclass Fail : Exception { }\ninternal class QuotaException : Exception { }\nclass OldException : ApplicationException { }";
-        assert_eq!(flagged("cs/empty-class", src), [2]);
+        // Deriving from a concrete class, EventArgs too, but not an
+        // exception or an attribute (measured on SonarQube 26.7); Base,
+        // declared elsewhere, may be abstract.
+        assert_eq!(flagged("cs/empty-class", src), [2, 10]);
         assert_eq!(flagged("cs/exception-name-without-base", src), [7]);
         assert_eq!(flagged("cs/type-suffix-from-base", src), [9, 10, 11]);
         assert_eq!(flagged("cs/non-public-exception", src), [8, 11, 12, 13]);
@@ -2243,7 +2385,9 @@ mod tests {
         let src = class(
             "int A { get { throw new ArgumentException(); } }\nint B { get { throw new InvalidOperationException(); } }\nint C => throw new FormatException();\nint D { get { try { return G(); } catch { throw new E(); } } set { throw new ArgumentException(); } }\nint E { get => x ?? throw new ObjectDisposedException(nameof(A)); }",
         );
-        assert_eq!(flagged("cs/property-getter-throws", &src), [3, 5]);
+        // A throw expression, `int C => throw ...`, isn't reported (measured
+        // on SonarQube 26.7).
+        assert_eq!(flagged("cs/property-getter-throws", &src), [3]);
     }
 
     #[test]

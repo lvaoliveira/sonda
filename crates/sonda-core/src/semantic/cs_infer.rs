@@ -2120,7 +2120,7 @@ fn settled(t: &Ty) -> bool {
 
 /// `IParser`, `IEnumerable<T>`, `N.IFoo`: an `I` then a capital, .NET's
 /// convention for an interface.
-fn named_like_an_interface(name: &[u8]) -> bool {
+pub(crate) fn named_like_an_interface(name: &[u8]) -> bool {
     let simple = name.split(|b| *b == b'<').next().unwrap_or(name);
     let simple = simple.rsplit(|b| *b == b'.').next().unwrap_or(simple);
     matches!(simple, [b'I', second, ..] if second.is_ascii_uppercase())
