@@ -86,7 +86,7 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/public-readonly-mutable",
-        name: "Visible readonly fields should not hold mutable collections",
+        name: "Public readonly fields should not hold mutable collections",
         description: "`readonly` only stops the field being reassigned; callers can still change the array or \
                       list it holds.",
         message: "Expose a read-only view (IReadOnlyList<T>, ImmutableArray<T>) instead.",
@@ -716,7 +716,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S4035")],
         check: Check::Query {
             langs: CSHARP,
-            query: "(class_declaration name: (identifier) (base_list)) @match",
+            query: "(class_declaration name: (identifier)) @match",
             filter: Some(Find(unsealed_equatable)),
         },
         example: Some(Example {
@@ -1158,12 +1158,11 @@ fn assertion_side_effect<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 fn visible_readonly_collection<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    // A static field too (measured on SonarQube 26.7).
+    // A public field, static too; not a protected or internal one (measured
+    // on SonarQube 26.7).
     if !cs_has_modifier(field, "readonly", src)
-        || cs_has_modifier(field, "private", src)
-        || !["public", "protected", "internal"]
-            .iter()
-            .any(|m| cs_has_modifier(field, m, src))
+        || !cs_has_modifier(field, "public", src)
+        || cs_has_modifier(field, "protected", src)
     {
         return None;
     }
@@ -1400,17 +1399,20 @@ fn unused_members_of<'t>(class: Node<'t>, scope: Node<'t>, src: &[u8], found: &m
         match member.kind() {
             "field_declaration" if private => {
                 for d in declarators(member) {
-                    if let Some(name) = d.child_by_field_name("name")
-                        && count_word(whole, text(name, src)) == 1
-                    {
-                        found.push(name);
+                    if let Some(name) = d.child_by_field_name("name") {
+                        let n = text(name, src);
+                        if count_word(whole, n) - qualified_by_other_type(scope, n, class_name, src)
+                            == 1
+                        {
+                            found.push(name);
+                        }
                     }
                 }
             }
             "method_declaration" if private => {
                 if let Some(name) = member.child_by_field_name("name")
                     && !matches!(text(name, src), b"Main" | b"Deconstruct")
-                    && count_word(whole, text(name, src)) == 1
+                    && method_unused(member, class, scope, whole, src)
                 {
                     found.push(name);
                 }
@@ -1501,14 +1503,127 @@ fn assigned_in(scope: Node, name: &[u8], src: &[u8]) -> bool {
     false
 }
 
-/// Whether `scope` creates a `name`: `new name(...)`, `new name { ... }`, or
-/// a target-typed `new(...)` given to something declared as one.
+/// Whether a private method is unused: no mention of its name besides its
+/// declarations, other types' members of that name, and calls whose
+/// argument count fits only another overload (measured on SonarQube 26.7).
+fn method_unused(method: Node, class: Node, scope: Node, whole: &[u8], src: &[u8]) -> bool {
+    let Some(name) = method.child_by_field_name("name").map(|n| text(n, src)) else {
+        return false;
+    };
+    let class_name = class.child_by_field_name("name").map(|n| text(n, src));
+    let overloads: Vec<Node> = members(class)
+        .into_iter()
+        .filter(|m| {
+            m.kind() == "method_declaration"
+                && m.child_by_field_name("name")
+                    .is_some_and(|n| text(n, src) == name)
+        })
+        .collect();
+    let mut uses = count_word(whole, name)
+        .saturating_sub(qualified_by_other_type(scope, name, class_name, src))
+        .saturating_sub(overloads.len());
+    if overloads.len() > 1 {
+        let (min, max) = arity(method, src);
+        let mut stack = vec![scope];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "invocation_expression"
+                && n.child_by_field_name("function").is_some_and(|f| {
+                    let called = f.child_by_field_name("name").unwrap_or(f);
+                    text(called, src) == name
+                })
+            {
+                let args = n.child_by_field_name("arguments").map_or(0, |a| {
+                    a.named_children(&mut a.walk())
+                        .filter(|x| x.kind() == "argument")
+                        .count()
+                });
+                if args < min || args > max {
+                    uses = uses.saturating_sub(1);
+                }
+            }
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+    }
+    uses == 0
+}
+
+/// How many arguments a method takes: its required parameters, and all of
+/// them (unbounded with `params`).
+fn arity(method: Node, src: &[u8]) -> (usize, usize) {
+    let Some(params) = method.child_by_field_name("parameters") else {
+        return (0, 0);
+    };
+    let list: Vec<Node> = params
+        .named_children(&mut params.walk())
+        .filter(|p| p.kind() == "parameter")
+        .collect();
+    let variadic = list.iter().any(|p| {
+        p.children(&mut p.walk())
+            .any(|c| c.kind() == "modifier" && text(c, src) == b"params")
+            || text(*p, src).starts_with(b"params ")
+    });
+    let required = list
+        .iter()
+        .filter(|p| {
+            !text(**p, src).starts_with(b"params ")
+                && !p
+                    .named_children(&mut p.walk())
+                    .any(|c| c.kind() == "equals_value_clause")
+        })
+        .count();
+    (required, if variadic { usize::MAX } else { list.len() })
+}
+
+/// Mentions of `name` as another type's member, `Cleaner.ReplaceEntities`:
+/// qualified by a capitalized name that isn't this type's nor a variable's.
+fn qualified_by_other_type(scope: Node, name: &[u8], own: Option<&[u8]>, src: &[u8]) -> usize {
+    let mut qualifiers = Vec::new();
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "member_access_expression"
+            && n.child_by_field_name("name")
+                .is_some_and(|m| text(m, src) == name)
+            && let Some(q) = n
+                .child_by_field_name("expression")
+                .filter(|q| q.kind() == "identifier")
+        {
+            let q = text(q, src);
+            if q.first().is_some_and(u8::is_ascii_uppercase) && Some(q) != own {
+                qualifiers.push(q);
+            }
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    if qualifiers.is_empty() {
+        return 0;
+    }
+    // A capitalized local, parameter, field or property isn't a type.
+    let mut declared = Vec::new();
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if matches!(
+            n.kind(),
+            "variable_declarator" | "parameter" | "property_declaration"
+        ) && let Some(d) = n.child_by_field_name("name")
+        {
+            declared.push(text(d, src));
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    qualifiers.iter().filter(|q| !declared.contains(q)).count()
+}
+
+/// Whether `scope` creates a `name`: `new name(...)`, `new name<T>(...)`,
+/// `new name { ... }`, or a target-typed `new(...)` given to something
+/// declared as one.
 fn created_in(scope: Node, name: &[u8], src: &[u8]) -> bool {
     let mut stack = vec![scope];
     while let Some(n) = stack.pop() {
         if n.kind() == "object_creation_expression"
-            && n.child_by_field_name("type")
-                .is_some_and(|t| text(t, src) == name)
+            && n.child_by_field_name("type").is_some_and(|t| {
+                let t = text(t, src);
+                t.split(|b| *b == b'<').next() == Some(name)
+            })
         {
             return true;
         }
@@ -1866,7 +1981,7 @@ fn contract_without_operations<'t>(declaration: Node<'t>, src: &[u8]) -> Option<
     (!has_operation).then(|| declaration.child_by_field_name("name"))?
 }
 
-fn implements_iequatable(declaration: Node, src: &[u8]) -> bool {
+pub(super) fn implements_iequatable(declaration: Node, src: &[u8]) -> bool {
     let mut cursor = declaration.walk();
     declaration
         .named_children(&mut cursor)
@@ -1878,36 +1993,41 @@ fn typed_equals_without_interface<'t>(declaration: Node<'t>, src: &[u8]) -> Opti
     if implements_iequatable(declaration, src) || cs_has_modifier(declaration, "partial", src) {
         return None;
     }
+    typed_equals(declaration, src)?;
+    // Reported at the type (measured on SonarQube 26.7).
+    declaration.child_by_field_name("name")
+}
+
+/// A public `Equals` taking the type's own type.
+fn typed_equals<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let own = text(declaration.child_by_field_name("name")?, src);
-    members(declaration)
-        .into_iter()
-        .find_map(|m| {
-            let name = m.child_by_field_name("name")?;
-            if m.kind() != "method_declaration"
-                || text(name, src) != b"Equals"
-                || !cs_has_modifier(m, "public", src)
-            {
-                return None;
-            }
-            let params = m.child_by_field_name("parameters")?;
-            let mut cursor = params.walk();
-            let types: Vec<&[u8]> = params
-                .named_children(&mut cursor)
-                .filter(|p| p.kind() == "parameter")
-                .filter_map(|p| p.child_by_field_name("type"))
-                .map(|t| {
-                    let t = text(t, src);
-                    t.strip_suffix(b"?").unwrap_or(t)
-                })
-                .collect();
-            (types == [own]).then_some(name)
-        })
-        // Reported at the type (measured on SonarQube 26.7).
-        .and_then(|_| declaration.child_by_field_name("name"))
+    members(declaration).into_iter().find_map(|m| {
+        let name = m.child_by_field_name("name")?;
+        if m.kind() != "method_declaration"
+            || text(name, src) != b"Equals"
+            || !cs_has_modifier(m, "public", src)
+        {
+            return None;
+        }
+        let params = m.child_by_field_name("parameters")?;
+        let mut cursor = params.walk();
+        let types: Vec<&[u8]> = params
+            .named_children(&mut cursor)
+            .filter(|p| p.kind() == "parameter")
+            .filter_map(|p| p.child_by_field_name("type"))
+            .map(|t| {
+                let t = text(t, src);
+                t.strip_suffix(b"?").unwrap_or(t)
+            })
+            .collect();
+        (types == [own]).then_some(m)
+    })
 }
 
 fn unsealed_equatable<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    (implements_iequatable(class, src)
+    // An `Equals(T)` of its own counts as much as the interface (measured on
+    // SonarQube 26.7).
+    ((implements_iequatable(class, src) || typed_equals(class, src).is_some())
         && !["sealed", "abstract", "static"]
             .iter()
             .any(|m| cs_has_modifier(class, m, src)))
@@ -2047,8 +2167,9 @@ mod tests {
         let src = class(
             "public readonly List<int> A = new();\npublic readonly int[] B;\nprivate readonly List<int> C;\npublic readonly IReadOnlyList<int> D;\npublic static readonly string[] E = { };\nprotected static readonly Dictionary<int, int> F = new();\ninternal static readonly int[] G;\npublic static readonly IReadOnlyList<int> H;",
         );
-        // Lists, not arrays, static or not (measured on SonarQube 26.7).
-        assert_eq!(flagged("cs/public-readonly-mutable", &src), [3, 8]);
+        // Public lists, not arrays, static or not; not protected (measured
+        // on SonarQube 26.7).
+        assert_eq!(flagged("cs/public-readonly-mutable", &src), [3]);
         assert_eq!(flagged("cs/public-static-mutable-collection", &src), [8]);
     }
 
@@ -2146,7 +2267,9 @@ mod tests {
         let src = "namespace N;\n[ServiceContract] interface IA { int Count(); }\n[ServiceContract] interface IB { [OperationContract] int Count(); }\nclass P { public bool Equals(P other) => true; }\nclass Q : IEquatable<Q> { public bool Equals(Q other) => true; }\nsealed class R : IEquatable<R> { public bool Equals(R? other) => true; }\nstruct S { public bool Equals(S other) => true; }";
         assert_eq!(flagged("cs/service-contract-without-operations", src), [2]);
         assert_eq!(flagged("cs/equals-without-iequatable", src), [4, 7]);
-        assert_eq!(flagged("cs/iequatable-not-sealed", src), [5]);
+        // P's own Equals(P) counts as much as the interface (measured on
+        // SonarQube 26.7).
+        assert_eq!(flagged("cs/iequatable-not-sealed", src), [4, 5]);
     }
 
     #[test]

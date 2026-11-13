@@ -1980,19 +1980,26 @@ fn needs_newer_java(active: &ActiveRule, java_version: Option<u32>) -> bool {
     })
 }
 
-/// The node a query rule reports for a capture: the capture itself, if its
-/// filter keeps it, or the node its filter finds; with the message its
+/// The nodes a query rule reports for a capture: the capture itself, if its
+/// filter keeps it, or the nodes its filter finds; with the message its
 /// filter gives, if any, in place of the rule's.
-fn filtered_node<'t>(
+fn filtered_nodes<'t>(
     filter: Option<Filter>,
     node: Node<'t>,
     bytes: &[u8],
-) -> Option<(Node<'t>, Option<String>)> {
+) -> Vec<(Node<'t>, Option<String>)> {
     match filter {
-        None => Some((node, None)),
-        Some(Filter::Keep(keep)) => keep(node, bytes).then_some((node, None)),
-        Some(Filter::Find(find)) => find(node, bytes).map(|n| (n, None)),
-        Some(Filter::FindSaying(find)) => find(node, bytes).map(|(n, m)| (n, Some(m))),
+        None => vec![(node, None)],
+        Some(Filter::Keep(keep)) => keep(node, bytes)
+            .then_some((node, None))
+            .into_iter()
+            .collect(),
+        Some(Filter::Find(find)) => find(node, bytes).map(|n| (n, None)).into_iter().collect(),
+        Some(Filter::FindSaying(find)) => find(node, bytes)
+            .map(|(n, m)| (n, Some(m)))
+            .into_iter()
+            .collect(),
+        Some(Filter::FindAll(find)) => find(node, bytes).into_iter().map(|n| (n, None)).collect(),
     }
 }
 
@@ -2101,7 +2108,7 @@ fn run_queries_in(
                 .captures()
                 .iter()
                 .filter(|c| c.index == cq.match_capture)
-                .filter_map(|cap| filtered_node(filter, cap.node, bytes))
+                .flat_map(|cap| filtered_nodes(filter, cap.node, bytes))
                 .filter(|(node, _)| within.is_none_or(|w| w.covers(node.start_byte())));
             for (node, message) in found {
                 let msg = message.unwrap_or_else(|| active.rule.message.to_string());
@@ -2615,6 +2622,7 @@ fn measure_functions(
         if let Some(rule) = params_rule
             && let Some(n) = parameter_count(node, syn, ctx.src.as_bytes())
             && n > max_parameters as usize
+            && !calls_base_constructor(node, ctx.src.as_bytes())
         {
             let msg = format!(
                 "'{name}' has {n} parameters, which is more than the {max_parameters} allowed."
@@ -2764,6 +2772,14 @@ struct CommentRules<'r, 't> {
     /// Python: the comment lines of the block being read, judged together
     /// when it ends, as SonarQube judges a block.
     python_block: Vec<(Node<'t>, String)>,
+    /// C#: judged as SonarQube 26.7 does (measured), not by the generic
+    /// heuristics.
+    csharp: bool,
+    /// C#: the `//` lines of the block being read.
+    csharp_block: Vec<(Node<'t>, String)>,
+    /// Where the file's first token starts: comments before it are its
+    /// header (a licence), which C# doesn't judge.
+    header_end: usize,
 }
 
 impl<'t> CommentRules<'_, 't> {
@@ -2780,9 +2796,92 @@ impl<'t> CommentRules<'_, 't> {
         }
     }
 
+    /// Judges the C# `//` block read so far: one issue, at its first line
+    /// when the lines together parse as C#, else at its first line that
+    /// reads as code on its own.
+    fn flush_csharp_block(&mut self, ctx: &Ctx, issues: &mut Vec<Issue>) {
+        let block = std::mem::take(&mut self.csharp_block);
+        let Some(rule) = self.code else {
+            return;
+        };
+        let lines: Vec<&str> = block.iter().map(|(_, t)| t.as_str()).collect();
+        let at = if lines.len() > 1 && csharp_parses(&lines.join("\n")) {
+            block.first().map(|(n, _)| *n)
+        } else {
+            block
+                .iter()
+                .find(|(_, t)| csharp_line_is_code(t))
+                .map(|(n, _)| *n)
+        };
+        if let Some(node) = at {
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+        }
+    }
+
+    /// C#: a `//` line on its own joins the block being read; a block
+    /// comment, or a comment after code, is judged line by line, reported at
+    /// its first line of code (measured on SonarQube 26.7).
+    fn check_csharp(
+        &mut self,
+        ctx: &Ctx,
+        node: Node<'t>,
+        text: &str,
+        alone: bool,
+        issues: &mut Vec<Issue>,
+    ) {
+        let line_comment = text.starts_with("//") && !text.starts_with("///");
+        let row = node.start_position().row;
+        let continues = alone
+            && line_comment
+            && self
+                .csharp_block
+                .last()
+                .is_some_and(|(last, _)| last.end_position().row + 1 == row);
+        if !continues {
+            self.flush_csharp_block(ctx, issues);
+        }
+        let Some(rule) = self.code else {
+            return;
+        };
+        if node.end_byte() <= self.header_end || text.starts_with("///") || text.starts_with("/**")
+        {
+            return;
+        }
+        if alone && line_comment {
+            self.csharp_block
+                .push((node, text.trim_start_matches('/').to_string()));
+            return;
+        }
+        let body = text
+            .strip_prefix("//")
+            .or_else(|| text.strip_prefix("/*"))
+            .unwrap_or(text);
+        let body = body.strip_suffix("*/").unwrap_or(body);
+        for (i, line) in body.lines().enumerate() {
+            let content = line.trim();
+            let content = content.strip_prefix('*').unwrap_or(content);
+            if csharp_line_is_code(content) {
+                let row = row + i;
+                let column = if i == 0 {
+                    ctx.lines.char_column(row, node.start_position().column)
+                } else {
+                    0
+                };
+                let width = ctx.lines.text(row).chars().count().max(column + 1);
+                let msg = "Remove this commented-out code.".to_string();
+                issues.push(ctx.issue_on_line(rule, row, (column, width), msg));
+                break;
+            }
+        }
+    }
+
     fn check(&mut self, ctx: &Ctx, node: Node<'t>, issues: &mut Vec<Issue>) {
         let text = ctx.text(node);
         let alone = comment_is_alone(ctx, node);
+        if self.csharp {
+            self.check_csharp(ctx, node, text, alone, issues);
+        }
         // A Java `/* */` comment (not a Javadoc) with code in it, reported at
         // its first line of code, as SonarQube 26.7 does (measured).
         if let Some(rule) = self.java_code
@@ -2849,6 +2948,7 @@ impl<'t> CommentRules<'_, 't> {
             }
         } else if let Some(rule) = self.code
             && !self.java
+            && !self.csharp
             && reads_as_code(text, alone, self.python)
         {
             let row = node.start_position().row;
@@ -2993,6 +3093,63 @@ fn python_block_is_code(lines: &[&str]) -> bool {
 
 /// Whether a comment is commented-out code. In Python, one after code on
 /// its line can be too, when it parses as a statement.
+/// A C# comment line that reads as code on its own (measured on SonarQube
+/// 26.7): it ends with `;`, a sentence too; it's a lone brace; or it ends
+/// with a brace and parses, `public string Name { get; set; }` but not a
+/// template's `{{ join .Categories "," }}`.
+fn csharp_line_is_code(line: &str) -> bool {
+    let l = line.trim();
+    if l.is_empty() || l.contains("sonda-ignore") || l.contains("NOSONAR") {
+        return false;
+    }
+    l.ends_with(';')
+        || l == "{"
+        || l == "}"
+        || l.ends_with('}') && csharp_parses(l)
+        || l.ends_with('{') && csharp_parses(&format!("{l}\n}}"))
+}
+
+/// Whether lines parse as C# statements or members, with no error.
+fn csharp_parses(code: &str) -> bool {
+    thread_local! {
+        static CS_PARSER: std::cell::RefCell<Option<tree_sitter::Parser>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    CS_PARSER.with(|p| {
+        let mut p = p.borrow_mut();
+        let parser = p.get_or_insert_with(|| {
+            let mut parser = tree_sitter::Parser::new();
+            let _ = parser.set_language(&Lang::CSharp.grammar());
+            parser
+        });
+        ["class __S { void __M() {\n", "class __S {\n"]
+            .into_iter()
+            .any(|open| {
+                let source = format!(
+                    "{open}{code}\n}}{}",
+                    if open.contains("__M") { " }" } else { "" }
+                );
+                parser.parse(&source, None).is_some_and(|tree| {
+                    let root = tree.root_node();
+                    // Something to parse: blank lines aren't code.
+                    let mut inner = root
+                        .named_child(0)
+                        .and_then(|c| c.child_by_field_name("body"));
+                    if open.contains("__M") {
+                        inner = inner
+                            .and_then(|b| b.named_child(0))
+                            .and_then(|m| m.child_by_field_name("body"));
+                    }
+                    !root.has_error()
+                        && inner.is_some_and(|b| {
+                            b.named_children(&mut b.walk())
+                                .any(|c| c.kind() != "comment")
+                        })
+                })
+            })
+    })
+}
+
 fn reads_as_code(text: &str, alone: bool, python: bool) -> bool {
     if python {
         python_comment_is_code(text, alone) || (alone && comment_is_commented_out_code(text))
@@ -3028,6 +3185,14 @@ fn scan_tokens(
             .flatten(),
         last_code_comment_row: None,
         python_block: Vec::new(),
+        csharp: std::ptr::eq(syn, Lang::CSharp.syntax()),
+        csharp_block: Vec::new(),
+        header_end: {
+            let mut cursor = root.walk();
+            root.named_children(&mut cursor)
+                .find(|c| !syn.comments.contains(&c.kind()))
+                .map_or(usize::MAX, |c| c.start_byte())
+        },
     };
     let python = comment_rules.python;
 
@@ -3068,6 +3233,7 @@ fn scan_tokens(
         true
     });
     comment_rules.flush_python_block(ctx, issues);
+    comment_rules.flush_csharp_block(ctx, issues);
 
     let code_lines = (0..rows).filter(|&r| code[r]).map(|r| r + 1).collect();
     TokenScan {
@@ -3418,6 +3584,20 @@ fn raw_function_name<'s>(node: Node, ctx: &Ctx<'s>) -> &'s str {
         _ => None,
     });
     named_by.map_or("<anonymous>", |n| ctx.text(n))
+}
+
+/// A C# constructor that calls `: base(...)`: its parameters are largely
+/// its base class's to take (measured on SonarQube 26.7, which doesn't
+/// count them against it).
+fn calls_base_constructor(node: Node, src: &[u8]) -> bool {
+    node.kind() == "constructor_declaration"
+        && node.named_children(&mut node.walk()).any(|c| {
+            c.kind() == "constructor_initializer"
+                && c.utf8_text(src).is_ok_and(|t| {
+                    t.trim_start_matches([':', ' ', '\n', '\r', '\t'])
+                        .starts_with("base")
+                })
+        })
 }
 
 fn parameter_count(node: Node, syn: &Syntax, src: &[u8]) -> Option<usize> {

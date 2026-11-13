@@ -19,14 +19,14 @@ the steps, the commands and what was learned along the way.
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
 | arandu | JavaScript | `57f6e9b` | 145 of 150 | 4 |
-| sonda | TypeScript (TSX), Rust | `c8bd04a` | 70 of 70 | 0 |
+| sonda | TypeScript (TSX), Rust | `e747206` | 73 of 73 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 124 of 173 | 15 |
 | eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
 | eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
-| Prowlarr³ | C# | `d2d1fc0` | 1,361 of 1,787 | 94 |
+| Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -584,23 +584,85 @@ container, with SonarScanner for .NET, one case per method.
 - **Without a resolved base type.** sonda can't tell a base class from an
   interface it can't resolve; `IParser`, named like an interface, is taken
   for one, so its implementers' private members are checked (S2325).
+- **Each one, more.** S2933 reports each field that could be readonly,
+  S3604 each initializer every constructor overwrites (public fields too),
+  S6967 each action, S3358 each nested conditional (in an argument or an
+  interpolation too), S6664 the first call of each level over its limit
+  (four debug, two information, one warning or error, across loggers).
+- **Grouping and position.** S4136 groups overloads by name, accessibility
+  and being static, constructors included. S6931 is reported at the
+  controller when all of its actions' routes are absolute; S6934 when it
+  has no route of its own and an action has a relative one (not an abstract
+  controller).
+- **Broader, measured.** S1144: a private method no call reaches with its
+  number of arguments, a field used only as another type's
+  (`Cleaner.ReplaceEntities`), a private nested generic class's
+  constructor. S1006: an implementation leaving out an interface's or base
+  method's default. S1075: `Redirect`'s and HttpClient's URL parameters.
+  S1125: `(x ?? false) == false`. S1643: a string parameter, and a string
+  from `string.Format`. S2094: an empty class deriving from a concrete one
+  (`EventArgs` too). S2077: Dapper's `Execute` and `Query` given built SQL.
+  S2326: interfaces. S2696: a write in a lambda. S2955: a local of the type
+  parameter. S3247: `x as T` after `x is T`, and a cast after `x is T v`.
+  S3626: a `return` or `continue` ending an if that ends the method or the
+  loop. S3878: `Split`, `Trim`, `TrimStart`, `TrimEnd` and `Path.Combine`.
+  S3928: no argument at all. S3993: an attribute deriving from another.
+  S4035: a class with its own `Equals(T)` and no `IEquatable<T>`. S5332:
+  an `xmlns.` host. S6669: NLog's `Logger`, made by `LogManager`.
+- **Narrower, measured.** S107 leaves a constructor calling `base(...)`.
+  S110 counts only the project's base classes, more than five (not
+  `Controller` or `object`). S1104 and S3887 leave a private nested class's
+  fields; S3887 is public fields only. S1121 leaves anything in a loop's
+  condition. S1172 leaves empty methods. S1244 leaves a comparison with
+  zero. S1479 is more than 30 cases, one of them doing more than one thing.
+  S1905 leaves `OfType`/`Cast` on a string or a non-generic collection.
+  S1940 leaves floating-point comparisons. S2068 is passwords (password,
+  passwd, pwd, passphrase), unless the value holds the word; S6418, a new
+  rule, `cs/hardcoded-secret`, is secrets (keys, auth, credentials,
+  tokens) whose value looks generated. S2325 leaves a member using the
+  type's type parameters. S2372 leaves `get => throw`. S2755 is a resolver
+  set: on .NET Core a reader has none, so `DtdProcessing.Parse` alone is
+  safe. S2933 leaves static fields, and a field the class locks on (S2445
+  reports it). S2955 leaves a type parameter constrained to a class. S3875
+  leaves a type implementing `IEquatable<T>`. S3878 leaves an object array.
+  S4545 knows `GetType()`. S6561 is a local that was `DateTime.Now`, not a
+  field. S6930 leaves a backslash in a parameter's regex. S6962 is in a
+  controller. S6968 is an action returning `Ok(value)`, not an async one.
+- **Commented-out code (S125).** A run of `//` lines that parses as C# is
+  one issue at its first line; otherwise the first line ending with `;`
+  (a sentence too), a lone brace, or a line ending with a brace that
+  parses. A block comment is judged line by line, and the file's header
+  isn't judged.
 
 ### Still open in C#
 
-On Prowlarr, 426 of SonarCloud's C# issues and 94 of sonda's:
+On Prowlarr, 354 of SonarCloud's C# issues and 29 of sonda's:
 
 - **Known gap, data flow (155):** S2259 (125), S2583 (22), S2589 (8).
-- **Known gap, types from other files (78):** S2325 (46), a class whose
+- **Known gap, types from other files (92):** S2325 (47), a class whose
   base class is declared in another file, which may declare what its
   members use; S6608 (32), `First()` on a list whose type another file
-  declares.
-- **Known gaps, libraries (20):** S6966 (11), a method with an async
-  variant in a library; S6549 (9), from the commercial security analyzer.
-- **SonarCloud differs from SonarQube 26.7 (6 sonda only):** S6667 on a
-  catch that logs the exception's message and rethrows, which 26.7
-  reports.
-- **Not yet looked into (173 SonarCloud only, 88 sonda only):** a few
-  issues each across some 70 keys.
+  declares; S1244 (7), S1125 (3) and S1075 (3), a property or constructor
+  declared in another file. One sonda only: S6967 on a controller whose
+  `[V1ApiController]`, declared elsewhere, works as `[ApiController]`.
+- **Known gaps, libraries and the security engine (27 SonarCloud only, 6
+  sonda only):** S6966 (11), a method with an async variant in a library;
+  S6549 (9), S2083 (5) and S5145 (2), and on sonda's side S2083 (5) and
+  S5146 (1), from SonarCloud's commercial taint analysis.
+- **SonarCloud differs from SonarQube 26.7 (9 sonda only):** S6667 (6) on
+  a catch that logs the exception's message and rethrows, S107 (2) on a
+  controller's constructor, S125 (1) on a prose line ending with `;`: 26.7
+  reports each.
+- **Not pinned down (9 and 9):** S3267. SonarCloud reports a `foreach`
+  whose body is an `if` on the element far more often than 26.7, which,
+  measured on 15 shapes, reports some and not others with no rule that
+  explains both.
+- **Unexplained:** S4136 on a `virtual` overload of an `ICollection<T>`
+  implementation (2 and 1); S1144 (6), private members whose names other
+  members share; S3776 (5 and 2), cognitive complexity; S2612 (1 sonda
+  only), not measured.
+- **Not yet looked into (58 SonarCloud only):** one to three issues each
+  across 42 keys.
 
 Prowlarr's JavaScript and TypeScript (a React frontend) aren't classified
 yet: 209 of 588 and 126 of 150.

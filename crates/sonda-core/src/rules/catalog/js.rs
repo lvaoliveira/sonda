@@ -5861,7 +5861,11 @@ fn looks_like_a_secret_value(string: Node, src: &[u8]) -> bool {
 /// Long, mixed letters and digits, and varied: what generated keys look
 /// like, unlike names, URLs or messages.
 fn looks_random(string: Node, src: &[u8]) -> bool {
-    let v = string_content(string, src);
+    random_looking(string_content(string, src))
+}
+
+/// Long, mixed letters and digits, and varied.
+pub(super) fn random_looking(v: &[u8]) -> bool {
     if v.len() < 16
         || v.iter().any(u8::is_ascii_whitespace)
         || v.windows(3).any(|w| w == b"://")

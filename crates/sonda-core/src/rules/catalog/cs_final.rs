@@ -265,7 +265,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "(class_declaration name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(field_only_set_at_construction)),
+            filter: Some(FindAll(fields_only_set_at_construction)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -329,7 +329,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "(class_declaration name: (identifier) body: (declaration_list)) @match",
-            filter: Some(Find(overwritten_initializer)),
+            filter: Some(FindAll(overwritten_initializers)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -556,9 +556,10 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "cs/too-many-log-calls",
         name: "Blocks should not contain too many logging calls",
-        description: "More than four logging calls in one block drown the code it logs, and usually log the \
-                      same thing several ways.",
-        message: "Reduce the logging calls in this block to four or fewer.",
+        description: "Many logging calls of one level in one block drown the code they log, and usually log \
+                      the same thing several ways. A block may hold four debug or trace calls, two \
+                      information calls, and one warning or error call.",
+        message: "Reduce the logging calls of this level in this block.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 10,
@@ -566,12 +567,12 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "(block) @match",
-            filter: Some(Find(fifth_log_call)),
+            filter: Some(FindAll(too_many_log_calls)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
             bad: "class A { void F(ILogger log) { log.LogInformation(\"a\"); log.LogInformation(\"b\"); log.LogInformation(\"c\"); log.LogInformation(\"d\"); log.LogInformation(\"e\"); } }",
-            good: "class A { void F(ILogger log) { log.LogInformation(\"a\"); log.LogInformation(\"b\"); } }",
+            good: "class A { void F(ILogger log) { log.LogInformation(\"a\"); log.LogDebug(\"b\"); } }",
         }),
     },
     Rule {
@@ -696,7 +697,7 @@ fn unconstrained_null_check<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
     }
     let params = method.child_by_field_name("parameters")?;
     let mut cursor = params.walk();
-    let values: Vec<&[u8]> = params
+    let mut values: Vec<&[u8]> = params
         .named_children(&mut cursor)
         .filter(|p| {
             p.child_by_field_name("type")
@@ -704,10 +705,27 @@ fn unconstrained_null_check<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
         })
         .filter_map(|p| p.child_by_field_name("name").map(|n| text(n, src)))
         .collect();
+    let body = method.child_by_field_name("body")?;
+    // A local declared as the type parameter too (measured on SonarQube 26.7).
+    let locals = std::cell::RefCell::new(Vec::new());
+    find_in_scope(body, CS_SCOPE_STOPS, |n| {
+        if n.kind() == "variable_declaration"
+            && n.child_by_field_name("type")
+                .is_some_and(|t| free.contains(&text(t, src)))
+        {
+            let mut c = n.walk();
+            locals.borrow_mut().extend(
+                n.named_children(&mut c)
+                    .filter(|d| d.kind() == "variable_declarator")
+                    .filter_map(|d| d.child_by_field_name("name").map(|x| text(x, src))),
+            );
+        }
+        false
+    });
+    values.extend(locals.into_inner());
     if values.is_empty() {
         return None;
     }
-    let body = method.child_by_field_name("body")?;
     find_in_scope(body, CS_SCOPE_STOPS, |n| null_test_of(n, &values, src))
 }
 
@@ -733,9 +751,21 @@ fn unconstrained_type_params<'s>(method: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
                 }
                 "type_parameter_constraints_clause" => {
                     let t = text(child, src);
-                    let reference = [&b"class"[..], b"struct", b"unmanaged"]
-                        .iter()
-                        .any(|k| count_word(t, k) > 0);
+                    // A base class makes it a reference type too (measured on
+                    // SonarQube 26.7); an interface, told by its name, doesn't.
+                    let mut c = child.walk();
+                    let base_class = child
+                        .named_children(&mut c)
+                        .filter(|k| k.kind() == "type_parameter_constraint")
+                        .any(|k| {
+                            let k = text(k, src);
+                            k.first().is_some_and(u8::is_ascii_uppercase)
+                                && !crate::semantic::cs_infer::named_like_an_interface(k)
+                        });
+                    let reference = base_class
+                        || [&b"class"[..], b"struct", b"unmanaged"]
+                            .iter()
+                            .any(|k| count_word(t, k) > 0);
                     if reference {
                         let mut c = child.walk();
                         constrained
@@ -1030,15 +1060,19 @@ fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
             top = p;
         }
         let target = top.parent().and_then(|p| match p.kind() {
-            "assignment_expression" => p.child_by_field_name("left"),
-            "variable_declarator" => p.child_by_field_name("name"),
-            "equals_value_clause" => p.parent().and_then(|d| d.child_by_field_name("name")),
+            "assignment_expression" => p.child_by_field_name("left").map(|n| text(n, src)),
+            "variable_declarator" => p.child_by_field_name("name").map(|n| text(n, src)),
+            "equals_value_clause" => p
+                .parent()
+                .and_then(|d| d.child_by_field_name("name"))
+                .map(|n| text(n, src)),
             "argument" => p
                 .child_by_field_name("name")
-                .or_else(|| parameter_for(p, src)),
+                .map(|n| text(n, src))
+                .or_else(|| parameter_name_for(p, src)),
             _ => None,
         });
-        return target.is_some_and(|t| location(text(t, src)));
+        return target.is_some_and(location);
     }
     let is_uri = value.windows(3).any(|w| w == b"://");
     let is_path = (value.len() > 3 && value[1] == b':' && matches!(value[2], b'\\' | b'/') && value[0].is_ascii_alphabetic())
@@ -1051,15 +1085,65 @@ fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
         return false;
     }
     let name = match parent.kind() {
-        "variable_declarator" => parent.child_by_field_name("name"),
-        "equals_value_clause" => parent.parent().and_then(|d| d.child_by_field_name("name")),
-        "assignment_expression" => parent.child_by_field_name("left"),
+        "variable_declarator" => parent.child_by_field_name("name").map(|n| text(n, src)),
+        "equals_value_clause" => parent
+            .parent()
+            .and_then(|d| d.child_by_field_name("name"))
+            .map(|n| text(n, src)),
+        "assignment_expression" => parent.child_by_field_name("left").map(|n| text(n, src)),
         "argument" => parent
             .child_by_field_name("name")
-            .or_else(|| parameter_for(parent, src)),
+            .map(|n| text(n, src))
+            .or_else(|| parameter_name_for(parent, src)),
         _ => None,
     };
-    name.is_some_and(|n| location(text(n, src)))
+    name.is_some_and(location)
+}
+
+/// The name of the parameter an argument goes to: a method's or
+/// constructor's declared in this file, `new Uri(...)`'s, or the first
+/// parameter of ASP.NET Core's redirects (`url`) and HttpClient's requests
+/// (`requestUri`), measured on SonarQube 26.7.
+fn parameter_name_for<'s>(argument: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let list = argument.parent()?;
+    let call = list
+        .parent()
+        .filter(|c| c.kind() == "invocation_expression");
+    let first = list
+        .named_children(&mut list.walk())
+        .find(|a| a.kind() == "argument")
+        .is_some_and(|a| a.id() == argument.id());
+    if let Some(call) = call
+        && first
+    {
+        let f = call.child_by_field_name("function")?;
+        let method = text(f.child_by_field_name("name").unwrap_or(f), src);
+        if matches!(
+            method,
+            b"Redirect"
+                | b"RedirectPermanent"
+                | b"RedirectPreserveMethod"
+                | b"RedirectPermanentPreserveMethod"
+                | b"LocalRedirect"
+                | b"LocalRedirectPermanent"
+        ) {
+            return Some(b"url");
+        }
+        if matches!(
+            method,
+            b"GetAsync"
+                | b"GetStringAsync"
+                | b"GetByteArrayAsync"
+                | b"GetStreamAsync"
+                | b"PostAsync"
+                | b"PutAsync"
+                | b"PatchAsync"
+                | b"DeleteAsync"
+        ) {
+            return Some(b"requestUri");
+        }
+    }
+    parameter_for(argument, src).map(|n| text(n, src))
 }
 
 /// The parameter an argument goes to, when the method or constructor is
@@ -1139,8 +1223,12 @@ fn unused_private_parameter<'t>(method: Node<'t>, src: &[u8]) -> Option<Node<'t>
     let body = method.child_by_field_name("body")?;
     let body_text = text(body, src);
     // A method that only throws is a stub; its parameters are its signature.
+    // So is an empty one (measured on SonarQube 26.7).
     if body.kind() == "block"
-        && matches!(cs_statements(body).as_slice(), [s] if s.kind() == "throw_statement")
+        && matches!(cs_statements(body).as_slice(), [] | [_])
+        && cs_statements(body)
+            .first()
+            .is_none_or(|s| s.kind() == "throw_statement")
         || body.kind() == "arrow_expression_clause"
             && operand(body).is_some_and(|e| e.kind() == "throw_expression")
     {
@@ -1196,10 +1284,26 @@ fn string_appended_in_loop(assignment: Node, src: &[u8]) -> bool {
         }
         up = n.parent();
     };
-    let Some(body) = enclosing_member(loop_node).and_then(|o| o.child_by_field_name("body")) else {
+    let Some(member) = enclosing_member(loop_node) else {
         return false;
     };
-    let strings = strings_declared_before(body, loop_node, src);
+    let Some(body) = member.child_by_field_name("body") else {
+        return false;
+    };
+    let mut strings = strings_declared_before(body, loop_node, src);
+    // A string parameter too (measured on SonarQube 26.7).
+    if let Some(params) = member.child_by_field_name("parameters") {
+        let mut c = params.walk();
+        strings.extend(
+            params
+                .named_children(&mut c)
+                .filter(|p| {
+                    p.child_by_field_name("type")
+                        .is_some_and(|t| matches!(text(t, src), b"string" | b"String"))
+                })
+                .filter_map(|p| p.child_by_field_name("name").map(|n| text(n, src))),
+        );
+    }
     appends_to(assignment, &strings, src)
 }
 
@@ -1257,7 +1361,8 @@ fn strings_declared_before<'s>(body: Node, loop_node: Node, src: &'s [u8]) -> Ve
 }
 
 /// `s += ...` or `s = s + ...`, with s one of `strings`.
-/// A declarator whose value is a string literal or `string.Empty`.
+/// A declarator whose value is a string literal, `string.Empty` or a
+/// `string.Format(...)`.
 fn starts_as_a_string(declarator: Node, src: &[u8]) -> bool {
     let mut c = declarator.walk();
     let value = declarator
@@ -1275,6 +1380,19 @@ fn starts_as_a_string(declarator: Node, src: &[u8]) -> bool {
                 v.kind(),
                 "string_literal" | "verbatim_string_literal" | "interpolated_string_expression"
             ) || text(v, src) == b"string.Empty"
+                // `string.Format(...)` and its kin (measured on SonarQube 26.7).
+                || v.kind() == "invocation_expression"
+                    && v.child_by_field_name("function").is_some_and(|f| {
+                        matches!(
+                            text(f, src),
+                            b"string.Format"
+                                | b"String.Format"
+                                | b"string.Concat"
+                                | b"String.Concat"
+                                | b"string.Join"
+                                | b"String.Join"
+                        )
+                    })
         })
     })
 }
@@ -1350,16 +1468,36 @@ fn test_without_assertion<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-fn field_only_set_at_construction<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+fn fields_only_set_at_construction<'t>(class: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(body) = class.child_by_field_name("body") else {
+        return Vec::new();
+    };
     if !self_contained(class, src) {
-        return None;
+        return Vec::new();
     }
-    let body = class.child_by_field_name("body")?;
+    // Each such field; not a static one, nor one the class locks on, which
+    // S2445 reports instead (measured on SonarQube 26.7).
     plain_private_fields(class, src)
         .into_iter()
-        .find_map(|(name, field, declarator)| {
+        .filter(|(name, field, _)| {
+            !cs_has_modifier(*field, "static", src) && !locked_on(body, name, src)
+        })
+        .filter_map(|(name, field, declarator)| {
             only_set_at_construction(body, name, field, declarator, src)
         })
+        .collect()
+}
+
+/// Whether a `lock` statement in `body` locks on the field `name`.
+fn locked_on(body: Node, name: &[u8], src: &[u8]) -> bool {
+    find_in_scope(body, &[], |n| {
+        n.kind() == "lock_statement"
+            && n.named_child(0).is_some_and(|e| {
+                let t = text(e, src);
+                t == name || t.strip_prefix(b"this.") == Some(name)
+            })
+    })
+    .is_some()
 }
 
 /// The field's name, when only its initializer or the constructors set it.
@@ -1420,7 +1558,8 @@ fn in_matching_constructor(n: Node, is_static: bool, src: &[u8]) -> bool {
 }
 
 /// Types whose fields can be readonly without copies: built-in types,
-/// strings, arrays, interfaces and the common collections and delegates.
+/// strings, arrays, interfaces, the common collections and delegates, and
+/// immutable structs such as DateTime (measured on SonarQube 26.7).
 fn is_reference_like(ty: Node, src: &[u8]) -> bool {
     let name = simple_name(ty, src);
     match ty.kind() {
@@ -1451,6 +1590,12 @@ fn is_reference_like(ty: Node, src: &[u8]) -> bool {
                         | b"CancellationTokenSource"
                         | b"HttpClient"
                         | b"Stopwatch"
+                        | b"DateTime"
+                        | b"DateTimeOffset"
+                        | b"TimeSpan"
+                        | b"Guid"
+                        | b"Version"
+                        | b"Uri"
                 )
         }
     }
@@ -1527,9 +1672,9 @@ fn field_never_assigned<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         })
 }
 
-fn overwritten_initializer<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+fn overwritten_initializers<'t>(class: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     if !self_contained(class, src) {
-        return None;
+        return Vec::new();
     }
     let ms = members(class);
     let constructors: Vec<Node<'t>> = ms
@@ -1538,7 +1683,7 @@ fn overwritten_initializer<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
         .filter(|m| m.kind() == "constructor_declaration" && !cs_has_modifier(*m, "static", src))
         .collect();
     if constructors.is_empty() {
-        return None;
+        return Vec::new();
     }
     // A constructor chaining to `this(...)` sets nothing itself; skip those
     // classes rather than follow the chain.
@@ -1550,14 +1695,21 @@ fn overwritten_initializer<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
         })
     });
     if chains {
-        return None;
+        return Vec::new();
     }
-    plain_private_fields(class, src)
-        .into_iter()
-        .find_map(|(name, field, declarator)| {
-            if cs_has_modifier(field, "static", src) || declarator.named_child_count() < 2 {
-                return None;
-            }
+    // Every such field, whatever its accessibility (measured on SonarQube
+    // 26.7).
+    ms.iter()
+        .filter(|m| {
+            m.kind() == "field_declaration"
+                && !["static", "const"]
+                    .iter()
+                    .any(|x| cs_has_modifier(**m, x, src))
+        })
+        .flat_map(|m| declarators(*m))
+        .filter(|declarator| declarator.named_child_count() >= 2)
+        .filter_map(|declarator| {
+            let name = text(declarator.child_by_field_name("name")?, src);
             // Every constructor assigns it in a top-level statement.
             let always = constructors.iter().all(|c| {
                 c.child_by_field_name("body").is_some_and(|b| {
@@ -1570,6 +1722,7 @@ fn overwritten_initializer<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
             });
             always.then(|| declarator.child_by_field_name("name"))?
         })
+        .collect()
 }
 
 fn serializable_without_constructor<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1723,7 +1876,13 @@ fn debugger_display_unknown_member<'t>(declaration: Node<'t>, src: &[u8]) -> Opt
             .collect();
         // `{GetType().Name}` or `{x,nq}`: only plain names are checked; a
         // name may also come from a base class, which isn't visible here.
-        if !name.is_empty() && !name[0].is_ascii_digit() && count_word(body, &name) == 0 {
+        // `{GetType()}`: object's own members are always there.
+        let objects = matches!(
+            &name[..],
+            b"GetType" | b"ToString" | b"GetHashCode" | b"Equals"
+        );
+        if !name.is_empty() && !name[0].is_ascii_digit() && !objects && count_word(body, &name) == 0
+        {
             let mut cursor = declaration.walk();
             let derives = declaration
                 .named_children(&mut cursor)
@@ -1814,15 +1973,51 @@ fn parses_without_provider(call: Node, src: &[u8]) -> bool {
     }
 }
 
-fn fifth_log_call<'t>(block: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let calls: Vec<Node<'t>> = cs_statements(block)
-        .into_iter()
-        .filter_map(|s| {
-            operand(s)
-                .filter(|e| e.kind() == "invocation_expression" && log_template(*e, src).is_some())
-        })
-        .collect();
-    calls.get(4).copied()
+/// Per level, the first logging call of a block holding more of that level
+/// than SonarQube's defaults allow: four debug, two information, one warning
+/// and one error, counted across loggers (measured on SonarQube 26.7).
+fn too_many_log_calls<'t>(block: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let mut by_level: [(usize, Option<Node<'t>>); 4] = [(0, None); 4];
+    for s in cs_statements(block) {
+        let Some(call) = operand(s).filter(|e| e.kind() == "invocation_expression") else {
+            continue;
+        };
+        if let Some(level) = log_level(call, src) {
+            let entry = &mut by_level[level];
+            entry.0 += 1;
+            entry.1.get_or_insert(call);
+        }
+    }
+    const ALLOWED: [usize; 4] = [4, 2, 1, 1];
+    by_level
+        .iter()
+        .zip(ALLOWED)
+        .filter(|((count, _), allowed)| count > allowed)
+        .filter_map(|((_, first), _)| *first)
+        .collect()
+}
+
+/// A logging call's level: 0 debug or trace, 1 information, 2 warning, 3
+/// error; for Microsoft.Extensions.Logging's, NLog's and Serilog's methods
+/// on a receiver named like a logger.
+fn log_level(call: Node, src: &[u8]) -> Option<usize> {
+    let function = call.child_by_field_name("function")?;
+    if function.kind() != "member_access_expression" {
+        return None;
+    }
+    let receiver = text(function.child_by_field_name("expression")?, src);
+    if !super::java_security::contains_ignoring_case(receiver, b"log")
+        || receiver.ends_with(b"InternalLogger")
+    {
+        return None;
+    }
+    match text(function.child_by_field_name("name")?, src) {
+        b"LogTrace" | b"LogDebug" | b"Trace" | b"Debug" | b"Verbose" => Some(0),
+        b"LogInformation" | b"Info" | b"Information" => Some(1),
+        b"LogWarning" | b"Warn" | b"Warning" => Some(2),
+        b"LogError" | b"LogCritical" | b"Error" | b"Fatal" | b"Critical" => Some(3),
+        _ => None,
+    }
 }
 
 fn exception_after_template<'t>(catch: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
@@ -1924,9 +2119,10 @@ mod tests {
     #[test]
     fn fields() {
         let src = "namespace N;\nclass A {\nprivate int size;\nprivate int count;\nprivate int limit;\nprivate int last;\nprivate int keep = 5;\nprivate int init = 1;\nprivate static int shared;\n[SerializeField] private int unity;\npublic A(int s) { size = s; keep = 2; init = 3; }\npublic A() : base() { size = 1; keep = 1; init = 4; }\npublic void Hit() { count++; last = 1; }\npublic int Read() => size + count + limit + keep + init + unity;\n}\nclass B {\nprivate LazyValue<int> lazy;\nprivate readonly SemaphoreSlim a;\npublic B(LazyValue<int> l) { lazy = l; (a, _) = Make(); }\npublic int Get() => lazy.Value + a.CurrentCount;\n}";
-        assert_eq!(flagged("cs/field-could-be-readonly", src), [3]);
+        // Each field, not the first of the class (measured on SonarQube 26.7).
+        assert_eq!(flagged("cs/field-could-be-readonly", src), [3, 7, 8]);
         assert_eq!(flagged("cs/field-never-assigned", src), [5]);
-        assert_eq!(flagged("cs/redundant-field-initializer", src), [7]);
+        assert_eq!(flagged("cs/redundant-field-initializer", src), [7, 8]);
         assert_eq!(flagged("cs/unread-private-field", src), [6]);
     }
 
@@ -1963,7 +2159,8 @@ mod tests {
     #[test]
     fn logging_and_controllers() {
         let src = "namespace N;\nclass A {\nvoid F(ILogger log) {\nlog.LogInformation(\"a\"); log.LogInformation(\"b\"); log.LogInformation(\"c\"); log.LogInformation(\"d\");\nlog.LogInformation(\"e\");\ntry { G(); } catch (IOException e) { log.LogError(\"Failed: {Error}\", e); }\ntry { G(); } catch (IOException e) { log.LogError(e, \"Failed\"); }\n}\n}\nclass OrdersController : ControllerBase { [HttpGet] public IActionResult Find() { var id = Request.Query[\"id\"]; return Ok(id); } }\nclass Other { void F() { var q = Request.Query; } }";
-        assert_eq!(flagged("cs/too-many-log-calls", src), [5]);
+        // At the first of the five information calls.
+        assert_eq!(flagged("cs/too-many-log-calls", src), [4]);
         assert_eq!(flagged("cs/exception-as-template-argument", src), [6]);
         assert_eq!(flagged("cs/raw-request-data-in-controller", src), [10]);
     }

@@ -444,7 +444,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "(conditional_expression) @match",
-            filter: Some(Find(nested_conditional)),
+            filter: Some(FindAll(nested_conditionals)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -1329,24 +1329,125 @@ fn is_bare_obsolete(node: Node, src: &[u8]) -> bool {
 
 /// A conditional directly inside this one. Looking down rather than up
 /// keeps long chains linear.
-fn nested_conditional<'t>(node: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
-    ["condition", "consequence", "alternative"]
-        .into_iter()
-        .filter_map(|f| node.child_by_field_name(f).map(unparenthesized))
-        .find(|n| n.kind() == "conditional_expression")
+/// Each conditional nested in this one, however deep (in an argument, an
+/// interpolation), with none between them; not in a lambda (measured on
+/// SonarQube 26.7).
+fn nested_conditionals<'t>(node: Node<'t>, _: &[u8]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    let mut stack: Vec<Node<'t>> = node.named_children(&mut node.walk()).collect();
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "conditional_expression" => found.push(n),
+            "lambda_expression" | "anonymous_method_expression" | "local_function_statement" => {}
+            _ => stack.extend(n.named_children(&mut n.walk())),
+        }
+    }
+    found
 }
 
 fn negates_comparison(node: Node, src: &[u8]) -> bool {
     if unary_operator(node, src).map(|(_, op)| op) != Some(b"!") {
         return false;
     }
+    // Not a floating-point comparison, where NaN makes `!(a <= b)` differ
+    // from `a > b` (measured on SonarQube 26.7).
     operand(node).map(unparenthesized).is_some_and(|inner| {
         inner.kind() == "binary_expression"
             && matches!(
                 operator_text(inner, src),
                 b"==" | b"!=" | b"<" | b"<=" | b">" | b">="
             )
+            && !["left", "right"].iter().any(|f| {
+                inner
+                    .child_by_field_name(f)
+                    .is_some_and(|o| known_floating(o, src))
+            })
     })
+}
+
+/// A floating-point literal, or a name declared `double` or `float` in the
+/// enclosing method or type.
+pub(super) fn known_floating(expr: Node, src: &[u8]) -> bool {
+    let expr = unparenthesized(expr);
+    if expr.kind() == "real_literal" {
+        let t = text(expr, src);
+        return !t.ends_with(b"m") && !t.ends_with(b"M");
+    }
+    if expr.kind() != "identifier" {
+        return false;
+    }
+    let name = text(expr, src);
+    let floating = |t: &[u8]| {
+        matches!(
+            t.strip_suffix(b"?").unwrap_or(t),
+            b"double" | b"float" | b"Double" | b"Single"
+        )
+    };
+    let mut current = expr.parent();
+    while let Some(p) = current {
+        let is_type = matches!(
+            p.kind(),
+            "class_declaration" | "struct_declaration" | "record_declaration"
+        );
+        // A method's parameters and locals; a type's own fields and
+        // properties, not other methods'.
+        let mut stack: Vec<Node> = if is_type {
+            p.child_by_field_name("body")
+                .map(|b| b.named_children(&mut b.walk()).collect())
+                .unwrap_or_default()
+        } else {
+            vec![p]
+        };
+        if is_type
+            || matches!(
+                p.kind(),
+                "method_declaration" | "constructor_declaration" | "local_function_statement"
+            )
+        {
+            while let Some(n) = stack.pop() {
+                let declared = match n.kind() {
+                    "parameter" => n
+                        .child_by_field_name("name")
+                        .filter(|d| text(*d, src) == name)
+                        .and_then(|_| n.child_by_field_name("type")),
+                    "variable_declaration" => n
+                        .named_children(&mut n.walk())
+                        .any(|d| {
+                            d.kind() == "variable_declarator"
+                                && d.child_by_field_name("name")
+                                    .is_some_and(|x| text(x, src) == name)
+                        })
+                        .then(|| n.child_by_field_name("type"))
+                        .flatten(),
+                    "property_declaration" => n
+                        .child_by_field_name("name")
+                        .filter(|d| text(*d, src) == name)
+                        .and_then(|_| n.child_by_field_name("type")),
+                    _ => None,
+                };
+                if declared.is_some_and(|t| floating(text(t, src))) {
+                    return true;
+                }
+                let nested = matches!(
+                    n.kind(),
+                    "class_declaration"
+                        | "struct_declaration"
+                        | "record_declaration"
+                        | "method_declaration"
+                        | "constructor_declaration"
+                        | "property_declaration"
+                );
+                if !is_type && (n == p || !nested) || is_type && n.kind() == "field_declaration" {
+                    stack.extend(n.named_children(&mut n.walk()));
+                }
+            }
+        }
+        if is_type {
+            return false;
+        }
+        current = p.parent();
+    }
+    false
 }
 
 fn compares_count_call_with_zero(node: Node, src: &[u8]) -> bool {
@@ -1390,34 +1491,39 @@ fn is_redundant_jump(node: Node, _: &[u8]) -> bool {
     if node.kind() == "return_statement" && node.child_count() > 2 {
         return false;
     }
-    // The last statement of its block.
-    let mut next = node.next_named_sibling();
-    while let Some(n) = next {
-        if n.kind() != "comment" {
-            return false;
+    let last = |n: Node| {
+        let mut next = n.next_named_sibling();
+        while let Some(s) = next {
+            if s.kind() != "comment" {
+                return false;
+            }
+            next = s.next_named_sibling();
         }
-        next = n.next_named_sibling();
-    }
-    let Some(block) = node.parent().filter(|p| p.kind() == "block") else {
-        return false;
+        true
     };
-    let Some(owner) = block.parent() else {
-        return false;
-    };
-    if node.kind() == "continue_statement" {
-        return matches!(
-            owner.kind(),
-            "for_statement" | "foreach_statement" | "while_statement"
-        );
-    }
-    matches!(
-        owner.kind(),
-        "method_declaration"
+    // The last statement of its block, climbing out through the ifs and
+    // blocks that end where it does (measured on SonarQube 26.7), up to the
+    // method for a return, to the loop for a continue.
+    let mut current = node;
+    loop {
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            "block" if last(current) => current = parent,
+            // A branch: what follows it in the if is the other branch.
+            "if_statement" | "else_clause" => current = parent,
+            "for_statement" | "foreach_statement" | "while_statement" => {
+                return node.kind() == "continue_statement";
+            }
+            "method_declaration"
             | "local_function_statement"
             | "constructor_declaration"
             | "destructor_declaration"
-            | "accessor_declaration"
-    )
+            | "accessor_declaration" => return node.kind() == "return_statement",
+            _ => return false,
+        }
+    }
 }
 
 fn class_members(class: Node) -> Vec<Node> {
@@ -1816,6 +1922,72 @@ pub(super) mod tests {
     /// Measured on SonarQube 26.7: an unused `out var`; an empty accessor is
     /// an empty block and an empty method; a constant method at its name; a
     /// `[host]` placeholder URL.
+    /// Shapes measured on SonarQube 26.7 for the rest of Prowlarr's
+    /// differences, one snippet per rule; the lines SonarQube reported.
+    #[test]
+    fn measured_on_sonarqube_round_two() {
+        let overloads = "class A\n{\n    public void Get(int a) { }\n    public void Other() { }\n    private void Get(string a) { }\n}\nclass B\n{\n    public B() { }\n    public void Other() { }\n    public B(int a) { }\n    public static void Put(int a) { }\n    public void Other2() { }\n    public void Put(string a) { }\n}";
+        assert_eq!(flagged("cs/overloads-not-adjacent", overloads), [9]);
+        let floats = "class A\n{\n    float Limit;\n    bool Z(double d) => d == 0.0;\n    bool H(double d) => d == 0.5;\n    bool M() => Limit == -2;\n    bool N(double v, double limit) => !(v <= limit);\n    bool I(int v, int limit) => !(v <= limit);\n}";
+        assert_eq!(flagged("cs/float-equality", floats), [5, 6]);
+        assert_eq!(flagged("cs/inverted-comparison", floats), [8]);
+        let jumps = "class A\n{\n    void F(bool a)\n    {\n        if (a)\n        {\n            G();\n            return;\n        }\n        else\n        {\n            G();\n        }\n    }\n    void L(int[] xs)\n    {\n        foreach (var x in xs)\n        {\n            if (x > 1)\n            {\n                continue;\n            }\n        }\n    }\n    void T(bool a)\n    {\n        try\n        {\n            if (a) { return; }\n        }\n        finally { G(); }\n    }\n    void G() { }\n}";
+        assert_eq!(flagged("cs/redundant-jump", jumps), [8, 21]);
+        let ternary = "class A\n{\n    string T(bool m, bool y, string t)\n    {\n        return m ?\n            t :\n            $\"{t}{(y ? \" y\" : \"\")}\";\n    }\n    object L(string a, string b)\n    {\n        return a != null ?\n            F(a != null ? a : null,\n              b != null ? b : null)\n            : null;\n    }\n    object F(object a, object b) => a;\n}";
+        assert_eq!(flagged("cs/nested-ternary", ternary), [7, 12, 13]);
+        let casts = "class A\n{\n    int F(object o)\n    {\n        if (o is string)\n        {\n            return G(o as string);\n        }\n        if (o is string v)\n        {\n            return G((string)o) + v.Length;\n        }\n        return 0;\n    }\n    int G(string s) => s.Length;\n    bool B(bool? a) => (a ?? false) == false;\n}";
+        assert_eq!(flagged("cs/duplicate-cast", casts), [5, 9]);
+        assert_eq!(flagged("cs/redundant-boolean-literal", casts), [16]);
+        let generic = "class Resource { }\ninterface IShape { }\nclass A<T> where T : Resource\n{\n    bool F(T r) { return r == null; }\n}\nclass B<T> where T : IShape\n{\n    bool F(T r) { return r == null; }\n}\nclass C<T>\n{\n    bool F(object o)\n    {\n        T value;\n        value = (T)o;\n        return value != null;\n    }\n}";
+        assert_eq!(flagged("cs/generic-null-comparison", generic), [9, 17]);
+        let fields = "class A\n{\n    private static string[] _types = new[] { \"a\" };\n    private static HashSet<string> _locked = new HashSet<string>();\n    private List<int> _two;\n    private List<int> _three;\n    private DateTime _last = DateTime.UtcNow;\n    public A() { _two = new List<int>(); _three = new List<int>(); }\n    public int N() { lock (_locked) { } return _types.Length + _two.Count + _three.Count + _last.Second; }\n}\nclass B\n{\n    public readonly int X = -1;\n    private readonly int _y = -1;\n    public B(int a) { X = a; _y = a; }\n    public int Y => _y;\n}";
+        assert_eq!(flagged("cs/field-could-be-readonly", fields), [5, 6, 7]);
+        assert_eq!(flagged("cs/redundant-field-initializer", fields), [13, 14]);
+        let nested = "class Outer\n{\n    private class S<T>\n    {\n        public T[] Handlers;\n        public S(T x) { Handlers = new[] { x }; }\n    }\n    public int Make(string s) => new S<string>(s).Handlers.Length;\n    private static readonly Regex ReplaceEntities = new Regex(\"x\");\n    public string P(string s) => Cleaner.ReplaceEntities(s);\n    private string GetValue(string key) => GetValue(key, \"\");\n    public string GetValue(string key, object d) => key + d;\n}";
+        assert!(flagged("cs/public-field", nested).is_empty());
+        assert_eq!(flagged("cs/unused-private-member", nested), [9, 11]);
+        let equality = "class P\n{\n    public bool Equals(P other) => other != null;\n}\nclass Q : IEquatable<Q>\n{\n    public bool Equals(Q other) => other != null;\n    public static bool operator ==(Q a, Q b) => Equals(a, b);\n    public static bool operator !=(Q a, Q b) => !Equals(a, b);\n}";
+        assert_eq!(flagged("cs/iequatable-not-sealed", equality), [1, 5]);
+        assert!(flagged("cs/class-equality-operator", equality).is_empty());
+        let misc = "[DebuggerDisplay(\"{GetType()} ID = {Id}\")]\nclass A\n{\n    public int Id { get; set; }\n    bool R(DirectoryInfo di)\n    {\n        var f = false;\n        while (!f && (di = di.Parent) != null) { f = di.Exists; }\n        return f;\n    }\n    string Data(string data, List<string> fs)\n    {\n        foreach (var f in fs) { data += f; }\n        var url = string.Format(\"{0}/x\", data);\n        foreach (var f in fs) { url += \"&\" + f; }\n        return url;\n    }\n}";
+        assert!(flagged("cs/debugger-display-unknown-member", misc).is_empty());
+        assert!(flagged("cs/assignment-in-subexpression", misc).is_empty());
+        assert_eq!(flagged("cs/string-concat-in-loop", misc), [13, 15]);
+        let logs = "class A\n{\n    private static readonly Logger _authLogger = LogManager.GetLogger(\"Auth\");\n    private readonly Logger _logger = LogManager.GetCurrentClassLogger();\n    void F()\n    {\n        _logger.Info(\"a\");\n        _authLogger.Info(\"b\");\n        _logger.Info(\"c\");\n        _logger.Debug(\"d\");\n    }\n}";
+        assert_eq!(flagged("cs/logger-field-name", logs), [3]);
+        assert_eq!(flagged("cs/too-many-log-calls", logs), [7]);
+        let sql = "class A\n{\n    int C(IDbConnection c, string t) => c.ExecuteScalar<int>($\"SELECT COUNT(*) FROM {t}\");\n    void D(IDbConnection c) => c.Execute(\"DELETE FROM T\");\n    void E(Runner r, string t) => r.Execute($\"job {t}\");\n}";
+        assert_eq!(flagged("cs/sql-built-dynamically", sql), [3]);
+        let urls = "class A\n{\n    bool N(string ns) => ns == \"http://xmlns.ezrss.it/0.1/\";\n    bool W(string ns) => ns == \"http://www.w3.org/2005/Atom\";\n}";
+        assert_eq!(flagged("cs/cleartext-url", urls), [3]);
+        let controllers = "class PingController : Controller\n{\n    [HttpGet(\"/ping\")]\n    public int Get() => 1;\n}\n[Route(\"\")]\nclass MixedController : Controller\n{\n    [HttpGet(\"/api/x\")]\n    [HttpGet(\"{id}/api\")]\n    public int Get(int id) => 1;\n}\n[ApiController]\nclass LoginController : Controller\n{\n    [HttpPost(\"login\")]\n    public IActionResult In() => Redirect(_base + \"/\");\n    [HttpGet(\"logout\")]\n    public IActionResult Out() => Content(\"x\");\n    [HttpGet(@\"{f:regex([[a-z]]+?\\.txt)}\")]\n    public IActionResult File(string f) => Content(f);\n}";
+        assert_eq!(flagged("cs/action-route-leading-slash", controllers), [1]);
+        assert_eq!(flagged("cs/controller-route-missing", controllers), [14]);
+        assert!(flagged("cs/produces-response-type-missing", controllers).is_empty());
+        assert!(flagged("cs/route-backslash", controllers).is_empty());
+        assert_eq!(flagged("cs/hardcoded-uri", controllers), [17]);
+        let comments = "// Licensed under the License (the \"License\");\nnamespace N\n{\n    // This class is licensed under the MIT license (see LICENSE);\n    class A\n    {\n        /*\n        [Obsolete]\n        public string Moved { get; set; }\n        */\n        int B(int x)\n        {\n            // if (x > 1)\n            // {\n            //     x++;\n            // }\n            x++;\n            //TODO filter\n            //if (!Matches(x))\n            //    continue;\n            x++;\n            //try\n            //{\n            return x; // x++;\n        }\n    }\n}";
+        // Not the file's header; a block that parses together at its first
+        // line, else the first line ending a statement or a block.
+        assert_eq!(
+            flagged("common/commented-out-code", comments),
+            [4, 9, 13, 20, 23, 24]
+        );
+        let templates = "class A\n{\n    int F(int x)\n    {\n        // handle join expression\n        // Example: {{ join .Categories \",\" }}\n        return x;\n    }\n}\n[V1ApiController(\"system\")]\nclass SController : Controller\n{\n    [HttpGet(\"status\")]\n    public int S() => 1;\n}\nabstract class BaseController : Controller\n{\n    [HttpGet(\"files\")]\n    public int F() => 1;\n}";
+        assert!(flagged("common/commented-out-code", templates).is_empty());
+        assert!(flagged("cs/controller-route-missing", templates).is_empty());
+        let shapes = "class Base1\n{\n    public int X { get; set; }\n}\nclass Empty1 : Base1\n{\n}\nclass Items<T> : List<T>\n{\n}\ninterface IMessage<TMessage> : IMessage\n{\n}\n[AttributeUsage(AttributeTargets.Class)]\nclass VersionedAttribute : Attribute\n{\n}\nclass V1Attribute : VersionedAttribute\n{\n}\nclass Thrower\n{\n    private static bool _busy;\n    void F() => throw new ArgumentOutOfRangeException();\n    void G() { ThreadPool.QueueUserWorkItem(_ => { _busy = true; }); }\n}";
+        assert_eq!(flagged("cs/empty-class", shapes), [5]);
+        assert_eq!(flagged("cs/unused-type-parameter", shapes), [11]);
+        assert_eq!(flagged("cs/attribute-usage-missing", shapes), [18]);
+        assert_eq!(flagged("cs/argument-exception-param-name", shapes), [24]);
+        assert_eq!(flagged("cs/instance-writes-static", shapes), [25]);
+        let constructors = "abstract class Base\n{\n    protected Base(int a, int b, int c, int d, int e, int f) { }\n}\nclass D : Base\n{\n    public D(int x, int y, int a, int b, int c, int d, int e, int f)\n        : base(a, b, c, d, e, f) { }\n}\nclass E\n{\n    public E(int x, int y, int a, int b, int c, int d, int e, int f) { }\n}";
+        assert_eq!(flagged("common/too-many-parameters", constructors), [12]);
+        let getters = "class A\n{\n    int C => throw new FormatException();\n    int D { get => throw new FormatException(); }\n    int F { get { throw new FormatException(); } }\n}";
+        assert_eq!(flagged("cs/property-getter-throws", getters), [5]);
+    }
+
     #[test]
     fn calibrated_csharp_shapes() {
         let locals = "class A\n{\n    bool F(string a)\n    {\n        return Parse(a, out var x, out var y) && x > 0;\n    }\n    static bool Parse(string a, out int x, out int y) { x = 1; y = 2; return true; }\n}";

@@ -636,7 +636,8 @@ fn cast_is_redundant(infer: &Infer, cast: Node, ancestors: &[Node], src: &[u8]) 
 }
 
 /// `xs.Cast<T>()` on a sequence of T, and `xs.OfType<T>()` when T is a
-/// value type (OfType drops nulls, which only those have none of).
+/// value type (OfType drops nulls, which only those have none of), for an
+/// array or a generic collection.
 fn redundant_sequence_casts<'t>(
     m: &Model<'t>,
     infer: &Infer,
@@ -647,6 +648,14 @@ fn redundant_sequence_casts<'t>(
         let Some((name, _, _)) = member_call(call, src) else {
             continue;
         };
+        // Not on a string, nor on a collection that isn't generic itself
+        // (Regex's CaptureCollection), whose element type comes from an
+        // interface it implements (measured on SonarQube 26.7).
+        if receiver.is("System.String")
+            || (!matches!(receiver, Ty::Array(_)) && receiver.args().is_empty())
+        {
+            continue;
+        }
         let (Some(target), Some(element)) = (
             sequence_cast_target(infer, call),
             infer.element_type(&receiver),
@@ -1428,6 +1437,15 @@ pub(super) fn could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             .iter()
             .any(|s| INSTANCE_ENTRY_POINTS.iter().any(|k| s.is(k)));
         let primary = primary_parameters(*declaration, src);
+        // The type's own type parameters: a member using one isn't reported
+        // (measured on SonarQube 26.7).
+        let type_parameters: Vec<&[u8]> = declaration
+            .named_children(&mut declaration.walk())
+            .filter(|c| c.kind() == "type_parameter_list")
+            .flat_map(|l| l.named_children(&mut l.walk()).collect::<Vec<_>>())
+            .map(|p| p.child_by_field_name("name").unwrap_or(p))
+            .map(|n| text(n, src))
+            .collect();
         let uses = InstanceUses {
             m,
             infer: &infer,
@@ -1447,8 +1465,12 @@ pub(super) fn could_be_static<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             let empty = member
                 .child_by_field_name("body")
                 .is_some_and(|b| b.kind() == "block" && b.named_child_count() == 0);
+            let generic = type_parameters
+                .iter()
+                .any(|t| count_word(text(member, src), t) > 0);
             if has_body
                 && !empty
+                && !generic
                 && may_be_static(&infer, &owner, member, member_name, entry_points, src)
                 && !uses.uses_instance(member)
             {
