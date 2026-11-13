@@ -1236,7 +1236,9 @@ fn cleartext_url(n: Node, src: &[u8]) -> bool {
         && (placeholder_host(value)
             || url_host(value).is_some_and(|h| {
                 !super::java_security::is_private_host(&h)
-                    && !super::java_security::is_namespace_host(&h)
+                    // An `xmlns.` host is reported in C# (measured on
+                    // SonarQube 26.7), where it's only a naming habit.
+                    && (!super::java_security::is_namespace_host(&h) || h.starts_with("xmlns"))
                     && h != "tempuri.org"
                     && h != "schema.org"
                     && !h.starts_with("schemas.")

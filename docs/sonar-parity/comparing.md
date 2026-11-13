@@ -238,6 +238,16 @@ behavior on the version measured.
 - **Check the fetch.** A first count of eGovFrame's issues stopped at the
   search limit and missed about 500 of them; compare the script's total
   with the project's page in SonarQube.
+- **Read the message.** SonarCloud's S1479 issue on Prowlarr said "at most
+  30 or have only one statement per case": every 30-case switch measured
+  before had one statement per case, so none was reported. The message
+  named the condition the calibration had missed.
+- **Rerun after each change.** A rule measured on invented cases can still
+  be too broad on the project: an empty class deriving from another was
+  reported on SonarQube 26.7, but Prowlarr's twelve new extras all derived
+  from abstract classes, which no invented case had. Copying a project's
+  own lines into a calibration project is the next check, before calling a
+  difference SonarCloud's newer analyzer.
 
 ## Projects
 
@@ -256,7 +266,7 @@ On the comparison server, as of 2026-11-11:
 | `sonda-calibrate-java`, `sonda-calibrate-java-*` | Java calibration (`-egov`, `-egov2`, `-egov3` for eGovFrame's, Java 17) | |
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
 | `Prowlarr_Prowlarr` on SonarCloud | Prowlarr (C#, from a CI build; JavaScript and TypeScript) | `d2d1fc0` |
-| `sonda-calibrate-cs1` to `cs5` | C# calibration, built with SonarScanner for .NET | |
+| `sonda-calibrate-cs1` to `cs15` | C# calibration, built with SonarScanner for .NET (`cs7`, `cs8`, `cs11` to `cs13` with ASP.NET Core, `cs8` with Swashbuckle) | |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: the rest of C#, and C++ on a public project that SonarCloud analyzes.
+Next: Prowlarr's JavaScript and TypeScript, and C++ on a public project that SonarCloud analyzes.

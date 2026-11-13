@@ -328,7 +328,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: CSHARP,
             query: "(class_declaration name: (identifier) (base_list) body: (declaration_list)) @match",
-            filter: Some(Find(unchecked_post_action)),
+            filter: Some(FindAll(unchecked_post_actions)),
         },
         example: Some(Example {
             lang: Lang::CSharp,
@@ -639,7 +639,8 @@ fn factory_captures_key<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     })
 }
 
-fn unchecked_post_action<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// Each such action (measured on SonarQube 26.7).
+fn unchecked_post_actions<'t>(class: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let mut cursor = class.walk();
     let is_controller = class
         .named_children(&mut cursor)
@@ -654,23 +655,26 @@ fn unchecked_post_action<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             .iter()
             .any(|(_, n)| *n == b"ApiController")
     {
-        return None;
+        return Vec::new();
     }
-    members(class).into_iter().find_map(|m| {
-        if m.kind() != "method_declaration" || !cs_has_modifier(m, "public", src) {
-            return None;
-        }
-        let posts = attribute_names(m, src)
-            .iter()
-            .any(|(_, n)| matches!(*n, b"HttpPost" | b"HttpPut" | b"HttpPatch"));
-        let takes_input = m
-            .child_by_field_name("parameters")
-            .is_some_and(|p| p.named_child_count() > 0);
-        let checks = m
-            .child_by_field_name("body")
-            .is_some_and(|b| contains_ignoring_case(text(b, src), b"ModelState"));
-        (posts && takes_input && !checks).then(|| m.child_by_field_name("name"))?
-    })
+    members(class)
+        .into_iter()
+        .filter_map(|m| {
+            if m.kind() != "method_declaration" || !cs_has_modifier(m, "public", src) {
+                return None;
+            }
+            let posts = attribute_names(m, src)
+                .iter()
+                .any(|(_, n)| matches!(*n, b"HttpPost" | b"HttpPut" | b"HttpPatch"));
+            let takes_input = m
+                .child_by_field_name("parameters")
+                .is_some_and(|p| p.named_child_count() > 0);
+            let checks = m
+                .child_by_field_name("body")
+                .is_some_and(|b| contains_ignoring_case(text(b, src), b"ModelState"));
+            (posts && takes_input && !checks).then(|| m.child_by_field_name("name"))?
+        })
+        .collect()
 }
 
 fn field_inside_accessor(name: Node, src: &[u8]) -> bool {

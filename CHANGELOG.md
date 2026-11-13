@@ -401,6 +401,59 @@ file, the report formats and the public library API.
     at the type, `cs/method-returns-constant` at the method's name.
   - `cs/could-be-static` takes an unresolved base type named like an
     interface (`IParser`) for one, and checks its implementers.
+- C#, the rest of Prowlarr's differences, each measured on SonarQube 26.7:
+  sonda raises 1,433 of SonarCloud's 1,787 C# issues, where it raised
+  1,361, and 29 it doesn't, where it raised 94.
+  - A new rule, `cs/hardcoded-secret` (S6418): an API key, auth value,
+    credential, secret or token whose value looks generated.
+    `cs/hardcoded-credential` is now S2068 alone: a password, unless the
+    value holds the word itself.
+  - Each one, not the first per class: `cs/field-could-be-readonly`,
+    `cs/redundant-field-initializer`, `cs/modelstate-not-checked`,
+    `cs/nested-ternary`, `cs/produces-response-type-missing`;
+    `cs/too-many-log-calls` per level (four debug, two information, one
+    warning or error), across loggers, at the first call.
+  - Broader: `cs/unused-private-member` (a method no call reaches with its
+    number of arguments, a field used only as another type's, a generic
+    nested class's constructor), `cs/override-changes-default` (an
+    interface's default left out), `cs/hardcoded-uri` (`Redirect`,
+    HttpClient's URLs), `cs/redundant-boolean-literal` (`?? false`),
+    `cs/string-concat-in-loop` (string parameters, `string.Format`),
+    `cs/empty-class` (deriving from a concrete class),
+    `cs/sql-built-dynamically` (Dapper), `cs/unused-type-parameter`
+    (interfaces), `cs/instance-writes-static` (in a lambda),
+    `cs/generic-null-comparison` (locals), `cs/duplicate-cast` (`as`, and
+    after `is T v`), `cs/redundant-jump` (ending an if that ends the method
+    or loop), `cs/array-for-params` (`Split`, `Trim*`, `Path.Combine`),
+    `cs/argument-exception-param-name` (no argument),
+    `cs/attribute-usage-missing` (a derived attribute),
+    `cs/iequatable-not-sealed` (an own `Equals(T)`), `cs/cleartext-url`
+    (`xmlns.` hosts), `cs/logger-field-name` (NLog), and
+    `cs/overloads-not-adjacent` (constructors).
+  - Narrower: `common/too-many-parameters` leaves a C# constructor calling
+    `base(...)`; `cs/deep-inheritance` counts only the project's classes;
+    `cs/public-field` and `cs/public-readonly-mutable` leave private nested
+    classes, the latter protected and internal fields too;
+    `cs/assignment-in-subexpression` leaves loop conditions;
+    `cs/unused-parameter` empty methods; `cs/float-equality` zero;
+    `cs/too-many-switch-cases` needs a case doing more than one thing;
+    `cs/redundant-cast` a string's or non-generic collection's
+    `OfType`/`Cast`; `cs/inverted-comparison` floating point;
+    `cs/could-be-static` members using the type's type parameters;
+    `cs/property-getter-throws` throw expressions; `cs/xxe` needs a
+    resolver; `cs/field-could-be-readonly` leaves static and locked
+    fields; `cs/generic-null-comparison` class constraints;
+    `cs/class-equality-operator` `IEquatable<T>` types;
+    `cs/array-for-params` object arrays; `cs/debugger-display-unknown-member`
+    `GetType()`; `cs/datetime-now-benchmark` needs a local that was `Now`;
+    `cs/route-backslash` leaves regex constraints; `cs/new-httpclient` is
+    in controllers; `cs/produces-response-type-missing` needs
+    `Ok(value)`; `cs/overloads-not-adjacent` groups by accessibility and
+    being static; `cs/action-route-leading-slash` is reported at a
+    controller whose routes are all absolute; `cs/controller-route-missing`
+    is a relative route without one, not an abstract controller.
+  - Commented-out C# is judged as SonarQube does: a run of `//` lines that
+    parses, or a line ending with `;` or a brace; not the file's header.
 - The SonarQube comparison script fetches security hotspots, which the
   issue search leaves out, and skips issues imported from other analyzers
   (`external_roslyn:IDE0028`).

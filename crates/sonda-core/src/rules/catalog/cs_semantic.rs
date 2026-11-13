@@ -306,12 +306,14 @@ fn float_equality<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             return false;
         };
         match operator_text(node, src) {
-            // `value == null` on a double? is a null check.
+            // `value == null` on a double? is a null check; zero is exact,
+            // so `x == 0.0` is fine (measured on SonarQube 26.7).
             b"==" | b"!=" => {
                 (is_float(left) || is_float(right))
-                    && ![left, right]
-                        .iter()
-                        .any(|s| unparenthesized(*s).kind() == "null_literal")
+                    && ![left, right].iter().any(|s| {
+                        let s = unparenthesized(*s);
+                        s.kind() == "null_literal" || is_zero_literal(s, src)
+                    })
             }
             // `x < 4 || x > 4` and `x <= 4 && x >= 4`: != and == in disguise.
             op @ (b"||" | b"&&") => {
@@ -489,6 +491,15 @@ fn redundant_boolean_literals<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
     )
 }
 
+/// `0`, `0.0`, `0f`, `0d`, `0.0D`.
+fn is_zero_literal(n: Node, src: &[u8]) -> bool {
+    matches!(n.kind(), "integer_literal" | "real_literal")
+        && text(n, src)
+            .iter()
+            .filter(|b| !matches!(b, b'f' | b'F' | b'd' | b'D' | b'm' | b'M'))
+            .all(|b| matches!(b, b'0' | b'.'))
+}
+
 fn is_bool_literal(n: Option<Node>) -> bool {
     n.is_some_and(|n| unparenthesized(n).kind() == "boolean_literal")
 }
@@ -496,7 +507,13 @@ fn is_bool_literal(n: Option<Node>) -> bool {
 /// A plain bool: a literal, a comparison or logic, or a name declared bool.
 fn plain_bool(m: &Model, n: Node, src: &[u8]) -> bool {
     let n = unparenthesized(n);
-    n.kind() == "boolean_literal" || is_boolean_expression(n, src) || type_is(m, n, src, &[b"bool"])
+    n.kind() == "boolean_literal"
+        || is_boolean_expression(n, src)
+        || type_is(m, n, src, &[b"bool"])
+        // `x ?? false` (measured on SonarQube 26.7).
+        || n.kind() == "binary_expression"
+            && operator_text(n, src) == b"??"
+            && is_bool_literal(n.child_by_field_name("right"))
 }
 
 /// `c ? true : false`, or `c ? true : x` with x a plain bool.
@@ -649,10 +666,29 @@ fn methods_returning_constants<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
             ]
             .iter()
             .any(|w| super::cs::cs_has_modifier(method, w, src));
+            // An attribute may make the value a contract; a controller
+            // action's routing attributes don't (measured on SonarQube 26.7).
             let mut cursor = method.walk();
-            let marked = method
-                .named_children(&mut cursor)
-                .any(|c| matches!(c.kind(), "explicit_interface_specifier" | "attribute_list"));
+            let marked = method.named_children(&mut cursor).any(|c| {
+                c.kind() == "explicit_interface_specifier"
+                    || c.kind() == "attribute_list"
+                        && c.named_children(&mut c.walk()).any(|a| {
+                            let name = a
+                                .child_by_field_name("name")
+                                .map_or(&b""[..], |n| text(n, src));
+                            !matches!(
+                                name,
+                                b"HttpGet"
+                                    | b"HttpPost"
+                                    | b"HttpPut"
+                                    | b"HttpDelete"
+                                    | b"HttpPatch"
+                                    | b"HttpHead"
+                                    | b"Route"
+                                    | b"Produces"
+                            )
+                        })
+            });
             if special || marked || may_implement_contract(method, src) {
                 return None;
             }
@@ -989,7 +1025,9 @@ mod tests {
         let src = class(
             "void Take(double d) { }\nvoid F(double x, float f, int i, int j, decimal m, long l, double? nd) {\nvar a = x == 0.1;\nvar b = f != 2;\nvar c = x == 0;\nvar d = i == 1;\nvar e = m == 1.1m;\nvar g = x < 4 || x > 4;\nvar h = x <= 4 && x >= 4;\nvar k = x < 4 || x > 5;\nvar n = nd == null;\ndouble r = i / j;\ndecimal s = 3 / 2;\ndouble t = 1.0 / i;\ndouble u = (double)i / j;\nx = l / i;\nTake(i / j);\nint v = i / j;\n}",
         );
-        assert_eq!(flagged("cs/float-equality", &src), [5, 6, 7, 10, 11]);
+        // `x == 0` compares with zero, which is exact (measured on SonarQube
+        // 26.7).
+        assert_eq!(flagged("cs/float-equality", &src), [5, 6, 10, 11]);
         assert_eq!(
             flagged("cs/integer-division-to-floating", &src),
             [14, 15, 18, 19]
