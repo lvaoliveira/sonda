@@ -2627,7 +2627,13 @@ fn measure_functions(
             let msg = format!(
                 "'{name}' has {n} parameters, which is more than the {max_parameters} allowed."
             );
-            issues.push(ctx.issue(rule, anchor, msg, rule.rule.effort_minutes));
+            // An arrow function at its `=>`, after the parameters (measured
+            // on SonarQube 26.7).
+            let mut cursor = node.walk();
+            let arrow = (node.kind() == "arrow_function")
+                .then(|| node.children(&mut cursor).find(|c| c.kind() == "=>"))
+                .flatten();
+            issues.push(ctx.issue(rule, arrow.unwrap_or(anchor), msg, rule.rule.effort_minutes));
         }
         // Keep descending: nested functions are measured on their own.
         true

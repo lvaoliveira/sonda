@@ -304,7 +304,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JS_TS,
             query: r#"(program) @match"#,
-            filter: Some(Find(import_exported_again)),
+            filter: Some(FindAll(imports_exported_again)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -355,7 +355,7 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "js/lodash-native",
         name: "Native APIs should be preferred over Lodash and Underscore.js methods",
-        description: "Array and string natives cover what these helpers do.",
+        description: "Array and string natives cover what these helpers do, and a Set removes duplicates.",
         message: "Use the native method.",
         category: CodeSmell,
         severity: Minor,
@@ -363,13 +363,13 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S8907")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(call_expression function: (member_expression object: (identifier) @o property: (property_identifier) @p (#any-of? @o "_" "lodash") (#any-of? @p "isArray" "map" "forEach" "filter" "reduce" "find" "some" "every" "includes" "keys" "values" "entries" "assign" "concat" "join" "slice" "trim" "startsWith" "endsWith" "toUpper" "toLower" "fill"))) @match"#,
-            filter: None,
+            query: r#"[(call_expression function: (member_expression object: (identifier) @o property: (property_identifier) @p (#any-of? @o "_" "lodash") (#any-of? @p "isArray" "map" "forEach" "filter" "reduce" "find" "some" "every" "includes" "keys" "values" "entries" "assign" "concat" "join" "slice" "trim" "startsWith" "endsWith" "toUpper" "toLower" "fill" "uniq"))) (call_expression function: (identifier) @u (#eq? @u "uniq"))] @match"#,
+            filter: Some(Keep(lodash_with_native)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "const a = _.map(list, fn);",
-            good: "const a = list.map(fn);",
+            bad: "const a = _.map([1, 2], fn);",
+            good: "const a = [1, 2].map(fn);",
         }),
     },
     Rule {
@@ -1424,7 +1424,10 @@ fn constant_assigned_in_constructor<'t>(method: Node<'t>, _: &[u8]) -> Option<No
     .then_some(first)
 }
 
-fn import_exported_again<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// Each re-export of a named or namespace import: a name in `export { a }`,
+/// or `export const A = a;`. A default import isn't one (measured on
+/// SonarQube 26.7), since `export { default as a } from` says no more.
+fn imports_exported_again<'t>(program: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let mut imported: Vec<&[u8]> = Vec::new();
     for statement in named(program) {
         if statement.kind() != "import_statement" {
@@ -1439,29 +1442,184 @@ fn import_exported_again<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> 
                         .or_else(|| n.child_by_field_name("name"));
                     imported.extend(local.map(|l| text(l, src)));
                 }
-                "namespace_import" => {}
-                "import_statement" | "import_clause" => {
-                    stack.extend(named(n));
+                "namespace_import" => {
+                    imported.extend(
+                        named(n)
+                            .into_iter()
+                            .find(|c| c.kind() == "identifier")
+                            .map(|c| text(c, src)),
+                    );
                 }
-                "named_imports" => stack.extend(named(n)),
-                "identifier" if n.parent().is_some_and(|p| p.kind() == "import_clause") => {
-                    imported.push(text(n, src));
-                }
+                "import_statement" | "import_clause" | "named_imports" => stack.extend(named(n)),
                 _ => {}
             }
         }
     }
-    named(program).into_iter().find(|s| {
-        s.kind() == "export_statement"
-            && s.child_by_field_name("source").is_none()
-            && named(*s).into_iter().any(|clause| {
-                clause.kind() == "export_clause"
-                    && named(clause).into_iter().any(|spec| {
-                        spec.child_by_field_name("name")
-                            .is_some_and(|n| imported.contains(&text(n, src)))
+    let mut found = Vec::new();
+    for s in named(program) {
+        if s.kind() != "export_statement" || s.child_by_field_name("source").is_some() {
+            continue;
+        }
+        for clause in named(s) {
+            if clause.kind() == "export_clause" {
+                found.extend(named(clause).into_iter().filter(|spec| {
+                    spec.child_by_field_name("name")
+                        .is_some_and(|n| imported.contains(&text(n, src)))
+                }));
+            }
+        }
+        // `export const BAN = fasBan;`
+        if let Some(d) = s.child_by_field_name("declaration")
+            && d.kind() == "lexical_declaration"
+        {
+            found.extend(named(d).into_iter().filter(|v| {
+                v.kind() == "variable_declarator"
+                    && v.child_by_field_name("value").is_some_and(|x| {
+                        x.kind() == "identifier" && imported.contains(&text(x, src))
                     })
-            })
-    })
+            }));
+        }
+    }
+    found
+}
+
+/// A Lodash helper with a native equivalent (measured on SonarQube 26.7):
+/// `isArray`, `uniq` (a Set), object helpers, and string helpers always; a
+/// collection helper only on what is known to be an array, since on an
+/// object, or given a property shorthand (`{ id }`), Lodash does more.
+fn lodash_with_native(call: Node, src: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() == "identifier" {
+        // `uniq(xs)`, imported from Lodash.
+        let mut root = call;
+        while let Some(p) = root.parent() {
+            root = p;
+        }
+        return named(root).into_iter().any(|s| {
+            s.kind() == "import_statement"
+                && s.child_by_field_name("source").is_some_and(|m| {
+                    let m = text(m, src);
+                    m.windows(6).any(|w| w == b"lodash")
+                })
+                && text(s, src).windows(4).any(|w| w == b"uniq")
+        });
+    }
+    let Some(method) = function.child_by_field_name("property") else {
+        return false;
+    };
+    let args: Vec<Node> = call
+        .child_by_field_name("arguments")
+        .map(named)
+        .unwrap_or_default();
+    match text(method, src) {
+        b"isArray" | b"uniq" | b"keys" | b"values" | b"entries" | b"assign" | b"trim"
+        | b"startsWith" | b"endsWith" | b"toUpper" | b"toLower" => true,
+        _ => {
+            let shorthand = args
+                .get(1)
+                .is_some_and(|a| matches!(a.kind(), "object" | "string" | "array"));
+            !shorthand && args.first().is_some_and(|a| known_array(*a, src, 0))
+        }
+    }
+}
+
+/// An expression known to be an array: a literal, `Object.keys(...)` and
+/// the like, a Lodash or array call that returns one, or a name declared
+/// as one in the file.
+fn known_array(e: Node, src: &[u8], depth: usize) -> bool {
+    if depth > 4 {
+        return false;
+    }
+    match e.kind() {
+        "array" => true,
+        "parenthesized_expression" => e
+            .named_child(0)
+            .is_some_and(|x| known_array(x, src, depth + 1)),
+        "call_expression" => e.child_by_field_name("function").is_some_and(|f| {
+            let t = text(f, src);
+            matches!(
+                t,
+                b"Object.keys" | b"Object.values" | b"Object.entries" | b"Array.from" | b"Array.of"
+            ) || (t.starts_with(b"_.")
+                && matches!(
+                    &t[2..],
+                    b"map" | b"filter" | b"uniq" | b"keys" | b"values" | b"sortBy" | b"flatten"
+                ))
+                || f.kind() == "member_expression"
+                    && f.child_by_field_name("property").is_some_and(|p| {
+                        matches!(text(p, src), b"map" | b"filter" | b"slice" | b"concat")
+                    })
+                    && f.child_by_field_name("object")
+                        .is_some_and(|o| known_array(o, src, depth + 1))
+        }),
+        "identifier" => declared_value(e, src).is_some_and(|v| known_array(v, src, depth + 1)),
+        _ => false,
+    }
+}
+
+/// The value a name was declared with: in the function around it (not when
+/// it's that function's parameter), or at the top of the module.
+pub(super) fn declared_value<'t>(name_node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let name = text(name_node, src);
+    let declares = |n: Node| {
+        n.kind() == "variable_declarator"
+            && n.child_by_field_name("name")
+                .is_some_and(|x| text(x, src) == name)
+    };
+    let mut current = name_node.parent();
+    while let Some(f) = current {
+        let function = matches!(
+            f.kind(),
+            "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
+        );
+        if function {
+            let param = f.child_by_field_name("parameters").is_some_and(|p| {
+                let t = text(p, src);
+                t.split(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$')))
+                    .any(|w| w == name)
+            }) || f
+                .child_by_field_name("parameter")
+                .is_some_and(|p| text(p, src) == name);
+            if param {
+                return None;
+            }
+            let mut found = None;
+            if let Some(body) = f.child_by_field_name("body") {
+                super::js_syntax::walk(body, &mut |n| {
+                    if found.is_none() && declares(n) {
+                        found = n.child_by_field_name("value");
+                    }
+                    found.is_none()
+                });
+            }
+            if found.is_some() {
+                return found;
+            }
+        }
+        if f.kind() == "program" {
+            for s in f.named_children(&mut f.walk()) {
+                let d = if s.kind() == "export_statement" {
+                    s.child_by_field_name("declaration")
+                } else {
+                    Some(s)
+                };
+                if let Some(d) =
+                    d.filter(|d| matches!(d.kind(), "lexical_declaration" | "variable_declaration"))
+                {
+                    for v in d.named_children(&mut d.walk()) {
+                        if declares(v) {
+                            return v.child_by_field_name("value");
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        current = f.parent();
+    }
+    None
 }
 
 fn array_only_asks_includes(declarator: Node, src: &[u8]) -> bool {
@@ -2079,7 +2237,7 @@ mod tests {
 
     #[test]
     fn expressions() {
-        let src = "const a = typeof obj.value === 'undefined';\nconst b = typeof value === 'undefined';\nconst c = [...[1, 2]];\nconst d = { ...{ a: 1 } };\nconst e = [...list];\nconst f = [...(x ? [1] : undefined)];\nconst g = [...(x ? [1] : [])];\nconst h = [].concat(...lists);\nconst i = lists.reduce((a, b) => a.concat(b), []);\nconst j = list.findIndex(x => x === v);\nconst k = list.findIndex(x => x.id === v);\nconst l = new FileReader();\nconst m = 'a\\\\b\\\\c';\nconst n = 'a\\nb';\nconst o = _.map(list, fn);\nconst p = _.memoize((a, b) => a);\nconst q = _.memoize((a) => a);";
+        let src = "const a = typeof obj.value === 'undefined';\nconst b = typeof value === 'undefined';\nconst c = [...[1, 2]];\nconst d = { ...{ a: 1 } };\nconst e = [...list];\nconst f = [...(x ? [1] : undefined)];\nconst g = [...(x ? [1] : [])];\nconst h = [].concat(...lists);\nconst i = lists.reduce((a, b) => a.concat(b), []);\nconst j = list.findIndex(x => x === v);\nconst k = list.findIndex(x => x.id === v);\nconst l = new FileReader();\nconst m = 'a\\\\b\\\\c';\nconst n = 'a\\nb';\nconst o = _.map([1, 2], fn);\nconst p = _.memoize((a, b) => a);\nconst q = _.memoize((a) => a);";
         assert_eq!(flagged("js/typeof-undefined", JS, src), [1]);
         assert_eq!(flagged("js/unnecessary-spread", JS, src), [3, 4]);
         assert_eq!(flagged("js/ternary-in-array-spread", JS, src), [6]);

@@ -1268,9 +1268,12 @@ fn branches_on_a_boolean_parameter(function: Node, src: &[u8]) -> bool {
     let Some(body) = function.child_by_field_name("body") else {
         return false;
     };
+    // An if/else, not an else-if chain over several flags (measured on
+    // SonarQube 26.7).
     named(body).iter().any(|s| {
         s.kind() == "if_statement"
-            && s.child_by_field_name("alternative").is_some()
+            && s.child_by_field_name("alternative")
+                .is_some_and(|a| !named(a).iter().any(|x| x.kind() == "if_statement"))
             && s.child_by_field_name("condition")
                 .and_then(|c| c.named_child(0))
                 .is_some_and(|c| flags.contains(&text(c, src)))

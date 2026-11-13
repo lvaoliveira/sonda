@@ -1323,7 +1323,9 @@ fn right_side_is_negation_or_null_test(r: Node, src: &[u8]) -> bool {
         && right
             .child_by_field_name("right")
             .is_some_and(|n| matches!(n.kind(), "null" | "undefined"));
-    negated || null_test
+    let inequality =
+        right.kind() == "binary_expression" && matches!(operator_text(right, src), b"!=" | b"!==");
+    negated || null_test || inequality
 }
 
 /// Whether the `&&` after `binary` compares a property of `subject` too.
@@ -1380,7 +1382,11 @@ fn chain_step<'t>(node: Node<'t>, subject: &[u8], src: &[u8], and: bool) -> Step
                 Step::Next(object)
             }
         }
-        "call_expression" => next(node.child_by_field_name("function")),
+        // `f && f().x`: `f?.().x` (measured on SonarQube 26.7).
+        "call_expression" => match node.child_by_field_name("function") {
+            Some(f) if text(f, src) == subject => Step::Found,
+            f => next(f),
+        },
         "binary_expression" => next(equality_left(node, src, and)),
         "unary_expression" if !and && text(node, src).starts_with(b"!") => {
             next(node.child_by_field_name("argument"))
@@ -1402,7 +1408,11 @@ fn equality_left<'t>(node: Node<'t>, src: &[u8], and: bool) -> Option<Node<'t>> 
     let left = node.child_by_field_name("left")?;
     let right = node.child_by_field_name("right")?;
     let nullish = matches!(right.kind(), "null" | "undefined");
-    if !and && !nullish {
+    // Against a value: after `&&`, only an equality, which a nullish `a?.b`
+    // fails as `a && ...` does; after `||`, only an inequality, which it
+    // passes as `!a || ...` does (measured on SonarQube 26.7).
+    let inequality = matches!(op, b"!=" | b"!==");
+    if !nullish && (and == inequality) {
         return None;
     }
     if and && nullish {

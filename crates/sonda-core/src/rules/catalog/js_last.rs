@@ -407,7 +407,7 @@ pub(super) static RULES: &[Rule] = &[
         id: "js/default-prop-is-required",
         name: "All \"defaultProps\" should have non-required PropTypes",
         description: "A required prop never uses its default.",
-        message: "Make the prop optional, or drop the default.",
+        message: "Drop this default, or make its prop optional and declare it in propTypes.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 3,
@@ -415,7 +415,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JSX,
             query: r#"(program) @match"#,
-            filter: Some(Find(default_prop_is_required)),
+            filter: Some(FindAll(defaults_of_required_props)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -555,7 +555,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: &[Lang::Tsx],
             query: r#"[(function_declaration) (variable_declarator)] @match"#,
-            filter: Some(Find(declares_unused_props)),
+            filter: Some(FindAll(declares_unused_props)),
         },
         example: Some(Example {
             lang: Lang::Tsx,
@@ -1333,6 +1333,42 @@ fn member_replacement(object: &[u8], member: &[u8]) -> Option<&'static str> {
     })
 }
 
+/// An expression known to be a string: a literal, a template, `String(x)`,
+/// a string method's or `toString()`'s result, `document.title`, or a name
+/// declared as one in the file.
+fn known_string(e: Node, src: &[u8], depth: usize) -> bool {
+    if depth > 4 {
+        return false;
+    }
+    match e.kind() {
+        "string" | "template_string" => true,
+        "parenthesized_expression" => e
+            .named_child(0)
+            .is_some_and(|x| known_string(x, src, depth + 1)),
+        "member_expression" => text(e, src) == b"document.title",
+        "call_expression" => e.child_by_field_name("function").is_some_and(|f| {
+            text(f, src) == b"String"
+                || f.kind() == "member_expression"
+                    && f.child_by_field_name("property").is_some_and(|p| {
+                        matches!(
+                            text(p, src),
+                            b"toString"
+                                | b"join"
+                                | b"toLowerCase"
+                                | b"toUpperCase"
+                                | b"trim"
+                                | b"padStart"
+                                | b"padEnd"
+                        )
+                    })
+        }),
+        "identifier" => {
+            super::js_extra::declared_value(e, src).is_some_and(|v| known_string(v, src, depth + 1))
+        }
+        _ => false,
+    }
+}
+
 /// What replaces a deprecated method of any object (`s.substr`), or None.
 fn method_replacement(method: &[u8]) -> Option<&'static str> {
     Some(match method {
@@ -1392,8 +1428,16 @@ fn uses_deprecated_api<'t>(node: Node<'t>, src: &[u8]) -> Option<(Node<'t>, Stri
             deprecated(&[object, b".", member].concat(), replacement),
         ));
     }
+    // `substr` on what is known to be a string; SonarQube reads the type, so
+    // a parameter's `p.substr(1)` isn't reported (measured on 26.7).
+    let string_receiver = || {
+        function
+            .child_by_field_name("object")
+            .is_some_and(|o| known_string(o, src, 0))
+    };
     if !matches!(object, b"Object" | b"Reflect")
         && let Some(replacement) = method_replacement(member)
+        && (member != b"substr" || string_receiver())
     {
         return Some((call, deprecated(member, replacement)));
     }
@@ -2254,49 +2298,128 @@ fn props_are_writable<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         .map(|_| param)
 }
 
-fn declares_unused_props<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let (_, func) = component_name(node, src)?;
-    let param = first_parameter(func)?;
-    let pattern = param
-        .child_by_field_name("pattern")
-        .filter(|p| p.kind() == "object_pattern")?;
-    if named(pattern).iter().any(|c| c.kind() == "rest_pattern") {
-        return None;
-    }
-    let ty = param.child_by_field_name("type")?.named_child(0)?;
-    if ty.kind() != "type_identifier" {
-        return None;
-    }
-    let declaration = props_type_in_file(root_node(node), text(ty, src), src)?;
-    let mut used = Vec::new();
-    pattern_names(pattern, src, &mut used);
-    // `{ a: renamed }` keeps the key a used.
+/// Each member of a component's props type it never reads: destructured in
+/// its parameter, or read from a `props` parameter in its body (measured on
+/// SonarQube 26.7).
+fn declares_unused_props<'t>(node: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some((_, func)) = component_name(node, src) else {
+        return Vec::new();
+    };
+    let Some(param) = first_parameter(func) else {
+        return Vec::new();
+    };
+    let Some(ty) = param
+        .child_by_field_name("type")
+        .and_then(|t| t.named_child(0))
+        .filter(|t| t.kind() == "type_identifier")
+    else {
+        return Vec::new();
+    };
+    let Some(declaration) = props_type_in_file(root_node(node), text(ty, src), src) else {
+        return Vec::new();
+    };
+    let Some(pattern) = param.child_by_field_name("pattern") else {
+        return Vec::new();
+    };
     let mut keys: Vec<&[u8]> = Vec::new();
-    for c in named(pattern) {
-        match c.kind() {
-            "pair_pattern" => {
-                if let Some(k) = c.child_by_field_name("key") {
-                    keys.push(text(k, src));
+    /// The keys an object pattern takes; false when a rest takes the others.
+    fn collect_keys<'s>(pattern: Node, src: &'s [u8], keys: &mut Vec<&'s [u8]>) -> bool {
+        for c in named(pattern) {
+            match c.kind() {
+                "pair_pattern" => {
+                    if let Some(k) = c.child_by_field_name("key") {
+                        keys.push(text(k, src));
+                    }
                 }
+                "shorthand_property_identifier_pattern" | "object_assignment_pattern" => {
+                    keys.push(text(c.child_by_field_name("left").unwrap_or(c), src));
+                }
+                "rest_pattern" => return false,
+                _ => {}
             }
-            "shorthand_property_identifier_pattern" | "object_assignment_pattern" => {
-                keys.push(text(c.child_by_field_name("left").unwrap_or(c), src));
-            }
-            _ => {}
         }
+        true
     }
-    type_members(declaration).into_iter().find(|m| {
-        m.kind() == "property_signature"
-            && m.child_by_field_name("name")
-                .is_some_and(|n| !keys.contains(&text(n, src)))
-    })
+    match pattern.kind() {
+        "object_pattern" => {
+            if !collect_keys(pattern, src, &mut keys) {
+                return Vec::new();
+            }
+        }
+        "identifier" => {
+            // `function F(props: P)`: what the body reads of props.
+            let name = text(pattern, src);
+            let Some(body) = func.child_by_field_name("body") else {
+                return Vec::new();
+            };
+            let mut whole = false;
+            walk(body, &mut |n| {
+                if n.kind() == "identifier" && text(n, src) == name {
+                    match n.parent() {
+                        Some(p)
+                            if p.kind() == "member_expression"
+                                && p.child_by_field_name("object") == Some(n) =>
+                        {
+                            if let Some(k) = p.child_by_field_name("property") {
+                                keys.push(text(k, src));
+                            }
+                        }
+                        Some(p)
+                            if p.kind() == "variable_declarator"
+                                && p.child_by_field_name("value") == Some(n)
+                                && p.child_by_field_name("name")
+                                    .is_some_and(|x| x.kind() == "object_pattern") =>
+                        {
+                            if let Some(x) = p.child_by_field_name("name")
+                                && !collect_keys(x, src, &mut keys)
+                            {
+                                whole = true;
+                            }
+                        }
+                        _ => whole = true,
+                    }
+                }
+                !whole
+            });
+            if whole {
+                return Vec::new();
+            }
+        }
+        _ => return Vec::new(),
+    }
+    // A name the body destructures from something else counts as the prop's
+    // use too (SonarCloud, on Prowlarr: `const { sortKey } = useSelector(...)`).
+    let mut destructured: Vec<&[u8]> = Vec::new();
+    if let Some(body) = func.child_by_field_name("body") {
+        walk(body, &mut |n| {
+            if n.kind() == "shorthand_property_identifier_pattern" {
+                destructured.push(text(n, src));
+            }
+            true
+        });
+    }
+    let in_body = |word: &[u8]| destructured.contains(&word);
+    type_members(declaration)
+        .into_iter()
+        .filter(|m| {
+            m.kind() == "property_signature"
+                && m.child_by_field_name("name").is_some_and(|n| {
+                    let n = text(n, src);
+                    !keys.contains(&n) && !in_body(n)
+                })
+        })
+        .collect()
 }
 
-fn default_prop_is_required<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+/// Each default of a prop its propTypes mark required, at the default
+/// (measured on SonarQube 26.7).
+fn defaults_of_required_props<'t>(program: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     // Component.propTypes = { a: PropTypes.string.isRequired } and
     // Component.defaultProps = { a: 'x' } name the same key.
-    let mut prop_types: Vec<(Vec<u8>, Vec<Node>)> = Vec::new();
-    let mut defaults: Vec<(Vec<u8>, Vec<&[u8]>)> = Vec::new();
+    let mut required: Vec<(Vec<u8>, Vec<&[u8]>)> = Vec::new();
+    // Every key each component's propTypes declare.
+    let mut declared: Vec<(Vec<u8>, Vec<&[u8]>)> = Vec::new();
+    let mut defaults: Vec<(Vec<u8>, Vec<Node<'t>>)> = Vec::new();
     walk(program, &mut |n| {
         if n.kind() == "assignment_expression"
             && let (Some(left), Some(right)) = (
@@ -2310,34 +2433,75 @@ fn default_prop_is_required<'t>(program: Node<'t>, src: &[u8]) -> Option<Node<'t
                 left.child_by_field_name("property"),
             )
         {
-            let pairs: Vec<Node> = named(right)
+            let pairs: Vec<Node<'t>> = named(right)
                 .into_iter()
                 .filter(|p| p.kind() == "pair")
                 .collect();
             match text(prop, src) {
-                b"propTypes" => prop_types.push((text(obj, src).to_vec(), pairs)),
-                b"defaultProps" => defaults.push((
-                    text(obj, src).to_vec(),
-                    pairs
-                        .iter()
-                        .filter_map(|p| p.child_by_field_name("key"))
-                        .map(|k| text(k, src))
-                        .collect(),
-                )),
+                b"propTypes" => {
+                    declared.push((
+                        text(obj, src).to_vec(),
+                        named(right)
+                            .into_iter()
+                            .filter_map(|p| match p.kind() {
+                                "pair" => p.child_by_field_name("key").map(|k| text(k, src)),
+                                "shorthand_property_identifier" => Some(text(p, src)),
+                                _ => None,
+                            })
+                            .collect(),
+                    ));
+                    // A spread may declare any key.
+                    if named(right).iter().any(|p| p.kind() == "spread_element") {
+                        declared.push((text(obj, src).to_vec(), vec![b"*"]));
+                    }
+                    required.push((
+                        text(obj, src).to_vec(),
+                        pairs
+                            .iter()
+                            .filter(|p| {
+                                p.child_by_field_name("value")
+                                    .is_some_and(|v| text(v, src).ends_with(b".isRequired"))
+                            })
+                            .filter_map(|p| p.child_by_field_name("key"))
+                            .map(|k| text(k, src))
+                            .collect(),
+                    ));
+                }
+                b"defaultProps" => defaults.push((text(obj, src).to_vec(), pairs)),
                 _ => {}
             }
         }
         true
     });
-    prop_types.iter().find_map(|(component, pairs)| {
-        let (_, keys) = defaults.iter().find(|(c, _)| c == component)?;
-        pairs.iter().copied().find(|p| {
-            p.child_by_field_name("key")
-                .is_some_and(|k| keys.contains(&text(k, src)))
-                && p.child_by_field_name("value")
-                    .is_some_and(|v| text(v, src).ends_with(b".isRequired"))
+    defaults
+        .into_iter()
+        .flat_map(|(component, pairs)| {
+            let keys: Vec<&[u8]> = required
+                .iter()
+                .filter(|(c, _)| *c == component)
+                .flat_map(|(_, k)| k.iter().copied())
+                .collect();
+            // A default no propTypes declares at all, when the component has
+            // propTypes (measured on SonarQube 26.7).
+            let known: Option<Vec<&[u8]>> =
+                declared.iter().any(|(c, _)| *c == component).then(|| {
+                    declared
+                        .iter()
+                        .filter(|(c, _)| *c == component)
+                        .flat_map(|(_, k)| k.iter().copied())
+                        .collect()
+                });
+            pairs.into_iter().filter(move |p| {
+                p.child_by_field_name("key").is_some_and(|k| {
+                    let k = text(k, src);
+                    keys.contains(&k)
+                        || known
+                            .as_ref()
+                            .is_some_and(|d| !d.contains(&k) && !d.contains(&&b"*"[..]))
+                })
+            })
         })
-    })
+        .collect()
 }
 
 fn jsx_attribute_text<'t>(opening: Node<'t>, name: &str, src: &'t [u8]) -> Option<&'t [u8]> {
@@ -2799,7 +2963,7 @@ mod tests {
     fn deprecated_api_names_its_replacement() {
         let src = "typeof document.execCommand;\n\
             fs.exists(p, cb);\n\
-            s.substr(1, 2);\n\
+            'abc'.substr(1, 2);\n\
             d.getYear();\n\
             escape(s);\n\
             /** @deprecated use g */\n\

@@ -255,7 +255,7 @@ pub(super) static RULES: &[Rule] = &[
         },
         example: Some(Example {
             lang: Lang::JavaScript,
-            bad: "if (obj.hasOwnProperty(key)) {}",
+            bad: "if (Object.prototype.hasOwnProperty.call(obj, key)) {}",
             good: "if (Object.hasOwn(obj, key)) {}",
         }),
     },
@@ -675,7 +675,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7765")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(binary_expression left: (call_expression function: (member_expression property: (property_identifier) @p (#any-of? @p "indexOf" "lastIndexOf")))) @match"#,
+            query: r#"[(binary_expression left: (call_expression function: (member_expression property: (property_identifier) @p (#any-of? @p "indexOf" "lastIndexOf")))) (call_expression function: (member_expression property: (property_identifier) @s (#eq? @s "some")))] @match"#,
             filter: Some(Keep(compares_index_for_existence)),
         },
         example: Some(Example {
@@ -905,7 +905,8 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S7784")],
         check: Check::Query {
             langs: JS_TS,
-            query: r#"(call_expression function: (member_expression object: (identifier) @o property: (property_identifier) @p (#eq? @o "JSON") (#eq? @p "parse")) arguments: (arguments . (call_expression function: (member_expression object: (identifier) @o2 property: (property_identifier) @q (#eq? @o2 "JSON") (#eq? @q "stringify"))))) @match"#,
+            // Lodash's `_.cloneDeep(x)` too (measured on SonarQube 26.7).
+            query: r#"[(call_expression function: (member_expression object: (identifier) @o property: (property_identifier) @p (#eq? @o "JSON") (#eq? @p "parse")) arguments: (arguments . (call_expression function: (member_expression object: (identifier) @o2 property: (property_identifier) @q (#eq? @o2 "JSON") (#eq? @q "stringify"))))) (call_expression function: (member_expression object: (identifier) @l property: (property_identifier) @c (#any-of? @l "_" "lodash") (#eq? @c "cloneDeep")))] @match"#,
             filter: None,
         },
         example: Some(Example {
@@ -1597,7 +1598,8 @@ fn ternary_has_simpler_form(ternary: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    let plain = matches!(cond.kind(), "identifier" | "member_expression");
+    // A name: `a.b ? a.b : c` isn't reported (measured on SonarQube 26.7).
+    let plain = cond.kind() == "identifier";
     (plain && (text(cond, src) == text(cons, src) || text(cond, src) == text(alt, src)))
         || (matches!(cons.kind(), "true" | "false")
             && matches!(alt.kind(), "true" | "false")
@@ -1694,13 +1696,9 @@ fn has_own_property_call(call: Node, src: &[u8]) -> bool {
     let Some(property) = function.child_by_field_name("property") else {
         return false;
     };
-    if text(property, src) == b"hasOwnProperty" {
-        return argument_count(call) == 1
-            && function
-                .child_by_field_name("object")
-                .is_some_and(|o| text(o, src) != b"Object.prototype");
-    }
-    true
+    // Only `Object.prototype.hasOwnProperty.call(o, k)` and `{}...call`:
+    // `o.hasOwnProperty(k)` isn't reported (measured on SonarQube 26.7).
+    text(property, src) != b"hasOwnProperty"
 }
 
 fn assign_into_new_object(call: Node, _: &[u8]) -> bool {
@@ -1892,7 +1890,20 @@ fn one_argument(call: Node, _: &[u8]) -> bool {
     argument_count(call) == 1
 }
 
+/// `xs.indexOf(x) !== -1`, not Lodash's `_.indexOf(xs, x)`; or
+/// `xs.some((v) => v === x)` (measured on SonarQube 26.7).
 fn compares_index_for_existence(binary: Node, src: &[u8]) -> bool {
+    if binary.kind() == "call_expression" {
+        return some_compares_each_to_a_value(binary, src);
+    }
+    let lodash = binary
+        .child_by_field_name("left")
+        .and_then(|c| c.child_by_field_name("function"))
+        .and_then(|f| f.child_by_field_name("object"))
+        .is_some_and(|o| matches!(text(o, src), b"_" | b"lodash"));
+    if lodash {
+        return false;
+    }
     let number = binary
         .child_by_field_name("right")
         .map_or(&b""[..], |n| text(n, src));
@@ -1906,6 +1917,66 @@ fn compares_index_for_existence(binary: Node, src: &[u8]) -> bool {
             | (b">=", b"0")
             | (b"<", b"0")
     )
+}
+
+/// `xs.some((v) => v === x)` with x not depending on v.
+fn some_compares_each_to_a_value(call: Node, src: &[u8]) -> bool {
+    let args: Vec<Node> = call
+        .child_by_field_name("arguments")
+        .map(|a| a.named_children(&mut a.walk()).collect())
+        .unwrap_or_default();
+    let [callback] = args.as_slice() else {
+        return false;
+    };
+    if callback.kind() != "arrow_function" {
+        return false;
+    }
+    let param = callback
+        .child_by_field_name("parameter")
+        .or_else(|| {
+            callback
+                .child_by_field_name("parameters")
+                .and_then(|p| p.named_child(0))
+                .filter(|_| {
+                    callback
+                        .child_by_field_name("parameters")
+                        .is_some_and(|p| p.named_child_count() == 1)
+                })
+        })
+        .filter(|p| p.kind() == "identifier");
+    let Some(param) = param.map(|p| text(p, src)) else {
+        return false;
+    };
+    let Some(body) = callback.child_by_field_name("body") else {
+        return false;
+    };
+    let body = if body.kind() == "parenthesized_expression" {
+        body.named_child(0).unwrap_or(body)
+    } else {
+        body
+    };
+    if body.kind() != "binary_expression" || !matches!(operator_text(body, src), b"===" | b"==") {
+        return false;
+    }
+    let (Some(l), Some(r)) = (
+        body.child_by_field_name("left"),
+        body.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    let mentions = |n: Node| {
+        let t = text(n, src);
+        t.windows(param.len()).enumerate().any(|(i, w)| {
+            w == param
+                && !t
+                    .get(i.wrapping_sub(1))
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                && !t
+                    .get(i + param.len())
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        })
+    };
+    (text(l, src) == param && !mentions(r)) || (text(r, src) == param && !mentions(l))
 }
 
 fn truncates_to_integer(node: Node, src: &[u8]) -> bool {
