@@ -1,0 +1,151 @@
+name: sonda pull request upload
+
+# Reusable (ADR-0028): sends a pull request's scan, saved by
+# scan-pull-request.yml, to the sonda server, which decorates the pull
+# request. Call it from a `workflow_run` workflow: GitHub runs that as it is
+# on the default branch, never as the pull request has it, so it may hold
+# the token and run where the server is reachable. It never checks out or
+# runs the pull request's code. The artifact is data the server validates,
+# and which pull request and commit it's for come from GitHub's event,
+# never from it.
+#
+#   on:
+#     workflow_run:
+#       workflows: [sonda scan]   # the scan workflow's name
+#       types: [completed]
+#   jobs:
+#     upload:
+#       permissions:
+#         actions: read
+#         contents: read
+#         pull-requests: read
+#       uses: lvaoliveira/sonda/.github/workflows/upload-pull-request.yml@vX.Y.Z
+#       with:
+#         project: shop
+#         server: http://localhost:9300
+#       secrets:
+#         SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: The project's key on the server.
+        type: string
+        required: true
+      server:
+        description: The server's URL, as the runner reaches it.
+        type: string
+        required: true
+      runs-on:
+        description: >-
+          The runner, as JSON, such as '["self-hosted", "lan"]': one that
+          reaches the server.
+        type: string
+        default: '["self-hosted"]'
+      sonda-version:
+        description: >-
+          The sonda release to upload with, such as 0.3.0 (default: the
+          latest), or `source` to build it from the default branch (sonda's
+          own repository).
+        type: string
+        default: ''
+      ca-cert:
+        description: >-
+          A PEM file on the runner with the authorities to trust for the
+          server, such as caddy-root.crt from setup-server.sh --https.
+        type: string
+        default: ''
+    secrets:
+      SONDA_TOKEN:
+        description: >-
+          The project's analysis token. For Dependabot's pull requests, also
+          add it as a Dependabot secret.
+        required: true
+
+permissions: {}
+
+jobs:
+  upload:
+    # A pull request's scan that saved its artifact.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30
+    permissions:
+      # The scan's artifact.
+      actions: read
+      # sonda-version `source`: the default branch, to build sonda from.
+      contents: read
+      # Which pull request the scan was for.
+      pull-requests: read
+    steps:
+      # A fork's run lists no pull request: it's found from its head.
+      - name: Which pull request
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run
+            let pr = run.pull_requests.find((p) => p.head.sha === run.head_sha)
+            const owner = run.head_repository?.owner?.login
+            if (!pr && owner) {
+              const { data } = await github.rest.pulls.list({
+                ...context.repo,
+                state: 'open',
+                head: `${owner}:${run.head_branch}`,
+                per_page: 30,
+              })
+              pr = data.find((p) => p.head.sha === run.head_sha)
+            }
+            if (!pr) {
+              core.notice(`No open pull request has commit ${run.head_sha}: nothing to upload.`)
+              return
+            }
+            core.setOutput('number', String(pr.number))
+            core.setOutput('base', pr.base.ref)
+      - if: steps.pr.outputs.number
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sonda-upload
+          path: ${{ runner.temp }}/sonda-upload
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      # The default branch's, as GitHub checks it out for workflow_run:
+      # never the pull request's.
+      - if: steps.pr.outputs.number && inputs.sonda-version == 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install sonda
+        if: steps.pr.outputs.number
+        env:
+          VERSION: ${{ inputs.sonda-version }}
+        run: |
+          if [ "$VERSION" = source ]; then
+            scripts/install-cli.sh "$RUNNER_TEMP/bin"
+          else
+            curl -fsSL https://sonda.sh/install | sh -s -- --dir "$RUNNER_TEMP/bin" ${VERSION:+--version "$VERSION"}
+          fi
+      # --no-gate: the server's gate shows in the `sonda` check on the pull
+      # request; this job only says whether the upload worked.
+      - name: Upload
+        if: steps.pr.outputs.number
+        env:
+          SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}
+          SERVER: ${{ inputs.server }}
+          PROJECT: ${{ inputs.project }}
+          CA_CERT: ${{ inputs.ca-cert }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          BASE: ${{ steps.pr.outputs.base }}
+          HEAD: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          "$RUNNER_TEMP/bin/sonda" upload --no-gate \
+            --saved "$RUNNER_TEMP/sonda-upload/sonda-upload.json.gz" \
+            --server "$SERVER" --project "$PROJECT" \
+            --branch "$HEAD" --commit "$HEAD_SHA" \
+            --pull-request "$NUMBER" --pull-request-base "$BASE" \
+            --pull-request-head-sha "$HEAD_SHA" --repository "$REPOSITORY" \
+            ${CA_CERT:+--ca-cert "$CA_CERT"}

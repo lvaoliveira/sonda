@@ -19,6 +19,23 @@ use ureq::tls::{PemItem, RootCerts, TlsConfig};
 
 /// A report bigger than this is not one sonda wrote.
 const MAX_REPORT_BYTES: u64 = 256 << 20;
+/// A saved upload, gzipped and unpacked: no more than the server accepts.
+const MAX_SAVED_BYTES: u64 = 128 << 20;
+const MAX_SAVED_JSON_BYTES: u64 = 800 << 20;
+/// The fields of a saved upload (`upload::Upload`'s); any other means it
+/// isn't one.
+const SAVED_FIELDS: [&str; 10] = [
+    "project",
+    "branch",
+    "commit",
+    "version",
+    "pull_request",
+    "commit_message",
+    "scan_duration_ms",
+    "report",
+    "sources",
+    "codeowners",
+];
 /// How much of a server's error answer to show.
 const MAX_ERROR_BYTES: u64 = 4 << 10;
 /// How much of a successful answer to read: counts and the gate's labels.
@@ -31,7 +48,14 @@ const MAX_CA_CERT_BYTES: u64 = 1 << 20;
 #[derive(Args)]
 pub struct UploadArgs {
     /// JSON report written by `sonda scan --format json`.
-    report: PathBuf,
+    #[arg(required_unless_present = "saved", conflicts_with = "saved")]
+    report: Option<PathBuf>,
+    /// Send what `sonda scan --save-upload` wrote, instead of a report and
+    /// its sources. Its project, branch, commit and pull request are this
+    /// command's, never the file's: for a workflow that uploads a pull
+    /// request's scan it didn't run (ADR-0028).
+    #[arg(long, value_name = "FILE")]
+    saved: Option<PathBuf>,
     /// Server URL, e.g. https://sonda.example.com.
     #[arg(long, env = "SONDA_SERVER")]
     server: String,
@@ -70,6 +94,14 @@ pub struct UploadArgs {
     /// The branch the pull request merges into.
     #[arg(long, value_name = "BRANCH", requires = "pull_request")]
     pull_request_base: Option<String>,
+    /// The pull request's head commit, where GitHub shows the check
+    /// (in a pull_request event, read from it).
+    #[arg(long, value_name = "SHA", requires = "pull_request")]
+    pull_request_head_sha: Option<String>,
+    /// The pull request's repository, as owner/name (in a pull_request
+    /// event, read from it).
+    #[arg(long, value_name = "OWNER/NAME", requires = "pull_request")]
+    repository: Option<String>,
     /// Always exit 0, even when the server's quality gate fails.
     #[arg(long)]
     no_gate: bool,
@@ -86,14 +118,22 @@ pub fn run(args: UploadArgs) -> Result<ExitCode> {
         ca_cert: args.ca_cert,
         pull_request: args.pull_request,
         pull_request_base: args.pull_request_base,
+        pull_request_head_sha: args.pull_request_head_sha,
+        repository: args.repository,
     }
     .check()?
     else {
         return Ok(ExitCode::SUCCESS);
     };
-    let report = read_capped(&args.report, MAX_REPORT_BYTES)?;
+    let gate = match (&args.saved, &args.report) {
+        (Some(saved), _) => target.send_saved(&read_capped(saved, MAX_SAVED_BYTES)?)?,
+        (None, Some(report)) => {
+            target.send(&read_capped(report, MAX_REPORT_BYTES)?, &args.root, None)?
+        }
+        (None, None) => unreachable!("clap requires one"),
+    };
     // As SonarQube's sonar.qualitygate.wait: the server's gate decides.
-    Ok(match target.send(&report, &args.root, None)? {
+    Ok(match gate {
         Some(false) if !args.no_gate => ExitCode::from(1),
         _ => ExitCode::SUCCESS,
     })
@@ -114,6 +154,9 @@ pub struct Target {
     /// together.
     pub pull_request: Option<u64>,
     pub pull_request_base: Option<String>,
+    /// `sonda upload`'s `--pull-request-head-sha` and `--repository`.
+    pub pull_request_head_sha: Option<String>,
+    pub repository: Option<String>,
 }
 
 /// A target whose URL, token and metadata passed the local checks.
@@ -246,8 +289,8 @@ impl Target {
                 number,
                 base,
                 head: self.branch.clone(),
-                head_sha: None,
-                repository: None,
+                head_sha: self.pull_request_head_sha.map(|s| s.to_ascii_lowercase()),
+                repository: self.repository,
             }),
             _ => match upload::github_pull_request(&|v| std::env::var(v).ok()) {
                 CiPullRequest::PullRequest(pr) => Some(pr),
@@ -348,6 +391,67 @@ impl Checked {
         root: &Path,
         scan_duration: Option<Duration>,
     ) -> Result<Option<bool>> {
+        let mut upload = upload::prepare(report, root, self.meta.clone())?;
+        upload.scan_duration_ms =
+            scan_duration.map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let body = serde_json::to_value(&upload)?;
+        self.deliver(body)
+    }
+
+    /// Sends a file `sonda scan --save-upload` wrote (`gz`), with this
+    /// target's project, branch, commit, version and pull request in place
+    /// of the file's (ADR-0028): the file comes from a pull request's own
+    /// CI, so it says nothing about where it goes. The server validates the
+    /// rest, as any upload.
+    pub fn send_saved(self, gz: &[u8]) -> Result<Option<bool>> {
+        let mut json = Vec::new();
+        flate2::read::GzDecoder::new(gz)
+            .take(MAX_SAVED_JSON_BYTES + 1)
+            .read_to_end(&mut json)
+            .context("the saved upload isn't gzip; write it with sonda scan --save-upload")?;
+        if json.len() as u64 > MAX_SAVED_JSON_BYTES {
+            bail!(
+                "the saved upload is larger than {} MiB unpacked",
+                MAX_SAVED_JSON_BYTES >> 20
+            );
+        }
+        let mut body: serde_json::Value = serde_json::from_slice(&json)
+            .context("the saved upload isn't JSON; write it with sonda scan --save-upload")?;
+        let Some(fields) = body.as_object_mut() else {
+            bail!("the saved upload isn't one sonda scan --save-upload wrote");
+        };
+        if let Some(unknown) = fields.keys().find(|k| !SAVED_FIELDS.contains(&k.as_str())) {
+            bail!(
+                "the saved upload has a field {:?} sonda doesn't write",
+                sonda_core::report::terminal_safe(unknown)
+            );
+        }
+        if !fields
+            .get("report")
+            .is_some_and(serde_json::Value::is_object)
+            || !fields
+                .get("sources")
+                .is_some_and(serde_json::Value::is_array)
+        {
+            bail!("the saved upload has no report or sources");
+        }
+        let meta = &self.meta;
+        fields.insert("project".into(), meta.project.clone().into());
+        fields.insert("branch".into(), meta.branch.clone().into());
+        fields.insert("commit".into(), meta.commit.to_ascii_lowercase().into());
+        fields.remove("version");
+        if let Some(v) = &meta.version {
+            fields.insert("version".into(), v.clone().into());
+        }
+        fields.remove("pull_request");
+        if let Some(pr) = &meta.pull_request {
+            fields.insert("pull_request".into(), serde_json::to_value(pr)?);
+        }
+        self.deliver(body)
+    }
+
+    /// Posts an upload's body, and reads the server's answer.
+    fn deliver(self, mut body: serde_json::Value) -> Result<Option<bool>> {
         let custom_roots = matches!(self.roots, RootCerts::Specific(_));
         let Checked {
             url,
@@ -356,12 +460,9 @@ impl Checked {
             server,
             meta,
         } = self;
-        let mut upload = upload::prepare(report, root, meta)?;
-        upload.scan_duration_ms =
-            scan_duration.map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
-        let files = upload.sources.len();
-        let post = |upload: &upload::Upload| -> Result<ureq::http::Response<ureq::Body>> {
-            let body = gzip(&serde_json::to_vec(upload)?)?;
+        let files = body["sources"].as_array().map_or(0, Vec::len);
+        let post = |body: &serde_json::Value| -> Result<ureq::http::Response<ureq::Body>> {
+            let body = gzip(&serde_json::to_vec(body)?)?;
             tracing::info!(url = %url, files, compressed_bytes = body.len(), "uploading");
             agent(Duration::from_secs(300), &roots)
                 .post(&url)
@@ -383,21 +484,25 @@ impl Checked {
             text.trim().to_string()
         };
 
-        let mut response = post(&upload)?;
+        let mut response = post(&body)?;
         let mut status = response.status();
+        let mut pull_request = meta.pull_request.as_ref().map(|pr| pr.number);
         // A server older than pull requests (ADR-0021) refuses the field:
         // upload it as the branch it is, as before.
-        if status == 400 && upload.pull_request.is_some() {
+        if status == 400 && pull_request.is_some() {
             let text = error_text(&mut response);
             if !text.contains("pull_request") {
                 bail!("the server answered {status}: {text}");
             }
             eprintln!(
                 "sonda: {server} doesn't know pull requests yet; uploading to branch {} instead",
-                sonda_core::report::terminal_safe(&upload.branch)
+                sonda_core::report::terminal_safe(&meta.branch)
             );
-            upload.pull_request = None;
-            response = post(&upload)?;
+            if let Some(fields) = body.as_object_mut() {
+                fields.remove("pull_request");
+            }
+            pull_request = None;
+            response = post(&body)?;
             status = response.status();
         }
         if !status.is_success() {
@@ -413,14 +518,14 @@ impl Checked {
             .as_reader()
             .take(MAX_ANSWER_BYTES)
             .read_to_string(&mut answer);
-        let what = match &upload.pull_request {
-            Some(pr) => format!("pull request #{}", pr.number),
-            None => upload.branch.clone(),
+        let what = match pull_request {
+            Some(number) => format!("pull request #{number}"),
+            None => meta.branch.clone(),
         };
         eprintln!(
             "sonda: uploaded {} files for {}/{} to {}{}",
             files,
-            upload.project,
+            meta.project,
             what,
             server,
             summary(&answer)
@@ -437,6 +542,62 @@ impl Checked {
             );
         }
         Ok(gate.map(|(passed, _)| passed))
+    }
+}
+
+/// `sonda scan --save-upload`: the body `--upload` would send, gzipped,
+/// written to a file for CI to keep as an artifact the server fetches
+/// (ADR-0028). No server and no token: it works where CI has neither.
+pub struct Saved {
+    path: PathBuf,
+    meta: Meta,
+}
+
+impl Saved {
+    /// Checks what's known before scanning, as `Target::check` does. A
+    /// pull request comes from the flags, else GitHub Actions' event; a
+    /// fork's is left out, since the server takes it from GitHub anyway.
+    pub fn check(path: PathBuf, target: Target) -> Result<Self> {
+        let pull_request = match (target.pull_request, target.pull_request_base) {
+            (Some(number), Some(base)) => Some(PullRequest {
+                number,
+                base,
+                head: target.branch.clone(),
+                head_sha: target.pull_request_head_sha,
+                repository: target.repository,
+            }),
+            _ => match upload::github_pull_request(&|v| std::env::var(v).ok()) {
+                CiPullRequest::PullRequest(pr) => Some(pr),
+                CiPullRequest::Fork(_) | CiPullRequest::None => None,
+            },
+        };
+        let meta = Meta {
+            project: target.project,
+            branch: target.branch,
+            commit: target.commit,
+            version: target.project_version,
+            pull_request,
+        };
+        upload::validate_meta(&meta)?;
+        Ok(Self { path, meta })
+    }
+
+    /// Writes `report` (JSON) and the sources under `root` to the file.
+    pub fn write(self, report: &[u8], root: &Path, scan_duration: Option<Duration>) -> Result<()> {
+        let mut upload = upload::prepare(report, root, self.meta)?;
+        upload.scan_duration_ms =
+            scan_duration.map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let body = gzip(&serde_json::to_vec(&upload)?)?;
+        std::fs::write(&self.path, &body)
+            .with_context(|| format!("writing {}", self.path.display()))?;
+        eprintln!(
+            "sonda: saved the upload of {} files for {} to {} ({} KiB)",
+            upload.sources.len(),
+            upload.project,
+            self.path.display(),
+            body.len().div_ceil(1024)
+        );
+        Ok(())
     }
 }
 
@@ -691,6 +852,8 @@ mod tests {
             // Named, so a CI run's own pull request isn't read from the environment.
             pull_request: Some(1),
             pull_request_base: Some("main".into()),
+            pull_request_head_sha: None,
+            repository: None,
         }
         .check()
         .unwrap()
