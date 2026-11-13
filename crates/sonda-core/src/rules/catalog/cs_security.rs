@@ -941,7 +941,7 @@ fn is_hardcoded_password(node: Node, src: &[u8]) -> bool {
         node,
         src,
         &[b"password", b"passwd", b"pwd", b"passphrase"],
-        true,
+        Credential::Password,
     )
 }
 
@@ -961,11 +961,20 @@ fn is_hardcoded_secret(node: Node, src: &[u8]) -> bool {
             b"secret",
             b"token",
         ],
-        false,
+        Credential::Secret,
     )
 }
 
-fn hardcoded_credential(node: Node, src: &[u8], words: &[&[u8]], password: bool) -> bool {
+/// Which credential rule is asking: they differ in what value counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Credential {
+    /// Any value but a placeholder, and a connection string's password.
+    Password,
+    /// A value that looks generated.
+    Secret,
+}
+
+fn hardcoded_credential(node: Node, src: &[u8], words: &[&[u8]], credential: Credential) -> bool {
     let (name, value) = match node.kind() {
         "variable_declarator" => {
             let name = node.child_by_field_name("name");
@@ -981,7 +990,7 @@ fn hardcoded_credential(node: Node, src: &[u8], words: &[&[u8]], password: bool)
             node.child_by_field_name("right"),
         ),
         // A connection string: "...;Password=s3cret;...".
-        _ => return password && has_connection_password(node, src),
+        _ => return credential == Credential::Password && has_connection_password(node, src),
     };
     let (Some(name), Some(value)) = (name, value) else {
         return false;
@@ -1000,10 +1009,9 @@ fn hardcoded_credential(node: Node, src: &[u8], words: &[&[u8]], password: bool)
         return false;
     };
     let value_lowered = literal.to_ascii_lowercase();
-    let value_fits = if password {
-        !value_lowered.windows(word.len()).any(|x| x == *word)
-    } else {
-        super::js::random_looking(literal)
+    let value_fits = match credential {
+        Credential::Password => !value_lowered.windows(word.len()).any(|x| x == *word),
+        Credential::Secret => super::js::random_looking(literal),
     };
     // PasswordLabel, TokenUrl, SecretName and the like describe a credential.
     let describes_it = [
