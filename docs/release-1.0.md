@@ -136,7 +136,9 @@ built.
       26.7 reports). C# (Prowlarr, against SonarCloud): 1,433 of 1,787
       and 29 extra, every change measured on SonarQube 26.7; data flow and
       types from other files are the large gaps, 58 small
-      differences not yet looked into. C++: not started.
+      differences not yet looked into. Its React frontend: JavaScript 563
+      of 588 and 8 extra, TypeScript 137 of 150 and 3 extra, every change
+      measured on SonarQube 26.7. C++: not started.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

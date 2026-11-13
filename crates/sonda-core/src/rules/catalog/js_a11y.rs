@@ -175,8 +175,9 @@ pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "js/unused-component-method",
         name: "Unused methods of React components should be removed",
-        description: "A method nothing calls is dead code that readers still have to understand.",
-        message: "Remove this unused method.",
+        description: "A method, property or field nothing reads is dead code that readers still have to \
+                      understand.",
+        message: "Remove this unused method, property or field.",
         category: CodeSmell,
         severity: Major,
         effort_minutes: 5,
@@ -184,7 +185,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: JSX,
             query: r#"(class_declaration (class_heritage) @h) @match"#,
-            filter: Some(Find(unused_component_method)),
+            filter: Some(FindAll(unused_component_members)),
         },
         example: Some(Example {
             lang: Lang::JavaScript,
@@ -541,40 +542,107 @@ const LIFECYCLE: &[&str] = &[
     "getChildContext",
 ];
 
-fn unused_component_method<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let heritage = class
+/// Each member of a React class component nothing reads: a method, an
+/// arrow-function property, and each assignment to a `this._x` field that is
+/// never read (measured on SonarQube 26.7). A dynamic `this[name]` lookup
+/// doesn't count as a read.
+fn unused_component_members<'t>(class: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(heritage) = class
         .named_children(&mut class.walk())
-        .find(|c| c.kind() == "class_heritage")?;
+        .find(|c| c.kind() == "class_heritage")
+    else {
+        return Vec::new();
+    };
+    let Some(body) = class.child_by_field_name("body") else {
+        return Vec::new();
+    };
     if !text(heritage, src).windows(9).any(|w| w == b"Component") {
-        return None;
+        return Vec::new();
     }
-    let body = class.child_by_field_name("body")?;
     let class_text = text(class, src);
-    let mut cursor = body.walk();
-    body.named_children(&mut cursor).find(|m| {
-        if m.kind() != "method_definition"
-            || has_token(*m, "static")
-            || has_token(*m, "get")
-            || has_token(*m, "set")
-        {
-            return false;
-        }
-        let Some(name) = m.child_by_field_name("name") else {
-            return false;
+    let uses = |name: &[u8]| {
+        class_text
+            .windows(name.len())
+            .enumerate()
+            .filter(|(i, w)| {
+                *w == name
+                    && !class_text
+                        .get(i.wrapping_sub(1))
+                        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
+                    && !class_text
+                        .get(i + name.len())
+                        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
+            })
+            .count()
+    };
+    let mut found = Vec::new();
+    let mut members: Vec<&[u8]> = Vec::new();
+    for m in body.named_children(&mut body.walk()) {
+        let name = match m.kind() {
+            "method_definition"
+                if !has_token(m, "static") && !has_token(m, "get") && !has_token(m, "set") =>
+            {
+                m.child_by_field_name("name")
+            }
+            "field_definition" if !has_token(m, "static") => {
+                m.child_by_field_name("property").filter(|_| {
+                    m.child_by_field_name("value").is_some_and(|v| {
+                        matches!(v.kind(), "arrow_function" | "function_expression")
+                    })
+                })
+            }
+            _ => None,
         };
-        let name = text(name, src);
+        let Some(name_node) = name else {
+            continue;
+        };
+        let name = text(name_node, src);
+        members.push(name);
         if LIFECYCLE.iter().any(|l| l.as_bytes() == name)
             || name.starts_with(b"component")
             || name.starts_with(b"UNSAFE_")
+            || matches!(name, b"state" | b"constructor")
         {
-            return false;
+            continue;
         }
-        class_text
-            .windows(name.len())
-            .filter(|w| *w == name)
-            .count()
-            <= 1
-    })
+        if uses(name) <= 1 {
+            found.push(m);
+        }
+    }
+    // `this._node = x` with `_node` never read.
+    let mut writes: Vec<(&[u8], Node<'t>)> = Vec::new();
+    let mut reads: Vec<&[u8]> = Vec::new();
+    super::js_syntax::walk(body, &mut |n| {
+        if n.kind() == "member_expression"
+            && n.child_by_field_name("object")
+                .is_some_and(|o| o.kind() == "this")
+            && let Some(p) = n
+                .child_by_field_name("property")
+                .filter(|p| p.kind() == "property_identifier")
+        {
+            let name = text(p, src);
+            match n.parent() {
+                Some(a)
+                    if a.kind() == "assignment_expression"
+                        && a.child_by_field_name("left") == Some(n) =>
+                {
+                    writes.push((name, a));
+                }
+                _ => reads.push(name),
+            }
+        }
+        true
+    });
+    for (name, assignment) in writes {
+        if !reads.contains(&name)
+            && !members.contains(&name)
+            && !matches!(name, b"state" | b"props" | b"context" | b"refs")
+        {
+            found.push(assignment);
+        }
+    }
+    found.sort_by_key(|n| n.start_byte());
+    found
 }
 
 const PLAIN_TAGS: &[&[u8]] = &[
