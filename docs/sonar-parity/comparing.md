@@ -254,7 +254,11 @@ behavior on the version measured.
   reported on public projects, and didn't, checked across two of them. A
   rule's parameters matter as much as its logic: SonarCloud's message gave
   C++'s cognitive-complexity threshold, 25, away ("from 35 to the 25
-  allowed").
+  allowed"). Read the issues a rule reports and the ones it leaves out
+  side by side before choosing its condition: S3230 looked like "a literal
+  in the initializer list" until the misses showed enumerators, `x_()` and
+  template parameters, and the extras showed only the first constructor
+  counts.
 - **Count only compared keys.** A sonda issue on a key the server's profile
   has off isn't a match, even when no difference lists it: eGovFrame's
   SonarCloud profile has S1226 off, so its 147 issues there were never
@@ -290,4 +294,5 @@ On the comparison server, as of 2026-11-11:
 | `dejwk_roo_display` on SonarCloud | roo_display (C++, C) | `f139977` |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: more C++ rules, the most frequent missing keys first.
+Next: more C++ rules, the most frequent missing keys first (S6022,
+S5817, S6177).

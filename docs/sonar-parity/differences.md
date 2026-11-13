@@ -29,8 +29,8 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
-| qutepart-cpp⁴ | C++ (Qt) | `1099377` | 238 of 748 | 32 |
-| roo_display⁴ | C++ (embedded), C | `f139977` | 1,525 of 2,958 | 124 |
+| qutepart-cpp⁴ | C++ (Qt) | `1099377` | 343 of 748 | 39 |
+| roo_display⁴ | C++ (embedded), C | `f139977` | 1,937 of 2,958 | 269 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -779,16 +779,38 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
     `cpp/redundant-type` (S5827), `cpp/make-unique` (S5950).
   - `cpp/init-statement` (S6004) is off by default: SonarCloud reported
     about a third of what it finds, and nothing visible told them apart.
+- **Second batch**, the most frequent keys left:
+  - `cpp/initializer-list-constant` (S3230): a member's initializer that
+    doesn't use the constructor's parameters (a literal, `kName` or
+    `ALL_CAPS`, `ns::value`, a template parameter, `x_()`), at the first
+    constructor in the class that sets it so; one that reads another
+    member isn't.
+  - `cpp/unused-parameter` (S1172): not in `Class::method(...)`, which a
+    declaration (perhaps virtual) fixes, nor in a template's
+    specialization, nor a virtual function or an override; the
+    initializer list counts as a use.
+  - `cpp/manual-memory` (S5025): `new` and `delete`, but not a `new`
+    handed straight to an owner (`p.reset(new T)`, `v.emplace_back(new
+    T)`, `std::unique_ptr<T> p(new T)`), a Qt object given a parent
+    (`new QTimer(this)`), nor a placement `new`.
+  - `cpp/void-pointer` (S5008): a `void*` parameter or return type, at the
+    definition, not the declaration; not `operator new` or `operator
+    delete`.
+  - `cpp/switch-fallthrough` (S128, also in C): not into a case that only
+    jumps (`default: break;`), and a nested switch whose every case
+    returns ends its case.
+  - `cpp/old-style-parameters` (S1198), `cpp/cast-drops-const` (S859, a
+    string literal cast to a non-const pointer), also in C;
+    `cpp/operator-hidden-friend` (S2807, a two-operand comparison defined
+    outside its class), `cpp/protected-member-variable` (S3656).
 
 ### Still open in C and C++
 
-On the two projects, 1,943 of SonarCloud's issues and 156 of sonda's:
+On the two projects, 1,426 of SonarCloud's issues and 308 of sonda's:
 
-- **No sonda rule yet:** the largest, S3230 (202, members set in a
-  constructor's body or its initializer list), S6022 (169, `std::byte`),
-  S1172 (88, unused parameters), S5817 (83, const member functions), S5025
-  (74, `new` and `delete`), S6177 (74, `using enum`), S1198, S5350, S859,
-  S2807, S1242; then about a hundred keys with fewer.
+- **No sonda rule yet (873):** the largest, S6022 (169, `std::byte`),
+  S5817 (83, const member functions), S6177 (74, `using enum`), S5350 (44),
+  S1242 (34); then about a hundred keys with fewer.
 - **Off by default:** S6004 (126).
 - **SonarCloud's commented-out code in generated tables (140):** roo_display's
   font files comment each glyph, `// "&" (U+0026), uncompressed`, which
@@ -797,8 +819,12 @@ On the two projects, 1,943 of SonarCloud's issues and 156 of sonda's:
   live or which files a build includes; SonarCloud analyzes only what the
   compilation database compiles (zlib's inactive fast paths, an ESP32-only
   source).
-- **sonda only, not pinned down (156):** S125 (45), S5421 (31), S5950 (17),
-  S1186 (16), S5827 (12), a few each for the rest.
+- **Members SonarCloud skipped (105, S3230):** a literal initializer it
+  didn't report, in a class it reported others of; nothing visible (a
+  template, a header, another constructor) told them apart.
+- **sonda only, not pinned down (the rest):** S125 (45), S5421 (31), S5025
+  (17, mostly a `new` stored in a member), S5950 (17), S1186 (16), S1172
+  (14, callbacks and constructors), S5827 (12), a few each for the rest.
 
 ## Rules that depend on knowing a type
 
