@@ -249,6 +249,12 @@ behavior on the version measured.
   project has a `package.json` and installs React, PropTypes and Lodash.
   SonarQube skips a large file it takes for a bundle; set
   `sonar.javascript.detectBundles=false` to measure one.
+- **C and C++ from SonarCloud only.** SonarQube 26.7's edition here has no
+  C/C++ analyzer, so a C++ rule's conditions come from what SonarCloud
+  reported on public projects, and didn't, checked across two of them. A
+  rule's parameters matter as much as its logic: SonarCloud's message gave
+  C++'s cognitive-complexity threshold, 25, away ("from 35 to the 25
+  allowed").
 - **Count only compared keys.** A sonda issue on a key the server's profile
   has off isn't a match, even when no difference lists it: eGovFrame's
   SonarCloud profile has S1226 off, so its 147 issues there were never
@@ -280,6 +286,8 @@ On the comparison server, as of 2026-11-11:
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
 | `Prowlarr_Prowlarr` on SonarCloud | Prowlarr (C#, from a CI build; JavaScript and TypeScript) | `d2d1fc0` |
 | `sonda-calibrate-cs1` to `cs15` | C# calibration, built with SonarScanner for .NET (`cs7`, `cs8`, `cs11` to `cs13` with ASP.NET Core, `cs8` with Swashbuckle) | |
+| `diegoiast_qutepart-cpp` on SonarCloud | qutepart-cpp (C++, Qt) | `1099377` |
+| `dejwk_roo_display` on SonarCloud | roo_display (C++, C) | `f139977` |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: C++ on a public project that SonarCloud analyzes.
+Next: more C++ rules, the most frequent missing keys first.

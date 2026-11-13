@@ -24,6 +24,7 @@ pub(crate) const PYTHON: &[Lang] = &[Lang::Python];
 pub(crate) const JAVA: &[Lang] = &[Lang::Java];
 pub(crate) const C_CPP: &[Lang] = &[Lang::C, Lang::Cpp];
 pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
+pub(crate) const CPP_ONLY: &[Lang] = &[Lang::Cpp];
 pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
 pub(crate) const RUST: &[Lang] = &[Lang::Rust];
 /// Every language but Rust, for the `common/` rules SonarQube has no Rust key for.
@@ -51,8 +52,8 @@ pub const ALL: &[Lang] = &[
 ];
 
 impl Lang {
-    /// Detects the language from the file extension. `.h` is treated as C;
-    /// C++ headers should use `.hpp`/`.hh`/`.hxx`.
+    /// Detects the language from the file extension. `.h` is C here; a scan
+    /// reads a `.h` written in C++ as C++ when the project has C++ sources.
     pub fn from_path(path: &Path) -> Option<Lang> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
@@ -152,6 +153,11 @@ pub(crate) struct Syntax {
     /// reports it, unless `thresholds.parameters` says otherwise: SonarQube's
     /// defaults, 13 in Python and 7 elsewhere.
     pub(crate) max_parameters: u32,
+    /// The cognitive complexity a function may have before
+    /// common/cognitive-complexity reports it, unless
+    /// `thresholds.cognitive_complexity` says otherwise: SonarQube's
+    /// defaults, 25 in C and C++ and 15 elsewhere.
+    pub(crate) max_cognitive: u32,
     /// A method's first parameter that isn't counted: Python's `self`, `cls`.
     pub(crate) receivers: &'static [&'static str],
     /// Loops, catches and ternaries: +1 cyclomatic, +1 (+nesting) cognitive.
@@ -181,6 +187,7 @@ static JS_SYNTAX: Syntax = Syntax {
     file_cognitive_nests_functions: true,
     cognitive_includes_nested_functions: false,
     max_parameters: 7,
+    max_cognitive: 15,
     receivers: &[],
     branches: &[
         "for_statement",
@@ -204,6 +211,7 @@ static PYTHON_SYNTAX: Syntax = Syntax {
     file_cognitive_nests_functions: false,
     cognitive_includes_nested_functions: true,
     max_parameters: 13,
+    max_cognitive: 15,
     receivers: &["self", "cls"],
     branches: &[
         "for_statement",
@@ -235,6 +243,7 @@ static JAVA_SYNTAX: Syntax = Syntax {
     file_cognitive_nests_functions: false,
     cognitive_includes_nested_functions: false,
     max_parameters: 7,
+    max_cognitive: 15,
     receivers: &[],
     branches: &[
         "for_statement",
@@ -251,13 +260,16 @@ static JAVA_SYNTAX: Syntax = Syntax {
 };
 
 static C_SYNTAX: Syntax = Syntax {
-    functions: &["function_definition", "lambda_expression"],
-    closures: &[],
+    functions: &["function_definition"],
+    // A C++ lambda is part of its function, one level deeper (as SonarCloud
+    // counts it).
+    closures: &["lambda_expression"],
     wildcard_arm_is_default: false,
     cognitive_skips_or: false,
     file_cognitive_nests_functions: false,
     cognitive_includes_nested_functions: false,
     max_parameters: 7,
+    max_cognitive: 25,
     receivers: &[],
     branches: &[
         "for_statement",
@@ -291,6 +303,7 @@ static CSHARP_SYNTAX: Syntax = Syntax {
     file_cognitive_nests_functions: false,
     cognitive_includes_nested_functions: false,
     max_parameters: 7,
+    max_cognitive: 15,
     receivers: &[],
     branches: &[
         "for_statement",
@@ -314,6 +327,7 @@ static RUST_SYNTAX: Syntax = Syntax {
     file_cognitive_nests_functions: false,
     cognitive_includes_nested_functions: false,
     max_parameters: 7,
+    max_cognitive: 15,
     receivers: &[],
     branches: &["for_expression", "while_expression"],
     // `loop` has no condition, so no decision: it only nests, like a match.

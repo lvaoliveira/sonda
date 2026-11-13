@@ -138,7 +138,11 @@ built.
       types from other files are the large gaps, 58 small
       differences not yet looked into. Its React frontend: JavaScript 563
       of 588 and 8 extra, TypeScript 137 of 150 and 3 extra, every change
-      measured on SonarQube 26.7. C++: not started.
+      measured on SonarQube 26.7. C and C++ (qutepart-cpp and roo_display,
+      against SonarCloud; no C/C++ analyzer on SonarQube 26.7 to measure
+      on): 238 of 748 and 1,525 of 2,958 after a first batch of 19 C++
+      rules and the shared ones aligned; most of the rest have no sonda rule
+      yet.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

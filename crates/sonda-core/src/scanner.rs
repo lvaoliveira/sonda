@@ -473,6 +473,7 @@ fn scan_files(
     // Every later stage (analysis order, duplication's "first occurrence")
     // relies on this sort.
     paths.sort_by(|a, b| a.rel.cmp(&b.rel));
+    promote_cpp_headers(&mut paths);
     let root = &opts.root;
     let scanned: HashSet<&str> = paths.iter().map(|p| p.rel.as_str()).collect();
     let coverage = load_coverage(&opts.coverage, root, &scanned)?;
@@ -695,6 +696,50 @@ fn collect_files(root: &Path, cfg: &Config) -> Result<Found, Error> {
         dependency_files,
         warnings,
     })
+}
+
+/// In a project with C++ sources, a `.h` header written in C++ (a class, a
+/// namespace, a template, `::`) is C++: SonarQube analyzes a header as part
+/// of the C++ files that include it. A C header stays C.
+fn promote_cpp_headers(paths: &mut [Candidate]) {
+    if !paths.iter().any(|c| c.lang == Lang::Cpp) {
+        return;
+    }
+    for c in paths
+        .iter_mut()
+        .filter(|c| c.lang == Lang::C && c.rel.ends_with(".h"))
+    {
+        let Ok(file) = std::fs::File::open(&c.path) else {
+            continue;
+        };
+        let mut head = Vec::new();
+        if std::io::Read::read_to_end(&mut std::io::Read::take(file, 256 * 1024), &mut head).is_ok()
+            && looks_like_cpp(&head)
+        {
+            c.lang = Lang::Cpp;
+        }
+    }
+}
+
+/// C++ syntax a C header doesn't have.
+pub(crate) fn looks_like_cpp(src: &[u8]) -> bool {
+    const MARKERS: &[&[u8]] = &[
+        b"class ",
+        b"namespace ",
+        b"template<",
+        b"template <",
+        b"public:",
+        b"private:",
+        b"protected:",
+        b"nullptr",
+        b"constexpr",
+        b"std::",
+        b"::",
+        b"virtual ",
+    ];
+    MARKERS
+        .iter()
+        .any(|m| src.windows(m.len()).any(|w| w == *m))
 }
 
 /// A source file's text: UTF-8, or for Python the Latin-1 family a PEP 263

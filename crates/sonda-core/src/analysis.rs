@@ -2574,6 +2574,7 @@ fn measure_functions(
     metrics: &mut FileMetrics,
 ) {
     let t = &cfg.thresholds;
+    let max_cognitive = t.cognitive_complexity.unwrap_or(syn.max_cognitive);
     let cognitive_rule = rules.get(rules::COGNITIVE_COMPLEXITY);
     let length_rule = rules.get(rules::FUNCTION_LENGTH);
     let params_rule = rules.get(rules::TOO_MANY_PARAMETERS);
@@ -2599,13 +2600,14 @@ fn measure_functions(
         let anchor = name_node(node).unwrap_or(node);
         if let Some(rule) = cognitive_rule
             && !whole
-            && c.cognitive > t.cognitive_complexity
+            && c.cognitive > max_cognitive
+            && !macro_body_or_old_style(node, ctx.src.as_bytes())
         {
             let msg = format!(
                 "Refactor '{name}' to reduce its cognitive complexity from {} to the {} allowed.",
-                c.cognitive, t.cognitive_complexity
+                c.cognitive, max_cognitive
             );
-            let effort = rule.rule.effort_minutes + (c.cognitive - t.cognitive_complexity);
+            let effort = rule.rule.effort_minutes + (c.cognitive - max_cognitive);
             issues.push(ctx.issue(rule, anchor, msg, effort));
         }
         let lines = node.end_position().row - node.start_position().row + 1;
@@ -2623,6 +2625,7 @@ fn measure_functions(
             && let Some(n) = parameter_count(node, syn, ctx.src.as_bytes())
             && n > max_parameters as usize
             && !calls_base_constructor(node, ctx.src.as_bytes())
+            && !overrides(node, ctx.src.as_bytes())
         {
             let msg = format!(
                 "'{name}' has {n} parameters, which is more than the {max_parameters} allowed."
@@ -2662,14 +2665,14 @@ fn measure_functions(
             let cognitive = complexity_with(node, syn, ctx.src.as_bytes(), true).cognitive;
             metrics.cognitive_complexity += cognitive;
             if let Some(rule) = cognitive_rule
-                && cognitive > t.cognitive_complexity
+                && cognitive > max_cognitive
             {
                 let name = function_name(node, ctx);
                 let msg = format!(
                     "Refactor '{name}' to reduce its cognitive complexity from {cognitive} to the {} allowed.",
-                    t.cognitive_complexity
+                    max_cognitive
                 );
-                let effort = rule.rule.effort_minutes + (cognitive - t.cognitive_complexity);
+                let effort = rule.rule.effort_minutes + (cognitive - max_cognitive);
                 issues.push(ctx.issue(rule, name_node(node).unwrap_or(node), msg, effort));
             }
             false
@@ -2783,6 +2786,10 @@ struct CommentRules<'r, 't> {
     csharp: bool,
     /// C#: the `//` lines of the block being read.
     csharp_block: Vec<(Node<'t>, String)>,
+    /// C and C++: a block of `//` lines is one finding, at its first line.
+    cfamily: bool,
+    /// C and C++: the `//` lines of the block being read.
+    cfamily_block: Vec<(Node<'t>, String)>,
     /// Where the file's first token starts: comments before it are its
     /// header (a licence), which C# doesn't judge.
     header_end: usize,
@@ -2820,6 +2827,58 @@ impl<'t> CommentRules<'_, 't> {
                 .map(|(n, _)| *n)
         };
         if let Some(node) = at {
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+        }
+    }
+
+    /// C and C++: a block of `//` lines with code in it is one issue, at its
+    /// first line, prose or not (as SonarCloud reports them; C/C++ couldn't
+    /// be measured on SonarQube 26.7).
+    fn flush_cfamily_block(&mut self, ctx: &Ctx, issues: &mut Vec<Issue>) {
+        let block = std::mem::take(&mut self.cfamily_block);
+        let (Some(rule), Some((first, _))) = (self.code, block.first()) else {
+            return;
+        };
+        let lines: Vec<&str> = block
+            .iter()
+            .map(|(_, t)| t.trim_start_matches('/'))
+            .collect();
+        if block.iter().any(|(_, t)| cfamily_line_is_code(t)) || cpp_parses(&lines.join("\n")) {
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue(rule, *first, msg, rule.rule.effort_minutes));
+        }
+    }
+
+    fn check_cfamily(
+        &mut self,
+        ctx: &Ctx,
+        node: Node<'t>,
+        text: &str,
+        alone: bool,
+        issues: &mut Vec<Issue>,
+    ) {
+        let line_comment =
+            text.starts_with("//") && !text.starts_with("///") && !text.starts_with("//!");
+        let row = node.start_position().row;
+        let continues = alone
+            && line_comment
+            && self
+                .cfamily_block
+                .last()
+                .is_some_and(|(last, _)| last.end_position().row + 1 == row);
+        if !continues {
+            self.flush_cfamily_block(ctx, issues);
+        }
+        if alone && line_comment {
+            self.cfamily_block.push((node, text.to_string()));
+            return;
+        }
+        let doc = text.starts_with("/**") || text.starts_with("///") || text.starts_with("//!");
+        if let Some(rule) = self.code
+            && !doc
+            && text.lines().any(cfamily_line_is_code)
+        {
             let msg = "Remove this commented-out code.".to_string();
             issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
         }
@@ -2888,6 +2947,9 @@ impl<'t> CommentRules<'_, 't> {
         if self.csharp {
             self.check_csharp(ctx, node, text, alone, issues);
         }
+        if self.cfamily {
+            self.check_cfamily(ctx, node, text, alone, issues);
+        }
         // A Java `/* */` comment (not a Javadoc) with code in it, reported at
         // its first line of code, as SonarQube 26.7 does (measured).
         if let Some(rule) = self.java_code
@@ -2955,6 +3017,7 @@ impl<'t> CommentRules<'_, 't> {
         } else if let Some(rule) = self.code
             && !self.java
             && !self.csharp
+            && !self.cfamily
             && reads_as_code(text, alone, self.python)
         {
             let row = node.start_position().row;
@@ -2965,7 +3028,17 @@ impl<'t> CommentRules<'_, 't> {
                 issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
             }
         }
-        if let Some(rule) = self.todo {
+        if let Some(rule) = self.todo
+            && self.cfamily
+        {
+            // C and C++: once per comment, at its start, the tag in any case
+            // (`// Fixme:`, `// todo:`), as SonarCloud reports them.
+            let upper = text.to_ascii_uppercase();
+            if let Some((tag, _)) = todo_tag_at(&upper) {
+                let msg = format!("Complete the task associated with this {tag} comment.");
+                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            }
+        } else if let Some(rule) = self.todo {
             // On each tag's line, as SonarQube reports them in a block
             // comment: one per line.
             let mut from = 0;
@@ -3115,6 +3188,60 @@ fn csharp_line_is_code(line: &str) -> bool {
         || l.ends_with('{') && csharp_parses(&format!("{l}\n}}"))
 }
 
+/// A C or C++ comment line that reads as code: the generic signs, a lone
+/// brace, or a preprocessor directive (`// #endif`, `// #include "x.h"`),
+/// as SonarCloud reports them.
+fn cfamily_line_is_code(line: &str) -> bool {
+    let l = line
+        .trim()
+        .trim_start_matches(['/', '*'])
+        .trim_end_matches("*/")
+        .trim();
+    let directive = l.strip_prefix('#').is_some_and(|d| {
+        let d = d.trim_start();
+        [
+            "include", "if", "ifdef", "ifndef", "endif", "else", "elif", "define", "undef",
+            "pragma",
+        ]
+        .iter()
+        .any(|k| d.starts_with(k))
+    });
+    matches!(l, "{" | "}" | "};") || directive || looks_like_code(line)
+}
+
+/// Whether lines parse as C++ statements (in a function body) or
+/// declarations (at namespace or class scope), with no error and at least
+/// one statement or declaration with a call, an assignment or a body.
+fn cpp_parses(code: &str) -> bool {
+    thread_local! {
+        static CPP_PARSER: std::cell::RefCell<Option<tree_sitter::Parser>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    if !code.contains([';', '{', '}']) {
+        return false;
+    }
+    CPP_PARSER.with(|p| {
+        let mut p = p.borrow_mut();
+        let parser = p.get_or_insert_with(|| {
+            let mut parser = tree_sitter::Parser::new();
+            let _ = parser.set_language(&Lang::Cpp.grammar());
+            parser
+        });
+        [
+            ("void __f() {\n", "\n}"),
+            ("struct __S {\n", "\n};"),
+            ("", ""),
+        ]
+        .into_iter()
+        .any(|(open, close)| {
+            let source = format!("{open}{code}{close}");
+            parser
+                .parse(&source, None)
+                .is_some_and(|tree| !tree.root_node().has_error())
+        })
+    })
+}
+
 /// Whether lines parse as C# statements or members, with no error.
 fn csharp_parses(code: &str) -> bool {
     thread_local! {
@@ -3193,6 +3320,8 @@ fn scan_tokens(
         python_block: Vec::new(),
         csharp: std::ptr::eq(syn, Lang::CSharp.syntax()),
         csharp_block: Vec::new(),
+        cfamily: std::ptr::eq(syn, Lang::C.syntax()),
+        cfamily_block: Vec::new(),
         header_end: {
             let mut cursor = root.walk();
             root.named_children(&mut cursor)
@@ -3240,6 +3369,7 @@ fn scan_tokens(
     });
     comment_rules.flush_python_block(ctx, issues);
     comment_rules.flush_csharp_block(ctx, issues);
+    comment_rules.flush_cfamily_block(ctx, issues);
 
     let code_lines = (0..rows).filter(|&r| code[r]).map(|r| r + 1).collect();
     TokenScan {
@@ -3505,6 +3635,16 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
                 Some(inner) if matches!(inner.kind(), "if_statement" | "if_expression") => {
                     self.stack.push(Step::If(inner, nesting, true))
                 }
+                // C and C++: `else { if ... }`, the if alone in its block, is
+                // an else-if (as SonarCloud counts it).
+                Some(block)
+                    if block.kind() == "compound_statement"
+                        && named_statements(block).len() == 1
+                        && named_statements(block)[0].kind() == "if_statement" =>
+                {
+                    self.stack
+                        .push(Step::If(named_statements(block)[0], nesting, true))
+                }
                 _ => {
                     self.c.cognitive += 1;
                     self.children(node, nesting + 1, None);
@@ -3526,6 +3666,15 @@ fn is_default_case(text: &str, wildcard: bool) -> bool {
             && text
                 .strip_prefix('_')
                 .is_some_and(|rest| rest.trim_start().starts_with("=>")))
+}
+
+/// A block's statements, comments left out.
+fn named_statements(block: Node) -> Vec<Node> {
+    let mut cursor = block.walk();
+    block
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() != "comment")
+        .collect()
 }
 
 fn only_named_child(node: Node) -> Option<Node> {
@@ -3590,6 +3739,44 @@ fn raw_function_name<'s>(node: Node, ctx: &Ctx<'s>) -> &'s str {
         _ => None,
     });
     named_by.map_or("<anonymous>", |n| ctx.text(n))
+}
+
+/// A C++ member function marked `override` or `final`: its parameters are
+/// the base's (as SonarCloud counts them).
+fn overrides(node: Node, src: &[u8]) -> bool {
+    node.kind() == "function_definition"
+        && node.child_by_field_name("declarator").is_some_and(|d| {
+            let mut cursor = d.walk();
+            d.named_children(&mut cursor).any(|c| {
+                c.kind() == "virtual_specifier"
+                    && c.utf8_text(src)
+                        .is_ok_and(|t| matches!(t, "override" | "final"))
+            })
+        })
+}
+
+/// A C or C++ function SonarCloud doesn't score: a test macro's body
+/// (`TEST(Suite, Name) { ... }`, no return type, a capitalized name) or an
+/// old-style definition declaring its parameters after the parentheses.
+fn macro_body_or_old_style(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "function_definition" {
+        return false;
+    }
+    let macro_body = node.child_by_field_name("type").is_none()
+        && node
+            .child_by_field_name("declarator")
+            .and_then(|d| d.child_by_field_name("declarator"))
+            .and_then(|n| n.utf8_text(src).ok())
+            .is_some_and(|n| {
+                !n.is_empty()
+                    && n.chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+            });
+    let mut cursor = node.walk();
+    let old_style = node
+        .named_children(&mut cursor)
+        .any(|c| c.kind() == "declaration");
+    macro_body || old_style
 }
 
 /// A C# constructor that calls `: base(...)`: its parameters are largely
