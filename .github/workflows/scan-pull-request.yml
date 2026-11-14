@@ -14,6 +14,10 @@ name: sonda pull request scan
 #       uses: lvaoliveira/sonda/.github/workflows/scan-pull-request.yml@vX.Y.Z
 #       with:
 #         project: shop
+#
+# This job runs no tests. For coverage, a job before it uploads the LCOV
+# reports as an artifact, which `coverage-artifact` names and `coverage`
+# lists (docs/server.md shows one).
 on:
   workflow_call:
     inputs:
@@ -28,8 +32,21 @@ on:
           repository).
         type: string
         default: ''
+      coverage-artifact:
+        description: >-
+          An artifact of this run with LCOV reports, downloaded into the
+          checkout. It keeps its files' paths from their common directory.
+        type: string
+        default: ''
+      coverage:
+        description: >-
+          The LCOV reports to import, space-separated, from the repository's
+          root. One that's missing (its tests failed, say) is skipped with a
+          warning, and the gate says coverage has no data.
+        type: string
+        default: ''
       args:
-        description: More `sonda scan` options, such as `--coverage lcov.info`.
+        description: More `sonda scan` options.
         type: string
         default: ''
 
@@ -66,17 +83,34 @@ jobs:
           else
             curl -fsSL https://sonda.sh/install | sh -s -- --dir "$RUNNER_TEMP/bin" ${VERSION:+--version "$VERSION"}
           fi
+      - if: inputs.coverage-artifact != ''
+        # Without it, the scan still runs, and the gate says why coverage has
+        # no data.
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.coverage-artifact }}
+          path: ${{ github.workspace }}
       # --no-gate: the server's gate, with its reviews, decides in the
       # `sonda` check it posts, not this job.
       - name: Scan
         env:
           PROJECT: ${{ inputs.project }}
           ARGS: ${{ inputs.args }}
+          COVERAGE: ${{ inputs.coverage }}
           HEAD: ${{ github.head_ref }}
-        # ARGS is options, split on spaces.
+        # ARGS is options and COVERAGE paths, split on spaces.
         run: |
+          reports=""
+          for report in $COVERAGE; do
+            if [ -f "$report" ]; then
+              reports="$reports --coverage $report"
+            else
+              echo "::warning::No coverage report at $report; coverage has no data for it."
+            fi
+          done
           # shellcheck disable=SC2086
-          "$RUNNER_TEMP/bin/sonda" scan . --no-gate $ARGS \
+          "$RUNNER_TEMP/bin/sonda" scan . --no-gate $ARGS $reports \
             --save-upload "$RUNNER_TEMP/sonda-upload.json.gz" \
             --project "$PROJECT" --branch "$HEAD" --commit "$GITHUB_SHA"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

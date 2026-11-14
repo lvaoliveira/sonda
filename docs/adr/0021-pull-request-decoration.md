@@ -74,7 +74,8 @@ builds GitHub on them first.
   - Its conclusion is `success` when the gate passes, `failure` when it
     fails, and `neutral` when it's partial. Branch protection can require it.
   - Its summary has:
-    - the gate, and which conditions fail;
+    - the gate, which conditions fail, and which have no data and why
+      (no coverage report, or one without the new lines);
     - new issues by type and severity;
     - coverage and duplication on new code;
     - a link to the analysis.

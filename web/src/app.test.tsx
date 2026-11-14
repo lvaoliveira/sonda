@@ -378,6 +378,23 @@ describe('Projects', () => {
     expect(screen.getByText('· ignored: no advisory data')).toBeInTheDocument()
   })
 
+  it('says why a condition has no data', async () => {
+    const api = createMockApi(0)
+    const real = api.project
+    const project: SondaApi['project'] = async (key, branch) => {
+      const p = await real(key, branch)
+      const conditions = p.gate.conditions.map((c) =>
+        c.metric === 'new_coverage'
+          ? { ...c, actual: null, status: 'no_data' as const, reason: "the coverage report doesn't include the new lines" }
+          : { ...c, status: 'ok' as const },
+      )
+      return { ...p, gate: { ...p.gate, state: 'partial', conditions } }
+    }
+    renderAt('/projects/payments-platform', { ...api, project })
+    expect(await screen.findByText("· the coverage report doesn't include the new lines")).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'No data' })).toBeInTheDocument()
+  })
+
   it('switches branches through the URL and explains unknown ones', async () => {
     const user = userEvent.setup()
     renderAt('/projects/payments-platform')

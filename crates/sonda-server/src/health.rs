@@ -88,16 +88,22 @@ pub(crate) fn evaluate_gate(gate: &mut Value, measures: &Value) -> bool {
     // As the CLI does: a small change ignores coverage and duplication of
     // new code, and no advisory data ignores dependencies.
     let new_lines = measures["new_lines"].as_f64();
+    let coverage = measures["coverage"].as_f64();
     for c in gate["conditions"].as_array_mut().into_iter().flatten() {
         let Some(metric) = c["metric"].as_str() else {
             continue;
         };
         let actual = measures[metric].as_f64();
         let threshold = c["threshold"].as_f64().unwrap_or(0.0);
-        let reason = sonda_core::model::Metric::ALL
+        let known = sonda_core::model::Metric::ALL
             .iter()
-            .find(|m| m.as_str() == metric)
-            .and_then(|m| sonda_core::ignored_because(*m, actual, new_lines));
+            .find(|m| m.as_str() == metric);
+        let ignored = known.and_then(|m| sonda_core::ignored_because(*m, actual, new_lines));
+        // Why there's no data, as the CLI says it.
+        let reason = match (ignored, actual) {
+            (None, None) => known.and_then(|m| sonda_core::missing_because(*m, coverage)),
+            _ => ignored,
+        };
         match reason {
             Some(r) => c["reason"] = Value::from(r),
             None => {
@@ -107,7 +113,7 @@ pub(crate) fn evaluate_gate(gate: &mut Value, measures: &Value) -> bool {
             }
         }
         let status = match (actual, c["op"].as_str()) {
-            _ if reason.is_some() => "ignored",
+            _ if ignored.is_some() => "ignored",
             (None, _) => "no_data",
             (Some(v), Some("gt")) if v > threshold => "error",
             (Some(v), Some("lt")) if v < threshold => "error",
@@ -400,6 +406,33 @@ mod tests {
             .map(duration_text)
             .collect();
         assert_eq!(got, ["850ms", "42s", "3m 12s", "1h 5m"]);
+    }
+
+    #[test]
+    fn re_evaluation_says_why_coverage_has_no_data() {
+        let cond = |metric: &str| json!({ "metric": metric, "op": "lt", "threshold": 80.0 });
+        let mut gate = json!({ "conditions": [cond("new_coverage"), cond("coverage")] });
+        let without = json!({ "new_lines": 40.0, "coverage": null, "new_coverage": null });
+        assert!(evaluate_gate(&mut gate, &without));
+        assert_eq!(gate["conditions"][0]["status"], "no_data");
+        assert!(
+            gate["conditions"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("no coverage report")
+        );
+        // A report that doesn't reach the new lines, then one that does.
+        let partial = json!({ "new_lines": 40.0, "coverage": 90.0, "new_coverage": null });
+        evaluate_gate(&mut gate, &partial);
+        assert_eq!(
+            gate["conditions"][0]["reason"],
+            "the coverage report doesn't include the new lines"
+        );
+        assert!(gate["conditions"][1].get("reason").is_none());
+        let full = json!({ "new_lines": 40.0, "coverage": 90.0, "new_coverage": 85.0 });
+        evaluate_gate(&mut gate, &full);
+        assert_eq!(gate["conditions"][0]["status"], "ok");
+        assert!(gate["conditions"][0].get("reason").is_none());
     }
 
     #[test]

@@ -30,6 +30,7 @@ export function GateConditions({ conditions }: Readonly<{ conditions: GateCondit
             <span>
               {c.label}
               {c.status === 'ignored' && <span className="text-xs text-fg-faint"> · ignored: {c.reason ?? 'fewer than 20 new lines'}</span>}
+              {c.status === 'no_data' && c.reason && <span className="text-xs text-fg-faint"> · {c.reason}</span>}
             </span>
             <Mono className="text-xs">
               <span style={{ color: m.color }}>{actualValue(c.actual, unit)}</span>
