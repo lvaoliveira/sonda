@@ -29,8 +29,8 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
-| qutepart-cpp⁴ | C++ (Qt) | `1099377` | 343 of 748 | 39 |
-| roo_display⁴ | C++ (embedded), C | `f139977` | 1,937 of 2,958 | 269 |
+| qutepart-cpp⁴ | C++ (Qt) | `1099377` | 353 of 748 | 39 |
+| roo_display⁴ | C++ (embedded), C | `f139977` | 2,032 of 2,958 | 320 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -803,14 +803,36 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
     string literal cast to a non-const pointer), also in C;
     `cpp/operator-hidden-friend` (S2807, a two-operand comparison defined
     outside its class), `cpp/protected-member-variable` (S3656).
+- **Third batch:**
+  - `cpp/default-capture` (S3608): a `[&]` or `[=]` lambda passed to a
+    call, directly or through a local; not one only called where it's
+    written, nor one in a constructor's initializer list.
+  - `cpp/loop-variable-outside` (S5955, also in C): `for (i = 0; ...)`
+    when the function declares `i` and only that loop, the one setting it,
+    uses it. Where several loops share a counter SonarCloud reports some
+    and not others; sonda reports none.
+  - `cpp/using-enum` (S6177): three or more `Scope::Value` uses of one
+    enumeration in a function, at the smallest block holding them all. A
+    Qt class's values (`QStyle::State_Selected`) aren't an enumeration's
+    scope. SonarCloud sometimes reports inner blocks separately instead
+    (an `if` and its `else`); nothing visible told when.
+  - `cpp/deducible-template-arguments` (S6012): `std::vector<T> v(n,
+    T(...))`, or with a local declared `T`, and a
+    `std::uniform_int_distribution<int>` from int literals, or `<>`; a
+    value whose type is in another file isn't known.
+  - `cpp/pointer-and-count` (S6188): a pointer parameter only ever indexed,
+    `p[i]`, in a loop bounded by an integer parameter named `count`,
+    `size` or `..._count`; not one passed on or moved.
 
 ### Still open in C and C++
 
-On the two projects, 1,426 of SonarCloud's issues and 308 of sonda's:
+On the two projects, 1,321 of SonarCloud's issues and 359 of sonda's:
 
-- **No sonda rule yet (873):** the largest, S6022 (169, `std::byte`),
-  S5817 (83, const member functions), S6177 (74, `using enum`), S5350 (44),
-  S1242 (34); then about a hundred keys with fewer.
+- **No sonda rule yet (730):** the largest, S6022 (169, `std::byte` for
+  bitwise operations on 8-bit values, which needs the operands' types),
+  S5817 (83, const member functions), S5350 (44, pointers and references
+  to const), S1242 (34, hiding an inherited function, which needs the base
+  class); then about a hundred keys with fewer.
 - **Off by default:** S6004 (126).
 - **SonarCloud's commented-out code in generated tables (140):** roo_display's
   font files comment each glyph, `// "&" (U+0026), uncompressed`, which
@@ -822,9 +844,10 @@ On the two projects, 1,426 of SonarCloud's issues and 308 of sonda's:
 - **Members SonarCloud skipped (105, S3230):** a literal initializer it
   didn't report, in a class it reported others of; nothing visible (a
   template, a header, another constructor) told them apart.
-- **sonda only, not pinned down (the rest):** S125 (45), S5421 (31), S5025
-  (17, mostly a `new` stored in a member), S5950 (17), S1186 (16), S1172
-  (14, callbacks and constructors), S5827 (12), a few each for the rest.
+- **sonda only, not pinned down (the rest):** S125 (45), S6177 (40, see
+  above), S5421 (31), S5025 (17, mostly a `new` stored in a member), S5950
+  (17), S1186 (16), S1172 (14, callbacks and constructors), S5827 (12), a
+  few each for the rest.
 
 ## Rules that depend on knowing a type
 

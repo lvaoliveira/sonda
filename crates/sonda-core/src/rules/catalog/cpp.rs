@@ -586,6 +586,112 @@ pub(super) static RULES: &[Rule] = &[
             good: "class Base { protected: int count() const { return count_; } private: int count_; };",
         }),
     },
+    Rule {
+        id: "cpp/default-capture",
+        name: "Lambdas passed on should name what they capture",
+        description: "A lambda that leaves the expression it's written in, with `[&]` or `[=]`, takes \
+                      whatever its body happens to mention; naming the captures shows what it holds on \
+                      to, and for how long.",
+        message: "Capture the variables this lambda uses by name instead of with a default capture.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S3608")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(lambda_expression captures: (lambda_capture_specifier (lambda_default_capture))) @match",
+            filter: Some(Keep(lambda_passed_on)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "void f(int n) { run([&]() { return n; }); }",
+            good: "void f(int n) { run([n]() { return n; }); }",
+        }),
+    },
+    Rule {
+        id: "cpp/loop-variable-outside",
+        name: "A loop's counter should be declared in the loop",
+        description: "A variable that only the one loop setting it uses reads, and is scoped, better \
+                      as `for (int i = 0; ...)`.",
+        message: "Declare this loop's variable in its initializer.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5955")],
+        check: Check::Query {
+            langs: C_CPP,
+            query: "(for_statement initializer: (assignment_expression left: (identifier))) @match",
+            filter: Some(Keep(counter_declared_outside)),
+        },
+        example: Some(Example {
+            lang: Lang::C,
+            bad: "void f(int *a) { int i; for (i = 0; i < 3; i++) a[i] = 0; }",
+            good: "void f(int *a) { for (int i = 0; i < 3; i++) a[i] = 0; }",
+        }),
+    },
+    Rule {
+        id: "cpp/using-enum",
+        name: "Repeated enumerators should come in with \"using enum\"",
+        description: "A block that spells out `Mode::kA`, `Mode::kB`, `Mode::kC` reads shorter with \
+                      `using enum Mode;` (C++20) at its start.",
+        message: "Add \"using enum\" for the enumeration this block names over and over.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S6177")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(function_definition body: (compound_statement)) @match",
+            filter: Some(FindAll(block_around_an_enums_uses)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "int f(Mode m) { switch (m) { case Mode::kA: return 1; case Mode::kB: return 2; case Mode::kC: return 3; } return 0; }",
+            good: "int f(Mode m) { switch (m) { using enum Mode; case kA: return 1; case kB: return 2; case kC: return 3; } return 0; }",
+        }),
+    },
+    Rule {
+        id: "cpp/deducible-template-arguments",
+        name: "Template arguments a constructor deduces should be left out",
+        description: "Since C++17 a class template's arguments come from its constructor's: \
+                      `std::vector v(n, Color(0))` says `Color` once.",
+        message: "Remove the template arguments; the constructor's arguments deduce them.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S6012")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(declaration type: (qualified_identifier name: (template_type)) declarator: (init_declarator value: (argument_list))) @match",
+            filter: Some(Keep(arguments_deduce_the_template)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "void f() { std::vector<Color> v(8, Color(0)); }",
+            good: "void f() { std::vector v(8, Color(0)); }",
+        }),
+    },
+    Rule {
+        id: "cpp/pointer-and-count",
+        name: "A pointer and its length should be passed as one span",
+        description: "A pointer parameter with a separate count can disagree with it; `std::span` \
+                      (C++20) carries both.",
+        message: "Replace this pointer and its count with a \"std::span\".",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 10,
+        sonar: &[exact("S6188")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(function_definition) @match",
+            filter: Some(Keep(takes_a_pointer_and_a_count)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "int sum(const int* values, int count) { int s = 0; for (int i = 0; i < count; ++i) s += values[i]; return s; }",
+            good: "int sum(std::span<const int> values) { int s = 0; for (int v : values) s += v; return s; }",
+        }),
+    },
 ];
 
 /// Its direct children's texts: specifiers and qualifiers.
@@ -1517,6 +1623,366 @@ fn unused_parameters<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
         .collect()
 }
 
+/// The smallest block holding every use of an enumeration's values in a
+/// function that uses them three times or more: `Mode::kA` and
+/// `Mode::Error`, a capitalized value under a capitalized scope, not a type
+/// nor a function called.
+fn block_around_an_enums_uses<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(body) = function.child_by_field_name("body") else {
+        return Vec::new();
+    };
+    let mut uses: Vec<(&[u8], Vec<Node<'t>>)> = Vec::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "function_definition" | "lambda_expression") {
+            continue;
+        }
+        if n.kind() == "qualified_identifier" {
+            if let Some(scope) = enumerator_scope(n, src) {
+                match uses.iter_mut().find(|(s, _)| *s == scope) {
+                    Some((_, nodes)) => nodes.push(n),
+                    None => uses.push((scope, vec![n])),
+                }
+            }
+            continue;
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    let mut blocks = Vec::new();
+    for (_, nodes) in uses.iter().filter(|(_, nodes)| nodes.len() >= 3) {
+        let mut up = nodes[0].parent();
+        while let Some(b) = up {
+            if b.kind() == "compound_statement"
+                && nodes
+                    .iter()
+                    .all(|n| b.start_byte() <= n.start_byte() && n.end_byte() <= b.end_byte())
+            {
+                blocks.push(b);
+                break;
+            }
+            up = b.parent();
+        }
+    }
+    blocks.sort_by_key(|b| b.start_byte());
+    blocks
+}
+
+/// `Scope` of a `Scope::Value` that reads as an enumerator: both
+/// capitalized (`kValue` counts), used as a value.
+fn enumerator_scope<'s>(id: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    let name = id
+        .child_by_field_name("name")
+        .filter(|n| n.kind() == "identifier")?;
+    let scope = id.child_by_field_name("scope")?;
+    if id.parent().is_some_and(|p| {
+        p.kind() == "call_expression" && p.child_by_field_name("function") == Some(id)
+    }) {
+        return None;
+    }
+    let capitalized = |t: &[u8]| {
+        t.first().is_some_and(u8::is_ascii_uppercase)
+            || (t.len() > 1 && t[0] == b'k' && t[1].is_ascii_uppercase())
+    };
+    let scope_text = text(scope, src);
+    let last = scope_text
+        .rsplit(|b| *b == b':')
+        .next()
+        .unwrap_or(scope_text);
+    let name_text = text(name, src);
+    (last.first().is_some_and(u8::is_ascii_uppercase)
+        && capitalized(name_text)
+        && !name_text.iter().all(|b| b.is_ascii_uppercase() || *b == b'_' || b.is_ascii_digit())
+        // Qt's enumerations live in classes: `QStyle::State_Selected`.
+        && !(last.len() > 1 && last[0] == b'Q' && last[1].is_ascii_uppercase())
+        && last != b"Qt")
+        .then_some(scope_text)
+}
+
+/// `std::vector<T> v(n, T(...))` or `v(n, t)` with a local `T t`, and
+/// `std::uniform_int_distribution<int>` (or `<>`) from int literals: the
+/// constructor's arguments give the same template argument.
+fn arguments_deduce_the_template(declaration: Node, src: &[u8]) -> bool {
+    let Some(ty) = declaration.child_by_field_name("type") else {
+        return false;
+    };
+    if ty
+        .child_by_field_name("scope")
+        .is_none_or(|s| text(s, src) != b"std")
+    {
+        return false;
+    }
+    let Some(template) = ty.child_by_field_name("name") else {
+        return false;
+    };
+    let class = template
+        .child_by_field_name("name")
+        .map_or(&b""[..], |n| text(n, src));
+    let Some(targs) = template.child_by_field_name("arguments") else {
+        return false;
+    };
+    let targs: Vec<&[u8]> = targs
+        .named_children(&mut targs.walk())
+        .map(|a| text(a, src))
+        .collect();
+    let Some(args) = declaration
+        .child_by_field_name("declarator")
+        .and_then(|d| d.child_by_field_name("value"))
+    else {
+        return false;
+    };
+    let args: Vec<Node> = args
+        .named_children(&mut args.walk())
+        .filter(|a| a.kind() != "comment")
+        .collect();
+    let int_literal = |a: Node| {
+        let a = if a.kind() == "unary_expression" {
+            a.named_child(0).unwrap_or(a)
+        } else {
+            a
+        };
+        a.kind() == "number_literal" && text(a, src).iter().all(u8::is_ascii_digit)
+    };
+    match class {
+        b"uniform_int_distribution" => {
+            args.len() == 2
+                && (targs.is_empty()
+                    || (targs == [&b"int"[..]] && args.iter().all(|a| int_literal(*a))))
+        }
+        b"vector" if targs.len() == 1 && args.len() == 2 => {
+            let t = targs[0];
+            let value = args[1];
+            match value.kind() {
+                "call_expression" => value
+                    .child_by_field_name("function")
+                    .is_some_and(|f| text(f, src) == t),
+                "identifier" => local_declared_as(declaration, text(value, src), t, src),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Whether a declaration before `at`, in its function, declares `name` as
+/// a `ty`.
+fn local_declared_as(at: Node, name: &[u8], ty: &[u8], src: &[u8]) -> bool {
+    let mut up = at.parent();
+    while let Some(block) = up {
+        let mut cursor = block.walk();
+        for d in block.named_children(&mut cursor) {
+            if d.start_byte() >= at.start_byte() {
+                break;
+            }
+            if d.kind() == "declaration"
+                && d.child_by_field_name("type")
+                    .is_some_and(|t| text(t, src) == ty)
+            {
+                let mut c = d.walk();
+                if d.children_by_field_name("declarator", &mut c).any(|v| {
+                    let v = if v.kind() == "init_declarator" {
+                        v.child_by_field_name("declarator")
+                    } else {
+                        Some(v)
+                    };
+                    v.is_some_and(|v| v.kind() == "identifier" && text(v, src) == name)
+                }) {
+                    return true;
+                }
+            }
+        }
+        if block.kind() == "function_definition" {
+            break;
+        }
+        up = block.parent();
+    }
+    false
+}
+
+/// A definition taking a pointer and an integer named for its length
+/// (`count`, `size`, `pixel_count`), that reads the pointer only as
+/// `p[i]` in a loop bounded by that length: what a span holds.
+fn takes_a_pointer_and_a_count(function: Node, src: &[u8]) -> bool {
+    let (Some(params), Some(body)) = (
+        function_declarator(function).and_then(|d| d.child_by_field_name("parameters")),
+        function.child_by_field_name("body"),
+    ) else {
+        return false;
+    };
+    let mut pointers = Vec::new();
+    let mut counts = Vec::new();
+    let mut cursor = params.walk();
+    for p in params.named_children(&mut cursor) {
+        let (Some(ty), Some(declarator)) = (
+            p.child_by_field_name("type"),
+            p.child_by_field_name("declarator"),
+        ) else {
+            continue;
+        };
+        let ty = text(ty, src);
+        if declarator.kind() == "pointer_declarator" {
+            if let Some(name) = declarator
+                .child_by_field_name("declarator")
+                .filter(|d| d.kind() == "identifier")
+            {
+                pointers.push(text(name, src));
+            }
+        } else if declarator.kind() == "identifier" && !pointers.is_empty() {
+            let name = text(declarator, src);
+            let integer = ty.starts_with(b"int")
+                || ty.starts_with(b"uint")
+                || ty == b"size_t"
+                || ty == b"unsigned";
+            if integer
+                && (matches!(name, b"count" | b"size" | b"len" | b"length")
+                    || name.ends_with(b"_count")
+                    || name.ends_with(b"_size"))
+            {
+                counts.push(name);
+            }
+        }
+    }
+    let bounded_by_a_count = |n: Node| {
+        n.kind() == "for_statement"
+            && n.child_by_field_name("condition").is_some_and(|c| {
+                c.kind() == "binary_expression"
+                    && c.child_by_field_name("operator")
+                        .is_some_and(|o| text(o, src) == b"<")
+                    && c.child_by_field_name("right")
+                        .is_some_and(|r| counts.contains(&text(r, src)))
+            })
+    };
+    let mut has_loop = false;
+    let mut indexed = vec![false; pointers.len()];
+    let mut other_use = vec![false; pointers.len()];
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        has_loop |= bounded_by_a_count(n);
+        if n.kind() == "identifier"
+            && let Some(k) = pointers.iter().position(|p| *p == text(n, src))
+        {
+            let subscripted = n.parent().is_some_and(|p| {
+                p.kind() == "subscript_expression" && p.child_by_field_name("argument") == Some(n)
+            });
+            if subscripted {
+                indexed[k] = true;
+            } else {
+                other_use[k] = true;
+            }
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    has_loop && (0..pointers.len()).any(|k| indexed[k] && !other_use[k])
+}
+
+/// A default-capture lambda that leaves its expression: passed to a call,
+/// or stored in a local that is; not one in a constructor's initializer
+/// list, nor one only called where it's defined.
+fn lambda_passed_on(lambda: Node, src: &[u8]) -> bool {
+    let mut up = lambda.parent();
+    while let Some(n) = up {
+        if n.kind() == "field_initializer_list" {
+            return false;
+        }
+        if n.kind() == "function_definition" {
+            break;
+        }
+        up = n.parent();
+    }
+    let Some(parent) = lambda.parent() else {
+        return false;
+    };
+    if parent.kind() == "argument_list" {
+        return true;
+    }
+    if parent.kind() != "init_declarator" {
+        return false;
+    }
+    let Some(name) = parent
+        .child_by_field_name("declarator")
+        .filter(|d| d.kind() == "identifier")
+    else {
+        return false;
+    };
+    let name = text(name, src);
+    let Some(scope) = parent.parent().and_then(|d| d.parent()) else {
+        return false;
+    };
+    let mut stack = vec![scope];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier"
+            && n.start_byte() > lambda.end_byte()
+            && text(n, src) == name
+            && n.parent().is_some_and(|p| p.kind() == "argument_list")
+        {
+            return true;
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    false
+}
+
+/// `for (i = 0; ...)` where the function declares `i` and uses it only in
+/// that loop, the one loop that sets it.
+fn counter_declared_outside(for_loop: Node, src: &[u8]) -> bool {
+    let Some(name) = for_loop
+        .child_by_field_name("initializer")
+        .and_then(|a| a.child_by_field_name("left"))
+        .map(|v| text(v, src))
+    else {
+        return false;
+    };
+    let mut up = for_loop.parent();
+    let body = loop {
+        match up {
+            Some(n) if n.kind() == "function_definition" => break n.child_by_field_name("body"),
+            Some(n) => up = n.parent(),
+            None => return false,
+        }
+    };
+    let Some(body) = body else {
+        return false;
+    };
+    let sets_it = |n: Node| {
+        n.kind() == "for_statement"
+            && n.child_by_field_name("initializer").is_some_and(|a| {
+                a.kind() == "assignment_expression"
+                    && a.child_by_field_name("left")
+                        .is_some_and(|l| text(l, src) == name)
+            })
+    };
+    let mut declared = false;
+    let mut loops = 0;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if sets_it(n) {
+            loops += 1;
+            continue;
+        }
+        if n.kind() == "declaration" {
+            let mut cursor = n.walk();
+            for d in n.children_by_field_name("declarator", &mut cursor) {
+                let id = if d.kind() == "init_declarator" {
+                    d.child_by_field_name("declarator")
+                } else {
+                    Some(d)
+                };
+                if id.is_some_and(|id| id.kind() == "identifier" && text(id, src) == name) {
+                    if d.kind() == "init_declarator" {
+                        return false;
+                    }
+                    declared = true;
+                }
+            }
+            continue;
+        }
+        if n.kind() == "identifier" && text(n, src) == name {
+            return false;
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    declared && loops == 1
+}
+
 /// A `void*` parameter or return type of a function defined here: not a
 /// declaration (the definition is reported), nor an `operator new` or
 /// `operator delete`, whose signatures the language fixes.
@@ -1906,5 +2372,28 @@ mod tests {
         let old = "int sum(a, b)\n  int a;\n  int b;\n{ return a + b; }\nvoid w() { char* s = (char*)\"text\"; const char* t = (const char*)\"x\"; }";
         assert_eq!(flagged_in("cpp/old-style-parameters", Lang::C, old), [2]);
         assert_eq!(flagged_in("cpp/cast-drops-const", Lang::C, old), [5]);
+    }
+
+    /// The third batch, from the same two analyses.
+    #[test]
+    fn third_batch_from_sonarcloud() {
+        // Passed on, directly or by name; not one only called here.
+        let lambdas = "void f(int n) {\n  run([&]() { return n; });\n  auto l = [=]() { return n; };\n  l();\n  auto k = [&]() { return n; };\n  run(k);\n}";
+        assert_eq!(flagged("cpp/default-capture", lambdas), [2, 5]);
+        // Only the variable set by one loop and used nowhere else.
+        let loops = "void f(int *a) {\n  int i, j;\n  for (i = 0; i < 3; i++) a[i] = 0;\n  for (j = 0; j < 3; j++) a[j] = 1;\n  for (j = 0; j < 3; j++) a[j] = 2;\n}";
+        assert_eq!(flagged_in("cpp/loop-variable-outside", Lang::C, loops), [3]);
+        // At the smallest block around three uses; not a Qt class's values,
+        // nor two uses.
+        let enums = "int f(Mode m) {\n  switch (m) {\n    case Mode::kA: return 1;\n    case Mode::kB: return 2;\n    case Mode::kC: return 3;\n  }\n  return 0;\n}\nvoid g() { h(QStyle::A, QStyle::B, QStyle::C); x(Mode::kA, Mode::kB); }";
+        assert_eq!(flagged("cpp/using-enum", enums), [2]);
+        let deduced = "void f(int n) {\n  std::vector<Color> a(8, Color(0));\n  Color c;\n  std::vector<Color> b(8, c);\n  std::vector<uint8_t> d(8, 128);\n  std::uniform_int_distribution<int> e(0, 6);\n  std::uniform_int_distribution<int16_t> g(0, 6);\n  std::uniform_int_distribution<> h(0, n);\n}";
+        assert_eq!(
+            flagged("cpp/deducible-template-arguments", deduced),
+            [2, 4, 6, 8]
+        );
+        // Only indexed, in a loop the count bounds; not passed on.
+        let spans = "void a(Color* p, int count) {\n  for (int i = 0; i < count; ++i) p[i] = 0;\n}\nvoid b(Color* p, int count) {\n  for (int i = 0; i < count; ++i) p[i] = 0;\n  g(p);\n}";
+        assert_eq!(flagged("cpp/pointer-and-count", spans), [1]);
     }
 }

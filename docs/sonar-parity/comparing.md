@@ -294,5 +294,5 @@ On the comparison server, as of 2026-11-11:
 | `dejwk_roo_display` on SonarCloud | roo_display (C++, C) | `f139977` |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: more C++ rules, the most frequent missing keys first (S6022,
-S5817, S6177).
+Next: more C++ rules, the most frequent missing keys first (S5817,
+S5350); S6022 and S1242 need types and base classes from other files.
