@@ -907,9 +907,24 @@ function IssuePath({ flow }: Readonly<{ flow: FlowStep[] }>) {
 
 /** Text with `backticked` names as inline code. */
 function WithCode({ text }: Readonly<{ text: string }>) {
+  // Each part keyed by where it starts in the text: stable, and unique.
+  const parts: { part: string; at: number; code: boolean }[] = []
+  let at = 0
+  for (const [n, part] of text.split('`').entries()) {
+    parts.push({ part, at, code: n % 2 === 1 })
+    at += part.length + 1
+  }
   return (
     <>
-      {text.split('`').map((part, i) => (i % 2 === 1 ? <code key={i} className="rounded bg-hover px-1 font-mono text-[12px]">{part}</code> : part))}
+      {parts.map(({ part, at, code }) =>
+        code ? (
+          <code key={at} className="rounded bg-hover px-1 font-mono text-[12px]">
+            {part}
+          </code>
+        ) : (
+          <span key={at}>{part}</span>
+        ),
+      )}
     </>
   )
 }
