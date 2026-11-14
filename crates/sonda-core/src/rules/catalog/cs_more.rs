@@ -1219,58 +1219,13 @@ fn grants_everyone(node: Node, src: &[u8]) -> bool {
 /// SonarQube 26.7): counted per class, leaving out attribute arguments and
 /// a literal naming a parameter of its method.
 fn strings_repeated_in_a_class<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    const TYPES: &[&str] = &[
-        "class_declaration",
-        "struct_declaration",
-        "record_declaration",
-        "record_struct_declaration",
-        "interface_declaration",
-    ];
     let Some(root) = m.root else {
         return Vec::new();
     };
     let mut found = Vec::new();
     let mut types = vec![root];
     while let Some(scope) = types.pop() {
-        // The literals of this type, not of the types nested in it.
-        let mut uses: Vec<(&[u8], Vec<Node<'t>>)> = Vec::new();
-        let mut stack: Vec<(Node<'t>, Option<Node<'t>>)> = Vec::new();
-        let mut c = scope.walk();
-        stack.extend(scope.named_children(&mut c).map(|n| (n, None)));
-        while let Some((n, method)) = stack.pop() {
-            if TYPES.contains(&n.kind()) {
-                types.push(n);
-                continue;
-            }
-            if n.kind() == "attribute_list" {
-                continue;
-            }
-            let method = if matches!(
-                n.kind(),
-                "method_declaration"
-                    | "constructor_declaration"
-                    | "local_function_statement"
-                    | "operator_declaration"
-            ) {
-                Some(n)
-            } else {
-                method
-            };
-            if matches!(n.kind(), "string_literal" | "verbatim_string_literal") {
-                if scope.id() != root.id()
-                    && let Some(value) = cs_string_value(n, src).filter(|v| v.len() >= 5)
-                    && !method.is_some_and(|f| names_a_parameter(f, value, src))
-                {
-                    match uses.iter_mut().find(|(v, _)| *v == value) {
-                        Some((_, nodes)) => nodes.push(n),
-                        None => uses.push((value, vec![n])),
-                    }
-                }
-                continue;
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c).map(|k| (k, method)));
-        }
+        let uses = string_uses_in_type(scope, root, &mut types, src);
         found.extend(
             uses.into_iter()
                 .filter(|(_, nodes)| nodes.len() >= 4)
@@ -1279,6 +1234,78 @@ fn strings_repeated_in_a_class<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -
     }
     found.sort_by_key(|n| n.start_byte());
     found
+}
+
+/// The declarations a repeated string is counted within.
+const STRING_SCOPES: &[&str] = &[
+    "class_declaration",
+    "struct_declaration",
+    "record_declaration",
+    "record_struct_declaration",
+    "interface_declaration",
+];
+
+/// Each string of five or more characters in a type, not in the types
+/// nested in it (pushed onto `types` instead), nor in attributes, nor one
+/// naming a parameter of its method, with where it's written. None at the
+/// top level, outside any type.
+fn string_uses_in_type<'t, 's>(
+    scope: Node<'t>,
+    root: Node<'t>,
+    types: &mut Vec<Node<'t>>,
+    src: &'s [u8],
+) -> Vec<(&'s [u8], Vec<Node<'t>>)> {
+    let mut uses: Vec<(&[u8], Vec<Node<'t>>)> = Vec::new();
+    let mut c = scope.walk();
+    let mut stack: Vec<(Node<'t>, Option<Node<'t>>)> =
+        scope.named_children(&mut c).map(|n| (n, None)).collect();
+    while let Some((n, method)) = stack.pop() {
+        if STRING_SCOPES.contains(&n.kind()) {
+            types.push(n);
+            continue;
+        }
+        if n.kind() == "attribute_list" {
+            continue;
+        }
+        let method = if matches!(
+            n.kind(),
+            "method_declaration"
+                | "constructor_declaration"
+                | "local_function_statement"
+                | "operator_declaration"
+        ) {
+            Some(n)
+        } else {
+            method
+        };
+        if matches!(n.kind(), "string_literal" | "verbatim_string_literal") {
+            if scope.id() != root.id() {
+                record_string(&mut uses, n, method, src);
+            }
+            continue;
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c).map(|k| (k, method)));
+    }
+    uses
+}
+
+fn record_string<'t, 's>(
+    uses: &mut Vec<(&'s [u8], Vec<Node<'t>>)>,
+    literal: Node<'t>,
+    method: Option<Node<'t>>,
+    src: &'s [u8],
+) {
+    let Some(value) = cs_string_value(literal, src).filter(|v| v.len() >= 5) else {
+        return;
+    };
+    if method.is_some_and(|f| names_a_parameter(f, value, src)) {
+        return;
+    }
+    match uses.iter_mut().find(|(v, _)| *v == value) {
+        Some((_, nodes)) => nodes.push(literal),
+        None => uses.push((value, vec![literal])),
+    }
 }
 
 /// Whether a method has a parameter with this name.
@@ -1373,97 +1400,133 @@ fn unused_private_members<'t>(m: &crate::semantic::Model<'t>, src: &[u8]) -> Vec
 }
 
 fn unused_members_of<'t>(class: Node<'t>, scope: Node<'t>, src: &[u8], found: &mut Vec<Node<'t>>) {
-    let whole = text(scope, src);
-    let nested_private = class.id() != scope.id()
-        && !["public", "protected", "internal"]
-            .iter()
-            .any(|v| cs_has_modifier(class, v, src));
-    let class_name = class.child_by_field_name("name").map(|n| text(n, src));
+    let ctx = MemberScope {
+        scope,
+        whole: text(scope, src),
+        nested_private: class.id() != scope.id()
+            && !["public", "protected", "internal"]
+                .iter()
+                .any(|v| cs_has_modifier(class, v, src)),
+        class_name: class.child_by_field_name("name").map(|n| text(n, src)),
+    };
     for member in members(class) {
-        let attributed = member
-            .named_children(&mut member.walk())
-            .any(|x| matches!(x.kind(), "attribute_list" | "explicit_interface_specifier"));
-        let special = ["override", "virtual", "abstract", "extern", "partial"]
-            .iter()
-            .any(|v| cs_has_modifier(member, v, src));
-        // The runtime runs a static constructor.
-        let static_constructor =
-            member.kind() == "constructor_declaration" && cs_has_modifier(member, "static", src);
-        if attributed || special || static_constructor {
+        if used_from_outside_the_code(member, src) {
             continue;
         }
         let visible = ["public", "protected", "internal"]
             .iter()
             .any(|v| cs_has_modifier(member, v, src));
-        let private = !visible || nested_private;
+        let private = !visible || ctx.nested_private;
         match member.kind() {
-            "field_declaration" if private => {
-                for d in declarators(member) {
-                    if let Some(name) = d.child_by_field_name("name") {
-                        let n = text(name, src);
-                        if count_word(whole, n) - qualified_by_other_type(scope, n, class_name, src)
-                            == 1
-                        {
-                            found.push(name);
-                        }
-                    }
-                }
-            }
+            "field_declaration" if private => unused_fields(member, &ctx, src, found),
             "method_declaration" if private => {
                 if let Some(name) = member.child_by_field_name("name")
                     && !matches!(text(name, src), b"Main" | b"Deconstruct")
-                    && method_unused(member, class, scope, whole, src)
+                    && method_unused(member, class, scope, ctx.whole, src)
                 {
                     found.push(name);
                 }
             }
-            "property_declaration" => {
-                let Some(name) = member.child_by_field_name("name") else {
-                    continue;
-                };
-                if private && count_word(whole, text(name, src)) == 1 {
-                    found.push(name);
-                    continue;
-                }
-                // A setter nothing assigns through.
-                let setter = member
-                    .child_by_field_name("accessors")
-                    .into_iter()
-                    .flat_map(|list| list.named_children(&mut list.walk()).collect::<Vec<_>>())
-                    .find(|a| {
-                        a.kind() == "accessor_declaration"
-                            && a.child_by_field_name("name")
-                                .is_some_and(|k| text(k, src) == b"set")
-                    });
-                if let Some(setter) = setter
-                    && (private || cs_has_modifier(setter, "private", src))
-                    && !assigned_in(scope, text(name, src), src)
-                {
-                    found.push(setter);
-                }
-            }
-            "constructor_declaration" if nested_private => {
+            "property_declaration" => found.extend(unused_property(member, private, &ctx, src)),
+            "constructor_declaration" if ctx.nested_private => {
                 if let (Some(name), Some(class_name)) =
-                    (member.child_by_field_name("name"), class_name)
+                    (member.child_by_field_name("name"), ctx.class_name)
                     && !created_in(scope, class_name, src)
                 {
                     found.push(name);
                 }
             }
             "class_declaration" | "struct_declaration" | "record_declaration" if private => {
-                if let Some(name) = member.child_by_field_name("name") {
-                    let constructors = members(member)
-                        .iter()
-                        .filter(|c| c.kind() == "constructor_declaration")
-                        .count();
-                    if count_word(whole, text(name, src)) == 1 + constructors {
-                        found.push(name);
-                    }
-                }
+                found.extend(unused_nested_type(member, &ctx, src));
             }
             _ => {}
         }
     }
+}
+
+/// A class whose members `unused_members_of` checks, and where they could
+/// be used.
+struct MemberScope<'t, 's> {
+    scope: Node<'t>,
+    /// The scope's text.
+    whole: &'s [u8],
+    /// A nested type that isn't public, protected or internal: its members
+    /// are as good as private.
+    nested_private: bool,
+    class_name: Option<&'s [u8]>,
+}
+
+/// Members something outside the code may use: those with attributes or
+/// an explicit interface, overrides, virtual, abstract, extern and partial
+/// ones, and a static constructor, which the runtime runs.
+fn used_from_outside_the_code(member: Node, src: &[u8]) -> bool {
+    member
+        .named_children(&mut member.walk())
+        .any(|x| matches!(x.kind(), "attribute_list" | "explicit_interface_specifier"))
+        || ["override", "virtual", "abstract", "extern", "partial"]
+            .iter()
+            .any(|v| cs_has_modifier(member, v, src))
+        || member.kind() == "constructor_declaration" && cs_has_modifier(member, "static", src)
+}
+
+/// A private field's names the scope mentions only where they're declared.
+fn unused_fields<'t>(
+    member: Node<'t>,
+    ctx: &MemberScope<'t, '_>,
+    src: &[u8],
+    found: &mut Vec<Node<'t>>,
+) {
+    for d in declarators(member) {
+        if let Some(name) = d.child_by_field_name("name") {
+            let n = text(name, src);
+            if count_word(ctx.whole, n) - qualified_by_other_type(ctx.scope, n, ctx.class_name, src)
+                == 1
+            {
+                found.push(name);
+            }
+        }
+    }
+}
+
+/// A private property nothing mentions, or a private setter nothing
+/// assigns through.
+fn unused_property<'t>(
+    member: Node<'t>,
+    private: bool,
+    ctx: &MemberScope<'t, '_>,
+    src: &[u8],
+) -> Option<Node<'t>> {
+    let name = member.child_by_field_name("name")?;
+    if private && count_word(ctx.whole, text(name, src)) == 1 {
+        return Some(name);
+    }
+    let setter = member
+        .child_by_field_name("accessors")
+        .into_iter()
+        .flat_map(|list| list.named_children(&mut list.walk()).collect::<Vec<_>>())
+        .find(|a| {
+            a.kind() == "accessor_declaration"
+                && a.child_by_field_name("name")
+                    .is_some_and(|k| text(k, src) == b"set")
+        })?;
+    ((private || cs_has_modifier(setter, "private", src))
+        && !assigned_in(ctx.scope, text(name, src), src))
+    .then_some(setter)
+}
+
+/// A private nested type mentioned nowhere but in its own declaration and
+/// constructors.
+fn unused_nested_type<'t>(
+    member: Node<'t>,
+    ctx: &MemberScope<'t, '_>,
+    src: &[u8],
+) -> Option<Node<'t>> {
+    let name = member.child_by_field_name("name")?;
+    let constructors = members(member)
+        .iter()
+        .filter(|c| c.kind() == "constructor_declaration")
+        .count();
+    (count_word(ctx.whole, text(name, src)) == 1 + constructors).then_some(name)
 }
 
 /// Whether anything in `scope` assigns to `name`: `name = x`, `x.name = y`,

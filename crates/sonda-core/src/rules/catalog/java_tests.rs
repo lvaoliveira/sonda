@@ -680,11 +680,22 @@ fn is_a_machine_specific_path(string: Node, src: &[u8]) -> bool {
     let Some(parent) = string.parent() else {
         return false;
     };
+    // A delimiter joined into a `new File(...)` path, `dir + "/" + name`
+    // (measured on SonarQube 26.7).
+    if parent.kind() == "binary_expression" && matches!(v, b"/" | b"\\") {
+        return joined_into_a_new_file(parent, src);
+    }
+    placed_where_a_path_goes(string, parent, src) && is_machine_specific(v)
+}
+
+/// Whether a string is a path's value: given to a variable or field named
+/// like a path, or the first argument of `new File(...)`.
+fn placed_where_a_path_goes(string: Node, parent: Node, src: &[u8]) -> bool {
     let named_like_a_path = |name: Node| {
         let n = text(name, src).to_ascii_lowercase();
         n.windows(4).any(|w| w == b"path") || n.windows(8).any(|w| w == b"filename")
     };
-    let placed = match parent.kind() {
+    match parent.kind() {
         "variable_declarator" => {
             parent
                 .child_by_field_name("value")
@@ -707,36 +718,35 @@ fn is_a_machine_specific_path(string: Node, src: &[u8]) -> bool {
                 })
         }
         "argument_list" => parent.parent().is_some_and(|c| {
-            c.kind() == "object_creation_expression"
-                && c.child_by_field_name("type")
-                    .is_some_and(|t| matches!(text(t, src), b"File" | b"java.io.File"))
-                && parent.named_child(0).is_some_and(|a| a.id() == string.id())
+            is_new_file(c, src) && parent.named_child(0).is_some_and(|a| a.id() == string.id())
         }),
-        // A delimiter joined into a `new File(...)` path, `dir + "/" + name`
-        // (measured on SonarQube 26.7).
-        "binary_expression" if matches!(v, b"/" | b"\\") => {
-            let mut top = parent;
-            while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
-                top = p;
-            }
-            return top
-                .parent()
-                .filter(|a| a.kind() == "argument_list")
-                .is_some_and(|args| {
-                    args.named_child(0) == Some(top)
-                        && args.parent().is_some_and(|c| {
-                            c.kind() == "object_creation_expression"
-                                && c.child_by_field_name("type").is_some_and(|t| {
-                                    matches!(text(t, src), b"File" | b"java.io.File")
-                                })
-                        })
-                });
-        }
         _ => false,
-    };
-    if !placed {
-        return false;
     }
+}
+
+/// Whether the `+` expression `parent` is in is `new File(...)`'s first
+/// argument.
+fn joined_into_a_new_file(parent: Node, src: &[u8]) -> bool {
+    let mut top = parent;
+    while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
+        top = p;
+    }
+    top.parent()
+        .filter(|a| a.kind() == "argument_list")
+        .is_some_and(|args| {
+            args.named_child(0) == Some(top) && args.parent().is_some_and(|c| is_new_file(c, src))
+        })
+}
+
+fn is_new_file(creation: Node, src: &[u8]) -> bool {
+    creation.kind() == "object_creation_expression"
+        && creation
+            .child_by_field_name("type")
+            .is_some_and(|t| matches!(text(t, src), b"File" | b"java.io.File"))
+}
+
+/// A URL, a drive path, or an absolute path three or more levels deep.
+fn is_machine_specific(v: &[u8]) -> bool {
     let scheme = v.iter().position(|b| *b == b':').is_some_and(|i| {
         i > 1 && v[..i].iter().all(u8::is_ascii_alphabetic) && v[i..].starts_with(b"://")
     });

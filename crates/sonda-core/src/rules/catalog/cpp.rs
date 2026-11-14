@@ -1538,56 +1538,78 @@ fn class_scope<'s>(function: Node, src: &'s [u8]) -> &'s [u8] {
         .map_or(&b""[..], |n| text(n, src))
 }
 
-/// Each named parameter the body never mentions: not of a virtual function
-/// or an override, whose signature isn't its own, nor [[maybe_unused]].
-fn unused_parameters<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    let (Some(body), params) = (
-        function.child_by_field_name("body"),
-        if function.kind() == "lambda_expression" {
-            function
-                .child_by_field_name("declarator")
-                .and_then(|d| d.child_by_field_name("parameters"))
-        } else {
-            function_declarator(function).and_then(|d| d.child_by_field_name("parameters"))
-        },
-    ) else {
-        return Vec::new();
-    };
-    let Some(params) = params else {
-        return Vec::new();
-    };
-    // `Class::method(...)` defines a member declared elsewhere, whose
-    // signature the declaration (perhaps a virtual one) fixes; `f<T>(...)`
-    // specializes a template, whose signature the template fixes.
-    if function_declarator(function)
+/// A function's or a lambda's parameter list.
+fn parameter_list(function: Node) -> Option<Node> {
+    if function.kind() == "lambda_expression" {
+        function
+            .child_by_field_name("declarator")
+            .and_then(|d| d.child_by_field_name("parameters"))
+    } else {
+        function_declarator(function).and_then(|d| d.child_by_field_name("parameters"))
+    }
+}
+
+/// Whether the function's signature is fixed by another declaration:
+/// `Class::method(...)` defines a member declared elsewhere (perhaps a
+/// virtual one); `f<T>(...)` specializes a template; a virtual function or
+/// an override shares its signature with the others.
+fn signature_fixed_elsewhere(function: Node, src: &[u8]) -> bool {
+    let declarator = function_declarator(function);
+    if declarator
         .and_then(|d| d.child_by_field_name("declarator"))
         .is_some_and(|n| matches!(n.kind(), "qualified_identifier" | "template_function"))
     {
-        return Vec::new();
+        return true;
     }
-    if function.kind() == "function_definition"
+    function.kind() == "function_definition"
         && (has_word(function, b"virtual", src)
-            || function_declarator(function).is_some_and(|d| {
+            || declarator.is_some_and(|d| {
                 d.named_children(&mut d.walk()).any(|c| {
                     c.kind() == "virtual_specifier"
                         && matches!(text(c, src), b"override" | b"final")
                 })
             }))
-    {
+}
+
+/// Whether `name` appears in `text` as a whole word.
+fn mentions_word(text: &[u8], name: &[u8]) -> bool {
+    let word_byte = |b: &u8| b.is_ascii_alphanumeric() || *b == b'_';
+    text.windows(name.len()).enumerate().any(|(i, w)| {
+        w == name
+            && !text.get(i.wrapping_sub(1)).is_some_and(word_byte)
+            && !text.get(i + name.len()).is_some_and(word_byte)
+    })
+}
+
+/// A parameter declaration's name, through pointers, references and
+/// arrays, at most six levels down.
+fn parameter_name(p: Node) -> Option<Node> {
+    let mut d = p.child_by_field_name("declarator")?;
+    for _ in 0..6 {
+        if d.kind() == "identifier" {
+            break;
+        }
+        d = d
+            .child_by_field_name("declarator")
+            .or_else(|| d.named_children(&mut d.walk()).last())?;
+    }
+    (d.kind() == "identifier").then_some(d)
+}
+
+/// Each named parameter the body never mentions: not of a virtual function
+/// or an override, whose signature isn't its own, nor [[maybe_unused]].
+fn unused_parameters<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let (Some(body), Some(params)) = (
+        function.child_by_field_name("body"),
+        parameter_list(function),
+    ) else {
+        return Vec::new();
+    };
+    if signature_fixed_elsewhere(function, src) {
         return Vec::new();
     }
     let body_text = text(body, src);
-    let mentions = |name: &[u8]| {
-        body_text.windows(name.len()).enumerate().any(|(i, w)| {
-            w == name
-                && !body_text
-                    .get(i.wrapping_sub(1))
-                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-                && !body_text
-                    .get(i + name.len())
-                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-        })
-    };
+    let mentions = |name: &[u8]| mentions_word(body_text, name);
     // A constructor's initializer list reads its parameters too.
     let initializers = function
         .named_children(&mut function.walk())
@@ -1604,18 +1626,7 @@ fn unused_parameters<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
         // `T* PROGMEM name`: a macro the parser takes for the name.
         .filter(|p| !p.has_error() && p.next_sibling().is_none_or(|n| !n.is_error()))
         .filter(|p| !text(*p, src).windows(12).any(|w| w == b"maybe_unused"))
-        .filter_map(|p| {
-            let mut d = p.child_by_field_name("declarator")?;
-            for _ in 0..6 {
-                if d.kind() == "identifier" {
-                    break;
-                }
-                d = d
-                    .child_by_field_name("declarator")
-                    .or_else(|| d.named_children(&mut d.walk()).last())?;
-            }
-            (d.kind() == "identifier").then_some(d)
-        })
+        .filter_map(parameter_name)
         .filter(|name| {
             let n = text(*name, src);
             !mentions(n) && !initializers.windows(n.len()).any(|w| w == n)
@@ -1631,6 +1642,18 @@ fn block_around_an_enums_uses<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t
     let Some(body) = function.child_by_field_name("body") else {
         return Vec::new();
     };
+    let mut blocks: Vec<Node<'t>> = enumerator_uses(body, src)
+        .iter()
+        .filter(|(_, nodes)| nodes.len() >= 3)
+        .filter_map(|(_, nodes)| innermost_block_around(nodes))
+        .collect();
+    blocks.sort_by_key(|b| b.start_byte());
+    blocks
+}
+
+/// The qualified enumerators a body names (`Color::Red`), by enum, outside
+/// nested functions and lambdas.
+fn enumerator_uses<'t, 's>(body: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Vec<Node<'t>>)> {
     let mut uses: Vec<(&[u8], Vec<Node<'t>>)> = Vec::new();
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
@@ -1648,23 +1671,23 @@ fn block_around_an_enums_uses<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t
         }
         stack.extend(n.named_children(&mut n.walk()));
     }
-    let mut blocks = Vec::new();
-    for (_, nodes) in uses.iter().filter(|(_, nodes)| nodes.len() >= 3) {
-        let mut up = nodes[0].parent();
-        while let Some(b) = up {
-            if b.kind() == "compound_statement"
-                && nodes
-                    .iter()
-                    .all(|n| b.start_byte() <= n.start_byte() && n.end_byte() <= b.end_byte())
-            {
-                blocks.push(b);
-                break;
-            }
-            up = b.parent();
+    uses
+}
+
+/// The innermost block holding every node, from the first's.
+fn innermost_block_around<'t>(nodes: &[Node<'t>]) -> Option<Node<'t>> {
+    let mut up = nodes.first()?.parent();
+    while let Some(b) = up {
+        if b.kind() == "compound_statement"
+            && nodes
+                .iter()
+                .all(|n| b.start_byte() <= n.start_byte() && n.end_byte() <= b.end_byte())
+        {
+            return Some(b);
         }
+        up = b.parent();
     }
-    blocks.sort_by_key(|b| b.start_byte());
-    blocks
+    None
 }
 
 /// `Scope` of a `Scope::Value` that reads as an enumerator: both
@@ -1769,26 +1792,12 @@ fn local_declared_as(at: Node, name: &[u8], ty: &[u8], src: &[u8]) -> bool {
     let mut up = at.parent();
     while let Some(block) = up {
         let mut cursor = block.walk();
-        for d in block.named_children(&mut cursor) {
-            if d.start_byte() >= at.start_byte() {
-                break;
-            }
-            if d.kind() == "declaration"
-                && d.child_by_field_name("type")
-                    .is_some_and(|t| text(t, src) == ty)
-            {
-                let mut c = d.walk();
-                if d.children_by_field_name("declarator", &mut c).any(|v| {
-                    let v = if v.kind() == "init_declarator" {
-                        v.child_by_field_name("declarator")
-                    } else {
-                        Some(v)
-                    };
-                    v.is_some_and(|v| v.kind() == "identifier" && text(v, src) == name)
-                }) {
-                    return true;
-                }
-            }
+        if block
+            .named_children(&mut cursor)
+            .take_while(|d| d.start_byte() < at.start_byte())
+            .any(|d| declares_as(d, name, ty, src))
+        {
+            return true;
         }
         if block.kind() == "function_definition" {
             break;
@@ -1796,6 +1805,26 @@ fn local_declared_as(at: Node, name: &[u8], ty: &[u8], src: &[u8]) -> bool {
         up = block.parent();
     }
     false
+}
+
+/// Whether `d` declares `name` with the type `ty`.
+fn declares_as(d: Node, name: &[u8], ty: &[u8], src: &[u8]) -> bool {
+    if d.kind() != "declaration"
+        || !d
+            .child_by_field_name("type")
+            .is_some_and(|t| text(t, src) == ty)
+    {
+        return false;
+    }
+    let mut c = d.walk();
+    d.children_by_field_name("declarator", &mut c).any(|v| {
+        let v = if v.kind() == "init_declarator" {
+            v.child_by_field_name("declarator")
+        } else {
+            Some(v)
+        };
+        v.is_some_and(|v| v.kind() == "identifier" && text(v, src) == name)
+    })
 }
 
 /// A definition taking a pointer and an integer named for its length
@@ -1808,6 +1837,13 @@ fn takes_a_pointer_and_a_count(function: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
+    let (pointers, counts) = pointers_and_counts(params, src);
+    pointer_indexed_in_a_counted_loop(body, &pointers, &counts, src)
+}
+
+/// The pointer parameters, and the integer ones named like a count
+/// (`count`, `len`, `n_size`) that follow a pointer.
+fn pointers_and_counts<'s>(params: Node, src: &'s [u8]) -> (Vec<&'s [u8]>, Vec<&'s [u8]>) {
     let mut pointers = Vec::new();
     let mut counts = Vec::new();
     let mut cursor = params.walk();
@@ -1818,45 +1854,47 @@ fn takes_a_pointer_and_a_count(function: Node, src: &[u8]) -> bool {
         ) else {
             continue;
         };
-        let ty = text(ty, src);
         if declarator.kind() == "pointer_declarator" {
-            if let Some(name) = declarator
-                .child_by_field_name("declarator")
-                .filter(|d| d.kind() == "identifier")
-            {
-                pointers.push(text(name, src));
-            }
-        } else if declarator.kind() == "identifier" && !pointers.is_empty() {
-            let name = text(declarator, src);
-            let integer = ty.starts_with(b"int")
-                || ty.starts_with(b"uint")
-                || ty == b"size_t"
-                || ty == b"unsigned";
-            if integer
-                && (matches!(name, b"count" | b"size" | b"len" | b"length")
-                    || name.ends_with(b"_count")
-                    || name.ends_with(b"_size"))
-            {
-                counts.push(name);
-            }
+            pointers.extend(
+                declarator
+                    .child_by_field_name("declarator")
+                    .filter(|d| d.kind() == "identifier")
+                    .map(|name| text(name, src)),
+            );
+        } else if declarator.kind() == "identifier"
+            && !pointers.is_empty()
+            && is_count(text(ty, src), text(declarator, src))
+        {
+            counts.push(text(declarator, src));
         }
     }
-    let bounded_by_a_count = |n: Node| {
-        n.kind() == "for_statement"
-            && n.child_by_field_name("condition").is_some_and(|c| {
-                c.kind() == "binary_expression"
-                    && c.child_by_field_name("operator")
-                        .is_some_and(|o| text(o, src) == b"<")
-                    && c.child_by_field_name("right")
-                        .is_some_and(|r| counts.contains(&text(r, src)))
-            })
-    };
+    (pointers, counts)
+}
+
+/// An integer named like a count.
+fn is_count(ty: &[u8], name: &[u8]) -> bool {
+    let integer =
+        ty.starts_with(b"int") || ty.starts_with(b"uint") || ty == b"size_t" || ty == b"unsigned";
+    integer
+        && (matches!(name, b"count" | b"size" | b"len" | b"length")
+            || name.ends_with(b"_count")
+            || name.ends_with(b"_size"))
+}
+
+/// Whether the body has a `for (...; i < count; ...)` loop and a pointer it
+/// only ever subscripts.
+fn pointer_indexed_in_a_counted_loop(
+    body: Node,
+    pointers: &[&[u8]],
+    counts: &[&[u8]],
+    src: &[u8],
+) -> bool {
     let mut has_loop = false;
     let mut indexed = vec![false; pointers.len()];
     let mut other_use = vec![false; pointers.len()];
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
-        has_loop |= bounded_by_a_count(n);
+        has_loop |= bounded_by_a_count(n, counts, src);
         if n.kind() == "identifier"
             && let Some(k) = pointers.iter().position(|p| *p == text(n, src))
         {
@@ -1872,6 +1910,18 @@ fn takes_a_pointer_and_a_count(function: Node, src: &[u8]) -> bool {
         stack.extend(n.named_children(&mut n.walk()));
     }
     has_loop && (0..pointers.len()).any(|k| indexed[k] && !other_use[k])
+}
+
+/// `for (...; x < count; ...)`, with `count` one of `counts`.
+fn bounded_by_a_count(n: Node, counts: &[&[u8]], src: &[u8]) -> bool {
+    n.kind() == "for_statement"
+        && n.child_by_field_name("condition").is_some_and(|c| {
+            c.kind() == "binary_expression"
+                && c.child_by_field_name("operator")
+                    .is_some_and(|o| text(o, src) == b"<")
+                && c.child_by_field_name("right")
+                    .is_some_and(|r| counts.contains(&text(r, src)))
+        })
 }
 
 /// A default-capture lambda that leaves its expression: passed to a call,
@@ -1931,47 +1981,22 @@ fn counter_declared_outside(for_loop: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
-    let mut up = for_loop.parent();
-    let body = loop {
-        match up {
-            Some(n) if n.kind() == "function_definition" => break n.child_by_field_name("body"),
-            Some(n) => up = n.parent(),
-            None => return false,
-        }
-    };
-    let Some(body) = body else {
+    let Some(body) = enclosing_function_body(for_loop) else {
         return false;
-    };
-    let sets_it = |n: Node| {
-        n.kind() == "for_statement"
-            && n.child_by_field_name("initializer").is_some_and(|a| {
-                a.kind() == "assignment_expression"
-                    && a.child_by_field_name("left")
-                        .is_some_and(|l| text(l, src) == name)
-            })
     };
     let mut declared = false;
     let mut loops = 0;
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
-        if sets_it(n) {
+        if sets_counter(n, name, src) {
             loops += 1;
             continue;
         }
         if n.kind() == "declaration" {
-            let mut cursor = n.walk();
-            for d in n.children_by_field_name("declarator", &mut cursor) {
-                let id = if d.kind() == "init_declarator" {
-                    d.child_by_field_name("declarator")
-                } else {
-                    Some(d)
-                };
-                if id.is_some_and(|id| id.kind() == "identifier" && text(id, src) == name) {
-                    if d.kind() == "init_declarator" {
-                        return false;
-                    }
-                    declared = true;
-                }
+            match counter_declaration(n, name, src) {
+                CounterDeclaration::Initialized => return false,
+                CounterDeclaration::Plain => declared = true,
+                CounterDeclaration::Elsewhere => {}
             }
             continue;
         }
@@ -1981,6 +2006,56 @@ fn counter_declared_outside(for_loop: Node, src: &[u8]) -> bool {
         stack.extend(n.named_children(&mut n.walk()));
     }
     declared && loops == 1
+}
+
+fn enclosing_function_body(n: Node) -> Option<Node> {
+    let mut up = n.parent();
+    while let Some(p) = up {
+        if p.kind() == "function_definition" {
+            return p.child_by_field_name("body");
+        }
+        up = p.parent();
+    }
+    None
+}
+
+/// `for (name = ...; ...)`.
+fn sets_counter(n: Node, name: &[u8], src: &[u8]) -> bool {
+    n.kind() == "for_statement"
+        && n.child_by_field_name("initializer").is_some_and(|a| {
+            a.kind() == "assignment_expression"
+                && a.child_by_field_name("left")
+                    .is_some_and(|l| text(l, src) == name)
+        })
+}
+
+/// What a declaration does with a loop's counter.
+enum CounterDeclaration {
+    /// `int i = 0;`: given a value, so used before the loop.
+    Initialized,
+    /// `int i;`.
+    Plain,
+    /// It declares other names.
+    Elsewhere,
+}
+
+fn counter_declaration(declaration: Node, name: &[u8], src: &[u8]) -> CounterDeclaration {
+    let mut found = CounterDeclaration::Elsewhere;
+    let mut cursor = declaration.walk();
+    for d in declaration.children_by_field_name("declarator", &mut cursor) {
+        let id = if d.kind() == "init_declarator" {
+            d.child_by_field_name("declarator")
+        } else {
+            Some(d)
+        };
+        if id.is_some_and(|id| id.kind() == "identifier" && text(id, src) == name) {
+            if d.kind() == "init_declarator" {
+                return CounterDeclaration::Initialized;
+            }
+            found = CounterDeclaration::Plain;
+        }
+    }
+    found
 }
 
 /// A `void*` parameter or return type of a function defined here: not a

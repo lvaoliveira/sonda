@@ -214,6 +214,88 @@ const JDK_EQUALS: &[&str] = &[
     "DecimalFormat",
 ];
 
+/// The findings of the rules `on` runs on one type.
+fn type_findings(
+    index: &ProjectIndex,
+    id: TypeId,
+    on: &dyn Fn(&str) -> bool,
+    found: &mut Vec<Finding>,
+) {
+    if on(USELESS_OVERRIDE) {
+        useless_overrides(index, id, found);
+    }
+    if on(MISSING_OVERRIDE) {
+        overrides_without_annotation(index, id, found);
+    }
+    if on(WILDCARD_RETURN) {
+        wildcard_returns(index, id, found);
+    }
+    if on(GENERIC_EXCEPTION) {
+        generic_exceptions_declared(index, id, found);
+    }
+    if index.decl(id).kind == "class" {
+        class_findings(index, id, on, found);
+    }
+}
+
+/// The findings of the rules `on` runs on a class.
+fn class_findings(
+    index: &ProjectIndex,
+    id: TypeId,
+    on: &dyn Fn(&str) -> bool,
+    found: &mut Vec<Finding>,
+) {
+    let (f, span) = (id.0, index.decl(id).span);
+    if on(CLASS_COUPLING) && project_types_used(index, id) > MAX_COUPLING {
+        found.push((CLASS_COUPLING, f, span));
+    }
+    if on(ABSTRACT_REDECLARED) {
+        redeclared_abstract_methods(index, id, found);
+    }
+    if on(DROPS_SYNCHRONIZED) {
+        overrides_dropping_synchronized(index, id, found);
+    }
+    // Its ancestors, `Object` included (measured on SonarQube 26.7).
+    if on(DEEP_INHERITANCE) && depth(index, id) - 1 > MAX_DEPTH {
+        found.push((DEEP_INHERITANCE, f, span));
+    }
+    if on(SERIALIZABLE_FIELD) {
+        non_serializable_fields(index, id, found);
+    }
+    if on(SUBCLASS_EQUALS) && adds_fields_without_equals(index, id) {
+        found.push((SUBCLASS_EQUALS, f, span));
+    }
+    if on(FIELD_SHADOWS_PARENT) {
+        fields_shadowing_ancestors(index, id, found);
+    }
+}
+
+/// The findings of the rules `on` runs on a file's calls.
+fn file_findings(
+    index: &ProjectIndex,
+    f: usize,
+    file: &FileIndex,
+    on: &dyn Fn(&str) -> bool,
+    found: &mut Vec<Finding>,
+) {
+    if on(STATIC_VIA_SUBCLASS) {
+        found.extend(
+            file.static_calls
+                .iter()
+                .filter(|call| static_reached_through_subclass(index, f, call))
+                .map(|call| (STATIC_VIA_SUBCLASS, f, call.span)),
+        );
+    }
+    if on(VARARGS_ARRAY) {
+        found.extend(
+            file.sites
+                .iter()
+                .filter(|site| passes_array_to_varargs(index, f, site))
+                .map(|site| (VARARGS_ARRAY, f, site.span)),
+        );
+    }
+}
+
 /// The findings of the rules `active` lists, for files given as their
 /// facts. Files without a Java index are skipped.
 pub(crate) fn run<'f>(
@@ -236,58 +318,9 @@ pub(crate) fn run<'f>(
     let mut found: Vec<Finding> = Vec::new();
     for (f, file) in index.files().iter().enumerate() {
         for t in 0..file.types.len() {
-            let id = (f, t);
-            if on(USELESS_OVERRIDE) {
-                useless_overrides(&index, id, &mut found);
-            }
-            if on(MISSING_OVERRIDE) {
-                overrides_without_annotation(&index, id, &mut found);
-            }
-            if on(WILDCARD_RETURN) {
-                wildcard_returns(&index, id, &mut found);
-            }
-            if on(GENERIC_EXCEPTION) {
-                generic_exceptions_declared(&index, id, &mut found);
-            }
-            if index.decl(id).kind == "class" {
-                if on(CLASS_COUPLING) && project_types_used(&index, id) > MAX_COUPLING {
-                    found.push((CLASS_COUPLING, f, index.decl(id).span));
-                }
-                if on(ABSTRACT_REDECLARED) {
-                    redeclared_abstract_methods(&index, id, &mut found);
-                }
-                if on(DROPS_SYNCHRONIZED) {
-                    overrides_dropping_synchronized(&index, id, &mut found);
-                }
-                // Its ancestors, `Object` included (measured on SonarQube 26.7).
-                if on(DEEP_INHERITANCE) && depth(&index, id) - 1 > MAX_DEPTH {
-                    found.push((DEEP_INHERITANCE, f, index.decl(id).span));
-                }
-                if on(SERIALIZABLE_FIELD) {
-                    non_serializable_fields(&index, id, &mut found);
-                }
-                if on(SUBCLASS_EQUALS) && adds_fields_without_equals(&index, id) {
-                    found.push((SUBCLASS_EQUALS, f, index.decl(id).span));
-                }
-                if on(FIELD_SHADOWS_PARENT) {
-                    fields_shadowing_ancestors(&index, id, &mut found);
-                }
-            }
+            type_findings(&index, (f, t), &on, &mut found);
         }
-        if on(STATIC_VIA_SUBCLASS) {
-            for call in &file.static_calls {
-                if static_reached_through_subclass(&index, f, call) {
-                    found.push((STATIC_VIA_SUBCLASS, f, call.span));
-                }
-            }
-        }
-        if on(VARARGS_ARRAY) {
-            for site in &file.sites {
-                if passes_array_to_varargs(&index, f, site) {
-                    found.push((VARARGS_ARRAY, f, site.span));
-                }
-            }
-        }
+        file_findings(&index, f, file, &on, &mut found);
     }
     found
         .into_iter()
@@ -428,35 +461,78 @@ fn non_serializable_fields(index: &ProjectIndex, id: TypeId, found: &mut Vec<Fin
     if !is_serializable(index, id, &mut Vec::new()) {
         return;
     }
-    let params = type_params_in_scope(index, id);
-    let type_var = |t: &TypeRef| {
-        (t.qualifier.is_empty() && t.args.is_empty())
-            .then(|| params.iter().find(|p| p.name == t.name))
-            .flatten()
+    let check = SerializableFields {
+        index,
+        id,
+        params: type_params_in_scope(index, id),
     };
-    // Whether a type, as written in this class, isn't serializable.
-    let not_serializable = |t: &TypeRef| -> bool {
+    for field in &decl.fields {
+        if !has(&field.modifiers, "static")
+            && !has(&field.modifiers, "transient")
+            && check.flags(field)
+        {
+            found.push((SERIALIZABLE_FIELD, id.0, field.span));
+        }
+    }
+}
+
+/// A serializable class's fields, judged by the types written in it.
+struct SerializableFields<'i, 'a> {
+    index: &'i ProjectIndex<'a>,
+    id: TypeId,
+    params: Vec<&'i crate::semantic::java_index::TypeParam>,
+}
+
+impl<'i> SerializableFields<'i, '_> {
+    /// The class's type variable a type names, if it's one.
+    fn type_var(&self, t: &TypeRef) -> Option<&'i crate::semantic::java_index::TypeParam> {
+        (t.qualifier.is_empty() && t.args.is_empty())
+            .then(|| self.params.iter().find(|p| p.name == t.name).copied())
+            .flatten()
+    }
+
+    /// Whether a field's type isn't serializable; a collection by what it
+    /// holds, or, declared as an interface, by being visible.
+    fn flags(&self, field: &crate::semantic::java_index::FieldDecl) -> bool {
+        let t = &field.ty;
+        let collection = self.index.resolve_in(self.id, t).is_none()
+            && jdk_name(t).is_some_and(|n| {
+                COLLECTION_INTERFACES.contains(&n) || COLLECTION_CLASSES.contains(&n)
+            });
+        if !collection {
+            return self.not_serializable(t);
+        }
+        let interface = jdk_name(t).is_some_and(|n| COLLECTION_INTERFACES.contains(&n));
+        interface && !has(&field.modifiers, "private") || self.holds_unserializable(t)
+    }
+
+    /// Whether a type, as written in this class, isn't serializable.
+    fn not_serializable(&self, t: &TypeRef) -> bool {
         if t.is_primitive() || t.dims > 0 {
             return false;
         }
-        if let Some(p) = type_var(t) {
-            return !p.bounds.iter().any(|b| {
-                matches!(b.name.as_str(), "Serializable" | "Externalizable")
-                    || index
-                        .resolve_in(id, b)
-                        .is_some_and(|s| is_serializable(index, s, &mut Vec::new()))
-                    || jdk_name(b).is_some_and(|n| JDK_SERIALIZABLE.contains(&n))
-            });
+        if let Some(p) = self.type_var(t) {
+            return !p.bounds.iter().any(|b| self.serializable_bound(b));
         }
-        match index.resolve_in(id, t) {
-            Some(ty) => !is_serializable(index, ty, &mut Vec::new()),
+        match self.index.resolve_in(self.id, t) {
+            Some(ty) => !is_serializable(self.index, ty, &mut Vec::new()),
             None => jdk_name(t).is_some_and(|n| JDK_NOT_SERIALIZABLE.contains(&n)),
         }
-    };
-    // What a collection holds: a type variable there may be anything, and
-    // isn't held against it; a bare wildcard, `List<?>`, is (measured on
-    // SonarQube 26.7).
-    let holds_unserializable = |t: &TypeRef| {
+    }
+
+    fn serializable_bound(&self, b: &TypeRef) -> bool {
+        matches!(b.name.as_str(), "Serializable" | "Externalizable")
+            || self
+                .index
+                .resolve_in(self.id, b)
+                .is_some_and(|s| is_serializable(self.index, s, &mut Vec::new()))
+            || jdk_name(b).is_some_and(|n| JDK_SERIALIZABLE.contains(&n))
+    }
+
+    /// What a collection holds: a type variable there may be anything, and
+    /// isn't held against it; a bare wildcard, `List<?>`, is (measured on
+    /// SonarQube 26.7).
+    fn holds_unserializable(&self, t: &TypeRef) -> bool {
         t.args.iter().any(|a| {
             let a = if a.is_wildcard() {
                 match a.args.first() {
@@ -466,31 +542,12 @@ fn non_serializable_fields(index: &ProjectIndex, id: TypeId, found: &mut Vec<Fin
             } else {
                 a
             };
-            type_var(a).is_none()
+            self.type_var(a).is_none()
                 && !jdk_name(a).is_some_and(|n| {
                     COLLECTION_INTERFACES.contains(&n) || COLLECTION_CLASSES.contains(&n)
                 })
-                && not_serializable(a)
+                && self.not_serializable(a)
         })
-    };
-    for field in &decl.fields {
-        if has(&field.modifiers, "static") || has(&field.modifiers, "transient") {
-            continue;
-        }
-        let t = &field.ty;
-        let collection = index.resolve_in(id, t).is_none()
-            && jdk_name(t).is_some_and(|n| {
-                COLLECTION_INTERFACES.contains(&n) || COLLECTION_CLASSES.contains(&n)
-            });
-        let flagged = if collection {
-            let interface = jdk_name(t).is_some_and(|n| COLLECTION_INTERFACES.contains(&n));
-            interface && !has(&field.modifiers, "private") || holds_unserializable(t)
-        } else {
-            not_serializable(t)
-        };
-        if flagged {
-            found.push((SERIALIZABLE_FIELD, id.0, field.span));
-        }
     }
 }
 
@@ -902,90 +959,109 @@ fn wildcard_returns(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) 
 /// `close()`.
 fn generic_exceptions_declared(index: &ProjectIndex, id: TypeId, found: &mut Vec<Finding>) {
     const GENERIC: &[&str] = &["Exception", "Throwable", "RuntimeException", "Error"];
+    let decl = index.decl(id);
+    let supers = all_supertypes(index, id);
+    for m in &decl.methods {
+        if m.throws.iter().all(|(t, _)| !GENERIC.contains(&t.as_str()))
+            || signature_not_its_own(index, decl, &supers, m)
+        {
+            continue;
+        }
+        let passes_one_on = m.calls.iter().any(|c| call_throws_generic(index, id, c));
+        for (t, span) in &m.throws {
+            if GENERIC.contains(&t.as_str()) && !(t == "Exception" && passes_one_on) {
+                found.push((GENERIC_EXCEPTION, id.0, *span));
+            }
+        }
+    }
+}
+
+/// Whether a method's `throws` comes from another declaration: an
+/// override, a JDK hook it implements, or a method of a supertype with its
+/// name and arity.
+fn signature_not_its_own(
+    index: &ProjectIndex,
+    decl: &TypeDecl,
+    supers: &[TypeId],
+    m: &MethodDecl,
+) -> bool {
     const JDK_HOOKS: &[(&str, &str)] = &[
         ("InvocationHandler", "invoke"),
         ("Callable", "call"),
         ("AutoCloseable", "close"),
         ("Closeable", "close"),
     ];
-    let decl = index.decl(id);
-    let supers = all_supertypes(index, id);
-    let throws_generic = |m: &MethodDecl| {
-        m.throws
-            .iter()
-            .any(|(t, _)| matches!(t.as_str(), "Exception" | "Throwable"))
-    };
-    // The methods of a type and its supertypes by name and arity.
-    let methods_of = |t: TypeId, name: &str, args: usize| -> Vec<&MethodDecl> {
-        let mut types = vec![t];
-        types.extend(all_supertypes(index, t));
-        types
-            .into_iter()
-            .flat_map(|t| index.decl(t).methods.iter())
-            .filter(|m| !m.constructor && m.name == name && (m.params.len() == args || m.varargs))
-            .collect()
-    };
-    for m in &decl.methods {
-        if m.throws.iter().all(|(t, _)| !GENERIC.contains(&t.as_str())) {
-            continue;
-        }
-        if m.annotations.iter().any(|a| a == "Override")
-            || JDK_HOOKS.iter().any(|(iface, name)| {
-                m.name == *name
-                    && decl
-                        .implements
-                        .iter()
-                        .chain(&decl.extends)
-                        .any(|t| t.name == *iface)
-            })
-        {
-            continue;
-        }
-        let overrides = supers.iter().any(|t| {
+    m.annotations.iter().any(|a| a == "Override")
+        || JDK_HOOKS.iter().any(|(iface, name)| {
+            m.name == *name
+                && decl
+                    .implements
+                    .iter()
+                    .chain(&decl.extends)
+                    .any(|t| t.name == *iface)
+        })
+        || supers.iter().any(|t| {
             index
                 .decl(*t)
                 .methods
                 .iter()
                 .any(|p| !p.constructor && p.name == m.name && p.params.len() == m.params.len())
-        });
-        if overrides {
-            continue;
-        }
-        let passes_one_on = m.calls.iter().any(|c| {
-            // `Callable.call()` and `AutoCloseable.close()` declare it; a
-            // reader's or stream's `close()` doesn't (measured on SonarQube
-            // 26.7). A receiver of unknown type may be either.
-            if matches!(c.name.as_str(), "call" | "close") {
-                let generic = c.receiver.as_ref().is_none_or(|r| {
-                    matches!(r.name.as_str(), "Callable" | "AutoCloseable")
-                        || index.resolve_in(id, r).is_some_and(|t| {
-                            methods_of(t, &c.name, c.args)
-                                .into_iter()
-                                .any(throws_generic)
-                        })
-                });
-                if generic {
-                    return true;
-                }
-            }
-            let target = if c.own {
-                Some(id)
-            } else {
-                c.receiver.as_ref().and_then(|r| index.resolve_in(id, r))
-            };
-            target.is_some_and(|t| {
-                methods_of(t, &c.name, c.args)
-                    .into_iter()
-                    .any(throws_generic)
-            })
-        });
-        for (t, span) in &m.throws {
-            if !GENERIC.contains(&t.as_str()) || (t == "Exception" && passes_one_on) {
-                continue;
-            }
-            found.push((GENERIC_EXCEPTION, id.0, *span));
-        }
+        })
+}
+
+fn throws_generic(m: &MethodDecl) -> bool {
+    m.throws
+        .iter()
+        .any(|(t, _)| matches!(t.as_str(), "Exception" | "Throwable"))
+}
+
+/// The methods of a type and its supertypes by name and arity.
+fn methods_named<'i>(
+    index: &'i ProjectIndex,
+    t: TypeId,
+    name: &str,
+    args: usize,
+) -> Vec<&'i MethodDecl> {
+    let mut types = vec![t];
+    types.extend(all_supertypes(index, t));
+    types
+        .into_iter()
+        .flat_map(|t| index.decl(t).methods.iter())
+        .filter(|m| !m.constructor && m.name == name && (m.params.len() == args || m.varargs))
+        .collect()
+}
+
+/// Whether a call may throw `Exception` or `Throwable` on: `Callable.call()`
+/// and `AutoCloseable.close()` declare it, a reader's or stream's
+/// `close()` doesn't (measured on SonarQube 26.7), and a receiver of
+/// unknown type may be either; else what the method called declares.
+fn call_throws_generic(
+    index: &ProjectIndex,
+    id: TypeId,
+    c: &crate::semantic::java_index::Call,
+) -> bool {
+    if matches!(c.name.as_str(), "call" | "close")
+        && c.receiver.as_ref().is_none_or(|r| {
+            matches!(r.name.as_str(), "Callable" | "AutoCloseable")
+                || index.resolve_in(id, r).is_some_and(|t| {
+                    methods_named(index, t, &c.name, c.args)
+                        .into_iter()
+                        .any(throws_generic)
+                })
+        })
+    {
+        return true;
     }
+    let target = if c.own {
+        Some(id)
+    } else {
+        c.receiver.as_ref().and_then(|r| index.resolve_in(id, r))
+    };
+    target.is_some_and(|t| {
+        methods_named(index, t, &c.name, c.args)
+            .into_iter()
+            .any(throws_generic)
+    })
 }
 
 /// Every supertype the project declares, at any distance.

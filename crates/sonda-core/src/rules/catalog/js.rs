@@ -4127,16 +4127,6 @@ fn is_bare_jump(jump: Node, _: &[u8]) -> bool {
     if jump.named_child_count() != 0 {
         return false;
     }
-    let last = |n: Node| {
-        let mut next = n.next_named_sibling();
-        while let Some(s) = next {
-            if s.kind() != "comment" {
-                return false;
-            }
-            next = s.next_named_sibling();
-        }
-        true
-    };
     let is_return = jump.kind() == "return_statement";
     let mut current = jump;
     for _ in 0..256 {
@@ -4144,42 +4134,63 @@ fn is_bare_jump(jump: Node, _: &[u8]) -> bool {
             return false;
         };
         match parent.kind() {
-            "statement_block" if last(current) => {
-                let owner = parent.parent();
-                let function = owner.is_some_and(|o| {
-                    matches!(
-                        o.kind(),
-                        "function_declaration"
-                            | "function_expression"
-                            | "arrow_function"
-                            | "method_definition"
-                            | "generator_function_declaration"
-                            | "generator_function"
-                    )
-                });
-                if function {
-                    let statements = parent
-                        .named_children(&mut parent.walk())
-                        .filter(|c| c.kind() != "comment")
-                        .count();
-                    return is_return && (current.id() != jump.id() || statements > 1);
+            "statement_block" if is_last_statement(current) => match block_owner(parent) {
+                BlockOwner::Function => {
+                    return is_return && (current.id() != jump.id() || statements_in(parent) > 1);
                 }
-                if owner.is_some_and(|o| {
-                    matches!(
-                        o.kind(),
-                        "for_statement" | "for_in_statement" | "while_statement" | "do_statement"
-                    )
-                }) {
-                    return !is_return;
-                }
-                current = parent;
-            }
+                BlockOwner::Loop => return !is_return,
+                BlockOwner::Other => current = parent,
+            },
             // A branch: what follows it in the if is the other branch.
             "if_statement" | "else_clause" => current = parent,
             _ => return false,
         }
     }
     false
+}
+
+/// What a statement block belongs to, for `is_bare_jump`.
+enum BlockOwner {
+    Function,
+    Loop,
+    Other,
+}
+
+fn block_owner(block: Node) -> BlockOwner {
+    match block.parent().map(|o| o.kind()) {
+        Some(
+            "function_declaration"
+            | "function_expression"
+            | "arrow_function"
+            | "method_definition"
+            | "generator_function_declaration"
+            | "generator_function",
+        ) => BlockOwner::Function,
+        Some("for_statement" | "for_in_statement" | "while_statement" | "do_statement") => {
+            BlockOwner::Loop
+        }
+        _ => BlockOwner::Other,
+    }
+}
+
+/// Whether only comments follow `n` in its block.
+fn is_last_statement(n: Node) -> bool {
+    let mut next = n.next_named_sibling();
+    while let Some(s) = next {
+        if s.kind() != "comment" {
+            return false;
+        }
+        next = s.next_named_sibling();
+    }
+    true
+}
+
+/// A block's statements, not counting comments.
+fn statements_in(block: Node) -> usize {
+    block
+        .named_children(&mut block.walk())
+        .filter(|c| c.kind() != "comment")
+        .count()
 }
 
 fn has_hole(array: Node, _: &[u8]) -> bool {
@@ -4690,36 +4701,47 @@ fn shadowed_between(node: Node, outer: Node, name: &[u8], src: &[u8]) -> bool {
         if matches!(
             f.kind(),
             "arrow_function" | "function_expression" | "function_declaration" | "method_definition"
-        ) {
-            let mut declares = false;
-            super::js_syntax::walk(f, &mut |d| {
-                if (d.kind() == "variable_declarator"
-                    && d.child_by_field_name("name")
-                        .is_some_and(|x| text(x, src) == name))
-                    || (d.kind() == "identifier"
-                        && text(d, src) == name
-                        && d.parent().is_some_and(|p| {
-                            matches!(
-                                p.kind(),
-                                "formal_parameters"
-                                    | "arrow_function"
-                                    | "required_parameter"
-                                    | "optional_parameter"
-                            ) && p.child_by_field_name("body") != Some(d)
-                                && p.child_by_field_name("value") != Some(d)
-                        }))
-                {
-                    declares = true;
-                }
-                !declares
-            });
-            if declares {
-                return true;
-            }
+        ) && function_declares(f, name, src)
+        {
+            return true;
         }
         current = f.parent();
     }
     false
+}
+
+/// Whether a function declares `name` anywhere in it: a variable, or a
+/// parameter.
+fn function_declares(function: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut declares = false;
+    super::js_syntax::walk(function, &mut |d| {
+        if declares_variable(d, name, src) || declares_parameter(d, name, src) {
+            declares = true;
+        }
+        !declares
+    });
+    declares
+}
+
+fn declares_variable(d: Node, name: &[u8], src: &[u8]) -> bool {
+    d.kind() == "variable_declarator"
+        && d.child_by_field_name("name")
+            .is_some_and(|x| text(x, src) == name)
+}
+
+fn declares_parameter(d: Node, name: &[u8], src: &[u8]) -> bool {
+    d.kind() == "identifier"
+        && text(d, src) == name
+        && d.parent().is_some_and(|p| {
+            matches!(
+                p.kind(),
+                "formal_parameters"
+                    | "arrow_function"
+                    | "required_parameter"
+                    | "optional_parameter"
+            ) && p.child_by_field_name("body") != Some(d)
+                && p.child_by_field_name("value") != Some(d)
+        })
 }
 
 fn setter_called_in_render<'t>(declarator: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

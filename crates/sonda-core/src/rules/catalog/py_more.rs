@@ -2952,44 +2952,37 @@ fn first_field_assignment(name: Node, src: &[u8]) -> bool {
         return true;
     };
     let n = text(name, src);
-    let mut class = attr.parent();
+    let Some(class) = enclosing_class_definition(attr) else {
+        return true;
+    };
+    first_below(class, |_| true, |node| assigns_self_field(node, n, src))
+        .is_none_or(|first| first.id() == attr.id())
+}
+
+fn enclosing_class_definition(node: Node) -> Option<Node> {
+    let mut class = node.parent();
     while let Some(c) = class.filter(|c| c.kind() != "class_definition") {
         class = c.parent();
     }
-    let Some(class) = class else {
-        return true;
-    };
-    let mut cursor = class.walk();
-    loop {
-        let node = cursor.node();
-        if node.kind() == "attribute"
-            && node
-                .child_by_field_name("attribute")
-                .is_some_and(|a| text(a, src) == n)
-            && node
-                .child_by_field_name("object")
-                .is_some_and(|o| text(o, src) == b"self")
-            && node.parent().is_some_and(|p| {
-                p.kind() == "pattern_list"
-                    || p.kind() == "assignment"
-                        && p.child_by_field_name("left")
-                            .is_some_and(|l| l.id() == node.id())
-            })
-        {
-            return node.id() == attr.id();
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() || cursor.node().id() == class.id() {
-                return true;
-            }
-        }
-    }
+    class
+}
+
+/// Whether `node` is `self.<field>` assigned to: on the left of `=`, or in
+/// a tuple of targets.
+fn assigns_self_field(node: Node, field: &[u8], src: &[u8]) -> bool {
+    node.kind() == "attribute"
+        && node
+            .child_by_field_name("attribute")
+            .is_some_and(|a| text(a, src) == field)
+        && node
+            .child_by_field_name("object")
+            .is_some_and(|o| text(o, src) == b"self")
+        && node.parent().is_some_and(|p| {
+            p.kind() == "pattern_list"
+                || p.kind() == "assignment"
+                    && p.child_by_field_name("left")
+                        .is_some_and(|l| l.id() == node.id())
+        })
 }
 
 /// Whether an identifier `name` appears under `node`: in code, an
