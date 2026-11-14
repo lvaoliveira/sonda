@@ -340,3 +340,19 @@ pub(crate) fn supports(lang: Lang) -> bool {
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp | Lang::Python
     )
 }
+
+/// Each file's summary under the fact `key` (ADR-0020), with the file's
+/// position in the scanner's list; a file without one, or with one that
+/// doesn't parse, is left out.
+pub(crate) fn summaries<'f, T: serde::de::DeserializeOwned>(
+    facts: impl Iterator<Item = &'f [(String, String)]>,
+    key: &str,
+) -> Vec<(usize, T)> {
+    facts
+        .enumerate()
+        .filter_map(|(i, f)| {
+            let (_, json) = f.iter().find(|(k, _)| k == key)?;
+            serde_json::from_str(json).ok().map(|x| (i, x))
+        })
+        .collect()
+}

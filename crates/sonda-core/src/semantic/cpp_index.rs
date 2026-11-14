@@ -233,42 +233,51 @@ impl<'s> Extractor<'s> {
                 }
             }
             "function_definition" | "field_declaration" | "declaration" => {
-                // A class defined in a member function's body.
-                if member.kind() == "function_definition"
-                    && let Some(body) = member.child_by_field_name("body")
-                {
-                    self.walk(body, scope);
-                }
-                // A nested class, `struct In {};`, or one a member's type
-                // defines.
-                if let Some(ty) = member.child_by_field_name("type")
-                    && matches!(ty.kind(), "class_specifier" | "struct_specifier")
-                {
-                    self.class(ty, scope);
-                }
-                let declarators: Vec<Node> = {
-                    let mut c = member.walk();
-                    member
-                        .children_by_field_name("declarator", &mut c)
-                        .collect()
-                };
-                for d in declarators {
-                    if let Some(f) = function_declarator(d) {
-                        if let Some(m) = self.method(member, f) {
-                            class.methods.push(m);
-                        }
-                    } else if member.kind() == "field_declaration"
-                        && let Some(name) = declared_name(d)
-                        && let Some(ty) = member.child_by_field_name("type")
-                    {
-                        class.fields.push(FieldDecl {
-                            name: self.text(name).to_string(),
-                            ty: self.compact(ty) + &pointer_suffix(self, d),
-                        });
-                    }
-                }
+                self.declaration_member(member, class, scope);
             }
             _ => {}
+        }
+    }
+
+    /// A member function or data member, and any class it defines: in a
+    /// member function's body, or as a member's type (`struct In {} x;`).
+    fn declaration_member(&mut self, member: Node, class: &mut ClassDecl, scope: &mut Vec<String>) {
+        if member.kind() == "function_definition"
+            && let Some(body) = member.child_by_field_name("body")
+        {
+            self.walk(body, scope);
+        }
+        if let Some(ty) = member.child_by_field_name("type")
+            && matches!(ty.kind(), "class_specifier" | "struct_specifier")
+        {
+            self.class(ty, scope);
+        }
+        let declarators: Vec<Node> = {
+            let mut c = member.walk();
+            member
+                .children_by_field_name("declarator", &mut c)
+                .collect()
+        };
+        for d in declarators {
+            self.declarator(member, d, class);
+        }
+    }
+
+    /// What one of a member's declarators declares: a member function, or
+    /// a data member.
+    fn declarator(&self, member: Node, d: Node, class: &mut ClassDecl) {
+        if let Some(f) = function_declarator(d) {
+            class.methods.extend(self.method(member, f));
+            return;
+        }
+        if member.kind() == "field_declaration"
+            && let Some(name) = declared_name(d)
+            && let Some(ty) = member.child_by_field_name("type")
+        {
+            class.fields.push(FieldDecl {
+                name: self.text(name).to_string(),
+                ty: self.compact(ty) + &pointer_suffix(self, d),
+            });
         }
     }
 

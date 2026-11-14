@@ -337,18 +337,7 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node, deadline: Instant) -> Vec<(Stri
     }
     // Lines whose comment suppresses issues, for the issues the project
     // pass adds.
-    let suppressing: Vec<(usize, &str)> = ctx
-        .src
-        .lines()
-        .enumerate()
-        .filter(|(_, l)| l.contains("NOSONAR") || l.contains("sonda-ignore"))
-        .map(|(i, l)| (i + 1, l))
-        .collect();
-    if !suppressing.is_empty()
-        && let Ok(json) = serde_json::to_string(&suppressing)
-    {
-        facts.push((JAVA_SUPPRESSED_LINES.to_string(), json));
-    }
+    facts.extend(suppressed_lines(ctx.src, JAVA_SUPPRESSED_LINES));
     let regions = java_suppressed_regions(ctx.src, root);
     if !regions.is_empty()
         && let Ok(json) = serde_json::to_string(&regions)
@@ -762,19 +751,26 @@ fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> 
     {
         facts.push((crate::semantic::cpp_index::FACT.to_string(), json));
     }
-    let suppressing: Vec<(usize, &str)> = ctx
-        .src
+    facts.extend(suppressed_lines(ctx.src, CPP_SUPPRESSED_LINES));
+    facts
+}
+
+/// The fact `key` listing a file's lines with a suppression comment
+/// (`NOSONAR`, `sonda-ignore`), for the issues a project pass adds; none
+/// when it has no such line.
+fn suppressed_lines(src: &str, key: &str) -> Option<(String, String)> {
+    let lines: Vec<(usize, &str)> = src
         .lines()
         .enumerate()
         .filter(|(_, l)| l.contains("NOSONAR") || l.contains("sonda-ignore"))
         .map(|(i, l)| (i + 1, l))
         .collect();
-    if !suppressing.is_empty()
-        && let Ok(json) = serde_json::to_string(&suppressing)
-    {
-        facts.push((CPP_SUPPRESSED_LINES.to_string(), json));
+    if lines.is_empty() {
+        return None;
     }
-    facts
+    serde_json::to_string(&lines)
+        .ok()
+        .map(|json| (key.to_string(), json))
 }
 
 /// C++ rules that need other files' classes (ADR-0020): functions hiding a
@@ -4251,6 +4247,40 @@ pub(crate) mod tests {
 
     pub(crate) fn far_deadline() -> Instant {
         Instant::now() + std::time::Duration::from_secs(60)
+    }
+
+    /// `rule`'s findings over files given as (path, source), analyzed as
+    /// `lang` and then by the project `pass`, as (path, line), sorted.
+    pub(crate) fn project_flagged(
+        rule: &str,
+        lang: Lang,
+        files: &[(&str, &str)],
+        pass: fn(&mut [FileAnalysis], &RuleSet),
+    ) -> Vec<(String, usize)> {
+        let mut cfg = Config::default();
+        cfg.rules.enabled = vec![rule.to_string()];
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<FileAnalysis> = files
+            .iter()
+            .map(|(path, src)| analyze(path, lang, src, &rules, &cfg, far_deadline()).unwrap())
+            .collect();
+        pass(&mut analyzed, &rules);
+        let mut found: Vec<(String, usize)> = analyzed
+            .iter()
+            .flat_map(|f| {
+                f.issues
+                    .iter()
+                    .filter(|i| i.rule == rule)
+                    .map(|i| (f.path.clone(), i.line))
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// A finding's (path, line), as `project_flagged` lists them.
+    pub(crate) fn at(path: &str, line: usize) -> (String, usize) {
+        (path.to_string(), line)
     }
 
     fn rules_hit(a: &FileAnalysis) -> Vec<&str> {
