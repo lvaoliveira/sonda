@@ -418,7 +418,7 @@ file, the report formats and the public library API.
 - C and C++, compared with SonarCloud on qutepart-cpp and roo_display (our
   SonarQube 26.7 has no C/C++ analyzer, so each rule follows what SonarCloud
   reported): sonda raises 353 of qutepart-cpp's 748 C and C++ issues, where
-  it raised 62, and 2,032 of roo_display's 2,958, where it raised 152.
+  it raised 62, and 2,062 of roo_display's 2,958, where it raised 152.
   - 19 C++ rules, `cpp/*`: C-style arrays, implicit converting
     constructors, nesting depth, mergeable ifs, several declarations per
     statement, nested conditionals, assignments in expressions, redundant
@@ -435,6 +435,10 @@ file, the report formats and the public library API.
     declared outside its only loop, `using enum` for a block that repeats
     an enumeration, template arguments the constructor deduces, and a
     pointer with its count where a `std::span` fits.
+  - C++ files summarize the classes they define, and rules can compare a
+    class with its bases in other files (ADR-0020):
+    `cpp/hidden-inherited-function` reports a member function hiding a
+    base's.
   - A `.h` written in C++ is read as C++ in a project with C++ sources.
   - Cognitive complexity's threshold is each language's default unless
     `thresholds.cognitive_complexity` sets it: 25 in C and C++, 15

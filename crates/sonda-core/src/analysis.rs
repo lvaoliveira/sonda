@@ -182,6 +182,7 @@ pub(crate) fn analyze(
         has_syntax_errors: root.has_error(),
         facts: match lang {
             Lang::CSharp => cs_facts(&ctx, root, deadline),
+            Lang::Cpp => cpp_facts(&ctx, root, deadline),
             _ => java_facts(&ctx, lang, root, deadline)
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
@@ -748,6 +749,49 @@ fn java_suppressed_regions(src: &str, root: Node) -> Vec<SuppressedRegion> {
 /// The fact listing a Java file's lines with a suppression comment.
 const JAVA_SUPPRESSED_LINES: &str = "java-suppressed-lines";
 
+/// The fact listing a C++ file's lines with a suppression comment.
+const CPP_SUPPRESSED_LINES: &str = "cpp-suppressed-lines";
+
+/// The facts the project-level C++ rules need from this file: the classes
+/// it defines (ADR-0020), and its lines with a suppression comment.
+fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> {
+    let mut facts = Vec::new();
+    let index = crate::semantic::cpp_index::extract(root, ctx.src.as_bytes(), deadline);
+    if !index.classes.is_empty()
+        && let Ok(json) = serde_json::to_string(&index)
+    {
+        facts.push((crate::semantic::cpp_index::FACT.to_string(), json));
+    }
+    let suppressing: Vec<(usize, &str)> = ctx
+        .src
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("NOSONAR") || l.contains("sonda-ignore"))
+        .map(|(i, l)| (i + 1, l))
+        .collect();
+    if !suppressing.is_empty()
+        && let Ok(json) = serde_json::to_string(&suppressing)
+    {
+        facts.push((CPP_SUPPRESSED_LINES.to_string(), json));
+    }
+    facts
+}
+
+/// C++ rules that need other files' classes (ADR-0020): functions hiding a
+/// base's.
+pub(crate) fn cpp_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
+    let active: Vec<&str> = rules::cpp_project::RULES
+        .iter()
+        .copied()
+        .filter(|r| rules.get(r).is_some())
+        .collect();
+    if active.is_empty() {
+        return;
+    }
+    let found = rules::cpp_project::run(files.iter().map(|f| f.facts.as_slice()), &active);
+    push_project_findings(files, rules, found, CPP_SUPPRESSED_LINES);
+}
+
 /// Java rules that need other files' declarations (ADR-0020): overrides,
 /// serializable fields, `equals` in subclasses, arrays passed as varargs.
 pub(crate) fn java_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
@@ -760,13 +804,25 @@ pub(crate) fn java_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
         return;
     }
     let found = rules::java_project::run(files.iter().map(|f| f.facts.as_slice()), &active);
+    push_project_findings(files, rules, found, JAVA_SUPPRESSED_LINES);
+}
+
+/// Adds a project pass's findings to their files as issues, unless a
+/// suppression comment on the line (listed in the `lines_fact` fact) or a
+/// suppressed region covers them.
+fn push_project_findings(
+    files: &mut [FileAnalysis],
+    rules: &RuleSet,
+    found: Vec<(&'static str, usize, crate::semantic::cs_index::Span)>,
+    lines_fact: &str,
+) {
     for (rule, file, span) in found {
         let Some(r) = rules.get(rule) else { continue };
         let f = &mut files[file];
         let suppressed = f
             .facts
             .iter()
-            .find(|(k, _)| k == JAVA_SUPPRESSED_LINES)
+            .find(|(k, _)| k == lines_fact)
             .and_then(|(_, json)| serde_json::from_str::<Vec<(usize, String)>>(json).ok())
             .is_some_and(|lines| {
                 lines

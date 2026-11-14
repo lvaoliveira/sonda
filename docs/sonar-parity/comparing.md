@@ -295,4 +295,4 @@ On the comparison server, as of 2026-11-11:
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
 Next: more C++ rules, the most frequent missing keys first (S5817,
-S5350); S6022 and S1242 need types and base classes from other files.
+S5350); S6022 needs field types from the C++ index (ADR-0020).

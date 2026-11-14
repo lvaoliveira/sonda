@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use tree_sitter::{CaptureQuantifier, Node, Query};
 
 pub use catalog::RULES;
+pub(crate) use catalog::cpp_project;
 pub(crate) use catalog::cs_project;
 pub(crate) use catalog::java_line_looks_like_code;
 pub(crate) use catalog::java_project;
@@ -179,13 +180,14 @@ impl Rule {
     /// The languages it checks. A structural rule's are in its id's
     /// prefix; `common/` rules check every language.
     pub fn langs(&self) -> &'static [Lang] {
-        use crate::lang::{ALL, CSHARP, JAVA, JS_TS, NOT_RUST, PYTHON, RUST};
+        use crate::lang::{ALL, CPP_ONLY, CSHARP, JAVA, JS_TS, NOT_RUST, PYTHON, RUST};
         match self.check {
             Check::Query { langs, .. }
             | Check::Semantic { langs, .. }
             | Check::Taint { langs, .. } => langs,
             Check::Structural => match self.id.split('/').next() {
                 Some("cs") => CSHARP,
+                Some("cpp") => CPP_ONLY,
                 Some("java") => JAVA,
                 Some("py") => PYTHON,
                 Some("js") => JS_TS,
@@ -428,7 +430,10 @@ mod tests {
         {
             let prefix = r.id.split('/').next().unwrap();
             assert!(
-                matches!(prefix, "cs" | "java" | "py" | "js" | "rs" | "common"),
+                matches!(
+                    prefix,
+                    "cs" | "cpp" | "java" | "py" | "js" | "rs" | "common"
+                ),
                 "{}: no languages for its prefix",
                 r.id
             );
@@ -476,6 +481,7 @@ mod tests {
             // Project-level rules see the example as a project of one file.
             crate::analysis::cs_project_rules(std::slice::from_mut(&mut bad), &rules);
             crate::analysis::java_project_rules(std::slice::from_mut(&mut bad), &rules);
+            crate::analysis::cpp_project_rules(std::slice::from_mut(&mut bad), &rules);
             assert!(
                 bad.issues.iter().any(|i| i.rule == r.id),
                 "{} did not flag its bad example:\n{}\nissues: {:?}",
@@ -487,6 +493,7 @@ mod tests {
                 analyze(good_path, ex.lang, ex.good, &rules, &cfg, far_deadline()).unwrap();
             crate::analysis::cs_project_rules(std::slice::from_mut(&mut good), &rules);
             crate::analysis::java_project_rules(std::slice::from_mut(&mut good), &rules);
+            crate::analysis::cpp_project_rules(std::slice::from_mut(&mut good), &rules);
             assert!(
                 !good.issues.iter().any(|i| i.rule == r.id),
                 "{} flagged its good example:\n{}",
