@@ -69,12 +69,13 @@ export function GenerateTokenDrawer({
     else setError('Could not copy; select the token and copy it.')
   }
 
-  if (created)
+  if (created) {
+    const forWhom = created.createdBy ? `For ${created.owner}. ` : ''
     return (
       <Drawer
         eyebrow={eyebrow}
         title={`Copy “${created.name}”`}
-        subtitle={`${created.createdBy ? `For ${created.owner}. ` : ''}It won’t be shown again.`}
+        subtitle={`${forWhom}It won’t be shown again.`}
         onClose={onClose}
         footer={
           <>
@@ -97,6 +98,7 @@ export function GenerateTokenDrawer({
         )}
       </Drawer>
     )
+  }
 
   return (
     <Drawer

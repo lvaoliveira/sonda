@@ -43,8 +43,7 @@ function matches(i: IssueSummary, q: IssueQuery, ignore?: FacetKey): boolean {
   if (q.branch && i.branch !== q.branch) return false
   if (q.file && !i.file.includes(q.file)) return false
   if (q.assignee && i.assignee !== q.assignee) return false
-  if (q.isNew && !i.isNew) return false
-  return true
+  return !q.isNew || i.isNew
 }
 
 /** The list item: the detail without its rule, code and history. */

@@ -234,26 +234,43 @@ def pair_up(sonar, sonda, tolerance, language=lambda path: None):
     return matched, only_sonar, only_sonda, matched_by_language
 
 
-def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
-    """sonar_data: SonarQube's (issues, files, active keys per language)."""
-    issues, files, active = sonar_data
-    main_files = {prefix + p: lang for p, (q, lang) in files.items() if q == "FIL"}
-    tests = {prefix + p for p, (q, _) in files.items() if q == "UTS"}
-    unparsed = {prefix + p for p, (q, _) in files.items() if q == "UNPARSED"}
-    # A key SonarQube raised on a language's files is active for it, whatever
-    # its profile search says: SonarCloud's leaves some active rules out.
+def active_keys(active, issues, main_files, prefix):
+    """The keys active per language: the profile's, and any key SonarQube
+    raised on a language's files, whatever its profile search says:
+    SonarCloud's leaves some active rules out."""
     active = {lang: set(keys) for lang, keys in active.items()}
     for i in issues:
         path = prefix + i["component"].split(":", 1)[1]
         if path in main_files:
             active.setdefault(main_files[path], set()).add(i["rule"].split(":", 1)[1])
-    analyzed = {f["path"] for f in report["files"]}
-    report_rules = set(report.get("active_rules") or on_by_default)
-    # SonarQube key -> the sonda rules that cover it.
+    return active
+
+
+def covering_rules(refs):
+    """SonarQube key -> the sonda rules that cover it."""
     covering = collections.defaultdict(set)
     for rule, (exact, related) in refs.items():
         for key in exact | related:
             covering[key].add(rule)
+    return covering
+
+
+def files_by_kind(files, prefix):
+    """SonarQube's files: main ones with their language, tests, unparsed."""
+    main_files = {prefix + p: lang for p, (q, lang) in files.items() if q == "FIL"}
+    tests = {prefix + p for p, (q, _) in files.items() if q == "UTS"}
+    unparsed = {prefix + p for p, (q, _) in files.items() if q == "UNPARSED"}
+    return main_files, tests, unparsed
+
+
+def compare(report, sonar_data, refs, on_by_default, prefix, tolerance):
+    """sonar_data: SonarQube's (issues, files, active keys per language)."""
+    issues, files, active = sonar_data
+    main_files, tests, unparsed = files_by_kind(files, prefix)
+    active = active_keys(active, issues, main_files, prefix)
+    analyzed = {f["path"] for f in report["files"]}
+    report_rules = set(report.get("active_rules") or on_by_default)
+    covering = covering_rules(refs)
     sonar, sonar_elsewhere = sonar_by_key(issues, main_files, tests, analyzed, prefix)
     sonda, sonda_elsewhere = sonda_by_key(report, main_files, active, refs, unparsed)
     matched, only_sonar, only_sonda, matched_by_language = pair_up(

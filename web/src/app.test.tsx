@@ -168,6 +168,9 @@ describe('Issues', () => {
     expect(await within(detail).findByRole('button', { name: /sign in with a name/ })).toBeDisabled()
   })
 
+})
+
+describe('Issues: moving through the list', () => {
   it('moves the selection with j and k', async () => {
     const user = userEvent.setup()
     renderAt('/issues')
@@ -1207,7 +1210,7 @@ describe('Overview', () => {
     const metrics = await screen.findByRole('region', { name: 'Key metrics' })
     const tone = (label: string) => within(metrics).getByRole('button', { name: new RegExp(`^${label} `) }).dataset.tone
     // 47 blocker or critical issues, 72.4% coverage, 3.1% duplication.
-    expect([tone('Blocker \\+ critical'), tone('Coverage'), tone('Duplication')]).toEqual(['crit', 'warn', 'warn'])
+    expect([tone(String.raw`Blocker \+ critical`), tone('Coverage'), tone('Duplication')]).toEqual(['crit', 'warn', 'warn'])
   })
 
   it('opens the drill-down drawer from a metric and closes it with Escape', async () => {
