@@ -329,10 +329,8 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node, deadline: Instant) -> Vec<(Stri
     // The types this file declares, for rules that compare declarations
     // across files (ADR-0020).
     let index = crate::semantic::java_index::extract(root, ctx.src.as_bytes(), deadline);
-    if (!index.types.is_empty() || !index.sites.is_empty())
-        && let Ok(json) = serde_json::to_string(&index)
-    {
-        facts.push((crate::semantic::java_index::FACT.to_string(), json));
+    if !index.types.is_empty() || !index.sites.is_empty() {
+        push_json_fact(&mut facts, crate::semantic::java_index::FACT, &index);
     }
     // Lines whose comment suppresses issues, for the issues the project
     // pass adds.
@@ -343,16 +341,12 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node, deadline: Instant) -> Vec<(Stri
         .filter(|(_, l)| l.contains("NOSONAR") || l.contains("sonda-ignore"))
         .map(|(i, l)| (i + 1, l))
         .collect();
-    if !suppressing.is_empty()
-        && let Ok(json) = serde_json::to_string(&suppressing)
-    {
-        facts.push((JAVA_SUPPRESSED_LINES.to_string(), json));
+    if !suppressing.is_empty() {
+        push_json_fact(&mut facts, JAVA_SUPPRESSED_LINES, &suppressing);
     }
     let regions = java_suppressed_regions(ctx.src, root);
-    if !regions.is_empty()
-        && let Ok(json) = serde_json::to_string(&regions)
-    {
-        facts.push((SUPPRESSION_FACT.to_string(), json));
+    if !regions.is_empty() {
+        push_json_fact(&mut facts, SUPPRESSION_FACT, &regions);
     }
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
@@ -361,26 +355,39 @@ fn java_facts(ctx: &Ctx, lang: Lang, root: Node, deadline: Instant) -> Vec<(Stri
         facts.push(("package".to_string(), p.clone()));
     }
     for class in children.iter().filter(|n| n.kind() == "class_declaration") {
-        let Some(mods) = class
-            .children(&mut class.walk())
-            .find(|c| c.kind() == "modifiers")
-        else {
-            continue;
-        };
-        let t = ctx.text(mods);
-        if t.contains("@SpringBootApplication") || t.contains("@ComponentScan") {
-            for b in spring_scan_bases(ctx, mods, package.as_deref()) {
-                facts.push(("scan".to_string(), b));
-            }
-        }
-        if COMPONENT_ANNOTATIONS.iter().any(|a| t.contains(a)) {
-            facts.push((
-                "component".to_string(),
-                (class.start_position().row + 1).to_string(),
-            ));
-        }
+        spring_facts(ctx, *class, package.as_deref(), &mut facts);
     }
     facts
+}
+
+/// A fact holding `value` as JSON; none if it can't be written.
+fn push_json_fact(facts: &mut Vec<(String, String)>, key: &str, value: &impl serde::Serialize) {
+    if let Ok(json) = serde_json::to_string(value) {
+        facts.push((key.to_string(), json));
+    }
+}
+
+/// A Spring class's facts: the packages `@SpringBootApplication` or
+/// `@ComponentScan` scans, and where a component is declared.
+fn spring_facts(ctx: &Ctx, class: Node, package: Option<&str>, facts: &mut Vec<(String, String)>) {
+    let Some(mods) = class
+        .children(&mut class.walk())
+        .find(|c| c.kind() == "modifiers")
+    else {
+        return;
+    };
+    let t = ctx.text(mods);
+    if t.contains("@SpringBootApplication") || t.contains("@ComponentScan") {
+        for b in spring_scan_bases(ctx, mods, package) {
+            facts.push(("scan".to_string(), b));
+        }
+    }
+    if COMPONENT_ANNOTATIONS.iter().any(|a| t.contains(a)) {
+        facts.push((
+            "component".to_string(),
+            (class.start_position().row + 1).to_string(),
+        ));
+    }
 }
 
 /// The annotations that make a class a Spring component.
@@ -695,54 +702,70 @@ fn java_suppressed_regions(src: &str, root: Node) -> Vec<SuppressedRegion> {
     let mut regions = Vec::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
-        if n.kind() == "annotation"
-            && n.child_by_field_name("name").is_some_and(|a| {
-                matches!(
-                    &src[a.byte_range()],
-                    "SuppressWarnings" | "java.lang.SuppressWarnings"
-                )
-            })
-            && let Some(declaration) = n
-                .parent()
-                .filter(|m| m.kind() == "modifiers")
-                .and_then(|m| m.parent())
-        {
+        if let Some(declaration) = suppress_warnings_target(n, src) {
             let start = declaration.start_position().row + 1;
             let end = declaration.end_position().row + 1;
-            let mut values = Vec::new();
-            let mut inner = vec![n];
-            while let Some(x) = inner.pop() {
-                if x.kind() == "string_literal" {
-                    values.push(src[x.byte_range()].trim_matches('"'));
-                    continue;
-                }
-                let mut c = x.walk();
-                inner.extend(x.named_children(&mut c));
-            }
-            for v in values {
-                // `"unused"` silences the rules about unused code (measured on
-                // SonarQube 26.7): locals, private fields and methods,
-                // parameters.
-                if v == "unused" {
-                    for key in ["S1481", "S1068", "S1144", "S1172"] {
-                        regions.push(SuppressedRegion::new(Some(key.to_string()), start, end));
-                    }
-                    continue;
-                }
-                let key = match v.split_once(':') {
-                    Some(("java" | "squid", key)) => Some(Some(key.to_string())),
-                    None if v == "all" => Some(None),
-                    _ => None,
-                };
-                if let Some(key) = key {
-                    regions.push(SuppressedRegion::new(key, start, end));
-                }
+            for v in annotation_strings(n, src) {
+                regions.extend(suppressed_by(v, start, end));
             }
         }
         let mut c = n.walk();
         stack.extend(n.named_children(&mut c));
     }
     regions
+}
+
+/// The declaration a `@SuppressWarnings` annotation is on.
+fn suppress_warnings_target<'t>(n: Node<'t>, src: &str) -> Option<Node<'t>> {
+    if n.kind() != "annotation"
+        || !n.child_by_field_name("name").is_some_and(|a| {
+            matches!(
+                &src[a.byte_range()],
+                "SuppressWarnings" | "java.lang.SuppressWarnings"
+            )
+        })
+    {
+        return None;
+    }
+    n.parent()
+        .filter(|m| m.kind() == "modifiers")
+        .and_then(|m| m.parent())
+}
+
+/// The strings in an annotation's arguments, unquoted.
+fn annotation_strings<'s>(annotation: Node, src: &'s str) -> Vec<&'s str> {
+    let mut values = Vec::new();
+    let mut inner = vec![annotation];
+    while let Some(x) = inner.pop() {
+        if x.kind() == "string_literal" {
+            values.push(src[x.byte_range()].trim_matches('"'));
+            continue;
+        }
+        let mut c = x.walk();
+        inner.extend(x.named_children(&mut c));
+    }
+    values
+}
+
+/// What one `@SuppressWarnings` value silences over lines `start..=end`:
+/// a rule (`"java:S1234"`), every rule (`"all"`), or, for `"unused"`, the
+/// rules about unused code (measured on SonarQube 26.7): locals, private
+/// fields and methods, parameters.
+fn suppressed_by(value: &str, start: usize, end: usize) -> Vec<SuppressedRegion> {
+    if value == "unused" {
+        return ["S1481", "S1068", "S1144", "S1172"]
+            .into_iter()
+            .map(|key| SuppressedRegion::new(Some(key.to_string()), start, end))
+            .collect();
+    }
+    let key = match value.split_once(':') {
+        Some(("java" | "squid", key)) => Some(Some(key.to_string())),
+        None if value == "all" => Some(None),
+        _ => None,
+    };
+    key.map(|key| SuppressedRegion::new(key, start, end))
+        .into_iter()
+        .collect()
 }
 
 /// The fact listing a Java file's lines with a suppression comment.
@@ -1266,50 +1289,68 @@ fn tests_in_main(ctx: &Ctx, children: &[Node], rules: &RuleSet, issues: &mut Vec
         }
     }
     if let Some(rule) = rules.get(rules::JAVA_ASSERTION_IN_MAIN) {
-        // A call to a test library's assertion, not its import: a generator
-        // naming `Test.class` uses the library without asserting anything
-        // (measured on SonarQube 26.7).
-        let mut classes: Vec<&str> = Vec::new();
-        let mut functions: Vec<&str> = Vec::new();
-        for import in children.iter().filter(|n| n.kind() == "import_declaration") {
-            let t = ctx.text(*import);
-            if !TEST_LIBRARIES.iter().any(|l| t.contains(l)) {
-                continue;
-            }
-            let path = t
-                .trim_start_matches("import")
-                .trim()
-                .trim_end_matches(';')
-                .trim();
-            match path.strip_prefix("static") {
-                Some(member) => functions.extend(member.trim().rsplit('.').next()),
-                None => classes.extend(path.rsplit('.').next()),
-            }
+        assertions_in_main(ctx, children, rule, issues);
+    }
+}
+
+/// A call to a test library's assertion, not its import: a generator
+/// naming `Test.class` uses the library without asserting anything
+/// (measured on SonarQube 26.7).
+fn assertions_in_main(ctx: &Ctx, children: &[Node], rule: &ActiveRule, issues: &mut Vec<Issue>) {
+    let (classes, functions) = test_library_imports(ctx, children);
+    if classes.is_empty() && functions.is_empty() {
+        return;
+    }
+    let mut stack: Vec<Node> = children.to_vec();
+    while let Some(n) = stack.pop() {
+        if is_test_assertion(ctx, n, &classes, &functions) {
+            let msg = "Remove this assertion from production code.".to_string();
+            issues.push(ctx.issue(rule, n, msg, rule.rule.effort_minutes));
         }
-        if classes.is_empty() && functions.is_empty() {
-            return;
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+}
+
+/// The test libraries' classes and statically imported members a file
+/// imports (`*` for a wildcard).
+fn test_library_imports<'s>(ctx: &Ctx<'s>, children: &[Node]) -> (Vec<&'s str>, Vec<&'s str>) {
+    let mut classes: Vec<&str> = Vec::new();
+    let mut functions: Vec<&str> = Vec::new();
+    for import in children.iter().filter(|n| n.kind() == "import_declaration") {
+        let t = ctx.text(*import);
+        if !TEST_LIBRARIES.iter().any(|l| t.contains(l)) {
+            continue;
         }
-        let asserts = |name: &str| name.starts_with("assert") || name == "fail";
-        let mut stack: Vec<Node> = children.to_vec();
-        while let Some(n) = stack.pop() {
-            if n.kind() == "method_invocation"
-                && let Some(name) = n.child_by_field_name("name").map(|x| ctx.text(x))
-            {
-                let on_class = n
-                    .child_by_field_name("object")
-                    .is_some_and(|o| classes.contains(&ctx.text(o)));
-                // `import static ...Assertions.assertThat;`, or `...Assert.*;`.
-                let imported = n.child_by_field_name("object").is_none()
-                    && (functions.contains(&name) || functions.contains(&"*"));
-                if (on_class || imported) && asserts(name) {
-                    let msg = "Remove this assertion from production code.".to_string();
-                    issues.push(ctx.issue(rule, n, msg, rule.rule.effort_minutes));
-                }
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
+        let path = t
+            .trim_start_matches("import")
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        match path.strip_prefix("static") {
+            Some(member) => functions.extend(member.trim().rsplit('.').next()),
+            None => classes.extend(path.rsplit('.').next()),
         }
     }
+    (classes, functions)
+}
+
+/// `Assert.assertEquals(...)` on an imported class, or an imported
+/// `assertThat(...)` (`import static ...Assertions.assertThat;`, or
+/// `...Assert.*;`): an assertion or `fail`.
+fn is_test_assertion(ctx: &Ctx, n: Node, classes: &[&str], functions: &[&str]) -> bool {
+    if n.kind() != "method_invocation" {
+        return false;
+    }
+    let Some(name) = n.child_by_field_name("name").map(|x| ctx.text(x)) else {
+        return false;
+    };
+    let on_class = n
+        .child_by_field_name("object")
+        .is_some_and(|o| classes.contains(&ctx.text(o)));
+    let imported = n.child_by_field_name("object").is_none()
+        && (functions.contains(&name) || functions.contains(&"*"));
+    (on_class || imported) && (name.starts_with("assert") || name == "fail")
 }
 
 /// Test libraries whose assertions don't belong in production code.
@@ -2416,39 +2457,17 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
         } else {
             tp::compose(&paths, &facts, None)
         };
-        let mut issues = Vec::new();
-        for f in found {
-            let file = &files[f.file];
-            let at = &f.sink.at;
-            if file
-                .issues
-                .iter()
-                .any(|i| i.rule == active.rule.id && i.line == at.l && i.column == at.c)
-            {
-                continue;
-            }
-            let mut issue =
-                project_issue(active, &file.path, at.l, active.rule.message.to_string());
-            issue.column = at.c;
-            issue.end_line = at.el;
-            issue.end_column = at.ec;
-            if let Some(fp) = parse_fingerprint(&f.sink.fingerprint) {
-                issue.fingerprint = fp;
-            }
-            issue.flow = f
-                .steps
-                .iter()
-                .map(|(i, s)| crate::model::FlowStep {
-                    path: (*i != f.file).then(|| files[*i].path.clone()),
-                    message: s.m.clone(),
-                    line: s.l,
-                    column: s.c,
-                    end_line: s.el,
-                    end_column: s.ec,
-                })
-                .collect();
-            issues.push((f.file, issue));
-        }
+        let issues: Vec<(usize, Issue)> = found
+            .iter()
+            .filter(|f| {
+                let at = &f.sink.at;
+                !files[f.file]
+                    .issues
+                    .iter()
+                    .any(|i| i.rule == active.rule.id && i.line == at.l && i.column == at.c)
+            })
+            .map(|f| (f.file, project_taint_issue(files, active, f)))
+            .collect();
         for (i, issue) in issues {
             if !files[i]
                 .issues
@@ -2459,6 +2478,36 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             }
         }
     }
+}
+
+/// The issue a taint flow across files makes, at its sink, with its steps.
+fn project_taint_issue(
+    files: &[FileAnalysis],
+    active: &ActiveRule,
+    f: &semantic::taint_project::Found,
+) -> Issue {
+    let file = &files[f.file];
+    let at = &f.sink.at;
+    let mut issue = project_issue(active, &file.path, at.l, active.rule.message.to_string());
+    issue.column = at.c;
+    issue.end_line = at.el;
+    issue.end_column = at.ec;
+    if let Some(fp) = parse_fingerprint(&f.sink.fingerprint) {
+        issue.fingerprint = fp;
+    }
+    issue.flow = f
+        .steps
+        .iter()
+        .map(|(i, s)| crate::model::FlowStep {
+            path: (*i != f.file).then(|| files[*i].path.clone()),
+            message: s.m.clone(),
+            line: s.l,
+            column: s.c,
+            end_line: s.el,
+            end_column: s.ec,
+        })
+        .collect();
+    issue
 }
 
 /// The files' C# indexes (ADR-0020), by their position in `files`.
@@ -2574,69 +2623,21 @@ fn measure_functions(
     metrics: &mut FileMetrics,
 ) {
     let t = &cfg.thresholds;
-    let max_cognitive = t.cognitive_complexity.unwrap_or(syn.max_cognitive);
-    let cognitive_rule = rules.get(rules::COGNITIVE_COMPLEXITY);
-    let length_rule = rules.get(rules::FUNCTION_LENGTH);
-    let params_rule = rules.get(rules::TOO_MANY_PARAMETERS);
-
+    let limits = FunctionLimits {
+        cognitive_rule: rules.get(rules::COGNITIVE_COMPLEXITY),
+        length_rule: rules.get(rules::FUNCTION_LENGTH),
+        params_rule: rules.get(rules::TOO_MANY_PARAMETERS),
+        max_cognitive: t.cognitive_complexity.unwrap_or(syn.max_cognitive),
+        max_lines: t.function_lines,
+        max_parameters: t.parameters.unwrap_or(syn.max_parameters),
+    };
     walk(root, |node| {
         // is_named: keyword tokens such as `function` share their text with node kinds.
-        let closure = syn.closures.contains(&node.kind());
-        if !node.is_named() || !(closure || syn.functions.contains(&node.kind())) {
-            return true;
-        }
-        if closure {
-            return true;
-        }
-        let c = complexity(node, syn, ctx.src.as_bytes());
-        metrics.complexity += c.cyclomatic;
-        let whole = syn.cognitive_includes_nested_functions;
-        if !syn.file_cognitive_nests_functions && !whole {
-            metrics.cognitive_complexity += c.cognitive;
-        }
-        metrics.functions += 1;
-
-        let name = function_name(node, ctx);
-        let anchor = name_node(node).unwrap_or(node);
-        if let Some(rule) = cognitive_rule
-            && !whole
-            && c.cognitive > max_cognitive
-            && !macro_body_or_old_style(node, ctx.src.as_bytes())
+        if node.is_named()
+            && syn.functions.contains(&node.kind())
+            && !syn.closures.contains(&node.kind())
         {
-            let msg = format!(
-                "Refactor '{name}' to reduce its cognitive complexity from {} to the {} allowed.",
-                c.cognitive, max_cognitive
-            );
-            let effort = rule.rule.effort_minutes + (c.cognitive - max_cognitive);
-            issues.push(ctx.issue(rule, anchor, msg, effort));
-        }
-        let lines = node.end_position().row - node.start_position().row + 1;
-        if let Some(rule) = length_rule
-            && lines > t.function_lines as usize
-        {
-            let msg = format!(
-                "'{name}' has {lines} lines, which is more than the {} allowed.",
-                t.function_lines
-            );
-            issues.push(ctx.issue(rule, anchor, msg, rule.rule.effort_minutes));
-        }
-        let max_parameters = t.parameters.unwrap_or(syn.max_parameters);
-        if let Some(rule) = params_rule
-            && let Some(n) = parameter_count(node, syn, ctx.src.as_bytes())
-            && n > max_parameters as usize
-            && !calls_base_constructor(node, ctx.src.as_bytes())
-            && !overrides(node, ctx.src.as_bytes())
-        {
-            let msg = format!(
-                "'{name}' has {n} parameters, which is more than the {max_parameters} allowed."
-            );
-            // An arrow function at its `=>`, after the parameters (measured
-            // on SonarQube 26.7).
-            let mut cursor = node.walk();
-            let arrow = (node.kind() == "arrow_function")
-                .then(|| node.children(&mut cursor).find(|c| c.kind() == "=>"))
-                .flatten();
-            issues.push(ctx.issue(rule, arrow.unwrap_or(anchor), msg, rule.rule.effort_minutes));
+            measure_function(ctx, syn, node, &limits, issues, metrics);
         }
         // Keep descending: nested functions are measured on their own.
         true
@@ -2651,33 +2652,115 @@ fn measure_functions(
         });
     }
     if syn.cognitive_includes_nested_functions {
-        // Code outside any function counts for the file, as SonarQube's
-        // Python analyzer measures it (`if __name__ == "__main__":`).
-        metrics.cognitive_complexity += complexity(root, syn, ctx.src.as_bytes()).cognitive;
-        // Each outermost function (a method too), with what's nested in it.
-        walk(root, |node| {
-            if !node.is_named() || !syn.functions.contains(&node.kind()) {
-                return true;
-            }
-            if !scored_on_its_own(node) {
-                return true; // part of the function around it
-            }
-            let cognitive = complexity_with(node, syn, ctx.src.as_bytes(), true).cognitive;
-            metrics.cognitive_complexity += cognitive;
-            if let Some(rule) = cognitive_rule
-                && cognitive > max_cognitive
-            {
-                let name = function_name(node, ctx);
-                let msg = format!(
-                    "Refactor '{name}' to reduce its cognitive complexity from {cognitive} to the {} allowed.",
-                    max_cognitive
-                );
-                let effort = rule.rule.effort_minutes + (cognitive - max_cognitive);
-                issues.push(ctx.issue(rule, name_node(node).unwrap_or(node), msg, effort));
-            }
-            false
-        });
+        cognitive_with_nested_functions(ctx, syn, root, &limits, issues, metrics);
     }
+}
+
+/// The rules on a function's size, active or not, and their thresholds.
+struct FunctionLimits<'r> {
+    cognitive_rule: Option<&'r ActiveRule>,
+    length_rule: Option<&'r ActiveRule>,
+    params_rule: Option<&'r ActiveRule>,
+    max_cognitive: u32,
+    max_lines: u32,
+    max_parameters: u32,
+}
+
+/// One function's measures, and the issues its size raises.
+fn measure_function(
+    ctx: &Ctx,
+    syn: &Syntax,
+    node: Node,
+    limits: &FunctionLimits,
+    issues: &mut Vec<Issue>,
+    metrics: &mut FileMetrics,
+) {
+    let c = complexity(node, syn, ctx.src.as_bytes());
+    metrics.complexity += c.cyclomatic;
+    let whole = syn.cognitive_includes_nested_functions;
+    if !syn.file_cognitive_nests_functions && !whole {
+        metrics.cognitive_complexity += c.cognitive;
+    }
+    metrics.functions += 1;
+
+    let name = function_name(node, ctx);
+    let anchor = name_node(node).unwrap_or(node);
+    if let Some(rule) = limits.cognitive_rule
+        && !whole
+        && c.cognitive > limits.max_cognitive
+        && !macro_body_or_old_style(node, ctx.src.as_bytes())
+    {
+        let msg = format!(
+            "Refactor '{name}' to reduce its cognitive complexity from {} to the {} allowed.",
+            c.cognitive, limits.max_cognitive
+        );
+        let effort = rule.rule.effort_minutes + (c.cognitive - limits.max_cognitive);
+        issues.push(ctx.issue(rule, anchor, msg, effort));
+    }
+    let lines = node.end_position().row - node.start_position().row + 1;
+    if let Some(rule) = limits.length_rule
+        && lines > limits.max_lines as usize
+    {
+        let msg = format!(
+            "'{name}' has {lines} lines, which is more than the {} allowed.",
+            limits.max_lines
+        );
+        issues.push(ctx.issue(rule, anchor, msg, rule.rule.effort_minutes));
+    }
+    if let Some(rule) = limits.params_rule
+        && let Some(n) = parameter_count(node, syn, ctx.src.as_bytes())
+        && n > limits.max_parameters as usize
+        && !calls_base_constructor(node, ctx.src.as_bytes())
+        && !overrides(node, ctx.src.as_bytes())
+    {
+        let msg = format!(
+            "'{name}' has {n} parameters, which is more than the {} allowed.",
+            limits.max_parameters
+        );
+        // An arrow function at its `=>`, after the parameters (measured
+        // on SonarQube 26.7).
+        let mut cursor = node.walk();
+        let arrow = (node.kind() == "arrow_function")
+            .then(|| node.children(&mut cursor).find(|c| c.kind() == "=>"))
+            .flatten();
+        issues.push(ctx.issue(rule, arrow.unwrap_or(anchor), msg, rule.rule.effort_minutes));
+    }
+}
+
+/// Cognitive complexity as SonarQube's Python analyzer measures it: code
+/// outside any function counts for the file (`if __name__ == "__main__":`),
+/// and each outermost function (a method too) with what's nested in it.
+fn cognitive_with_nested_functions(
+    ctx: &Ctx,
+    syn: &Syntax,
+    root: Node,
+    limits: &FunctionLimits,
+    issues: &mut Vec<Issue>,
+    metrics: &mut FileMetrics,
+) {
+    metrics.cognitive_complexity += complexity(root, syn, ctx.src.as_bytes()).cognitive;
+    walk(root, |node| {
+        if !node.is_named() || !syn.functions.contains(&node.kind()) {
+            return true;
+        }
+        if !scored_on_its_own(node) {
+            return true; // part of the function around it
+        }
+        let cognitive = complexity_with(node, syn, ctx.src.as_bytes(), true).cognitive;
+        metrics.cognitive_complexity += cognitive;
+        if let Some(rule) = limits.cognitive_rule
+            && cognitive > limits.max_cognitive
+        {
+            let name = function_name(node, ctx);
+            let msg = format!(
+                "Refactor '{name}' to reduce its cognitive complexity from {cognitive} to the {} allowed.",
+                limits.max_cognitive
+            );
+            let effort = rule.rule.effort_minutes + (cognitive - limits.max_cognitive);
+            issues.push(ctx.issue(rule, name_node(node).unwrap_or(node), msg, effort));
+        }
+        false
+    });
 }
 
 /// Whether a Python function is scored on its own: it isn't inside another
@@ -2950,36 +3033,11 @@ impl<'t> CommentRules<'_, 't> {
         if self.cfamily {
             self.check_cfamily(ctx, node, text, alone, issues);
         }
-        // A Java `/* */` comment (not a Javadoc) with code in it, reported at
-        // its first line of code, as SonarQube 26.7 does (measured).
         if let Some(rule) = self.java_code
             && node.kind() == "block_comment"
             && !text.starts_with("/**")
         {
-            let body = text.strip_suffix("*/").unwrap_or(text);
-            for (i, line) in body.lines().enumerate() {
-                let line = if i == 0 {
-                    line.strip_prefix("/*").unwrap_or(line)
-                } else {
-                    line
-                };
-                let content = line.trim();
-                let content = content.strip_prefix('*').unwrap_or(content).trim();
-                if !content.is_empty()
-                    && crate::rules::java_line_looks_like_code(content.as_bytes())
-                {
-                    let row = node.start_position().row + i;
-                    let column = if i == 0 {
-                        ctx.lines.char_column(row, node.start_position().column)
-                    } else {
-                        0
-                    };
-                    let width = ctx.lines.text(row).chars().count().max(column + 1);
-                    let msg = "Remove this commented-out code.".to_string();
-                    issues.push(ctx.issue_on_line(rule, row, (column, width), msg));
-                    break;
-                }
-            }
+            java_block_comment_code(ctx, rule, node, text, issues);
         }
         if let Some(rule) = self.nosonar
             && text.contains("NOSONAR")
@@ -2995,71 +3053,76 @@ impl<'t> CommentRules<'_, 't> {
             issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
         }
         if self.python {
-            // A block of comment lines is judged as one; a comment after
-            // code on its line, on its own.
-            let row = node.start_position().row;
-            let continues = alone
-                && self
-                    .python_block
-                    .last()
-                    .is_some_and(|(last, _)| last.end_position().row + 1 == row);
-            if !continues {
-                self.flush_python_block(ctx, issues);
-            }
-            if alone {
-                self.python_block.push((node, text.to_string()));
-            } else if let Some(rule) = self.code
-                && python_block_is_code(&[text])
-            {
-                let msg = "Remove this commented-out code.".to_string();
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
-            }
-        } else if let Some(rule) = self.code
-            && !self.java
-            && !self.csharp
-            && !self.cfamily
-            && reads_as_code(text, alone, self.python)
-        {
-            let row = node.start_position().row;
-            let continues_block = self.last_code_comment_row.is_some_and(|r| r + 1 == row);
-            self.last_code_comment_row = Some(last_row(node));
-            if !continues_block {
-                let msg = "Remove this commented-out code.".to_string();
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+            self.check_python(ctx, node, text, alone, issues);
+        } else {
+            self.check_other_code(ctx, node, text, alone, issues);
+        }
+        if let Some(rule) = self.todo {
+            if self.cfamily {
+                // C and C++: once per comment, at its start, the tag in any
+                // case (`// Fixme:`, `// todo:`), as SonarCloud reports them.
+                let upper = text.to_ascii_uppercase();
+                if let Some((tag, _)) = todo_tag_at(&upper) {
+                    let msg = format!("Complete the task associated with this {tag} comment.");
+                    issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+                }
+            } else {
+                todo_tags_by_line(ctx, rule, node, text, issues);
             }
         }
-        if let Some(rule) = self.todo
-            && self.cfamily
+    }
+
+    /// Python: a block of comment lines is judged as one; a comment after
+    /// code on its line, on its own.
+    fn check_python(
+        &mut self,
+        ctx: &Ctx,
+        node: Node<'t>,
+        text: &str,
+        alone: bool,
+        issues: &mut Vec<Issue>,
+    ) {
+        let row = node.start_position().row;
+        let continues = alone
+            && self
+                .python_block
+                .last()
+                .is_some_and(|(last, _)| last.end_position().row + 1 == row);
+        if !continues {
+            self.flush_python_block(ctx, issues);
+        }
+        if alone {
+            self.python_block.push((node, text.to_string()));
+        } else if let Some(rule) = self.code
+            && python_block_is_code(&[text])
         {
-            // C and C++: once per comment, at its start, the tag in any case
-            // (`// Fixme:`, `// todo:`), as SonarCloud reports them.
-            let upper = text.to_ascii_uppercase();
-            if let Some((tag, _)) = todo_tag_at(&upper) {
-                let msg = format!("Complete the task associated with this {tag} comment.");
-                issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
-            }
-        } else if let Some(rule) = self.todo {
-            // On each tag's line, as SonarQube reports them in a block
-            // comment: one per line.
-            let mut from = 0;
-            while let Some((tag, found)) = todo_tag_at(&text[from..]) {
-                let at = from + found;
-                let msg = format!("Complete the task associated with this {tag} comment.");
-                let before = &text[..at];
-                let row = node.start_position().row + before.matches('\n').count();
-                let column = match before.rfind('\n') {
-                    Some(nl) => before[nl + 1..].chars().count(),
-                    None => {
-                        ctx.lines.char_column(row, node.start_position().column)
-                            + before.chars().count()
-                    }
-                };
-                issues.push(ctx.issue_on_line(rule, row, (column, column + tag.len()), msg));
-                match text[at..].find('\n') {
-                    Some(nl) => from = at + nl + 1,
-                    None => break,
-                }
-            }
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
+        }
+    }
+
+    /// Commented-out code in the languages without a check of their own:
+    /// once per run of comments that read as code.
+    fn check_other_code(
+        &mut self,
+        ctx: &Ctx,
+        node: Node<'t>,
+        text: &str,
+        alone: bool,
+        issues: &mut Vec<Issue>,
+    ) {
+        let Some(rule) = self.code else {
+            return;
+        };
+        if self.java || self.csharp || self.cfamily || !reads_as_code(text, alone, self.python) {
+            return;
+        }
+        let row = node.start_position().row;
+        let continues_block = self.last_code_comment_row.is_some_and(|r| r + 1 == row);
+        self.last_code_comment_row = Some(last_row(node));
+        if !continues_block {
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
         }
     }
 }
@@ -3094,16 +3157,88 @@ fn is_docstring(string: Node) -> bool {
                 }))
 }
 
+/// A Java `/* */` comment (not a Javadoc) with code in it, reported at
+/// its first line of code, as SonarQube 26.7 does (measured).
+fn java_block_comment_code(
+    ctx: &Ctx,
+    rule: &ActiveRule,
+    node: Node,
+    text: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let body = text.strip_suffix("*/").unwrap_or(text);
+    for (i, line) in body.lines().enumerate() {
+        let line = if i == 0 {
+            line.strip_prefix("/*").unwrap_or(line)
+        } else {
+            line
+        };
+        let content = line.trim();
+        let content = content.strip_prefix('*').unwrap_or(content).trim();
+        if !content.is_empty() && crate::rules::java_line_looks_like_code(content.as_bytes()) {
+            let row = node.start_position().row + i;
+            let column = if i == 0 {
+                ctx.lines.char_column(row, node.start_position().column)
+            } else {
+                0
+            };
+            let width = ctx.lines.text(row).chars().count().max(column + 1);
+            let msg = "Remove this commented-out code.".to_string();
+            issues.push(ctx.issue_on_line(rule, row, (column, width), msg));
+            return;
+        }
+    }
+}
+
+/// Each TODO or FIXME tag on its line, as SonarQube reports them in a block
+/// comment: one per line.
+fn todo_tags_by_line(
+    ctx: &Ctx,
+    rule: &ActiveRule,
+    node: Node,
+    text: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let mut from = 0;
+    while let Some((tag, found)) = todo_tag_at(&text[from..]) {
+        let at = from + found;
+        let msg = format!("Complete the task associated with this {tag} comment.");
+        let before = &text[..at];
+        let row = node.start_position().row + before.matches('\n').count();
+        let column = match before.rfind('\n') {
+            Some(nl) => before[nl + 1..].chars().count(),
+            None => {
+                ctx.lines.char_column(row, node.start_position().column) + before.chars().count()
+            }
+        };
+        issues.push(ctx.issue_on_line(rule, row, (column, column + tag.len()), msg));
+        match text[at..].find('\n') {
+            Some(nl) => from = at + nl + 1,
+            None => break,
+        }
+    }
+}
+
 /// Whether a Python comment block (its lines, `#` and all) is commented-out
 /// code, as SonarQube judges it: the whole block, without its `#`s and
 /// dedented, parses as Python and holds a statement (an assignment, a
 /// return, an assert, a block header...), not only expressions such as a
 /// lone call. A block mixing prose and code doesn't parse.
 fn python_block_is_code(lines: &[&str]) -> bool {
-    use std::cell::RefCell;
-    thread_local! {
-        static PARSER: RefCell<Option<tree_sitter::Parser>> = const { RefCell::new(None) };
+    let joined = uncommented_python(lines);
+    let text = joined.trim();
+    if is_python_tool_directive(text) || is_directive_or_too_short(text) {
+        return false;
     }
+    let mut source = format!("{joined}\n");
+    if text.ends_with(':') {
+        source.push_str("    pass\n");
+    }
+    parses_as_python_code(&source)
+}
+
+/// A comment block's lines without their `#`, dedented together.
+fn uncommented_python(lines: &[&str]) -> String {
     let stripped: Vec<&str> = lines
         .iter()
         .map(|l| l.trim_start().trim_start_matches('#').trim_end())
@@ -3124,21 +3259,26 @@ fn python_block_is_code(lines: &[&str]) -> bool {
             }
         })
         .collect();
-    let joined = body.join("\n");
-    let text = joined.trim();
-    // `fmt: off`, `pylint: disable=...`: SonarQube's own exception.
-    let directive = text.starts_with("fmt:")
+    body.join("\n")
+}
+
+/// `fmt: off`, `pylint: disable=...`: SonarQube's own exception.
+fn is_python_tool_directive(text: &str) -> bool {
+    text.starts_with("fmt:")
         || text.starts_with("py")
             && text
                 .split(':')
                 .next()
-                .is_some_and(|w| !w.contains(' ') && text.contains(':'));
-    if directive || is_directive_or_too_short(text) {
-        return false;
-    }
-    let mut source = format!("{joined}\n");
-    if text.ends_with(':') {
-        source.push_str("    pass\n");
+                .is_some_and(|w| !w.contains(' ') && text.contains(':'))
+}
+
+/// Whether `source` parses, without errors, as Python with a statement that
+/// does something: not only expressions, `pass` or a future import (an
+/// assignment counts).
+fn parses_as_python_code(source: &str) -> bool {
+    use std::cell::RefCell;
+    thread_local! {
+        static PARSER: RefCell<Option<tree_sitter::Parser>> = const { RefCell::new(None) };
     }
     PARSER.with(|p| {
         let mut p = p.borrow_mut();
@@ -3147,7 +3287,7 @@ fn python_block_is_code(lines: &[&str]) -> bool {
             let _ = parser.set_language(&Lang::Python.grammar());
             parser
         });
-        let Some(tree) = parser.parse(&source, None) else {
+        let Some(tree) = parser.parse(source, None) else {
             return false;
         };
         let root = tree.root_node();
@@ -3534,50 +3674,8 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
 
     fn visit(&mut self, node: Node<'t>, nesting: u32, parent_op: Option<&'a str>) {
         let kind = node.kind();
-        // A class in a Python function starts again at no nesting, and its
-        // methods add none (measured on SonarQube 26.7).
-        if self.nested && self.syn.cognitive_includes_nested_functions && kind == "class_definition"
-        {
-            return self.children(node, 0, None);
-        }
-        if self.syn.functions.contains(&kind) {
-            if self.nested {
-                let deeper = !(self.syn.cognitive_includes_nested_functions
-                    && (encloses_only_functions(node) || is_method(node)));
-                self.children(node, nesting + u32::from(deeper), None);
-            }
+        if self.visit_scope(node, kind, nesting) || self.visit_control(node, kind, nesting) {
             return;
-        }
-        if self.syn.closures.contains(&kind) {
-            // Part of the enclosing function, one level deeper.
-            self.c.cyclomatic += 1;
-            return self.children(node, nesting + 1, None);
-        }
-        if matches!(kind, "if_statement" | "if_expression") {
-            return self.stack.push(Step::If(node, nesting, false));
-        }
-        // Python's `try: ... else:` costs 1 and nests its body, as an if's
-        // else does (measured on SonarQube 26.7).
-        if kind == "else_clause" && node.parent().is_some_and(|p| p.kind() == "try_statement") {
-            self.c.cognitive += 1;
-            return self.children(node, nesting + 1, None);
-        }
-        if self.syn.branches.contains(&kind) {
-            self.c.cyclomatic += 1;
-            self.c.cognitive += 1 + nesting;
-            self.c.structures += 1;
-            // Python's `for ... else` and `while ... else`: +1, as an if's else.
-            if matches!(kind, "for_statement" | "while_statement")
-                && node.child_by_field_name("alternative").is_some()
-            {
-                self.c.cognitive += 1;
-            }
-            return self.children(node, nesting + 1, None);
-        }
-        if self.syn.switches.contains(&kind) {
-            self.c.cognitive += 1 + nesting;
-            self.c.structures += 1;
-            return self.children(node, nesting + 1, None);
         }
         if self.syn.cases.contains(&kind)
             && !is_default_case(
@@ -3595,6 +3693,68 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
             }
         }
         self.children(node, nesting, op);
+    }
+
+    /// A class, a function or a closure: whether `node` was one.
+    fn visit_scope(&mut self, node: Node<'t>, kind: &str, nesting: u32) -> bool {
+        // A class in a Python function starts again at no nesting, and its
+        // methods add none (measured on SonarQube 26.7).
+        if self.nested && self.syn.cognitive_includes_nested_functions && kind == "class_definition"
+        {
+            self.children(node, 0, None);
+            return true;
+        }
+        if self.syn.functions.contains(&kind) {
+            if self.nested {
+                let deeper = !(self.syn.cognitive_includes_nested_functions
+                    && (encloses_only_functions(node) || is_method(node)));
+                self.children(node, nesting + u32::from(deeper), None);
+            }
+            return true;
+        }
+        if self.syn.closures.contains(&kind) {
+            // Part of the enclosing function, one level deeper.
+            self.c.cyclomatic += 1;
+            self.children(node, nesting + 1, None);
+            return true;
+        }
+        false
+    }
+
+    /// An if, a branch (a loop, a catch...) or a switch: whether `node`
+    /// was one.
+    fn visit_control(&mut self, node: Node<'t>, kind: &str, nesting: u32) -> bool {
+        if matches!(kind, "if_statement" | "if_expression") {
+            self.stack.push(Step::If(node, nesting, false));
+            return true;
+        }
+        // Python's `try: ... else:` costs 1 and nests its body, as an if's
+        // else does (measured on SonarQube 26.7).
+        if kind == "else_clause" && node.parent().is_some_and(|p| p.kind() == "try_statement") {
+            self.c.cognitive += 1;
+            self.children(node, nesting + 1, None);
+            return true;
+        }
+        if self.syn.branches.contains(&kind) {
+            self.c.cyclomatic += 1;
+            self.c.cognitive += 1 + nesting;
+            self.c.structures += 1;
+            // Python's `for ... else` and `while ... else`: +1, as an if's else.
+            if matches!(kind, "for_statement" | "while_statement")
+                && node.child_by_field_name("alternative").is_some()
+            {
+                self.c.cognitive += 1;
+            }
+            self.children(node, nesting + 1, None);
+            return true;
+        }
+        if self.syn.switches.contains(&kind) {
+            self.c.cognitive += 1 + nesting;
+            self.c.structures += 1;
+            self.children(node, nesting + 1, None);
+            return true;
+        }
+        false
     }
 
     fn visit_if(&mut self, node: Node<'t>, nesting: u32, flat: bool) {
