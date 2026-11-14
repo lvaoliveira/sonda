@@ -90,67 +90,10 @@ impl<'t> Binder<'t, '_> {
         match node.kind() {
             "function_definition" => self.function(node, scope, next),
             "lambda" => self.function(node, scope, next),
-            "class_definition" => {
-                if let Some(name) = field("name") {
-                    self.bind(scope, name, DeclKind::Class);
-                }
-                next.extend(field("superclasses").map(|s| (s, scope)));
-                next.extend(field("type_parameters").map(|s| (s, scope)));
-                if let Some(body) = field("body") {
-                    let class = self.m.push_scope(scope, ScopeKind::Type);
-                    next.push((body, class));
-                }
-            }
-            k if COMPREHENSIONS.contains(&k) => {
-                let inner = self.m.push_scope(scope, ScopeKind::Function);
-                self.comprehensions.insert(inner);
-                let mut first = true;
-                for c in children(node) {
-                    if c.kind() == "for_in_clause" {
-                        if let Some(left) = c.child_by_field_name("left") {
-                            self.bind_target(left, inner, DeclKind::Var, next);
-                        }
-                        // The first iterable is evaluated where the
-                        // comprehension is; the rest inside it.
-                        let iterable_scope = if first { scope } else { inner };
-                        first = false;
-                        let mut cursor = c.walk();
-                        for r in c.children_by_field_name("right", &mut cursor) {
-                            if r.is_named() {
-                                next.push((r, iterable_scope));
-                            }
-                        }
-                    } else {
-                        next.push((c, inner));
-                    }
-                }
-            }
-            "assignment" => {
-                if let Some(left) = field("left") {
-                    let before = self.m.decls.len();
-                    self.bind_target(left, scope, DeclKind::Var, next);
-                    // `x = value`: the declaration's value, for rules that
-                    // follow what a name was set to.
-                    if left.kind() == "identifier"
-                        && self.m.decls.len() > before
-                        && let Some(d) = self.m.decls.last_mut()
-                    {
-                        d.declarator = Some(node);
-                    }
-                }
-                next.extend(field("type").map(|t| (t, scope)));
-                next.extend(field("right").map(|r| (r, scope)));
-            }
-            "augmented_assignment" => {
-                if let Some(left) = field("left") {
-                    if left.kind() == "identifier" {
-                        // Read, then written.
-                        self.reference(left, scope);
-                    }
-                    self.bind_target(left, scope, DeclKind::Var, next);
-                }
-                next.extend(field("right").map(|r| (r, scope)));
-            }
+            "class_definition" => self.visit_class(node, scope, next),
+            k if COMPREHENSIONS.contains(&k) => self.visit_comprehension(node, scope, next),
+            "assignment" => self.visit_assignment(node, scope, next),
+            "augmented_assignment" => self.visit_augmented_assignment(node, scope, next),
             "for_statement" => {
                 if let Some(left) = field("left") {
                     self.bind_target(left, scope, DeclKind::Var, next);
@@ -167,38 +110,9 @@ impl<'t> Binder<'t, '_> {
                 next.extend(field("value").map(|v| (v, scope)));
             }
             // `with open(p) as f`, and `case X() as y`.
-            "as_pattern" => {
-                for c in children(node) {
-                    if c.kind() == "as_pattern_target" {
-                        self.bind_target(c, scope, DeclKind::Var, next);
-                    } else {
-                        next.push((c, scope));
-                    }
-                }
-            }
-            "except_clause" => {
-                if let Some(alias) = field("alias") {
-                    self.bind_target(alias, scope, DeclKind::Var, next);
-                }
-                for c in children(node) {
-                    if Some(c) != field("alias") {
-                        next.push((c, scope));
-                    }
-                }
-            }
-            "global_statement" | "nonlocal_statement" => {
-                let names: HashSet<String> = children(node)
-                    .into_iter()
-                    .filter(|c| c.kind() == "identifier")
-                    .map(|c| self.text(c))
-                    .collect();
-                let set = if node.kind() == "global_statement" {
-                    self.globals.entry(scope).or_default()
-                } else {
-                    self.nonlocals.entry(scope).or_default()
-                };
-                set.extend(names);
-            }
+            "as_pattern" => self.visit_as_pattern(node, scope, next),
+            "except_clause" => self.visit_except_clause(node, scope, next),
+            "global_statement" | "nonlocal_statement" => self.visit_scope_statement(node, scope),
             "import_statement" | "import_from_statement" => self.import(node, scope),
             // `obj.attr`: `attr` is no variable.
             "attribute" => next.extend(field("object").map(|o| (o, scope))),
@@ -207,6 +121,139 @@ impl<'t> Binder<'t, '_> {
             "identifier" => self.reference(node, scope),
             _ => next.extend(children(node).into_iter().map(|c| (c, scope))),
         }
+    }
+
+    /// A class: its name, then its body in a scope of its own.
+    fn visit_class(&mut self, node: Node<'t>, scope: ScopeId, next: &mut Vec<(Node<'t>, ScopeId)>) {
+        let field = |name: &str| node.child_by_field_name(name);
+        if let Some(name) = field("name") {
+            self.bind(scope, name, DeclKind::Class);
+        }
+        next.extend(field("superclasses").map(|s| (s, scope)));
+        next.extend(field("type_parameters").map(|s| (s, scope)));
+        if let Some(body) = field("body") {
+            let class = self.m.push_scope(scope, ScopeKind::Type);
+            next.push((body, class));
+        }
+    }
+
+    /// A comprehension, a scope of its own: its targets are bound inside
+    /// it, and its first iterable is evaluated where the comprehension is,
+    /// the rest inside it.
+    fn visit_comprehension(
+        &mut self,
+        node: Node<'t>,
+        scope: ScopeId,
+        next: &mut Vec<(Node<'t>, ScopeId)>,
+    ) {
+        let inner = self.m.push_scope(scope, ScopeKind::Function);
+        self.comprehensions.insert(inner);
+        let mut first = true;
+        for c in children(node) {
+            if c.kind() != "for_in_clause" {
+                next.push((c, inner));
+                continue;
+            }
+            if let Some(left) = c.child_by_field_name("left") {
+                self.bind_target(left, inner, DeclKind::Var, next);
+            }
+            let iterable_scope = if first { scope } else { inner };
+            first = false;
+            let mut cursor = c.walk();
+            next.extend(
+                c.children_by_field_name("right", &mut cursor)
+                    .filter(|r| r.is_named())
+                    .map(|r| (r, iterable_scope)),
+            );
+        }
+    }
+
+    fn visit_assignment(
+        &mut self,
+        node: Node<'t>,
+        scope: ScopeId,
+        next: &mut Vec<(Node<'t>, ScopeId)>,
+    ) {
+        let field = |name: &str| node.child_by_field_name(name);
+        if let Some(left) = field("left") {
+            let before = self.m.decls.len();
+            self.bind_target(left, scope, DeclKind::Var, next);
+            // `x = value`: the declaration's value, for rules that follow
+            // what a name was set to.
+            if left.kind() == "identifier"
+                && self.m.decls.len() > before
+                && let Some(d) = self.m.decls.last_mut()
+            {
+                d.declarator = Some(node);
+            }
+        }
+        next.extend(field("type").map(|t| (t, scope)));
+        next.extend(field("right").map(|r| (r, scope)));
+    }
+
+    /// `x += 1`: read, then written.
+    fn visit_augmented_assignment(
+        &mut self,
+        node: Node<'t>,
+        scope: ScopeId,
+        next: &mut Vec<(Node<'t>, ScopeId)>,
+    ) {
+        if let Some(left) = node.child_by_field_name("left") {
+            if left.kind() == "identifier" {
+                self.reference(left, scope);
+            }
+            self.bind_target(left, scope, DeclKind::Var, next);
+        }
+        next.extend(node.child_by_field_name("right").map(|r| (r, scope)));
+    }
+
+    fn visit_as_pattern(
+        &mut self,
+        node: Node<'t>,
+        scope: ScopeId,
+        next: &mut Vec<(Node<'t>, ScopeId)>,
+    ) {
+        for c in children(node) {
+            if c.kind() == "as_pattern_target" {
+                self.bind_target(c, scope, DeclKind::Var, next);
+            } else {
+                next.push((c, scope));
+            }
+        }
+    }
+
+    /// `except E as e`: `e` is bound; the rest visited.
+    fn visit_except_clause(
+        &mut self,
+        node: Node<'t>,
+        scope: ScopeId,
+        next: &mut Vec<(Node<'t>, ScopeId)>,
+    ) {
+        let alias = node.child_by_field_name("alias");
+        if let Some(alias) = alias {
+            self.bind_target(alias, scope, DeclKind::Var, next);
+        }
+        next.extend(
+            children(node)
+                .into_iter()
+                .filter(|c| Some(*c) != alias)
+                .map(|c| (c, scope)),
+        );
+    }
+
+    /// `global x` or `nonlocal x`: the names this scope refers elsewhere.
+    fn visit_scope_statement(&mut self, node: Node<'t>, scope: ScopeId) {
+        let names: HashSet<String> = children(node)
+            .into_iter()
+            .filter(|c| c.kind() == "identifier")
+            .map(|c| self.text(c))
+            .collect();
+        let set = if node.kind() == "global_statement" {
+            self.globals.entry(scope).or_default()
+        } else {
+            self.nonlocals.entry(scope).or_default()
+        };
+        set.extend(names);
     }
 
     /// A function or a lambda: its name binds where it's defined; its
