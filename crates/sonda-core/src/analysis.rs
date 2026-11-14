@@ -746,7 +746,7 @@ const CPP_SUPPRESSED_LINES: &str = "cpp-suppressed-lines";
 fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> {
     let mut facts = Vec::new();
     let index = crate::semantic::cpp_index::extract(root, ctx.src.as_bytes(), deadline);
-    if !index.classes.is_empty()
+    if (!index.classes.is_empty() || !index.bytes.is_empty())
         && let Ok(json) = serde_json::to_string(&index)
     {
         facts.push((crate::semantic::cpp_index::FACT.to_string(), json));

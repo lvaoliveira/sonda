@@ -710,6 +710,24 @@ pub(super) static RULES: &[Rule] = &[
             good: "class Base {\n public:\n  void draw(int x);\n};\nclass Shape : public Base {\n public:\n  using Base::draw;\n  void draw(int x, int y);\n};",
         }),
     },
+    Rule {
+        id: "cpp/std-byte",
+        name: "Bits of raw bytes should be handled as std::byte",
+        description: "A `uint8_t` or `unsigned char` shifted and masked is a byte, not a number: \
+                      `std::byte` (C++17) allows the bitwise operations and refuses arithmetic, and \
+                      says so in the type.",
+        message: "Hold these bits in a \"std::byte\" instead of an 8-bit integer.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[exact("S6022")],
+        check: Check::Structural,
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "int high(uint8_t b) { return b >> 4; }",
+            good: "int high(std::byte b) { return std::to_integer<int>(b >> 4); }",
+        }),
+    },
 ];
 
 /// Its direct children's texts: specifiers and qualifiers.
