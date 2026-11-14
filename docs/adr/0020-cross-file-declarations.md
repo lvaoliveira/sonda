@@ -5,7 +5,8 @@
   interfaces and partial methods read the index (`semantic/cs_index.rs`).
   Recorded as accepted when the 1.0 plan checked each ADR's status against
   what's built. Extended to Java on 2026-11-11 (`semantic/java_index.rs`,
-  [below](#java)).
+  [below](#java)), and to C++ on 2026-11-14 (`semantic/cpp_index.rs`,
+  [below](#c)).
 - Date: 2026-11-01
 
 ## Context
@@ -114,10 +115,57 @@ On Commons Lang, the seven rules went from 73 differences to none. Its scan
 (638 Java files) takes 3.9 s where it took 3.7 s, median of five on 12
 workers.
 
+## C++
+
+Compared with SonarCloud on roo_display and qutepart-cpp, a C++ class's
+bases are usually in another file: a header the class's file includes.
+S1242, a member function hiding a base's function of the same name, can't be
+decided without them. C++ uses the same scheme, with less to resolve by:
+
+- **The summary** (`semantic/cpp_index.rs`) holds the classes and structs
+  the file defines, at any depth, a class defined in a function body
+  included: the namespaces and classes around each, its bases as written
+  (without template arguments), its member functions (name, parameter
+  types, whether `virtual`, `override` or `final`, `static`, private), its
+  data members (name, type) and the names its `using Base::name;`
+  declarations bring in. It travels as one JSON fact per file, `cpp-index`.
+- **Names resolve by namespace, not by include.** C++ has no imports to
+  narrow a name: which declarations a file sees depends on its `#include`s
+  and the build's flags, which sonda doesn't know. A base resolves by its
+  simple name, among the classes whose namespaces end with how it's
+  qualified (`gfx::Output`), to the one sharing most of the derived class's
+  namespaces; two equally close candidates resolve to nothing, unless
+  they're the same class in two files (a header copied into a test).
+- **Parameter types compare without namespaces** (`Color*` and
+  `roo_display::Color*` are one type), with whitespace removed, as written:
+  a typedef and its target don't match.
+- **The rule** is `cpp/hidden-inherited-function` (S1242), checked in
+  `rules/catalog/cpp_project.rs`: a public or protected member function
+  named like a function of one of its bases, which it hides, when that one
+  isn't private nor virtual (nor virtual further up, with as many
+  parameters), or when the bases' are all virtual and some aren't
+  overridden here. Every base counts, as SonarCloud counts them: a function
+  an intermediate class hides already is reported again in the classes
+  below. A `using Base::name;` in the class brings the bases' back.
+
+On roo_display it finds 30 of SonarCloud's 32, and 20 it doesn't. The 2 left
+derive from Arduino's `Print`, outside the project. 18 of the 20 are three
+font classes overriding `Font`'s virtual overloads while `Font` also has
+non-virtual ones, the shape SonarCloud reports for every other base, which
+nothing visible sets apart; one more derives from a class template's
+instance. qutepart-cpp's 2 derive from Qt classes, which aren't in the
+project. Scanning roo_display (479 C and C++ files) takes 0.67 s
+where it took 0.61 s, and qutepart-cpp 0.36 s as before, median of five on
+12 workers.
+
 ## Consequences
 
 - **What stays unseen:** types from referenced packages aren't in the project, so they resolve to nothing. That costs recall. The framework's own types do resolve, through the summary of its reference packs ([ADR-0022](0022-platform-types.md)). By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`, and all eighteen are.
 - **Cost:** extraction is one cursor walk that copies no member bodies, and builds the semantic model only for files with a site that needs it. The scan time of the seven reference projects is unchanged (3.0 s). The project pass parses one JSON summary per C# file. The summaries hold declarations and sites only, a small fraction of each file's size.
 - **The worker model is unchanged.** Workers still analyze one file each and return facts; only what a fact can carry grew. A rule that needs more than declarations from other files (call graphs, data flow across calls) still needs a decision of its own.
 - **Other languages can use the same scheme** when their rules need it; Java
-  does since 2026-11-11.
+  does since 2026-11-11, C++ since 2026-11-14.
+- **C++ resolves less than C# or Java.** Without the build's includes and
+  flags, a base resolves by namespace alone, every `#if` branch is read,
+  and a macro is taken as written. A rule on the C++ index reports nothing
+  about a base it can't settle, so what this costs is recall.

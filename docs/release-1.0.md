@@ -140,9 +140,10 @@ built.
       of 588 and 8 extra, TypeScript 137 of 150 and 3 extra, every change
       measured on SonarQube 26.7. C and C++ (qutepart-cpp and roo_display,
       against SonarCloud; no C/C++ analyzer on SonarQube 26.7 to measure
-      on): 353 of 748 and 2,032 of 2,958 after three batches of C++ rules
-      (33) and the shared ones aligned; most of the rest have no sonda rule
-      yet, or need types from other files.
+      on): 353 of 748 and 2,062 of 2,958 after three batches of C++ rules,
+      a C++ class index across files (ADR-0020) and the shared ones
+      aligned; most of the rest have no sonda rule yet, or need types from
+      other files.
 - [x] Performance measured on a large repository (time, peak memory, worker
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).

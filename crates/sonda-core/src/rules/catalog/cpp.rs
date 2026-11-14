@@ -692,6 +692,24 @@ pub(super) static RULES: &[Rule] = &[
             good: "int sum(std::span<const int> values) { int s = 0; for (int v : values) s += v; return s; }",
         }),
     },
+    Rule {
+        id: "cpp/hidden-inherited-function",
+        name: "Member functions should not hide a base's functions",
+        description: "A function named like a base's non-virtual one, or overriding only some of a \
+                      base's virtual overloads, hides the base's from calls through the derived \
+                      class; `using Base::name;` brings them back.",
+        message: "Rename this function, or bring the base's functions of this name in with \"using\".",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 10,
+        sonar: &[exact("S1242")],
+        check: Check::Structural,
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "class Base {\n public:\n  void draw(int x);\n};\nclass Shape : public Base {\n public:\n  void draw(int x, int y);\n};",
+            good: "class Base {\n public:\n  void draw(int x);\n};\nclass Shape : public Base {\n public:\n  using Base::draw;\n  void draw(int x, int y);\n};",
+        }),
+    },
 ];
 
 /// Its direct children's texts: specifiers and qualifiers.
