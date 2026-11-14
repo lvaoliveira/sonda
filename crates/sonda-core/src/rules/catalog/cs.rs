@@ -1377,58 +1377,26 @@ pub(super) fn known_floating(expr: Node, src: &[u8]) -> bool {
         return false;
     }
     let name = text(expr, src);
-    let floating = |t: &[u8]| {
-        matches!(
-            t.strip_suffix(b"?").unwrap_or(t),
-            b"double" | b"float" | b"Double" | b"Single"
-        )
-    };
     let mut current = expr.parent();
     while let Some(p) = current {
-        let is_type = matches!(
+        // A type's own fields and properties, not other methods'.
+        if matches!(
             p.kind(),
             "class_declaration" | "struct_declaration" | "record_declaration"
-        );
-        // A method's parameters and locals; a type's own fields and
-        // properties, not other methods'.
-        let mut stack: Vec<Node> = if is_type {
-            p.child_by_field_name("body")
+        ) {
+            let members = p
+                .child_by_field_name("body")
                 .map(|b| b.named_children(&mut b.walk()).collect())
-                .unwrap_or_default()
-        } else {
-            vec![p]
-        };
-        if is_type
-            || matches!(
-                p.kind(),
-                "method_declaration" | "constructor_declaration" | "local_function_statement"
-            )
-        {
-            while let Some(n) = stack.pop() {
-                let declared = match n.kind() {
-                    "parameter" => n
-                        .child_by_field_name("name")
-                        .filter(|d| text(*d, src) == name)
-                        .and_then(|_| n.child_by_field_name("type")),
-                    "variable_declaration" => n
-                        .named_children(&mut n.walk())
-                        .any(|d| {
-                            d.kind() == "variable_declarator"
-                                && d.child_by_field_name("name")
-                                    .is_some_and(|x| text(x, src) == name)
-                        })
-                        .then(|| n.child_by_field_name("type"))
-                        .flatten(),
-                    "property_declaration" => n
-                        .child_by_field_name("name")
-                        .filter(|d| text(*d, src) == name)
-                        .and_then(|_| n.child_by_field_name("type")),
-                    _ => None,
-                };
-                if declared.is_some_and(|t| floating(text(t, src))) {
-                    return true;
-                }
-                let nested = matches!(
+                .unwrap_or_default();
+            return declares_floating(members, name, src, |n| n.kind() == "field_declaration");
+        }
+        // A method's parameters and locals.
+        if matches!(
+            p.kind(),
+            "method_declaration" | "constructor_declaration" | "local_function_statement"
+        ) && declares_floating(vec![p], name, src, |n| {
+            n == p
+                || !matches!(
                     n.kind(),
                     "class_declaration"
                         | "struct_declaration"
@@ -1436,18 +1404,59 @@ pub(super) fn known_floating(expr: Node, src: &[u8]) -> bool {
                         | "method_declaration"
                         | "constructor_declaration"
                         | "property_declaration"
-                );
-                if !is_type && (n == p || !nested) || is_type && n.kind() == "field_declaration" {
-                    stack.extend(n.named_children(&mut n.walk()));
-                }
-            }
-        }
-        if is_type {
-            return false;
+                )
+        }) {
+            return true;
         }
         current = p.parent();
     }
     false
+}
+
+/// Whether `name` is declared as a `double` or a `float` (or a nullable
+/// one) in `nodes`, looking inside those `descend` allows.
+fn declares_floating(
+    mut stack: Vec<Node>,
+    name: &[u8],
+    src: &[u8],
+    descend: impl Fn(Node) -> bool,
+) -> bool {
+    while let Some(n) = stack.pop() {
+        if declared_type_of(n, name, src).is_some_and(|t| is_floating_type(text(t, src))) {
+            return true;
+        }
+        if descend(n) {
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+    }
+    false
+}
+
+/// The type `n` declares `name` with: a parameter, a local, a property.
+fn declared_type_of<'t>(n: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    match n.kind() {
+        "parameter" | "property_declaration" => n
+            .child_by_field_name("name")
+            .filter(|d| text(*d, src) == name)
+            .and_then(|_| n.child_by_field_name("type")),
+        "variable_declaration" => n
+            .named_children(&mut n.walk())
+            .any(|d| {
+                d.kind() == "variable_declarator"
+                    && d.child_by_field_name("name")
+                        .is_some_and(|x| text(x, src) == name)
+            })
+            .then(|| n.child_by_field_name("type"))
+            .flatten(),
+        _ => None,
+    }
+}
+
+fn is_floating_type(t: &[u8]) -> bool {
+    matches!(
+        t.strip_suffix(b"?").unwrap_or(t),
+        b"double" | b"float" | b"Double" | b"Single"
+    )
 }
 
 fn compares_count_call_with_zero(node: Node, src: &[u8]) -> bool {

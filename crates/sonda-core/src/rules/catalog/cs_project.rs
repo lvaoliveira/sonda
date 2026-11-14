@@ -355,35 +355,45 @@ fn overrides_and_implementations(
         if method.explicit {
             continue;
         }
-        let Some(other) = counterpart(index, id, method) else {
-            continue;
-        };
-        if other.params.len() != method.params.len() {
-            continue;
-        }
-        let pairs: Vec<(&ParamDecl, &ParamDecl)> =
-            method.params.iter().zip(&other.params).collect();
-        if on("cs/parameter-name-mismatch")
-            && let Some(mine) = parameter_name_mismatch(&pairs)
+        if let Some(other) = counterpart(index, id, method)
+            && other.params.len() == method.params.len()
         {
-            found.push(("cs/parameter-name-mismatch", file, mine.span));
+            compare_with_counterpart(method, other, file, on, found);
         }
-        if method.has("override") {
-            for (mine, theirs) in &pairs {
-                override_parameter_findings(mine, theirs, file, on, found);
-            }
+    }
+}
+
+/// A method's parameters against those of the member it overrides or
+/// implements, with as many.
+fn compare_with_counterpart(
+    method: &MemberDecl,
+    other: &MemberDecl,
+    file: usize,
+    on: &dyn Fn(&str) -> bool,
+    found: &mut Vec<Finding>,
+) {
+    let pairs: Vec<(&ParamDecl, &ParamDecl)> = method.params.iter().zip(&other.params).collect();
+    if on("cs/parameter-name-mismatch")
+        && let Some(mine) = parameter_name_mismatch(&pairs)
+    {
+        found.push(("cs/parameter-name-mismatch", file, mine.span));
+    }
+    if method.has("override") {
+        for (mine, theirs) in &pairs {
+            override_parameter_findings(mine, theirs, file, on, found);
         }
-        // A default the overridden or implemented member declares and this
-        // one leaves out: callers get it or not depending on the type they
-        // call through (measured on SonarQube 26.7, for an interface's
-        // member too).
-        if on("cs/override-changes-default") && !method.has("partial") {
-            for (mine, theirs) in &pairs {
-                if theirs.default.is_some() && mine.default.is_none() {
-                    found.push(("cs/override-changes-default", file, mine.span));
-                }
-            }
-        }
+    }
+    // A default the overridden or implemented member declares and this
+    // one leaves out: callers get it or not depending on the type they
+    // call through (measured on SonarQube 26.7, for an interface's
+    // member too).
+    if on("cs/override-changes-default") && !method.has("partial") {
+        found.extend(
+            pairs
+                .iter()
+                .filter(|(mine, theirs)| theirs.default.is_some() && mine.default.is_none())
+                .map(|(mine, _)| ("cs/override-changes-default", file, mine.span)),
+        );
     }
 }
 

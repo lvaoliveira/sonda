@@ -626,30 +626,7 @@ fn calls_a_static_method_on_an_instance(call: Node, src: &[u8]) -> bool {
     // `this.field` for a static field of the class (measured on SonarQube
     // 26.7).
     if call.kind() == "field_access" {
-        let Some(field) = call.child_by_field_name("field") else {
-            return false;
-        };
-        let mut up = call.parent();
-        while let Some(n) = up {
-            if matches!(n.kind(), "class_declaration" | "enum_declaration") {
-                return class_members(n).into_iter().any(|m| {
-                    m.kind() == "field_declaration"
-                        && has_modifier(m, "static")
-                        && children_of_kind(m, "variable_declarator").iter().any(|d| {
-                            d.child_by_field_name("name")
-                                .is_some_and(|x| text(x, src) == text(field, src))
-                        })
-                });
-            }
-            if matches!(n.kind(), "class_body" | "object_creation_expression")
-                && n.parent()
-                    .is_some_and(|p| p.kind() == "object_creation_expression")
-            {
-                return false;
-            }
-            up = n.parent();
-        }
-        return false;
+        return reads_a_static_field(call, src);
     }
     let Some(object) = call.child_by_field_name("object") else {
         return false;
@@ -663,15 +640,49 @@ fn calls_a_static_method_on_an_instance(call: Node, src: &[u8]) -> bool {
     }
     let name = method_name(call, src);
     find_node(root_of(call), |n| {
-        n.kind() == "class_declaration" && name_text(n, src) == t && {
-            let methods: Vec<Node> = class_members(n)
-                .into_iter()
-                .filter(|m| m.kind() == "method_declaration" && name_text(*m, src) == name)
-                .collect();
-            !methods.is_empty() && methods.iter().all(|m| has_modifier(*m, "static"))
-        }
+        n.kind() == "class_declaration"
+            && name_text(n, src) == t
+            && only_static_methods_named(n, name, src)
     })
     .is_some()
+}
+
+/// Whether `this.field` names a static field of the enclosing class; not
+/// from inside an anonymous class, whose `this` is another object.
+fn reads_a_static_field(access: Node, src: &[u8]) -> bool {
+    let Some(field) = access.child_by_field_name("field") else {
+        return false;
+    };
+    let mut up = access.parent();
+    while let Some(n) = up {
+        if matches!(n.kind(), "class_declaration" | "enum_declaration") {
+            return class_members(n).into_iter().any(|m| {
+                m.kind() == "field_declaration"
+                    && has_modifier(m, "static")
+                    && children_of_kind(m, "variable_declarator").iter().any(|d| {
+                        d.child_by_field_name("name")
+                            .is_some_and(|x| text(x, src) == text(field, src))
+                    })
+            });
+        }
+        if matches!(n.kind(), "class_body" | "object_creation_expression")
+            && n.parent()
+                .is_some_and(|p| p.kind() == "object_creation_expression")
+        {
+            return false;
+        }
+        up = n.parent();
+    }
+    false
+}
+
+/// Whether the class declares methods named `name`, all of them static.
+fn only_static_methods_named(class: Node, name: &[u8], src: &[u8]) -> bool {
+    let methods: Vec<Node> = class_members(class)
+        .into_iter()
+        .filter(|m| m.kind() == "method_declaration" && name_text(*m, src) == name)
+        .collect();
+    !methods.is_empty() && methods.iter().all(|m| has_modifier(*m, "static"))
 }
 
 fn inner_class_ignores_the_outer(inner: Node, src: &[u8]) -> bool {

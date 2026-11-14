@@ -597,32 +597,41 @@ fn has_empty_class(_: &str, r: &Regex) -> bool {
 /// purpose, and SonarQube leaves it alone.
 fn text_has_control_characters(pattern: &str, _: &Regex) -> bool {
     let chars: Vec<char> = pattern.chars().collect();
-    let is_control = |c: char| (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r');
     let mut in_class = false;
     let mut i = 0;
     while i < chars.len() {
-        let (control, len) = if chars[i] == '\\' {
-            let rest: String = chars[i + 1..].iter().take(8).collect();
-            (escape_is_control(&rest), 1 + escape_len(&rest))
-        } else {
-            match chars[i] {
-                '[' if !in_class => in_class = true,
-                ']' if in_class => in_class = false,
-                _ => {}
-            }
-            (is_control(chars[i]), 1)
-        };
-        if control {
-            let starts_range = chars.get(i + len) == Some(&'-')
-                && chars.get(i + len + 1).is_some_and(|&c| c != ']');
-            let ends_range = i >= 2 && chars[i - 1] == '-' && !matches!(chars[i - 2], '[' | '^');
-            if !(in_class && (starts_range || ends_range)) {
-                return true;
-            }
+        let (control, len) = control_at(&chars, i, &mut in_class);
+        if control && !(in_class && bounds_a_range(&chars, i, len)) {
+            return true;
         }
         i += len;
     }
     false
+}
+
+/// Whether the character or escape at `i` is a control character (other
+/// than tab, line feed and carriage return), and how many characters it
+/// takes. Opens and closes `in_class` at brackets.
+fn control_at(chars: &[char], i: usize, in_class: &mut bool) -> (bool, usize) {
+    if chars[i] == '\\' {
+        let rest: String = chars[i + 1..].iter().take(8).collect();
+        return (escape_is_control(&rest), 1 + escape_len(&rest));
+    }
+    match chars[i] {
+        '[' if !*in_class => *in_class = true,
+        ']' if *in_class => *in_class = false,
+        _ => {}
+    }
+    let c = chars[i];
+    ((c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r'), 1)
+}
+
+/// Whether what's at `i`, `len` characters long, starts or ends a range.
+fn bounds_a_range(chars: &[char], i: usize, len: usize) -> bool {
+    let starts =
+        chars.get(i + len) == Some(&'-') && chars.get(i + len + 1).is_some_and(|&c| c != ']');
+    let ends = i >= 2 && chars[i - 1] == '-' && !matches!(chars[i - 2], '[' | '^');
+    starts || ends
 }
 
 /// How many characters an escape takes after its backslash: `xhh`,

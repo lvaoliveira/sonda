@@ -88,12 +88,39 @@ pub(super) use tree_sitter::Node;
 /// What the catalog's files share, as `use super::prelude::*`: named here,
 /// so a file's imports say where its names come from, and the wildcard is
 /// the one Rust and SonarQube allow (a module named `prelude`).
+/// The first node below `root`, in source order, that satisfies `pred`,
+/// not looking inside a node `descend` refuses (a nested scope, say).
+pub(super) fn first_below<'t>(
+    root: Node<'t>,
+    descend: impl Fn(Node<'t>) -> bool,
+    pred: impl Fn(Node<'t>) -> bool,
+) -> Option<Node<'t>> {
+    let mut cursor = root.walk();
+    if !cursor.goto_first_child() {
+        return None;
+    }
+    loop {
+        let node = cursor.node();
+        if pred(node) {
+            return Some(node);
+        }
+        if descend(node) && cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() || cursor.node().id() == root.id() {
+                return None;
+            }
+        }
+    }
+}
+
 mod prelude {
     pub(super) use super::{
         Blocker, Bug, C_CPP, C_ONLY, CPP_ONLY, CSHARP, Check, CodeSmell, Critical, Example, Find,
         FindAll, FindSaying, Info, JAVA, JS_TS, JSX, Keep, Lang, Major, Minor, Node, PYTHON, RUST,
-        Rule, TS, Vulnerability, bare_except, empty_block, exact, has_equality_operator,
-        no_arguments, not_nullish_comparison, related,
+        Rule, TS, Vulnerability, bare_except, empty_block, exact, first_below,
+        has_equality_operator, no_arguments, not_nullish_comparison, related,
     };
 }
 
