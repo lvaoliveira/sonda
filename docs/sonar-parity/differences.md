@@ -30,7 +30,7 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
 | qutepart-cpp⁴ | C++ (Qt) | `1099377` | 353 of 748 | 39 |
-| roo_display⁴ | C++ (embedded), C | `f139977` | 2,032 of 2,958 | 320 |
+| roo_display⁴ | C++ (embedded), C | `f139977` | 2,062 of 2,958 | 340 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -823,16 +823,27 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   - `cpp/pointer-and-count` (S6188): a pointer parameter only ever indexed,
     `p[i]`, in a loop bounded by an integer parameter named `count`,
     `size` or `..._count`; not one passed on or moved.
+- **Classes from other files** ([ADR-0020](../adr/0020-cross-file-declarations.md#c)):
+  each C++ file summarizes the classes it defines, and
+  `cpp/hidden-inherited-function` (S1242) runs on the project's index. A
+  public or protected member function is reported when a base has a
+  function of that name it hides: one that isn't private nor virtual, or
+  virtual overloads it doesn't override each of. Every base counts, as
+  SonarCloud counts them, an intermediate class's hiding included, and a
+  `using Base::name;` brings the bases' back. 30 of roo_display's 32; the
+  rest derive from classes outside the project (Arduino's `Print`, and
+  Qt's on qutepart-cpp). Of its 20 extra, 18 are three font classes
+  SonarCloud leaves out though `Font` has the shape it reports for every
+  other base.
 
 ### Still open in C and C++
 
-On the two projects, 1,321 of SonarCloud's issues and 359 of sonda's:
+On the two projects, 1,291 of SonarCloud's issues and 379 of sonda's:
 
-- **No sonda rule yet (730):** the largest, S6022 (169, `std::byte` for
+- **No sonda rule yet (696):** the largest, S6022 (169, `std::byte` for
   bitwise operations on 8-bit values, which needs the operands' types),
   S5817 (83, const member functions), S5350 (44, pointers and references
-  to const), S1242 (34, hiding an inherited function, which needs the base
-  class); then about a hundred keys with fewer.
+  to const); then about a hundred keys with fewer.
 - **Off by default:** S6004 (126).
 - **SonarCloud's commented-out code in generated tables (140):** roo_display's
   font files comment each glyph, `// "&" (U+0026), uncompressed`, which
@@ -845,7 +856,7 @@ On the two projects, 1,321 of SonarCloud's issues and 359 of sonda's:
   didn't report, in a class it reported others of; nothing visible (a
   template, a header, another constructor) told them apart.
 - **sonda only, not pinned down (the rest):** S125 (45), S6177 (40, see
-  above), S5421 (31), S5025 (17, mostly a `new` stored in a member), S5950
+  above), S5421 (31), S1242 (20, see above), S5025 (17, mostly a `new` stored in a member), S5950
   (17), S1186 (16), S1172 (14, callbacks and constructors), S5827 (12), a
   few each for the rest.
 

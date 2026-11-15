@@ -47,14 +47,8 @@ pub(crate) fn run<'f>(
     if !RULES.iter().any(|r| active.contains(r)) {
         return Vec::new();
     }
-    // (position in the scanner's list, the file's index)
-    let parsed: Vec<(usize, FileIndex)> = facts
-        .enumerate()
-        .filter_map(|(i, f)| {
-            let (_, json) = f.iter().find(|(k, _)| k == FACT)?;
-            serde_json::from_str(json).ok().map(|x| (i, x))
-        })
-        .collect();
+    // (position in the scanner's list, the file's summary)
+    let parsed: Vec<(usize, FileIndex)> = crate::semantic::summaries(facts, FACT);
     let index = ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
     let mut found: Vec<Finding> = Vec::new();
     let on = |rule: &str| active.contains(&rule);

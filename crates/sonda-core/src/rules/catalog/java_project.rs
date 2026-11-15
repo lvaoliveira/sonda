@@ -305,14 +305,8 @@ pub(crate) fn run<'f>(
     if !RULES.iter().any(|r| active.contains(r)) {
         return Vec::new();
     }
-    // (position in the scanner's list, the file's index)
-    let parsed: Vec<(usize, FileIndex)> = facts
-        .enumerate()
-        .filter_map(|(i, f)| {
-            let (_, json) = f.iter().find(|(k, _)| k == FACT)?;
-            serde_json::from_str(json).ok().map(|x| (i, x))
-        })
-        .collect();
+    // (position in the scanner's list, the file's summary)
+    let parsed: Vec<(usize, FileIndex)> = crate::semantic::summaries(facts, FACT);
     let index = ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
     let on = |rule: &str| active.contains(&rule);
     let mut found: Vec<Finding> = Vec::new();
@@ -1108,39 +1102,16 @@ fn all_supertypes(index: &ProjectIndex, id: TypeId) -> Vec<TypeId> {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::analyze;
-    use crate::analysis::tests::far_deadline;
-    use crate::config::Config;
+    use crate::analysis::tests::at;
     use crate::lang::Lang;
-    use crate::rules::RuleSet;
 
-    /// `rule`'s findings over files given as (path, source), as (path, line).
     fn flagged(rule: &str, files: &[(&str, &str)]) -> Vec<(String, usize)> {
-        let mut cfg = Config::default();
-        cfg.rules.enabled = vec![rule.to_string()];
-        let rules = RuleSet::new(&cfg.rules).unwrap();
-        let mut analyzed: Vec<_> = files
-            .iter()
-            .map(|(path, src)| {
-                analyze(path, Lang::Java, src, &rules, &cfg, far_deadline()).unwrap()
-            })
-            .collect();
-        crate::analysis::java_project_rules(&mut analyzed, &rules);
-        let mut found: Vec<(String, usize)> = analyzed
-            .iter()
-            .flat_map(|f| {
-                f.issues
-                    .iter()
-                    .filter(|i| i.rule == rule)
-                    .map(|i| (f.path.clone(), i.line))
-            })
-            .collect();
-        found.sort();
-        found
-    }
-
-    fn at(path: &str, line: usize) -> (String, usize) {
-        (path.to_string(), line)
+        crate::analysis::tests::project_flagged(
+            rule,
+            Lang::Java,
+            files,
+            crate::analysis::java_project_rules,
+        )
     }
 
     const BASE: (&str, &str) = (

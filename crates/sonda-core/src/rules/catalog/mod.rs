@@ -40,6 +40,7 @@ mod java_more;
 pub(crate) fn java_line_looks_like_code(line: &[u8]) -> bool {
     java_more::line_looks_like_code(line)
 }
+pub(crate) mod cpp_project;
 pub(crate) mod java_project;
 mod java_regex;
 mod java_rest;
