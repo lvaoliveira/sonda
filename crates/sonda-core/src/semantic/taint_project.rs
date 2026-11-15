@@ -136,27 +136,71 @@ pub(crate) fn compose(
     facts: &[Option<FileFacts>],
     cs: Option<CsResolver>,
 ) -> Vec<Found> {
-    let by_path: HashMap<String, usize> = paths
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (normalize(p), i))
-        .collect();
-    let mut summaries: HashMap<(usize, &Key), &Summary> = HashMap::new();
-    for (i, f) in facts.iter().enumerate() {
-        for s in f.iter().flat_map(|f| &f.summaries) {
-            summaries.entry((i, &s.key)).or_insert(s);
+    let composer = Composer::new(paths, facts, cs);
+    let mut found = composer.through_calls();
+    found.extend(composer.through_returns());
+    each_sink_once(found)
+}
+
+/// What composing needs: the files, their summaries by key, and how a call
+/// in one file resolves to another file's function.
+struct Composer<'f, 'r> {
+    paths: &'f [&'f str],
+    facts: &'f [Option<FileFacts>],
+    by_path: HashMap<String, usize>,
+    summaries: HashMap<(usize, &'f Key), &'f Summary>,
+    py_index: std::cell::OnceCell<PyModules>,
+    cs: Option<CsResolver<'r>>,
+}
+
+/// A request's value passed to another file's function, and on through
+/// the functions that pass it on.
+struct Work {
+    steps: Vec<(usize, StepFact)>,
+    from: usize,
+    callee: Callee,
+    arg: usize,
+    hops: usize,
+}
+
+impl<'f, 'r> Composer<'f, 'r> {
+    fn new(
+        paths: &'f [&'f str],
+        facts: &'f [Option<FileFacts>],
+        cs: Option<CsResolver<'r>>,
+    ) -> Self {
+        let by_path: HashMap<String, usize> = paths
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (normalize(p), i))
+            .collect();
+        let mut summaries: HashMap<(usize, &Key), &Summary> = HashMap::new();
+        for (i, f) in facts.iter().enumerate() {
+            for s in f.iter().flat_map(|f| &f.summaries) {
+                summaries.entry((i, &s.key)).or_insert(s);
+            }
+        }
+        Self {
+            paths,
+            facts,
+            by_path,
+            summaries,
+            py_index: std::cell::OnceCell::new(),
+            cs,
         }
     }
-    let py_index = std::cell::OnceCell::new();
-    let resolve = |from: usize, callee: &Callee| -> Vec<(usize, &Summary)> {
+
+    /// The summaries of the functions a call in file `from` may reach.
+    fn resolve(&self, from: usize, callee: &Callee) -> Vec<(usize, &'f Summary)> {
+        let summary = |file: usize, k: &Key| self.summaries.get(&(file, k)).map(|s| (file, *s));
         match callee {
             Callee::Js { spec, name, member } => {
-                let Some(file) = resolve_module(paths[from], spec, &by_path) else {
+                let Some(file) = resolve_module(self.paths[from], spec, &self.by_path) else {
                     return Vec::new();
                 };
                 candidate_keys(name.as_deref(), member.as_deref())
                     .into_iter()
-                    .find_map(|k| summaries.get(&(file, &k)).map(|s| vec![(file, *s)]))
+                    .find_map(|k| summary(file, &k).map(|s| vec![s]))
                     .unwrap_or_default()
             }
             Callee::Py {
@@ -164,119 +208,150 @@ pub(crate) fn compose(
                 name,
                 member,
             } => py_candidates(
-                paths[from],
+                self.paths[from],
                 module,
                 name.as_deref(),
                 member.as_deref(),
-                &by_path,
-                py_index.get_or_init(|| PyModules::new(&by_path)),
+                &self.by_path,
+                self.py_index.get_or_init(|| PyModules::new(&self.by_path)),
             )
             .into_iter()
-            .find_map(|(file, k)| summaries.get(&(file, &k)).map(|s| vec![(file, *s)]))
+            .find_map(|(file, k)| summary(file, &k).map(|s| vec![s]))
             .unwrap_or_default(),
-            Callee::Cs { .. } => cs
+            Callee::Cs { .. } => self
+                .cs
                 .map(|r| r(from, callee))
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|(file, key)| summaries.get(&(file, &key)).map(|s| (file, *s)))
+                .filter_map(|(file, key)| summary(file, &key))
                 .collect(),
         }
-    };
-
-    let mut found = Vec::new();
-    // A request's value passed to another file's function, and on through
-    // the functions that pass it on.
-    struct Work {
-        steps: Vec<(usize, StepFact)>,
-        from: usize,
-        callee: Callee,
-        arg: usize,
-        hops: usize,
     }
-    let mut work: Vec<Work> = facts
-        .iter()
-        .enumerate()
-        .flat_map(|(i, f)| {
-            f.iter().flat_map(move |f| {
-                f.calls.iter().map(move |c| Work {
-                    steps: c.steps.iter().map(|s| (i, s.clone())).collect(),
-                    from: i,
-                    callee: c.callee.clone(),
-                    arg: c.arg,
-                    hops: 0,
+
+    /// Requests' values passed to other files' functions that reach a
+    /// sink, followed through the calls that pass them on.
+    fn through_calls(&self) -> Vec<Found> {
+        let mut found = Vec::new();
+        let mut work: Vec<Work> = self
+            .facts
+            .iter()
+            .enumerate()
+            .flat_map(|(i, f)| {
+                f.iter().flat_map(move |f| {
+                    f.calls.iter().map(move |c| Work {
+                        steps: c.steps.iter().map(|s| (i, s.clone())).collect(),
+                        from: i,
+                        callee: c.callee.clone(),
+                        arg: c.arg,
+                        hops: 0,
+                    })
                 })
             })
-        })
-        .collect();
-    let mut seen: HashSet<(usize, String, usize)> = HashSet::new();
-    while let Some(w) = work.pop() {
-        for (file, s) in resolve(w.from, &w.callee) {
-            // The same call reached twice: once is enough.
-            if !seen.insert((file, format!("{:?}", s.key), w.arg)) && w.hops > 0 {
-                continue;
-            }
-            for t in s.to_sink.iter().filter(|t| t.p == w.arg) {
-                let mut steps = w.steps.clone();
-                steps.extend(t.steps.iter().map(|x| (file, x.clone())));
-                found.push(Found {
-                    file,
-                    sink: t.sink.clone(),
-                    steps,
-                });
-            }
-            if w.hops + 1 >= MAX_HOPS {
-                continue;
-            }
-            for c in s.to_call.iter().filter(|c| c.p == w.arg) {
-                let mut steps = w.steps.clone();
-                steps.extend(c.steps.iter().map(|x| (file, x.clone())));
-                work.push(Work {
-                    steps,
-                    from: file,
-                    callee: c.callee.clone(),
-                    arg: c.arg,
-                    hops: w.hops + 1,
-                });
-            }
-        }
-    }
-    // Another file's function's result reaching a sink.
-    for (i, f) in facts.iter().enumerate() {
-        for r in f.iter().flat_map(|f| &f.returns) {
-            for (file, s) in resolve(i, &r.callee) {
-                if r.needs_sql && !s.returns_sql {
+            .collect();
+        let mut seen: HashSet<(usize, String, usize)> = HashSet::new();
+        while let Some(w) = work.pop() {
+            for (file, s) in self.resolve(w.from, &w.callee) {
+                // The same call reached twice: once is enough.
+                if !seen.insert((file, format!("{:?}", s.key), w.arg)) && w.hops > 0 {
                     continue;
                 }
-                let after = |mut steps: Vec<(usize, StepFact)>| {
-                    steps.push((i, r.returned.clone()));
-                    steps.extend(r.after.iter().map(|x| (i, x.clone())));
-                    steps
-                };
-                if let Some(source) = &s.returns_source {
-                    found.push(Found {
-                        file: i,
-                        sink: r.sink.clone(),
-                        steps: after(source.iter().map(|x| (file, x.clone())).collect()),
-                    });
-                }
-                for t in &s.to_return {
-                    let Some(arg) = r.args.iter().find(|a| a.p == t.p) else {
-                        continue;
-                    };
-                    let mut steps: Vec<(usize, StepFact)> =
-                        arg.steps.iter().map(|x| (i, x.clone())).collect();
-                    steps.push((i, r.passed.clone()));
-                    steps.extend(t.steps.iter().map(|x| (file, x.clone())));
-                    found.push(Found {
-                        file: i,
-                        sink: r.sink.clone(),
-                        steps: after(steps),
-                    });
+                found.extend(sinks_reached(&w, file, s));
+                if w.hops + 1 < MAX_HOPS {
+                    work.extend(calls_onward(&w, file, s));
                 }
             }
         }
+        found
     }
-    // Each sink once, by its shortest path; capped like a file's paths.
+
+    /// Another file's function's result reaching a sink: a source it
+    /// returns, or an argument it returns.
+    fn through_returns(&self) -> Vec<Found> {
+        let mut found = Vec::new();
+        for (i, f) in self.facts.iter().enumerate() {
+            for r in f.iter().flat_map(|f| &f.returns) {
+                for (file, s) in self.resolve(i, &r.callee) {
+                    if !r.needs_sql || s.returns_sql {
+                        found.extend(returned_to_sink(i, r, file, s));
+                    }
+                }
+            }
+        }
+        found
+    }
+}
+
+/// The sinks a summary's parameter reaches, for the work's argument.
+fn sinks_reached(w: &Work, file: usize, s: &Summary) -> Vec<Found> {
+    s.to_sink
+        .iter()
+        .filter(|t| t.p == w.arg)
+        .map(|t| {
+            let mut steps = w.steps.clone();
+            steps.extend(t.steps.iter().map(|x| (file, x.clone())));
+            Found {
+                file,
+                sink: t.sink.clone(),
+                steps,
+            }
+        })
+        .collect()
+}
+
+/// The calls a summary's parameter is passed on to, one hop further.
+fn calls_onward(w: &Work, file: usize, s: &Summary) -> Vec<Work> {
+    s.to_call
+        .iter()
+        .filter(|c| c.p == w.arg)
+        .map(|c| {
+            let mut steps = w.steps.clone();
+            steps.extend(c.steps.iter().map(|x| (file, x.clone())));
+            Work {
+                steps,
+                from: file,
+                callee: c.callee.clone(),
+                arg: c.arg,
+                hops: w.hops + 1,
+            }
+        })
+        .collect()
+}
+
+/// What a call's result, used in file `i` (`r`), carries to its sink from
+/// the function in `file` (`s`).
+fn returned_to_sink(i: usize, r: &Return, file: usize, s: &Summary) -> Vec<Found> {
+    let after = |mut steps: Vec<(usize, StepFact)>| {
+        steps.push((i, r.returned.clone()));
+        steps.extend(r.after.iter().map(|x| (i, x.clone())));
+        steps
+    };
+    let mut found = Vec::new();
+    if let Some(source) = &s.returns_source {
+        found.push(Found {
+            file: i,
+            sink: r.sink.clone(),
+            steps: after(source.iter().map(|x| (file, x.clone())).collect()),
+        });
+    }
+    for t in &s.to_return {
+        let Some(arg) = r.args.iter().find(|a| a.p == t.p) else {
+            continue;
+        };
+        let mut steps: Vec<(usize, StepFact)> = arg.steps.iter().map(|x| (i, x.clone())).collect();
+        steps.push((i, r.passed.clone()));
+        steps.extend(t.steps.iter().map(|x| (file, x.clone())));
+        found.push(Found {
+            file: i,
+            sink: r.sink.clone(),
+            steps: after(steps),
+        });
+    }
+    found
+}
+
+/// Each sink once, by its shortest path; capped like a file's paths; not
+/// the suppressed ones.
+fn each_sink_once(mut found: Vec<Found>) -> Vec<Found> {
     found.sort_by_key(|f| (f.file, f.sink.at.l, f.sink.at.c, f.steps.len()));
     found.dedup_by(|a, b| a.file == b.file && a.sink.at == b.sink.at);
     for f in &mut found {

@@ -414,7 +414,22 @@ impl<'s> Extractor<'s> {
         let Some(body) = m.child_by_field_name("body") else {
             return Vec::new();
         };
-        // Names declared in the method: parameters and locals.
+        let declared = self.names_in_scope(m);
+        let mut calls = Vec::new();
+        let mut stack = vec![body];
+        while let Some(n) = stack.pop() {
+            calls.extend(self.call(n, &declared));
+            if matches!(n.kind(), "lambda_expression" | "class_body") {
+                continue;
+            }
+            stack.extend(named(n));
+        }
+        calls
+    }
+
+    /// The names a method sees, with their types: its parameters and
+    /// locals, then the class's fields they don't shadow.
+    fn names_in_scope(&self, m: Node) -> Vec<(String, TypeRef)> {
         let mut declared: Vec<(String, TypeRef)> = Vec::new();
         let mut stack = vec![m];
         while let Some(n) = stack.pop() {
@@ -422,33 +437,12 @@ impl<'s> Extractor<'s> {
                 "formal_parameter"
                 | "spread_parameter"
                 | "local_variable_declaration"
-                | "catch_formal_parameter" => {
-                    let ty = n.child_by_field_name("type").or_else(|| {
-                        named(n)
-                            .into_iter()
-                            .find(|c| c.kind().ends_with("type") || c.kind() == "type_identifier")
-                    });
-                    if let Some(ty) = ty {
-                        let r = self.type_ref(ty);
-                        let names: Vec<Node> = match n.kind() {
-                            "local_variable_declaration" | "spread_parameter" => named(n)
-                                .into_iter()
-                                .filter(|d| d.kind() == "variable_declarator")
-                                .filter_map(|d| d.child_by_field_name("name"))
-                                .collect(),
-                            _ => n.child_by_field_name("name").into_iter().collect(),
-                        };
-                        for name in names {
-                            declared.push((self.text(name).to_string(), r.clone()));
-                        }
-                    }
-                }
+                | "catch_formal_parameter" => declared.extend(self.declared_names(n)),
                 "lambda_expression" | "class_body" => continue,
                 _ => {}
             }
             stack.extend(named(n));
         }
-        // And the class's fields.
         if let Some(class_body) = m.parent() {
             for f in named(class_body)
                 .into_iter()
@@ -461,58 +455,84 @@ impl<'s> Extractor<'s> {
                 }
             }
         }
-        let mut calls = Vec::new();
-        let mut stack = vec![body];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "method_invocation"
-                && let Some(name) = n.child_by_field_name("name")
-            {
-                let object = n.child_by_field_name("object");
-                let receiver_name = object.and_then(|o| match o.kind() {
-                    "identifier" => Some(self.text(o)),
-                    "field_access"
-                        if o.child_by_field_name("object")
-                            .is_some_and(|x| x.kind() == "this") =>
-                    {
-                        o.child_by_field_name("field").map(|f| self.text(f))
-                    }
-                    _ => None,
-                });
-                let receiver = receiver_name.and_then(|r| {
-                    declared
-                        .iter()
-                        .find(|(n, _)| n == r)
-                        .map(|(_, t)| t.clone())
-                        .or_else(|| {
-                            // A type named directly: `Util.f()`.
-                            r.chars()
-                                .next()
-                                .filter(|c| c.is_uppercase())
-                                .map(|_| TypeRef {
-                                    name: r.to_string(),
-                                    ..TypeRef::default()
-                                })
-                        })
-                });
-                let args = n.child_by_field_name("arguments").map_or(0, |a| {
-                    named(a)
-                        .into_iter()
-                        .filter(|x| !x.kind().ends_with("comment"))
-                        .count()
-                });
-                calls.push(Call {
-                    name: self.text(name).to_string(),
-                    args,
-                    receiver,
-                    own: object.is_none_or(|o| o.kind() == "this"),
-                });
-            }
-            if matches!(n.kind(), "lambda_expression" | "class_body") {
-                continue;
-            }
-            stack.extend(named(n));
+        declared
+    }
+
+    /// The names a parameter or local declaration declares, with its type.
+    fn declared_names(&self, n: Node) -> Vec<(String, TypeRef)> {
+        let ty = n.child_by_field_name("type").or_else(|| {
+            named(n)
+                .into_iter()
+                .find(|c| c.kind().ends_with("type") || c.kind() == "type_identifier")
+        });
+        let Some(ty) = ty else {
+            return Vec::new();
+        };
+        let r = self.type_ref(ty);
+        let names: Vec<Node> = match n.kind() {
+            "local_variable_declaration" | "spread_parameter" => named(n)
+                .into_iter()
+                .filter(|d| d.kind() == "variable_declarator")
+                .filter_map(|d| d.child_by_field_name("name"))
+                .collect(),
+            _ => n.child_by_field_name("name").into_iter().collect(),
+        };
+        names
+            .into_iter()
+            .map(|name| (self.text(name).to_string(), r.clone()))
+            .collect()
+    }
+
+    /// A method invocation, with its receiver's type where `declared` or
+    /// its name tells it.
+    fn call(&self, n: Node, declared: &[(String, TypeRef)]) -> Option<Call> {
+        if n.kind() != "method_invocation" {
+            return None;
         }
-        calls
+        let name = n.child_by_field_name("name")?;
+        let object = n.child_by_field_name("object");
+        let receiver = object.and_then(|o| self.receiver_type(o, declared));
+        let args = n.child_by_field_name("arguments").map_or(0, |a| {
+            named(a)
+                .into_iter()
+                .filter(|x| !x.kind().ends_with("comment"))
+                .count()
+        });
+        Some(Call {
+            name: self.text(name).to_string(),
+            args,
+            receiver,
+            own: object.is_none_or(|o| o.kind() == "this"),
+        })
+    }
+
+    /// The type of a call's receiver, `x` or `this.x`: as declared, or a
+    /// type named directly (`Util.f()`).
+    fn receiver_type(&self, object: Node, declared: &[(String, TypeRef)]) -> Option<TypeRef> {
+        let r = match object.kind() {
+            "identifier" => Some(self.text(object)),
+            "field_access"
+                if object
+                    .child_by_field_name("object")
+                    .is_some_and(|x| x.kind() == "this") =>
+            {
+                object.child_by_field_name("field").map(|f| self.text(f))
+            }
+            _ => None,
+        }?;
+        declared
+            .iter()
+            .find(|(n, _)| n == r)
+            .map(|(_, t)| t.clone())
+            .or_else(|| {
+                r.chars()
+                    .next()
+                    .filter(|c| c.is_uppercase())
+                    .map(|_| TypeRef {
+                        name: r.to_string(),
+                        ..TypeRef::default()
+                    })
+            })
     }
 
     /// `return super.name(params);` or `super.name(params);`, alone.
@@ -588,27 +608,12 @@ impl<'s> Extractor<'s> {
             _ => "annotation",
         };
         // Members of an interface are public, and nested types static.
-        if kind == "interface" || kind == "annotation" {
+        let in_interface = kind == "interface" || kind == "annotation";
+        if in_interface {
             modifiers.push("abstract".into());
         }
         let name = t.child_by_field_name("name");
-        let (extends, implements) = match kind {
-            "interface" => (
-                self.type_list(
-                    children(t)
-                        .into_iter()
-                        .find(|c| c.kind() == "extends_interfaces"),
-                ),
-                Vec::new(),
-            ),
-            _ => (
-                t.child_by_field_name("superclass")
-                    .and_then(|s| s.named_child(0))
-                    .map(|s| vec![self.type_ref(s)])
-                    .unwrap_or_default(),
-                self.type_list(t.child_by_field_name("interfaces")),
-            ),
-        };
+        let (extends, implements) = self.supertypes_written(t, kind);
         let mut decl = TypeDecl {
             name: name.map(|n| self.text(n).to_string()).unwrap_or_default(),
             outer: outer.to_vec(),
@@ -621,42 +626,76 @@ impl<'s> Extractor<'s> {
             ..TypeDecl::default()
         };
         decl.uses = self.uses(t);
-        let in_interface = kind == "interface" || kind == "annotation";
         if let Some(body) = t.child_by_field_name("body") {
-            let members = named(body).into_iter().flat_map(|m| {
-                // An enum's members follow its constants.
-                if m.kind() == "enum_body_declarations" {
-                    named(m)
-                } else {
-                    vec![m]
-                }
-            });
-            for m in members {
-                match m.kind() {
-                    "field_declaration" | "constant_declaration" => {
-                        let mut fields = self.fields(m);
-                        if in_interface {
-                            for f in &mut fields {
-                                f.modifiers
-                                    .extend(["public", "static", "final"].map(String::from));
-                            }
-                        }
-                        decl.fields.extend(fields);
-                    }
-                    "method_declaration"
-                    | "constructor_declaration"
-                    | "compact_constructor_declaration" => {
-                        let mut method = self.method(m);
-                        if in_interface && !method.modifiers.iter().any(|x| x == "private") {
-                            method.modifiers.push("public".into());
-                        }
-                        decl.methods.push(method);
-                    }
-                    _ => {}
-                }
-            }
+            self.add_members(&mut decl, body, in_interface);
         }
         decl
+    }
+
+    /// What a type extends and implements, as written: an interface's
+    /// `extends` list, or a class's superclass and interfaces.
+    fn supertypes_written(&self, t: Node, kind: &str) -> (Vec<TypeRef>, Vec<TypeRef>) {
+        if kind == "interface" {
+            let extends = children(t)
+                .into_iter()
+                .find(|c| c.kind() == "extends_interfaces");
+            return (self.type_list(extends), Vec::new());
+        }
+        (
+            t.child_by_field_name("superclass")
+                .and_then(|s| s.named_child(0))
+                .map(|s| vec![self.type_ref(s)])
+                .unwrap_or_default(),
+            self.type_list(t.child_by_field_name("interfaces")),
+        )
+    }
+
+    /// A type body's fields and methods; an interface's are public, and its
+    /// fields static and final.
+    fn add_members(&self, decl: &mut TypeDecl, body: Node, in_interface: bool) {
+        let members = named(body).into_iter().flat_map(|m| {
+            // An enum's members follow its constants.
+            if m.kind() == "enum_body_declarations" {
+                named(m)
+            } else {
+                vec![m]
+            }
+        });
+        for m in members {
+            match m.kind() {
+                "field_declaration" | "constant_declaration" => {
+                    decl.fields.extend(self.member_fields(m, in_interface));
+                }
+                "method_declaration"
+                | "constructor_declaration"
+                | "compact_constructor_declaration" => {
+                    decl.methods.push(self.member_method(m, in_interface));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A field declaration's fields; an interface's are public, static and
+    /// final.
+    fn member_fields(&self, m: Node, in_interface: bool) -> Vec<FieldDecl> {
+        let mut fields = self.fields(m);
+        if in_interface {
+            for f in &mut fields {
+                f.modifiers
+                    .extend(["public", "static", "final"].map(String::from));
+            }
+        }
+        fields
+    }
+
+    /// A method or constructor; an interface's is public unless private.
+    fn member_method(&self, m: Node, in_interface: bool) -> MethodDecl {
+        let mut method = self.method(m);
+        if in_interface && !method.modifiers.iter().any(|x| x == "private") {
+            method.modifiers.push("public".into());
+        }
+        method
     }
 
     /// Every type named in the declaration, each once, as written.
@@ -774,11 +813,40 @@ const TYPE_DECLARATIONS: &[&str] = &[
     "annotation_type_declaration",
 ];
 
+/// `rest` in package `p`.
+fn in_package(p: &str, rest: &str) -> String {
+    if p.is_empty() {
+        rest.to_string()
+    } else {
+        format!("{p}.{rest}")
+    }
+}
+
 /// The summary of one file: its package, imports, the types it declares at
 /// any depth, and the calls that pass an array literal last.
 pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
     let x = Extractor { src };
     let mut index = FileIndex::default();
+    read_package_and_imports(&x, root, &mut index);
+    // (node, the named types around it)
+    let mut stack: Vec<(Node, Vec<String>)> = vec![(root, Vec::new())];
+    let mut visited = 0usize;
+    while let Some((n, outer)) = stack.pop() {
+        visited += 1;
+        if visited.is_multiple_of(4096) && Instant::now() > deadline {
+            break;
+        }
+        let inner = index_node(&x, n, outer, &mut index);
+        let mut c = n.walk();
+        let kids: Vec<Node> = n.named_children(&mut c).collect();
+        stack.extend(kids.into_iter().rev().map(|k| (k, inner.clone())));
+    }
+    index
+}
+
+/// The file's package, and its imports, by name or wildcard; not static
+/// ones.
+fn read_package_and_imports(x: &Extractor, root: Node, index: &mut FileIndex) {
     for child in named(root) {
         match child.kind() {
             "package_declaration" => {
@@ -810,34 +878,27 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
             _ => {}
         }
     }
-    // (node, the named types around it)
-    let mut stack: Vec<(Node, Vec<String>)> = vec![(root, Vec::new())];
-    let mut visited = 0usize;
-    while let Some((n, outer)) = stack.pop() {
-        visited += 1;
-        if visited.is_multiple_of(4096) && Instant::now() > deadline {
-            break;
+}
+
+/// Indexes what `n` is: a type declaration, or a creation or call site.
+/// Returns the named types around its children.
+fn index_node(x: &Extractor, n: Node, outer: Vec<String>, index: &mut FileIndex) -> Vec<String> {
+    let mut inner = outer.clone();
+    if TYPE_DECLARATIONS.contains(&n.kind()) {
+        let decl = x.type_decl(n, &outer);
+        inner.push(decl.name.clone());
+        index.types.push(decl);
+    } else if matches!(n.kind(), "object_creation_expression" | "method_invocation") {
+        if let Some(site) = x.site(n, &outer) {
+            index.sites.push(site);
         }
-        let mut inner = outer.clone();
-        if TYPE_DECLARATIONS.contains(&n.kind()) {
-            let decl = x.type_decl(n, &outer);
-            inner.push(decl.name.clone());
-            index.types.push(decl);
-        } else if matches!(n.kind(), "object_creation_expression" | "method_invocation") {
-            if let Some(site) = x.site(n, &outer) {
-                index.sites.push(site);
-            }
-            if n.kind() == "method_invocation"
-                && let Some(call) = x.static_call(n, &outer)
-            {
-                index.static_calls.push(call);
-            }
+        if n.kind() == "method_invocation"
+            && let Some(call) = x.static_call(n, &outer)
+        {
+            index.static_calls.push(call);
         }
-        let mut c = n.walk();
-        let kids: Vec<Node> = n.named_children(&mut c).collect();
-        stack.extend(kids.into_iter().rev().map(|k| (k, inner.clone())));
     }
-    index
+    inner
 }
 
 /// A type: (its file, its position in the file's types).
@@ -877,51 +938,66 @@ impl<'a> ProjectIndex<'a> {
         qualifier: &str,
         name: &str,
     ) -> Option<TypeId> {
-        let f = self.files[file];
-        let package = |p: &str, rest: &str| {
-            if p.is_empty() {
-                rest.to_string()
-            } else {
-                format!("{p}.{rest}")
-            }
-        };
         if !qualifier.is_empty() {
-            // A full name, or a type nested in one this file sees.
-            if let Some(id) = self.by_name.get(&format!("{qualifier}.{name}")) {
-                return Some(*id);
-            }
-            let (head, rest) = qualifier.split_once('.').unwrap_or((qualifier, ""));
-            let outer = self.resolve(file, within, "", head)?;
-            let outer_name = full_name(self.files[outer.0], self.decl(outer));
-            let nested = [outer_name.as_str(), rest, name]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(".");
-            return self.by_name.get(&nested).copied();
+            return self.resolve_qualified(file, within, qualifier, name);
         }
+        let f = self.files[file];
         // Nested in the types around the use, innermost first, then the
         // file's top-level types.
         for k in (0..=within.len()).rev() {
             let mut path = within[..k].to_vec();
             path.push(name.to_string());
-            if let Some(id) = self.by_name.get(&package(&f.package, &path.join("."))) {
+            if let Some(id) = self.by_name.get(&in_package(&f.package, &path.join("."))) {
                 return Some(*id);
             }
         }
-        // Nested in a supertype of the enclosing type.
-        if let Some(enclosing) = (!within.is_empty())
-            .then(|| self.by_name.get(&package(&f.package, &within.join("."))))
-            .flatten()
-        {
-            for sup in self.supertypes(*enclosing) {
-                let nested = format!("{}.{name}", full_name(self.files[sup.0], self.decl(sup)));
-                if let Some(id) = self.by_name.get(&nested) {
-                    return Some(*id);
-                }
-            }
+        self.nested_in_a_supertype(f, within, name)
+            .or_else(|| self.imported(f, name))
+    }
+
+    /// `qualifier.name`: a full name, or a type nested in one this file
+    /// sees.
+    fn resolve_qualified(
+        &self,
+        file: usize,
+        within: &[String],
+        qualifier: &str,
+        name: &str,
+    ) -> Option<TypeId> {
+        if let Some(id) = self.by_name.get(&format!("{qualifier}.{name}")) {
+            return Some(*id);
         }
+        let (head, rest) = qualifier.split_once('.').unwrap_or((qualifier, ""));
+        let outer = self.resolve(file, within, "", head)?;
+        let outer_name = full_name(self.files[outer.0], self.decl(outer));
+        let nested = [outer_name.as_str(), rest, name]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(".");
+        self.by_name.get(&nested).copied()
+    }
+
+    /// A type nested in a supertype of the enclosing type.
+    fn nested_in_a_supertype(
+        &self,
+        f: &FileIndex,
+        within: &[String],
+        name: &str,
+    ) -> Option<TypeId> {
+        let enclosing = (!within.is_empty())
+            .then(|| self.by_name.get(&in_package(&f.package, &within.join("."))))
+            .flatten()?;
+        self.supertypes(*enclosing).into_iter().find_map(|sup| {
+            let nested = format!("{}.{name}", full_name(self.files[sup.0], self.decl(sup)));
+            self.by_name.get(&nested).copied()
+        })
+    }
+
+    /// A type imported by name, else in the file's package, else in exactly
+    /// one of its wildcard imports.
+    fn imported(&self, f: &FileIndex, name: &str) -> Option<TypeId> {
         if let Some(import) = f
             .imports
             .iter()
@@ -929,7 +1005,7 @@ impl<'a> ProjectIndex<'a> {
         {
             return self.by_name.get(import).copied();
         }
-        if let Some(id) = self.by_name.get(&package(&f.package, name)) {
+        if let Some(id) = self.by_name.get(&in_package(&f.package, name)) {
             return Some(*id);
         }
         let mut found = f

@@ -102,63 +102,70 @@ fn defaults(bytes: &[u8], open: usize, blank: &mut Vec<(usize, usize)>) -> usize
     let mut default_from: Option<usize> = None;
     let mut i = open;
     while i < bytes.len() {
-        let b = bytes[i];
-        match b {
+        match bytes[i] {
             b'\'' | b'"' => {
-                // Skip a string, triple-quoted or not.
-                let triple = bytes[i..].starts_with(&[b, b, b]);
-                let quote: &[u8] = if triple {
-                    &bytes[i..i + 3]
-                } else {
-                    &bytes[i..=i]
-                };
-                let mut j = i + quote.len();
-                while j < bytes.len() && !bytes[j..].starts_with(quote) {
-                    if bytes[j] == b'\\' {
-                        j += 1;
-                    } else if bytes[j] == b'\n' && !triple {
-                        break;
-                    }
-                    j += 1;
-                }
-                i = j + quote.len();
+                i = after_string(bytes, i);
                 continue;
             }
             b'#' => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
+                i = end_of_line(bytes, i);
                 continue;
             }
             b'[' | b'(' | b'{' => depth += 1,
             b']' | b')' | b'}' => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    if let Some(from) = default_from.take() {
-                        blank.push((from, i));
-                    }
+                    blank.extend(default_from.take().map(|from| (from, i)));
                     return i + 1;
                 }
             }
-            b',' if depth == 1 => {
-                if let Some(from) = default_from.take() {
-                    blank.push((from, i));
-                }
-            }
-            b'=' if depth == 1 && default_from.is_none() => {
-                // Not part of `==`, `<=`, `>=` or `!=`: none belongs in a
-                // type parameter list, but don't take them for a default.
-                let prev = i.checked_sub(1).map(|p| bytes[p]);
-                let next = bytes.get(i + 1).copied();
-                if !matches!(prev, Some(b'=' | b'<' | b'>' | b'!')) && next != Some(b'=') {
-                    default_from = Some(i);
-                }
+            b',' if depth == 1 => blank.extend(default_from.take().map(|from| (from, i))),
+            b'=' if depth == 1 && default_from.is_none() && is_default_equals(bytes, i) => {
+                default_from = Some(i);
             }
             _ => {}
         }
         i += 1;
     }
     bytes.len()
+}
+
+/// Where a string starting at `i` (its quote) ends, triple-quoted or not.
+fn after_string(bytes: &[u8], i: usize) -> usize {
+    let b = bytes[i];
+    let triple = bytes[i..].starts_with(&[b, b, b]);
+    let quote: &[u8] = if triple {
+        &bytes[i..i + 3]
+    } else {
+        &bytes[i..=i]
+    };
+    let mut j = i + quote.len();
+    while j < bytes.len() && !bytes[j..].starts_with(quote) {
+        if bytes[j] == b'\\' {
+            j += 1;
+        } else if bytes[j] == b'\n' && !triple {
+            break;
+        }
+        j += 1;
+    }
+    j + quote.len()
+}
+
+/// The line feed ending the line `i` is on, or the end.
+fn end_of_line(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && bytes[i] != b'\n' {
+        i += 1;
+    }
+    i
+}
+
+/// Whether the `=` at `i` is a default's, not part of `==`, `<=`, `>=` or
+/// `!=`: none belongs in a type parameter list, but don't take them for a
+/// default.
+fn is_default_equals(bytes: &[u8], i: usize) -> bool {
+    let prev = i.checked_sub(1).map(|p| bytes[p]);
+    let next = bytes.get(i + 1).copied();
+    !matches!(prev, Some(b'=' | b'<' | b'>' | b'!')) && next != Some(b'=')
 }
 
 #[cfg(test)]
