@@ -417,7 +417,7 @@ file, the report formats and the public library API.
     interface (`IParser`) for one, and checks its implementers.
 - C and C++, compared with SonarCloud on qutepart-cpp and roo_display (our
   SonarQube 26.7 has no C/C++ analyzer, so each rule follows what SonarCloud
-  reported): sonda raises 352 of qutepart-cpp's 746 C and C++ issues, where
+  reported): sonda raises 365 of qutepart-cpp's 746 C and C++ issues, where
   it raised 62, and 2,231 of roo_display's 2,958, where it raised 152.
   - 19 C++ rules, `cpp/*`: C-style arrays, implicit converting
     constructors, nesting depth, mergeable ifs, several declarations per
@@ -442,7 +442,8 @@ file, the report formats and the public library API.
     its type found in another file when it's a field or member function.
     `cpp/const-member-function` (off by default) reports a member function
     that changes nothing of its object, judged with the class's fields and
-    const functions from the index.
+    const functions from the index. `cpp/const-reference-variable`
+    reports a range-for reference only used through `->`.
   - A `.h` written in C++ is read as C++ in a project with C++ sources.
   - Cognitive complexity's threshold is each language's default unless
     `thresholds.cognitive_complexity` sets it: 25 in C and C++, 15
