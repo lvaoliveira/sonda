@@ -3133,29 +3133,17 @@ pub(super) fn first_binding_in_scope(name: Node, src: &[u8]) -> bool {
         }
         root
     });
-    let mut cursor = scope.walk();
-    loop {
-        let node = cursor.node();
-        if node.kind() == "identifier" && text(node, src) == n && is_binding(node) {
-            return node.id() == name.id();
-        }
-        let nested = node.id() != scope.id()
-            && matches!(
-                node.kind(),
-                "function_definition" | "class_definition" | "lambda"
-            );
-        if !nested && cursor.goto_first_child() {
-            continue;
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() || cursor.node().id() == scope.id() {
-                return true;
-            }
-        }
-    }
+    // Nested functions, classes and lambdas are scopes of their own.
+    let descend = |node: Node| {
+        !matches!(
+            node.kind(),
+            "function_definition" | "class_definition" | "lambda"
+        )
+    };
+    first_below(scope, descend, |node| {
+        node.kind() == "identifier" && text(node, src) == n && is_binding(node)
+    })
+    .is_none_or(|first| first.id() == name.id())
 }
 
 /// An identifier that gives a name a value: an assignment's target, part of

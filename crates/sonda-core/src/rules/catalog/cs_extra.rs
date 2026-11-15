@@ -1616,75 +1616,79 @@ fn in_static_member(n: Node, src: &[u8]) -> bool {
 }
 
 fn subtracts_from_now(node: Node, src: &[u8]) -> bool {
-    let now = |t: &[u8]| {
-        matches!(
-            t,
-            b"DateTime.Now"
-                | b"DateTime.UtcNow"
-                | b"System.DateTime.Now"
-                | b"System.DateTime.UtcNow"
-        )
-    };
     // `DateTime.Now - start`, with start a local that was `DateTime.Now`
     // too: a field, a property or a TimeSpan isn't a measurement (measured
     // on SonarQube 26.7).
     operator_text(node, src) == b"-"
         && node
             .child_by_field_name("left")
-            .is_some_and(|l| now(text(l, src)))
+            .is_some_and(|l| is_now(text(l, src)))
         && node
             .child_by_field_name("right")
             .filter(|r| r.kind() == "identifier")
             .is_some_and(|r| {
-                let name = text(r, src);
-                let mut owner = node.parent();
-                while let Some(o) = owner {
-                    if matches!(
-                        o.kind(),
-                        "method_declaration"
-                            | "constructor_declaration"
-                            | "local_function_statement"
-                            | "lambda_expression"
-                            | "accessor_declaration"
-                    ) {
-                        break;
-                    }
-                    owner = o.parent();
-                }
-                let Some(owner) = owner else {
-                    return false;
-                };
-                let mut stack = vec![owner];
-                while let Some(n) = stack.pop() {
-                    let value = match n.kind() {
-                        "variable_declarator"
-                            if n.child_by_field_name("name")
-                                .is_some_and(|x| text(x, src) == name) =>
-                        {
-                            n.named_children(&mut n.walk()).last()
-                        }
-                        "assignment_expression"
-                            if n.child_by_field_name("left")
-                                .is_some_and(|x| text(x, src) == name) =>
-                        {
-                            n.child_by_field_name("right")
-                        }
-                        _ => None,
-                    };
-                    if value.is_some_and(|v| {
-                        let v = if v.kind() == "equals_value_clause" {
-                            v.named_child(0).unwrap_or(v)
-                        } else {
-                            v
-                        };
-                        now(text(v, src))
-                    }) {
-                        return true;
-                    }
-                    stack.extend(n.named_children(&mut n.walk()));
-                }
-                false
+                code_owner(node).is_some_and(|owner| local_set_to_now(owner, text(r, src), src))
             })
+}
+
+fn is_now(t: &[u8]) -> bool {
+    matches!(
+        t,
+        b"DateTime.Now" | b"DateTime.UtcNow" | b"System.DateTime.Now" | b"System.DateTime.UtcNow"
+    )
+}
+
+/// The method, constructor, local function, lambda or accessor `node` is in.
+fn code_owner(node: Node) -> Option<Node> {
+    let mut owner = node.parent();
+    while let Some(o) = owner {
+        if matches!(
+            o.kind(),
+            "method_declaration"
+                | "constructor_declaration"
+                | "local_function_statement"
+                | "lambda_expression"
+                | "accessor_declaration"
+        ) {
+            break;
+        }
+        owner = o.parent();
+    }
+    owner
+}
+
+/// Whether `name` is declared or assigned as `DateTime.Now` in `owner`.
+fn local_set_to_now(owner: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut stack = vec![owner];
+    while let Some(n) = stack.pop() {
+        let value = match n.kind() {
+            "variable_declarator"
+                if n.child_by_field_name("name")
+                    .is_some_and(|x| text(x, src) == name) =>
+            {
+                n.named_children(&mut n.walk()).last()
+            }
+            "assignment_expression"
+                if n.child_by_field_name("left")
+                    .is_some_and(|x| text(x, src) == name) =>
+            {
+                n.child_by_field_name("right")
+            }
+            _ => None,
+        };
+        if value.is_some_and(|v| {
+            let v = if v.kind() == "equals_value_clause" {
+                v.named_child(0).unwrap_or(v)
+            } else {
+                v
+            };
+            is_now(text(v, src))
+        }) {
+            return true;
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    false
 }
 
 fn oddly_named_logger<'t>(field: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

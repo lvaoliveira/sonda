@@ -764,8 +764,9 @@ on the pull request itself:
 - **A `sonda` check run** on its head commit. Its conclusion is `success`
   when the gate passes, `failure` when it fails, and `neutral` when
   conditions lack data, so branch protection can require it. Its summary
-  says which conditions fail, the new issues by type and severity, and
-  coverage and duplication on new code.
+  says which conditions fail, which couldn't be checked and why (no
+  coverage report, or one that doesn't include the new lines), the new
+  issues by type and severity, and coverage and duplication on new code.
 - **Annotations** on the new issues, at most 50, most severe first. Each
   analysis's check run replaces the previous one, so a fixed issue's
   annotation is gone with it. Accepted and false-positive issues get none.
@@ -877,8 +878,44 @@ jobs:
     uses: lvaoliveira/sonda/.github/workflows/scan-pull-request.yml@vX.Y.Z
     with:
       project: shop
-      # args: --coverage coverage/lcov.info   # more sonda scan options
+      # args: --new-code origin/main   # more sonda scan options
 ```
+
+The scan job runs no tests. For coverage on the pull request, run them in a
+job before it and upload the LCOV reports as an artifact; the scan job
+downloads it into its checkout:
+
+```yaml
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci && npx vitest run --coverage   # writes coverage/lcov.info
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          retention-days: 1
+  scan:
+    needs: coverage
+    if: ${{ !cancelled() }}   # failed tests still get a scan
+    permissions:
+      contents: read
+    uses: lvaoliveira/sonda/.github/workflows/scan-pull-request.yml@vX.Y.Z
+    with:
+      project: shop
+      coverage-artifact: coverage
+      coverage: lcov.info   # space-separated; a missing one is skipped
+```
+
+An artifact keeps its files' paths from their common directory, so a lone
+`coverage/lcov.info` lands at the root as `lcov.info`, and reports from
+several directories keep theirs. Relative `SF:` paths resolve from where the
+report lands, then from the root.
 
 ```yaml
 # .github/workflows/sonda-upload.yml

@@ -59,7 +59,7 @@ mod worker;
 pub use error::Error;
 pub use gate::{
     ConditionResult, GateResult, MIN_NEW_LINES, Status, ignored_because, ignored_on_small_changes,
-    needs_advisories,
+    missing_because, needs_advisories,
 };
 pub use measures::Measures;
 pub use project::ProjectAnalysis;

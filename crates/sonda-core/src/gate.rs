@@ -7,7 +7,9 @@ use serde::Serialize;
 pub enum Status {
     Ok,
     Error,
-    /// The metric has no value (e.g. coverage without a report); not counted as failing.
+    /// The metric has no value (e.g. coverage without a report); not counted
+    /// as failing. The result's `reason` says why, when it's known (see
+    /// [`missing_because`]).
     NoData,
     /// Not evaluated, for the `reason` the result gives (see
     /// [`ignored_because`]); not counted as failing.
@@ -58,13 +60,27 @@ pub fn ignored_because(
     }
 }
 
+/// Why a metric has no value, when that can be told: coverage without a
+/// report that covers the scanned files, or coverage of new code whose
+/// lines the report doesn't include. `coverage` is the overall coverage.
+/// The CLI and the server share it.
+pub fn missing_because(metric: Metric, coverage: Option<f64>) -> Option<&'static str> {
+    match metric {
+        Metric::Coverage | Metric::NewCoverage if coverage.is_none() => Some(
+            "no coverage report (`sonda scan --coverage`), or none that covers the scanned files",
+        ),
+        Metric::NewCoverage => Some("the coverage report doesn't include the new lines"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConditionResult {
     #[serde(flatten)]
     pub condition: Condition,
     pub actual: Option<f64>,
     pub status: Status,
-    /// Why it's ignored, when it is.
+    /// Why it's ignored, or why it has no data when that's known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
 }
@@ -77,13 +93,14 @@ pub struct GateResult {
 
 pub(crate) fn evaluate(conditions: &[Condition], measures: &Measures) -> GateResult {
     let new_lines = measures.get(&Metric::NewLines).copied().flatten();
+    let coverage = measures.get(&Metric::Coverage).copied().flatten();
     let results: Vec<ConditionResult> = conditions
         .iter()
         .map(|c| {
             let actual = measures.get(&c.metric).copied().flatten();
-            let reason = ignored_because(c.metric, actual, new_lines);
+            let ignored = ignored_because(c.metric, actual, new_lines);
             let status = match actual {
-                _ if reason.is_some() => Status::Ignored,
+                _ if ignored.is_some() => Status::Ignored,
                 None => Status::NoData,
                 Some(v)
                     if (c.op == Op::Gt && v > c.threshold)
@@ -92,6 +109,10 @@ pub(crate) fn evaluate(conditions: &[Condition], measures: &Measures) -> GateRes
                     Status::Error
                 }
                 Some(_) => Status::Ok,
+            };
+            let reason = match status {
+                Status::NoData => missing_because(c.metric, coverage),
+                _ => ignored,
             };
             ConditionResult {
                 condition: c.clone(),
@@ -134,6 +155,38 @@ mod tests {
         assert!(!r.passed);
         let statuses: Vec<_> = r.conditions.iter().map(|c| c.status).collect();
         assert_eq!(statuses, vec![Status::Error, Status::NoData, Status::Ok]);
+        assert_eq!(
+            r.conditions[1].reason,
+            Some("the coverage report doesn't include the new lines")
+        );
+    }
+
+    #[test]
+    fn coverage_without_a_report_says_so() {
+        let condition = Condition {
+            metric: Metric::NewCoverage,
+            op: Op::Lt,
+            threshold: 80.0,
+        };
+        let measures = Measures::from([
+            (Metric::NewLines, Some(40.0)),
+            (Metric::Coverage, None),
+            (Metric::NewCoverage, None),
+        ]);
+        let r = evaluate(std::slice::from_ref(&condition), &measures);
+        assert!(r.passed);
+        assert_eq!(r.conditions[0].status, Status::NoData);
+        assert_eq!(
+            r.conditions[0].reason,
+            Some(
+                "no coverage report (`sonda scan --coverage`), or none that covers the scanned files"
+            )
+        );
+        // Other metrics without a value have no known reason.
+        assert_eq!(
+            missing_because(Metric::NewDuplicatedLinesDensity, None),
+            None
+        );
     }
 
     #[test]

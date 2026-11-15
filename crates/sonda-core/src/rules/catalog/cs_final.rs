@@ -1031,12 +1031,6 @@ fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
     let Some(value) = cs_string_value(literal, src) else {
         return false;
     };
-    let location = |n: &[u8]| {
-        let l = n.to_ascii_lowercase();
-        [&b"url"[..], b"uri", b"path", b"file", b"folder", b"dir"]
-            .iter()
-            .any(|w| l.windows(w.len()).any(|x| x == *w))
-    };
     let Some(parent) = literal.parent() else {
         return false;
     };
@@ -1046,58 +1040,82 @@ fn is_hardcoded_location(literal: Node, src: &[u8]) -> bool {
         || (literal.kind() == "string_literal" && value == b"\\\\")
         || (literal.kind() == "verbatim_string_literal" && value == b"\\");
     if delimiter {
-        // Joined with `+` into a value given to a location's name, not
-        // returned or compared (measured on SonarQube 26.7).
-        if parent.kind() != "binary_expression"
-            || parent
-                .child_by_field_name("operator")
-                .is_none_or(|o| text(o, src) != b"+")
-        {
-            return false;
-        }
-        let mut top = parent;
-        while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
-            top = p;
-        }
-        let target = top.parent().and_then(|p| match p.kind() {
-            "assignment_expression" => p.child_by_field_name("left").map(|n| text(n, src)),
-            "variable_declarator" => p.child_by_field_name("name").map(|n| text(n, src)),
-            "equals_value_clause" => p
-                .parent()
-                .and_then(|d| d.child_by_field_name("name"))
-                .map(|n| text(n, src)),
-            "argument" => p
-                .child_by_field_name("name")
-                .map(|n| text(n, src))
-                .or_else(|| parameter_name_for(p, src)),
-            _ => None,
-        });
-        return target.is_some_and(location);
+        return delimiter_joined_into_location(parent, src);
     }
-    let is_uri = value.windows(3).any(|w| w == b"://");
-    let is_path = (value.len() > 3 && value[1] == b':' && matches!(value[2], b'\\' | b'/') && value[0].is_ascii_alphabetic())
-        // Unix paths under a filesystem root; "/Account/Login" is a route.
-        || ([&b"/var/"[..], b"/usr/", b"/etc/", b"/home/", b"/opt/", b"/srv/", b"/mnt/", b"/tmp/", b"/Users/", b"/data/"]
-            .iter()
-            .any(|root| value.starts_with(root)))
-        || value.starts_with(b"\\\\");
-    if !(is_uri || is_path) || value.contains(&b'{') {
+    if !looks_like_a_location(value) || value.contains(&b'{') {
         return false;
     }
-    let name = match parent.kind() {
-        "variable_declarator" => parent.child_by_field_name("name").map(|n| text(n, src)),
-        "equals_value_clause" => parent
+    receiving_name(parent, src).is_some_and(names_a_location)
+}
+
+/// Whether a delimiter's `+` joins it into a value given to a location's
+/// name, not returned or compared (measured on SonarQube 26.7).
+fn delimiter_joined_into_location(parent: Node, src: &[u8]) -> bool {
+    if parent.kind() != "binary_expression"
+        || parent
+            .child_by_field_name("operator")
+            .is_none_or(|o| text(o, src) != b"+")
+    {
+        return false;
+    }
+    let mut top = parent;
+    while let Some(p) = top.parent().filter(|p| p.kind() == "binary_expression") {
+        top = p;
+    }
+    top.parent()
+        .and_then(|p| receiving_name(p, src))
+        .is_some_and(names_a_location)
+}
+
+/// A URI, a Windows path or share, or a Unix path under a filesystem root
+/// ("/Account/Login" is a route).
+fn looks_like_a_location(value: &[u8]) -> bool {
+    let is_uri = value.windows(3).any(|w| w == b"://");
+    let windows_path = value.len() > 3
+        && value[1] == b':'
+        && matches!(value[2], b'\\' | b'/')
+        && value[0].is_ascii_alphabetic();
+    let unix_path = [
+        &b"/var/"[..],
+        b"/usr/",
+        b"/etc/",
+        b"/home/",
+        b"/opt/",
+        b"/srv/",
+        b"/mnt/",
+        b"/tmp/",
+        b"/Users/",
+        b"/data/",
+    ]
+    .iter()
+    .any(|root| value.starts_with(root));
+    is_uri || windows_path || unix_path || value.starts_with(b"\\\\")
+}
+
+/// The name a value is given to: the variable declared or assigned, or the
+/// parameter it's passed for.
+fn receiving_name<'s>(node: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    match node.kind() {
+        "variable_declarator" => node.child_by_field_name("name").map(|n| text(n, src)),
+        "equals_value_clause" => node
             .parent()
             .and_then(|d| d.child_by_field_name("name"))
             .map(|n| text(n, src)),
-        "assignment_expression" => parent.child_by_field_name("left").map(|n| text(n, src)),
-        "argument" => parent
+        "assignment_expression" => node.child_by_field_name("left").map(|n| text(n, src)),
+        "argument" => node
             .child_by_field_name("name")
             .map(|n| text(n, src))
-            .or_else(|| parameter_name_for(parent, src)),
+            .or_else(|| parameter_name_for(node, src)),
         _ => None,
-    };
-    name.is_some_and(location)
+    }
+}
+
+/// A name with url, uri, path, file, folder or dir in it.
+fn names_a_location(name: &[u8]) -> bool {
+    let l = name.to_ascii_lowercase();
+    [&b"url"[..], b"uri", b"path", b"file", b"folder", b"dir"]
+        .iter()
+        .any(|w| l.windows(w.len()).any(|x| x == *w))
 }
 
 /// The name of the parameter an argument goes to: a method's or

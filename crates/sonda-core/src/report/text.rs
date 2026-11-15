@@ -203,7 +203,11 @@ fn write_gate(out: &mut String, r: &Report) {
         let (mark, actual) = match c.status {
             Status::Ok => ("✓", format!("{}", c.actual.unwrap_or_default())),
             Status::Error => ("✗", format!("{}", c.actual.unwrap_or_default())),
-            Status::NoData => ("–", "no data".into()),
+            Status::NoData => (
+                "–",
+                c.reason
+                    .map_or("no data".into(), |r| format!("no data: {r}")),
+            ),
             Status::Ignored => (
                 "–",
                 format!(

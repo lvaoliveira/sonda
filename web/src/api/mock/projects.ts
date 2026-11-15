@@ -132,7 +132,7 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
       conditions: [
         { label: 'New bugs > 0', metric: 'new_bugs', actual: 0, status: 'ok' },
         { label: 'New vulnerabilities > 0', metric: 'new_vulnerabilities', actual: failing ? 2 : 0, status: verdict },
-        { label: 'Coverage on new code < 80%', metric: 'new_coverage', actual: p.coverage == null ? null : 76.8, status: p.coverage == null ? 'no_data' : verdict },
+        { label: 'Coverage on new code < 80%', metric: 'new_coverage', actual: p.coverage == null ? null : 76.8, status: p.coverage == null ? 'no_data' : verdict, reason: p.coverage == null ? 'no coverage report (`sonda scan --coverage`), or none that covers the scanned files' : null },
         { label: 'Duplication on new code > 3%', metric: 'new_duplicated_lines_density', actual: 1.4, status: 'ok' },
       ],
       serverGate: null,

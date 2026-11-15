@@ -1428,57 +1428,63 @@ fn constant_assigned_in_constructor<'t>(method: Node<'t>, _: &[u8]) -> Option<No
 /// or `export const A = a;`. A default import isn't one (measured on
 /// SonarQube 26.7), since `export { default as a } from` says no more.
 fn imports_exported_again<'t>(program: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let imported = imported_names(program, src);
+    named(program)
+        .into_iter()
+        .filter(|s| s.kind() == "export_statement" && s.child_by_field_name("source").is_none())
+        .flat_map(|s| exported_imports(s, &imported, src))
+        .collect()
+}
+
+/// The local name of everything the module imports.
+fn imported_names<'s>(program: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut imported: Vec<&[u8]> = Vec::new();
-    for statement in named(program) {
-        if statement.kind() != "import_statement" {
-            continue;
-        }
-        let mut stack = vec![statement];
-        while let Some(n) = stack.pop() {
-            match n.kind() {
-                "import_specifier" => {
-                    let local = n
-                        .child_by_field_name("alias")
-                        .or_else(|| n.child_by_field_name("name"));
-                    imported.extend(local.map(|l| text(l, src)));
-                }
-                "namespace_import" => {
-                    imported.extend(
-                        named(n)
-                            .into_iter()
-                            .find(|c| c.kind() == "identifier")
-                            .map(|c| text(c, src)),
-                    );
-                }
-                "import_statement" | "import_clause" | "named_imports" => stack.extend(named(n)),
-                _ => {}
+    let mut stack: Vec<Node> = named(program)
+        .into_iter()
+        .filter(|s| s.kind() == "import_statement")
+        .rev()
+        .collect();
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "import_specifier" => {
+                let local = n
+                    .child_by_field_name("alias")
+                    .or_else(|| n.child_by_field_name("name"));
+                imported.extend(local.map(|l| text(l, src)));
             }
+            "namespace_import" => imported.extend(
+                named(n)
+                    .into_iter()
+                    .find(|c| c.kind() == "identifier")
+                    .map(|c| text(c, src)),
+            ),
+            "import_statement" | "import_clause" | "named_imports" => stack.extend(named(n)),
+            _ => {}
         }
     }
+    imported
+}
+
+/// What a local export statement exports again of the imports: an
+/// `export { x }` specifier, or `export const BAN = fasBan;`.
+fn exported_imports<'t>(statement: Node<'t>, imported: &[&[u8]], src: &[u8]) -> Vec<Node<'t>> {
     let mut found = Vec::new();
-    for s in named(program) {
-        if s.kind() != "export_statement" || s.child_by_field_name("source").is_some() {
-            continue;
-        }
-        for clause in named(s) {
-            if clause.kind() == "export_clause" {
-                found.extend(named(clause).into_iter().filter(|spec| {
-                    spec.child_by_field_name("name")
-                        .is_some_and(|n| imported.contains(&text(n, src)))
-                }));
-            }
-        }
-        // `export const BAN = fasBan;`
-        if let Some(d) = s.child_by_field_name("declaration")
-            && d.kind() == "lexical_declaration"
-        {
-            found.extend(named(d).into_iter().filter(|v| {
-                v.kind() == "variable_declarator"
-                    && v.child_by_field_name("value").is_some_and(|x| {
-                        x.kind() == "identifier" && imported.contains(&text(x, src))
-                    })
+    for clause in named(statement) {
+        if clause.kind() == "export_clause" {
+            found.extend(named(clause).into_iter().filter(|spec| {
+                spec.child_by_field_name("name")
+                    .is_some_and(|n| imported.contains(&text(n, src)))
             }));
         }
+    }
+    if let Some(d) = statement.child_by_field_name("declaration")
+        && d.kind() == "lexical_declaration"
+    {
+        found.extend(named(d).into_iter().filter(|v| {
+            v.kind() == "variable_declarator"
+                && v.child_by_field_name("value")
+                    .is_some_and(|x| x.kind() == "identifier" && imported.contains(&text(x, src)))
+        }));
     }
     found
 }
@@ -1563,61 +1569,74 @@ fn known_array(e: Node, src: &[u8], depth: usize) -> bool {
 /// it's that function's parameter), or at the top of the module.
 pub(super) fn declared_value<'t>(name_node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let name = text(name_node, src);
-    let declares = |n: Node| {
-        n.kind() == "variable_declarator"
-            && n.child_by_field_name("name")
-                .is_some_and(|x| text(x, src) == name)
-    };
     let mut current = name_node.parent();
     while let Some(f) = current {
-        let function = matches!(
+        if matches!(
             f.kind(),
             "function_declaration" | "function_expression" | "arrow_function" | "method_definition"
-        );
-        if function {
-            let param = f.child_by_field_name("parameters").is_some_and(|p| {
-                let t = text(p, src);
-                t.split(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$')))
-                    .any(|w| w == name)
-            }) || f
-                .child_by_field_name("parameter")
-                .is_some_and(|p| text(p, src) == name);
-            if param {
-                return None;
-            }
-            let mut found = None;
-            if let Some(body) = f.child_by_field_name("body") {
-                super::js_syntax::walk(body, &mut |n| {
-                    if found.is_none() && declares(n) {
-                        found = n.child_by_field_name("value");
-                    }
-                    found.is_none()
-                });
-            }
-            if found.is_some() {
-                return found;
-            }
+        ) && let Some(found) = value_in_function(f, name, src)
+        {
+            return found;
         }
         if f.kind() == "program" {
-            for s in f.named_children(&mut f.walk()) {
-                let d = if s.kind() == "export_statement" {
-                    s.child_by_field_name("declaration")
-                } else {
-                    Some(s)
-                };
-                if let Some(d) =
-                    d.filter(|d| matches!(d.kind(), "lexical_declaration" | "variable_declaration"))
-                {
-                    for v in d.named_children(&mut d.walk()) {
-                        if declares(v) {
-                            return v.child_by_field_name("value");
-                        }
-                    }
-                }
-            }
-            return None;
+            return top_level_value(f, name, src);
         }
         current = f.parent();
+    }
+    None
+}
+
+fn declares_variable_named(n: Node, name: &[u8], src: &[u8]) -> bool {
+    n.kind() == "variable_declarator"
+        && n.child_by_field_name("name")
+            .is_some_and(|x| text(x, src) == name)
+}
+
+/// What a function says of `name`: `Some(None)` when a parameter shadows
+/// it, `Some(value)` when its body declares it, `None` when it does
+/// neither and the search goes on outside.
+fn value_in_function<'t>(f: Node<'t>, name: &[u8], src: &[u8]) -> Option<Option<Node<'t>>> {
+    let param = f.child_by_field_name("parameters").is_some_and(|p| {
+        let t = text(p, src);
+        t.split(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$')))
+            .any(|w| w == name)
+    }) || f
+        .child_by_field_name("parameter")
+        .is_some_and(|p| text(p, src) == name);
+    if param {
+        return Some(None);
+    }
+    let mut found = None;
+    if let Some(body) = f.child_by_field_name("body") {
+        super::js_syntax::walk(body, &mut |n| {
+            if found.is_none() && declares_variable_named(n, name, src) {
+                found = n.child_by_field_name("value");
+            }
+            found.is_none()
+        });
+    }
+    found.map(Some)
+}
+
+/// The value a top-level declaration, exported or not, gives `name`.
+fn top_level_value<'t>(program: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    for s in program.named_children(&mut program.walk()) {
+        let d = if s.kind() == "export_statement" {
+            s.child_by_field_name("declaration")
+        } else {
+            Some(s)
+        };
+        let Some(d) =
+            d.filter(|d| matches!(d.kind(), "lexical_declaration" | "variable_declaration"))
+        else {
+            continue;
+        };
+        if let Some(v) = d
+            .named_children(&mut d.walk())
+            .find(|v| declares_variable_named(*v, name, src))
+        {
+            return v.child_by_field_name("value");
+        }
     }
     None
 }
@@ -1629,34 +1648,35 @@ fn array_only_asks_includes(declarator: Node, src: &[u8]) -> bool {
     ) else {
         return false;
     };
-    if !is_const_declaration(declarator) {
+    if !is_const_declaration(declarator) || !is_lookup_array(value, src) {
         return false;
     }
-    if value.kind() == "call_expression" {
-        // An array built by a call: only the methods that return one.
-        let builds_an_array = value
-            .child_by_field_name("function")
-            .and_then(|f| f.child_by_field_name("property"))
-            .is_some_and(|p| matches!(text(p, src), b"map" | b"filter" | b"flatMap" | b"slice"));
-        if !builds_an_array {
-            return false;
-        }
-    } else {
-        let items = named(value);
-        if items.len() < 2
-            || !items
-                .iter()
-                .all(|i| matches!(i.kind(), "string" | "number"))
-        {
-            return false;
-        }
-    }
-    // Every use of the name in its scope, comments and property names aside,
-    // calls includes() on it.
-    let n = text(name, src);
     let Some(scope) = scope_node(declarator) else {
         return false;
     };
+    only_asks_includes(scope, name, src)
+}
+
+/// An array literal of two or more strings or numbers, or one built by
+/// `map`, `filter`, `flatMap` or `slice`.
+fn is_lookup_array(value: Node, src: &[u8]) -> bool {
+    if value.kind() == "call_expression" {
+        return value
+            .child_by_field_name("function")
+            .and_then(|f| f.child_by_field_name("property"))
+            .is_some_and(|p| matches!(text(p, src), b"map" | b"filter" | b"flatMap" | b"slice"));
+    }
+    let items = named(value);
+    items.len() >= 2
+        && items
+            .iter()
+            .all(|i| matches!(i.kind(), "string" | "number"))
+}
+
+/// Whether every use of `name` in its scope, comments and property names
+/// aside, calls includes() on it, and there's at least one.
+fn only_asks_includes(scope: Node, name: Node, src: &[u8]) -> bool {
+    let n = text(name, src);
     let (mut asks, mut other) = (0, 0);
     super::js_syntax::walk(scope, &mut |node| {
         if matches!(node.kind(), "identifier" | "shorthand_property_identifier")

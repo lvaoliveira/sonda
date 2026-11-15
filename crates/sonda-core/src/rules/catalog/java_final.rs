@@ -1319,44 +1319,8 @@ fn configuration_autowires_a_field<'t>(class: Node<'t>, src: &[u8]) -> Option<No
 /// stereotype annotation gives its class, `@Service("FooService")`
 /// (measured on SonarQube 26.7).
 fn bean_method_name_is_wrong<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    let camel = |n: &[u8]| {
-        n.first().is_some_and(u8::is_ascii_lowercase) && n.iter().all(u8::is_ascii_alphanumeric)
-    };
     if decl.kind() == "method_declaration" {
-        if !has_annotation(decl, b"Bean", src) {
-            return None;
-        }
-        // `@Bean("egov.sqlSession")` or `@Bean(name = ...)` names the bean
-        // itself, reported at that string (measured on SonarQube 26.7).
-        let given = decl
-            .children(&mut decl.walk())
-            .find(|c| c.kind() == "modifiers")
-            .and_then(|mods| {
-                let mut c = mods.walk();
-                mods.children(&mut c).find(|a| {
-                    a.kind() == "annotation"
-                        && a.child_by_field_name("name")
-                            .is_some_and(|n| text(n, src) == b"Bean")
-                })
-            })
-            .and_then(|bean| {
-                let mut stack = vec![bean.child_by_field_name("arguments")?];
-                while let Some(n) = stack.pop() {
-                    if n.kind() == "string_literal" {
-                        return Some(n);
-                    }
-                    let mut c = n.walk();
-                    stack.extend(n.named_children(&mut c));
-                }
-                None
-            });
-        return match given {
-            Some(value) => {
-                let name = string_value(value, src)?;
-                (!name.is_empty() && !camel(name)).then_some(value)
-            }
-            None => (!camel(name_text(decl, src))).then_some(decl),
-        };
+        return bean_name_is_wrong(decl, src);
     }
     // The name a stereotype gives, reported where it's written.
     let mods = decl
@@ -1364,25 +1328,72 @@ fn bean_method_name_is_wrong<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>>
         .find(|c| c.kind() == "modifiers")?;
     let mut c = mods.walk();
     mods.children(&mut c).find_map(|a| {
-        let stereotype = a.kind() == "annotation"
-            && a.child_by_field_name("name").is_some_and(|n| {
-                matches!(
-                    text(n, src),
-                    b"Component"
-                        | b"Service"
-                        | b"Repository"
-                        | b"Controller"
-                        | b"RestController"
-                        | b"Configuration"
-                )
-            });
         let value = a
             .child_by_field_name("arguments")
             .and_then(|args| args.named_child(0))
             .filter(|v| v.kind() == "string_literal")?;
         let name = string_value(value, src)?;
-        (stereotype && !name.is_empty() && !camel(name)).then_some(value)
+        (is_stereotype(a, src) && !name.is_empty() && !is_camel(name)).then_some(value)
     })
+}
+
+/// A `@Bean` method's name, or the name its annotation gives
+/// (`@Bean("egov.sqlSession")`, `@Bean(name = ...)`), reported at that
+/// string (measured on SonarQube 26.7), when it isn't camel case.
+fn bean_name_is_wrong<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if !has_annotation(decl, b"Bean", src) {
+        return None;
+    }
+    match bean_annotation_string(decl, src) {
+        Some(value) => {
+            let name = string_value(value, src)?;
+            (!name.is_empty() && !is_camel(name)).then_some(value)
+        }
+        None => (!is_camel(name_text(decl, src))).then_some(decl),
+    }
+}
+
+/// The first string in a declaration's `@Bean(...)` arguments.
+fn bean_annotation_string<'t>(decl: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let mods = decl
+        .children(&mut decl.walk())
+        .find(|c| c.kind() == "modifiers")?;
+    let mut c = mods.walk();
+    let bean = mods.children(&mut c).find(|a| {
+        a.kind() == "annotation"
+            && a.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"Bean")
+    })?;
+    let mut stack = vec![bean.child_by_field_name("arguments")?];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "string_literal" {
+            return Some(n);
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    None
+}
+
+/// `@Component`, `@Service` and the other annotations that name a bean.
+fn is_stereotype(annotation: Node, src: &[u8]) -> bool {
+    annotation.kind() == "annotation"
+        && annotation.child_by_field_name("name").is_some_and(|n| {
+            matches!(
+                text(n, src),
+                b"Component"
+                    | b"Service"
+                    | b"Repository"
+                    | b"Controller"
+                    | b"RestController"
+                    | b"Configuration"
+            )
+        })
+}
+
+/// `camelCase`: a lowercase first letter, then letters and digits only.
+fn is_camel(name: &[u8]) -> bool {
+    name.first().is_some_and(u8::is_ascii_lowercase) && name.iter().all(u8::is_ascii_alphanumeric)
 }
 
 fn bean_method_called_without_proxy<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {

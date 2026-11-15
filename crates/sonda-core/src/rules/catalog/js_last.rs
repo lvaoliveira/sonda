@@ -996,6 +996,18 @@ fn last_write_never_read<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         return None;
     }
     let local = |name: &[u8]| !name.starts_with(b"_") && locals.iter().any(|(l, ..)| *l == name);
+    let mut uses = local_uses(body, &local, src);
+    uses.sort_by_key(|u| u.at);
+    last_unread_write(&uses)
+}
+
+/// Each read and statement write of a local in `body`, with whether it's in
+/// a loop or in a nested function.
+fn local_uses<'s, 't>(
+    body: Node<'t>,
+    local: &dyn Fn(&[u8]) -> bool,
+    src: &'s [u8],
+) -> Vec<LocalUse<'s, 't>> {
     let mut uses: Vec<LocalUse> = Vec::new();
     let mut stack = vec![(body, false, false)];
     while let Some((n, in_loop, nested)) = stack.pop() {
@@ -1018,41 +1030,54 @@ fn last_write_never_read<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
                 "for_statement" | "for_in_statement" | "while_statement" | "do_statement"
             );
         let nested = nested || (n.id() != body.id() && is_function_kind(n.kind()));
-        // A declaration's name is neither a read nor a statement's write.
-        if n.kind() == "variable_declarator" {
-            if let Some(value) = n.child_by_field_name("value") {
-                stack.push((value, in_loop, nested));
-            }
-            continue;
-        }
-        let assignment = (n.kind() == "expression_statement")
-            .then(|| n.named_child(0))
-            .flatten()
-            .filter(|a| a.kind() == "assignment_expression");
-        if let Some(a) = assignment
-            && let Some(left) = a
-                .child_by_field_name("left")
-                .filter(|l| l.kind() == "identifier" && local(text(*l, src)))
-        {
-            uses.push(LocalUse {
-                name: text(left, src),
-                at: left.start_byte(),
-                write: Some(a),
-                in_loop,
-                nested,
-            });
-            if let Some(right) = a.child_by_field_name("right") {
-                stack.push((right, in_loop, nested));
-            }
-            continue;
-        }
-        let mut cursor = n.walk();
-        stack.extend(n.named_children(&mut cursor).map(|c| (c, in_loop, nested)));
+        let next = local_use_children(n, in_loop, nested, local, &mut uses, src);
+        stack.extend(next.into_iter().map(|c| (c, in_loop, nested)));
     }
-    uses.sort_by_key(|u| u.at);
-    // Only a name's last use can be a write nothing reads after: per name,
-    // that use, whether it was read before, and whether a nested function
-    // uses it.
+    uses
+}
+
+/// What to look at below `n`, recording a statement's write to a local: a
+/// declaration's value only, its name being neither a read nor a write; an
+/// assignment statement's value; else every child.
+fn local_use_children<'s, 't>(
+    n: Node<'t>,
+    in_loop: bool,
+    nested: bool,
+    local: &dyn Fn(&[u8]) -> bool,
+    uses: &mut Vec<LocalUse<'s, 't>>,
+    src: &'s [u8],
+) -> Vec<Node<'t>> {
+    if n.kind() == "variable_declarator" {
+        return n.child_by_field_name("value").into_iter().collect();
+    }
+    let assignment = (n.kind() == "expression_statement")
+        .then(|| n.named_child(0))
+        .flatten()
+        .filter(|a| a.kind() == "assignment_expression");
+    if let Some(a) = assignment
+        && let Some(left) = a
+            .child_by_field_name("left")
+            .filter(|l| l.kind() == "identifier" && local(text(*l, src)))
+    {
+        uses.push(LocalUse {
+            name: text(left, src),
+            at: left.start_byte(),
+            write: Some(a),
+            in_loop,
+            nested,
+        });
+        return a.child_by_field_name("right").into_iter().collect();
+    }
+    let mut cursor = n.walk();
+    n.named_children(&mut cursor).collect()
+}
+
+/// The first write that is a name's last use, read before, outside a loop,
+/// and not used by a nested function. Only a name's last use can be a
+/// write nothing reads after.
+fn last_unread_write<'t>(uses: &[LocalUse<'_, 't>]) -> Option<Node<'t>> {
+    // Per name: its last use, whether it was read before, and whether a
+    // nested function uses it.
     let mut by_name: Vec<(&[u8], usize, bool, bool)> = Vec::new();
     for (i, u) in uses.iter().enumerate() {
         let name = u.name;
@@ -2318,77 +2343,91 @@ fn declares_unused_props<'t>(node: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     let Some(declaration) = props_type_in_file(root_node(node), text(ty, src), src) else {
         return Vec::new();
     };
-    let Some(pattern) = param.child_by_field_name("pattern") else {
+    let Some(keys) = param
+        .child_by_field_name("pattern")
+        .and_then(|pattern| props_read(func, pattern, src))
+    else {
         return Vec::new();
     };
+    // A name the body destructures from something else counts as the prop's
+    // use too (SonarCloud, on Prowlarr: `const { sortKey } = useSelector(...)`).
+    let destructured = destructured_names(func, src);
+    type_members(declaration)
+        .into_iter()
+        .filter(|m| {
+            m.kind() == "property_signature"
+                && m.child_by_field_name("name").is_some_and(|n| {
+                    let n = text(n, src);
+                    !keys.contains(&n) && !destructured.contains(&n)
+                })
+        })
+        .collect()
+}
+
+/// The props a component's first parameter takes: destructured
+/// (`{ a, b }`), or, for `props: P`, what the body reads of it. `None`
+/// when it may use any of them: a rest element, the props object used
+/// whole, or another pattern.
+fn props_read<'s>(func: Node, pattern: Node, src: &'s [u8]) -> Option<Vec<&'s [u8]>> {
     let mut keys: Vec<&[u8]> = Vec::new();
-    /// The keys an object pattern takes; false when a rest takes the others.
-    fn collect_keys<'s>(pattern: Node, src: &'s [u8], keys: &mut Vec<&'s [u8]>) -> bool {
-        for c in named(pattern) {
-            match c.kind() {
-                "pair_pattern" => {
-                    if let Some(k) = c.child_by_field_name("key") {
-                        keys.push(text(k, src));
-                    }
-                }
-                "shorthand_property_identifier_pattern" | "object_assignment_pattern" => {
-                    keys.push(text(c.child_by_field_name("left").unwrap_or(c), src));
-                }
-                "rest_pattern" => return false,
-                _ => {}
-            }
-        }
-        true
-    }
     match pattern.kind() {
-        "object_pattern" => {
-            if !collect_keys(pattern, src, &mut keys) {
-                return Vec::new();
-            }
-        }
+        "object_pattern" => collect_pattern_keys(pattern, src, &mut keys).then_some(keys),
         "identifier" => {
-            // `function F(props: P)`: what the body reads of props.
             let name = text(pattern, src);
-            let Some(body) = func.child_by_field_name("body") else {
-                return Vec::new();
-            };
+            let body = func.child_by_field_name("body")?;
             let mut whole = false;
             walk(body, &mut |n| {
                 if n.kind() == "identifier" && text(n, src) == name {
-                    match n.parent() {
-                        Some(p)
-                            if p.kind() == "member_expression"
-                                && p.child_by_field_name("object") == Some(n) =>
-                        {
-                            if let Some(k) = p.child_by_field_name("property") {
-                                keys.push(text(k, src));
-                            }
-                        }
-                        Some(p)
-                            if p.kind() == "variable_declarator"
-                                && p.child_by_field_name("value") == Some(n)
-                                && p.child_by_field_name("name")
-                                    .is_some_and(|x| x.kind() == "object_pattern") =>
-                        {
-                            if let Some(x) = p.child_by_field_name("name")
-                                && !collect_keys(x, src, &mut keys)
-                            {
-                                whole = true;
-                            }
-                        }
-                        _ => whole = true,
-                    }
+                    whole = !note_prop_read(n, src, &mut keys);
                 }
                 !whole
             });
-            if whole {
-                return Vec::new();
-            }
+            (!whole).then_some(keys)
         }
-        _ => return Vec::new(),
+        _ => None,
     }
-    // A name the body destructures from something else counts as the prop's
-    // use too (SonarCloud, on Prowlarr: `const { sortKey } = useSelector(...)`).
+}
+
+/// Notes what a use of the props parameter reads: `props.a`, or
+/// `const { a } = props`. False when it may read any prop.
+fn note_prop_read<'s>(n: Node, src: &'s [u8], keys: &mut Vec<&'s [u8]>) -> bool {
+    match n.parent() {
+        Some(p)
+            if p.kind() == "member_expression" && p.child_by_field_name("object") == Some(n) =>
+        {
+            keys.extend(p.child_by_field_name("property").map(|k| text(k, src)));
+            true
+        }
+        Some(p)
+            if p.kind() == "variable_declarator"
+                && p.child_by_field_name("value") == Some(n)
+                && p.child_by_field_name("name")
+                    .is_some_and(|x| x.kind() == "object_pattern") =>
+        {
+            p.child_by_field_name("name")
+                .is_none_or(|x| collect_pattern_keys(x, src, keys))
+        }
+        _ => false,
+    }
+}
+
+/// The keys an object pattern takes; false when a rest takes the others.
+fn collect_pattern_keys<'s>(pattern: Node, src: &'s [u8], keys: &mut Vec<&'s [u8]>) -> bool {
+    for c in named(pattern) {
+        match c.kind() {
+            "pair_pattern" => keys.extend(c.child_by_field_name("key").map(|k| text(k, src))),
+            "shorthand_property_identifier_pattern" | "object_assignment_pattern" => {
+                keys.push(text(c.child_by_field_name("left").unwrap_or(c), src));
+            }
+            "rest_pattern" => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Every name the function's body destructures, from anything.
+fn destructured_names<'s>(func: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     let mut destructured: Vec<&[u8]> = Vec::new();
     if let Some(body) = func.child_by_field_name("body") {
         walk(body, &mut |n| {
@@ -2398,99 +2437,25 @@ fn declares_unused_props<'t>(node: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
             true
         });
     }
-    let in_body = |word: &[u8]| destructured.contains(&word);
-    type_members(declaration)
-        .into_iter()
-        .filter(|m| {
-            m.kind() == "property_signature"
-                && m.child_by_field_name("name").is_some_and(|n| {
-                    let n = text(n, src);
-                    !keys.contains(&n) && !in_body(n)
-                })
-        })
-        .collect()
+    destructured
 }
 
 /// Each default of a prop its propTypes mark required, at the default
 /// (measured on SonarQube 26.7).
 fn defaults_of_required_props<'t>(program: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
-    // Component.propTypes = { a: PropTypes.string.isRequired } and
-    // Component.defaultProps = { a: 'x' } name the same key.
-    let mut required: Vec<(Vec<u8>, Vec<&[u8]>)> = Vec::new();
-    // Every key each component's propTypes declare.
-    let mut declared: Vec<(Vec<u8>, Vec<&[u8]>)> = Vec::new();
-    let mut defaults: Vec<(Vec<u8>, Vec<Node<'t>>)> = Vec::new();
-    walk(program, &mut |n| {
-        if n.kind() == "assignment_expression"
-            && let (Some(left), Some(right)) = (
-                n.child_by_field_name("left"),
-                n.child_by_field_name("right"),
-            )
-            && left.kind() == "member_expression"
-            && right.kind() == "object"
-            && let (Some(obj), Some(prop)) = (
-                left.child_by_field_name("object"),
-                left.child_by_field_name("property"),
-            )
-        {
-            let pairs: Vec<Node<'t>> = named(right)
-                .into_iter()
-                .filter(|p| p.kind() == "pair")
-                .collect();
-            match text(prop, src) {
-                b"propTypes" => {
-                    declared.push((
-                        text(obj, src).to_vec(),
-                        named(right)
-                            .into_iter()
-                            .filter_map(|p| match p.kind() {
-                                "pair" => p.child_by_field_name("key").map(|k| text(k, src)),
-                                "shorthand_property_identifier" => Some(text(p, src)),
-                                _ => None,
-                            })
-                            .collect(),
-                    ));
-                    // A spread may declare any key.
-                    if named(right).iter().any(|p| p.kind() == "spread_element") {
-                        declared.push((text(obj, src).to_vec(), vec![b"*"]));
-                    }
-                    required.push((
-                        text(obj, src).to_vec(),
-                        pairs
-                            .iter()
-                            .filter(|p| {
-                                p.child_by_field_name("value")
-                                    .is_some_and(|v| text(v, src).ends_with(b".isRequired"))
-                            })
-                            .filter_map(|p| p.child_by_field_name("key"))
-                            .map(|k| text(k, src))
-                            .collect(),
-                    ));
-                }
-                b"defaultProps" => defaults.push((text(obj, src).to_vec(), pairs)),
-                _ => {}
-            }
-        }
-        true
-    });
-    defaults
+    let props = component_props(program, src);
+    props
+        .defaults
         .into_iter()
         .flat_map(|(component, pairs)| {
-            let keys: Vec<&[u8]> = required
-                .iter()
-                .filter(|(c, _)| *c == component)
-                .flat_map(|(_, k)| k.iter().copied())
-                .collect();
+            let keys = keys_of(&props.required, &component);
             // A default no propTypes declares at all, when the component has
             // propTypes (measured on SonarQube 26.7).
-            let known: Option<Vec<&[u8]>> =
-                declared.iter().any(|(c, _)| *c == component).then(|| {
-                    declared
-                        .iter()
-                        .filter(|(c, _)| *c == component)
-                        .flat_map(|(_, k)| k.iter().copied())
-                        .collect()
-                });
+            let known: Option<Vec<&[u8]>> = props
+                .declared
+                .iter()
+                .any(|(c, _)| *c == component)
+                .then(|| keys_of(&props.declared, &component));
             pairs.into_iter().filter(move |p| {
                 p.child_by_field_name("key").is_some_and(|k| {
                     let k = text(k, src);
@@ -2501,6 +2466,101 @@ fn defaults_of_required_props<'t>(program: Node<'t>, src: &[u8]) -> Vec<Node<'t>
                 })
             })
         })
+        .collect()
+}
+
+/// What `Component.propTypes = {...}` and `Component.defaultProps = {...}`
+/// say, by component: the required keys, every key declared (`*` for a
+/// spread, which may declare any), and the defaults' pairs.
+struct ComponentProps<'t, 's> {
+    required: Vec<(Vec<u8>, Vec<&'s [u8]>)>,
+    declared: Vec<(Vec<u8>, Vec<&'s [u8]>)>,
+    defaults: Vec<(Vec<u8>, Vec<Node<'t>>)>,
+}
+
+fn component_props<'t, 's>(program: Node<'t>, src: &'s [u8]) -> ComponentProps<'t, 's> {
+    let mut props = ComponentProps {
+        required: Vec::new(),
+        declared: Vec::new(),
+        defaults: Vec::new(),
+    };
+    walk(program, &mut |n| {
+        let Some((obj, prop, right)) = component_object_assignment(n) else {
+            return true;
+        };
+        let component = text(obj, src).to_vec();
+        match text(prop, src) {
+            b"propTypes" => {
+                props
+                    .declared
+                    .push((component.clone(), declared_keys(right, src)));
+                if named(right).iter().any(|p| p.kind() == "spread_element") {
+                    props.declared.push((component.clone(), vec![b"*"]));
+                }
+                props.required.push((component, required_keys(right, src)));
+            }
+            b"defaultProps" => props.defaults.push((component, pairs_of(right))),
+            _ => {}
+        }
+        true
+    });
+    props
+}
+
+/// `object.property = { ... }`: the object, the property and the literal.
+fn component_object_assignment(n: Node) -> Option<(Node, Node, Node)> {
+    if n.kind() != "assignment_expression" {
+        return None;
+    }
+    let left = n.child_by_field_name("left")?;
+    let right = n.child_by_field_name("right")?;
+    if left.kind() != "member_expression" || right.kind() != "object" {
+        return None;
+    }
+    Some((
+        left.child_by_field_name("object")?,
+        left.child_by_field_name("property")?,
+        right,
+    ))
+}
+
+fn pairs_of(object: Node) -> Vec<Node> {
+    named(object)
+        .into_iter()
+        .filter(|p| p.kind() == "pair")
+        .collect()
+}
+
+/// An object literal's keys: its pairs' and its shorthand properties.
+fn declared_keys<'s>(object: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    named(object)
+        .into_iter()
+        .filter_map(|p| match p.kind() {
+            "pair" => p.child_by_field_name("key").map(|k| text(k, src)),
+            "shorthand_property_identifier" => Some(text(p, src)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The keys whose propType ends in `.isRequired`.
+fn required_keys<'s>(object: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    pairs_of(object)
+        .iter()
+        .filter(|p| {
+            p.child_by_field_name("value")
+                .is_some_and(|v| text(v, src).ends_with(b".isRequired"))
+        })
+        .filter_map(|p| p.child_by_field_name("key"))
+        .map(|k| text(k, src))
+        .collect()
+}
+
+/// Every key the list holds for `component`.
+fn keys_of<'s>(list: &[(Vec<u8>, Vec<&'s [u8]>)], component: &[u8]) -> Vec<&'s [u8]> {
+    list.iter()
+        .filter(|(c, _)| c == component)
+        .flat_map(|(_, k)| k.iter().copied())
         .collect()
 }
 

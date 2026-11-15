@@ -186,6 +186,8 @@ pub struct Content {
     /// `passed`, `failed` or `partial`.
     pub gate: &'static str,
     pub failing: Vec<String>,
+    /// The conditions without data, each with why when that's known.
+    pub lacking: Vec<String>,
     pub new_issues: Vec<NewIssue>,
     pub new_coverage: Option<f64>,
     pub new_duplication: Option<f64>,
@@ -206,7 +208,10 @@ impl Content {
                 "Quality gate failed: {}",
                 plural(self.failing.len(), "condition", "conditions")
             ),
-            "partial" => "Quality gate passed, with conditions lacking data".into(),
+            "partial" => format!(
+                "Quality gate passed, but {} couldn't be checked",
+                plural(self.lacking.len(), "condition", "conditions")
+            ),
             _ => "Quality gate passed".into(),
         }
     }
@@ -217,7 +222,10 @@ impl Content {
         for f in &self.failing {
             s.push_str(&format!("- ✕ {f}\n"));
         }
-        if !self.failing.is_empty() {
+        for l in &self.lacking {
+            s.push_str(&format!("- – {l}\n"));
+        }
+        if !self.failing.is_empty() || !self.lacking.is_empty() {
             s.push('\n');
         }
         let n = self.new_issues.len();
@@ -378,6 +386,14 @@ async fn content(
             .filter(|c| c.status == "error")
             .map(|c| c.label)
             .collect(),
+        lacking: conditions(&gate)
+            .into_iter()
+            .filter(|c| c.status == "no_data")
+            .map(|c| match c.reason {
+                Some(r) => format!("{}: no data ({r})", c.label),
+                None => format!("{}: no data", c.label),
+            })
+            .collect(),
         new_issues,
         new_coverage: measures["new_coverage"].as_f64(),
         new_duplication: measures["new_duplicated_lines_density"].as_f64(),
@@ -486,6 +502,11 @@ mod tests {
             } else {
                 vec![]
             },
+            lacking: if gate == "partial" {
+                vec!["Coverage on new code < 80%: no data (no coverage report)".into()]
+            } else {
+                vec![]
+            },
             new_issues: issues,
             new_coverage: Some(76.84),
             new_duplication: None,
@@ -521,6 +542,23 @@ mod tests {
         assert_eq!(
             content("passed", vec![]).summary().lines().nth(2),
             Some("No new issues.")
+        );
+    }
+
+    #[test]
+    fn a_partial_gate_says_which_conditions_had_no_data_and_why() {
+        let c = content("partial", vec![]);
+        assert_eq!(
+            c.check_run("abc")["output"]["title"],
+            "Quality gate passed, but 1 condition couldn't be checked"
+        );
+        assert!(
+            c.summary().starts_with(
+                "**Quality gate passed, but 1 condition couldn't be checked**\n\n\
+                 - – Coverage on new code < 80%: no data (no coverage report)\n\nNo new issues.\n"
+            ),
+            "{}",
+            c.summary()
         );
     }
 

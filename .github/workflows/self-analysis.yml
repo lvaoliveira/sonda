@@ -6,8 +6,8 @@ name: Self-analysis
 # repository is public, so no code from a pull request may run there.
 # `workflow_run` runs this file as it is on main, on main's commit.
 #
-# Both analyze the web app, the scripts and the Rust crates, SonarQube with
-# coverage from CI's `coverage` job and the web app's tests.
+# Both analyze the web app, the scripts and the Rust crates, with coverage
+# from CI's `coverage` job and the web app's tests.
 on:
   workflow_run:
     workflows: [CI]
@@ -85,8 +85,11 @@ jobs:
       - name: sonda
         env:
           SONDA_TOKEN: ${{ secrets.SONDA_TOKEN }}
-        run: >
-          "$RUNNER_TEMP/bin/sonda" scan . --upload
-          --server http://localhost:9300 --project sonda
-          --branch main --commit "$SHA"
-          --coverage web/coverage/lcov.info
+        # Without CI's report (a run by hand), Rust has no coverage.
+        run: |
+          rust="$RUNNER_TEMP/rust-coverage/lcov.info"
+          set -- --coverage web/coverage/lcov.info
+          if [ -f "$rust" ]; then set -- "$@" --coverage "$rust"; fi
+          "$RUNNER_TEMP/bin/sonda" scan . --upload \
+            --server http://localhost:9300 --project sonda \
+            --branch main --commit "$SHA" "$@"

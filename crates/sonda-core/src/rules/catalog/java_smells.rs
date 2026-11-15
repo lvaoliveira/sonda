@@ -3444,9 +3444,19 @@ fn streams_a_collection(call: Node, src: &[u8]) -> bool {
 
 /// The first legacy date or time in a file: SonarQube reports the file once.
 fn first_legacy_date_in_file(node: Node, src: &[u8]) -> bool {
-    // Any use of the types, an import included, as SonarQube reports the
-    // file (measured on 26.7); `SimpleDateFormat` and `java.sql` aren't.
-    let is_legacy = |n: Node| match n.kind() {
+    first_below(
+        super::java_final::root_of(node),
+        |_| true,
+        |n| is_legacy_date(n, src),
+    )
+    .is_some_and(|first| first.id() == node.id())
+}
+
+/// Any use of `Date`, `Calendar` or `GregorianCalendar`, an import
+/// included, as SonarQube reports the file (measured on 26.7);
+/// `SimpleDateFormat` and `java.sql` aren't.
+fn is_legacy_date(n: Node, src: &[u8]) -> bool {
+    match n.kind() {
         // Written out (`java.util.Calendar`), it isn't counted.
         "type_identifier" => {
             matches!(text(n, src), b"Date" | b"Calendar" | b"GregorianCalendar")
@@ -3467,24 +3477,6 @@ fn first_legacy_date_in_file(node: Node, src: &[u8]) -> bool {
                 && method_name(n, src) == b"getInstance"
         }
         _ => false,
-    };
-    let mut cursor = super::java_final::root_of(node).walk();
-    loop {
-        let n = cursor.node();
-        if is_legacy(n) {
-            return n.id() == node.id();
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() {
-                return false;
-            }
-        }
     }
 }
 
@@ -3721,52 +3713,16 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
     else {
         return false;
     };
-    let is_method = |m: Node| m.kind() == "method_declaration";
-    let names_of = |m: Node| -> Vec<&[u8]> {
-        match m.kind() {
-            "field_declaration" | "constant_declaration" => declarator_names(m, src),
-            "method_declaration" => m
-                .child_by_field_name("name")
-                .map(|n| vec![text(n, src)])
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        }
-    };
-    let mine = names_of(member);
+    let mine = member_names(member, src);
     let in_interface = body.kind() == "interface_body";
-    let visibility = |m: Node| {
-        if in_interface || has_modifier(m, "public") {
-            3
-        } else if has_modifier(m, "protected") {
-            2
-        } else if has_modifier(m, "private") {
-            0
-        } else {
-            1
-        }
-    };
     members(body)
         .into_iter()
-        .filter(|m| m.id() != member.id())
-        .filter(|m| {
-            // A method and a field clash only when the field is as visible
-            // as the method (measured on SonarQube 26.7, fitted rather than
-            // understood): a private field never does.
-            if is_method(*m) == is_method(member) {
-                return true;
-            }
-            let (field, method) = if is_method(member) {
-                (*m, member)
-            } else {
-                (member, *m)
-            };
-            visibility(field) > 0 && visibility(field) >= visibility(method)
-        })
+        .filter(|m| m.id() != member.id() && can_clash(member, *m, in_interface))
         .flat_map(|m| {
             let earlier = m.start_byte() < member.start_byte();
             let method_vs_field = is_method(m) != is_method(member);
             let method = if is_method(m) { m } else { member };
-            names_of(m)
+            member_names(m, src)
                 .into_iter()
                 .map(move |n| (n, earlier, method_vs_field, method))
         })
@@ -3781,6 +3737,51 @@ fn name_differs_by_case_only(member: Node, src: &[u8]) -> bool {
                     && !getter
             })
         })
+}
+
+fn is_method(m: Node) -> bool {
+    m.kind() == "method_declaration"
+}
+
+/// A field's or constant's declared names, or a method's name.
+fn member_names<'s>(m: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    match m.kind() {
+        "field_declaration" | "constant_declaration" => declarator_names(m, src),
+        "method_declaration" => m
+            .child_by_field_name("name")
+            .map(|n| vec![text(n, src)])
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Public 3, protected 2, package 1, private 0; an interface's are public.
+fn visibility_rank(m: Node, in_interface: bool) -> u8 {
+    if in_interface || has_modifier(m, "public") {
+        3
+    } else if has_modifier(m, "protected") {
+        2
+    } else if has_modifier(m, "private") {
+        0
+    } else {
+        1
+    }
+}
+
+/// Whether two members' names can clash: two fields, two methods, or a
+/// method and a field as visible as it (measured on SonarQube 26.7, fitted
+/// rather than understood): a private field never does.
+fn can_clash(member: Node, other: Node, in_interface: bool) -> bool {
+    if is_method(other) == is_method(member) {
+        return true;
+    }
+    let (field, method) = if is_method(member) {
+        (other, member)
+    } else {
+        (member, other)
+    };
+    let field_rank = visibility_rank(field, in_interface);
+    field_rank > 0 && field_rank >= visibility_rank(method, in_interface)
 }
 
 fn negates_a_comparison(unary: Node, src: &[u8]) -> bool {
@@ -4201,72 +4202,72 @@ fn jump_is_redundant(jump: Node, _: &[u8]) -> bool {
     if jump.kind() != "return_statement" && jump.named_child_count() > 0 {
         return false;
     }
-    // Whether `n` is the last statement of its block, or a branch of an
-    // `if` (with no braces).
-    let last_in_block = |n: Node| {
-        n.parent()
-            .is_some_and(|p| p.kind() == "block" && statements(p).last() == Some(&n))
-    };
-    if !last_in_block(jump) && !jump.parent().is_some_and(|p| p.kind() == "if_statement") {
+    // The last statement of its block, or a branch of an `if` (with no
+    // braces).
+    if !is_last_in_block(jump) && !jump.parent().is_some_and(|p| p.kind() == "if_statement") {
         return false;
     }
-    // Climb out through constructs the jump ends.
-    let mut node = jump;
-    let owner = loop {
-        let Some(parent) = node.parent() else {
-            return false;
-        };
-        let up = match parent.kind() {
-            "block" => {
-                if statements(parent).last() != Some(&node) {
-                    return false;
-                }
-                match parent.parent() {
-                    Some(p)
-                        if matches!(
-                            p.kind(),
-                            "if_statement" | "try_statement" | "catch_clause"
-                        ) =>
-                    {
-                        p
-                    }
-                    Some(p) => break p,
-                    None => return false,
-                }
-            }
-            "if_statement" => parent,
-            _ => break parent,
-        };
-        // The construct itself must end what holds it.
-        let construct = match up.kind() {
-            "catch_clause" => match up.parent() {
-                Some(t) => t,
-                None => return false,
-            },
-            _ => up,
-        };
-        if construct.kind() == "try_statement"
-            && construct
-                .children(&mut construct.walk())
-                .any(|c| c.kind() == "finally_clause")
-        {
-            return false;
-        }
-        // An `else if` chain is one statement.
-        let mut statement = construct;
-        while statement
-            .parent()
-            .is_some_and(|p| p.kind() == "if_statement")
-        {
-            statement = statement.parent().unwrap_or(statement);
-        }
-        node = statement;
+    let Some(owner) = construct_ended_by(jump) else {
+        return false;
     };
     if jump.kind() == "return_statement" {
         jump.named_child_count() == 0 && owner.kind() == "method_declaration"
     } else {
         LOOPS.contains(&owner.kind())
     }
+}
+
+fn is_last_in_block(n: Node) -> bool {
+    n.parent()
+        .is_some_and(|p| p.kind() == "block" && statements(p).last() == Some(&n))
+}
+
+/// Climbs out through the constructs a jump ends (blocks it's last in,
+/// ifs, tries and catches) to the first one it doesn't: the method or the
+/// loop it may end. `None` when something runs after it.
+fn construct_ended_by(jump: Node) -> Option<Node> {
+    let mut node = jump;
+    loop {
+        let parent = node.parent()?;
+        let up = match parent.kind() {
+            "block" => {
+                if statements(parent).last() != Some(&node) {
+                    return None;
+                }
+                let p = parent.parent()?;
+                if !matches!(p.kind(), "if_statement" | "try_statement" | "catch_clause") {
+                    return Some(p);
+                }
+                p
+            }
+            "if_statement" => parent,
+            _ => return Some(parent),
+        };
+        node = statement_of(up)?;
+    }
+}
+
+/// The statement a construct belongs to, which must end what holds it: a
+/// catch clause's try, an `else if` chain's first if. `None` for a try with
+/// a finally, which runs after the jump.
+fn statement_of(construct: Node) -> Option<Node> {
+    let construct = if construct.kind() == "catch_clause" {
+        construct.parent()?
+    } else {
+        construct
+    };
+    if construct.kind() == "try_statement"
+        && construct
+            .children(&mut construct.walk())
+            .any(|c| c.kind() == "finally_clause")
+    {
+        return None;
+    }
+    let mut statement = construct;
+    while let Some(p) = statement.parent().filter(|p| p.kind() == "if_statement") {
+        statement = p;
+    }
+    Some(statement)
 }
 
 fn private_mapped_method(method: Node, src: &[u8]) -> bool {

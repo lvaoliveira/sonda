@@ -1876,26 +1876,13 @@ fn logger_format_mismatch(call: Node, src: &[u8]) -> bool {
         return false;
     };
     if format.kind() == "binary_expression" {
-        return find_node(*format, |n| {
-            !matches!(
-                n.kind(),
-                "binary_expression"
-                    | "string_literal"
-                    | "string_fragment"
-                    | "parenthesized_expression"
-            ) && n.parent().is_some_and(|p| p.kind() == "binary_expression")
-        })
-        .is_some();
+        return concatenates_a_value(*format);
     }
     if format.kind() != "string_literal" {
         return false;
     }
     // `x.toString()` given for a placeholder does what the logger would.
-    if args[1..].iter().any(|a| {
-        a.kind() == "method_invocation"
-            && method_name(*a, src) == b"toString"
-            && call_arguments(*a).is_empty()
-    }) {
+    if args[1..].iter().any(|a| calls_to_string(*a, src)) {
         return true;
     }
     let Some(value) = super::java_security::string_value(*format, src) else {
@@ -1903,51 +1890,78 @@ fn logger_format_mismatch(call: Node, src: &[u8]) -> bool {
     };
     let placeholders = value.windows(2).filter(|w| *w == b"{}").count();
     let rest = args.len() - 1;
-    // A last argument that is the exception is logged with its trace: a
-    // variable declared or caught as one, or `getCause()`.
-    let throwable = |ty: &[u8]| {
-        ty.ends_with(b"Exception") || ty.ends_with(b"Throwable") || ty.ends_with(b"Error")
-    };
-    let caught_as = |name: &[u8]| {
-        let mut p = call.parent();
-        while let Some(n) = p {
-            if n.kind() == "catch_clause"
-                && let Some(param) = n.named_child(0)
-                && param
-                    .child_by_field_name("name")
-                    .is_some_and(|x| text(x, src) == name)
-            {
-                let mut c = param.walk();
-                return param.named_children(&mut c).any(|t| {
-                    t.kind() != "identifier" && t.kind() != "modifiers" && throwable(text(t, src))
-                });
-            }
-            p = n.parent();
-        }
-        false
-    };
-    let exception = |a: &Node| {
-        let t = text(*a, src);
-        match a.kind() {
-            "identifier" => {
-                matches!(t, b"e" | b"ex" | b"exc" | b"t" | b"th" | b"throwable")
-                    || caught_as(t)
-                    || super::java_extra::declared_type(*a, t, src)
-                        .is_some_and(|ty| throwable(text(ty, src)))
-            }
-            "method_invocation" => method_name(*a, src) == b"getCause",
-            _ => false,
-        }
-    };
     // A last exception either fills the last placeholder or is logged as the
     // exception; alone, it never fills one (measured on SonarQube 26.7:
     // `warn("{} {}", x, e)` and `warn("{}", x, e)` are fine, `error("{}", e)`
     // isn't).
-    let last_is_exception = args.last().is_some_and(exception);
+    let last_is_exception = args
+        .last()
+        .is_some_and(|a| is_logged_exception(*a, call, src));
     if last_is_exception && rest == 1 {
         return placeholders != 0;
     }
     !(placeholders == rest || last_is_exception && placeholders + 1 == rest)
+}
+
+/// Whether a `+` format joins in anything but strings.
+fn concatenates_a_value(format: Node) -> bool {
+    find_node(format, |n| {
+        !matches!(
+            n.kind(),
+            "binary_expression" | "string_literal" | "string_fragment" | "parenthesized_expression"
+        ) && n.parent().is_some_and(|p| p.kind() == "binary_expression")
+    })
+    .is_some()
+}
+
+/// `x.toString()`, with no arguments.
+fn calls_to_string(arg: Node, src: &[u8]) -> bool {
+    arg.kind() == "method_invocation"
+        && method_name(arg, src) == b"toString"
+        && call_arguments(arg).is_empty()
+}
+
+fn is_throwable_type(ty: &[u8]) -> bool {
+    ty.ends_with(b"Exception") || ty.ends_with(b"Throwable") || ty.ends_with(b"Error")
+}
+
+/// A logger's last argument that is the exception, logged with its trace:
+/// a variable declared or caught as one, or `getCause()`.
+fn is_logged_exception(arg: Node, call: Node, src: &[u8]) -> bool {
+    let t = text(arg, src);
+    match arg.kind() {
+        "identifier" => {
+            matches!(t, b"e" | b"ex" | b"exc" | b"t" | b"th" | b"throwable")
+                || caught_as_throwable(call, t, src)
+                || super::java_extra::declared_type(arg, t, src)
+                    .is_some_and(|ty| is_throwable_type(text(ty, src)))
+        }
+        "method_invocation" => method_name(arg, src) == b"getCause",
+        _ => false,
+    }
+}
+
+/// Whether `name` is the parameter of a catch clause around `call`, caught
+/// as a throwable type.
+fn caught_as_throwable(call: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut p = call.parent();
+    while let Some(n) = p {
+        if n.kind() == "catch_clause"
+            && let Some(param) = n.named_child(0)
+            && param
+                .child_by_field_name("name")
+                .is_some_and(|x| text(x, src) == name)
+        {
+            let mut c = param.walk();
+            return param.named_children(&mut c).any(|t| {
+                t.kind() != "identifier"
+                    && t.kind() != "modifiers"
+                    && is_throwable_type(text(t, src))
+            });
+        }
+        p = n.parent();
+    }
+    false
 }
 
 fn format_arguments_mismatch(call: Node, src: &[u8]) -> bool {
