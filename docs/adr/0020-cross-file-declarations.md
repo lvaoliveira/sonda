@@ -180,6 +180,27 @@ number in the same function, a flags byte masked once). With the byte
 sites, scanning roo_display takes 0.71 s where it took 0.58 s without the
 index (measured again together, median of five), qutepart-cpp 0.33 s.
 
+**Const member functions (S5817).** Whether a member function changes its
+object depends on which names are fields and which member functions are
+const, declared with the class, usually in a header. The summary records
+whether each member function is `const`, and, for each non-static,
+non-const, non-virtual member function body (`semantic/cpp_const.rs`), the
+names it writes that aren't its locals (through `.`, `->`, `[]`, `*`, a
+local pointing into a member, a range-for reference to one, what a member
+call returns), the non-local names it passes to calls, the functions it
+calls on the object and on other names, and whether `this` or a member's
+address escapes. The project pass resolves the class (to the candidate
+that declares the function, when several share its name), and
+`cpp/const-member-function` reports the function when it writes nothing,
+passes only scalar fields, and calls only const functions on the object
+and its fields. With a base outside the project, a name the index can't
+place counts against it. It finds 36 of SonarCloud's 81 on the two
+projects, and 66 it doesn't, with nothing visible to tell SonarCloud's
+from the rest; it's off by default, as `cpp/init-statement` is. A worker
+extracts the byte sites and the bodies only when their rule is on: with
+the defaults, scanning roo_display takes 0.72 s, as before; with the rule
+on, 0.76 s.
+
 ## Consequences
 
 - **What stays unseen:** types from referenced packages aren't in the project, so they resolve to nothing. That costs recall. The framework's own types do resolve, through the summary of its reference packs ([ADR-0022](0022-platform-types.md)). By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`, and all eighteen are.
