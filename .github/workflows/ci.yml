@@ -45,7 +45,9 @@ jobs:
 
   lint:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
+    # The web app and the scripts too: the complexity check covers their
+    # code as well as the crates'.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.scripts == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,6 +71,12 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Rules doc is up to date
         run: cargo run -q --locked -p sonda -- rules --format markdown | diff - docs/rules.md
+      # This change's own CLI on this change's code: no function, in any
+      # language, over the complexity thresholds (CONTRIBUTING.md).
+      - name: No function over the complexity thresholds
+        run: |
+          cargo run -q --locked -p sonda -- scan . --no-gate -f json -o "$RUNNER_TEMP/self.json"
+          scripts/check-complexity.sh "$RUNNER_TEMP/self.json"
       # The fuzz crate is a separate workspace; keep it compiling between
       # the weekly fuzz runs (fuzz.yml).
       - run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
