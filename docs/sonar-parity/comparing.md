@@ -259,6 +259,12 @@ behavior on the version measured.
   in the initializer list" until the misses showed enumerators, `x_()` and
   template parameters, and the extras showed only the first constructor
   counts.
+- **Check the analyzed commit before each comparison.** A public project's
+  SonarCloud analysis moves when its owner pushes: qutepart-cpp was
+  re-analyzed at a new commit mid-batch, its issues moved lines, and the
+  comparison against the old source showed 70 differences that weren't
+  sonda's. `api/project_analyses/search` gives the latest analysis's
+  revision; compare against that commit's source.
 - **Count only compared keys.** A sonda issue on a key the server's profile
   has off isn't a match, even when no difference lists it: eGovFrame's
   SonarCloud profile has S1226 off, so its 147 issues there were never
@@ -290,9 +296,9 @@ On the comparison server, as of 2026-11-11:
 | `apiaddicts_apigen.springboot` on SonarCloud | apigen.springboot (Java 21, Spring Boot) | `ef13838` |
 | `Prowlarr_Prowlarr` on SonarCloud | Prowlarr (C#, from a CI build; JavaScript and TypeScript) | `d2d1fc0` |
 | `sonda-calibrate-cs1` to `cs15` | C# calibration, built with SonarScanner for .NET (`cs7`, `cs8`, `cs11` to `cs13` with ASP.NET Core, `cs8` with Swashbuckle) | |
-| `diegoiast_qutepart-cpp` on SonarCloud | qutepart-cpp (C++, Qt) | `1099377` |
+| `diegoiast_qutepart-cpp` on SonarCloud | qutepart-cpp (C++, Qt) | `0e5a022` |
 | `dejwk_roo_display` on SonarCloud | roo_display (C++, C) | `f139977` |
 | `jinahya_egovframe-common-components-spring-boot` on SonarCloud | eGovFrame common components (Java 17, Spring; browser JavaScript), with its submodule | `14313bc` |
 
-Next: more C++ rules, the most frequent missing keys first (S5817,
-S5350), on the C++ index (ADR-0020) where a type is in another file.
+Next: more C++ rules, the most frequent missing keys first (S5350),
+on the C++ index (ADR-0020) where a type is in another file.

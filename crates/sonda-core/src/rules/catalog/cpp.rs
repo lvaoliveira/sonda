@@ -5,10 +5,12 @@
 use super::java_security::text;
 use super::prelude::*;
 
-/// Off: SonarCloud reports about a third of what this finds, and nothing
-/// visible tells its reports from the rest (an else, nesting, use in the
-/// body); C++ can't be measured on SonarQube 26.7.
-pub(super) static OFF_BY_DEFAULT: &[&str] = &["cpp/init-statement"];
+/// Off: SonarCloud reports about a third of what each finds, and nothing
+/// visible tells its reports from the rest (for the init-statement, an
+/// else, nesting, use in the body; for const member functions, which of
+/// those that touch no member, or only read, it reports); C++ can't be
+/// measured on SonarQube 26.7.
+pub(super) static OFF_BY_DEFAULT: &[&str] = &["cpp/init-statement", "cpp/const-member-function"];
 
 pub(super) static RULES: &[Rule] = &[
     Rule {
@@ -726,6 +728,24 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::Cpp,
             bad: "int high(uint8_t b) { return b >> 4; }",
             good: "int high(std::byte b) { return std::to_integer<int>(b >> 4); }",
+        }),
+    },
+    Rule {
+        id: "cpp/const-member-function",
+        name: "Member functions that don't change their object should be const",
+        description: "A member function that writes no field and calls only const functions can \
+                      be declared `const`, which lets callers holding a const object use it and \
+                      says it changes nothing.",
+        message: "Declare this member function \"const\"; it doesn't change its object.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5817")],
+        check: Check::Structural,
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "class Box {\n public:\n  int area() { return w_ * h_; }\n private:\n  int w_, h_;\n};",
+            good: "class Box {\n public:\n  int area() const { return w_ * h_; }\n private:\n  int w_, h_;\n};",
         }),
     },
 ];
