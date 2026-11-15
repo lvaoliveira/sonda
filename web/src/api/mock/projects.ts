@@ -105,6 +105,24 @@ function sampleComponents(p: ProjectRow) {
   }))
 }
 
+/** The default gate's conditions as a project's branch meets them. */
+function gateConditions(p: (typeof projects)[number], failing: boolean): ProjectDetail['gate']['conditions'] {
+  const verdict = failing ? 'error' : 'ok'
+  const noCoverage = p.coverage == null
+  return [
+    { label: 'New bugs > 0', metric: 'new_bugs', actual: 0, status: 'ok' },
+    { label: 'New vulnerabilities > 0', metric: 'new_vulnerabilities', actual: failing ? 2 : 0, status: verdict },
+    {
+      label: 'Coverage on new code < 80%',
+      metric: 'new_coverage',
+      actual: noCoverage ? null : 76.8,
+      status: noCoverage ? 'no_data' : verdict,
+      reason: noCoverage ? 'no coverage report (`sonda scan --coverage`), or none that covers the scanned files' : null,
+    },
+    { label: 'Duplication on new code > 3%', metric: 'new_duplicated_lines_density', actual: 1.4, status: 'ok' },
+  ]
+}
+
 export function projectDetail(key: string, branch?: string, settings?: MockProjectSettings): ProjectDetail | null {
   const p = projects.find((r) => r.key === key)
   if (!p) return null
@@ -117,7 +135,6 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
   if (!branches.some((b) => b.name === on)) throw new Error(`branch "${on}" has no analyses; analyzed branches: main, release/2.4`)
   // Only the main branch fails; the release branch passes.
   const failing = p.gate === 'failed' && on === 'main'
-  const verdict = failing ? 'error' : 'ok'
   const history = sampleHistory(p)
   return {
     key: p.key,
@@ -129,12 +146,7 @@ export function projectDetail(key: string, branch?: string, settings?: MockProje
     analysis: { id: 911, sha: '9f3c2a1e7b04', analyzedAt: p.analyzedAt, toolVersion: '0.1.0', newCodeReference: 'origin/main', version: history.at(-1)!.version },
     gate: {
       state: on === 'main' ? p.gate : 'passed',
-      conditions: [
-        { label: 'New bugs > 0', metric: 'new_bugs', actual: 0, status: 'ok' },
-        { label: 'New vulnerabilities > 0', metric: 'new_vulnerabilities', actual: failing ? 2 : 0, status: verdict },
-        { label: 'Coverage on new code < 80%', metric: 'new_coverage', actual: p.coverage == null ? null : 76.8, status: p.coverage == null ? 'no_data' : verdict, reason: p.coverage == null ? 'no coverage report (`sonda scan --coverage`), or none that covers the scanned files' : null },
-        { label: 'Duplication on new code > 3%', metric: 'new_duplicated_lines_density', actual: 1.4, status: 'ok' },
-      ],
+      conditions: gateConditions(p, failing),
       serverGate: null,
     },
     score: p.score,
