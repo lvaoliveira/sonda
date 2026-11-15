@@ -472,61 +472,10 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     };
     let mut found = Vec::new();
     let mut facts = Facts::default();
-    for i in 0..m.functions.len() {
-        if !sources || !file.analyzable(i) {
-            continue;
-        }
-        let sinks = file.sinks(i);
-        let calls = file.calls_with_sinks(i);
-        let external = file.external_calls(i);
-        if sinks.is_empty() && calls.is_empty() && external.is_empty() {
-            continue;
-        }
-        let Some(cfg) = file.cfg(i) else {
-            continue;
-        };
-        let mut a = file.analysis(i);
-        // Another file's result matters only where it can reach a sink of
-        // this function, or of a helper it calls; elsewhere it's only work.
-        a.from_calls = !sinks.is_empty() || !calls.is_empty();
-        let sources = source_params(m, &infer, i, src);
-        if let Some(inn) = a.run(&cfg, sources) {
-            for f in a.findings(&cfg, &inn, &sinks, &calls) {
-                if !from_call(&f.steps) {
-                    found.push(f);
-                    continue;
-                }
-                // Another file's method's result reaching a sink here.
-                let call = f.steps[0].node;
-                let Some(callee) = file.external_callee(call) else {
-                    continue;
-                };
-                let state = a.state_at(&cfg, &inn, call);
-                let args = arguments(call)
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(k, arg)| {
-                        a.taint(arg, &state)
-                            .filter(|p| !from_call(p))
-                            .map(|p| (k, cap(p)))
-                    })
-                    .collect();
-                facts.returns.push(super::taint::ReturnFact {
-                    call,
-                    callee,
-                    args,
-                    after: cap(f.steps[1..].to_vec()),
-                    sink: f.sink,
-                    needs_sql: false,
-                });
-            }
-            for (steps, call, callee, arg) in a.opens(&cfg, &inn, &external) {
-                facts.calls.push(super::taint::CallFact {
-                    steps: cap(steps),
-                    call,
-                    callee,
-                    arg,
-                });
+    if sources {
+        for i in 0..m.functions.len() {
+            if file.analyzable(i) {
+                find_in_function(&file, i, &mut found, &mut facts);
             }
         }
     }
@@ -538,6 +487,83 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
         findings: found,
         facts,
     }
+}
+
+/// One function's findings, and its facts for the project pass: another
+/// file's method's result reaching a sink here, and a request's value
+/// passed to another file's method.
+fn find_in_function<'a, 't>(
+    file: &'a FileCx<'a, 't>,
+    i: usize,
+    found: &mut Vec<Finding<'t>>,
+    facts: &mut Facts<'t>,
+) {
+    let sinks = file.sinks(i);
+    let calls = file.calls_with_sinks(i);
+    let external = file.external_calls(i);
+    if sinks.is_empty() && calls.is_empty() && external.is_empty() {
+        return;
+    }
+    let Some(cfg) = file.cfg(i) else {
+        return;
+    };
+    let mut a = file.analysis(i);
+    // Another file's result matters only where it can reach a sink of
+    // this function, or of a helper it calls; elsewhere it's only work.
+    a.from_calls = !sinks.is_empty() || !calls.is_empty();
+    let entry = source_params(file.m, file.infer, i, file.src);
+    let Some(inn) = a.run(&cfg, entry) else {
+        return;
+    };
+    for f in a.findings(&cfg, &inn, &sinks, &calls) {
+        if from_call(&f.steps) {
+            facts
+                .returns
+                .extend(returned_to_sink(file, &a, &cfg, &inn, f));
+        } else {
+            found.push(f);
+        }
+    }
+    for (steps, call, callee, arg) in a.opens(&cfg, &inn, &external) {
+        facts.calls.push(super::taint::CallFact {
+            steps: cap(steps),
+            call,
+            callee,
+            arg,
+        });
+    }
+}
+
+/// Another file's method's result reaching a sink here, from a finding
+/// whose path starts at the call: what the call is passed, and what
+/// follows it.
+fn returned_to_sink<'t>(
+    file: &FileCx<'_, 't>,
+    a: &Analysis<'_, 't>,
+    cfg: &Cfg<'t>,
+    inn: &[State<'t>],
+    f: Finding<'t>,
+) -> Option<super::taint::ReturnFact<'t>> {
+    let call = f.steps[0].node;
+    let callee = file.external_callee(call)?;
+    let state = a.state_at(cfg, inn, call);
+    let args = arguments(call)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(k, arg)| {
+            a.taint(arg, &state)
+                .filter(|p| !from_call(p))
+                .map(|p| (k, cap(p)))
+        })
+        .collect();
+    Some(super::taint::ReturnFact {
+        call,
+        callee,
+        args,
+        after: cap(f.steps[1..].to_vec()),
+        sink: f.sink,
+        needs_sql: false,
+    })
 }
 
 /// One file's functions, as T3 sees them (ADR-0027): each function's graph
@@ -592,6 +618,17 @@ struct Summary<'t> {
 struct LocalCall<'t> {
     call: Node<'t>,
     callee: usize,
+}
+
+/// What `compute_summary` runs each parameter's analysis with.
+struct SummaryCx<'c, 'a, 't> {
+    a: Analysis<'a, 't>,
+    cfg: &'c Cfg<'t>,
+    name: &'a str,
+    sinks: Rc<Vec<Sink<'t>>>,
+    calls: Vec<LocalCall<'t>>,
+    external: Rc<Vec<ExternalCall<'t>>>,
+    returns: Vec<Node<'t>>,
 }
 
 impl<'a, 't> FileCx<'a, 't> {
@@ -910,78 +947,75 @@ impl<'a, 't> FileCx<'a, 't> {
     /// methods that aren't private, by the type's full name and the
     /// method's name and arity.
     fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
-        let mut out = Vec::new();
-        for j in 0..self.functions.len() {
-            let f = self.functions[j];
-            if f.kind() != "method_declaration" || !self.analyzable(j) {
-                continue;
-            }
-            let modifiers: Vec<&str> = children(f)
-                .into_iter()
-                .filter(|c| c.kind() == "modifier")
-                .map(|c| self.text(c))
-                .collect();
-            if !modifiers
-                .iter()
-                .any(|m| matches!(*m, "public" | "internal" | "protected"))
-            {
-                continue;
-            }
-            // Only a method with a sink, or one passing a parameter on to
-            // another file's method, has anything to say.
+        (0..self.functions.len())
+            .filter_map(|j| self.exported_summary(j))
+            .collect()
+    }
 
-            // A method whose text names no sink of this kind has none,
-            // unless a helper of the file it calls does.
-            let own_text = f.utf8_text(self.src).unwrap_or_default().as_bytes();
-            let sinks_here = self.sink_text
-                && (might_have_sinks(own_text, self.kind) || !self.local_calls(j).is_empty())
-                && self.reaches_sink(j);
-            let returned = self.returned_params(j);
-            if !(sinks_here || !self.passed_on(j).is_empty() || !returned.is_empty()) {
-                continue;
-            }
-            let (_, owner) = scope_of(f, self.src);
-            if owner.is_empty() {
-                continue;
-            }
-            let Some(name) = f.child_by_field_name("name") else {
-                continue;
-            };
-            let summary = if sinks_here {
-                self.summary(j)
-            } else {
-                Rc::new(Summary {
-                    calls: self.calls_passed_on(j),
-                    ..Summary::default()
-                })
-            };
-            // What it returns of its parameters: the analysis's, for a
-            // method summarized in full, else read from the syntax.
-            let to_return: Vec<(usize, Path<'t>)> = if sinks_here {
-                summary.returns.clone()
-            } else {
-                returned
-            };
-            if summary.sinks.is_empty() && summary.calls.is_empty() && to_return.is_empty() {
-                continue;
-            }
-            out.push(SummaryFact {
-                key: Key {
-                    export: owner,
-                    member: Some(format!("{}/{}", self.text(name), params_count(f))),
-                },
-                returns_sql: false,
-                to_sink: summary
-                    .sinks
-                    .iter()
-                    .map(|(p, sink, path)| (*p, path.clone(), *sink))
-                    .collect(),
-                to_return,
-                returns_source: None,
-                to_call: summary.calls.clone(),
-            });
+    /// A public, internal or protected method's summary, for other files:
+    /// what reaches its sinks, what it passes on to another file's method,
+    /// what it returns of its parameters. None when it has nothing to say.
+    fn exported_summary(&self, j: usize) -> Option<SummaryFact<'t>> {
+        let f = self.functions[j];
+        if f.kind() != "method_declaration" || !self.analyzable(j) || !self.visible(f) {
+            return None;
         }
-        out
+        // A method whose text names no sink of this kind has none,
+        // unless a helper of the file it calls does.
+        let own_text = f.utf8_text(self.src).unwrap_or_default().as_bytes();
+        let sinks_here = self.sink_text
+            && (might_have_sinks(own_text, self.kind) || !self.local_calls(j).is_empty())
+            && self.reaches_sink(j);
+        let returned = self.returned_params(j);
+        if !(sinks_here || !self.passed_on(j).is_empty() || !returned.is_empty()) {
+            return None;
+        }
+        let (_, owner) = scope_of(f, self.src);
+        if owner.is_empty() {
+            return None;
+        }
+        let name = f.child_by_field_name("name")?;
+        let summary = if sinks_here {
+            self.summary(j)
+        } else {
+            Rc::new(Summary {
+                calls: self.calls_passed_on(j),
+                ..Summary::default()
+            })
+        };
+        // What it returns of its parameters: the analysis's, for a
+        // method summarized in full, else read from the syntax.
+        let to_return: Vec<(usize, Path<'t>)> = if sinks_here {
+            summary.returns.clone()
+        } else {
+            returned
+        };
+        if summary.sinks.is_empty() && summary.calls.is_empty() && to_return.is_empty() {
+            return None;
+        }
+        Some(SummaryFact {
+            key: Key {
+                export: owner,
+                member: Some(format!("{}/{}", self.text(name), params_count(f))),
+            },
+            returns_sql: false,
+            to_sink: summary
+                .sinks
+                .iter()
+                .map(|(p, sink, path)| (*p, path.clone(), *sink))
+                .collect(),
+            to_return,
+            returns_source: None,
+            to_call: summary.calls.clone(),
+        })
+    }
+
+    /// Whether a method is public, internal or protected.
+    fn visible(&self, f: Node<'t>) -> bool {
+        children(f)
+            .into_iter()
+            .filter(|c| c.kind() == "modifier")
+            .any(|c| matches!(self.text(c), "public" | "internal" | "protected"))
     }
 
     /// The parameters function `j` returns built straight from, as the
@@ -1134,71 +1168,87 @@ impl<'a, 't> FileCx<'a, 't> {
             return summary;
         };
         let function = self.functions[j];
-        let name = function
-            .child_by_field_name("name")
-            .map_or("the function", |n| self.text(n));
-        let a = self.analysis(j);
-        let sinks = self.sinks(j);
-        let calls: Vec<LocalCall<'t>> = self
-            .calls_with_sinks(j)
-            .into_iter()
-            .filter(|c| c.callee != j)
-            .collect();
-        let external = self.external_calls(j);
-        let returns = return_values(function, &self.functions);
+        let cx = SummaryCx {
+            a: self.analysis(j),
+            cfg: &cfg,
+            name: function
+                .child_by_field_name("name")
+                .map_or("the function", |n| self.text(n)),
+            sinks: self.sinks(j),
+            calls: self
+                .calls_with_sinks(j)
+                .into_iter()
+                .filter(|c| c.callee != j)
+                .collect(),
+            external: self.external_calls(j),
+            returns: return_values(function, &self.functions),
+        };
         // What the function returns of a request's value it reads itself.
-        if let Some(inn) = a.run(&cfg, source_params(self.m, self.infer, j, self.src)) {
-            summary.returns_source = returns.iter().find_map(|r| {
-                let st = a.state_at(&cfg, &inn, *r);
-                a.taint(*r, &st)
+        if let Some(inn) =
+            cx.a.run(&cfg, source_params(self.m, self.infer, j, self.src))
+        {
+            summary.returns_source = cx.returns.iter().find_map(|r| {
+                let st = cx.a.state_at(&cfg, &inn, *r);
+                cx.a.taint(*r, &st)
             });
         }
         // Each parameter, tainted alone: what reaches the return, and sinks.
         for (p, decls) in self.m.functions[j].params.iter().enumerate() {
             for d in decls {
-                let decl = &self.m.decls[*d];
-                if decl
-                    .ty
-                    .and_then(|t| self.infer.written(t))
-                    .is_some_and(|t| is_safe_type(self.infer, &t))
-                {
-                    continue;
-                }
-                let marker = Step {
-                    node: decl.node,
-                    message: format!("`{name}`'s parameter `{}`", decl.name),
-                };
-                let mut entry = State::new();
-                entry.insert(*d, vec![marker]);
-                let Some(inn) = a.run(&cfg, entry) else {
-                    continue;
-                };
-                let from_param =
-                    |path: &Path<'t>| path.first().is_some_and(|s| s.node.id() == decl.node.id());
-                for r in &returns {
-                    let st = a.state_at(&cfg, &inn, *r);
-                    if let Some(path) = a.taint(*r, &st).filter(from_param) {
-                        summary.returns.push((p, cap(path)));
-                        break;
-                    }
-                }
-                for f in a.findings(&cfg, &inn, sinks.as_slice(), &calls) {
-                    if from_param(&f.steps) {
-                        summary.sinks.push((p, f.sink, f.steps));
-                    }
-                }
-                for (mut path, call, callee, arg) in a.opens(&cfg, &inn, &external) {
-                    if from_param(&path) {
-                        path.push(Step {
-                            node: call,
-                            message: format!("passed to `{}`", callee.display()),
-                        });
-                        summary.calls.push((p, cap(path), callee, arg));
-                    }
-                }
+                self.summarize_param(&cx, p, *d, &mut summary);
             }
         }
         summary
+    }
+
+    /// What one parameter, tainted alone, reaches: the return, sinks, and
+    /// other files' methods it's passed to. Not a parameter of a safe type.
+    fn summarize_param(
+        &self,
+        cx: &SummaryCx<'_, '_, 't>,
+        p: usize,
+        d: DeclId,
+        summary: &mut Summary<'t>,
+    ) {
+        let decl = &self.m.decls[d];
+        if decl
+            .ty
+            .and_then(|t| self.infer.written(t))
+            .is_some_and(|t| is_safe_type(self.infer, &t))
+        {
+            return;
+        }
+        let marker = Step {
+            node: decl.node,
+            message: format!("`{}`'s parameter `{}`", cx.name, decl.name),
+        };
+        let mut entry = State::new();
+        entry.insert(d, vec![marker]);
+        let Some(inn) = cx.a.run(cx.cfg, entry) else {
+            return;
+        };
+        let from_param =
+            |path: &Path<'t>| path.first().is_some_and(|s| s.node.id() == decl.node.id());
+        if let Some(path) = cx.returns.iter().find_map(|r| {
+            let st = cx.a.state_at(cx.cfg, &inn, *r);
+            cx.a.taint(*r, &st).filter(from_param)
+        }) {
+            summary.returns.push((p, cap(path)));
+        }
+        for f in cx.a.findings(cx.cfg, &inn, cx.sinks.as_slice(), &cx.calls) {
+            if from_param(&f.steps) {
+                summary.sinks.push((p, f.sink, f.steps));
+            }
+        }
+        for (mut path, call, callee, arg) in cx.a.opens(cx.cfg, &inn, &cx.external) {
+            if from_param(&path) {
+                path.push(Step {
+                    node: call,
+                    message: format!("passed to `{}`", callee.display()),
+                });
+                summary.calls.push((p, cap(path), callee, arg));
+            }
+        }
     }
 }
 
@@ -1980,6 +2030,65 @@ fn first_argument(call: Node) -> Option<Node> {
     arg.named_child(arg.named_child_count().saturating_sub(1) as u32)
 }
 
+/// What one node of an expression says of its taint (`Analysis::taint`).
+enum TaintStep<'t> {
+    /// A request's own value.
+    Found(Path<'t>),
+    /// Another file's method's result: used if nothing else turns up.
+    Fallback(Path<'t>),
+    /// The nodes to look at next, in the order to push them.
+    Visit(Vec<Node<'t>>),
+}
+
+/// Each block's predecessors.
+fn predecessors(cfg: &Cfg) -> Vec<Vec<usize>> {
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); cfg.blocks.len()];
+    for (i, b) in cfg.blocks.iter().enumerate() {
+        for s in &b.succ {
+            preds[*s].push(i);
+        }
+    }
+    preds
+}
+
+/// A block's state on entry: its predecessors' states merged. A request's
+/// own path wins over one from another file's result, whichever branch
+/// came first.
+fn merged<'t>(preds: &[usize], out: &[State<'t>]) -> State<'t> {
+    let mut s = State::new();
+    for p in preds {
+        for (d, path) in &out[*p] {
+            let keep = s
+                .get(d)
+                .is_some_and(|old| !(from_call(old) && !from_call(path)));
+            if !keep {
+                s.insert(*d, path.clone());
+            }
+        }
+    }
+    s
+}
+
+/// An interpolated string's values, in the order to push them: each
+/// interpolation's, without its `{`, `,alignment`, `:format` or `}`.
+fn interpolated_values(n: Node) -> Vec<Node> {
+    children(n)
+        .into_iter()
+        .rev()
+        .filter(|part| part.kind() == "interpolation")
+        .filter_map(|part| {
+            children(part).into_iter().find(|c| {
+                !matches!(
+                    c.kind(),
+                    "interpolation_brace"
+                        | "interpolation_alignment_clause"
+                        | "interpolation_format_clause"
+                )
+            })
+        })
+        .collect()
+}
+
 struct Analysis<'a, 't> {
     m: &'a Model<'t>,
     infer: &'a Infer<'a, 't>,
@@ -2005,12 +2114,7 @@ impl<'t> Analysis<'_, 't> {
     /// entry; None past the bounds.
     fn run(&self, cfg: &Cfg<'t>, entry: State<'t>) -> Option<Vec<State<'t>>> {
         let n = cfg.blocks.len();
-        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (i, b) in cfg.blocks.iter().enumerate() {
-            for s in &b.succ {
-                preds[*s].push(i);
-            }
-        }
+        let preds = predecessors(cfg);
         let mut inn: Vec<State<'t>> = vec![State::new(); n];
         let mut out: Vec<State<'t>> = vec![State::new(); n];
         inn[ENTRY] = entry;
@@ -2020,30 +2124,14 @@ impl<'t> Analysis<'_, 't> {
                 let mut state = if i == ENTRY {
                     inn[ENTRY].clone()
                 } else {
-                    let mut s = State::new();
-                    for p in &preds[i] {
-                        for (d, path) in &out[*p] {
-                            // A request's own path wins over one from
-                            // another file's result, whichever branch came
-                            // first.
-                            match s.get(d) {
-                                Some(old) if !(from_call(old) && !from_call(path)) => {}
-                                _ => {
-                                    s.insert(*d, path.clone());
-                                }
-                            }
-                        }
-                    }
-                    s
+                    merged(&preds[i], &out)
                 };
                 inn[i] = state.clone();
                 self.transfer(cfg, i, &mut state, None);
                 if state.len() > MAX_TRACKED {
                     return None;
                 }
-                if !same_keys(&state, &out[i]) {
-                    changed = true;
-                }
+                changed |= !same_keys(&state, &out[i]);
                 out[i] = state;
             }
             if !changed {
@@ -2142,8 +2230,7 @@ impl<'t> Analysis<'_, 't> {
             if e.access == Access::Read {
                 continue;
             }
-            let value = self.written_value(e.node, e.decl, state);
-            match (e.access, value) {
+            match (e.access, self.written_value(e.node, e.decl, state)) {
                 (_, Some(path)) => {
                     state.insert(e.decl, path);
                 }
@@ -2153,32 +2240,36 @@ impl<'t> Analysis<'_, 't> {
                 _ => {}
             }
         }
-        // `sb.Append(id)`, `list.Add(id)`: the receiver holds the value now.
         if let Some(syntax) = block.syntax {
-            for call in self.calls_into_receiver(syntax) {
-                if until.is_some_and(|u| call.end_byte() > u) {
-                    continue;
-                }
-                let Some((decl, receiver)) = self.receiver_decl(call) else {
-                    continue;
-                };
-                if state.contains_key(&decl) {
-                    continue;
-                }
-                let tainted = call
-                    .child_by_field_name("arguments")
-                    .map(children)
-                    .into_iter()
-                    .flatten()
-                    .filter(|a| a.kind() == "argument")
-                    .find_map(|a| self.taint(a, state));
-                if let Some(mut path) = tainted {
-                    path.push(Step {
-                        node: call,
-                        message: format!("added to `{}`", self.text(receiver)),
-                    });
-                    state.insert(decl, path);
-                }
+            self.fill_receivers(syntax, state, until);
+        }
+    }
+
+    /// `sb.Append(id)`, `list.Add(id)`: the receiver holds the value now.
+    fn fill_receivers(&self, syntax: Node<'t>, state: &mut State<'t>, until: Option<usize>) {
+        for call in self.calls_into_receiver(syntax) {
+            if until.is_some_and(|u| call.end_byte() > u) {
+                continue;
+            }
+            let Some((decl, receiver)) = self.receiver_decl(call) else {
+                continue;
+            };
+            if state.contains_key(&decl) {
+                continue;
+            }
+            let tainted = call
+                .child_by_field_name("arguments")
+                .map(children)
+                .into_iter()
+                .flatten()
+                .filter(|a| a.kind() == "argument")
+                .find_map(|a| self.taint(a, state));
+            if let Some(mut path) = tainted {
+                path.push(Step {
+                    node: call,
+                    message: format!("added to `{}`", self.text(receiver)),
+                });
+                state.insert(decl, path);
             }
         }
     }
@@ -2262,112 +2353,114 @@ impl<'t> Analysis<'_, 't> {
             if self.untainted_by_type(n) {
                 continue;
             }
-            match n.kind() {
-                "identifier" | "member_access_expression"
-                    if self.checked.contains(self.text(n)) => {}
-                "identifier" => {
-                    if let Some(path) = self.decl(n).and_then(|d| state.get(&d)) {
-                        if !from_call(path) {
-                            return Some(path.clone());
-                        }
-                        fallback.get_or_insert_with(|| path.clone());
-                    }
+            match self.taint_step(n, state) {
+                TaintStep::Found(path) => return Some(path),
+                TaintStep::Fallback(path) => {
+                    fallback.get_or_insert(path);
                 }
-                "member_access_expression" => {
-                    if let Some(path) = self.request_member(n) {
-                        return Some(path);
-                    }
-                    stack.extend(n.child_by_field_name("expression"));
-                }
-                "element_access_expression" | "conditional_access_expression" => {
-                    stack.extend(
-                        n.child_by_field_name("expression")
-                            .or_else(|| n.named_child(0)),
-                    );
-                }
-                "invocation_expression" => {
-                    if let Some(j) = self.file.callee(n) {
-                        // A function of this file: what its summary says.
-                        if let Some(path) = self.through_local_call(n, j, state) {
-                            if !from_call(&path) {
-                                return Some(path);
-                            }
-                            fallback.get_or_insert(path);
-                        }
-                    } else if self.from_calls && self.file.external_callee(n).is_some() {
-                        // Another file's: a request's value if it returns
-                        // one, which the project pass decides.
-                        fallback.get_or_insert_with(|| {
-                            vec![Step {
-                                node: n,
-                                message: FROM_CALL.to_string(),
-                            }]
-                        });
-                    } else if !self.sanitizes(n) {
-                        stack.extend(self.propagated(n).into_iter().rev());
-                    }
-                }
-                "object_creation_expression" => {
-                    let ty = n.child_by_field_name("type").map(|t| self.text(t));
-                    if matches!(
-                        ty,
-                        Some(
-                            "StringBuilder"
-                                | "System.Text.StringBuilder"
-                                | "string"
-                                | "Uri"
-                                | "System.Uri"
-                        )
-                    ) {
-                        stack.extend(arguments(n).into_iter().rev());
-                    }
-                }
-                "binary_expression" | "interpolated_string_expression" if self.fixes_origin(n) => {}
-                "binary_expression" => {
-                    let op = n.child_by_field_name("operator").map(|o| self.text(o));
-                    if matches!(op, Some("+" | "??")) {
-                        stack.extend(n.child_by_field_name("right"));
-                        stack.extend(n.child_by_field_name("left"));
-                    }
-                }
-                "conditional_expression" => {
-                    stack.extend(n.child_by_field_name("alternative"));
-                    stack.extend(n.child_by_field_name("consequence"));
-                }
-                "assignment_expression" => stack.extend(n.child_by_field_name("right")),
-                "interpolated_string_expression" => {
-                    for part in children(n).into_iter().rev() {
-                        if part.kind() == "interpolation" {
-                            // `{`, the value, `,alignment`, `:format`, `}`.
-                            stack.extend(children(part).into_iter().find(|c| {
-                                !matches!(
-                                    c.kind(),
-                                    "interpolation_brace"
-                                        | "interpolation_alignment_clause"
-                                        | "interpolation_format_clause"
-                                )
-                            }));
-                        }
-                    }
-                }
-                "parenthesized_expression"
-                | "cast_expression"
-                | "postfix_unary_expression"
-                | "await_expression"
-                | "checked_expression"
-                | "argument" => {
-                    if let Some(v) = n
-                        .child_by_field_name("value")
-                        .or_else(|| n.named_child(n.named_child_count().saturating_sub(1) as u32))
-                    {
-                        stack.push(v);
-                    }
-                }
-                "as_expression" => stack.extend(n.child_by_field_name("left")),
-                _ => {}
+                TaintStep::Visit(next) => stack.extend(next),
             }
         }
         fallback
+    }
+
+    /// What one node of an expression says of its taint: a request's value
+    /// found, another file's result to fall back on, or the nodes to look at
+    /// next, in the order to push them.
+    fn taint_step(&self, n: Node<'t>, state: &State<'t>) -> TaintStep<'t> {
+        let visit =
+            |nodes: Vec<Option<Node<'t>>>| TaintStep::Visit(nodes.into_iter().flatten().collect());
+        match n.kind() {
+            "identifier" | "member_access_expression" if self.checked.contains(self.text(n)) => {
+                TaintStep::Visit(Vec::new())
+            }
+            "identifier" => match self.decl(n).and_then(|d| state.get(&d)) {
+                Some(path) if !from_call(path) => TaintStep::Found(path.clone()),
+                Some(path) => TaintStep::Fallback(path.clone()),
+                None => TaintStep::Visit(Vec::new()),
+            },
+            "member_access_expression" => match self.request_member(n) {
+                Some(path) => TaintStep::Found(path),
+                None => visit(vec![n.child_by_field_name("expression")]),
+            },
+            "element_access_expression" | "conditional_access_expression" => visit(vec![
+                n.child_by_field_name("expression")
+                    .or_else(|| n.named_child(0)),
+            ]),
+            "invocation_expression" => self.invocation_step(n, state),
+            "object_creation_expression" => {
+                let ty = n.child_by_field_name("type").map(|t| self.text(t));
+                if matches!(
+                    ty,
+                    Some(
+                        "StringBuilder"
+                            | "System.Text.StringBuilder"
+                            | "string"
+                            | "Uri"
+                            | "System.Uri"
+                    )
+                ) {
+                    TaintStep::Visit(arguments(n).into_iter().rev().collect())
+                } else {
+                    TaintStep::Visit(Vec::new())
+                }
+            }
+            "binary_expression" | "interpolated_string_expression" if self.fixes_origin(n) => {
+                TaintStep::Visit(Vec::new())
+            }
+            "binary_expression" => {
+                let op = n.child_by_field_name("operator").map(|o| self.text(o));
+                if matches!(op, Some("+" | "??")) {
+                    visit(vec![
+                        n.child_by_field_name("right"),
+                        n.child_by_field_name("left"),
+                    ])
+                } else {
+                    TaintStep::Visit(Vec::new())
+                }
+            }
+            "conditional_expression" => visit(vec![
+                n.child_by_field_name("alternative"),
+                n.child_by_field_name("consequence"),
+            ]),
+            "assignment_expression" => visit(vec![n.child_by_field_name("right")]),
+            "interpolated_string_expression" => TaintStep::Visit(interpolated_values(n)),
+            "parenthesized_expression"
+            | "cast_expression"
+            | "postfix_unary_expression"
+            | "await_expression"
+            | "checked_expression"
+            | "argument" => {
+                visit(vec![n.child_by_field_name("value").or_else(|| {
+                    n.named_child(n.named_child_count().saturating_sub(1) as u32)
+                })])
+            }
+            "as_expression" => visit(vec![n.child_by_field_name("left")]),
+            _ => TaintStep::Visit(Vec::new()),
+        }
+    }
+
+    /// A call's taint: a function of this file's, by its summary; another
+    /// file's, a request's value if it returns one, which the project pass
+    /// decides; else its arguments, unless it sanitizes them.
+    fn invocation_step(&self, n: Node<'t>, state: &State<'t>) -> TaintStep<'t> {
+        if let Some(j) = self.file.callee(n) {
+            return match self.through_local_call(n, j, state) {
+                Some(path) if !from_call(&path) => TaintStep::Found(path),
+                Some(path) => TaintStep::Fallback(path),
+                None => TaintStep::Visit(Vec::new()),
+            };
+        }
+        if self.from_calls && self.file.external_callee(n).is_some() {
+            return TaintStep::Fallback(vec![Step {
+                node: n,
+                message: FROM_CALL.to_string(),
+            }]);
+        }
+        if self.sanitizes(n) {
+            return TaintStep::Visit(Vec::new());
+        }
+        TaintStep::Visit(self.propagated(n).into_iter().rev().collect())
     }
 
     /// For a request (SSRF) or a redirect: a URL built after text that
@@ -2463,46 +2556,60 @@ impl<'t> Analysis<'_, 't> {
             if n.kind() == "invocation_expression"
                 && let Some(f) = n.child_by_field_name("function")
             {
-                let name = self.text(bare_name(f.child_by_field_name("name").unwrap_or(f)));
-                let validates = match self.kind {
-                    // `Url.IsLocalUrl`, and helpers around it such as
-                    // nopCommerce's `CheckIsLocalUrl`.
-                    SinkKind::Redirect => {
-                        name.ends_with("IsLocalUrl")
-                            || matches!(name, "IsValidReturnUrl" | "GetAuthorizationContextAsync")
-                    }
-                    SinkKind::Path => {
-                        name.starts_with("Is")
-                            && ["Path", "Within", "Inside", "Safe"]
-                                .iter()
-                                .any(|w| name.contains(w))
-                    }
-                    _ => false,
-                };
-                if validates {
-                    out.extend(arguments(n).into_iter().map(|a| self.text(a).to_string()));
-                }
-                if self.kind == SinkKind::Path && name == "StartsWith" {
-                    out.extend(
-                        f.child_by_field_name("expression")
-                            .map(|r| self.text(r).to_string()),
-                    );
-                }
-                // A function of this file that checks what it's given, such
-                // as a validation helper that calls `IsPathWithinDirectory`.
-                if let Some(j) = self.file.callee(n)
-                    && self.file.functions[j].id() != function.id()
-                {
-                    for p in self.file.checks(j).iter() {
-                        out.extend(
-                            argument_for(self.file, n, j, *p).map(|a| self.text(a).to_string()),
-                        );
-                    }
-                }
+                out.extend(self.values_a_call_checks(n, f, function));
             }
             stack.extend(children(n));
         }
         out
+    }
+
+    /// The values a call checks: a validator's arguments, `x.StartsWith`'s
+    /// receiver for paths, and what a function of this file that checks
+    /// what it's given (a validation helper calling
+    /// `IsPathWithinDirectory`) is passed.
+    fn values_a_call_checks(&self, call: Node<'t>, f: Node<'t>, function: Node<'t>) -> Vec<String> {
+        let mut out = Vec::new();
+        let name = self.text(bare_name(f.child_by_field_name("name").unwrap_or(f)));
+        if self.validates(name) {
+            out.extend(
+                arguments(call)
+                    .into_iter()
+                    .map(|a| self.text(a).to_string()),
+            );
+        }
+        if self.kind == SinkKind::Path && name == "StartsWith" {
+            out.extend(
+                f.child_by_field_name("expression")
+                    .map(|r| self.text(r).to_string()),
+            );
+        }
+        if let Some(j) = self.file.callee(call)
+            && self.file.functions[j].id() != function.id()
+        {
+            for p in self.file.checks(j).iter() {
+                out.extend(argument_for(self.file, call, j, *p).map(|a| self.text(a).to_string()));
+            }
+        }
+        out
+    }
+
+    /// Whether a function by this name validates a value for this sink
+    /// kind: `Url.IsLocalUrl` and helpers around it such as nopCommerce's
+    /// `CheckIsLocalUrl`, or `IsPathWithin...` and the like.
+    fn validates(&self, name: &str) -> bool {
+        match self.kind {
+            SinkKind::Redirect => {
+                name.ends_with("IsLocalUrl")
+                    || matches!(name, "IsValidReturnUrl" | "GetAuthorizationContextAsync")
+            }
+            SinkKind::Path => {
+                name.starts_with("Is")
+                    && ["Path", "Within", "Inside", "Safe"]
+                        .iter()
+                        .any(|w| name.contains(w))
+            }
+            _ => false,
+        }
     }
 
     /// The value a call to function `j` of this file returns, when its
