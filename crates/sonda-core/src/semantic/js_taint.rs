@@ -728,76 +728,74 @@ impl<'a, 't> Cx<'a, 't> {
     fn walk(&mut self, root: Node<'t>) -> Option<()> {
         let mut stack = vec![root];
         while let Some(n) = stack.pop() {
-            match n.kind() {
-                "import_statement" => self.import(n),
-                "variable_declarator" => {
-                    if let (Some(name), Some(value)) = (
-                        n.child_by_field_name("name"),
-                        n.child_by_field_name("value"),
-                    ) {
-                        self.required(name, value);
-                        // `const exec = run`, where `run` is imported.
-                        if name.kind() == "identifier"
-                            && let Some(import) = self.import_of(value)
-                        {
-                            let (module, member, default) =
-                                (import.module.clone(), import.member.clone(), import.default);
-                            self.add_import_as(name, &module, member, default);
-                        }
-                        self.writes.push(Write {
-                            target: name,
-                            value,
-                            adds: false,
-                        });
-                    }
-                }
-                "assignment_expression" | "augmented_assignment_expression" => {
-                    if let (Some(left), Some(right)) = (
-                        n.child_by_field_name("left"),
-                        n.child_by_field_name("right"),
-                    ) {
-                        self.writes.push(Write {
-                            target: left,
-                            value: right,
-                            adds: n.kind() == "augmented_assignment_expression",
-                        });
-                    }
-                }
-                "for_in_statement" => {
-                    if let (Some(left), Some(right)) = (
-                        n.child_by_field_name("left"),
-                        n.child_by_field_name("right"),
-                    ) {
-                        self.writes.push(Write {
-                            target: left,
-                            value: right,
-                            adds: false,
-                        });
-                    }
-                }
-                "call_expression" | "new_expression" => {
-                    self.calls.push(n);
-                    if let Some((receiver, name)) = method(n)
-                        && INTO_RECEIVER.contains(&self.text(name))
-                        && receiver.kind() == "identifier"
-                    {
-                        for a in arguments(n) {
-                            self.writes.push(Write {
-                                target: receiver,
-                                value: a,
-                                adds: true,
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
+            self.note(n);
             if self.writes.len() > MAX_WRITES {
                 return None;
             }
             stack.extend(children(n).into_iter().rev());
         }
         Some(())
+    }
+
+    /// Records what one node writes, imports or calls.
+    fn note(&mut self, n: Node<'t>) {
+        let field = |f: &str| n.child_by_field_name(f);
+        match n.kind() {
+            "import_statement" => self.import(n),
+            "variable_declarator" => {
+                if let (Some(name), Some(value)) = (field("name"), field("value")) {
+                    self.note_declarator(name, value);
+                }
+            }
+            "assignment_expression" | "augmented_assignment_expression" => {
+                if let (Some(left), Some(right)) = (field("left"), field("right")) {
+                    self.note_write(left, right, n.kind() == "augmented_assignment_expression");
+                }
+            }
+            "for_in_statement" => {
+                if let (Some(left), Some(right)) = (field("left"), field("right")) {
+                    self.note_write(left, right, false);
+                }
+            }
+            "call_expression" | "new_expression" => self.note_call(n),
+            _ => {}
+        }
+    }
+
+    fn note_write(&mut self, target: Node<'t>, value: Node<'t>, adds: bool) {
+        self.writes.push(Write {
+            target,
+            value,
+            adds,
+        });
+    }
+
+    /// `const x = value`; `const exec = run`, where `run` is imported, is an
+    /// import too.
+    fn note_declarator(&mut self, name: Node<'t>, value: Node<'t>) {
+        self.required(name, value);
+        if name.kind() == "identifier"
+            && let Some(import) = self.import_of(value)
+        {
+            let (module, member, default) =
+                (import.module.clone(), import.member.clone(), import.default);
+            self.add_import_as(name, &module, member, default);
+        }
+        self.note_write(name, value, false);
+    }
+
+    /// A call; one that adds its arguments to its receiver, which holds
+    /// them then.
+    fn note_call(&mut self, n: Node<'t>) {
+        self.calls.push(n);
+        if let Some((receiver, name)) = method(n)
+            && INTO_RECEIVER.contains(&self.text(name))
+            && receiver.kind() == "identifier"
+        {
+            for a in arguments(n) {
+                self.note_write(receiver, a, true);
+            }
+        }
     }
 
     fn import(&mut self, n: Node<'t>) {
@@ -923,11 +921,35 @@ impl<'a, 't> Cx<'a, 't> {
         if nodes.is_empty() {
             return;
         }
-        // NestJS and routing-controllers: decorated parameters, in any method.
+        self.mark_decorated_params(&nodes, params);
+        let next_route = self.is_next_route(f);
+        if !(next_route || self.is_route_argument(f) || self.named_like_handler(&nodes)) {
+            return;
+        }
+        for decls in params {
+            self.handler_params.extend(decls.iter().copied());
+        }
+        // The request: the first parameter, and for a Next.js route the
+        // second too, which holds the route's `params`.
+        let requests = if next_route { 2 } else { 1 };
+        for (i, decls) in params.iter().enumerate().take(requests) {
+            match nodes.get(i).map(|n| pattern_of(*n)) {
+                Some(p) if p.kind() == "identifier" => {
+                    self.initial.requests.extend(decls.iter().copied());
+                }
+                // `({ query, body }, res) => …`: the request's members.
+                Some(_) => self.mark_request_members(decls),
+                None => {}
+            }
+        }
+    }
+
+    /// NestJS and routing-controllers: decorated parameters, in any method.
+    fn mark_decorated_params(&mut self, nodes: &[Node<'t>], params: &[Vec<DeclId>]) {
         for (i, p) in nodes.iter().enumerate() {
+            let Some(decls) = params.get(i) else { continue };
             for d in decorators(*p) {
                 let name = self.text(d);
-                let Some(decls) = params.get(i) else { continue };
                 if PARAM_DECORATORS.contains(&name) {
                     for &decl in decls {
                         self.initial.tainted.insert(
@@ -943,43 +965,26 @@ impl<'a, 't> Cx<'a, 't> {
                 }
             }
         }
-        let next_route = self.is_next_route(f);
-        if !(next_route || self.is_route_argument(f) || self.named_like_handler(&nodes)) {
-            return;
-        }
-        for decls in params {
-            self.handler_params.extend(decls.iter().copied());
-        }
-        // The request: the first parameter, and for a Next.js route the
-        // second too, which holds the route's `params`.
-        let requests = if next_route { 2 } else { 1 };
-        for (i, decls) in params.iter().enumerate().take(requests) {
-            let pattern = nodes.get(i).map(|n| pattern_of(*n));
-            match pattern {
-                Some(p) if p.kind() == "identifier" => {
-                    self.initial.requests.extend(decls.iter().copied());
-                }
-                // `({ query, body }, res) => …`: the request's members.
-                Some(_) => {
-                    for &decl in decls {
-                        let node = self.m.decls[decl].node;
-                        let Some(key) = pattern_key(node, self.src) else {
-                            continue;
-                        };
-                        if REQUEST_MEMBERS.contains(&key.as_str()) {
-                            self.initial.tainted.insert(
-                                decl,
-                                vec![Step {
-                                    node,
-                                    message: format!("the request's `{key}`"),
-                                }],
-                            );
-                        } else if REQUEST_OBJECTS.contains(&key.as_str()) {
-                            self.initial.requests.insert(decl);
-                        }
-                    }
-                }
-                None => {}
+    }
+
+    /// A request destructured in the parameters: its members' values, and
+    /// the objects that hold more of them.
+    fn mark_request_members(&mut self, decls: &[DeclId]) {
+        for &decl in decls {
+            let node = self.m.decls[decl].node;
+            let Some(key) = pattern_key(node, self.src) else {
+                continue;
+            };
+            if REQUEST_MEMBERS.contains(&key.as_str()) {
+                self.initial.tainted.insert(
+                    decl,
+                    vec![Step {
+                        node,
+                        message: format!("the request's `{key}`"),
+                    }],
+                );
+            } else if REQUEST_OBJECTS.contains(&key.as_str()) {
+                self.initial.requests.insert(decl);
             }
         }
     }
@@ -1098,82 +1103,78 @@ impl<'a, 't> Cx<'a, 't> {
     fn bind(&self, w: &Write<'t>, state: &mut State<'t>) -> bool {
         let target = unwrap(w.target);
         match target.kind() {
-            "identifier" => {
-                let Some(decl) = self.decl(target) else {
-                    return false;
-                };
-                if !w.adds && self.is_request(w.value, state) {
-                    return state.requests.insert(decl);
-                }
-                if settled(state, decl) {
-                    return false;
-                }
-                let Some(mut path) = self.taint(w.value, state, 0) else {
-                    return false;
-                };
-                if !replaces(state, decl, &path) {
-                    return false;
-                }
-                let name = self.text(target);
-                let into = if w.adds && w.target.parent().is_some_and(|p| p.kind() == "arguments") {
-                    format!("added to `{name}`")
-                } else if w.adds || is_built(unwrap(w.value)) {
-                    format!("concatenated into `{name}`")
-                } else {
-                    format!("assigned to `{name}`")
-                };
-                path.push(Step {
-                    node: target,
-                    message: into,
-                });
-                state.tainted.insert(decl, cap(path));
-                true
-            }
+            "identifier" => self.bind_name(w, target, state),
             "object_pattern" | "array_pattern" => self.bind_pattern(target, w.value, state),
             // `options.url = x`: the object holds it.
-            "member_expression" | "subscript_expression" => {
-                let Some(object) = target.child_by_field_name("object").map(unwrap) else {
-                    return false;
-                };
-                if object.kind() != "identifier" {
-                    return false;
-                }
-                // `to.pathname = x`, `to.search = x`: a URL's parts after its
-                // host don't change where it goes.
-                if matches!(self.kind, SinkKind::Redirect | SinkKind::Ssrf)
-                    && target.child_by_field_name("property").is_some_and(|p| {
-                        matches!(
-                            self.text(p),
-                            "pathname" | "search" | "hash" | "query" | "searchParams"
-                        )
-                    })
-                {
-                    return false;
-                }
-                let Some(decl) = self.decl(object) else {
-                    return false;
-                };
-                if settled(state, decl)
-                    || state.requests.contains(&decl)
-                    || self.handler_params.contains(&decl)
-                {
-                    return false;
-                }
-                let Some(mut path) = self.taint(w.value, state, 0) else {
-                    return false;
-                };
-                if !replaces(state, decl, &path) {
-                    return false;
-                }
-                path.push(Step {
-                    node: target,
-                    message: format!("assigned to `{}`", self.text(target)),
-                });
-                state.tainted.insert(decl, cap(path));
-                true
-            }
+            "member_expression" | "subscript_expression" => self.bind_member(w, target, state),
             _ => false,
         }
+    }
+
+    fn bind_name(&self, w: &Write<'t>, target: Node<'t>, state: &mut State<'t>) -> bool {
+        let Some(decl) = self.decl(target) else {
+            return false;
+        };
+        if !w.adds && self.is_request(w.value, state) {
+            return state.requests.insert(decl);
+        }
+        if settled(state, decl) {
+            return false;
+        }
+        let Some(mut path) = self.taint(w.value, state, 0) else {
+            return false;
+        };
+        if !replaces(state, decl, &path) {
+            return false;
+        }
+        path.push(Step {
+            node: target,
+            message: binding_message(w, self.text(target)),
+        });
+        state.tainted.insert(decl, cap(path));
+        true
+    }
+
+    fn bind_member(&self, w: &Write<'t>, target: Node<'t>, state: &mut State<'t>) -> bool {
+        let Some(object) = target.child_by_field_name("object").map(unwrap) else {
+            return false;
+        };
+        if object.kind() != "identifier" || self.sets_url_tail(target) {
+            return false;
+        }
+        let Some(decl) = self.decl(object) else {
+            return false;
+        };
+        if settled(state, decl)
+            || state.requests.contains(&decl)
+            || self.handler_params.contains(&decl)
+        {
+            return false;
+        }
+        let Some(mut path) = self.taint(w.value, state, 0) else {
+            return false;
+        };
+        if !replaces(state, decl, &path) {
+            return false;
+        }
+        path.push(Step {
+            node: target,
+            message: format!("assigned to `{}`", self.text(target)),
+        });
+        state.tainted.insert(decl, cap(path));
+        true
+    }
+
+    /// `to.pathname = x`, `to.search = x`: a URL's parts after its host
+    /// don't change where it goes.
+    fn sets_url_tail(&self, target: Node<'t>) -> bool {
+        matches!(self.kind, SinkKind::Redirect | SinkKind::Ssrf)
+            && target.child_by_field_name("property").is_some_and(|p| {
+                matches!(
+                    self.text(p),
+                    "pathname" | "search" | "hash" | "query" | "searchParams"
+                )
+            })
     }
 
     /// `const { id } = req.query`, `const { query } = req`, `const [a] = xs`.
@@ -1262,30 +1263,7 @@ impl<'a, 't> Cx<'a, 't> {
                 .named_children(&mut n.walk())
                 .find(|c| !c.kind().contains("type"))
                 .and_then(|c| self.taint(c, state, d)),
-            "member_expression" => {
-                let object = n.child_by_field_name("object")?;
-                let property = self.text(n.child_by_field_name("property")?);
-                if self.is_request(object, state) {
-                    return REQUEST_MEMBERS.contains(&property).then(|| {
-                        vec![Step {
-                            node: n,
-                            message: format!("the request's `{property}`"),
-                        }]
-                    });
-                }
-                // An upload's name is its sender's; where it was stored
-                // (multer's `path`, `filename`) is the server's.
-                if UPLOAD_NAMES.contains(&property) && self.is_upload(object, state) {
-                    return Some(vec![Step {
-                        node: n,
-                        message: format!("the uploaded file's `{property}`"),
-                    }]);
-                }
-                if property == "length" {
-                    return None;
-                }
-                self.taint(object, state, d).map(|p| deepen(p, object, n))
-            }
+            "member_expression" => self.member_taint(n, state, d),
             "subscript_expression" => {
                 let object = n.child_by_field_name("object")?;
                 if self.is_request(object, state) {
@@ -1293,48 +1271,9 @@ impl<'a, 't> Cx<'a, 't> {
                 }
                 self.taint(object, state, d).map(|p| deepen(p, object, n))
             }
-            "binary_expression" => {
-                let op = n.child_by_field_name("operator").map(|o| self.text(o));
-                let left = n.child_by_field_name("left")?;
-                let right = n.child_by_field_name("right")?;
-                match op {
-                    Some("+") => {
-                        if self.fixes_origin(n, state, d) {
-                            return None;
-                        }
-                        self.taint(left, state, d)
-                            .or_else(|| self.taint(right, state, d))
-                    }
-                    Some("||" | "??") => self
-                        .taint(left, state, d)
-                        .or_else(|| self.taint(right, state, d)),
-                    Some("&&") => self.taint(right, state, d),
-                    _ => None,
-                }
-            }
-            "template_string" => {
-                if self.fixes_origin(n, state, d) {
-                    return None;
-                }
-                children(n)
-                    .into_iter()
-                    .filter(|c| c.kind() == "template_substitution")
-                    .filter_map(|c| c.named_child(0))
-                    .find_map(|e| self.taint(e, state, d))
-            }
-            // `ok.includes(x) ? x : 'jpg'`: the branch its condition checked.
-            "ternary_expression" => n
-                .child_by_field_name("consequence")
-                .filter(|c| {
-                    !n.child_by_field_name("condition").is_some_and(|cond| {
-                        self.checked_values(cond).contains(self.text(unwrap(*c)))
-                    })
-                })
-                .and_then(|c| self.taint(c, state, d))
-                .or_else(|| {
-                    n.child_by_field_name("alternative")
-                        .and_then(|a| self.taint(a, state, d))
-                }),
+            "binary_expression" => self.binary_taint(n, state, d),
+            "template_string" => self.template_taint(n, state, d),
+            "ternary_expression" => self.ternary_taint(n, state, d),
             "array" => children(n)
                 .into_iter()
                 .find_map(|e| self.taint(e, state, d)),
@@ -1345,15 +1284,93 @@ impl<'a, 't> Cx<'a, 't> {
                 .child_by_field_name("right")
                 .and_then(|r| self.taint(r, state, d)),
             "call_expression" => self.call_taint(n, state, d),
-            "new_expression" => {
-                let ctor = self.text(n.child_by_field_name("constructor")?);
-                let first = arguments(n).into_iter().next()?;
-                match ctor {
-                    "URL" if self.fixes_origin(first, state, d) => None,
-                    "URL" | "String" | "URLSearchParams" => self.taint(first, state, d),
-                    _ => None,
+            "new_expression" => self.new_taint(n, state, d),
+            _ => None,
+        }
+    }
+
+    /// `x.prop`: a request's member, an upload's name, or what the object
+    /// carries; not a length.
+    fn member_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        let object = n.child_by_field_name("object")?;
+        let property = self.text(n.child_by_field_name("property")?);
+        if self.is_request(object, state) {
+            return REQUEST_MEMBERS.contains(&property).then(|| {
+                vec![Step {
+                    node: n,
+                    message: format!("the request's `{property}`"),
+                }]
+            });
+        }
+        // An upload's name is its sender's; where it was stored (multer's
+        // `path`, `filename`) is the server's.
+        if UPLOAD_NAMES.contains(&property) && self.is_upload(object, state) {
+            return Some(vec![Step {
+                node: n,
+                message: format!("the uploaded file's `{property}`"),
+            }]);
+        }
+        if property == "length" {
+            return None;
+        }
+        self.taint(object, state, d).map(|p| deepen(p, object, n))
+    }
+
+    /// `a + b` (unless it fixes a URL's origin), `a || b`, `a ?? b`, `a && b`.
+    fn binary_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        let op = n.child_by_field_name("operator").map(|o| self.text(o));
+        let left = n.child_by_field_name("left")?;
+        let right = n.child_by_field_name("right")?;
+        match op {
+            Some("+") => {
+                if self.fixes_origin(n, state, d) {
+                    return None;
                 }
+                self.taint(left, state, d)
+                    .or_else(|| self.taint(right, state, d))
             }
+            Some("||" | "??") => self
+                .taint(left, state, d)
+                .or_else(|| self.taint(right, state, d)),
+            Some("&&") => self.taint(right, state, d),
+            _ => None,
+        }
+    }
+
+    /// A template string's substitutions, unless it fixes a URL's origin.
+    fn template_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        if self.fixes_origin(n, state, d) {
+            return None;
+        }
+        children(n)
+            .into_iter()
+            .filter(|c| c.kind() == "template_substitution")
+            .filter_map(|c| c.named_child(0))
+            .find_map(|e| self.taint(e, state, d))
+    }
+
+    /// `ok.includes(x) ? x : 'jpg'`: not the branch its condition checked.
+    fn ternary_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        n.child_by_field_name("consequence")
+            .filter(|c| {
+                !n.child_by_field_name("condition")
+                    .is_some_and(|cond| self.checked_values(cond).contains(self.text(unwrap(*c))))
+            })
+            .and_then(|c| self.taint(c, state, d))
+            .or_else(|| {
+                n.child_by_field_name("alternative")
+                    .and_then(|a| self.taint(a, state, d))
+            })
+    }
+
+    /// `new URL(x)` (unless it fixes the origin), `new String(x)`,
+    /// `new URLSearchParams(x)`.
+    fn new_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        let ctor = self.text(n.child_by_field_name("constructor")?);
+        let first = arguments(n).into_iter().next()?;
+        match ctor {
+            "URL" if self.fixes_origin(first, state, d) => None,
+            "URL" | "String" | "URLSearchParams" => self.taint(first, state, d),
             _ => None,
         }
     }
@@ -1364,11 +1381,6 @@ impl<'a, 't> Cx<'a, 't> {
         if args.kind() == "template_string" {
             return None;
         }
-        let any_arg = || {
-            arguments(call)
-                .into_iter()
-                .find_map(|a| self.taint(a, state, d))
-        };
         // A function of this file: what its summary returns.
         if let Some(j) = self.local_function(call) {
             return self.through_local(call, j, state, d);
@@ -1383,27 +1395,47 @@ impl<'a, 't> Cx<'a, 't> {
         }
         let callee = unwrap(call.child_by_field_name("function")?);
         if callee.kind() == "identifier" {
-            let name = self.text(callee);
-            if let Some(import) = self.import_of(callee) {
-                return self
-                    .module_propagates(&import.module, import.member.as_deref())
-                    .then(any_arg)
-                    .flatten();
-            }
-            if self.decl(callee).is_none() && PROPAGATING_GLOBALS.contains(&name) {
-                return any_arg();
-            }
-            if self.decl(callee).is_none()
-                && name == "encodeURIComponent"
-                && !matches!(self.kind, SinkKind::Redirect | SinkKind::Ssrf)
-            {
-                return any_arg();
-            }
-            return None;
+            return self.function_call_taint(call, callee, state, d);
         }
+        self.method_call_taint(call, state, d)
+    }
+
+    fn any_argument_taint(&self, call: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        arguments(call)
+            .into_iter()
+            .find_map(|a| self.taint(a, state, d))
+    }
+
+    /// `f(x)`: an imported function that passes values on, a global that
+    /// does, and `encodeURIComponent` but for redirects and requests.
+    fn function_call_taint(
+        &self,
+        call: Node<'t>,
+        callee: Node<'t>,
+        state: &State<'t>,
+        d: u32,
+    ) -> Option<Path<'t>> {
+        let name = self.text(callee);
+        let passes_on = match self.import_of(callee) {
+            Some(import) => self.module_propagates(&import.module, import.member.as_deref()),
+            None => {
+                self.decl(callee).is_none()
+                    && (PROPAGATING_GLOBALS.contains(&name)
+                        || name == "encodeURIComponent"
+                            && !matches!(self.kind, SinkKind::Redirect | SinkKind::Ssrf))
+            }
+        };
+        passes_on
+            .then(|| self.any_argument_taint(call, state, d))
+            .flatten()
+    }
+
+    /// `x.method(...)`: the request's values (`req.get('x')`, `await
+    /// request.json()`), a module's or a static method that passes values
+    /// on, and methods that return their receiver's.
+    fn method_call_taint(&self, call: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
         let (receiver, method_name) = method(call)?;
         let name = self.text(method_name);
-        // `req.get('x')`, `await request.json()`: the request's values.
         if self.is_request(receiver, state) {
             return REQUEST_METHODS.contains(&name).then(|| {
                 vec![Step {
@@ -1415,7 +1447,7 @@ impl<'a, 't> Cx<'a, 't> {
         if let Some(import) = self.import_of(receiver) {
             return self
                 .module_propagates(&import.module, Some(name))
-                .then(any_arg)
+                .then(|| self.any_argument_taint(call, state, d))
                 .flatten();
         }
         let receiver = unwrap(receiver);
@@ -1423,16 +1455,16 @@ impl<'a, 't> Cx<'a, 't> {
             && self.decl(receiver).is_none()
             && PROPAGATING_STATICS.contains(&(self.text(receiver), name))
         {
-            return any_arg();
+            return self.any_argument_taint(call, state, d);
         }
-        if !PROPAGATING_METHODS.contains(&name) {
+        if !PROPAGATING_METHODS.contains(&name) || self.replaces_origin(call, name) {
             return None;
         }
-        if self.replaces_origin(call, name) {
-            return None;
-        }
-        self.taint(receiver, state, d)
-            .or_else(|| (name == "concat").then(any_arg).flatten())
+        self.taint(receiver, state, d).or_else(|| {
+            (name == "concat")
+                .then(|| self.any_argument_taint(call, state, d))
+                .flatten()
+        })
     }
 
     /// Whether a module's function returns what it's given: `path.join`,
@@ -1539,7 +1571,23 @@ impl<'a, 't> Cx<'a, 't> {
     /// helpers' sinks, and other files' functions.
     fn reached(&self, scope: Option<Node>, state: &State<'t>) -> Vec<Reach<'t>> {
         let mut out = Vec::new();
-        let calls = match scope {
+        for &call in self.calls_in(scope) {
+            if let Some((name, args)) = self.cached_sink(call) {
+                out.extend(self.sink_reached(call, &name, args, state));
+            } else if let Some(j) = self.local_function(call) {
+                // A helper of this file whose parameter reaches a sink, or
+                // another file's function.
+                self.reached_through_local(call, j, state, &mut out);
+            } else if let Some(callee) = self.callee_of(call) {
+                self.reached_another_file(call, callee, state, &mut out);
+            }
+        }
+        out
+    }
+
+    /// The calls inside `scope`, or every call.
+    fn calls_in(&self, scope: Option<Node>) -> &[Node<'t>] {
+        match scope {
             None => &self.calls[..],
             Some(s) => {
                 let lo = self
@@ -1550,104 +1598,146 @@ impl<'a, 't> Cx<'a, 't> {
                     .partition_point(|c| c.start_byte() < s.end_byte());
                 &self.calls[lo..hi]
             }
+        }
+    }
+
+    /// Whether a call is a sink, and its arguments that are, worked out once.
+    fn cached_sink(&self, call: Node<'t>) -> Option<(String, Vec<Node<'t>>)> {
+        self.sinks
+            .borrow_mut()
+            .entry(call.id())
+            .or_insert_with(|| self.sink(call, &self.initial))
+            .clone()
+    }
+
+    /// A sink's first argument a request's value reaches unchecked; for a
+    /// SQL query, one that reads as SQL, or another file's result.
+    fn sink_reached(
+        &self,
+        call: Node<'t>,
+        name: &str,
+        args: Vec<Node<'t>>,
+        state: &State<'t>,
+    ) -> Option<Reach<'t>> {
+        for arg in args {
+            let Some(mut path) = self.taint(arg, state, 0) else {
+                continue;
+            };
+            let needs_sql = self.kind == SinkKind::Sql
+                && SQL_QUERY.contains(&name)
+                && !self.reads_as_sql(arg, 3);
+            if needs_sql && !from_call(&path) {
+                continue;
+            }
+            let checked = self.checks_of(outermost_function(call, self.m));
+            if self.is_checked(&checked, call, arg, &path) {
+                continue;
+            }
+            path.push(Step {
+                node: call,
+                message: format!("passed to `{name}`"),
+            });
+            return Some(self.reach_sink(path, call, needs_sql));
+        }
+        None
+    }
+
+    /// What a value passed to a helper of this file reaches through it.
+    fn reached_through_local(
+        &self,
+        call: Node<'t>,
+        j: usize,
+        state: &State<'t>,
+        out: &mut Vec<Reach<'t>>,
+    ) {
+        let summary = self.summary(j);
+        let name = self.function_name(j);
+        for (i, arg) in arguments(call).into_iter().enumerate() {
+            if !summary.to_sink.iter().any(|t| t.0 == i)
+                && !summary.to_call.iter().any(|t| t.0 == i)
+            {
+                continue;
+            }
+            let Some(path) = self.taint(arg, state, 0) else {
+                continue;
+            };
+            if self.is_checked(
+                &self.checks_of(outermost_function(call, self.m)),
+                call,
+                arg,
+                &path,
+            ) {
+                continue;
+            }
+            out.extend(self.through_summary(&summary, i, &path, call, &name));
+        }
+    }
+
+    /// The paths a value passed as parameter `i` of a helper takes through
+    /// it: to its sinks, and, for a request's own value, to the other
+    /// files' functions it passes it to.
+    fn through_summary(
+        &self,
+        summary: &FnSummary<'t>,
+        i: usize,
+        path: &Path<'t>,
+        call: Node<'t>,
+        name: &str,
+    ) -> Vec<Reach<'t>> {
+        let into = |inner: &Path<'t>| {
+            let mut p = path.clone();
+            p.push(Step {
+                node: call,
+                message: format!("passed to `{name}`"),
+            });
+            p.extend(inner.iter().cloned());
+            p
         };
-        for &call in calls {
-            let sink = self
-                .sinks
-                .borrow_mut()
-                .entry(call.id())
-                .or_insert_with(|| self.sink(call, &self.initial))
-                .clone();
-            if let Some((name, args)) = sink {
-                for arg in args {
-                    let Some(mut path) = self.taint(arg, state, 0) else {
-                        continue;
-                    };
-                    let needs_sql = self.kind == SinkKind::Sql
-                        && SQL_QUERY.contains(&name.as_str())
-                        && !self.reads_as_sql(arg, 3);
-                    if needs_sql && !from_call(&path) {
-                        continue;
-                    }
-                    let scope = outermost_function(call, self.m);
-                    let checked = self.checks_of(scope);
-                    if self.is_checked(&checked, call, arg, &path) {
-                        continue;
-                    }
-                    path.push(Step {
-                        node: call,
-                        message: format!("passed to `{name}`"),
-                    });
-                    out.push(self.reach_sink(path, call, needs_sql));
-                    break;
-                }
-                continue;
-            }
-            // A helper of this file whose parameter reaches a sink, or
-            // another file's function.
-            if let Some(j) = self.local_function(call) {
-                let summary = self.summary(j);
-                let name = self.function_name(j);
-                for (i, arg) in arguments(call).into_iter().enumerate() {
-                    if !summary.to_sink.iter().any(|t| t.0 == i)
-                        && !summary.to_call.iter().any(|t| t.0 == i)
-                    {
-                        continue;
-                    }
-                    let Some(path) = self.taint(arg, state, 0) else {
-                        continue;
-                    };
-                    if self.is_checked(
-                        &self.checks_of(outermost_function(call, self.m)),
+        let mut out: Vec<Reach<'t>> = summary
+            .to_sink
+            .iter()
+            .filter(|t| t.0 == i)
+            .map(|(_, inner, sink)| self.reach_sink(into(inner), *sink, false))
+            .collect();
+        if !from_call(path) {
+            out.extend(
+                summary
+                    .to_call
+                    .iter()
+                    .filter(|t| t.0 == i)
+                    .map(|(_, inner, callee, a)| Reach::Open {
+                        path: into(inner),
+                        callee: callee.clone(),
+                        arg: *a,
                         call,
-                        arg,
-                        &path,
-                    ) {
-                        continue;
-                    }
-                    let into = |inner: &Path<'t>| {
-                        let mut p = path.clone();
-                        p.push(Step {
-                            node: call,
-                            message: format!("passed to `{name}`"),
-                        });
-                        p.extend(inner.iter().cloned());
-                        p
-                    };
-                    for (_, inner, sink) in summary.to_sink.iter().filter(|t| t.0 == i) {
-                        out.push(self.reach_sink(into(inner), *sink, false));
-                    }
-                    if !from_call(&path) {
-                        for (_, inner, callee, a) in summary.to_call.iter().filter(|t| t.0 == i) {
-                            out.push(Reach::Open {
-                                path: into(inner),
-                                callee: callee.clone(),
-                                arg: *a,
-                                call,
-                            });
-                        }
-                    }
-                }
-                continue;
-            }
-            if let Some(callee) = self.callee_of(call) {
-                let checked = self.checks_of(outermost_function(call, self.m));
-                for (i, arg) in arguments(call).into_iter().enumerate() {
-                    if let Some(path) = self
-                        .taint(arg, state, 0)
-                        .filter(|p| !from_call(p) && !self.is_checked(&checked, call, arg, p))
-                    {
-                        out.push(Reach::Open {
-                            path,
-                            callee: callee.clone(),
-                            arg: i,
-                            call,
-                        });
-                    }
-                }
-            }
+                    }),
+            );
         }
         out
+    }
+
+    /// A request's own value passed, unchecked, to another file's function.
+    fn reached_another_file(
+        &self,
+        call: Node<'t>,
+        callee: Callee,
+        state: &State<'t>,
+        out: &mut Vec<Reach<'t>>,
+    ) {
+        let checked = self.checks_of(outermost_function(call, self.m));
+        for (i, arg) in arguments(call).into_iter().enumerate() {
+            if let Some(path) = self
+                .taint(arg, state, 0)
+                .filter(|p| !from_call(p) && !self.is_checked(&checked, call, arg, p))
+            {
+                out.push(Reach::Open {
+                    path,
+                    callee: callee.clone(),
+                    arg: i,
+                    call,
+                });
+            }
+        }
     }
 
     /// A sink reached: by a request's value, or by another file's
@@ -1981,77 +2071,9 @@ impl<'a, 't> Cx<'a, 't> {
         while let Some(n) = stack.pop() {
             match n.kind() {
                 "export_statement" if n.child_by_field_name("source").is_none() => {
-                    let default =
-                        children(n).is_empty() || n.child(1).is_some_and(|c| c.kind() == "default");
-                    if let Some(d) = n.child_by_field_name("declaration") {
-                        match d.kind() {
-                            "lexical_declaration" | "variable_declaration" => {
-                                for v in children(d)
-                                    .into_iter()
-                                    .filter(|v| v.kind() == "variable_declarator")
-                                {
-                                    if let (Some(name), Some(value)) = (
-                                        v.child_by_field_name("name"),
-                                        v.child_by_field_name("value"),
-                                    ) {
-                                        self.export_value(&mut out, self.text(name), value);
-                                    }
-                                }
-                            }
-                            _ => {
-                                let name = if default {
-                                    "default"
-                                } else {
-                                    d.child_by_field_name("name")
-                                        .map_or("default", |x| self.text(x))
-                                };
-                                self.export_value(&mut out, name, d);
-                            }
-                        }
-                    } else if let Some(v) = n.child_by_field_name("value") {
-                        self.export_value(&mut out, "default", v);
-                    }
-                    for clause in children(n)
-                        .into_iter()
-                        .filter(|c| c.kind() == "export_clause")
-                    {
-                        for spec in children(clause) {
-                            let (Some(local), alias) = (
-                                spec.child_by_field_name("name"),
-                                spec.child_by_field_name("alias"),
-                            ) else {
-                                continue;
-                            };
-                            let exported = self.text(alias.unwrap_or(local));
-                            self.export_value(&mut out, exported, local);
-                        }
-                    }
+                    self.export_statement(n, &mut out);
                 }
-                "assignment_expression" => {
-                    let (Some(left), Some(right)) = (
-                        n.child_by_field_name("left"),
-                        n.child_by_field_name("right"),
-                    ) else {
-                        stack.extend(children(n));
-                        continue;
-                    };
-                    let target = self.text(left);
-                    if target == "module.exports" {
-                        if unwrap(right).kind() == "object" {
-                            for (k, v) in self.object_members(unwrap(right)) {
-                                self.export_value(&mut out, &k, v);
-                            }
-                        } else {
-                            self.export_value(&mut out, "default", right);
-                        }
-                    } else if let Some(name) = target
-                        .strip_prefix("module.exports.")
-                        .or_else(|| target.strip_prefix("exports."))
-                        .filter(|n| !n.contains('.'))
-                    {
-                        self.export_value(&mut out, name, right);
-                    }
-                }
+                "assignment_expression" => self.commonjs_export(n, &mut out),
                 _ => {}
             }
             stack.extend(children(n));
@@ -2061,40 +2083,95 @@ impl<'a, 't> Cx<'a, 't> {
         out
     }
 
+    /// What a local `export` statement exports: a declaration, a default
+    /// value, and the names of an export clause.
+    fn export_statement(&self, n: Node<'t>, out: &mut Vec<(Key, usize)>) {
+        let default = children(n).is_empty() || n.child(1).is_some_and(|c| c.kind() == "default");
+        if let Some(d) = n.child_by_field_name("declaration") {
+            self.export_declaration(d, default, out);
+        } else if let Some(v) = n.child_by_field_name("value") {
+            self.export_value(out, "default", v);
+        }
+        for clause in children(n)
+            .into_iter()
+            .filter(|c| c.kind() == "export_clause")
+        {
+            for spec in children(clause) {
+                let (Some(local), alias) = (
+                    spec.child_by_field_name("name"),
+                    spec.child_by_field_name("alias"),
+                ) else {
+                    continue;
+                };
+                let exported = self.text(alias.unwrap_or(local));
+                self.export_value(out, exported, local);
+            }
+        }
+    }
+
+    /// An exported declaration: each variable, or a function or class by
+    /// its name (`default` when it's the default export).
+    fn export_declaration(&self, d: Node<'t>, default: bool, out: &mut Vec<(Key, usize)>) {
+        if matches!(d.kind(), "lexical_declaration" | "variable_declaration") {
+            for v in children(d)
+                .into_iter()
+                .filter(|v| v.kind() == "variable_declarator")
+            {
+                if let (Some(name), Some(value)) = (
+                    v.child_by_field_name("name"),
+                    v.child_by_field_name("value"),
+                ) {
+                    self.export_value(out, self.text(name), value);
+                }
+            }
+            return;
+        }
+        let name = if default {
+            "default"
+        } else {
+            d.child_by_field_name("name")
+                .map_or("default", |x| self.text(x))
+        };
+        self.export_value(out, name, d);
+    }
+
+    /// `module.exports = ...` (an object's members, or the default), and
+    /// `module.exports.name = ...` or `exports.name = ...`.
+    fn commonjs_export(&self, n: Node<'t>, out: &mut Vec<(Key, usize)>) {
+        let (Some(left), Some(right)) = (
+            n.child_by_field_name("left"),
+            n.child_by_field_name("right"),
+        ) else {
+            return;
+        };
+        let target = self.text(left);
+        if target == "module.exports" {
+            if unwrap(right).kind() == "object" {
+                for (k, v) in self.object_members(unwrap(right)) {
+                    self.export_value(out, &k, v);
+                }
+            } else {
+                self.export_value(out, "default", right);
+            }
+        } else if let Some(name) = target
+            .strip_prefix("module.exports.")
+            .or_else(|| target.strip_prefix("exports."))
+            .filter(|n| !n.contains('.'))
+        {
+            self.export_value(out, name, right);
+        }
+    }
+
     /// An exported value's functions: a function, a name set to one, a
     /// class's methods, a default-exported object's members.
     fn export_value(&self, out: &mut Vec<(Key, usize)>, name: &str, value: Node<'t>) {
         let value = unwrap(value);
-        let key = |member: Option<&str>| Key {
-            export: name.to_string(),
-            member: member.map(str::to_string),
-        };
         if let Some(&j) = self.fn_index.get(&value.id()) {
-            out.push((key(None), j));
+            out.push((export_key(name, None), j));
             return;
         }
         match value.kind() {
-            "identifier" => {
-                let Some(d) = self.decl(value) else { return };
-                let node = self.m.decls[d].node;
-                let Some(parent) = node.parent() else { return };
-                match parent.kind() {
-                    "function_declaration" | "generator_function_declaration" => {
-                        if let Some(&j) = self.fn_index.get(&parent.id()) {
-                            out.push((key(None), j));
-                        }
-                    }
-                    "variable_declarator" => {
-                        if let Some(v) = parent.child_by_field_name("value") {
-                            self.export_value(out, name, v);
-                        }
-                    }
-                    "class_declaration" | "abstract_class_declaration" => {
-                        self.export_value(out, name, parent);
-                    }
-                    _ => {}
-                }
-            }
+            "identifier" => self.export_declared(out, name, value),
             "class_declaration" | "abstract_class_declaration" | "class" => {
                 let Some(body) = value.child_by_field_name("body") else {
                     return;
@@ -2106,16 +2183,41 @@ impl<'a, 't> Cx<'a, 't> {
                     if let (Some(n), Some(&j)) =
                         (m.child_by_field_name("name"), self.fn_index.get(&m.id()))
                     {
-                        out.push((key(Some(self.text(n))), j));
+                        out.push((export_key(name, Some(self.text(n))), j));
                     }
                 }
             }
             "object" if name == "default" => {
                 for (k, v) in self.object_members(value) {
                     if let Some(&j) = self.fn_index.get(&unwrap(v).id()) {
-                        out.push((key(Some(&k)), j));
+                        out.push((export_key(name, Some(&k)), j));
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// An exported name: what its declaration is, a function, a variable's
+    /// value or a class.
+    fn export_declared(&self, out: &mut Vec<(Key, usize)>, name: &str, value: Node<'t>) {
+        let Some(d) = self.decl(value) else { return };
+        let Some(parent) = self.m.decls[d].node.parent() else {
+            return;
+        };
+        match parent.kind() {
+            "function_declaration" | "generator_function_declaration" => {
+                if let Some(&j) = self.fn_index.get(&parent.id()) {
+                    out.push((export_key(name, None), j));
+                }
+            }
+            "variable_declarator" => {
+                if let Some(v) = parent.child_by_field_name("value") {
+                    self.export_value(out, name, v);
+                }
+            }
+            "class_declaration" | "abstract_class_declaration" => {
+                self.export_value(out, name, parent);
             }
             _ => {}
         }
@@ -2147,34 +2249,9 @@ impl<'a, 't> Cx<'a, 't> {
                 .or_else(|| call.child_by_field_name("constructor"))?,
         );
         let args = arguments(call);
-        let pick = |spec: Args| -> Vec<Node<'t>> {
-            match spec {
-                Args::First => args.iter().take(1).copied().collect(),
-                Args::FirstTwo => args.iter().take(2).copied().collect(),
-                Args::Last => args.last().copied().into_iter().collect(),
-                Args::All => args.clone(),
-            }
-        };
-        let from_module = |module: &str, member: &str| {
-            MODULE_SINKS
-                .iter()
-                .find(|(m, names, k, _)| *k == self.kind && *m == module && names.contains(&member))
-                .map(|(_, _, _, spec)| (member.to_string(), pick(*spec)))
-        };
         // `exec(x)` imported, `eval(x)` a global.
         if callee.kind() == "identifier" {
-            let name = self.text(callee);
-            if let Some(import) = self.import_of(callee) {
-                let member = import.member.as_deref().unwrap_or("default");
-                return from_module(&import.module, member).map(|(_, a)| (name.to_string(), a));
-            }
-            if self.decl(callee).is_none() {
-                return GLOBAL_SINKS
-                    .iter()
-                    .find(|(g, k, _)| *g == name && *k == self.kind)
-                    .map(|(_, _, spec)| (name.to_string(), pick(*spec)));
-            }
-            return None;
+            return self.function_sink(callee, &args);
         }
         let (receiver, method_name) = method(call)?;
         let name = self.text(method_name);
@@ -2186,55 +2263,98 @@ impl<'a, 't> Cx<'a, 't> {
         // A module's function, when it's one of the tables'; else the
         // methods below, on whatever the module returned (`models.db.query`).
         if let Some(import) = self.import_of(root)
-            && let Some(found) = from_module(&import.module.clone(), name)
+            && let Some(found) = self.module_sink(&import.module.clone(), name, &args)
         {
             return Some(found);
         }
         if let Some(module) = require_of(root, self.src)
-            && let Some(found) = from_module(normalize_module(&module), name)
+            && let Some(found) = self.module_sink(normalize_module(&module), name, &args)
         {
             return Some(found);
         }
         let receiver = unwrap(receiver);
         match self.kind {
             SinkKind::Redirect | SinkKind::Path if self.is_response(receiver, state) => {
-                if let Some((_, _, spec)) = RESPONSE_SINKS
-                    .iter()
-                    .find(|(m, k, _)| *m == name && *k == self.kind)
-                {
-                    // `res.sendFile(name, { root })` stays under `root`.
-                    if name == "sendFile" && args.get(1).is_some_and(|o| self.has_key(*o, "root")) {
-                        return None;
-                    }
-                    return Some((name.to_string(), pick(*spec)));
-                }
-                // `res.setHeader('Location', x)`, `res.writeHead(302, { Location: x })`.
-                if self.kind == SinkKind::Redirect {
-                    if matches!(name, "setHeader" | "set" | "header" | "append")
-                        && args.first().is_some_and(|h| {
-                            string_value(self.text(*h)).eq_ignore_ascii_case("location")
-                        })
-                    {
-                        return Some((
-                            name.to_string(),
-                            args.iter().skip(1).take(1).copied().collect(),
-                        ));
-                    }
-                    if name == "writeHead" {
-                        let location = args
-                            .iter()
-                            .filter(|a| a.kind() == "object")
-                            .find_map(|o| self.value_of_key(*o, "location"));
-                        return location.map(|v| (name.to_string(), vec![v]));
-                    }
-                }
-                None
+                self.response_sink(name, &args)
             }
             SinkKind::Sql if SQL_RAW.contains(&name) || SQL_QUERY.contains(&name) => {
                 Some((name.to_string(), args.iter().take(1).copied().collect()))
             }
             _ => None,
         }
+    }
+
+    /// A module's function that is a sink of this kind, with the arguments
+    /// it uses.
+    fn module_sink(
+        &self,
+        module: &str,
+        member: &str,
+        args: &[Node<'t>],
+    ) -> Option<(String, Vec<Node<'t>>)> {
+        MODULE_SINKS
+            .iter()
+            .find(|(m, names, k, _)| *k == self.kind && *m == module && names.contains(&member))
+            .map(|(_, _, _, spec)| (member.to_string(), pick_args(args, *spec)))
+    }
+
+    /// `f(x)`: an imported function that is a sink, or a global one.
+    fn function_sink(
+        &self,
+        callee: Node<'t>,
+        args: &[Node<'t>],
+    ) -> Option<(String, Vec<Node<'t>>)> {
+        let name = self.text(callee);
+        if let Some(import) = self.import_of(callee) {
+            let member = import.member.as_deref().unwrap_or("default");
+            return self
+                .module_sink(&import.module, member, args)
+                .map(|(_, a)| (name.to_string(), a));
+        }
+        if self.decl(callee).is_some() {
+            return None;
+        }
+        GLOBAL_SINKS
+            .iter()
+            .find(|(g, k, _)| *g == name && *k == self.kind)
+            .map(|(_, _, spec)| (name.to_string(), pick_args(args, *spec)))
+    }
+
+    /// A response's method that redirects or sends a file; for a
+    /// redirect, a `Location` header too (`res.setHeader('Location', x)`,
+    /// `res.writeHead(302, { Location: x })`).
+    fn response_sink(&self, name: &str, args: &[Node<'t>]) -> Option<(String, Vec<Node<'t>>)> {
+        if let Some((_, _, spec)) = RESPONSE_SINKS
+            .iter()
+            .find(|(m, k, _)| *m == name && *k == self.kind)
+        {
+            // `res.sendFile(name, { root })` stays under `root`.
+            if name == "sendFile" && args.get(1).is_some_and(|o| self.has_key(*o, "root")) {
+                return None;
+            }
+            return Some((name.to_string(), pick_args(args, *spec)));
+        }
+        if self.kind != SinkKind::Redirect {
+            return None;
+        }
+        if matches!(name, "setHeader" | "set" | "header" | "append")
+            && args
+                .first()
+                .is_some_and(|h| string_value(self.text(*h)).eq_ignore_ascii_case("location"))
+        {
+            return Some((
+                name.to_string(),
+                args.iter().skip(1).take(1).copied().collect(),
+            ));
+        }
+        if name == "writeHead" {
+            let location = args
+                .iter()
+                .filter(|a| a.kind() == "object")
+                .find_map(|o| self.value_of_key(*o, "location"));
+            return location.map(|v| (name.to_string(), vec![v]));
+        }
+        None
     }
 
     /// A handler's parameter, a `res`, or Koa's `ctx.response`.
@@ -2363,123 +2483,111 @@ impl<'a, 't> Cx<'a, 't> {
     /// A check anywhere in the handler counts, not only one guarding the
     /// sink: precision before recall.
     fn checked_values(&self, function: Node) -> HashSet<String> {
-        let words: &[&str] = match self.kind {
-            SinkKind::Redirect | SinkKind::Ssrf => &[
-                "url",
-                "redirect",
-                "local",
-                "safe",
-                "allowed",
-                "valid",
-                "trusted",
-                "whitelist",
-                "allowlist",
-                "domain",
-                "host",
-                "origin",
-            ],
-            SinkKind::Path => &[
-                "path", "within", "inside", "safe", "allowed", "valid", "sub",
-            ],
-            _ => &[],
-        };
+        let words = check_words(self.kind);
         let mut out = HashSet::new();
-        let add = |n: Node, out: &mut HashSet<String>| {
-            let mut stack = vec![n];
-            while let Some(c) = stack.pop() {
-                if matches!(
-                    c.kind(),
-                    "identifier" | "member_expression" | "call_expression"
-                ) {
-                    out.insert(self.text(c).to_string());
-                }
-                stack.extend(children(c));
-            }
-        };
-        // An allowlist or a pattern checks the value it's given, as a whole:
-        // `ok.includes(name.split('.').pop())` checks the extension, not
-        // `name`. `new URL(u).hostname` is `u`'s host.
-        let exact = |a: Node, out: &mut HashSet<String>| {
-            let a = unwrap(a);
-            out.insert(self.text(a).to_string());
-            if a.kind() == "member_expression"
-                && a.child_by_field_name("property")
-                    .is_some_and(|p| matches!(self.text(p), "host" | "hostname" | "origin"))
-                && let Some(object) = a.child_by_field_name("object").map(unwrap)
-            {
-                let url = if object.kind() == "new_expression" {
-                    arguments(object).into_iter().next()
-                } else {
-                    Some(object)
-                };
-                out.extend(url.map(|u| self.text(unwrap(u)).to_string()));
-            }
-        };
         let mut stack = vec![function];
         while let Some(n) = stack.pop() {
             if n.kind() == "call_expression"
                 && let Some(callee) = n.child_by_field_name("function").map(unwrap)
             {
-                let (receiver, name) = match method(n) {
-                    Some((r, m)) => (Some(unwrap(r)), self.text(m)),
-                    None => (None, self.text(callee)),
-                };
-                let lower = name.to_ascii_lowercase();
-                // `resolveLoginRedirect(x)` returns an allowed URL or throws;
-                // `resolvePath` only joins.
-                let resolves = self.kind == SinkKind::Redirect && lower.starts_with("resolve");
-                let named_check = ([
-                    "is", "validate", "assert", "check", "ensure", "verify", "sanitize",
-                ]
-                .iter()
-                .any(|p| lower.starts_with(p))
-                    || resolves)
-                    && words.iter().any(|w| lower.contains(w));
-                if named_check {
-                    for a in arguments(n) {
-                        add(a, &mut out);
-                    }
-                }
-                if let Some(r) = receiver {
-                    let receiver_name = self.text(r).to_ascii_lowercase();
-                    let first = arguments(n).into_iter().next();
-                    match name {
-                        "startsWith" if !words.is_empty() => add(r, &mut out),
-                        "includes" | "indexOf"
-                            if self.kind == SinkKind::Path
-                                && first.is_some_and(|a| {
-                                    matches!(string_value(self.text(a)), ".." | "/" | "\\\\")
-                                }) =>
-                        {
-                            add(r, &mut out);
-                        }
-                        _ => {}
-                    }
-                    match name {
-                        // `['asc', 'desc'].includes(x)`, `allowedHosts.has(x)`.
-                        "includes" | "has" | "indexOf" | "some"
-                            if r.kind() == "array"
-                                || ["allow", "white", "trusted", "permitted", "safe", "valid"]
-                                    .iter()
-                                    .any(|w| receiver_name.contains(w)) =>
-                        {
-                            for a in arguments(n) {
-                                exact(a, &mut out);
-                            }
-                        }
-                        // `/^[\w-]+$/.test(x)`, or a name set to such a pattern.
-                        "test" if self.whole_value_pattern(r) => {
-                            for a in arguments(n) {
-                                exact(a, &mut out);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                self.call_checks(n, callee, words, &mut out);
             }
             stack.extend(children(n));
         }
         out
+    }
+
+    /// Every name, member and call in `n`.
+    fn add_names(&self, n: Node, out: &mut HashSet<String>) {
+        let mut stack = vec![n];
+        while let Some(c) = stack.pop() {
+            if matches!(
+                c.kind(),
+                "identifier" | "member_expression" | "call_expression"
+            ) {
+                out.insert(self.text(c).to_string());
+            }
+            stack.extend(children(c));
+        }
+    }
+
+    /// An allowlist or a pattern checks the value it's given, as a whole:
+    /// `ok.includes(name.split('.').pop())` checks the extension, not
+    /// `name`. `new URL(u).hostname` is `u`'s host.
+    fn add_exact(&self, a: Node, out: &mut HashSet<String>) {
+        let a = unwrap(a);
+        out.insert(self.text(a).to_string());
+        if a.kind() == "member_expression"
+            && a.child_by_field_name("property")
+                .is_some_and(|p| matches!(self.text(p), "host" | "hostname" | "origin"))
+            && let Some(object) = a.child_by_field_name("object").map(unwrap)
+        {
+            let url = if object.kind() == "new_expression" {
+                arguments(object).into_iter().next()
+            } else {
+                Some(object)
+            };
+            out.extend(url.map(|u| self.text(unwrap(u)).to_string()));
+        }
+    }
+
+    /// What a call checks: a validator's arguments, and what a check on a
+    /// receiver tests.
+    fn call_checks(&self, n: Node, callee: Node, words: &[&str], out: &mut HashSet<String>) {
+        let (receiver, name) = match method(n) {
+            Some((r, m)) => (Some(unwrap(r)), self.text(m)),
+            None => (None, self.text(callee)),
+        };
+        if is_named_check(self.kind, name, words) {
+            for a in arguments(n) {
+                self.add_names(a, out);
+            }
+        }
+        if let Some(r) = receiver {
+            self.receiver_checks(n, r, name, words, out);
+        }
+    }
+
+    /// `x.startsWith(base)` checks `x`; for a path, `x.includes('..')`;
+    /// `['asc', 'desc'].includes(x)` and `allowedHosts.has(x)` check `x`
+    /// exactly, as `/^[\w-]+$/.test(x)` does.
+    fn receiver_checks(
+        &self,
+        n: Node,
+        r: Node,
+        name: &str,
+        words: &[&str],
+        out: &mut HashSet<String>,
+    ) {
+        let first = arguments(n).into_iter().next();
+        match name {
+            "startsWith" if !words.is_empty() => self.add_names(r, out),
+            "includes" | "indexOf"
+                if self.kind == SinkKind::Path
+                    && first.is_some_and(|a| {
+                        matches!(string_value(self.text(a)), ".." | "/" | "\\\\")
+                    }) =>
+            {
+                self.add_names(r, out);
+            }
+            _ => {}
+        }
+        let receiver_name = self.text(r).to_ascii_lowercase();
+        let exact = match name {
+            "includes" | "has" | "indexOf" | "some" => {
+                r.kind() == "array"
+                    || ["allow", "white", "trusted", "permitted", "safe", "valid"]
+                        .iter()
+                        .any(|w| receiver_name.contains(w))
+            }
+            "test" => self.whole_value_pattern(r),
+            _ => false,
+        };
+        if exact {
+            for a in arguments(n) {
+                self.add_exact(a, out);
+            }
+        }
     }
 
     /// Values a sink's branch knows the text of: in
@@ -2489,48 +2597,49 @@ impl<'a, 't> Cx<'a, 't> {
         let mut out = HashSet::new();
         let mut child = sink;
         while let Some(p) = child.parent() {
-            let (condition, branch) = match p.kind() {
-                "if_statement" => (
+            if matches!(p.kind(), "if_statement" | "ternary_expression")
+                && let (Some(c), Some(b)) = (
                     p.child_by_field_name("condition"),
                     p.child_by_field_name("consequence"),
-                ),
-                "ternary_expression" => (
-                    p.child_by_field_name("condition"),
-                    p.child_by_field_name("consequence"),
-                ),
-                _ => (None, None),
-            };
-            if let (Some(c), Some(b)) = (condition, branch)
+                )
                 && b.id() == child.id()
             {
-                let mut terms = vec![unwrap(c)];
-                while let Some(t) = terms.pop() {
-                    let op = t.child_by_field_name("operator").map(|o| self.text(o));
-                    match (t.kind(), op) {
-                        ("binary_expression", Some("&&")) => {
-                            terms.extend(t.child_by_field_name("left").map(unwrap));
-                            terms.extend(t.child_by_field_name("right").map(unwrap));
-                        }
-                        ("binary_expression", Some("===" | "==")) => {
-                            let (Some(l), Some(r)) = (
-                                t.child_by_field_name("left").map(unwrap),
-                                t.child_by_field_name("right").map(unwrap),
-                            ) else {
-                                continue;
-                            };
-                            if r.kind() == "string" {
-                                out.insert(self.text(l).to_string());
-                            } else if l.kind() == "string" {
-                                out.insert(self.text(r).to_string());
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                self.literal_comparisons(c, &mut out);
             }
             child = p;
         }
         out
+    }
+
+    /// The names a condition compares with a string (`x === 'a'`, either
+    /// way round), through `&&`.
+    fn literal_comparisons(&self, condition: Node, out: &mut HashSet<String>) {
+        let mut terms = vec![unwrap(condition)];
+        while let Some(t) = terms.pop() {
+            if t.kind() != "binary_expression" {
+                continue;
+            }
+            let op = t.child_by_field_name("operator").map(|o| self.text(o));
+            let left = t.child_by_field_name("left").map(unwrap);
+            let right = t.child_by_field_name("right").map(unwrap);
+            match op {
+                Some("&&") => {
+                    terms.extend(left);
+                    terms.extend(right);
+                }
+                Some("===" | "==") => {
+                    let (Some(l), Some(r)) = (left, right) else {
+                        continue;
+                    };
+                    if r.kind() == "string" {
+                        out.insert(self.text(l).to_string());
+                    } else if l.kind() == "string" {
+                        out.insert(self.text(r).to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// A regular expression that matches a whole value, `^…$`, or a name
@@ -2872,6 +2981,73 @@ fn looks_like_sql(t: &str) -> bool {
         || (has("update ") && has(" set "))
         || has(" where ")
         || has("order by ")
+}
+
+/// The step a write adds to its target's path.
+fn binding_message(w: &Write, name: &str) -> String {
+    if w.adds && w.target.parent().is_some_and(|p| p.kind() == "arguments") {
+        format!("added to `{name}`")
+    } else if w.adds || is_built(unwrap(w.value)) {
+        format!("concatenated into `{name}`")
+    } else {
+        format!("assigned to `{name}`")
+    }
+}
+
+fn export_key(name: &str, member: Option<&str>) -> Key {
+    Key {
+        export: name.to_string(),
+        member: member.map(str::to_string),
+    }
+}
+
+/// The arguments a sink's spec names.
+fn pick_args<'t>(args: &[Node<'t>], spec: Args) -> Vec<Node<'t>> {
+    match spec {
+        Args::First => args.iter().take(1).copied().collect(),
+        Args::FirstTwo => args.iter().take(2).copied().collect(),
+        Args::Last => args.last().copied().into_iter().collect(),
+        Args::All => args.to_vec(),
+    }
+}
+
+/// The words a check's name has for this sink kind.
+fn check_words(kind: SinkKind) -> &'static [&'static str] {
+    match kind {
+        SinkKind::Redirect | SinkKind::Ssrf => &[
+            "url",
+            "redirect",
+            "local",
+            "safe",
+            "allowed",
+            "valid",
+            "trusted",
+            "whitelist",
+            "allowlist",
+            "domain",
+            "host",
+            "origin",
+        ],
+        SinkKind::Path => &[
+            "path", "within", "inside", "safe", "allowed", "valid", "sub",
+        ],
+        _ => &[],
+    }
+}
+
+/// A function named like a check (`is`, `validate`, `ensure`...) of
+/// something these words name; for a redirect, `resolveLoginRedirect(x)`
+/// too, which returns an allowed URL or throws (`resolvePath` only joins).
+fn is_named_check(kind: SinkKind, name: &str, words: &[&str]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let resolves = kind == SinkKind::Redirect && lower.starts_with("resolve");
+    ([
+        "is", "validate", "assert", "check", "ensure", "verify", "sanitize",
+    ]
+    .iter()
+    .any(|p| lower.starts_with(p))
+        || resolves)
+        && words.iter().any(|w| lower.contains(w))
 }
 
 #[cfg(test)]
