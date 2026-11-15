@@ -23,8 +23,8 @@ Windows, and on macOS in a workflow of its own (`macos.yml`) that doesn't
 block a merge: GitHub's macOS runners are often short of capacity. On a
 pull request, CI runs only the jobs that test what it changes
 (`scripts/ci-changes.sh`): a change to the docs runs none, one to the web
-app the web, Docker and `lint` jobs (`lint` checks its complexity). Pushes to `main` and changes to the
-workflows run everything.
+app the web, Docker and `lint` jobs (`lint` checks its complexity). Pushes
+to `main` and changes to the workflows run everything.
 
 ```sh
 cargo fmt --all -- --check
