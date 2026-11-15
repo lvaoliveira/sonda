@@ -126,9 +126,11 @@ decided without them. C++ uses the same scheme, with less to resolve by:
   the file defines, at any depth, a class defined in a function body
   included: the namespaces and classes around each, its bases as written
   (without template arguments), its member functions (name, parameter
-  types, whether `virtual`, `override` or `final`, `static`, private), its
-  data members (name, type) and the names its `using Base::name;`
-  declarations bring in. It travels as one JSON fact per file, `cpp-index`.
+  types, return type, whether `virtual`, `override` or `final`, `static`,
+  private), its data members (name, type) and the names its
+  `using Base::name;` declarations bring in. It also holds the file's
+  bitwise operations on bytes (`semantic/cpp_bytes.rs`), below. It travels
+  as one JSON fact per file, `cpp-index`.
 - **Names resolve by namespace, not by include.** C++ has no imports to
   narrow a name: which declarations a file sees depends on its `#include`s
   and the build's flags, which sonda doesn't know. A base resolves by its
@@ -157,6 +159,26 @@ instance. qutepart-cpp's 2 derive from Qt classes, which aren't in the
 project. Scanning roo_display (479 C and C++ files) takes 0.67 s
 where it took 0.61 s, and qutepart-cpp 0.36 s as before, median of five on
 12 workers.
+
+**Bytes (S6022).** A bitwise operation (`&`, `|`, `^`, `<<`, `>>`, their
+compound assignments, `~`) whose left operand is an 8-bit unsigned value
+should be on a `std::byte`. Of SonarCloud's 169 on roo_display, about a
+third have an operand only another file types: a field
+(`arc.quadrants_ & 4`, `scrim_ ^ dst`) or a member function's result
+(`color.r() >> 4`), declared in a header. So the worker decides what the
+file shows, a parameter or local (the declaration in scope, `#if`
+branches not scoping), a cast, an element of a byte pointer or array, a
+function the file declares returning a byte, and records the rest as a
+site naming the class and the field or member function, with the scope
+it's written in. The project pass resolves the class, finds the field or
+function in it or its bases, and reports the operation when the type is a
+byte. An operation cast straight back to a byte type,
+`(roo::byte)(x << 4)`, isn't reported; nor is the right operand (`| b`).
+`cpp/std-byte` finds all 169, and 7 SonarCloud doesn't report: locals it
+leaves out with nothing visible to tell them apart (`uint8_t b` read as a
+number in the same function, a flags byte masked once). With the byte
+sites, scanning roo_display takes 0.71 s where it took 0.58 s without the
+index (measured again together, median of five), qutepart-cpp 0.33 s.
 
 ## Consequences
 

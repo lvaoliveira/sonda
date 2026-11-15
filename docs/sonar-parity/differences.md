@@ -30,7 +30,7 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
 | qutepart-cpp⁴ | C++ (Qt) | `1099377` | 353 of 748 | 39 |
-| roo_display⁴ | C++ (embedded), C | `f139977` | 2,062 of 2,958 | 340 |
+| roo_display⁴ | C++ (embedded), C | `f139977` | 2,231 of 2,958 | 347 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
 under `Lib/`. SonarQube couldn't parse 6 of their 93 files (`lazy import`,
@@ -835,15 +835,20 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   Qt's on qutepart-cpp). Of its 20 extra, 18 are three font classes
   SonarCloud leaves out though `Font` has the shape it reports for every
   other base.
+- **Bytes** (`cpp/std-byte`, S6022, on the same index): a bitwise
+  operation whose left operand is an 8-bit unsigned value: a local or
+  parameter, a cast, a byte pointer's element, a function returning a
+  byte, or a field or member function the index finds declared as one in
+  another file. Not the right operand, nor an operation cast straight back
+  to a byte type. All 169 of roo_display's, and 7 extra.
 
 ### Still open in C and C++
 
-On the two projects, 1,291 of SonarCloud's issues and 379 of sonda's:
+On the two projects, 1,122 of SonarCloud's issues and 386 of sonda's:
 
-- **No sonda rule yet (696):** the largest, S6022 (169, `std::byte` for
-  bitwise operations on 8-bit values, which needs the operands' types),
-  S5817 (83, const member functions), S5350 (44, pointers and references
-  to const); then about a hundred keys with fewer.
+- **No sonda rule yet (527):** the largest, S5817 (83, const member
+  functions), S5350 (44, pointers and references to const); then about a
+  hundred keys with fewer.
 - **Off by default:** S6004 (126).
 - **SonarCloud's commented-out code in generated tables (140):** roo_display's
   font files comment each glyph, `// "&" (U+0026), uncompressed`, which
@@ -856,7 +861,7 @@ On the two projects, 1,291 of SonarCloud's issues and 379 of sonda's:
   didn't report, in a class it reported others of; nothing visible (a
   template, a header, another constructor) told them apart.
 - **sonda only, not pinned down (the rest):** S125 (45), S6177 (40, see
-  above), S5421 (31), S1242 (20, see above), S5025 (17, mostly a `new` stored in a member), S5950
+  above), S5421 (31), S1242 (20, see above), S6022 (7, see above), S5025 (17, mostly a `new` stored in a member), S5950
   (17), S1186 (16), S1172 (14, callbacks and constructors), S5827 (12), a
   few each for the rest.
 

@@ -36,6 +36,9 @@ pub(crate) struct MethodDecl {
     pub(crate) virtual_: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) static_: bool,
+    /// Its return type as written, whitespace removed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) ret: String,
     /// Under `private:`, or before any access specifier in a `class`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) private_: bool,
@@ -77,6 +80,10 @@ pub(crate) struct ClassDecl {
 pub(crate) struct FileIndex {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) classes: Vec<ClassDecl>,
+    /// Bitwise operations on bytes, some on fields whose type the index
+    /// knows (`cpp_bytes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) bytes: Vec<super::cpp_bytes::ByteSite>,
 }
 
 /// How many classes a file may summarize: a generated file declaring more
@@ -89,7 +96,7 @@ struct Extractor<'s> {
     classes: Vec<ClassDecl>,
 }
 
-/// The classes a C++ file defines.
+/// The classes a C++ file defines, and its byte-oriented operations.
 pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
     let mut x = Extractor {
         src,
@@ -97,27 +104,44 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
         classes: Vec::new(),
     };
     x.walk(root, &mut Vec::new());
-    FileIndex { classes: x.classes }
+    FileIndex {
+        classes: x.classes,
+        bytes: super::cpp_bytes::sites(root, src, deadline),
+    }
+}
+
+/// A node's source text.
+pub(super) fn node_text<'s>(src: &'s [u8], n: Node) -> &'s str {
+    std::str::from_utf8(&src[n.byte_range()]).unwrap_or_default()
+}
+
+/// A node's text without whitespace: `constBox&` for `const Box &`, enough
+/// to tell two types apart.
+pub(super) fn compact_text(src: &[u8], n: Node) -> String {
+    node_text(src, n).split_whitespace().collect()
+}
+
+/// Where a node is, in lines and columns from 1.
+pub(super) fn span_of(n: Node) -> Span {
+    Span {
+        line: n.start_position().row + 1,
+        column: n.start_position().column + 1,
+        end_line: n.end_position().row + 1,
+        end_column: n.end_position().column + 1,
+    }
 }
 
 impl<'s> Extractor<'s> {
     fn text(&self, n: Node) -> &'s str {
-        std::str::from_utf8(&self.src[n.byte_range()]).unwrap_or_default()
+        node_text(self.src, n)
     }
 
-    /// The text without whitespace: `constBox&` for `const Box &`, enough to
-    /// tell two parameter lists apart.
     fn compact(&self, n: Node) -> String {
-        self.text(n).split_whitespace().collect()
+        compact_text(self.src, n)
     }
 
     fn span(&self, n: Node) -> Span {
-        Span {
-            line: n.start_position().row + 1,
-            column: n.start_position().column + 1,
-            end_line: n.end_position().row + 1,
-            end_column: n.end_position().column + 1,
-        }
+        span_of(n)
     }
 
     /// Walks declarations, keeping the namespaces and classes around them;
@@ -328,13 +352,17 @@ impl<'s> Extractor<'s> {
                     .iter()
                     .any(|w| matches!(*w, "override" | "final")),
             static_: own.contains(&"static"),
+            ret: member
+                .child_by_field_name("type")
+                .map(|t| self.compact(t))
+                .unwrap_or_default(),
             private_: false,
             span: self.span(name),
         })
     }
 }
 
-fn named(n: Node) -> Vec<Node> {
+pub(super) fn named(n: Node) -> Vec<Node> {
     let mut c = n.walk();
     n.named_children(&mut c).collect()
 }
@@ -422,7 +450,7 @@ fn unqualified(ty: &str) -> String {
 }
 
 /// `ns::Base` for `ns::Base<T>`.
-fn without_template_arguments(name: &str) -> String {
+pub(super) fn without_template_arguments(name: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
     for c in name.chars() {
@@ -465,10 +493,20 @@ impl<'a> ProjectIndex<'a> {
     }
 
     /// The class a base written as `name` (`ns::Base` or `Base`) in `from`
-    /// is: the candidates whose scope ends with the name's qualifier, then
-    /// the ones whose scope is shared with `from`, closest first; nothing
-    /// when that leaves more than one.
+    /// is, as `resolve_in` finds it from `from`'s scope; never `from`.
     pub(crate) fn resolve(&self, from: ClassId, name: &str) -> Option<ClassId> {
+        self.resolve_in(&self.class(from).scope, name, Some(from))
+    }
+
+    /// The class `name` (`ns::Spec` or `Spec`), written in `scope`, is: the
+    /// candidates whose scope ends with the name's qualifier, then the ones
+    /// sharing most of `scope`; nothing when that leaves more than one.
+    pub(crate) fn resolve_in(
+        &self,
+        scope: &[String],
+        name: &str,
+        except: Option<ClassId>,
+    ) -> Option<ClassId> {
         let (qualifier, simple) = name.rsplit_once("::").unwrap_or(("", name));
         let qualifier: Vec<&str> = qualifier.split("::").filter(|s| !s.is_empty()).collect();
         let candidates: Vec<ClassId> = self
@@ -476,11 +514,11 @@ impl<'a> ProjectIndex<'a> {
             .get(simple)?
             .iter()
             .copied()
-            .filter(|id| *id != from)
+            .filter(|id| Some(*id) != except)
             .filter(|id| {
-                let scope = &self.class(*id).scope;
-                scope.len() >= qualifier.len()
-                    && scope[scope.len() - qualifier.len()..]
+                let theirs = &self.class(*id).scope;
+                theirs.len() >= qualifier.len()
+                    && theirs[theirs.len() - qualifier.len()..]
                         .iter()
                         .zip(&qualifier)
                         .all(|(a, b)| a == b)
@@ -489,13 +527,11 @@ impl<'a> ProjectIndex<'a> {
         if candidates.len() <= 1 {
             return candidates.first().copied();
         }
-        // The ones sharing the longest stretch of `from`'s scope.
-        let own = &self.class(from).scope;
         let shared = |id: &ClassId| {
             self.class(*id)
                 .scope
                 .iter()
-                .zip(own)
+                .zip(scope)
                 .take_while(|(a, b)| a == b)
                 .count()
         };
@@ -511,6 +547,23 @@ impl<'a> ProjectIndex<'a> {
             .iter()
             .all(|id| self.class(*id).scope == self.class(first).scope)
             .then_some(first)
+    }
+
+    /// The return type of `id`'s member function `name`, declared in it or
+    /// a base (the first found, overloads aside).
+    pub(crate) fn return_type(&self, id: ClassId, name: &str) -> Option<&'a str> {
+        std::iter::once(id)
+            .chain(self.ancestors(id))
+            .find_map(|c| self.class(c).methods.iter().find(|m| m.name == name))
+            .map(|m| m.ret.as_str())
+    }
+
+    /// The type of `id`'s field `name`, declared in it or a base.
+    pub(crate) fn field_type(&self, id: ClassId, name: &str) -> Option<&'a str> {
+        std::iter::once(id)
+            .chain(self.ancestors(id))
+            .find_map(|c| self.class(c).fields.iter().find(|f| f.name == name))
+            .map(|f| f.ty.as_str())
     }
 
     /// The classes `id` derives from, nearest first, each once.

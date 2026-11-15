@@ -1,11 +1,13 @@
 //! C++ rules that need classes from other files of the project (ADR-0020):
-//! a member function compared with its bases' functions. They run once per
+//! a member function compared with its bases' functions, a bitwise
+//! operation with the type of the field it operates on. They run once per
 //! scan, on the index the files' summaries build (`semantic::cpp_index`),
 //! and are `Check::Structural` in the catalog.
 //!
 //! A base outside the project (Qt's, the standard library's) resolves to
 //! nothing, and nothing is reported about it.
 
+use crate::semantic::cpp_bytes::{ByteSite, is_byte, is_byte_pointer};
 use crate::semantic::cpp_index::{ClassDecl, ClassId, FACT, FileIndex, MethodDecl, ProjectIndex};
 use crate::semantic::cs_index::Span;
 
@@ -13,9 +15,10 @@ use crate::semantic::cs_index::Span;
 pub(crate) type Finding = (&'static str, usize, Span);
 
 pub(crate) const HIDDEN_FUNCTION: &str = "cpp/hidden-inherited-function";
+pub(crate) const BYTE_OPERATION: &str = "cpp/std-byte";
 
 /// The rules this module checks.
-pub(crate) const RULES: &[&str] = &[HIDDEN_FUNCTION];
+pub(crate) const RULES: &[&str] = &[HIDDEN_FUNCTION, BYTE_OPERATION];
 
 /// Checks the active rules on every file's summary.
 pub(crate) fn run<'f>(
@@ -29,17 +32,54 @@ pub(crate) fn run<'f>(
     let parsed: Vec<(usize, FileIndex)> = crate::semantic::summaries(facts, FACT);
     let index = ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
     let mut found: Vec<Finding> = Vec::new();
-    for (f, file) in index.files().iter().enumerate() {
-        for c in 0..file.classes.len() {
-            if active.contains(&HIDDEN_FUNCTION) {
-                hidden_functions(&index, (f, c), &mut found);
-            }
-        }
+    for f in 0..index.files().len() {
+        check_file(&index, f, active, &mut found);
     }
     found
         .into_iter()
         .map(|(rule, file, span)| (rule, parsed[file].0, span))
         .collect()
+}
+
+/// The active rules' findings in the index's file `f`.
+fn check_file(index: &ProjectIndex, f: usize, active: &[&str], found: &mut Vec<Finding>) {
+    let file = index.files()[f];
+    if active.contains(&HIDDEN_FUNCTION) {
+        for c in 0..file.classes.len() {
+            hidden_functions(index, (f, c), found);
+        }
+    }
+    if active.contains(&BYTE_OPERATION) {
+        found.extend(
+            file.bytes
+                .iter()
+                .filter(|site| operates_on_a_byte(index, site))
+                .map(|site| (BYTE_OPERATION, f, site.span)),
+        );
+    }
+}
+
+/// A byte-oriented operation whose operand the file shows is a byte, or is
+/// a field the index finds declared as one (a byte pointer or array, for
+/// an element), or a call to a member function the index finds returns
+/// one.
+fn operates_on_a_byte(index: &ProjectIndex, site: &ByteSite) -> bool {
+    if site.class.is_empty() {
+        return true;
+    }
+    let Some(class) = index.resolve_in(&site.scope, &site.class, None) else {
+        return false;
+    };
+    if !site.method.is_empty() {
+        return index.return_type(class, &site.method).is_some_and(is_byte);
+    }
+    index.field_type(class, &site.field).is_some_and(|ty| {
+        if site.element {
+            is_byte_pointer(ty)
+        } else {
+            is_byte(ty)
+        }
+    })
 }
 
 /// A public or protected member function named like functions of its
@@ -153,6 +193,28 @@ mod tests {
                 at("device.cpp", 5),
                 // Brought in one level up, hidden again below.
                 at("device.cpp", 16),
+            ]
+        );
+    }
+    /// Shapes from SonarCloud's analysis of roo_display: fields and member
+    /// functions declared in a header, operated on in another file.
+    #[test]
+    fn byte_operations() {
+        let header = (
+            "spec.h",
+            "namespace gfx {\nclass Color {\n public:\n  uint8_t r() const;\n  uint32_t argb() const;\n};\nclass Spec {\n public:\n  void draw(Color c);\n  uint8_t quadrants_;\n  int count_;\n  const uint8_t* mask_;\n};\n}",
+        );
+        let source = (
+            "spec.cpp",
+            "namespace gfx {\nvoid Spec::draw(Color c) {\n  int a = quadrants_ & 4;\n  int b = count_ & 4;\n  int d = mask_[0] >> 1;\n  int e = c.r() >> 4;\n  int f = c.argb() >> 4;\n  uint8_t g = 3;\n  int h = (roo::byte)(g << 4);\n  return;\n}\nvoid draw(Spec& s) { int k = s.quadrants_ | 1; }\n}",
+        );
+        assert_eq!(
+            flagged("cpp/std-byte", &[header, source]),
+            [
+                at("spec.cpp", 3),
+                at("spec.cpp", 5),
+                at("spec.cpp", 6),
+                at("spec.cpp", 12),
             ]
         );
     }

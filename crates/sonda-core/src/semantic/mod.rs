@@ -6,6 +6,7 @@
 //! deadline: a file that runs out of time keeps its syntactic findings and
 //! loses only the semantic ones, with a warning.
 
+pub(crate) mod cpp_bytes;
 pub(crate) mod cpp_index;
 mod cs;
 pub(crate) mod cs_cfg;
