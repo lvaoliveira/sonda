@@ -283,7 +283,7 @@ csharpsquid:S3906,code_smell,major,no,all,syntactic,done,cs/event-handler-signat
 csharpsquid:S3908,code_smell,major,no,all,syntactic,done,cs/custom-event-handler-delegate,,
 csharpsquid:S3909,code_smell,major,no,all,syntactic,done,cs/non-generic-collection,,
 csharpsquid:S3923,bug,major,yes,all,syntactic,done,cs/identical-branches,,
-csharpsquid:S3925,code_smell,major,yes,main,syntactic,partial,cs/iserializable-without-constructor,,
+csharpsquid:S3925,code_smell,major,yes,main,syntactic,done,cs/iserializable-without-constructor,,
 csharpsquid:S3926,bug,major,yes,all,syntactic,done,cs/optional-field-without-callbacks,,
 csharpsquid:S3927,bug,major,yes,all,syntactic,done,cs/serialization-callback-signature,,
 csharpsquid:S3928,code_smell,major,yes,all,syntactic,done,cs/argument-exception-param-name,,

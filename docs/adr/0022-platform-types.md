@@ -56,8 +56,8 @@ same scan gives the same result everywhere.
 ### The platform summary
 
 - **Contents:** each public type's full name, arity, kind, base type,
-  interfaces and a few attributes (`[Flags]`, `[Obsolete]`, abstract,
-  sealed, static); each public or protected member's kind, name, static or
+  interfaces and a few attributes (`[Flags]`, `[Obsolete]`,
+  `[Serializable]`, abstract, sealed, static); each public or protected member's kind, name, static or
   not, return type, generic arity, and parameters (type, name, `ref`/`out`/`in`,
   optional and its constant default, `params`, caller-information
   attributes, `[StringSyntax]` such as `Regex` or `Uri`), with extension
@@ -67,7 +67,9 @@ same scan gives the same result everywhere.
   but apply them nowhere, so rules that SonarQube documents through them
   (S2201, S4055) can't read them from the summary.
 - **Source:** the reference packs of the current .NET LTS, .NET 8 first,
-  downloaded by version and checksum.
+  downloaded by version and checksum. Reference assemblies drop the
+  `[Serializable]` flag, so it's read from the same version's runtime packs
+  (Linux x64), which add no types (S3925).
 - **Extraction** is a development tool in the repository (`tools/netref`,
   its own workspace), not part of the shipped crates. It reads the
   assemblies' metadata tables with `cildec` (no dependencies, no unsafe

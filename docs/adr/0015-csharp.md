@@ -94,9 +94,18 @@ The other partial rules need what sonda doesn't have:
   entropy threshold;
 - a definition the documentation doesn't settle: S2245 (which contexts need
   a secure generator), S4261 (`ValueTask` and async streams, which TAP
-  names with Async but the text leaves out);
-- more work: S3925 (nine serialization checks, and which projects are
-  test projects).
+  names with Async but the text leaves out).
+
+S3925 checks the nine documented problems on a type that implements
+ISerializable, itself or through a base the file or the platform declares,
+once it opts in. A field doesn't serialize when its type is a class or struct
+the runtime doesn't mark `[Serializable]` (the platform data's tag) or one of
+the file's without the attribute; enums always do. `[Serializable]` isn't
+inherited, so derived types need it too, as the compliant example shows.
+Members and attributes in any `#if` branch count. Test projects, which
+sonda can't read from project files, are told by convention: a `test`,
+`tests` or `specs` directory, one named like `Shop.Tests` or `UnitTests`,
+or a file that imports xUnit, NUnit or MSTest.
 
 ### Suppressions
 

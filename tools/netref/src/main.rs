@@ -6,7 +6,10 @@
 //! OUT is written as deflated JSON, the format `sonda-core` embeds. A LABEL
 //! starting with `baseline:` adds no types: members of the other packs it
 //! also declares, with the same signature, are tagged "ns20" (.NET
-//! Standard 2.0, which every target has).
+//! Standard 2.0, which every target has). One starting with `serializable:`
+//! adds none either: the types its assemblies mark `[Serializable]` are
+//! tagged "Serializable". Reference assemblies drop that flag, so its DIR is
+//! a runtime pack's implementation assemblies; one it can't read is skipped.
 //!
 //! Type names are keys like the project index's (`semantic/cs_index.rs`):
 //! namespace, enclosing types without their arity, then the type with its
@@ -46,7 +49,7 @@ struct TypeEntry {
     b: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     i: Vec<String>,
-    /// "abstract", "sealed", "static", "Flags", "Obsolete".
+    /// "abstract", "sealed", "static", "Flags", "Obsolete", "Serializable".
     #[serde(skip_serializing_if = "Vec::is_empty")]
     a: Vec<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -102,8 +105,9 @@ fn main() -> Res<()> {
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("usage: sonda-netref OUT LABEL DIR [LABEL DIR]...".into());
     }
-    let (packs, mut types, baseline) = read_packs(&args[1..])?;
+    let (packs, mut types, baseline, serializable) = read_packs(&args[1..])?;
     tag_baseline(&mut types, &baseline);
+    tag_serializable(&mut types, &serializable);
     let summary = Summary {
         packs,
         types: types.into_values().collect(),
@@ -114,16 +118,20 @@ fn main() -> Res<()> {
 /// Types by name.
 type Types = BTreeMap<String, TypeEntry>;
 
-/// The packs' labels, their types, and the baseline's (a label starting
-/// with `baseline:`).
-fn read_packs(pairs: &[String]) -> Res<(Vec<String>, Types, Types)> {
+/// The packs' labels, their types, the baseline's (a label starting with
+/// `baseline:`) and the implementation's (`serializable:`).
+fn read_packs(pairs: &[String]) -> Res<(Vec<String>, Types, Types, Types)> {
     let mut types = Types::new();
     let mut baseline = Types::new();
+    let mut serializable = Types::new();
     let mut packs = Vec::new();
     for pair in pairs.chunks(2) {
         packs.push(pair[0].clone());
+        let implementation = pair[0].starts_with("serializable:");
         let into = if pair[0].starts_with("baseline:") {
             &mut baseline
+        } else if implementation {
+            &mut serializable
         } else {
             &mut types
         };
@@ -133,10 +141,26 @@ fn read_packs(pairs: &[String]) -> Res<(Vec<String>, Types, Types)> {
             .collect();
         dlls.sort();
         for dll in dlls {
-            extract(&dll, into).map_err(|e| format!("{}: {e}", dll.display()))?;
+            match extract(&dll, into) {
+                Ok(()) => {}
+                Err(e) if implementation => eprintln!("skipped {}: {e}", dll.display()),
+                Err(e) => return Err(format!("{}: {e}", dll.display()).into()),
+            }
         }
     }
-    Ok((packs, types, baseline))
+    Ok((packs, types, baseline, serializable))
+}
+
+/// Tags "Serializable" the types the implementation marks so.
+fn tag_serializable(types: &mut Types, implementation: &Types) {
+    for (name, t) in types.iter_mut() {
+        let marked = implementation
+            .get(name)
+            .is_some_and(|i| i.a.contains(&"Serializable"));
+        if marked && !t.a.contains(&"Serializable") {
+            t.a.push("Serializable");
+        }
+    }
 }
 
 /// A member's identity across packs: its type, kind, name, arity and
@@ -426,6 +450,10 @@ fn extract(path: &Path, types: &mut BTreeMap<String, TypeEntry>) -> Res<()> {
         let kind = type_kind(&row, base.as_deref(), &name);
         let mut a = type_modifiers(&row, kind);
         a.extend(r.tags(Token::new(TableId::TypeDef, rid))?);
+        // [Serializable] is a flag in metadata, not a custom attribute.
+        if row.flags & 0x2000 != 0 {
+            a.push("Serializable");
+        }
         let interfaces = interfaces_of(&r, rid)?;
         let members = members(&r, rid)?;
         types.insert(

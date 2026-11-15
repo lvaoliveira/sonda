@@ -339,23 +339,24 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cs/iserializable-without-constructor",
-        name: "ISerializable types should have a deserialization constructor",
-        description: "The serializer calls a constructor taking (SerializationInfo, StreamingContext); without \
-                      it, deserialization fails at run time.",
-        message: "Add a constructor taking (SerializationInfo info, StreamingContext context).",
+        name: "ISerializable should be implemented correctly",
+        description: "A serializable type needs the [Serializable] attribute, a serialization constructor that \
+                      derived types can call, a GetObjectData they can extend, and [NonSerialized] on fields \
+                      that can't be serialized; otherwise serialization fails, or loses data, at run time.",
+        message: "Implement ISerializable as recommended: [Serializable], the serialization constructor, \
+                  GetObjectData, and [NonSerialized] fields.",
         category: CodeSmell,
         severity: Major,
-        effort_minutes: 10,
-        sonar: &[related("S3925")],
-        check: Check::Query {
+        effort_minutes: 20,
+        sonar: &[exact("S3925")],
+        check: Check::Semantic {
             langs: CSHARP,
-            query: "(class_declaration (attribute_list) name: (identifier) (base_list)) @match",
-            filter: Some(Find(serializable_without_constructor)),
+            find: super::cs_documented::serialization_problems,
         },
         example: Some(Example {
             lang: Lang::CSharp,
-            bad: "[Serializable] class P : ISerializable { public void GetObjectData(SerializationInfo i, StreamingContext c) { } }",
-            good: "[Serializable] class P : ISerializable { protected P(SerializationInfo i, StreamingContext c) { } public void GetObjectData(SerializationInfo i, StreamingContext c) { } }",
+            bad: "using System.Runtime.Serialization;\n[Serializable] class P : ISerializable { public void GetObjectData(SerializationInfo i, StreamingContext c) { } }",
+            good: "using System.Runtime.Serialization;\n[Serializable] class P : ISerializable { protected P(SerializationInfo i, StreamingContext c) { } public virtual void GetObjectData(SerializationInfo i, StreamingContext c) { } }",
         }),
     },
     Rule {
@@ -1743,24 +1744,6 @@ fn overwritten_initializers<'t>(class: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
         .collect()
 }
 
-fn serializable_without_constructor<'t>(class: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
-    find_attribute(class, "Serializable", src)?;
-    let mut cursor = class.walk();
-    let implements = class
-        .named_children(&mut cursor)
-        .filter(|c| c.kind() == "base_list")
-        .any(|b| count_word(text(b, src), b"ISerializable") > 0);
-    if !implements {
-        return None;
-    }
-    let has_constructor = members(class).iter().any(|m| {
-        m.kind() == "constructor_declaration"
-            && m.child_by_field_name("parameters")
-                .is_some_and(|p| count_word(text(p, src), b"SerializationInfo") > 0)
-    });
-    (!has_constructor).then(|| class.child_by_field_name("name"))?
-}
-
 /// The indentation of the line a node starts on, so an `else if` is measured
 /// from the `else`, not from the `if` in the middle of the line.
 pub(super) fn line_indent(node: Node, src: &[u8]) -> usize {
@@ -2148,7 +2131,12 @@ mod tests {
     fn overloads_serializable_indentation() {
         let src = "namespace N;\nclass A {\nvoid F(int a) { }\nvoid F(int a, int b = 0) { }\nvoid G(int a, string s = null) { }\nvoid G(string s) { }\nvoid H(int a, out bool e) { e = true; }\nvoid H(int a) { }\n}\n[Serializable] class P : ISerializable { public void GetObjectData(SerializationInfo i, StreamingContext c) { } }\n[Serializable] class Q : ISerializable { protected Q(SerializationInfo i, StreamingContext c) { } public void GetObjectData(SerializationInfo i, StreamingContext c) { } }\nclass R {\nvoid F(bool b) {\n    if (b)\n    G();\n    if (b)\n        G();\n    if (b)\n        G();\n    else if (c)\n        H();\n}\n}";
         assert_eq!(flagged("cs/optional-overload-collision", src), [4]);
-        assert_eq!(flagged("cs/iserializable-without-constructor", src), [10]);
+        // P: no serialization constructor, and a GetObjectData that isn't
+        // virtual; Q: that GetObjectData too (cs_documented has the rest).
+        assert_eq!(
+            flagged("cs/iserializable-without-constructor", src),
+            [10, 10, 11]
+        );
         assert_eq!(flagged("cs/unbraced-body-not-indented", src), [15]);
     }
 

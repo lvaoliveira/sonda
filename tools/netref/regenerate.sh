@@ -14,6 +14,10 @@ packs=(
   "microsoft.aspnetcore.app.ref 8.0.11 757275875c72788fa5cdda0d898b662c1ce44271ca65c59292c8eea3bd32a799"
   # Only to tag what every target has (.NET Standard 2.0); adds no types.
   "netstandard.library 2.0.3 3eb87644f79bcffb3c0331dbdac3c7837265f2cdf58a7bfd93e431776f77c9ba"
+  # Only to tag what's [Serializable], a flag reference assemblies drop;
+  # add no types.
+  "microsoft.netcore.app.runtime.linux-x64 8.0.11 579e4bb11e839a9c4045d9d9beaa186a479b749fb6719ca44cc0d386b9909c0d"
+  "microsoft.aspnetcore.app.runtime.linux-x64 8.0.11 a98d67332c3008f397c414305cb79868d4afbbbc225c8a757d6798f13840e106"
 )
 
 args=()
@@ -25,8 +29,11 @@ for pack in "${packs[@]}"; do
   mkdir -p "$work/$name"
   unzip -q "$file" -d "$work/$name"
   label="$(sed -n 's:.*<id>\(.*\)</id>.*:\1:p' "$work/$name"/*.nuspec | head -1) $version"
+  lib="$work/$name/runtimes/linux-x64/lib/net8.0"
   if [ "$name" = netstandard.library ]; then
     args+=("baseline:$label" "$work/$name/build/netstandard2.0/ref")
+  elif [ -d "$lib" ]; then
+    args+=("serializable:$label" "$lib")
   else
     args+=("$label" "$work/$name/ref/net8.0")
   fi

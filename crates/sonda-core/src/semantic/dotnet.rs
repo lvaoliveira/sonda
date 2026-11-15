@@ -35,7 +35,7 @@ pub(crate) struct PlatformType {
     /// The interfaces it declares, not those its bases do.
     #[serde(rename = "i", default)]
     pub(crate) interfaces: Vec<String>,
-    /// "abstract", "sealed", "static", "Flags", "Obsolete".
+    /// "abstract", "sealed", "static", "Flags", "Obsolete", "Serializable".
     #[serde(rename = "a", default)]
     pub(crate) tags: Vec<String>,
     #[serde(rename = "m", default)]
