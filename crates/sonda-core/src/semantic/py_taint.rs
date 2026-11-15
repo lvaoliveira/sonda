@@ -771,82 +771,79 @@ impl<'a, 't> Cx<'a, 't> {
     fn walk(&mut self, root: Node<'t>) -> Option<()> {
         let mut stack = vec![root];
         while let Some(n) = stack.pop() {
-            let field = |f: &str| n.child_by_field_name(f);
-            match n.kind() {
-                "import_statement" | "import_from_statement" => self.import(n),
-                "assignment" | "augmented_assignment" => {
-                    if let (Some(left), Some(right)) = (field("left"), field("right")) {
-                        self.instance(left, right);
-                        self.writes.push(Write {
-                            target: left,
-                            value: right,
-                            adds: n.kind() == "augmented_assignment",
-                        });
-                    }
-                }
-                "for_statement" | "for_in_clause" => {
-                    if let (Some(left), Some(right)) = (field("left"), field("right")) {
-                        self.writes.push(Write {
-                            target: left,
-                            value: right,
-                            adds: false,
-                        });
-                    }
-                }
-                "named_expression" => {
-                    if let (Some(name), Some(value)) = (field("name"), field("value")) {
-                        self.writes.push(Write {
-                            target: name,
-                            value,
-                            adds: false,
-                        });
-                    }
-                }
-                // `with open(p) as f`, `async with ClientSession() as s`.
-                "as_pattern" => {
-                    let value = children(n)
-                        .into_iter()
-                        .find(|c| c.kind() != "as_pattern_target");
-                    let target = children(n)
-                        .into_iter()
-                        .find(|c| c.kind() == "as_pattern_target");
-                    if let (Some(value), Some(target)) = (value, target) {
-                        let target = target.named_child(0).unwrap_or(target);
-                        self.instance(target, value);
-                        self.writes.push(Write {
-                            target,
-                            value,
-                            adds: false,
-                        });
-                    }
-                }
-                "call" => {
-                    self.calls.push(n);
-                    // `parts.append(x)`: the list holds it.
-                    if let Some((receiver, name)) = method(n)
-                        && matches!(
-                            self.text(name),
-                            "append" | "extend" | "insert" | "add" | "update"
-                        )
-                        && receiver.kind() == "identifier"
-                    {
-                        for a in arguments(n) {
-                            self.writes.push(Write {
-                                target: receiver,
-                                value: a,
-                                adds: true,
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
+            self.note(n);
             if self.writes.len() > MAX_WRITES {
                 return None;
             }
             stack.extend(children(n).into_iter().rev());
         }
         Some(())
+    }
+
+    /// Records what one node writes, imports or calls.
+    fn note(&mut self, n: Node<'t>) {
+        let field = |f: &str| n.child_by_field_name(f);
+        match n.kind() {
+            "import_statement" | "import_from_statement" => self.import(n),
+            "assignment" | "augmented_assignment" => {
+                if let (Some(left), Some(right)) = (field("left"), field("right")) {
+                    self.instance(left, right);
+                    self.note_write(left, right, n.kind() == "augmented_assignment");
+                }
+            }
+            "for_statement" | "for_in_clause" => {
+                if let (Some(left), Some(right)) = (field("left"), field("right")) {
+                    self.note_write(left, right, false);
+                }
+            }
+            "named_expression" => {
+                if let (Some(name), Some(value)) = (field("name"), field("value")) {
+                    self.note_write(name, value, false);
+                }
+            }
+            // `with open(p) as f`, `async with ClientSession() as s`.
+            "as_pattern" => self.note_as_pattern(n),
+            "call" => self.note_call(n),
+            _ => {}
+        }
+    }
+
+    fn note_write(&mut self, target: Node<'t>, value: Node<'t>, adds: bool) {
+        self.writes.push(Write {
+            target,
+            value,
+            adds,
+        });
+    }
+
+    fn note_as_pattern(&mut self, n: Node<'t>) {
+        let value = children(n)
+            .into_iter()
+            .find(|c| c.kind() != "as_pattern_target");
+        let target = children(n)
+            .into_iter()
+            .find(|c| c.kind() == "as_pattern_target");
+        if let (Some(value), Some(target)) = (value, target) {
+            let target = target.named_child(0).unwrap_or(target);
+            self.instance(target, value);
+            self.note_write(target, value, false);
+        }
+    }
+
+    /// A call; `parts.append(x)`: the list holds it.
+    fn note_call(&mut self, n: Node<'t>) {
+        self.calls.push(n);
+        if let Some((receiver, name)) = method(n)
+            && matches!(
+                self.text(name),
+                "append" | "extend" | "insert" | "add" | "update"
+            )
+            && receiver.kind() == "identifier"
+        {
+            for a in arguments(n) {
+                self.note_write(receiver, a, true);
+            }
+        }
     }
 
     fn import(&mut self, n: Node<'t>) {
@@ -958,26 +955,11 @@ impl<'a, 't> Cx<'a, 't> {
 
     /// Whether function `i` is a handler, and what its parameters hold.
     fn handler(&mut self, i: usize, f: Node<'t>) {
-        let params = &self.m.functions[i].params;
         let nodes: Vec<Node<'t>> = f
             .child_by_field_name("parameters")
             .map(children)
             .unwrap_or_default();
-        // A parameter named `request`, or typed as one: Django's and
-        // Starlette's request.
-        let mut request_at = None;
-        for (k, p) in nodes.iter().enumerate() {
-            let name = param_name(*p).map(|n| self.text(n));
-            let typed = p
-                .child_by_field_name("type")
-                .is_some_and(|t| REQUEST_TYPES.contains(&last_name(self.text(t))));
-            if name == Some("request") || typed {
-                if let Some(decls) = params.get(k) {
-                    self.initial.requests.extend(decls.iter().copied());
-                }
-                request_at.get_or_insert(k);
-            }
-        }
+        let request_at = self.mark_requests(i, &nodes);
         let route = self.route_of(f);
         // A route's parameters, and a Django view's after its request.
         let first_value = match (&route, request_at) {
@@ -985,20 +967,14 @@ impl<'a, 't> Cx<'a, 't> {
             (None, Some(k)) if k <= 1 => k + 1,
             _ => return,
         };
+        let m = self.m;
+        let params = &m.functions[i].params;
         for (k, p) in nodes.iter().enumerate().skip(first_value) {
             let Some(name) = param_name(*p) else { continue };
             let text = self.text(name);
-            if matches!(text, "self" | "cls" | "request") || Some(k) == request_at {
-                continue;
-            }
-            // A number, a dependency or a framework object isn't a value.
-            if p.child_by_field_name("type")
-                .is_some_and(|t| NOT_VALUES.contains(&last_name(self.text(t))))
-                || p.child_by_field_name("value").is_some_and(|v| {
-                    let v = self.text(v);
-                    v.starts_with("Depends(") || v.starts_with("Security(")
-                })
-                || route.as_deref().is_some_and(|r| numeric_converter(r, text))
+            if matches!(text, "self" | "cls" | "request")
+                || Some(k) == request_at
+                || !self.is_value_param(*p, route.as_deref(), text)
             {
                 continue;
             }
@@ -1012,6 +988,39 @@ impl<'a, 't> Cx<'a, 't> {
                 );
             }
         }
+    }
+
+    /// Marks the parameters named `request`, or typed as one (Django's and
+    /// Starlette's request); returns the first one's position.
+    fn mark_requests(&mut self, i: usize, nodes: &[Node<'t>]) -> Option<usize> {
+        let m = self.m;
+        let params = &m.functions[i].params;
+        let mut request_at = None;
+        for (k, p) in nodes.iter().enumerate() {
+            let name = param_name(*p).map(|n| self.text(n));
+            let typed = p
+                .child_by_field_name("type")
+                .is_some_and(|t| REQUEST_TYPES.contains(&last_name(self.text(t))));
+            if name == Some("request") || typed {
+                if let Some(decls) = params.get(k) {
+                    self.initial.requests.extend(decls.iter().copied());
+                }
+                request_at.get_or_insert(k);
+            }
+        }
+        request_at
+    }
+
+    /// Whether a parameter carries a value: not a number, a dependency or a
+    /// framework object.
+    fn is_value_param(&self, p: Node<'t>, route: Option<&str>, name: &str) -> bool {
+        !(p.child_by_field_name("type")
+            .is_some_and(|t| NOT_VALUES.contains(&last_name(self.text(t))))
+            || p.child_by_field_name("value").is_some_and(|v| {
+                let v = self.text(v);
+                v.starts_with("Depends(") || v.starts_with("Security(")
+            })
+            || route.is_some_and(|r| numeric_converter(r, name)))
     }
 
     /// The route a function is decorated with: `@app.route('/u/<id>')`,
@@ -1080,95 +1089,92 @@ impl<'a, 't> Cx<'a, 't> {
     }
 
     fn bind(&self, w: &Write<'t>, state: &mut State<'t>) -> bool {
-        let target = w.target;
-        match target.kind() {
-            "identifier" => {
-                let Some(decl) = self.decl(target) else {
-                    return false;
-                };
-                if !w.adds && self.is_request(w.value, state) {
-                    return state.requests.insert(decl);
-                }
-                if !w.adds && self.is_upload(w.value, state) {
-                    return state.uploads.insert(decl);
-                }
-                if settled(state, decl) {
-                    return false;
-                }
-                let Some(mut path) = self.taint(w.value, state, 0) else {
-                    return false;
-                };
-                if !replaces(state, decl, &path) {
-                    return false;
-                }
-                let name = self.text(target);
-                let message = if w.adds
-                    && w.target
-                        .parent()
-                        .is_some_and(|p| p.kind() == "argument_list")
-                {
-                    format!("added to `{name}`")
-                } else if w.adds || is_built(w.value) {
-                    format!("concatenated into `{name}`")
-                } else {
-                    format!("assigned to `{name}`")
-                };
-                path.push(Step {
-                    node: target,
-                    message,
-                });
-                state.tainted.insert(decl, cap(path));
-                true
-            }
+        match w.target.kind() {
+            "identifier" => self.bind_name(w, state),
             // `a, b = request.args['a'], …`: each name gets the value.
             "pattern_list" | "tuple_pattern" | "list_pattern" | "tuple" | "list" => {
-                let Some(path) = self.taint(w.value, state, 0) else {
-                    return false;
-                };
-                let mut changed = false;
-                for name in names_in(target) {
-                    let Some(decl) = self.decl(name) else {
-                        continue;
-                    };
-                    if state.tainted.contains_key(&decl) {
-                        continue;
-                    }
-                    let mut p = path.clone();
-                    p.push(Step {
-                        node: name,
-                        message: format!("read into `{}`", self.text(name)),
-                    });
-                    state.tainted.insert(decl, cap(p));
-                    changed = true;
-                }
-                changed
+                self.bind_names(w, state)
             }
             // `params['q'] = x`, `options.url = x`: the object holds it.
-            "subscript" | "attribute" => {
-                let object = target
-                    .child_by_field_name("value")
-                    .or_else(|| target.child_by_field_name("object"));
-                let Some(object) = object.filter(|o| o.kind() == "identifier") else {
-                    return false;
-                };
-                let Some(decl) = self.decl(object) else {
-                    return false;
-                };
-                if state.tainted.contains_key(&decl) || state.requests.contains(&decl) {
-                    return false;
-                }
-                let Some(mut path) = self.taint(w.value, state, 0) else {
-                    return false;
-                };
-                path.push(Step {
-                    node: target,
-                    message: format!("assigned to `{}`", self.text(target)),
-                });
-                state.tainted.insert(decl, cap(path));
-                true
-            }
+            "subscript" | "attribute" => self.bind_member(w, state),
             _ => false,
         }
+    }
+
+    fn bind_name(&self, w: &Write<'t>, state: &mut State<'t>) -> bool {
+        let target = w.target;
+        let Some(decl) = self.decl(target) else {
+            return false;
+        };
+        if !w.adds && self.is_request(w.value, state) {
+            return state.requests.insert(decl);
+        }
+        if !w.adds && self.is_upload(w.value, state) {
+            return state.uploads.insert(decl);
+        }
+        if settled(state, decl) {
+            return false;
+        }
+        let Some(mut path) = self.taint(w.value, state, 0) else {
+            return false;
+        };
+        if !replaces(state, decl, &path) {
+            return false;
+        }
+        path.push(Step {
+            node: target,
+            message: binding_message(w, self.text(target)),
+        });
+        state.tainted.insert(decl, cap(path));
+        true
+    }
+
+    fn bind_names(&self, w: &Write<'t>, state: &mut State<'t>) -> bool {
+        let Some(path) = self.taint(w.value, state, 0) else {
+            return false;
+        };
+        let mut changed = false;
+        for name in names_in(w.target) {
+            let Some(decl) = self.decl(name) else {
+                continue;
+            };
+            if state.tainted.contains_key(&decl) {
+                continue;
+            }
+            let mut p = path.clone();
+            p.push(Step {
+                node: name,
+                message: format!("read into `{}`", self.text(name)),
+            });
+            state.tainted.insert(decl, cap(p));
+            changed = true;
+        }
+        changed
+    }
+
+    fn bind_member(&self, w: &Write<'t>, state: &mut State<'t>) -> bool {
+        let target = w.target;
+        let object = target
+            .child_by_field_name("value")
+            .or_else(|| target.child_by_field_name("object"));
+        let Some(object) = object.filter(|o| o.kind() == "identifier") else {
+            return false;
+        };
+        let Some(decl) = self.decl(object) else {
+            return false;
+        };
+        if state.tainted.contains_key(&decl) || state.requests.contains(&decl) {
+            return false;
+        }
+        let Some(mut path) = self.taint(w.value, state, 0) else {
+            return false;
+        };
+        path.push(Step {
+            node: target,
+            message: format!("assigned to `{}`", self.text(target)),
+        });
+        state.tainted.insert(decl, cap(path));
+        true
     }
 
     /// A request object: a handler's, Flask's imported one, or `flask.request`.
@@ -1284,36 +1290,7 @@ impl<'a, 't> Cx<'a, 't> {
             "parenthesized_expression" | "await" | "expression_statement" => {
                 n.named_child(0).and_then(|c| self.taint(c, state, d))
             }
-            "attribute" => {
-                let object = n.child_by_field_name("object")?;
-                let property = self.text(n.child_by_field_name("attribute")?);
-                if self.is_request(object, state) {
-                    // The request's own path: its route matched it, and a
-                    // redirect to it stays on this site.
-                    if self.kind == SinkKind::Redirect && OWN_PATH.contains(&property) {
-                        return None;
-                    }
-                    return REQUEST_MEMBERS.contains(&property).then(|| {
-                        vec![Step {
-                            node: n,
-                            message: format!("the request's `{property}`"),
-                        }]
-                    });
-                }
-                if self.kind == SinkKind::Path
-                    && matches!(property, "name" | "stem" | "suffix")
-                    && self.is_path_object(object)
-                {
-                    return None;
-                }
-                if UPLOAD_NAMES.contains(&property) && self.is_upload(object, state) {
-                    return Some(vec![Step {
-                        node: n,
-                        message: format!("the uploaded file's `{property}`"),
-                    }]);
-                }
-                self.taint(object, state, d).map(|p| deepen(p, object, n))
-            }
+            "attribute" => self.attribute_taint(n, state, d),
             "subscript" => {
                 let value = n.child_by_field_name("value")?;
                 if self.is_request(value, state) || self.is_upload(value, state) {
@@ -1321,32 +1298,7 @@ impl<'a, 't> Cx<'a, 't> {
                 }
                 self.taint(value, state, d).map(|p| deepen(p, value, n))
             }
-            "binary_operator" => {
-                let op = n.child_by_field_name("operator").map(|o| self.text(o));
-                let left = n.child_by_field_name("left")?;
-                let right = n.child_by_field_name("right")?;
-                match op {
-                    Some("+") => {
-                        if self.fixes_origin(n, state, d) {
-                            return None;
-                        }
-                        self.taint(left, state, d)
-                            .or_else(|| self.taint(right, state, d))
-                    }
-                    // `base / name`: a path built from both.
-                    Some("/") if self.kind == SinkKind::Path => self
-                        .taint(left, state, d)
-                        .or_else(|| self.taint(right, state, d)),
-                    // `"… %s" % x`: string formatting, when the left is text.
-                    Some("%") if is_text(left) => {
-                        if self.fixes_origin(n, state, d) {
-                            return None;
-                        }
-                        self.taint(right, state, d)
-                    }
-                    _ => None,
-                }
-            }
+            "binary_operator" => self.binary_taint(n, state, d),
             "boolean_operator" => n
                 .child_by_field_name("left")
                 .and_then(|l| self.taint(l, state, d))
@@ -1362,16 +1314,7 @@ impl<'a, 't> Cx<'a, 't> {
                     .flatten()
                     .find_map(|p| self.taint(*p, state, d))
             }
-            "string" => {
-                if self.fixes_origin(n, state, d) {
-                    return None;
-                }
-                children(n)
-                    .into_iter()
-                    .filter(|c| c.kind() == "interpolation")
-                    .filter_map(|c| c.named_child(0))
-                    .find_map(|e| self.taint(e, state, d))
-            }
+            "string" => self.string_taint(n, state, d),
             "concatenated_string" | "list" | "tuple" | "set" | "expression_list" => children(n)
                 .into_iter()
                 .find_map(|c| self.taint(c, state, d)),
@@ -1387,19 +1330,89 @@ impl<'a, 't> Cx<'a, 't> {
         }
     }
 
+    /// `x.attr`: a request's member, an uploaded file's name, or what the
+    /// object carries.
+    fn attribute_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        let object = n.child_by_field_name("object")?;
+        let property = self.text(n.child_by_field_name("attribute")?);
+        if self.is_request(object, state) {
+            // The request's own path: its route matched it, and a redirect
+            // to it stays on this site.
+            if self.kind == SinkKind::Redirect && OWN_PATH.contains(&property) {
+                return None;
+            }
+            return REQUEST_MEMBERS.contains(&property).then(|| {
+                vec![Step {
+                    node: n,
+                    message: format!("the request's `{property}`"),
+                }]
+            });
+        }
+        if self.kind == SinkKind::Path
+            && matches!(property, "name" | "stem" | "suffix")
+            && self.is_path_object(object)
+        {
+            return None;
+        }
+        if UPLOAD_NAMES.contains(&property) && self.is_upload(object, state) {
+            return Some(vec![Step {
+                node: n,
+                message: format!("the uploaded file's `{property}`"),
+            }]);
+        }
+        self.taint(object, state, d).map(|p| deepen(p, object, n))
+    }
+
+    /// `a + b`, a path's `base / name`, and `"… %s" % x` with text on the
+    /// left: string formatting.
+    fn binary_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        let op = n.child_by_field_name("operator").map(|o| self.text(o));
+        let left = n.child_by_field_name("left")?;
+        let right = n.child_by_field_name("right")?;
+        match op {
+            Some("+") => {
+                if self.fixes_origin(n, state, d) {
+                    return None;
+                }
+                self.taint(left, state, d)
+                    .or_else(|| self.taint(right, state, d))
+            }
+            Some("/") if self.kind == SinkKind::Path => self
+                .taint(left, state, d)
+                .or_else(|| self.taint(right, state, d)),
+            Some("%") if is_text(left) => {
+                if self.fixes_origin(n, state, d) {
+                    return None;
+                }
+                self.taint(right, state, d)
+            }
+            _ => None,
+        }
+    }
+
+    /// An f-string: its interpolations, unless they follow a fixed origin.
+    fn string_taint(&self, n: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        if self.fixes_origin(n, state, d) {
+            return None;
+        }
+        children(n)
+            .into_iter()
+            .filter(|c| c.kind() == "interpolation")
+            .filter_map(|c| c.named_child(0))
+            .find_map(|e| self.taint(e, state, d))
+    }
+
     fn call_taint(&self, call: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
-        let any_arg = || {
-            arguments(call)
-                .into_iter()
-                .find_map(|a| self.taint(a, state, d))
-        };
         if let Some(j) = self.local_function(call) {
             return self.through_local(call, j, state, d);
         }
         let callee = call.child_by_field_name("function")?;
         if callee.kind() == "identifier" && self.decl(callee).is_none() {
             let name = self.text(callee);
-            return PROPAGATING_BUILTINS.contains(&name).then(any_arg).flatten();
+            return PROPAGATING_BUILTINS
+                .contains(&name)
+                .then(|| self.any_argument_taint(call, state, d))
+                .flatten();
         }
         if state.from_calls
             && self.callee_of(call).is_some()
@@ -1413,19 +1426,46 @@ impl<'a, 't> Cx<'a, 't> {
             }]);
         }
         if let Some((module, name)) = self.qualified(callee) {
-            // `os.path.basename` and `secure_filename` keep a file name.
-            let sanitizes = match self.kind {
-                SinkKind::Path => name == "basename" || name == "secure_filename",
-                SinkKind::Redirect | SinkKind::Ssrf => {
-                    module == "urllib.parse" && name.starts_with("quote")
-                }
-                SinkKind::Command => module == "shlex" && name == "quote",
-                SinkKind::Code | SinkKind::Sql | SinkKind::XPath | SinkKind::Ldap => false,
-            };
-            let propagates = PROPAGATING_MODULES.contains(&module.as_str())
-                || (module == "os" && name == "fspath");
-            return (propagates && !sanitizes).then(any_arg).flatten();
+            return self.module_call_taint(call, &module, &name, state, d);
         }
+        self.method_call_taint(call, state, d)
+    }
+
+    fn any_argument_taint(&self, call: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
+        arguments(call)
+            .into_iter()
+            .find_map(|a| self.taint(a, state, d))
+    }
+
+    /// A module's function: its arguments' taint, when the module passes
+    /// values on, unless the function sanitizes them for this sink
+    /// (`os.path.basename` and `secure_filename` keep a file name).
+    fn module_call_taint(
+        &self,
+        call: Node<'t>,
+        module: &str,
+        name: &str,
+        state: &State<'t>,
+        d: u32,
+    ) -> Option<Path<'t>> {
+        let sanitizes = match self.kind {
+            SinkKind::Path => name == "basename" || name == "secure_filename",
+            SinkKind::Redirect | SinkKind::Ssrf => {
+                module == "urllib.parse" && name.starts_with("quote")
+            }
+            SinkKind::Command => module == "shlex" && name == "quote",
+            SinkKind::Code | SinkKind::Sql | SinkKind::XPath | SinkKind::Ldap => false,
+        };
+        let propagates =
+            PROPAGATING_MODULES.contains(&module) || (module == "os" && name == "fspath");
+        (propagates && !sanitizes)
+            .then(|| self.any_argument_taint(call, state, d))
+            .flatten()
+    }
+
+    /// `x.method(...)`: a request's method, or what a method that passes
+    /// values on returns.
+    fn method_call_taint(&self, call: Node<'t>, state: &State<'t>, d: u32) -> Option<Path<'t>> {
         let (receiver, method_name) = method(call)?;
         let name = self.text(method_name);
         if self.is_request(receiver, state) {
@@ -1443,8 +1483,11 @@ impl<'a, 't> Cx<'a, 't> {
             return None;
         }
         // `"… {}".format(x)`, `", ".join(names)`: the arguments too.
-        self.taint(receiver, state, d)
-            .or_else(|| matches!(name, "format" | "join").then(any_arg).flatten())
+        self.taint(receiver, state, d).or_else(|| {
+            matches!(name, "format" | "join")
+                .then(|| self.any_argument_taint(call, state, d))
+                .flatten()
+        })
     }
 
     /// For a request (SSRF) or a redirect: a URL whose text before the
@@ -1458,18 +1501,8 @@ impl<'a, 't> Cx<'a, 't> {
             match part.kind() {
                 "string_content" => before.push_str(self.text(part)),
                 "string" => {
-                    for c in children(part) {
-                        if c.kind() == "string_content" {
-                            before.push_str(self.text(c));
-                        } else if c.kind() == "interpolation" {
-                            let Some(e) = c.named_child(0) else { continue };
-                            if self.taint(e, state, d + 1).is_some() {
-                                return fixed(&before);
-                            }
-                            if before.is_empty() && self.site_url(e) {
-                                return true;
-                            }
-                        }
+                    if let Some(decided) = self.string_fixes_origin(part, &mut before, state, d) {
+                        return decided;
                     }
                 }
                 _ if self.taint(part, state, d + 1).is_some() => break,
@@ -1480,6 +1513,32 @@ impl<'a, 't> Cx<'a, 't> {
             }
         }
         fixed(&before)
+    }
+
+    /// A string part of a URL: its text joins `before`; at its first
+    /// tainted interpolation, whether the text before fixes the origin; at
+    /// a site URL first, it does. `None` to go on.
+    fn string_fixes_origin(
+        &self,
+        part: Node<'t>,
+        before: &mut String,
+        state: &State<'t>,
+        d: u32,
+    ) -> Option<bool> {
+        for c in children(part) {
+            if c.kind() == "string_content" {
+                before.push_str(self.text(c));
+            } else if c.kind() == "interpolation" {
+                let Some(e) = c.named_child(0) else { continue };
+                if self.taint(e, state, d + 1).is_some() {
+                    return Some(fixed(before));
+                }
+                if before.is_empty() && self.site_url(e) {
+                    return Some(true);
+                }
+            }
+        }
+        None
     }
 
     /// A URL of this site: `url_for(…)`, Django's `reverse(…)`, or a name
@@ -1510,7 +1569,23 @@ impl<'a, 't> Cx<'a, 't> {
     /// functions.
     fn reached(&self, scope: Option<Node>, state: &State<'t>) -> Vec<Reach<'t>> {
         let mut out = Vec::new();
-        let calls = match scope {
+        for &call in self.calls_in(scope) {
+            if let Some((name, args)) = self.sink(call) {
+                out.extend(self.sink_reached(call, &name, args, state));
+            } else if let Some(j) = self.local_function(call) {
+                // A helper of this file whose parameter reaches a sink, or
+                // another file's function.
+                self.reached_through_local(call, j, state, &mut out);
+            } else if let Some(callee) = self.callee_of(call) {
+                self.reached_another_file(call, callee, state, &mut out);
+            }
+        }
+        out
+    }
+
+    /// The calls inside `scope`, or every call.
+    fn calls_in(&self, scope: Option<Node>) -> &[Node<'t>] {
+        match scope {
             None => &self.calls[..],
             Some(s) => {
                 let lo = self
@@ -1521,97 +1596,94 @@ impl<'a, 't> Cx<'a, 't> {
                     .partition_point(|c| c.start_byte() < s.end_byte());
                 &self.calls[lo..hi]
             }
-        };
-        for &call in calls {
-            if let Some((name, args)) = self.sink(call) {
-                for arg in args {
-                    let Some(mut path) = self.taint(arg, state, 0) else {
-                        continue;
-                    };
-                    let needs_sql = self.kind == SinkKind::Sql
-                        && SQL_EXECUTE.contains(&name.as_str())
-                        && !self.reads_as_sql(arg, 3);
-                    if needs_sql && !from_call(&path) {
-                        continue;
-                    }
-                    if self.is_checked(call, arg, &path) {
-                        continue;
-                    }
-                    path.push(Step {
-                        node: call,
-                        message: format!("passed to `{name}`"),
-                    });
-                    out.push(reach_sink(path, call, needs_sql));
-                    break;
-                }
+        }
+    }
+
+    /// A sink's first argument a request's value reaches unchecked; for a
+    /// SQL execution, one that reads as SQL, or another file's result.
+    fn sink_reached(
+        &self,
+        call: Node<'t>,
+        name: &str,
+        args: Vec<Node<'t>>,
+        state: &State<'t>,
+    ) -> Option<Reach<'t>> {
+        for arg in args {
+            let Some(mut path) = self.taint(arg, state, 0) else {
+                continue;
+            };
+            let needs_sql = self.kind == SinkKind::Sql
+                && SQL_EXECUTE.contains(&name)
+                && !self.reads_as_sql(arg, 3);
+            if needs_sql && !from_call(&path) {
                 continue;
             }
-            // A helper of this file whose parameter reaches a sink, or
-            // another file's function.
-            if let Some(j) = self.local_function(call) {
-                let summary = self.summary(j);
-                if summary.to_sink.is_empty() && summary.to_call.is_empty() {
-                    continue;
-                }
-                let fname = self.function_name(j);
-                let params: HashSet<usize> = summary
-                    .to_sink
-                    .iter()
-                    .map(|t| t.0)
-                    .chain(summary.to_call.iter().map(|t| t.0))
-                    .collect();
-                for p in params {
-                    let Some(arg) = self.argument_for(call, j, p) else {
-                        continue;
-                    };
-                    let Some(path) = self.taint(arg, state, 0) else {
-                        continue;
-                    };
-                    if self.is_checked(call, arg, &path) {
-                        continue;
-                    }
-                    let into = |inner: &Path<'t>| {
-                        let mut path = path.clone();
-                        path.push(Step {
-                            node: call,
-                            message: format!("passed to `{fname}`"),
-                        });
-                        path.extend(inner.iter().cloned());
-                        path
-                    };
-                    for (_, inner, sink) in summary.to_sink.iter().filter(|t| t.0 == p) {
-                        out.push(reach_sink(into(inner), *sink, false));
-                    }
-                    if !from_call(&path) {
-                        for (_, inner, callee, a) in summary.to_call.iter().filter(|t| t.0 == p) {
-                            out.push(Reach::Open {
-                                path: into(inner),
-                                callee: callee.clone(),
-                                arg: *a,
-                                call,
-                            });
-                        }
-                    }
-                }
+            if self.is_checked(call, arg, &path) {
                 continue;
             }
-            if let Some(callee) = self.callee_of(call) {
-                for (i, arg) in positional(call).into_iter().enumerate() {
-                    if let Some(path) = self
-                        .taint(arg, state, 0)
-                        .filter(|p| !from_call(p) && !self.is_checked(call, arg, p))
-                    {
-                        out.push(Reach::Open {
-                            path,
-                            callee: callee.clone(),
-                            arg: i,
-                            call,
-                        });
-                    }
-                }
+            path.push(Step {
+                node: call,
+                message: format!("passed to `{name}`"),
+            });
+            return Some(reach_sink(path, call, needs_sql));
+        }
+        None
+    }
+
+    /// What a value passed to a helper of this file reaches through it.
+    fn reached_through_local(
+        &self,
+        call: Node<'t>,
+        j: usize,
+        state: &State<'t>,
+        out: &mut Vec<Reach<'t>>,
+    ) {
+        let summary = self.summary(j);
+        if summary.to_sink.is_empty() && summary.to_call.is_empty() {
+            return;
+        }
+        let fname = self.function_name(j);
+        let params: HashSet<usize> = summary
+            .to_sink
+            .iter()
+            .map(|t| t.0)
+            .chain(summary.to_call.iter().map(|t| t.0))
+            .collect();
+        for p in params {
+            let Some(arg) = self.argument_for(call, j, p) else {
+                continue;
+            };
+            let Some(path) = self.taint(arg, state, 0) else {
+                continue;
+            };
+            if self.is_checked(call, arg, &path) {
+                continue;
+            }
+            out.extend(through_summary(&summary, p, &path, call, &fname));
+        }
+    }
+
+    /// A request's own value passed, unchecked, to another file's function.
+    fn reached_another_file(
+        &self,
+        call: Node<'t>,
+        callee: Callee,
+        state: &State<'t>,
+        out: &mut Vec<Reach<'t>>,
+    ) {
+        for (i, arg) in positional(call).into_iter().enumerate() {
+            if let Some(path) = self
+                .taint(arg, state, 0)
+                .filter(|p| !from_call(p) && !self.is_checked(call, arg, p))
+            {
+                out.push(Reach::Open {
+                    path,
+                    callee: callee.clone(),
+                    arg: i,
+                    call,
+                });
             }
         }
-        out
     }
 
     /// Another file's function a call calls: imported from a module of the
@@ -1765,94 +1837,131 @@ impl<'a, 't> Cx<'a, 't> {
     /// argument, a member of it, or in a concatenation, a `%` or an
     /// f-string, not through another call, which may sanitize it.
     fn passed_on_summaries(&self) -> Vec<SummaryFact<'t>> {
-        let mut out = Vec::new();
-        for (j, f) in self.m.functions.iter().enumerate() {
-            let Some(key) = self.export_key(j) else {
+        (0..self.m.functions.len())
+            .filter_map(|j| self.passed_on_summary(j))
+            .collect()
+    }
+
+    /// What an exported function passes on of its parameters: to another
+    /// file's functions, and in a value it returns built straight from one
+    /// (a query builder's).
+    fn passed_on_summary(&self, j: usize) -> Option<SummaryFact<'t>> {
+        let f = &self.m.functions[j];
+        let key = self.export_key(j)?;
+        let fname = self.function_name(j);
+        let first_is_self = f
+            .params
+            .first()
+            .and_then(|d| d.first())
+            .is_some_and(|d| matches!(self.m.decls[*d].name.as_str(), "self" | "cls"));
+        let shift = usize::from(key.member.is_some() && first_is_self);
+        let to_call = self.params_passed_on(f, shift, &fname);
+        let returns = self.returns_of(j);
+        let to_return = self.params_returned(f, shift, &fname, &returns);
+        if to_call.is_empty() && to_return.is_empty() {
+            return None;
+        }
+        Some(SummaryFact {
+            key,
+            returns_sql: self.kind == SinkKind::Sql
+                && returns.iter().any(|r| self.reads_as_sql(*r, 3)),
+            to_sink: Vec::new(),
+            to_return,
+            returns_source: None,
+            to_call,
+        })
+    }
+
+    /// The parameters a function passes directly to another file's
+    /// functions, with where.
+    fn params_passed_on(
+        &self,
+        f: &super::Function<'t>,
+        shift: usize,
+        fname: &str,
+    ) -> Vec<(usize, Path<'t>, Callee, usize)> {
+        let lo = self
+            .calls
+            .partition_point(|c| c.start_byte() < f.node.start_byte());
+        let hi = self
+            .calls
+            .partition_point(|c| c.start_byte() < f.node.end_byte());
+        let mut to_call = Vec::new();
+        for &call in &self.calls[lo..hi] {
+            let positional = positional(call);
+            if positional.is_empty() {
                 continue;
-            };
-            let fname = self.function_name(j);
-            let first_is_self = f
-                .params
-                .first()
-                .and_then(|d| d.first())
-                .is_some_and(|d| matches!(self.m.decls[*d].name.as_str(), "self" | "cls"));
-            let shift = usize::from(key.member.is_some() && first_is_self);
-            let lo = self
-                .calls
-                .partition_point(|c| c.start_byte() < f.node.start_byte());
-            let hi = self
-                .calls
-                .partition_point(|c| c.start_byte() < f.node.end_byte());
-            let mut to_call = Vec::new();
-            for &call in &self.calls[lo..hi] {
-                let positional = positional(call);
-                if positional.is_empty() {
-                    continue;
-                }
-                for (p, decls) in f.params.iter().enumerate().skip(shift) {
-                    for &d in decls {
-                        let decl = &self.m.decls[d];
-                        let Some(k) = positional
-                            .iter()
-                            .position(|a| passes_directly(*a, &decl.name, self.src))
-                        else {
-                            continue;
-                        };
-                        let Some(callee) = self.callee_of(call) else {
-                            continue;
-                        };
-                        to_call.push((
-                            p - shift,
-                            vec![
-                                Step {
-                                    node: decl.node,
-                                    message: format!("`{fname}`'s parameter `{}`", decl.name),
-                                },
-                                Step {
-                                    node: call,
-                                    message: format!("passed to `{}`", callee.display()),
-                                },
-                            ],
-                            callee,
-                            k,
-                        ));
-                    }
-                }
             }
-            // A value it returns built straight from a parameter: a query
-            // builder's.
-            let returns = self.returns_of(j);
-            let mut to_return = Vec::new();
             for (p, decls) in f.params.iter().enumerate().skip(shift) {
-                for &d in decls {
-                    let decl = &self.m.decls[d];
-                    if returns
+                to_call.extend(
+                    decls
                         .iter()
-                        .any(|r| passes_directly(*r, &decl.name, self.src))
-                    {
-                        to_return.push((
-                            p - shift,
-                            vec![Step {
-                                node: decl.node,
-                                message: format!("`{fname}`'s parameter `{}`", decl.name),
-                            }],
-                        ));
-                    }
-                }
-            }
-            if !to_call.is_empty() || !to_return.is_empty() {
-                out.push(SummaryFact {
-                    key,
-                    returns_sql: self.kind == SinkKind::Sql
-                        && returns.iter().any(|r| self.reads_as_sql(*r, 3)),
-                    to_sink: Vec::new(),
-                    to_return,
-                    returns_source: None,
-                    to_call,
-                });
+                        .filter_map(|&d| self.param_passed(call, &positional, d, p - shift, fname)),
+                );
             }
         }
-        out
+        to_call
+    }
+
+    /// Parameter `d` (`p` among them) passed directly as an argument of
+    /// another file's function.
+    fn param_passed(
+        &self,
+        call: Node<'t>,
+        positional: &[Node<'t>],
+        d: DeclId,
+        p: usize,
+        fname: &str,
+    ) -> Option<(usize, Path<'t>, Callee, usize)> {
+        let decl = &self.m.decls[d];
+        let k = positional
+            .iter()
+            .position(|a| passes_directly(*a, &decl.name, self.src))?;
+        let callee = self.callee_of(call)?;
+        Some((
+            p,
+            vec![
+                Step {
+                    node: decl.node,
+                    message: format!("`{fname}`'s parameter `{}`", decl.name),
+                },
+                Step {
+                    node: call,
+                    message: format!("passed to `{}`", callee.display()),
+                },
+            ],
+            callee,
+            k,
+        ))
+    }
+
+    /// The parameters a function returns directly.
+    fn params_returned(
+        &self,
+        f: &super::Function<'t>,
+        shift: usize,
+        fname: &str,
+        returns: &[Node<'t>],
+    ) -> Vec<(usize, Path<'t>)> {
+        let mut to_return = Vec::new();
+        for (p, decls) in f.params.iter().enumerate().skip(shift) {
+            for &d in decls {
+                let decl = &self.m.decls[d];
+                if returns
+                    .iter()
+                    .any(|r| passes_directly(*r, &decl.name, self.src))
+                {
+                    to_return.push((
+                        p - shift,
+                        vec![Step {
+                            node: decl.node,
+                            message: format!("`{fname}`'s parameter `{}`", decl.name),
+                        }],
+                    ));
+                }
+            }
+        }
+        to_return
     }
 
     /// The summaries of the functions other modules can import: the
@@ -1939,69 +2048,16 @@ impl<'a, 't> Cx<'a, 't> {
             .into_iter()
             .filter(|a| a.kind() != "keyword_argument")
             .collect::<Vec<_>>();
-        let keyword = |k: &str| {
-            arguments(call)
-                .into_iter()
-                .filter(|a| a.kind() == "keyword_argument")
-                .find(|a| {
-                    a.child_by_field_name("name")
-                        .is_some_and(|n| self.text(n) == k)
-                })
-                .and_then(|a| a.child_by_field_name("value"))
-        };
-        let pick = |spec: Args| -> Vec<Node<'t>> {
-            match spec {
-                Args::First => positional.iter().take(1).copied().collect(),
-                Args::Second => positional.iter().skip(1).take(1).copied().collect(),
-                Args::FirstTwo => positional.iter().take(2).copied().collect(),
-                Args::Third => positional.iter().skip(2).take(1).copied().collect(),
-            }
-        };
         // `eval(x)`, `open(p)`: builtins, when nothing in the file shadows them.
         if callee.kind() == "identifier" && self.decl(callee).is_none() {
             let name = self.text(callee);
             return BUILTIN_SINKS
                 .iter()
                 .find(|(b, k, _)| *b == name && *k == self.kind)
-                .map(|(_, _, spec)| (name.to_string(), pick(*spec)));
+                .map(|(_, _, spec)| (name.to_string(), pick_args(&positional, *spec)));
         }
         if let Some((module, name)) = self.qualified(callee) {
-            let found = MODULE_SINKS.iter().find(|(m, names, k, _)| {
-                *k == self.kind
-                    && names.contains(&name.as_str())
-                    && (*m == module || module.starts_with(&format!("{m}.")))
-            });
-            if let Some((_, _, _, spec)) = found {
-                let mut args = pick(*spec);
-                // `subprocess.run([prog, arg])`: without a shell, only the
-                // program is a command; `args=` and `url=` too.
-                if self.kind == SinkKind::Command {
-                    if args.is_empty() {
-                        args.extend(keyword("args"));
-                    }
-                    let shell = keyword("shell").is_some_and(|v| self.text(v) == "True");
-                    if !shell && module == "subprocess" {
-                        args = args
-                            .into_iter()
-                            .map(|a| match a.kind() {
-                                "list" | "tuple" => children(a).into_iter().next().unwrap_or(a),
-                                _ => a,
-                            })
-                            .collect();
-                    }
-                }
-                if self.kind == SinkKind::Ssrf && args.is_empty() {
-                    args.extend(keyword("url"));
-                }
-                return Some((name, args));
-            }
-            if self.kind == SinkKind::Sql
-                && SQL_RAW.contains(&name.as_str())
-                && module.starts_with("sqlalchemy")
-            {
-                return Some((name, pick(Args::First)));
-            }
-            return None;
+            return self.module_sink(call, &positional, module, name);
         }
         let (receiver, method_name) = method(call)?;
         let name = self.text(method_name).to_string();
@@ -2015,13 +2071,88 @@ impl<'a, 't> Cx<'a, 't> {
                     *k == self.kind && m == module && names.contains(&name.as_str())
                 })
                 .map(|(_, _, _, spec)| {
-                    let mut args = pick(*spec);
+                    let mut args = pick_args(&positional, *spec);
                     if args.is_empty() {
-                        args.extend(keyword("url"));
+                        args.extend(self.keyword_arg(call, "url"));
                     }
                     (name.clone(), args)
                 });
         }
+        self.method_sink(name, receiver, &positional)
+    }
+
+    /// A call's keyword argument's value.
+    fn keyword_arg(&self, call: Node<'t>, k: &str) -> Option<Node<'t>> {
+        arguments(call)
+            .into_iter()
+            .filter(|a| a.kind() == "keyword_argument")
+            .find(|a| {
+                a.child_by_field_name("name")
+                    .is_some_and(|n| self.text(n) == k)
+            })
+            .and_then(|a| a.child_by_field_name("value"))
+    }
+
+    /// A module's function that is a sink of this kind, with the arguments
+    /// it uses.
+    fn module_sink(
+        &self,
+        call: Node<'t>,
+        positional: &[Node<'t>],
+        module: String,
+        name: String,
+    ) -> Option<SinkCall<'t>> {
+        let found = MODULE_SINKS.iter().find(|(m, names, k, _)| {
+            *k == self.kind
+                && names.contains(&name.as_str())
+                && (*m == module || module.starts_with(&format!("{m}.")))
+        });
+        if let Some((_, _, _, spec)) = found {
+            let mut args = pick_args(positional, *spec);
+            if self.kind == SinkKind::Command {
+                args = self.command_args(call, args, &module);
+            }
+            if self.kind == SinkKind::Ssrf && args.is_empty() {
+                args.extend(self.keyword_arg(call, "url"));
+            }
+            return Some((name, args));
+        }
+        if self.kind == SinkKind::Sql
+            && SQL_RAW.contains(&name.as_str())
+            && module.starts_with("sqlalchemy")
+        {
+            return Some((name, pick_args(positional, Args::First)));
+        }
+        None
+    }
+
+    /// `subprocess.run([prog, arg])`: without a shell, only the program is
+    /// a command; `args=` too.
+    fn command_args(&self, call: Node<'t>, mut args: Vec<Node<'t>>, module: &str) -> Vec<Node<'t>> {
+        if args.is_empty() {
+            args.extend(self.keyword_arg(call, "args"));
+        }
+        let shell = self
+            .keyword_arg(call, "shell")
+            .is_some_and(|v| self.text(v) == "True");
+        if shell || module != "subprocess" {
+            return args;
+        }
+        args.into_iter()
+            .map(|a| match a.kind() {
+                "list" | "tuple" => children(a).into_iter().next().unwrap_or(a),
+                _ => a,
+            })
+            .collect()
+    }
+
+    /// A method that is a sink of this kind on whatever receiver it has.
+    fn method_sink(
+        &self,
+        name: String,
+        receiver: Node<'t>,
+        positional: &[Node<'t>],
+    ) -> Option<SinkCall<'t>> {
         match self.kind {
             // `Path(p).read_text()`: the path object is what's used.
             SinkKind::Path
@@ -2032,16 +2163,16 @@ impl<'a, 't> Cx<'a, 't> {
             SinkKind::Sql
                 if SQL_EXECUTE.contains(&name.as_str()) || SQL_RAW.contains(&name.as_str()) =>
             {
-                Some((name, pick(Args::First)))
+                Some((name, pick_args(positional, Args::First)))
             }
-            SinkKind::XPath if name == "xpath" => Some((name, pick(Args::First))),
+            SinkKind::XPath if name == "xpath" => Some((name, pick_args(positional, Args::First))),
             // python-ldap's `search_s(base, scope, filter)`, ldap3's
             // `search(base, filter)`, in a file that imports them.
             SinkKind::Ldap if self.imports_module("ldap") && name.starts_with("search") => {
-                Some((name, pick(Args::Third)))
+                Some((name, pick_args(positional, Args::Third)))
             }
             SinkKind::Ldap if self.imports_module("ldap3") && name == "search" => {
-                Some((name, pick(Args::Second)))
+                Some((name, pick_args(positional, Args::Second)))
             }
             _ => None,
         }
@@ -2122,107 +2253,108 @@ impl<'a, 't> Cx<'a, 't> {
     /// - every sink: an allowlist (`x in ALLOWED`, `x in ('a', 'b')`) and a
     ///   whole-value pattern (`re.fullmatch(p, x)`).
     fn checked_values(&self, function: Node) -> HashSet<String> {
-        let words: &[&str] = match self.kind {
-            SinkKind::Redirect | SinkKind::Ssrf => &[
-                "url", "redirect", "host", "safe", "allowed", "valid", "trusted", "domain",
-                "origin",
-            ],
-            SinkKind::Path => &[
-                "path", "within", "inside", "safe", "allowed", "valid", "sub",
-            ],
-            _ => &[],
-        };
+        let words = check_words(self.kind);
         let mut out = HashSet::new();
-        let add_all = |n: Node, out: &mut HashSet<String>| {
-            let mut stack = vec![n];
-            while let Some(c) = stack.pop() {
-                if matches!(c.kind(), "identifier" | "attribute" | "subscript" | "call") {
-                    out.insert(self.text(c).to_string());
-                }
-                stack.extend(children(c));
-            }
-        };
         let mut stack = vec![function];
         while let Some(n) = stack.pop() {
             stack.extend(children(n));
             match n.kind() {
-                // `x in ALLOWED`, `x in ('asc', 'desc')`.
-                "comparison_operator" => {
-                    let ops: Vec<&str> = (0..n.child_count())
-                        .filter_map(|i| n.child(i))
-                        .filter(|c| !c.is_named())
-                        .map(|c| self.text(c))
-                        .collect();
-                    let parts = children(n);
-                    let membership = ops.iter().any(|o| matches!(*o, "in" | "not in"));
-                    if membership && let (Some(value), Some(set)) = (parts.first(), parts.get(1)) {
-                        let allowlist = matches!(set.kind(), "list" | "tuple" | "set")
-                            || ["allow", "white", "trusted", "permitted", "safe", "valid"]
-                                .iter()
-                                .any(|w| self.text(*set).to_ascii_lowercase().contains(w));
-                        if allowlist {
-                            out.insert(self.text(*value).to_string());
-                        }
-                    }
-                    // `'..' in p`
-                    if self.kind == SinkKind::Path
-                        && matches!(ops.first(), Some(&"in") | Some(&"not in"))
-                        && parts
-                            .first()
-                            .is_some_and(|v| string_value(self.text(*v)) == "..")
-                        && let Some(p) = parts.get(1)
-                    {
-                        add_all(*p, &mut out);
-                    }
-                }
-                "call" => {
-                    let Some(callee) = n.child_by_field_name("function") else {
-                        continue;
-                    };
-                    let (receiver, name) = match method(n) {
-                        Some((r, m)) => (Some(r), self.text(m)),
-                        None => (None, self.text(callee)),
-                    };
-                    let lower = name.trim_start_matches('_').to_ascii_lowercase();
-                    let named_check = [
-                        "is_", "validate", "assert", "check", "ensure", "verify", "sanitize",
-                        "allow", "safe", "can_", "has_",
-                    ]
-                    .iter()
-                    .any(|p| lower.starts_with(p))
-                        && words.iter().any(|w| lower.contains(w));
-                    let django = name == "url_has_allowed_host_and_scheme";
-                    if named_check || django {
-                        for a in arguments(n) {
-                            add_all(a, &mut out);
-                        }
-                    }
-                    if let Some(r) = receiver {
-                        if !words.is_empty() && matches!(name, "startswith" | "is_relative_to") {
-                            add_all(r, &mut out);
-                        }
-                        // `re.fullmatch(p, x)`, `PATTERN.fullmatch(x)`, and
-                        // `re.match(r"^[a-z_]+$", x)`: a whole value.
-                        let args = arguments(n);
-                        let anchored = |pattern: Option<&Node>| {
-                            pattern.is_some_and(|p| {
-                                let t = string_value(self.text(*p));
-                                t.starts_with('^') && (t.ends_with('$') || t.ends_with("\\Z"))
-                            })
-                        };
-                        let whole = name == "fullmatch"
-                            || (matches!(name, "match" | "search")
-                                && (anchored(args.first().filter(|_| args.len() >= 2))
-                                    || self.compiled_anchored(r)));
-                        if whole && let Some(last) = args.last() {
-                            out.insert(self.text(*last).to_string());
-                        }
-                    }
-                }
+                "comparison_operator" => self.comparison_checks(n, &mut out),
+                "call" => self.call_checks(n, words, &mut out),
                 _ => {}
             }
         }
         out
+    }
+
+    /// Every name, member, subscript and call in `n`.
+    fn add_names(&self, n: Node, out: &mut HashSet<String>) {
+        let mut stack = vec![n];
+        while let Some(c) = stack.pop() {
+            if matches!(c.kind(), "identifier" | "attribute" | "subscript" | "call") {
+                out.insert(self.text(c).to_string());
+            }
+            stack.extend(children(c));
+        }
+    }
+
+    /// `x in ALLOWED`, `x in ('asc', 'desc')`, and for a path `'..' in p`.
+    fn comparison_checks(&self, n: Node, out: &mut HashSet<String>) {
+        let ops: Vec<&str> = (0..n.child_count())
+            .filter_map(|i| n.child(i))
+            .filter(|c| !c.is_named())
+            .map(|c| self.text(c))
+            .collect();
+        let parts = children(n);
+        let membership = ops.iter().any(|o| matches!(*o, "in" | "not in"));
+        if membership
+            && let (Some(value), Some(set)) = (parts.first(), parts.get(1))
+            && self.is_allowlist(*set)
+        {
+            out.insert(self.text(*value).to_string());
+        }
+        if self.kind == SinkKind::Path
+            && matches!(ops.first(), Some(&"in") | Some(&"not in"))
+            && parts
+                .first()
+                .is_some_and(|v| string_value(self.text(*v)) == "..")
+            && let Some(p) = parts.get(1)
+        {
+            self.add_names(*p, out);
+        }
+    }
+
+    /// A literal collection, or one named like an allowlist.
+    fn is_allowlist(&self, set: Node) -> bool {
+        matches!(set.kind(), "list" | "tuple" | "set")
+            || ["allow", "white", "trusted", "permitted", "safe", "valid"]
+                .iter()
+                .any(|w| self.text(set).to_ascii_lowercase().contains(w))
+    }
+
+    /// What a call checks: a validator's arguments (`is_safe_url(x)`,
+    /// Django's `url_has_allowed_host_and_scheme`), `x.startswith(...)`'s
+    /// receiver, and the value a whole-value regex match tests.
+    fn call_checks(&self, n: Node, words: &[&str], out: &mut HashSet<String>) {
+        let Some(callee) = n.child_by_field_name("function") else {
+            return;
+        };
+        let (receiver, name) = match method(n) {
+            Some((r, m)) => (Some(r), self.text(m)),
+            None => (None, self.text(callee)),
+        };
+        if is_named_check(name, words) || name == "url_has_allowed_host_and_scheme" {
+            for a in arguments(n) {
+                self.add_names(a, out);
+            }
+        }
+        let Some(r) = receiver else {
+            return;
+        };
+        if !words.is_empty() && matches!(name, "startswith" | "is_relative_to") {
+            self.add_names(r, out);
+        }
+        if self.matches_whole_value(n, name, r)
+            && let Some(last) = arguments(n).last()
+        {
+            out.insert(self.text(*last).to_string());
+        }
+    }
+
+    /// `re.fullmatch(p, x)`, `PATTERN.fullmatch(x)`, and
+    /// `re.match(r"^[a-z_]+$", x)`: a whole value.
+    fn matches_whole_value(&self, n: Node, name: &str, receiver: Node) -> bool {
+        let args = arguments(n);
+        let anchored = |pattern: Option<&Node>| {
+            pattern.is_some_and(|p| {
+                let t = string_value(self.text(*p));
+                t.starts_with('^') && (t.ends_with('$') || t.ends_with("\\Z"))
+            })
+        };
+        name == "fullmatch"
+            || (matches!(name, "match" | "search")
+                && (anchored(args.first().filter(|_| args.len() >= 2))
+                    || self.compiled_anchored(receiver)))
     }
 
     /// A name set to `re.compile(r"^…$")`.
@@ -2245,51 +2377,53 @@ impl<'a, 't> Cx<'a, 't> {
         let mut out = HashSet::new();
         let mut child = sink;
         while let Some(p) = child.parent() {
-            let (condition, branch) = match p.kind() {
-                "if_statement" | "elif_clause" => (
+            if matches!(p.kind(), "if_statement" | "elif_clause")
+                && let (Some(c), Some(b)) = (
                     p.child_by_field_name("condition"),
                     p.child_by_field_name("consequence"),
-                ),
-                _ => (None, None),
-            };
-            if let (Some(c), Some(b)) = (condition, branch)
+                )
                 && b.id() == child.id()
             {
-                let mut terms = vec![c];
-                while let Some(t) = terms.pop() {
-                    match t.kind() {
-                        "boolean_operator" => terms.extend(children(t)),
-                        "comparison_operator" => {
-                            let parts = children(t);
-                            let op = (0..t.child_count())
-                                .filter_map(|i| t.child(i))
-                                .find(|c| !c.is_named())
-                                .map(|c| self.text(c));
-                            if op == Some("==")
-                                && let (Some(l), Some(r)) = (parts.first(), parts.get(1))
-                            {
-                                if r.kind() == "string" {
-                                    out.insert(self.text(*l).to_string());
-                                } else if l.kind() == "string" {
-                                    out.insert(self.text(*r).to_string());
-                                }
-                            }
-                            // `if plugin in plugins:`: one of a collection's
-                            // values, not a substring of a text.
-                            if op == Some("in")
-                                && let (Some(l), Some(r)) = (parts.first(), parts.get(1))
-                                && r.kind() != "string"
-                            {
-                                out.insert(self.text(*l).to_string());
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                self.literal_comparisons(c, &mut out);
             }
             child = p;
         }
         out
+    }
+
+    /// The names a condition compares with a literal, through `and` and `or`.
+    fn literal_comparisons(&self, condition: Node, out: &mut HashSet<String>) {
+        let mut terms = vec![condition];
+        while let Some(t) = terms.pop() {
+            match t.kind() {
+                "boolean_operator" => terms.extend(children(t)),
+                "comparison_operator" => self.literal_comparison(t, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// `x == 'a'` (either way round); `if plugin in plugins:`, one of a
+    /// collection's values, not a substring of a text.
+    fn literal_comparison(&self, t: Node, out: &mut HashSet<String>) {
+        let parts = children(t);
+        let op = (0..t.child_count())
+            .filter_map(|i| t.child(i))
+            .find(|c| !c.is_named())
+            .map(|c| self.text(c));
+        let (Some(l), Some(r)) = (parts.first(), parts.get(1)) else {
+            return;
+        };
+        if op == Some("==") {
+            if r.kind() == "string" {
+                out.insert(self.text(*l).to_string());
+            } else if l.kind() == "string" {
+                out.insert(self.text(*r).to_string());
+            }
+        }
+        if op == Some("in") && r.kind() != "string" {
+            out.insert(self.text(*l).to_string());
+        }
     }
 
     // ------------------------------------------------------------ helpers (T3)
@@ -2495,6 +2629,99 @@ impl<'a, 't> Cx<'a, 't> {
         }
         summary
     }
+}
+
+/// The step a write adds to its target's path.
+fn binding_message(w: &Write, name: &str) -> String {
+    if w.adds
+        && w.target
+            .parent()
+            .is_some_and(|p| p.kind() == "argument_list")
+    {
+        format!("added to `{name}`")
+    } else if w.adds || is_built(w.value) {
+        format!("concatenated into `{name}`")
+    } else {
+        format!("assigned to `{name}`")
+    }
+}
+
+/// The paths a value passed as parameter `p` of a helper takes through it:
+/// to its sinks, and, for a request's own value, to the other files'
+/// functions it passes it to.
+fn through_summary<'t>(
+    summary: &FnSummary<'t>,
+    p: usize,
+    path: &Path<'t>,
+    call: Node<'t>,
+    fname: &str,
+) -> Vec<Reach<'t>> {
+    let into = |inner: &Path<'t>| {
+        let mut path = path.clone();
+        path.push(Step {
+            node: call,
+            message: format!("passed to `{fname}`"),
+        });
+        path.extend(inner.iter().cloned());
+        path
+    };
+    let mut out: Vec<Reach<'t>> = summary
+        .to_sink
+        .iter()
+        .filter(|t| t.0 == p)
+        .map(|(_, inner, sink)| reach_sink(into(inner), *sink, false))
+        .collect();
+    if !from_call(path) {
+        out.extend(
+            summary
+                .to_call
+                .iter()
+                .filter(|t| t.0 == p)
+                .map(|(_, inner, callee, a)| Reach::Open {
+                    path: into(inner),
+                    callee: callee.clone(),
+                    arg: *a,
+                    call,
+                }),
+        );
+    }
+    out
+}
+
+/// The arguments a sink's spec names, by position.
+fn pick_args<'t>(positional: &[Node<'t>], spec: Args) -> Vec<Node<'t>> {
+    match spec {
+        Args::First => positional.iter().take(1).copied().collect(),
+        Args::Second => positional.iter().skip(1).take(1).copied().collect(),
+        Args::FirstTwo => positional.iter().take(2).copied().collect(),
+        Args::Third => positional.iter().skip(2).take(1).copied().collect(),
+    }
+}
+
+/// The words a check's name has for this sink kind.
+fn check_words(kind: SinkKind) -> &'static [&'static str] {
+    match kind {
+        SinkKind::Redirect | SinkKind::Ssrf => &[
+            "url", "redirect", "host", "safe", "allowed", "valid", "trusted", "domain", "origin",
+        ],
+        SinkKind::Path => &[
+            "path", "within", "inside", "safe", "allowed", "valid", "sub",
+        ],
+        _ => &[],
+    }
+}
+
+/// A function named like a check (`is_`, `validate`, `ensure`...) of
+/// something these words name.
+fn is_named_check(name: &str, words: &[&str]) -> bool {
+    let lower = name.trim_start_matches('_').to_ascii_lowercase();
+    [
+        "is_", "validate", "assert", "check", "ensure", "verify", "sanitize", "allow", "safe",
+        "can_", "has_",
+    ]
+    .iter()
+    .any(|p| lower.starts_with(p))
+        && words.iter().any(|w| lower.contains(w))
 }
 
 /// A sink reached: by a request's value, or by another file's function's
