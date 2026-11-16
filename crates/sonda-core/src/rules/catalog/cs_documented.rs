@@ -1882,6 +1882,175 @@ fn calls_base_constructor(constructor: Node, src: &[u8]) -> bool {
         })
 }
 
+/// Whether a file imports a test framework.
+fn uses_test_framework(root: Node, src: &[u8]) -> bool {
+    root.named_children(&mut root.walk())
+        .filter(|c| c.kind() == "using_directive")
+        .any(|u| {
+            let t = text(u, src);
+            TEST_FRAMEWORKS
+                .iter()
+                .any(|f| t.windows(f.len()).any(|w| w == f.as_bytes()))
+        })
+}
+
+/// A class or struct that implements ISerializable and takes part in
+/// serialization, with the parts S3925 checks.
+struct Serialized<'t> {
+    name: Node<'t>,
+    marked: bool,
+    constructor: Option<Node<'t>>,
+    get_object_data: Option<Node<'t>>,
+    /// A struct or a sealed class: nothing derives from it.
+    sealed: bool,
+    /// It derives from a class that implements ISerializable.
+    derived: bool,
+    fields: Vec<(Node<'t>, Node<'t>)>,
+}
+
+/// Whether a base list names ISerializable itself.
+fn names_iserializable(base_list: Option<Node>, src: &[u8]) -> bool {
+    base_list.is_some_and(|b| {
+        b.named_children(&mut b.walk())
+            .any(|t| super::cs::simple_name(t, src) == b"ISerializable")
+    })
+}
+
+/// The serialization constructor among a type's members.
+fn serialization_constructor<'t>(members: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    members.iter().copied().find(|c| {
+        c.kind() == "constructor_declaration"
+            && !cs_has_modifier(*c, "static", src)
+            && serialization_parameters(*c, src)
+    })
+}
+
+/// `GetObjectData(SerializationInfo, StreamingContext)` among a type's
+/// members.
+fn get_object_data<'t>(members: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    members.iter().copied().find(|c| {
+        c.kind() == "method_declaration"
+            && c.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"GetObjectData")
+            && serialization_parameters(*c, src)
+    })
+}
+
+/// Whether the first type in a base list is a class implementing
+/// ISerializable.
+fn derives_serializable(infer: &Infer, base_list: Option<Node>) -> bool {
+    base_list
+        .and_then(|b| b.named_child(0))
+        .and_then(|b| infer.written(b))
+        .filter(|b| infer.kind(b) == Some("class"))
+        .is_some_and(|b| implements_iserializable(infer, &b) == Some(true))
+}
+
+/// A declaration S3925 applies to: a class or struct implementing
+/// ISerializable that opts in with the attribute, ISerializable in its own
+/// base list, or a serialization constructor.
+fn serialized<'t>(infer: &Infer, declaration: Node<'t>, src: &[u8]) -> Option<Serialized<'t>> {
+    if !matches!(
+        declaration.kind(),
+        "class_declaration" | "struct_declaration"
+    ) {
+        return None;
+    }
+    let name = declaration.child_by_field_name("name")?;
+    let body = declaration.child_by_field_name("body")?;
+    let ty = infer.enclosing_type(name)?;
+    let base_list = declaration
+        .named_children(&mut declaration.walk())
+        .find(|c| c.kind() == "base_list");
+    let names_it = names_iserializable(base_list, src);
+    if !names_it && implements_iserializable(infer, &ty) != Some(true) {
+        return None;
+    }
+    let members = branch_members(body);
+    let constructor = serialization_constructor(&members, src);
+    let marked = has_attribute(declaration, b"Serializable", src);
+    if !(marked || names_it || constructor.is_some()) {
+        return None;
+    }
+    Some(Serialized {
+        name,
+        marked,
+        constructor,
+        get_object_data: get_object_data(&members, src),
+        sealed: declaration.kind() == "struct_declaration"
+            || cs_has_modifier(declaration, "sealed", src),
+        derived: derives_serializable(infer, base_list),
+        fields: serialized_fields(body, src),
+    })
+}
+
+/// Whether the serialization constructor is protected (private, or with no
+/// access modifier, when nothing derives from the type), and calls the base
+/// one when there's a serializable base.
+fn constructor_fits(s: &Serialized, constructor: Node, src: &[u8]) -> bool {
+    let access: Vec<&str> = ["public", "protected", "internal", "private"]
+        .into_iter()
+        .filter(|w| cs_has_modifier(constructor, w, src))
+        .collect();
+    let fitting = if s.sealed {
+        access.is_empty() || access == ["private"]
+    } else {
+        access == ["protected"]
+    };
+    fitting && (!s.derived || calls_base_constructor(constructor, src))
+}
+
+/// Whether GetObjectData is public and overridable when the type can be
+/// derived from, and calls the base one when there's a serializable base.
+fn get_object_data_fits(s: &Serialized, method: Node, src: &[u8]) -> bool {
+    let overridable = cs_has_modifier(method, "public", src)
+        && (cs_has_modifier(method, "virtual", src)
+            || (cs_has_modifier(method, "override", src)
+                && !cs_has_modifier(method, "sealed", src)));
+    let calls_base = method.child_by_field_name("body").is_some_and(|b| {
+        text(b, src)
+            .windows(19)
+            .any(|w| w == b"base.GetObjectData(")
+    });
+    (s.sealed || overridable) && (!s.derived || calls_base)
+}
+
+/// One type's departures from the pattern, possibly repeating a node.
+fn serialization_type_problems<'t>(infer: &Infer, s: &Serialized<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let field_serializes = |ty: Node| infer.written(ty).and_then(|t| serializable(infer, &t, src));
+    let mut out = Vec::new();
+    if !s.marked {
+        out.push(s.name);
+    }
+    out.extend(
+        s.fields
+            .iter()
+            .filter(|(_, ty)| field_serializes(*ty) == Some(false))
+            .map(|(field, _)| *field),
+    );
+    match s.constructor {
+        None => out.push(s.name),
+        Some(c) if !constructor_fits(s, c, src) => {
+            out.push(c.child_by_field_name("name").unwrap_or(c));
+        }
+        Some(_) => {}
+    }
+    match s.get_object_data {
+        Some(g) if !get_object_data_fits(s, g, src) => {
+            out.push(g.child_by_field_name("name").unwrap_or(g));
+        }
+        // New fields, with nothing to write them.
+        None if s.derived => out.extend(
+            s.fields
+                .iter()
+                .filter(|(_, ty)| field_serializes(*ty) != Some(false))
+                .map(|(field, _)| *field),
+        ),
+        _ => {}
+    }
+    out
+}
+
 /// Types implementing ISerializable that take part in serialization (the
 /// `[Serializable]` attribute, ISerializable in their own base list, or a
 /// serialization constructor) without the recommended pattern: the
@@ -1896,133 +2065,17 @@ pub(super) fn serialization_problems<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<
     let Some(infer) = Infer::new(m, src) else {
         return Vec::new();
     };
-    let Some(root) = m.root else {
-        return Vec::new();
-    };
-    let test_code = root
-        .named_children(&mut root.walk())
-        .filter(|c| c.kind() == "using_directive")
-        .any(|u| {
-            let t = text(u, src);
-            TEST_FRAMEWORKS
-                .iter()
-                .any(|f| t.windows(f.len()).any(|w| w == f.as_bytes()))
-        });
-    if test_code {
+    if m.root.is_none_or(|root| uses_test_framework(root, src)) {
         return Vec::new();
     }
     let mut found: Vec<Node<'t>> = Vec::new();
     walk_tree(m, |declaration, _| {
-        if !matches!(
-            declaration.kind(),
-            "class_declaration" | "struct_declaration"
-        ) {
-            return;
-        }
-        let (Some(name), Some(body)) = (
-            declaration.child_by_field_name("name"),
-            declaration.child_by_field_name("body"),
-        ) else {
-            return;
-        };
-        let Some(ty) = infer.enclosing_type(name) else {
-            return;
-        };
-        let base_list = declaration
-            .named_children(&mut declaration.walk())
-            .find(|c| c.kind() == "base_list");
-        let names_iserializable = base_list.is_some_and(|b| {
-            b.named_children(&mut b.walk())
-                .any(|t| super::cs::simple_name(t, src) == b"ISerializable")
-        });
-        if !names_iserializable && implements_iserializable(&infer, &ty) != Some(true) {
-            return;
-        }
-        let members = branch_members(body);
-        let constructor = members.iter().copied().find(|c| {
-            c.kind() == "constructor_declaration"
-                && !cs_has_modifier(*c, "static", src)
-                && serialization_parameters(*c, src)
-        });
-        let marked = has_attribute(declaration, b"Serializable", src);
-        if !(marked || names_iserializable || constructor.is_some()) {
-            return;
-        }
-        let get_object_data = members.iter().copied().find(|c| {
-            c.kind() == "method_declaration"
-                && c.child_by_field_name("name")
-                    .is_some_and(|n| text(n, src) == b"GetObjectData")
-                && serialization_parameters(*c, src)
-        });
-        let sealed = declaration.kind() == "struct_declaration"
-            || cs_has_modifier(declaration, "sealed", src);
-        // A base class that implements ISerializable.
-        let derived = base_list
-            .and_then(|b| b.named_child(0))
-            .and_then(|b| infer.written(b))
-            .filter(|b| infer.kind(b) == Some("class"))
-            .is_some_and(|b| implements_iserializable(&infer, &b) == Some(true));
-        let mut report = |n: Node<'t>| {
-            if !found.iter().any(|f| f.id() == n.id()) {
-                found.push(n);
-            }
-        };
-        if !marked {
-            report(name);
-        }
-        let fields = serialized_fields(body, src);
-        for (field, field_ty) in &fields {
-            let known = infer.written(*field_ty);
-            if known.and_then(|t| serializable(&infer, &t, src)) == Some(false) {
-                report(*field);
-            }
-        }
-        match constructor {
-            None => report(name),
-            Some(c) => {
-                let named = c.child_by_field_name("name").unwrap_or(c);
-                let access: Vec<&str> = ["public", "protected", "internal", "private"]
-                    .into_iter()
-                    .filter(|w| cs_has_modifier(c, w, src))
-                    .collect();
-                let fitting = if sealed {
-                    access.is_empty() || access == ["private"]
-                } else {
-                    access == ["protected"]
-                };
-                if !fitting || (derived && !calls_base_constructor(c, src)) {
-                    report(named);
-                }
-            }
-        }
-        match get_object_data {
-            Some(g) => {
-                let named = g.child_by_field_name("name").unwrap_or(g);
-                let overridable = cs_has_modifier(g, "public", src)
-                    && (cs_has_modifier(g, "virtual", src)
-                        || (cs_has_modifier(g, "override", src)
-                            && !cs_has_modifier(g, "sealed", src)));
-                let calls_base = g.child_by_field_name("body").is_some_and(|b| {
-                    text(b, src)
-                        .windows(19)
-                        .any(|w| w == b"base.GetObjectData(")
-                });
-                if (!sealed && !overridable) || (derived && !calls_base) {
-                    report(named);
-                }
-            }
-            None if derived => {
-                for (field, field_ty) in &fields {
-                    let known = infer.written(*field_ty);
-                    if known.and_then(|t| serializable(&infer, &t, src)) != Some(false) {
-                        report(*field);
-                    }
-                }
-            }
-            None => {}
+        if let Some(s) = serialized(&infer, declaration, src) {
+            found.extend(serialization_type_problems(&infer, &s, src));
         }
     });
-    found.sort_by_key(|n| n.start_byte());
+    found.sort_by_key(|n| (n.start_byte(), n.id()));
+    found.dedup_by_key(|n| n.id());
     found
 }
 
