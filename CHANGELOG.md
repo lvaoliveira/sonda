@@ -267,6 +267,13 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- C++'s `cpp/initializer-list-constant` looks at every constructor of the
+  class: a member another constructor sets from its parameters is reported
+  only when two constructors share the constant, and a class template
+  whose constructors delegate is left alone. `A::B::B()` is no longer
+  taken for a constructor of `A`. On roo_display, 46 fewer issues
+  SonarCloud doesn't report, one fewer it does.
+
 - C and C++'s `common/commented-out-code` judges a comment as a whole: one
   that is mostly prose with a line or two of code in it (an explanation,
   a licence, a usage note with an example) is documentation, not code. A

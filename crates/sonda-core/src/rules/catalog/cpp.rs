@@ -1456,8 +1456,9 @@ fn mutable_global<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 }
 
 /// A member's initializer that doesn't depend on the constructor's
-/// parameters, the first such one for that member in the class: the same
-/// value every time, which an in-class initializer states once.
+/// parameters, when the class's other constructors in the file agree: none
+/// sets the member otherwise, or another one sets it to the same value. Reported at the first
+/// constructor only.
 fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
     let Some(constructor) = init.parent().and_then(|list| list.parent()) else {
         return false;
@@ -1465,6 +1466,17 @@ fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
     let Some(member) = independent_member(init, &parameter_names(constructor, src), src) else {
         return false;
     };
+    let value = initializer_value(init, src);
+    // An empty `()` asks for what the member gets anyway; a class
+    // template's delegating constructors otherwise hide the rest.
+    let template = in_template(constructor) && !matches!(&value[..], b"()" | b"{}");
+    if template
+        && init
+            .parent()
+            .is_some_and(|list| delegates(constructor, list, src))
+    {
+        return false;
+    }
     let scope = class_scope(constructor, src);
     let container = match constructor.parent() {
         Some(t) if t.kind() == "template_declaration" => t.parent(),
@@ -1473,40 +1485,105 @@ fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
     let Some(container) = container else {
         return true;
     };
+    let (mut same, mut otherwise) = (0, 0);
     let mut cursor = container.walk();
-    for earlier in container.named_children(&mut cursor) {
-        let earlier = if earlier.kind() == "template_declaration" {
-            match earlier
-                .named_children(&mut earlier.walk())
+    for other in container.named_children(&mut cursor) {
+        let other = if other.kind() == "template_declaration" {
+            match other
+                .named_children(&mut other.walk())
                 .find(|c| c.kind() == "function_definition")
             {
                 Some(f) => f,
                 None => continue,
             }
         } else {
-            earlier
+            other
         };
-        if earlier.start_byte() >= constructor.start_byte() {
-            break;
-        }
-        if earlier.kind() != "function_definition" || class_scope(earlier, src) != scope {
+        if other.id() == constructor.id()
+            || other.kind() != "function_definition"
+            || class_scope(other, src) != scope
+        {
             continue;
         }
-        let params = parameter_names(earlier, src);
-        let Some(list) = earlier
-            .named_children(&mut earlier.walk())
+        let Some(list) = other
+            .named_children(&mut other.walk())
             .find(|c| c.kind() == "field_initializer_list")
         else {
             continue;
         };
-        if list
-            .named_children(&mut list.walk())
-            .any(|other| independent_member(other, &params, src) == Some(member))
-        {
+        if template && delegates(other, list, src) {
             return false;
         }
+        let mine = list.named_children(&mut list.walk()).find(|o| {
+            o.named_child(0)
+                .is_some_and(|n| n.kind() == "field_identifier" && text(n, src) == member)
+        });
+        match mine {
+            Some(o) if initializer_value(o, src) == value => {
+                if other.start_byte() < constructor.start_byte() {
+                    return false;
+                }
+                same += 1;
+            }
+            Some(_) => otherwise += 1,
+            None => {}
+        }
     }
-    true
+    otherwise == 0 || same > 0
+}
+
+/// Whether a node sits in a template: a class template's member, say.
+fn in_template(node: Node) -> bool {
+    let mut up = node.parent();
+    while let Some(n) = up {
+        if n.kind() == "template_declaration" {
+            return true;
+        }
+        up = n.parent();
+    }
+    false
+}
+
+/// Whether a constructor hands over to another one of its class, as
+/// `A(int x) : A(x, 0) {}` does.
+fn delegates(constructor: Node, list: Node, src: &[u8]) -> bool {
+    let Some(mut name) = constructor
+        .child_by_field_name("declarator")
+        .and_then(|d| d.child_by_field_name("declarator"))
+    else {
+        return false;
+    };
+    while name.kind() == "qualified_identifier" {
+        match name.child_by_field_name("name") {
+            Some(n) => name = n,
+            None => return false,
+        }
+    }
+    let own = text(name, src);
+    list.named_children(&mut list.walk()).any(|entry| {
+        entry.named_child(0).is_some_and(|n| {
+            let n = if n.kind() == "template_type" {
+                n.child_by_field_name("name").unwrap_or(n)
+            } else {
+                n
+            };
+            text(n, src) == own
+        })
+    })
+}
+
+/// The value a `member_(value)` initializer gives, without its spacing.
+fn initializer_value(init: Node, src: &[u8]) -> Vec<u8> {
+    init.named_children(&mut init.walk())
+        .find(|c| matches!(c.kind(), "argument_list" | "initializer_list"))
+        .map(|args| {
+            text(args, src)
+                .iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The member a `member_(value)` initializer sets, when the value uses
@@ -1606,13 +1683,26 @@ fn parameter_names<'s>(function: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
     names
 }
 
-/// `A` for an out-of-class `A::A(...)`, empty inside the class.
+/// `A` for an out-of-class `A::A(...)`, `A::B` for `A::B::B(...)`, empty
+/// inside the class.
 fn class_scope<'s>(function: Node, src: &'s [u8]) -> &'s [u8] {
     function_declarator(function)
         .and_then(|d| d.child_by_field_name("declarator"))
         .filter(|n| n.kind() == "qualified_identifier")
-        .and_then(|n| n.child_by_field_name("scope"))
-        .map_or(&b""[..], |n| text(n, src))
+        .map_or(&b""[..], |n| {
+            let full = text(n, src);
+            let mut last = n;
+            while let Some(name) = last
+                .child_by_field_name("name")
+                .filter(|m| m.kind() == "qualified_identifier")
+            {
+                last = name;
+            }
+            let end = last
+                .child_by_field_name("name")
+                .map_or(full.len(), |m| m.start_byte() - n.start_byte());
+            full[..end].strip_suffix(b"::").unwrap_or(&full[..end])
+        })
 }
 
 /// A function's or a lambda's parameter list.
@@ -2572,13 +2662,17 @@ mod tests {
     #[test]
     fn more_shapes_from_sonarcloud() {
         // The first constructor setting a member to a value that doesn't
-        // depend on its parameters: literals, named constants, template
-        // parameters, value-initialization.
+        // depend on its parameters (literals, named constants, template
+        // parameters, value-initialization), unless another constructor
+        // sets it otherwise and none repeats the value.
         let inits = "template <int W>\nclass A {\n public:\n  A(int a) : a_(a), b_(0), c_(kSize), d_(W), e_() {}\n  A(double) : a_(1), b_(0), c_(other_), d_(f(x_)) {}\n private:\n  int a_, b_, c_, d_, e_;\n};";
-        assert_eq!(
-            flagged("cpp/initializer-list-constant", inits),
-            [4, 4, 4, 4, 5]
-        );
+        assert_eq!(flagged("cpp/initializer-list-constant", inits), [4, 4]);
+        let agree = "struct T {\n  T(float a) : a_(a), t_(0) {}\n  T(Id) : a_(1.0), t_(0) {}\n  T(Move m) : a_(1.0), t_(m.dx()) {}\n  float a_, t_;\n};\nOuter::Inner::Inner() : n_(0) {}\nOuter::Outer(int n) : n_(n) {}";
+        assert_eq!(flagged("cpp/initializer-list-constant", agree), [2, 3, 7]);
+        // A class template whose constructors delegate, except for an empty
+        // initializer.
+        let delegating = "template <typename R>\nstruct S {\n  S(const R& r) : S(r.Open()) {}\n  S(Stream s) : s_(std::move(s)), n_(0), c_() {}\n};\nstruct P {\n  P() : P(0) {}\n  P(int x) : x_(x), n_(0) {}\n};";
+        assert_eq!(flagged("cpp/initializer-list-constant", delegating), [4, 8]);
         let params = "struct S { void m(int x); virtual void v(int x) {} };\nvoid S::m(int x) {}\ntemplate <> int pick<1>(int x) { return 0; }\nstatic int read(const char* PROGMEM p) { return 0; }\nint add(int a, int b, int c) { return a + b; }\nauto l = [](int x, int y) { return x; };";
         assert_eq!(flagged("cpp/unused-parameter", params), [5, 6]);
         let memory = "struct W : QWidget {\n  W() : t_(new QTimer(this)), q_(new Thing()) {\n    a_ = new QAction(\"x\", menu);\n    p_.reset(new Thing());\n    v_.emplace_back(new Thing());\n    std::unique_ptr<Thing> u(new Thing());\n    Thing* raw = new Thing();\n    delete raw;\n  }\n};";
