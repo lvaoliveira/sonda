@@ -1,12 +1,14 @@
-//! Rust rules, batch 4 (ADR-0007, ADR-0026): more of Clippy's correctness
-//! lints that one file's syntax can decide. Their documentation is a sentence
+//! Rust rules, batch 4 (ADR-0007, ADR-0026): Clippy's correctness lints that
+//! one file's syntax can decide, 11 of them batch 3's rewritten. Their
+//! documentation is a sentence
 //! and an example, so the details were settled by running Clippy on probe
 //! files (ADR-0026, "Probing Clippy"). Where a lint needs a type, a rule
 //! reports what the file's own declarations prove and is `related` to its key.
 
 use super::java_security::text;
 use super::prelude::*;
-use super::rs::{arguments, block_items, method, receiver, same_pure_expression};
+use super::rs::{arguments, block_items, method, receiver, same_expression, same_pure_expression};
+use std::cmp::Ordering;
 
 /// Rules that are off unless `rules.enabled` lists them (see
 /// `catalog::OFF_BY_DEFAULT`): SonarQube's default profile has all of these.
@@ -15,9 +17,30 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[];
 const CALL: &str = "(call_expression) @match";
 const METHOD_CALL: &str = "(call_expression function: (field_expression field: (field_identifier)) arguments: (arguments)) @match";
 const BINARY: &str = "(binary_expression) @match";
+const AND: &str = r#"(binary_expression operator: "&&") @match"#;
 const IMPL_OF_TRAIT: &str = "(impl_item trait: (_) type: (_)) @match";
 
 pub(super) static RULES: &[Rule] = &[
+    Rule {
+        id: "rs/non-octal-permissions",
+        name: "Unix file permissions should be set with octal values",
+        description: "`mode(644)` is the decimal 644, octal 1204: not the permissions it looks like.",
+        message: "Write these permissions in octal, such as `0o644`.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[related("S7448")],
+        check: Check::Query {
+            langs: RUST,
+            query: CALL,
+            filter: Some(Find(non_octal_permissions)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f(o: &mut OpenOptions) { o.mode(644); }",
+            good: "fn f(o: &mut OpenOptions) { o.mode(0o644); }",
+        }),
+    },
     Rule {
         id: "rs/nonsensical-open-options",
         name: "File open options should be consistent",
@@ -37,6 +60,89 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::Rust,
             bad: "fn f() { let _ = OpenOptions::new().read(true).truncate(true).open(\"a\"); }",
             good: "fn f() { let _ = OpenOptions::new().write(true).truncate(true).open(\"a\"); }",
+        }),
+    },
+    Rule {
+        id: "rs/match-str-case-mismatch",
+        name: "Case mismatches in pattern arms of match expressions should be avoided",
+        description: "Matching on a lowercased string, an arm with an uppercase letter never matches \
+                      (and the other way round).",
+        message: "Change this arm's case to match the converted string.",
+        category: Bug,
+        severity: Blocker,
+        effort_minutes: 5,
+        sonar: &[exact("S7428")],
+        check: Check::Query {
+            langs: RUST,
+            query: "(match_expression) @match",
+            filter: Some(FindAll(case_mismatched_arms)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f(s: &str) { match s.to_lowercase().as_str() { \"Yes\" => {}, _ => {} } }",
+            good: "fn f(s: &str) { match s.to_lowercase().as_str() { \"yes\" => {}, _ => {} } }",
+        }),
+    },
+    Rule {
+        id: "rs/infinite-iterator",
+        name: "Infinite iterators should be finished off with a terminating operation",
+        description: "Counting, collecting or folding an iterator that never ends, such as `(0..)` or \
+                      `repeat(x)` without a `take`, never returns.",
+        message: "Limit this iterator, with `take` for example, before consuming it.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7464")],
+        check: Check::Query {
+            langs: RUST,
+            query: CALL,
+            filter: Some(Keep(consumes_infinite_iterator)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f() -> Vec<u8> { std::iter::repeat(1).collect() }",
+            good: "fn f() -> Vec<u8> { std::iter::repeat(1).take(5).collect() }",
+        }),
+    },
+    Rule {
+        id: "rs/redundant-comparison",
+        name: "Redundant comparisons should be removed",
+        description: "In `x <= 400 && x < 500` the second comparison never changes the result: one bound \
+                      was probably meant to be the other way round.",
+        message: "Remove the comparison that has no effect, or correct its bound.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7436")],
+        check: Check::Query {
+            langs: RUST,
+            query: AND,
+            filter: Some(Keep(is_redundant_comparison)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f(x: u32) -> bool { x <= 400 && x < 500 }",
+            good: "fn f(x: u32) -> bool { x >= 400 && x < 500 }",
+        }),
+    },
+    Rule {
+        id: "rs/impossible-comparison",
+        name: "Comparisons with overlapping ranges that are always false should not be made",
+        description: "`x <= 400 && x > 500` is never true, so the code it guards never runs.",
+        message: "Correct these bounds: together they can never be true.",
+        category: Bug,
+        severity: Critical,
+        effort_minutes: 5,
+        sonar: &[exact("S7439")],
+        check: Check::Query {
+            langs: RUST,
+            query: AND,
+            filter: Some(Keep(is_impossible_comparison)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f(x: u32) -> bool { x <= 400 && x > 500 }",
+            good: "fn f(x: u32) -> bool { x >= 400 && x < 500 }",
         }),
     },
     Rule {
@@ -78,6 +184,111 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::Rust,
             bad: "fn f(x: u32) -> bool { x | 2 > 3 }",
             good: "fn f(x: u32) -> bool { x > 3 }",
+        }),
+    },
+    Rule {
+        id: "rs/while-float",
+        name: "\"while\" loop counters should not have floating type",
+        description: "Rounding errors add up on a floating-point counter, so the number of iterations \
+                      isn't the one the bounds suggest.",
+        message: "Use an integer counter for this loop.",
+        category: Bug,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[related("S2193")],
+        check: Check::Query {
+            langs: RUST,
+            query: "(while_expression condition: (_)) @match",
+            filter: Some(Find(float_loop_condition)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f() { let mut x = 0.0; while x < 10.0 { x += 0.1; } }",
+            good: "fn f() { let mut i = 0; while i < 100 { i += 1; } }",
+        }),
+    },
+    Rule {
+        id: "rs/mut-from-ref",
+        name: "Functions should not return mutable references from immutable parameters",
+        description: "A `&mut` derived through `unsafe` from a `&` can be made twice, two live mutable \
+                      references to one value: undefined behavior.",
+        message: "Take a mutable reference to return one, or return a shared reference.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7453")],
+        check: Check::Query {
+            langs: RUST,
+            query: "(function_item return_type: (_)) @match",
+            filter: Some(Find(mut_from_ref)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f(x: &u32) -> &mut u32 { unsafe { &mut *(x as *const u32 as *mut u32) } }",
+            good: "fn f(x: &mut u32) -> &mut u32 { x }",
+        }),
+    },
+    Rule {
+        id: "rs/unsafe-pointer-deref",
+        name: "Functions expecting raw pointer arguments should be marked as unsafe",
+        description: "A public safe function that dereferences a raw pointer argument lets safe code pass \
+                      any pointer and read or write through it.",
+        message: "Mark this function `unsafe`, since it dereferences a raw pointer argument.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[related("S7446")],
+        check: Check::Query {
+            langs: RUST,
+            query: "(function_item parameters: (parameters (parameter type: (pointer_type)))) @match",
+            filter: Some(FindAll(dereferenced_pointer_arguments)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "pub fn f(p: *const u8) -> u8 { unsafe { *p } }",
+            good: "pub unsafe fn f(p: *const u8) -> u8 { unsafe { *p } }",
+        }),
+    },
+    Rule {
+        id: "rs/to-string-shadows-display",
+        name: "Inherent shadowing definitions of to_string should be avoided",
+        description: "An inherent `to_string(&self)` hides the one `Display` provides, so the two can \
+                      disagree depending on how the method is reached.",
+        message: "Remove this method and rely on the `Display` implementation.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7458")],
+        check: Check::Query {
+            langs: RUST,
+            query: "(impl_item !trait type: (_) body: (declaration_list)) @match",
+            filter: Some(FindAll(to_string_shadowing_display)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "struct A;\nimpl A { fn to_string(&self) -> String { String::new() } }\nimpl fmt::Display for A { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }",
+            good: "struct A;\nimpl fmt::Display for A { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }",
+        }),
+    },
+    Rule {
+        id: "rs/serde-visit-string-only",
+        name: "Serde `visit_str` method should be implemented when `visit_string` is implemented",
+        description: "Serde calls `visit_str` for borrowed strings, which a visitor implementing only \
+                      `visit_string` then rejects.",
+        message: "Implement `visit_str` as well.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7460")],
+        check: Check::Query {
+            langs: RUST,
+            query: IMPL_OF_TRAIT,
+            filter: Some(Find(visit_string_without_visit_str)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "impl<'de> Visitor<'de> for V { type Value = String; fn visit_string<E>(self, v: String) -> Result<String, E> { Ok(v) } }",
+            good: "impl<'de> Visitor<'de> for V { type Value = String; fn visit_str<E>(self, v: &str) -> Result<String, E> { Ok(v.into()) } }",
         }),
     },
     Rule {
@@ -142,6 +353,27 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::Rust,
             bad: "fn f(v: &mut [(u8, u8)]) { v.sort_by_key(|x| { x.1; }); }",
             good: "fn f(v: &mut [(u8, u8)]) { v.sort_by_key(|x| x.1); }",
+        }),
+    },
+    Rule {
+        id: "rs/panicking-unwrap",
+        name: "`unwrap()` should only be used when there is a value to unwrap",
+        description: "An `unwrap` where the condition just showed the value is `None`, or an `Err`, always \
+                      panics: the condition is probably inverted.",
+        message: "This always panics: the condition shows there is no value to unwrap.",
+        category: Bug,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S7442")],
+        check: Check::Query {
+            langs: RUST,
+            query: "[(if_expression) (while_expression)] @match",
+            filter: Some(FindAll(panicking_unwraps)),
+        },
+        example: Some(Example {
+            lang: Lang::Rust,
+            bad: "fn f(o: Option<u8>) -> u8 { if o.is_none() { o.unwrap() } else { 0 } }",
+            good: "fn f(o: Option<u8>) -> u8 { if o.is_some() { o.unwrap() } else { 0 } }",
         }),
     },
     Rule {
@@ -295,6 +527,13 @@ fn descendants<'t>(root: Node<'t>, skip: &[&str]) -> Vec<Node<'t>> {
     out
 }
 
+fn has_unsafe_modifier(function: Node, src: &[u8]) -> bool {
+    let mut c = function.walk();
+    function.named_children(&mut c).any(|m| {
+        m.kind() == "function_modifiers" && text(m, src).windows(6).any(|w| w == b"unsafe")
+    })
+}
+
 /// The type and value a local is declared with: the last `let` before `at`
 /// in the enclosing function, or else its parameter.
 fn declaration<'t>(at: Node<'t>, src: &[u8]) -> Option<(Option<Node<'t>>, Option<Node<'t>>)> {
@@ -350,6 +589,16 @@ fn literal_suffix(literal: Node, src: &[u8]) -> &'static str {
 enum Num {
     Int(i128),
     Float(f64),
+}
+
+impl Num {
+    fn compare(self, other: Num) -> Option<Ordering> {
+        match (self, other) {
+            (Num::Int(a), Num::Int(b)) => Some(a.cmp(&b)),
+            (Num::Float(a), Num::Float(b)) => a.partial_cmp(&b),
+            _ => None,
+        }
+    }
 }
 
 /// The value of a literal, a negated one, a character, or a constant the
@@ -450,6 +699,79 @@ fn integer_constant(n: Node, src: &[u8]) -> Option<u128> {
     }
 }
 
+// ---------------------------------------------------------------- comparisons
+
+/// One side of a range check: `subject < value` and its kin.
+struct Bound<'t> {
+    subject: Node<'t>,
+    upper: bool,
+    inclusive: bool,
+    value: Num,
+}
+
+fn bound<'t>(comparison: Node<'t>, src: &[u8]) -> Option<Bound<'t>> {
+    let c = unparen(comparison);
+    if c.kind() != "binary_expression" {
+        return None;
+    }
+    let (upper, inclusive) = match operator(c, src) {
+        b"<" => (true, false),
+        b"<=" => (true, true),
+        b">" => (false, false),
+        b">=" => (false, true),
+        _ => return None,
+    };
+    let (l, r) = operands(c)?;
+    match (constant(l, src), constant(r, src)) {
+        (None, Some(value)) => Some(Bound {
+            subject: l,
+            upper,
+            inclusive,
+            value,
+        }),
+        (Some(value), None) => Some(Bound {
+            subject: r,
+            upper: !upper,
+            inclusive,
+            value,
+        }),
+        _ => None,
+    }
+}
+
+/// The two bounds `a && b` puts on one side-effect-free expression.
+fn bounds<'t>(and: Node<'t>, src: &[u8]) -> Option<(Bound<'t>, Bound<'t>)> {
+    let a = bound(and.child_by_field_name("left")?, src)?;
+    let b = bound(and.child_by_field_name("right")?, src)?;
+    same_pure_expression(a.subject, b.subject, src).then_some((a, b))
+}
+
+fn is_redundant_comparison(and: Node, src: &[u8]) -> bool {
+    let Some((a, b)) = bounds(and, src) else {
+        return false;
+    };
+    // The same comparison twice is `identical-operands`' finding.
+    a.upper == b.upper
+        && a.value
+            .compare(b.value)
+            .is_some_and(|o| o != Ordering::Equal || a.inclusive != b.inclusive)
+}
+
+fn is_impossible_comparison(and: Node, src: &[u8]) -> bool {
+    let Some((a, b)) = bounds(and, src) else {
+        return false;
+    };
+    if a.upper == b.upper {
+        return false;
+    }
+    let (low, high) = if a.upper { (b, a) } else { (a, b) };
+    match low.value.compare(high.value) {
+        Some(Ordering::Greater) => true,
+        Some(Ordering::Equal) => !(low.inclusive && high.inclusive),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------- bit masks
 
 /// `x <mask op> m <comparison> c`, the constant on either side of each:
@@ -530,6 +852,23 @@ fn is_ineffective_bit_mask(n: Node, src: &[u8]) -> bool {
 
 // ---------------------------------------------------------------- files
 
+/// The argument of `mode(644)`, `set_mode(644)` or `Permissions::from_mode(644)`
+/// when it's an integer written in decimal or hexadecimal.
+fn non_octal_permissions<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let named = if method(call).is_some() {
+        method_is(call, src, &["mode", "set_mode"])
+    } else {
+        function_name(call, src) == Some(b"from_mode")
+    };
+    let args = arguments(call);
+    let [arg] = args.as_slice() else {
+        return None;
+    };
+    let t = text(*arg, src);
+    (named && arg.kind() == "integer_literal" && !t.starts_with(b"0o") && !t.starts_with(b"0b"))
+        .then_some(*arg)
+}
+
 const OPEN_OPTIONS: &[&str] = &[
     "read",
     "write",
@@ -596,6 +935,447 @@ fn nonsensical_open_options<'t>(open: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
     found
 }
 
+// ---------------------------------------------------------------- strings
+
+/// The case conversion a match is over: `to_lowercase` in
+/// `match &*s.to_lowercase()`, `s.to_lowercase().as_str()` or
+/// `&s.to_lowercase()[..]`.
+fn case_conversion<'a>(value: Node, src: &'a [u8]) -> Option<&'a [u8]> {
+    let mut n = value;
+    loop {
+        n = match n.kind() {
+            "reference_expression" => n.child_by_field_name("value")?,
+            "unary_expression" if text(n, src).starts_with(b"*") => n.named_child(0)?,
+            "parenthesized_expression" => n.named_child(0)?,
+            "index_expression" if n.named_child(1).is_some_and(|i| text(i, src) == b"..") => {
+                n.named_child(0)?
+            }
+            "call_expression" => {
+                let name = text(method(n)?, src);
+                match name {
+                    b"to_lowercase"
+                    | b"to_ascii_lowercase"
+                    | b"to_uppercase"
+                    | b"to_ascii_uppercase" => {
+                        return Some(name);
+                    }
+                    b"as_str" | b"as_ref" if arguments(n).is_empty() => receiver(n)?,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+    }
+}
+
+/// The arms of a match over a case-converted string whose literal has the
+/// other case, and so never matches.
+fn case_mismatched_arms<'t>(m: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(conversion) = m
+        .child_by_field_name("value")
+        .and_then(|v| case_conversion(v, src))
+    else {
+        return Vec::new();
+    };
+    let Some(arms) = m.child_by_field_name("body") else {
+        return Vec::new();
+    };
+    let mut c = arms.walk();
+    arms.named_children(&mut c)
+        .filter_map(|arm| arm.child_by_field_name("pattern")?.named_child(0))
+        .filter(|lit| matches!(lit.kind(), "string_literal" | "raw_string_literal"))
+        .filter(|lit| {
+            let mut c = lit.walk();
+            let content: String = lit
+                .named_children(&mut c)
+                .filter(|p| p.kind() == "string_content")
+                .map(|p| String::from_utf8_lossy(text(p, src)).into_owned())
+                .collect();
+            let converted = match conversion {
+                b"to_lowercase" => content.to_lowercase(),
+                b"to_ascii_lowercase" => content.to_ascii_lowercase(),
+                b"to_uppercase" => content.to_uppercase(),
+                _ => content.to_ascii_uppercase(),
+            };
+            converted != content
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------- iterators
+
+/// Methods that run an iterator to its end, with their argument counts.
+const CONSUMERS: &[(&str, usize)] = &[
+    ("count", 0),
+    ("collect", 0),
+    ("sum", 0),
+    ("product", 0),
+    ("last", 0),
+    ("max", 0),
+    ("min", 0),
+    ("max_by", 1),
+    ("min_by", 1),
+    ("max_by_key", 1),
+    ("min_by_key", 1),
+    ("for_each", 1),
+    ("partition", 1),
+    ("fold", 2),
+];
+
+/// Adapters that are as infinite as what they're called on.
+const INFINITE_KEEPING: &[&str] = &[
+    "map",
+    "filter",
+    "skip",
+    "enumerate",
+    "by_ref",
+    "fuse",
+    "flat_map",
+];
+
+fn consumes_infinite_iterator(call: Node, src: &[u8]) -> bool {
+    let Some(name) = method(call) else {
+        return false;
+    };
+    let args = arguments(call).len();
+    CONSUMERS
+        .iter()
+        .any(|(n, a)| n.as_bytes() == text(name, src) && *a == args)
+        && receiver(call).is_some_and(|r| is_infinite(r, src))
+}
+
+/// Whether an iterator never ends: `(0..)`, `repeat(x)`, `.cycle()`, and
+/// what the adapters above make of them.
+fn is_infinite(n: Node, src: &[u8]) -> bool {
+    let n = unparen(n);
+    match n.kind() {
+        "range_expression" => {
+            let t = text(n, src).trim_ascii();
+            n.named_child_count() == 1 && t.ends_with(b"..") && !t.starts_with(b"..")
+        }
+        "call_expression" => {
+            let args = arguments(n);
+            let Some(name) = method(n) else {
+                return args.len() == 1 && is_std_repeat(n, src);
+            };
+            let on_infinite = || receiver(n).is_some_and(|r| is_infinite(r, src));
+            match text(name, src) {
+                b"cycle" => args.is_empty(),
+                b"chain" => on_infinite() || args.first().is_some_and(|a| is_infinite(*a, src)),
+                b"zip" => on_infinite() && args.first().is_some_and(|a| is_infinite(*a, src)),
+                other => INFINITE_KEEPING.iter().any(|k| k.as_bytes() == other) && on_infinite(),
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `std::iter::repeat`, written with its `iter::` path or imported from it
+/// (other crates, such as rayon, have a `repeat` of their own).
+fn is_std_repeat(call: Node, src: &[u8]) -> bool {
+    let Some(f) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let path = squeezed(f, src);
+    let path = path.strip_prefix(b"::").unwrap_or(&path);
+    match f.kind() {
+        "scoped_identifier" => matches!(
+            path,
+            b"iter::repeat" | b"std::iter::repeat" | b"core::iter::repeat"
+        ),
+        "identifier" if path == b"repeat" => {
+            let root = ancestors(call).last().unwrap_or(call);
+            descendants(root, &["function_item", "impl_item"])
+                .into_iter()
+                .any(|u| {
+                    if u.kind() != "use_declaration" {
+                        return false;
+                    }
+                    let t = squeezed(u, src);
+                    let t = t.strip_prefix(b"pub").unwrap_or(&t);
+                    let t = t
+                        .strip_prefix(b"use::")
+                        .or_else(|| t.strip_prefix(b"use"))
+                        .unwrap_or(t);
+                    (t.starts_with(b"std::iter::") || t.starts_with(b"core::iter::"))
+                        && t.split(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+                            .any(|w| w == b"repeat")
+                })
+        }
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------- floats
+
+/// A `while` condition comparing a floating-point value.
+fn float_loop_condition<'t>(w: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let condition = w.child_by_field_name("condition")?;
+    let c = unparen(condition);
+    let compares = c.kind() == "binary_expression"
+        && matches!(
+            operator(c, src),
+            b"<" | b"<=" | b">" | b">=" | b"==" | b"!="
+        );
+    let (l, r) = operands(c)?;
+    (compares && (is_float(l, src) || is_float(r, src))).then_some(condition)
+}
+
+fn is_float_type(ty: Node, src: &[u8]) -> bool {
+    matches!(text(ty, src), b"f32" | b"f64")
+}
+
+/// Whether an expression is visibly floating-point: a float literal, a cast
+/// to a float, or a local declared or initialized as one.
+fn is_float(n: Node, src: &[u8]) -> bool {
+    let n = unparen(n);
+    match n.kind() {
+        "identifier" => declaration(n, src).is_some_and(|(ty, value)| {
+            ty.is_some_and(|t| is_float_type(t, src))
+                || value.is_some_and(|v| is_float_literal(v, src))
+        }),
+        "type_cast_expression" => n
+            .child_by_field_name("type")
+            .is_some_and(|t| is_float_type(t, src)),
+        _ => is_float_literal(n, src),
+    }
+}
+
+fn is_float_literal(n: Node, src: &[u8]) -> bool {
+    matches!(literal(n, src), Some(Num::Float(_)))
+}
+
+// ---------------------------------------------------------------- references
+
+/// The references a type spells out, with their lifetime and whether they're
+/// `&mut`; those in function types (`Fn(&mut T)`) aren't the type's own.
+fn references<'t>(ty: Node<'t>, src: &[u8]) -> Vec<(Node<'t>, Option<Vec<u8>>, bool)> {
+    descendants(ty, &["function_type"])
+        .into_iter()
+        .filter(|n| n.kind() == "reference_type")
+        .map(|r| {
+            let mut c = r.walk();
+            let children: Vec<Node> = r.named_children(&mut c).collect();
+            let lifetime = children
+                .iter()
+                .find(|c| c.kind() == "lifetime")
+                .map(|l| text(*l, src).to_vec());
+            let mutable = children.iter().any(|c| c.kind() == "mutable_specifier");
+            (r, lifetime, mutable)
+        })
+        .collect()
+}
+
+/// A `&mut` in the return type of a function with `unsafe` code, whose
+/// lifetime comes only from shared references among the inputs.
+fn mut_from_ref<'t>(function: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let returned = references(function.child_by_field_name("return_type")?, src);
+    if !returned.iter().any(|(_, _, m)| *m) {
+        return None;
+    }
+    let body = function.child_by_field_name("body")?;
+    let unsafe_code = has_unsafe_modifier(function, src)
+        || descendants(body, &["function_item"])
+            .iter()
+            .any(|n| n.kind() == "unsafe_block");
+    if !unsafe_code {
+        return None;
+    }
+    let params = function.child_by_field_name("parameters")?;
+    let mut c = params.walk();
+    let mut self_ref = None;
+    let mut inputs = Vec::new();
+    for p in params.named_children(&mut c) {
+        match p.kind() {
+            "self_parameter" if text(p, src).starts_with(b"&") => {
+                let mut c = p.walk();
+                let children: Vec<Node> = p.named_children(&mut c).collect();
+                let lifetime = children
+                    .iter()
+                    .find(|c| c.kind() == "lifetime")
+                    .map(|l| text(*l, src).to_vec());
+                let mutable = children.iter().any(|c| c.kind() == "mutable_specifier");
+                self_ref = Some((lifetime.clone(), mutable));
+                inputs.push((lifetime, mutable));
+            }
+            "parameter" => {
+                if let Some(t) = p.child_by_field_name("type") {
+                    inputs.extend(references(t, src).into_iter().map(|(_, l, m)| (l, m)));
+                }
+            }
+            _ => {}
+        }
+    }
+    returned
+        .into_iter()
+        .filter(|(_, _, m)| *m)
+        .find_map(|(r, lifetime, _)| {
+            let sources: Vec<bool> = match lifetime.as_deref() {
+                Some(b"'static") => return None,
+                Some(l) => inputs
+                    .iter()
+                    .filter(|(il, _)| il.as_deref() == Some(l))
+                    .map(|(_, m)| *m)
+                    .collect(),
+                // Elided: `&self`'s lifetime, or else the only input reference's.
+                None => match (&self_ref, inputs.as_slice()) {
+                    (Some((_, m)), _) => vec![*m],
+                    (None, [(_, m)]) => vec![*m],
+                    _ => return None,
+                },
+            };
+            (!sources.is_empty() && !sources.contains(&true)).then_some(r)
+        })
+}
+
+/// Raw-pointer methods that are `unsafe` to call.
+const UNSAFE_POINTER_METHODS: &[&str] = &[
+    "read",
+    "read_volatile",
+    "read_unaligned",
+    "write",
+    "write_volatile",
+    "write_unaligned",
+    "write_bytes",
+    "add",
+    "sub",
+    "offset",
+    "byte_add",
+    "byte_sub",
+    "byte_offset",
+    "offset_from",
+    "as_ref",
+    "as_mut",
+    "as_uninit_ref",
+    "as_uninit_mut",
+    "copy_to",
+    "copy_to_nonoverlapping",
+    "copy_from",
+    "copy_from_nonoverlapping",
+    "replace",
+    "swap",
+    "drop_in_place",
+    "get_unchecked",
+    "get_unchecked_mut",
+];
+
+/// Whether a function is visible outside its crate as far as this file
+/// shows: `pub`, in modules that are `pub`, or implementing a trait.
+fn is_exported(function: Node, src: &[u8]) -> bool {
+    let in_trait_impl = function
+        .parent()
+        .and_then(|d| d.parent())
+        .is_some_and(|i| i.kind() == "impl_item" && i.child_by_field_name("trait").is_some());
+    let public = |n: Node| {
+        let mut c = n.walk();
+        n.named_children(&mut c)
+            .any(|v| v.kind() == "visibility_modifier" && text(v, src) == b"pub")
+    };
+    (in_trait_impl || public(function))
+        && ancestors(function)
+            .filter(|a| a.kind() == "mod_item")
+            .all(public)
+}
+
+/// The uses of a public safe function's raw-pointer parameters that
+/// dereference them: `*p`, an unsafe pointer method, or passing it to a
+/// call inside `unsafe`.
+fn dereferenced_pointer_arguments<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    if has_unsafe_modifier(function, src) || !is_exported(function, src) {
+        return Vec::new();
+    }
+    let (Some(params), Some(body)) = (
+        function.child_by_field_name("parameters"),
+        function.child_by_field_name("body"),
+    ) else {
+        return Vec::new();
+    };
+    let mut c = params.walk();
+    let pointers: Vec<&[u8]> = params
+        .named_children(&mut c)
+        .filter(|p| {
+            p.child_by_field_name("type")
+                .is_some_and(|t| t.kind() == "pointer_type")
+        })
+        .filter_map(|p| p.child_by_field_name("pattern"))
+        .filter(|p| p.kind() == "identifier")
+        .map(|p| text(p, src))
+        .collect();
+    let nodes = descendants(body, &["function_item"]);
+    // A `let` of the same name hides the parameter from there on.
+    let shadowed = |id: Node| {
+        nodes.iter().any(|n| {
+            n.kind() == "let_declaration"
+                && n.end_byte() <= id.start_byte()
+                && n.child_by_field_name("pattern")
+                    .is_some_and(|p| text(p, src) == text(id, src))
+        })
+    };
+    nodes
+        .iter()
+        .copied()
+        .filter(|n| n.kind() == "identifier" && pointers.contains(&text(*n, src)))
+        .filter(|n| !shadowed(*n) && dereferences(*n, body, src))
+        .collect()
+}
+
+fn dereferences(id: Node, body: Node, src: &[u8]) -> bool {
+    let Some(parent) = id.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "unary_expression" => text(parent, src).starts_with(b"*"),
+        "field_expression" => {
+            parent.child_by_field_name("value") == Some(id)
+                && parent
+                    .parent()
+                    .is_some_and(|c| c.kind() == "call_expression")
+                && parent.child_by_field_name("field").is_some_and(|f| {
+                    UNSAFE_POINTER_METHODS
+                        .iter()
+                        .any(|m| m.as_bytes() == text(f, src))
+                })
+        }
+        "arguments" => {
+            let in_unsafe = ancestors(parent)
+                .take_while(|a| *a != body)
+                .any(|a| a.kind() == "unsafe_block");
+            in_unsafe
+                && parent
+                    .parent()
+                    .is_some_and(|call| calls_unsafe_function(call, src))
+        }
+        _ => false,
+    }
+}
+
+/// Whether a call inside `unsafe` is to an unsafe function: an unsafe
+/// pointer method, or a function that the file declares `unsafe` or in an
+/// `extern` block, or one it doesn't declare at all.
+fn calls_unsafe_function(call: Node, src: &[u8]) -> bool {
+    if let Some(m) = method(call) {
+        return UNSAFE_POINTER_METHODS
+            .iter()
+            .any(|u| u.as_bytes() == text(m, src));
+    }
+    let Some(name) = function_name(call, src) else {
+        return true;
+    };
+    let root = ancestors(call).last().unwrap_or(call);
+    let declared: Vec<Node> = descendants(root, &["function_item"])
+        .into_iter()
+        .filter(|n| {
+            matches!(n.kind(), "function_item" | "function_signature_item")
+                && n.child_by_field_name("name")
+                    .is_some_and(|f| text(f, src) == name)
+        })
+        .collect();
+    declared.is_empty()
+        || declared.iter().any(|f| {
+            has_unsafe_modifier(*f, src) || ancestors(*f).any(|a| a.kind() == "foreign_mod_item")
+        })
+}
+
 // ---------------------------------------------------------------- traits
 
 /// The trait an impl implements, by name: `Display` for `impl fmt::Display for A`.
@@ -605,6 +1385,15 @@ fn trait_name<'a>(imp: Node, src: &'a [u8]) -> Option<&'a [u8]> {
 
 fn impl_type_name<'a>(imp: Node, src: &'a [u8]) -> Option<&'a [u8]> {
     imp.child_by_field_name("type").map(|t| type_name(t, src))
+}
+
+/// The impls in the file for the trait and type, by name.
+fn implements(root: Node, src: &[u8], trait_: &[u8], ty: &[u8]) -> bool {
+    descendants(root, &["function_item"]).into_iter().any(|n| {
+        n.kind() == "impl_item"
+            && trait_name(n, src) == Some(trait_)
+            && impl_type_name(n, src) == Some(ty)
+    })
 }
 
 fn functions_in<'t>(imp: Node<'t>) -> Vec<Node<'t>> {
@@ -620,6 +1409,50 @@ fn functions_in<'t>(imp: Node<'t>) -> Vec<Node<'t>> {
 fn function_named(f: Node, src: &[u8], name: &[u8]) -> bool {
     f.child_by_field_name("name")
         .is_some_and(|n| text(n, src) == name)
+}
+
+/// An inherent `to_string(&self) -> String` on a type that implements
+/// `Display` in the file.
+fn to_string_shadowing_display<'t>(imp: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(ty) = impl_type_name(imp, src) else {
+        return Vec::new();
+    };
+    let candidates: Vec<Node> = functions_in(imp)
+        .into_iter()
+        .filter(|f| {
+            function_named(*f, src, b"to_string")
+                && f.child_by_field_name("parameters")
+                    .is_some_and(|p| squeezed(p, src) == b"(&self)")
+                && f.child_by_field_name("return_type")
+                    .is_some_and(|r| text(r, src) == b"String")
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let root = ancestors(imp).last().unwrap_or(imp);
+    if implements(root, src, b"Display", ty) {
+        candidates
+    } else {
+        Vec::new()
+    }
+}
+
+/// A serde `Visitor` that implements `visit_string` but not `visit_str`.
+fn visit_string_without_visit_str<'t>(imp: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    if trait_name(imp, src) != Some(b"Visitor") {
+        return None;
+    }
+    let functions = functions_in(imp);
+    if functions
+        .iter()
+        .any(|f| function_named(*f, src, b"visit_str"))
+    {
+        return None;
+    }
+    functions
+        .into_iter()
+        .find(|f| function_named(*f, src, b"visit_string"))
 }
 
 /// A `Hash` impl, or a `#[derive(Hash)]`, for a type the file also gives
@@ -880,6 +1713,124 @@ fn returns_unit(body: Node, src: &[u8]) -> bool {
     }
 }
 
+// ---------------------------------------------------------------- unwrap
+
+#[derive(Clone, Copy, PartialEq)]
+enum Variant {
+    None,
+    Some,
+    Ok,
+    Err,
+}
+
+/// What a condition being `holds` shows about an `Option` or `Result`:
+/// each subject and the variant it is.
+fn variant_checks<'t>(
+    condition: Node<'t>,
+    src: &[u8],
+    holds: bool,
+    out: &mut Vec<(Node<'t>, Variant)>,
+) {
+    let c = unparen(condition);
+    match c.kind() {
+        "unary_expression" if text(c, src).starts_with(b"!") => {
+            if let Some(inner) = c.named_child(0) {
+                variant_checks(inner, src, !holds, out);
+            }
+        }
+        "binary_expression" => {
+            let both = matches!((operator(c, src), holds), (b"&&", true) | (b"||", false));
+            if let (true, Some((l, r))) = (both, operands(c)) {
+                variant_checks(l, src, holds, out);
+                variant_checks(r, src, holds, out);
+            }
+        }
+        "call_expression" if arguments(c).is_empty() => {
+            let (Some(name), Some(subject)) = (method(c), receiver(c)) else {
+                return;
+            };
+            let variant = match (text(name, src), holds) {
+                (b"is_some", true) | (b"is_none", false) => Variant::Some,
+                (b"is_none", true) | (b"is_some", false) => Variant::None,
+                (b"is_ok", true) | (b"is_err", false) => Variant::Ok,
+                (b"is_err", true) | (b"is_ok", false) => Variant::Err,
+                _ => return,
+            };
+            if same_pure_expression(subject, subject, src) {
+                out.push((subject, variant));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The `unwrap`s and `expect`s in an `if` or `while` that its condition
+/// shows will panic.
+fn panicking_unwraps<'t>(n: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(condition) = n.child_by_field_name("condition") else {
+        return Vec::new();
+    };
+    let then = n
+        .child_by_field_name("consequence")
+        .or_else(|| n.child_by_field_name("body"));
+    let otherwise = n
+        .child_by_field_name("alternative")
+        .and_then(|e| e.named_child(0));
+    let mut found = Vec::new();
+    for (branch, holds) in [(then, true), (otherwise, false)] {
+        if let Some(branch) = branch {
+            let mut checks = Vec::new();
+            variant_checks(condition, src, holds, &mut checks);
+            found.extend(unwraps_that_panic(branch, &checks, src));
+        }
+    }
+    found
+}
+
+/// The calls in `branch` that unwrap a subject `checks` shows has no value
+/// to unwrap, before anything rebinds or assigns it.
+fn unwraps_that_panic<'t>(
+    branch: Node<'t>,
+    checks: &[(Node<'t>, Variant)],
+    src: &[u8],
+) -> Vec<Node<'t>> {
+    let nodes = descendants(branch, &["closure_expression", "function_item"]);
+    let calls = nodes
+        .iter()
+        .copied()
+        .filter(|c| c.kind() == "call_expression");
+    calls
+        .filter(|call| {
+            checks.iter().any(|&(subject, variant)| {
+                let panics = match variant {
+                    Variant::None | Variant::Err => method_is(*call, src, &["unwrap", "expect"]),
+                    Variant::Ok => method_is(*call, src, &["unwrap_err", "expect_err"]),
+                    Variant::Some => false,
+                };
+                panics
+                    && receiver(*call).is_some_and(|r| same_expression(r, subject, src))
+                    && !changed_before(subject, &nodes, call.start_byte(), src)
+            })
+        })
+        .collect()
+}
+
+/// Whether, among `nodes`, something before `at` rebinds or assigns `subject`.
+fn changed_before(subject: Node, nodes: &[Node], at: usize, src: &[u8]) -> bool {
+    nodes.iter().any(|n| {
+        n.start_byte() < at
+            && match n.kind() {
+                "let_declaration" => n
+                    .child_by_field_name("pattern")
+                    .is_some_and(|p| text(p, src) == text(subject, src)),
+                "assignment_expression" | "compound_assignment_expr" => n
+                    .child_by_field_name("left")
+                    .is_some_and(|l| same_expression(l, subject, src)),
+                _ => false,
+            }
+    })
+}
+
 // ---------------------------------------------------------------- arithmetic
 
 /// `a + b < a`, `a > a + b`, `a - b > a` and `a < a - b`, unless `a` is
@@ -1132,6 +2083,25 @@ mod tests {
     }
 
     #[test]
+    fn permissions_must_be_octal() {
+        let cases = [
+            "o.mode(644);",
+            "o.mode(0o644);",
+            "o.mode(0x1a4);",
+            "o.mode(0);",
+            "o.mode(0b1);",
+            "p.set_mode(755);",
+            "let q = Permissions::from_mode(600);",
+            "o.mode(M);",
+            "o.mode(6_44);",
+        ];
+        assert_eq!(
+            reported("rs/non-octal-permissions", &cases),
+            [1, 3, 4, 6, 7, 9]
+        );
+    }
+
+    #[test]
     fn open_options_conflict_or_repeat() {
         let cases = [
             "OpenOptions::new().read(true).truncate(true).open(\"a\")?;",
@@ -1149,6 +2119,90 @@ mod tests {
         assert_eq!(
             reported("rs/nonsensical-open-options", &cases),
             [1, 3, 4, 7, 9]
+        );
+    }
+
+    #[test]
+    fn match_arms_in_the_wrong_case() {
+        let cases = [
+            "match &*text.to_ascii_lowercase() { \"foo\" => {}, \"Bar\" => {}, _ => {} }",
+            "match text.to_uppercase().as_str() { \"A\" => {}, \"b\" => {}, _ => {} }",
+            "match text.to_ascii_uppercase().as_ref() { \"ok\" => {}, _ => {} }",
+            "match s.to_lowercase().as_str() { \"x\" | \"Y\" => {}, _ => {} }",
+            "match text.to_lowercase().as_str() { \"1\" => {}, \"é\" => {}, \"É\" => {}, _ => {} }",
+            "match text { \"Bar\" => {}, _ => {} }",
+            "match &text.to_lowercase()[..] { \"Z\" => {}, _ => {} }",
+            "match text.to_lowercase().as_str() { r\"Raw\" => {}, _ => {} }",
+            "match text.to_uppercase().as_str() { \"\\u{1F600}\" => {}, _ => {} }",
+        ];
+        assert_eq!(
+            reported("rs/match-str-case-mismatch", &cases),
+            [1, 2, 3, 5, 7, 8]
+        );
+    }
+
+    #[test]
+    fn infinite_iterators_consumed_whole() {
+        let cases = [
+            "let a: Vec<u8> = std::iter::repeat(1u8).collect();",
+            "let b = (0..).count();",
+            "let c = (0..).map(|x| x * 2).sum::<u64>();",
+            "let d = (0..).take(5).count();",
+            "let e = [1, 2].iter().cycle().count();",
+            "let h = (0..).find(|x| *x > 5);",
+            "let i = (0..).zip(0..10).count();",
+            "let m = (0..).skip(3).count();",
+            "let n = std::iter::repeat_with(|| 1).count();",
+            "let p = (0..).chain(0..3).count();",
+            "let q = (1..).step_by(2).count();",
+            "let r = (0..).fold(0, |a, x| a + x);",
+            "let s = v.iter().chain((0..).map(|_| &0)).count();",
+            "let t = (0..).peekable().count();",
+        ];
+        assert_eq!(
+            reported("rs/infinite-iterator", &cases),
+            [1, 2, 3, 5, 8, 10, 12, 13]
+        );
+        // Another crate's `repeat` (rayon's) is not std's.
+        let src = "use rayon::iter::repeat;\nfn f() { repeat(()).count(); }\n";
+        assert!(lines("rs/infinite-iterator", src).is_empty());
+        let src = "use std::iter::{once, repeat};\nfn f() { repeat(()).count(); }\n";
+        assert_eq!(lines("rs/infinite-iterator", src), [2]);
+    }
+
+    #[test]
+    fn double_comparisons_against_constants() {
+        let cases = [
+            "if x <= 400 && x < 500 {}",
+            "if x <= 400 && x > 500 {}",
+            "if x > 10 && x > 5 {}",
+            "if x == 5 && x < 10 {}",
+            "if x > 5 || x > 10 {}",
+            "if x < 5 && x >= 5 {}",
+            "if x <= 5 && x >= 5 {}",
+            "if 400 >= x && x < 500 {}",
+            "if x < LIMIT && x < 20 {}",
+            "if x < -1 && x > 3 {}",
+            "if x as u8 > 3 && x as u8 > 4 {}",
+            "if f < 1.0 && f < 2.0 {}",
+            "if g() < 5 && g() < 10 {}",
+            "if c >= 'z' && c <= 'a' {}",
+            "if x > 5 && x < 6 {}",
+            "if y && x < 5 && x < 10 {}",
+            "if x < 5 && x < 5 {}",
+            "if v.len() > 3 && v.len() > 5 {}",
+        ];
+        let src_cases: Vec<&str> = std::iter::once("const LIMIT: i32 = 10;")
+            .chain(cases)
+            .collect();
+        let shifted = |v: Vec<usize>| v.into_iter().map(|l| l - 1).collect::<Vec<_>>();
+        assert_eq!(
+            shifted(reported("rs/redundant-comparison", &src_cases)),
+            [1, 3, 8, 9, 11, 12]
+        );
+        assert_eq!(
+            shifted(reported("rs/impossible-comparison", &src_cases)),
+            [2, 6, 10, 14]
         );
     }
 
@@ -1189,6 +2243,83 @@ mod tests {
             [1, 2, 3, 4, 5, 6, 12, 13, 14, 15, 16]
         );
         assert_eq!(reported("rs/ineffective-bit-mask", &cases), [8, 9, 11, 19]);
+    }
+
+    #[test]
+    fn while_conditions_on_floats() {
+        let src = "fn f(mut x: f64, g: f64, n: i32) {\n\
+                   while x < 42.0 { x += 1.0; }\n\
+                   while (x as i32) < 4 { x += 1.0; }\n\
+                   while x < 42f64 { x += 1.0; }\n\
+                   let mut y = 0.0f32;\n\
+                   while y < 3.0 { y += 0.1; }\n\
+                   while x < g { x += 1.0; }\n\
+                   let mut i = 0;\n\
+                   while i < 10 { i += 1; }\n\
+                   while x < 4.0 && n > 2 { x += 1.0; }\n\
+                   while !(x > 4.0) { x += 1.0; }\n\
+                   }\n";
+        assert_eq!(lines("rs/while-float", src), [2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn mutable_references_from_shared_ones() {
+        let src = "struct Foo { v: u32 }\n\
+            fn r1(x: &Foo) -> &mut u32 { unsafe { &mut *(&x.v as *const u32 as *mut u32) } }\n\
+            fn r2(x: &Foo) -> &mut u32 { todo!() }\n\
+            fn r3<'a>(x: &'a Foo, y: &'a mut Foo) -> &'a mut u32 { unsafe { cast(x) } }\n\
+            fn r4<'a, 'b>(x: &'a Foo, y: &'b mut Foo) -> &'a mut u32 { unsafe { cast(x) } }\n\
+            impl Foo {\n\
+            fn m1(&self) -> &mut u32 { unsafe { cast(self) } }\n\
+            fn m2(&mut self) -> &mut u32 { &mut self.v }\n\
+            fn m3(&self) -> Option<&mut u32> { unsafe { Some(cast(self)) } }\n\
+            fn m4(&self, x: &mut u32) -> &mut u32 { unsafe { cast(self) } }\n\
+            unsafe fn m5(&self) -> &mut u32 { cast(self) }\n\
+            fn m6(&self) -> &'static mut u32 { unsafe { cast(self) } }\n\
+            fn m7(&self) -> (&u32, &mut u32) { unsafe { (&self.v, cast(self)) } }\n\
+            }\n";
+        assert_eq!(lines("rs/mut-from-ref", src), [2, 5, 7, 9, 10, 11, 13]);
+    }
+
+    #[test]
+    fn public_safe_functions_dereferencing_pointer_arguments() {
+        let src = "pub fn p1(x: *const u8) -> u8 { unsafe { *x } }\n\
+            pub unsafe fn p2(x: *const u8) -> u8 { *x }\n\
+            fn p3(x: *const u8) -> u8 { unsafe { *x } }\n\
+            pub fn p5(x: *const u8) -> u8 { unsafe { x.read() } }\n\
+            pub fn p6(x: *const u8) -> u8 { unsafe { std::ptr::read(x) } }\n\
+            pub fn p7(x: *const u8) -> bool { x.is_null() }\n\
+            pub(crate) fn p9(x: *const u8) -> u8 { unsafe { *x } }\n\
+            pub struct P;\n\
+            impl P { pub fn p10(&self, x: *const u8) -> u8 { unsafe { *x } } }\n\
+            pub fn p12(x: *const u8) -> u8 { let y = x; unsafe { *y } }\n\
+            impl T1 for P { fn t(&self, x: *const u8) -> u8 { unsafe { *x } } }\n\
+            pub fn p13(x: *const u8) -> usize { let x = x as usize; unsafe { from_usize(x) } }\n\
+            fn safe_helper(p: *const u8) -> bool { p.is_null() }\n\
+            pub fn p14(x: *const u8) -> bool { unsafe { safe_helper(x) } }\n\
+            pub fn p15(a: *const u8, b: *const u8) -> bool { unsafe { a.cmp(&b).is_lt() } }\n\
+            mod private { pub fn p16(x: *const u8) -> u8 { unsafe { *x } } }\n";
+        assert_eq!(lines("rs/unsafe-pointer-deref", src), [1, 4, 5, 9, 11]);
+    }
+
+    #[test]
+    fn to_string_beside_display() {
+        let src = "pub struct A;\n\
+            impl A { pub fn to_string(&self) -> String { String::new() } }\n\
+            impl fmt::Display for A { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }\n\
+            pub struct B;\n\
+            impl B { pub fn to_string(&self) -> String { String::new() } }\n\
+            pub struct D;\n\
+            impl D { pub fn to_string(&self, x: u8) -> String { String::new() } }\n\
+            impl std::fmt::Display for D { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }\n";
+        assert_eq!(lines("rs/to-string-shadows-display", src), [2]);
+    }
+
+    #[test]
+    fn serde_visitors_need_visit_str() {
+        let src = "impl<'de> de::Visitor<'de> for V {\n    fn visit_string<E>(self, v: String) -> Result<(), E> { Ok(()) }\n}\n\
+            impl<'de> Visitor<'de> for W {\n    fn visit_str<E>(self, v: &str) -> Result<(), E> { Ok(()) }\n    fn visit_string<E>(self, v: String) -> Result<(), E> { Ok(()) }\n}\n";
+        assert_eq!(lines("rs/serde-visit-string-only", src), [2]);
     }
 
     #[test]
@@ -1263,6 +2394,29 @@ mod tests {
         assert_eq!(
             reported("rs/unit-returned-for-ord", &cases),
             [1, 3, 5, 6, 8, 9, 10, 11]
+        );
+    }
+
+    #[test]
+    fn unwraps_the_condition_shows_will_panic() {
+        let cases = [
+            "if o.is_none() { o.unwrap(); }",
+            "if o.is_some() { o.unwrap(); } else { o.unwrap(); }",
+            "if r.is_err() { r.unwrap(); }",
+            "if r.is_ok() { r.unwrap_err(); }",
+            "if !o.is_some() { o.expect(\"x\"); }",
+            "if o.is_none() { let o = Some(1); o.unwrap(); }",
+            "if o.is_none() && ready { o.unwrap(); }",
+            "if o.is_none() || ready { o.unwrap(); }",
+            "if p.is_none() { p = Some(1); p.unwrap(); }",
+            "if let None = o { o.unwrap(); }",
+            "while o.is_none() { o.unwrap(); break; }",
+            "if o.is_none() { let c = || o.unwrap(); }",
+            "if s.o.is_none() { s.o.unwrap(); }",
+        ];
+        assert_eq!(
+            reported("rs/panicking-unwrap", &cases),
+            [1, 2, 3, 4, 5, 7, 11, 13]
         );
     }
 
