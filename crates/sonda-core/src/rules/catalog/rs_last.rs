@@ -465,23 +465,10 @@ fn missing_comma<'t>(array: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::analyze;
-    use crate::config::Config;
-    use crate::lang::Lang;
-    use crate::rules::RuleSet;
-    use std::time::{Duration, Instant};
+    use super::super::rs::tests::lines_with;
 
     fn lines(rule: &str, src: &str) -> Vec<usize> {
-        let mut cfg = Config::default();
-        cfg.rules.enabled = super::OFF_BY_DEFAULT.iter().map(|&id| id.into()).collect();
-        let rules = RuleSet::new(&cfg.rules).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let a = analyze("t.rs", Lang::Rust, src, &rules, &cfg, deadline).unwrap();
-        a.issues
-            .iter()
-            .filter(|i| i.rule == rule)
-            .map(|i| i.line)
-            .collect()
+        lines_with(rule, src, super::OFF_BY_DEFAULT)
     }
 
     fn in_fn(rule: &str, body: &str) -> bool {
