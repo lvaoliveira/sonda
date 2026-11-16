@@ -2979,19 +2979,16 @@ impl<'t> CommentRules<'_, 't> {
         }
     }
 
-    /// C and C++: a block of `//` lines with code in it is one issue, at its
-    /// first line, prose or not (as SonarCloud reports them; C/C++ couldn't
-    /// be measured on SonarQube 26.7).
+    /// C and C++: a block of `//` lines with code in it, and not mostly
+    /// prose, is one issue, at its first line (as SonarCloud reports them;
+    /// C/C++ couldn't be measured on SonarQube 26.7).
     fn flush_cfamily_block(&mut self, ctx: &Ctx, issues: &mut Vec<Issue>) {
         let block = std::mem::take(&mut self.cfamily_block);
         let (Some(rule), Some((first, _))) = (self.code, block.first()) else {
             return;
         };
-        let lines: Vec<&str> = block
-            .iter()
-            .map(|(_, t)| t.trim_start_matches('/'))
-            .collect();
-        if block.iter().any(|(_, t)| cfamily_line_is_code(t)) || cpp_parses(&lines.join("\n")) {
+        let lines: Vec<&str> = block.iter().map(|(_, t)| t.as_str()).collect();
+        if cfamily_block_is_code(&lines) {
             let msg = "Remove this commented-out code.".to_string();
             issues.push(ctx.issue(rule, *first, msg, rule.rule.effort_minutes));
         }
@@ -3024,7 +3021,7 @@ impl<'t> CommentRules<'_, 't> {
         let doc = text.starts_with("/**") || text.starts_with("///") || text.starts_with("//!");
         if let Some(rule) = self.code
             && !doc
-            && text.lines().any(cfamily_line_is_code)
+            && cfamily_block_is_code(&text.lines().collect::<Vec<_>>())
         {
             let msg = "Remove this commented-out code.".to_string();
             issues.push(ctx.issue(rule, node, msg, rule.rule.effort_minutes));
@@ -3393,14 +3390,18 @@ fn csharp_line_is_code(line: &str) -> bool {
 }
 
 /// A C or C++ comment line that reads as code: the generic signs, a lone
-/// brace, or a preprocessor directive (`// #endif`, `// #include "x.h"`),
-/// as SonarCloud reports them.
+/// brace, a preprocessor directive (`// #endif`, `// #include "x.h"`), or a
+/// line ending a statement or a block with code in it (`//   int bar() {`,
+/// `//     pixels_per_byte, storage_type> {`), as SonarCloud reports them.
+/// A comment closing the line (`// free(p); // no longer used`) is left out;
+/// a Python block header (`// if self.x:`) isn't C or C++.
 fn cfamily_line_is_code(line: &str) -> bool {
     let l = line
         .trim()
         .trim_start_matches(['/', '*'])
         .trim_end_matches("*/")
         .trim();
+    let l = l.find(" //").map_or(l, |at| l[..at].trim_end());
     let directive = l.strip_prefix('#').is_some_and(|d| {
         let d = d.trim_start();
         [
@@ -3410,7 +3411,52 @@ fn cfamily_line_is_code(line: &str) -> bool {
         .iter()
         .any(|k| d.starts_with(k))
     });
-    matches!(l, "{" | "}" | "};") || directive || looks_like_code(line)
+    if l.ends_with(':') && starts_with_any(l, PYTHON_BLOCK_KEYWORDS) {
+        return false;
+    }
+    matches!(l, "{" | "}" | "};") || directive || looks_like_code(l) || ends_code(l)
+}
+
+/// A line ending a statement or a block (`;`, `{`, `}`) with code before
+/// it: a call, an assignment, a template or a member, not a sentence
+/// ending in a semicolon.
+fn ends_code(l: &str) -> bool {
+    let Some(body) = l.strip_suffix([';', '{', '}']) else {
+        return false;
+    };
+    !is_sentence(l)
+        && ["(", "=", "<", "[", "::", "->", "{", "}"]
+            .iter()
+            .any(|s| body.contains(s))
+}
+
+/// A line of prose: four plain lowercase words or more, punctuation after
+/// a word aside (`try to ignore lines like: if (a) b;`).
+fn is_sentence(l: &str) -> bool {
+    l.split_whitespace()
+        .map(|w| w.trim_end_matches(['.', ':', '!', '?']))
+        .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_ascii_lowercase()))
+        .count()
+        >= 4
+}
+
+/// C and C++: whether a comment's lines are code, judged together: a line
+/// of code (or lines that parse as code together), and not mostly prose. A
+/// comment explaining something with a line or two of code in it, or a
+/// licence or a usage note with an example, is documentation, as
+/// SonarCloud judges it: prose lines as many as the lines of code, or at
+/// least three and a third as many.
+fn cfamily_block_is_code(lines: &[&str]) -> bool {
+    let mut code = lines.iter().filter(|l| cfamily_line_is_code(l)).count();
+    if code == 0 {
+        let body: Vec<&str> = lines
+            .iter()
+            .map(|l| l.trim_start_matches('/').trim_end_matches("*/"))
+            .collect();
+        code = usize::from(cpp_parses(&body.join("\n")));
+    }
+    let prose = lines.iter().filter(|l| is_sentence(l)).count();
+    code > 0 && (prose == 0 || prose < code && (prose < 3 || 3 * prose < code))
 }
 
 /// Whether lines parse as C++ statements (in a function body) or

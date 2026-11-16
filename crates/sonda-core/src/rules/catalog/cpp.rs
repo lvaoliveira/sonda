@@ -2542,12 +2542,14 @@ mod tests {
     /// and C++, as SonarCloud reports them.
     #[test]
     fn shared_rules_in_cpp() {
-        let comments = "// Sample script:\n// int x = 1;\n// f(x);\nint a;\n// plain prose here\nint a2;\n// #endif\nint b;\n/* longhand:\n   x = y;\n*/\nint c; // }";
-        // One issue per block, at its first line; a directive or a lone
-        // brace is code.
+        let comments = "// Sample script:\n// int x = 1;\n// f(x);\nint a;\n// plain prose here\nint a2;\n// #endif\nint b;\n/* longhand:\n   x = y;\n*/\nint c; // }\n// Helper that turns a run of pixel writes into one request to the\n// underlying device, minimizing the number of window changes:\n//   write(x, y);\nint d;\n// if self.x:\nint e;\nint f2; //   int bar() {\n// free(ptr); // no longer used\nint g;\n/* Returns the offset of the next read in the file,\n   which is zero when the file has just been opened:\n\n     off = tell(file);\n*/\nint h;";
+        // One issue per block, at its first line; a directive, a lone
+        // brace or a line ending a block is code, a comment closing the
+        // line aside. Prose explaining a line of code, or a Python header,
+        // isn't.
         assert_eq!(
             flagged("common/commented-out-code", comments),
-            [1, 7, 9, 12]
+            [1, 7, 9, 12, 19, 20]
         );
         let todos = "/*\n * Search for x.\n * TODO currently not.\n */\nint a; // Fixme: later\n// todo: maybe";
         assert_eq!(flagged("common/todo-comment", todos), [1, 5, 6]);
