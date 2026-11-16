@@ -98,6 +98,12 @@ pub(crate) fn analyze(
             deadline,
         ));
     }
+    if lang == Lang::Rust
+        && root.has_error()
+        && let Some(rule) = rules.get(rules::RS_PARSE_FAILURE)
+    {
+        parse_failure(&ctx, root, rule, &mut issues);
+    }
     let mut taint_facts = Vec::new();
     let semantic_incomplete = run_semantic(
         &ctx,

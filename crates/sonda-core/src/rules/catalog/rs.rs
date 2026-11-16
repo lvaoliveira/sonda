@@ -520,9 +520,21 @@ pub(super) fn arguments(call: Node) -> Vec<Node> {
 
 /// The method a call names: `skip` in `it.skip(0)`.
 pub(super) fn method<'t>(call: Node<'t>) -> Option<Node<'t>> {
-    call.child_by_field_name("function")
-        .filter(|f| f.kind() == "field_expression")?
-        .child_by_field_name("field")
+    callee_field(call)?.child_by_field_name("field")
+}
+
+/// What a method call is called on: `v` in `v.iter()`, `it` in `it.collect::<T>()`.
+pub(super) fn receiver<'t>(call: Node<'t>) -> Option<Node<'t>> {
+    callee_field(call)?.child_by_field_name("value")
+}
+
+/// The `receiver.name` part of a call, through a turbofish if it has one.
+fn callee_field<'t>(call: Node<'t>) -> Option<Node<'t>> {
+    let mut function = call.child_by_field_name("function")?;
+    if function.kind() == "generic_function" {
+        function = function.child_by_field_name("function")?;
+    }
+    (function.kind() == "field_expression").then_some(function)
 }
 
 /// The method's name node, when it is `name` and the call has `count`
@@ -608,7 +620,7 @@ fn option_env_unwrapped<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 /// A path's last two segments, `("MaybeUninit", "uninit")` for
 /// `std::mem::MaybeUninit::<T>::uninit`, with generic arguments dropped.
-fn path_tail(function: Node, src: &[u8]) -> Option<(String, String)> {
+pub(super) fn path_tail(function: Node, src: &[u8]) -> Option<(String, String)> {
     let mut f = function;
     if f.kind() == "generic_function" {
         f = f.child_by_field_name("function")?;

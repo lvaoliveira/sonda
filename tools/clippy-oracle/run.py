@@ -46,12 +46,32 @@ LINTS = {
     'rs/derive-ord-with-manual-partial-ord': 'derive_ord_xor_partial_ord',
     'rs/derived-hash-with-manual-eq': 'derived_hash_with_manual_eq',
     'rs/uninit-vec': 'uninit_vec',
+    'rs/overly-complex-bool-expr': 'overly_complex_bool_expr',
+    'rs/redundant-comparison': 'redundant_comparisons',
+    'rs/impossible-comparison': 'impossible_comparisons',
+    'rs/panicking-unwrap': 'panicking_unwrap',
+    'rs/let-underscore-lock': 'let_underscore_lock',
+    'rs/match-str-case-mismatch': 'match_str_case_mismatch',
+    'rs/while-float': 'while_float',
+    'rs/min-max-reversed': 'min_max',
+    'rs/out-of-bounds-index': 'out_of_bounds_indexing',
+    'rs/unnecessary-cast': 'unnecessary_cast',
+    'rs/mut-from-ref': 'mut_from_ref',
+    'rs/to-string-shadows-display': 'inherent_to_string_shadow_display',
+    'rs/serde-visit-string-only': 'serde_api_misuse',
+    'rs/infinite-iterator': 'infinite_iter',
+    'rs/transmute-null': 'transmuting_null',
+    'rs/non-octal-permissions': 'non_octal_unix_permissions',
+    'rs/unsafe-pointer-deref': 'not_unsafe_ptr_arg_deref',
+    'rs/read-line-untrimmed': 'read_line_without_trim',
 }
 RULE_OF = {lint: rule for rule, lint in LINTS.items()}
+# A rule that follows a second lint.
+RULE_OF['transmute_null_to_fn'] = 'rs/transmute-null'
 TARGET = '/home/oracle/target'
 ENV = dict(os.environ, CARGO_TARGET_DIR=TARGET, CARGO_TERM_COLOR='never', RUSTFLAGS='--cap-lints=warn')
 ARGS = ['cargo', 'clippy', '--quiet', '--message-format=json', '--all-targets', '--', '-A', 'clippy::all']
-for lint in LINTS.values():
+for lint in RULE_OF:
     ARGS += ['--force-warn', 'clippy::' + lint]
 
 
