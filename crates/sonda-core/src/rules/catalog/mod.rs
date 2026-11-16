@@ -74,6 +74,7 @@ mod py_regex;
 mod py_security;
 mod regex_checks;
 mod rs;
+mod rs_correctness;
 mod rs_extra;
 mod rs_more;
 pub(super) mod standards;
@@ -194,6 +195,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (rs::RULES, rs::OFF_BY_DEFAULT),
     (rs_more::RULES, rs_more::OFF_BY_DEFAULT),
     (rs_extra::RULES, rs_extra::OFF_BY_DEFAULT),
+    (rs_correctness::RULES, rs_correctness::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

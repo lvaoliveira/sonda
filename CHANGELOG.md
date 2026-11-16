@@ -9,6 +9,14 @@ file, the report formats and the public library API.
 
 ### Added
 
+- More Rust rules from SonarQube's Rust set, Clippy's correctness lints:
+  inconsistent open options, bad and ineffective bit masks, `Hash` beside
+  `Borrow<str>` and `Borrow<[u8]>`, recursive formatting, key closures
+  returning `()`, C-style overflow checks, eagerly evaluated transmutes, and
+  byte counts passed as element counts. Each was checked against Clippy on
+  probe files that vary its pattern
+  ([ADR-0026](docs/adr/0026-rust.md), "Probing Clippy").
+
 - Pull requests whose CI can't upload are decorated too: a fork's or
   Dependabot's, which have no token, and any whose server GitHub's
   runners can't reach, on a LAN or a tailnet
@@ -273,6 +281,18 @@ file, the report formats and the public library API.
   whose constructors delegate is left alone. `A::B::B()` is no longer
   taken for a constructor of `A`. On roo_display, 46 fewer issues
   SonarCloud doesn't report, one fewer it does.
+
+- Eleven Rust rules follow Clippy's output on probe files of their pattern:
+  `redundant-comparison`, `impossible-comparison`, `panicking-unwrap`,
+  `match-str-case-mismatch`, `while-float`, `mut-from-ref`,
+  `to-string-shadows-display`, `serde-visit-string-only`,
+  `infinite-iterator`, `non-octal-permissions` and `unsafe-pointer-deref`.
+  They no longer report an or-pattern arm, `x == 5 && x == 6`, `||`,
+  `repeat_with` or `repeat_n`, an `unwrap` after the value is shadowed, or
+  a function without `unsafe` code returning `&mut`. They now find raw
+  pointer arguments passed to unsafe functions or methods, hexadecimal
+  permissions, float loops on typed locals, and unwraps under `!`, `&&`
+  and `while` ([ADR-0026](docs/adr/0026-rust.md), "Probing Clippy").
 
 - C and C++'s `common/commented-out-code` judges a comment as a whole: one
   that is mostly prose with a line or two of code in it (an explanation,
