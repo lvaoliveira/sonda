@@ -9,6 +9,14 @@ file, the report formats and the public library API.
 
 ### Added
 
+- More Rust rules from SonarQube's Rust set, Clippy's correctness lints:
+  inconsistent open options, bad and ineffective bit masks, `Hash` beside
+  `Borrow<str>` and `Borrow<[u8]>`, recursive formatting, key closures
+  returning `()`, C-style overflow checks, eagerly evaluated transmutes, and
+  byte counts passed as element counts. Each was checked against Clippy on
+  probe files that vary its pattern
+  ([ADR-0026](docs/adr/0026-rust.md), "Probing Clippy").
+
 - Pull requests whose CI can't upload are decorated too: a fork's or
   Dependabot's, which have no token, and any whose server GitHub's
   runners can't reach, on a LAN or a tailnet
