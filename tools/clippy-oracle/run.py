@@ -64,6 +64,15 @@ LINTS = {
     'rs/non-octal-permissions': 'non_octal_unix_permissions',
     'rs/unsafe-pointer-deref': 'not_unsafe_ptr_arg_deref',
     'rs/read-line-untrimmed': 'read_line_without_trim',
+    'rs/nonsensical-open-options': 'nonsensical_open_options',
+    'rs/bad-bit-mask': 'bad_bit_mask',
+    'rs/ineffective-bit-mask': 'ineffective_bit_mask',
+    'rs/hash-borrow-str-and-bytes': 'impl_hash_borrow_with_str_and_bytes',
+    'rs/recursive-format-impl': 'recursive_format_impl',
+    'rs/unit-returned-for-ord': 'unit_return_expecting_ord',
+    'rs/overflow-check-panics': 'panicking_overflow_checks',
+    'rs/eager-transmute': 'eager_transmute',
+    'rs/size-of-as-element-count': 'size_of_in_element_count',
 }
 RULE_OF = {lint: rule for rule, lint in LINTS.items()}
 # A rule that follows a second lint.
@@ -90,7 +99,16 @@ def finding(line):
     code = ((msg or {}).get('code') or {}).get('code', '')
     rule = RULE_OF.get(code[8:]) if code.startswith('clippy::') else None
     primary = next((sp for sp in msg['spans'] if sp['is_primary']), None) if rule else None
+    primary = in_crate(primary) if primary else None
     return (rule, primary['file_name'], primary['line_start']) if primary else None
+
+
+def in_crate(span):
+    """The span itself, or for a lint inside a standard macro (`write!`), which is
+    reported in the macro's source, the crate's own call it expands from."""
+    while span['file_name'].startswith('/') and span.get('expansion'):
+        span = span['expansion']['span']
+    return span
 
 
 def compiled_files(crate_dir, started):
