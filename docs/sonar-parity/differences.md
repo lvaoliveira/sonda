@@ -29,7 +29,7 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
-| qutepart-cpp⁴ | C++ (Qt) | `0e5a022` | 352 of 746 | 40 |
+| qutepart-cpp⁴ | C++ (Qt) | `0e5a022` | 365 of 746 | 40 |
 | roo_display⁴ | C++ (embedded), C | `f139977` | 2,231 of 2,958 | 347 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
@@ -853,13 +853,22 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   read, which SonarCloud reports in some classes and not others, with
   nothing visible to tell them apart. The same reason keeps
   `cpp/init-statement` off.
+- **Loop references** (`cpp/const-reference-variable`, S5350, one file): a
+  range-for variable bound by non-const reference and used only through
+  `->` or a smart pointer's `get()`, `data()`, `isNull()`; not in a const
+  member function, where `auto&` over a member is const already. 13 of
+  qutepart-cpp's 28, none extra. The rest are local pointers and loops
+  calling the element's own functions, whose constness needs the type
+  (Qt's, or the C library's in roo_display's zlib).
 
 ### Still open in C and C++
 
-On the two projects, 1,121 of SonarCloud's issues and 387 of sonda's:
+On the two projects, 1,108 of SonarCloud's issues and 387 of sonda's:
 
-- **No sonda rule yet (444):** the largest, S5350 (45, pointers and
-  references to const); then about a hundred keys with fewer.
+- **No sonda rule yet (399):** about a hundred keys, none with more than
+  18 issues: S5951 (a needless `const` qualifier), S886 (loops to
+  rewrite), S6230 (`= default`), S995 (pointer parameters to const),
+  S5812 (nested namespaces to concatenate).
 - **Off by default:** S6004 (125), S5817 (84).
 - **SonarCloud's commented-out code in generated tables (140):** roo_display's
   font files comment each glyph, `// "&" (U+0026), uncompressed`, which
