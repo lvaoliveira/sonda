@@ -673,6 +673,28 @@ fn drops_lock_at_once(declaration: Node, src: &[u8]) -> bool {
 
 // ---- Strings, numbers and indexing ----
 
+/// A string literal in `pattern` holding a letter of the case the scrutinee can never have.
+fn wrong_case_literal<'t>(pattern: Node<'t>, lower: bool, src: &[u8]) -> Option<Node<'t>> {
+    let mut inner = vec![pattern];
+    while let Some(p) = inner.pop() {
+        if p.kind() != "string_literal" {
+            let mut c = p.walk();
+            inner.extend(p.named_children(&mut c));
+            continue;
+        }
+        let t = std::str::from_utf8(text(p, src)).unwrap_or("");
+        let wrong = if lower {
+            t.chars().any(char::is_uppercase)
+        } else {
+            t.chars().any(char::is_lowercase)
+        };
+        if wrong {
+            return Some(p);
+        }
+    }
+    None
+}
+
 fn case_mismatch_pattern<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let scrutinee = text(node.child_by_field_name("value")?, src);
     let has = |name: &[u8]| scrutinee.windows(name.len()).any(|w| w == name);
@@ -687,24 +709,10 @@ fn case_mismatch_pattern<'t>(node: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
         if n.kind() == "match_arm" {
-            if let Some(pattern) = n.child_by_field_name("pattern") {
-                let mut inner = vec![pattern];
-                while let Some(p) = inner.pop() {
-                    if p.kind() == "string_literal" {
-                        let t = std::str::from_utf8(text(p, src)).unwrap_or("");
-                        let wrong = if lower {
-                            t.chars().any(char::is_uppercase)
-                        } else {
-                            t.chars().any(char::is_lowercase)
-                        };
-                        if wrong {
-                            return Some(p);
-                        }
-                    } else {
-                        let mut c = p.walk();
-                        inner.extend(p.named_children(&mut c));
-                    }
-                }
+            if let Some(pattern) = n.child_by_field_name("pattern")
+                && let Some(wrong) = wrong_case_literal(pattern, lower, src)
+            {
+                return Some(wrong);
             }
             continue;
         }
@@ -991,6 +999,23 @@ fn visit_string_without_visit_str<'t>(implementation: Node<'t>, src: &[u8]) -> O
 
 // ---- Iterators and pointers ----
 
+/// Where an infinite iterator starts: `iter::repeat(x)` or an open range `(0..)`.
+fn infinite_source(node: Node, src: &[u8]) -> bool {
+    if node.kind() == "range_expression" {
+        let t = text(node, src);
+        return node.named_child_count() == 1 && t.ends_with(b"..") && !t.ends_with(b"..=");
+    }
+    // A bare `repeat` may be another crate's (winnow has one that isn't
+    // infinite), and only the path tells them apart.
+    let Some(f) = node.child_by_field_name("function") else {
+        return false;
+    };
+    let f = text(f, src);
+    [&b"iter::repeat"[..], b"iter::repeat_with"]
+        .iter()
+        .any(|p| f.windows(p.len()).any(|w| w == *p))
+}
+
 fn consumes_infinite<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     const CONSUMERS: &[&[u8]] = &[
         b"count",
@@ -1038,29 +1063,15 @@ fn consumes_infinite<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
         }
         match node.kind() {
             "call_expression" => {
-                if let Some(m) = method(node) {
-                    if !KEEPS.contains(&text(m, src)) {
-                        return None;
-                    }
-                    node = receiver(node)?;
-                } else {
-                    // `iter::repeat(x)`: where an infinite iterator starts. A bare
-                    // `repeat` may be another crate's (winnow has one that isn't
-                    // infinite), and only the path tells them apart.
-                    let f = text(node.child_by_field_name("function")?, src);
-                    let std_repeat = [&b"iter::repeat"[..], b"iter::repeat_with"]
-                        .iter()
-                        .any(|p| f.windows(p.len()).any(|w| w == *p));
-                    return std_repeat.then_some(consumer);
+                let Some(m) = method(node) else {
+                    return infinite_source(node, src).then_some(consumer);
+                };
+                if !KEEPS.contains(&text(m, src)) {
+                    return None;
                 }
+                node = receiver(node)?;
             }
-            // `(0..)`: a range with no end.
-            "range_expression" => {
-                let open = node.named_child_count() == 1
-                    && text(node, src).ends_with(b"..")
-                    && !text(node, src).ends_with(b"..=");
-                return open.then_some(consumer);
-            }
+            "range_expression" => return infinite_source(node, src).then_some(consumer),
             _ => return None,
         }
     }
