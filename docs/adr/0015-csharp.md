@@ -107,6 +107,12 @@ sonda can't read from project files, are told by convention: a `test`,
 `tests` or `specs` directory, one named like `Shop.Tests` or `UnitTests`,
 or a file that imports xUnit, NUnit or MSTest.
 
+S1451 compares a `headerFormat` setting with the file's leading trivia, the
+comments and preprocessor directives before its first token. sonda has no
+such setting, so, as for the other languages, a header is trivia that names
+a copyright or license; a `#region`, `#if` or `#pragma` around it counts as
+part of it, as Roslyn reads trivia.
+
 ### Suppressions
 
 Code that SonarQube analyzed carries its suppressions: `#pragma warning

@@ -43,6 +43,7 @@ pub(super) static OFF_BY_DEFAULT: &[&str] = &[
     "cs/use-list-find",
     "cs/use-list-true-for-all",
     "cs/use-list-exists",
+    "cs/missing-license-header",
 ];
 
 pub(super) static RULES: &[Rule] = &[
@@ -508,9 +509,75 @@ pub(super) static RULES: &[Rule] = &[
             good: "class A { bool F(List<int> xs) { return xs.Exists(x => x > 1); } }",
         }),
     },
+    Rule {
+        id: "cs/missing-license-header",
+        name: "Track lack of copyright and license headers",
+        description: "A header states who owns the file and under which terms it is shared.",
+        message: "Add the header.",
+        category: CodeSmell,
+        severity: Blocker,
+        effort_minutes: 5,
+        sonar: &[exact("S1451")],
+        check: Check::Query {
+            langs: CSHARP,
+            query: "(compilation_unit) @match",
+            filter: Some(Find(lacks_a_license_header)),
+        },
+        example: Some(Example {
+            lang: Lang::CSharp,
+            bad: "namespace Shop;\nclass Order { }",
+            good: "// Copyright 2026 Example Ltd.\nnamespace Shop;\nclass Order { }",
+        }),
+    },
 ];
 
 // ---------------------------------------------------- filters
+
+/// Where a file's leading trivia ends: the comments, blank lines and
+/// preprocessor directives before its first token, which Roslyn reads as
+/// one block and SonarQube compares with the header.
+fn leading_trivia_end(src: &[u8]) -> usize {
+    let mut i = if src.starts_with(b"\xef\xbb\xbf") {
+        3
+    } else {
+        0
+    };
+    loop {
+        while i < src.len() && src[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let rest = &src[i..];
+        if rest.starts_with(b"//") || rest.starts_with(b"#") {
+            i += rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
+        } else if rest.starts_with(b"/*") {
+            i += rest
+                .windows(2)
+                .skip(2)
+                .position(|w| w == b"*/")
+                .map_or(rest.len(), |p| p + 4);
+        } else {
+            return i;
+        }
+    }
+}
+
+/// The top-level node holding the file's first token, when the leading
+/// trivia (the header, `#region` or `#if` around it included) doesn't name
+/// a copyright or license. sonda has no `headerFormat` setting to compare
+/// against.
+fn lacks_a_license_header<'t>(unit: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let end = leading_trivia_end(src);
+    let header = &src[..end];
+    if ["copyright", "license", "licence"]
+        .iter()
+        .any(|w| contains_ignoring_case(header, w.as_bytes()))
+    {
+        return None;
+    }
+    let mut cursor = unit.walk();
+    unit.named_children(&mut cursor)
+        .find(|c| c.kind() != "comment" && c.end_byte() > end)
+}
 
 fn has_base(declaration: Node, src: &[u8], name: &[u8]) -> bool {
     let mut cursor = declaration.walk();
@@ -1127,6 +1194,35 @@ mod tests {
         assert_eq!(flagged("cs/extension-in-same-namespace", src), [3]);
         assert_eq!(flagged("cs/azure-function-without-try", src), [6]);
         assert_eq!(flagged("cs/azure-function-catch-not-logged", src), [8]);
+    }
+
+    #[test]
+    fn license_headers() {
+        let rule = "cs/missing-license-header";
+        assert_eq!(flagged(rule, "using System;\nclass A { }"), [1]);
+        assert_eq!(
+            flagged(rule, "// Helpers.\n\nnamespace N;\nclass A { }"),
+            [3]
+        );
+        for ok in [
+            "// Copyright (c) Example Ltd. All rights reserved.\nusing System;\nclass A { }",
+            "/*\n * Licensed under the MIT License.\n */\nnamespace N;\nclass A { }",
+            "// <copyright file=\"A.cs\">\n// Example Ltd.\n// </copyright>\nclass A { }",
+            "// Example Ltd.\n// Licence: Apache-2.0\nclass A { }",
+            "\u{feff}#region License\n// Copyright (c) 2007 Example\n#endregion\n\nusing System;\nclass A { }",
+            "#pragma warning disable\n// Licensed under the MIT license.\nnamespace N;\nclass A { }",
+            "\n#if !NET8_0\n/* Copyright 2009 Example */\nclass A { }\n#endif\n",
+            "",
+        ] {
+            assert!(flagged(rule, ok).is_empty(), "{ok}");
+        }
+        // A header after code isn't one.
+        assert_eq!(
+            flagged(rule, "using System;\n// Copyright 2026\nclass A { }"),
+            [1]
+        );
+        // Nor is a word in code.
+        assert_eq!(flagged(rule, "/* Keys. */\nclass License { }"), [2]);
     }
 
     #[test]
