@@ -38186,20 +38186,22 @@ class A { int size; public A(int s) { size = s; } }
 
 ## cs/iserializable-without-constructor
 
-**ISerializable types should have a deserialization constructor.** The serializer calls a constructor taking (SerializationInfo, StreamingContext); without it, deserialization fails at run time.
+**ISerializable should be implemented correctly.** A serializable type needs the [Serializable] attribute, a serialization constructor that derived types can call, a GetObjectData they can extend, and [NonSerialized] on fields that can't be serialized; otherwise serialization fails, or loses data, at run time.
 
-SonarQube: S3925 (related)
+SonarQube: S3925
 
 Noncompliant:
 
 ```csharp
+using System.Runtime.Serialization;
 [Serializable] class P : ISerializable { public void GetObjectData(SerializationInfo i, StreamingContext c) { } }
 ```
 
 Compliant:
 
 ```csharp
-[Serializable] class P : ISerializable { protected P(SerializationInfo i, StreamingContext c) { } public void GetObjectData(SerializationInfo i, StreamingContext c) { } }
+using System.Runtime.Serialization;
+[Serializable] class P : ISerializable { protected P(SerializationInfo i, StreamingContext c) { } public virtual void GetObjectData(SerializationInfo i, StreamingContext c) { } }
 ```
 
 ## cs/unbraced-body-not-indented

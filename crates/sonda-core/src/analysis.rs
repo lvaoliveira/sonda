@@ -2003,9 +2003,14 @@ fn skipped_in_test_file(active: &ActiveRule, test_file: bool) -> bool {
 pub(crate) const TEST_CODE_RULES: &[&str] = &["java/incomplete-assertion"];
 
 /// Rules a file's name says don't apply: a package's `__init__.py` gathers
-/// its modules' names with `from .mod import *`, as SonarQube allows.
+/// its modules' names with `from .mod import *`, as SonarQube allows, and
+/// S3925 doesn't check test projects.
 fn skipped_for_path(active: &ActiveRule, path: &str) -> bool {
-    active.rule.id == "py/wildcard-import" && path.rsplit(['/', '\\']).next() == Some("__init__.py")
+    match active.rule.id {
+        "py/wildcard-import" => path.rsplit(['/', '\\']).next() == Some("__init__.py"),
+        "cs/iserializable-without-constructor" => rules::in_csharp_test_project(path),
+        _ => false,
+    }
 }
 
 /// The Java version each rule's suggestion needs: on code that targets an
@@ -2314,6 +2319,7 @@ fn run_semantic(
             _ => None,
         })
         .filter(|(a, _)| !(test_file && a.rule.category == Category::Vulnerability))
+        .filter(|(a, _)| !skipped_for_path(a, ctx.path))
         .collect();
     if active.is_empty() {
         return false;

@@ -1725,6 +1725,360 @@ fn field_occurrences<'t>(
     occurrences
 }
 
+// ---------------------------------------------------- S3925
+
+const ISERIALIZABLE: &str = "System.Runtime.Serialization.ISerializable";
+
+/// The test frameworks whose `using` makes a file test code.
+const TEST_FRAMEWORKS: &[&str] = &[
+    "Xunit",
+    "NUnit.Framework",
+    "Microsoft.VisualStudio.TestTools.UnitTesting",
+];
+
+/// Whether a C# file belongs to a test project, which sonda can only tell
+/// by convention: a `test`, `tests` or `specs` directory, or one named
+/// like `Shop.Tests`, `UnitTests` or `Shop.Specs`.
+pub(crate) fn in_csharp_test_project(path: &str) -> bool {
+    let mut dirs = path.split(['/', '\\']).rev().skip(1);
+    dirs.any(|d| {
+        let d = d.to_ascii_lowercase();
+        matches!(d.as_str(), "test" | "tests" | "specs")
+            || d.ends_with(".test")
+            || d.ends_with("tests")
+            || d.ends_with(".specs")
+    })
+}
+
+/// Whether a declaration has an attribute, in any `#if` branch.
+fn has_attribute(declaration: Node, name: &[u8], src: &[u8]) -> bool {
+    attribute_names(declaration, src)
+        .iter()
+        .any(|(_, n)| *n == name)
+        || declaration
+            .named_children(&mut declaration.walk())
+            .filter(|c| c.kind() == "preproc_if_in_attribute_list")
+            .any(|branch| has_attribute(branch, name, src))
+}
+
+/// A type's members, those of every `#if`, `#elif` and `#else` branch
+/// included: the code is judged for each configuration it builds in.
+fn branch_members(body: Node) -> Vec<Node> {
+    let mut out = Vec::new();
+    for c in body.named_children(&mut body.walk()) {
+        match c.kind() {
+            "preproc_if" | "preproc_elif" | "preproc_else" => out.extend(branch_members(c)),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether values of a type serialize: a class or struct the runtime marks
+/// `[Serializable]` (the platform data's tag), or one of the file's so
+/// marked; enums always. None when that can't be told: interfaces,
+/// delegates, type parameters, types from other files.
+fn serializable(infer: &Infer, ty: &Ty, src: &[u8]) -> Option<bool> {
+    match ty {
+        Ty::Array(element) => serializable(infer, element, src),
+        Ty::Named {
+            local: false, key, ..
+        } => {
+            let p = dotnet_type(key)?;
+            match p.kind.as_str() {
+                "enum" => Some(true),
+                "class" | "struct" => Some(p.tags.iter().any(|t| t == "Serializable")),
+                _ => None,
+            }
+        }
+        Ty::Named { local: true, .. } => {
+            let node = infer.local_type_node(ty)?;
+            match node.kind() {
+                "enum_declaration" => Some(true),
+                "class_declaration" | "struct_declaration" | "record_declaration" => {
+                    Some(has_attribute(node, b"Serializable", src))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Whether a type implements ISerializable; None when its bases don't all
+/// resolve.
+fn implements_iserializable(infer: &Infer, ty: &Ty) -> Option<bool> {
+    if infer.supertypes(ty).iter().any(|t| t.is(ISERIALIZABLE)) {
+        return Some(true);
+    }
+    infer.base_classes_known(ty).then_some(false)
+}
+
+/// `(SerializationInfo, StreamingContext)`, by the parameters' type names.
+fn serialization_parameters(function: Node, src: &[u8]) -> bool {
+    let Some(list) = function.child_by_field_name("parameters") else {
+        return false;
+    };
+    let types: Vec<&[u8]> = list
+        .named_children(&mut list.walk())
+        .filter(|p| p.kind() == "parameter")
+        .filter_map(|p| p.child_by_field_name("type"))
+        .map(|t| super::cs::simple_name(t, src))
+        .collect();
+    types == [&b"SerializationInfo"[..], b"StreamingContext"]
+}
+
+/// An instance field's declarators, unless it's `[NonSerialized]`, with
+/// its type node.
+fn serialized_fields<'t>(body: Node<'t>, src: &[u8]) -> Vec<(Node<'t>, Node<'t>)> {
+    let mut out = Vec::new();
+    for field in branch_members(body)
+        .into_iter()
+        .filter(|c| c.kind() == "field_declaration")
+    {
+        if cs_has_modifier(field, "static", src)
+            || cs_has_modifier(field, "const", src)
+            || has_attribute(field, b"NonSerialized", src)
+        {
+            continue;
+        }
+        let Some(declaration) = field
+            .named_children(&mut field.walk())
+            .find(|c| c.kind() == "variable_declaration")
+        else {
+            continue;
+        };
+        let Some(ty) = declaration.child_by_field_name("type") else {
+            continue;
+        };
+        for declarator in declaration
+            .named_children(&mut declaration.walk())
+            .filter(|c| c.kind() == "variable_declarator")
+        {
+            if let Some(name) = declarator.child_by_field_name("name") {
+                out.push((name, ty));
+            }
+        }
+    }
+    out
+}
+
+/// Whether a constructor starts with `: base(info, context)`, two
+/// arguments.
+fn calls_base_constructor(constructor: Node, src: &[u8]) -> bool {
+    constructor
+        .named_children(&mut constructor.walk())
+        .find(|c| c.kind() == "constructor_initializer")
+        .is_some_and(|i| {
+            text(i, src).trim_ascii_start().starts_with(b": base")
+                && i.named_children(&mut i.walk())
+                    .find(|c| c.kind() == "argument_list")
+                    .is_some_and(|a| {
+                        a.named_children(&mut a.walk())
+                            .filter(|c| c.kind() == "argument")
+                            .count()
+                            == 2
+                    })
+        })
+}
+
+/// Whether a file imports a test framework.
+fn uses_test_framework(root: Node, src: &[u8]) -> bool {
+    root.named_children(&mut root.walk())
+        .filter(|c| c.kind() == "using_directive")
+        .any(|u| {
+            let t = text(u, src);
+            TEST_FRAMEWORKS
+                .iter()
+                .any(|f| t.windows(f.len()).any(|w| w == f.as_bytes()))
+        })
+}
+
+/// A class or struct that implements ISerializable and takes part in
+/// serialization, with the parts S3925 checks.
+struct Serialized<'t> {
+    name: Node<'t>,
+    marked: bool,
+    constructor: Option<Node<'t>>,
+    get_object_data: Option<Node<'t>>,
+    /// A struct or a sealed class: nothing derives from it.
+    sealed: bool,
+    /// It derives from a class that implements ISerializable.
+    derived: bool,
+    fields: Vec<(Node<'t>, Node<'t>)>,
+}
+
+/// Whether a base list names ISerializable itself.
+fn names_iserializable(base_list: Option<Node>, src: &[u8]) -> bool {
+    base_list.is_some_and(|b| {
+        b.named_children(&mut b.walk())
+            .any(|t| super::cs::simple_name(t, src) == b"ISerializable")
+    })
+}
+
+/// The serialization constructor among a type's members.
+fn serialization_constructor<'t>(members: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    members.iter().copied().find(|c| {
+        c.kind() == "constructor_declaration"
+            && !cs_has_modifier(*c, "static", src)
+            && serialization_parameters(*c, src)
+    })
+}
+
+/// `GetObjectData(SerializationInfo, StreamingContext)` among a type's
+/// members.
+fn get_object_data<'t>(members: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    members.iter().copied().find(|c| {
+        c.kind() == "method_declaration"
+            && c.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == b"GetObjectData")
+            && serialization_parameters(*c, src)
+    })
+}
+
+/// Whether the first type in a base list is a class implementing
+/// ISerializable.
+fn derives_serializable(infer: &Infer, base_list: Option<Node>) -> bool {
+    base_list
+        .and_then(|b| b.named_child(0))
+        .and_then(|b| infer.written(b))
+        .filter(|b| infer.kind(b) == Some("class"))
+        .is_some_and(|b| implements_iserializable(infer, &b) == Some(true))
+}
+
+/// A declaration S3925 applies to: a class or struct implementing
+/// ISerializable that opts in with the attribute, ISerializable in its own
+/// base list, or a serialization constructor.
+fn serialized<'t>(infer: &Infer, declaration: Node<'t>, src: &[u8]) -> Option<Serialized<'t>> {
+    if !matches!(
+        declaration.kind(),
+        "class_declaration" | "struct_declaration"
+    ) {
+        return None;
+    }
+    let name = declaration.child_by_field_name("name")?;
+    let body = declaration.child_by_field_name("body")?;
+    let ty = infer.enclosing_type(name)?;
+    let base_list = declaration
+        .named_children(&mut declaration.walk())
+        .find(|c| c.kind() == "base_list");
+    let names_it = names_iserializable(base_list, src);
+    if !names_it && implements_iserializable(infer, &ty) != Some(true) {
+        return None;
+    }
+    let members = branch_members(body);
+    let constructor = serialization_constructor(&members, src);
+    let marked = has_attribute(declaration, b"Serializable", src);
+    if !(marked || names_it || constructor.is_some()) {
+        return None;
+    }
+    Some(Serialized {
+        name,
+        marked,
+        constructor,
+        get_object_data: get_object_data(&members, src),
+        sealed: declaration.kind() == "struct_declaration"
+            || cs_has_modifier(declaration, "sealed", src),
+        derived: derives_serializable(infer, base_list),
+        fields: serialized_fields(body, src),
+    })
+}
+
+/// Whether the serialization constructor is protected (private, or with no
+/// access modifier, when nothing derives from the type), and calls the base
+/// one when there's a serializable base.
+fn constructor_fits(s: &Serialized, constructor: Node, src: &[u8]) -> bool {
+    let access: Vec<&str> = ["public", "protected", "internal", "private"]
+        .into_iter()
+        .filter(|w| cs_has_modifier(constructor, w, src))
+        .collect();
+    let fitting = if s.sealed {
+        access.is_empty() || access == ["private"]
+    } else {
+        access == ["protected"]
+    };
+    fitting && (!s.derived || calls_base_constructor(constructor, src))
+}
+
+/// Whether GetObjectData is public and overridable when the type can be
+/// derived from, and calls the base one when there's a serializable base.
+fn get_object_data_fits(s: &Serialized, method: Node, src: &[u8]) -> bool {
+    let overridable = cs_has_modifier(method, "public", src)
+        && (cs_has_modifier(method, "virtual", src)
+            || (cs_has_modifier(method, "override", src)
+                && !cs_has_modifier(method, "sealed", src)));
+    let calls_base = method.child_by_field_name("body").is_some_and(|b| {
+        text(b, src)
+            .windows(19)
+            .any(|w| w == b"base.GetObjectData(")
+    });
+    (s.sealed || overridable) && (!s.derived || calls_base)
+}
+
+/// One type's departures from the pattern, possibly repeating a node.
+fn serialization_type_problems<'t>(infer: &Infer, s: &Serialized<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let field_serializes = |ty: Node| infer.written(ty).and_then(|t| serializable(infer, &t, src));
+    let mut out = Vec::new();
+    if !s.marked {
+        out.push(s.name);
+    }
+    out.extend(
+        s.fields
+            .iter()
+            .filter(|(_, ty)| field_serializes(*ty) == Some(false))
+            .map(|(field, _)| *field),
+    );
+    match s.constructor {
+        None => out.push(s.name),
+        Some(c) if !constructor_fits(s, c, src) => {
+            out.push(c.child_by_field_name("name").unwrap_or(c));
+        }
+        Some(_) => {}
+    }
+    match s.get_object_data {
+        Some(g) if !get_object_data_fits(s, g, src) => {
+            out.push(g.child_by_field_name("name").unwrap_or(g));
+        }
+        // New fields, with nothing to write them.
+        None if s.derived => out.extend(
+            s.fields
+                .iter()
+                .filter(|(_, ty)| field_serializes(*ty) != Some(false))
+                .map(|(field, _)| *field),
+        ),
+        _ => {}
+    }
+    out
+}
+
+/// Types implementing ISerializable that take part in serialization (the
+/// `[Serializable]` attribute, ISerializable in their own base list, or a
+/// serialization constructor) without the recommended pattern: the
+/// attribute, `[NonSerialized]` on fields that don't serialize, a
+/// serialization constructor, protected when the type can be derived from
+/// and private when it can't, a public virtual GetObjectData on a type that
+/// can be derived from, and, deriving from a serializable base, calls to
+/// its constructor and GetObjectData and an override of GetObjectData for
+/// new fields. Test projects aren't checked (`in_csharp_test_project`, and
+/// files using a test framework here).
+pub(super) fn serialization_problems<'t>(m: &Model<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(infer) = Infer::new(m, src) else {
+        return Vec::new();
+    };
+    if m.root.is_none_or(|root| uses_test_framework(root, src)) {
+        return Vec::new();
+    }
+    let mut found: Vec<Node<'t>> = Vec::new();
+    walk_tree(m, |declaration, _| {
+        if let Some(s) = serialized(&infer, declaration, src) {
+            found.extend(serialization_type_problems(&infer, &s, src));
+        }
+    });
+    found.sort_by_key(|n| (n.start_byte(), n.id()));
+    found.dedup_by_key(|n| n.id());
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::cs::tests::flagged;
@@ -1962,5 +2316,107 @@ mod tests {
             public void Kept(string p) { using var fs = new FileStream(p, FileMode.Open); var ms = new MemoryStream(); }\n\
             }";
         assert_eq!(flagged("cs/undisposed-local", src), [6, 12, 18, 18]);
+    }
+
+    #[test]
+    fn serialization_as_documented() {
+        let bad = "using System;\nusing System.Runtime.Serialization;\n\
+            public class Bar\n{\n}\n\
+            public class Foo : ISerializable\n{\n\
+                private readonly Bar bar;\n}\n\
+            public sealed class SealedFoo : Foo\n{\n\
+                private int val;\n\
+                public SealedFoo()\n    {\n    }\n\
+                public SealedFoo(SerializationInfo info, StreamingContext context)\n    {\n    }\n}\n\
+            public class UnsealedFoo : Foo\n{\n\
+                public UnsealedFoo()\n    {\n    }\n\
+                public UnsealedFoo(SerializationInfo info, StreamingContext context)\n        : base(info, context)\n    {\n    }\n\
+                protected void GetObjectData(SerializationInfo info, StreamingContext context)\n    {\n    }\n}\n";
+        // [Serializable] isn't inherited, so the derived types need it too:
+        // the compliant solution adds it to both.
+        assert_eq!(
+            flagged("cs/iserializable-without-constructor", bad),
+            [6, 8, 10, 12, 16, 20, 25, 29]
+        );
+        let good = "using System;\nusing System.Runtime.Serialization;\n\
+            public class Bar { }\n\
+            [Serializable]\npublic class Foo : ISerializable {\n\
+                [NonSerialized]\n    private readonly Bar bar;\n\
+                public Foo() { }\n\
+                protected Foo(SerializationInfo info, StreamingContext context) { }\n\
+                public virtual void GetObjectData(SerializationInfo info, StreamingContext context) { }\n}\n\
+            [Serializable]\npublic sealed class SealedFoo : Foo {\n\
+                private int val;\n\
+                public SealedFoo() { }\n\
+                private SealedFoo(SerializationInfo info, StreamingContext context) : base(info, context) { }\n\
+                public override void GetObjectData(SerializationInfo info, StreamingContext context) { base.GetObjectData(info, context); }\n}\n\
+            [Serializable]\npublic class UnsealedFoo : Foo {\n\
+                public UnsealedFoo() { }\n\
+                protected UnsealedFoo(SerializationInfo info, StreamingContext context) : base(info, context) { }\n\
+                public override void GetObjectData(SerializationInfo info, StreamingContext context) { base.GetObjectData(info, context); }\n}\n";
+        assert_eq!(
+            flagged("cs/iserializable-without-constructor", good),
+            [] as [usize; 0]
+        );
+    }
+
+    #[test]
+    fn serialization_opt_in_and_fields() {
+        let src = "using System;\nusing System.IO;\nusing System.Runtime.Serialization;\n\
+            [Serializable]\npublic class OptInAttribute { private Stream s; }\n\
+            public class OptInInterface : ISerializable { }\n\
+            public class OptInConstructor { protected OptInConstructor(SerializationInfo info, StreamingContext context) { } }\n\
+            public class PlainException : Exception { private int code; }\n\
+            [Serializable]\npublic class MarkedException : Exception {\n\
+                private Stream stream;\n\
+                private string text;\n\
+                [NonSerialized] private Stream skipped;\n\
+                private static Stream shared;\n\
+                private DayOfWeek day;\n\
+                protected MarkedException(SerializationInfo info, StreamingContext context) : base(info, context) { }\n}\n";
+        // Only types implementing ISerializable are checked, once they opt in:
+        // the attribute alone (line 5) or a constructor alone (line 7) isn't
+        // ISerializable, and an exception (line 8) hasn't opted in.
+        // MarkedException: a Stream without [NonSerialized], and new fields
+        // without a GetObjectData override.
+        assert_eq!(
+            flagged("cs/iserializable-without-constructor", src),
+            [6, 11, 12, 15]
+        );
+        let tests = "using System;\nusing System.Runtime.Serialization;\nusing Xunit;\n\
+            public class Fixture : ISerializable { }\n";
+        assert_eq!(
+            flagged("cs/iserializable-without-constructor", tests),
+            [] as [usize; 0]
+        );
+    }
+
+    #[test]
+    fn serialization_in_conditional_code() {
+        let src = "using System;\nusing System.Runtime.Serialization;\n\
+            #if HAVE_SERIALIZATION\n[Serializable]\n#endif\n\
+            public class JsonException : Exception {\n\
+            #if HAVE_SERIALIZATION\n\
+                public JsonException(SerializationInfo info, StreamingContext context) : base(info, context) { }\n\
+            #endif\n}\n";
+        // Both are seen in their #if: opted in and marked, but the
+        // constructor of a type that can be derived from is public.
+        assert_eq!(flagged("cs/iserializable-without-constructor", src), [8]);
+    }
+
+    #[test]
+    fn csharp_test_projects_by_convention() {
+        for test in [
+            "test/Shop.Tests/OrderTests.cs",
+            "src/Shop.UnitTests/A.cs",
+            "tests/A.cs",
+            "Shop.Specs/A.cs",
+            "src\\Shop.Test\\A.cs",
+        ] {
+            assert!(super::in_csharp_test_project(test), "{test}");
+        }
+        for main in ["src/Shop/Tests.cs", "src/Contest/A.cs", "A.cs"] {
+            assert!(!super::in_csharp_test_project(main), "{main}");
+        }
     }
 }

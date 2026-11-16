@@ -9,6 +9,7 @@ mod cs_bugs;
 mod cs_classes;
 mod cs_dataflow;
 mod cs_documented;
+pub(crate) use cs_documented::in_csharp_test_project;
 mod cs_extra;
 mod cs_final;
 mod cs_flow;
