@@ -1559,7 +1559,7 @@ fn recursive_formatting<'t>(imp: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
 }
 
 /// A macro's arguments: its token tree split at the top-level commas.
-fn macro_arguments(tokens: Node) -> Vec<Vec<Node>> {
+pub(super) fn macro_arguments(tokens: Node) -> Vec<Vec<Node>> {
     let mut args = vec![Vec::new()];
     let mut c = tokens.walk();
     let children: Vec<Node> = tokens.children(&mut c).collect();
