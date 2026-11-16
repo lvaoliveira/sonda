@@ -1457,10 +1457,10 @@ fn mutable_global<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 /// A member's initializer that doesn't depend on the constructor's
 /// parameters, when the class's other constructors in the file agree: none
-/// sets the member otherwise, or another one sets it to the same value. Reported at the first
-/// constructor only.
+/// sets the member otherwise, or another one sets it to the same value.
+/// Reported at the first constructor only.
 fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
-    let Some(constructor) = init.parent().and_then(|list| list.parent()) else {
+    let Some((constructor, list)) = init.parent().and_then(|l| Some((l.parent()?, l))) else {
         return false;
     };
     let Some(member) = independent_member(init, &parameter_names(constructor, src), src) else {
@@ -1470,66 +1470,63 @@ fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
     // An empty `()` asks for what the member gets anyway; a class
     // template's delegating constructors otherwise hide the rest.
     let template = in_template(constructor) && !matches!(&value[..], b"()" | b"{}");
-    if template
-        && init
-            .parent()
-            .is_some_and(|list| delegates(constructor, list, src))
-    {
+    if template && delegates(constructor, list, src) {
         return false;
     }
-    let scope = class_scope(constructor, src);
+    let (mut same, mut otherwise) = (0, 0);
+    for (other, list) in other_constructors(constructor, src) {
+        if template && delegates(other, list, src) {
+            return false;
+        }
+        match member_initializer(list, member, src).map(|o| initializer_value(o, src) == value) {
+            Some(true) if other.start_byte() < constructor.start_byte() => return false,
+            Some(true) => same += 1,
+            Some(false) => otherwise += 1,
+            None => {}
+        }
+    }
+    otherwise == 0 || same > 0
+}
+
+/// The class's other constructors in the same file, with their initializer
+/// lists.
+fn other_constructors<'t>(constructor: Node<'t>, src: &[u8]) -> Vec<(Node<'t>, Node<'t>)> {
     let container = match constructor.parent() {
         Some(t) if t.kind() == "template_declaration" => t.parent(),
         p => p,
     };
     let Some(container) = container else {
-        return true;
+        return Vec::new();
     };
-    let (mut same, mut otherwise) = (0, 0);
+    let scope = class_scope(constructor, src);
     let mut cursor = container.walk();
-    for other in container.named_children(&mut cursor) {
-        let other = if other.kind() == "template_declaration" {
-            match other
+    container
+        .named_children(&mut cursor)
+        .filter_map(|other| {
+            let other = if other.kind() == "template_declaration" {
+                other
+                    .named_children(&mut other.walk())
+                    .find(|c| c.kind() == "function_definition")?
+            } else {
+                other
+            };
+            let candidate = other.id() != constructor.id()
+                && other.kind() == "function_definition"
+                && class_scope(other, src) == scope;
+            let list = other
                 .named_children(&mut other.walk())
-                .find(|c| c.kind() == "function_definition")
-            {
-                Some(f) => f,
-                None => continue,
-            }
-        } else {
-            other
-        };
-        if other.id() == constructor.id()
-            || other.kind() != "function_definition"
-            || class_scope(other, src) != scope
-        {
-            continue;
-        }
-        let Some(list) = other
-            .named_children(&mut other.walk())
-            .find(|c| c.kind() == "field_initializer_list")
-        else {
-            continue;
-        };
-        if template && delegates(other, list, src) {
-            return false;
-        }
-        let mine = list.named_children(&mut list.walk()).find(|o| {
-            o.named_child(0)
-                .is_some_and(|n| n.kind() == "field_identifier" && text(n, src) == member)
-        });
-        match mine {
-            Some(o) if initializer_value(o, src) == value => {
-                if other.start_byte() < constructor.start_byte() {
-                    return false;
-                }
-                same += 1;
-            }
-            Some(_) => otherwise += 1,
-            None => {}
-        }
-    }
-    otherwise == 0 || same > 0
+                .find(|c| c.kind() == "field_initializer_list")?;
+            candidate.then_some((other, list))
+        })
+        .collect()
+}
+
+/// The entry of an initializer list that sets the member.
+fn member_initializer<'t>(list: Node<'t>, member: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    list.named_children(&mut list.walk()).find(|o| {
+        o.named_child(0)
+            .is_some_and(|n| n.kind() == "field_identifier" && text(n, src) == member)
+    })
 }
 
 /// Whether a node sits in a template: a class template's member, say.
