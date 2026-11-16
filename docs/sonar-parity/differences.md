@@ -752,9 +752,13 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   (`TEST(Suite, Name) { ... }`) and an old-style (K&R) definition aren't
   scored.
 - **Commented-out code (S125).** A block of `//` lines is one issue, at its
-  first line, prose or not, when a line reads as code or the lines parse as
-  C++; a commented preprocessor directive (`// #endif`) and a lone brace
-  are code.
+  first line, when a line reads as code or the lines parse as C++, and the
+  block isn't mostly prose: prose lines as many as the lines of code, or at
+  least three and a third as many, make it documentation (a licence, an
+  explanation quoting a line of code, a usage note with an example), as do
+  zlib's `/* */` function docs. A commented preprocessor directive
+  (`// #endif`), a lone brace and a line ending a block or a statement
+  with code before it (`//   pixels_per_byte, storage_type> {`) are code.
 - **TODO and FIXME (S1134, S1135).** In any case (`// Fixme:`), once per
   comment, at its first line.
 - **Parameters (S107).** An `override` isn't counted.
@@ -880,7 +884,14 @@ On the two projects, 1,108 of SonarCloud's issues and 387 of sonda's:
 - **Members SonarCloud skipped (105, S3230):** a literal initializer it
   didn't report, in a class it reported others of; nothing visible (a
   template, a header, another constructor) told them apart.
-- **sonda only, not pinned down (the rest):** S125 (45), S6177 (40, see
+- **Commented-out code SonarCloud leaves (17, S125):** blocks of
+  declarations only (`// Color a = color::Transparent;` four times, though
+  a lone `// bool owns_buffer_;` is reported), single calls
+  (`// t.writeCommand(...);`, a `Serial.println` over two lines), short
+  examples after a line of prose (`// stuff like:`), and the wiring notes
+  of three drivers, though a fourth driver's, of the same shape, is
+  reported. Nothing in the text tells them apart from blocks it reports.
+- **sonda only, not pinned down (the rest):** S6177 (40, see
   above), S5421 (31), S1242 (20, see above), S6022 (7, see above), S5025 (17, mostly a `new` stored in a member), S5950
   (17), S1186 (16), S1172 (14, callbacks and constructors), S5827 (12), a
   few each for the rest.

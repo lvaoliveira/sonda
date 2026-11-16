@@ -267,6 +267,15 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- C and C++'s `common/commented-out-code` judges a comment as a whole: one
+  that is mostly prose with a line or two of code in it (an explanation,
+  a licence, a usage note with an example) is documentation, not code. A
+  line ending a statement or a block with code before it
+  (`//   int bar() {`) reads as code, a comment closing the line
+  (`// free(p); // no longer used`) aside, and a Python header
+  (`// if self.x:`) doesn't. On qutepart-cpp and roo_display, sonda
+  raises 5 more of SonarCloud's issues and 25 fewer it doesn't.
+
 - `js/deprecated-api` names what replaces the API it found
   ("document.execCommand is deprecated: use navigator.clipboard to copy
   and paste.") in place of "Use the replacement.", and no longer reports
