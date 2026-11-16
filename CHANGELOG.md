@@ -275,6 +275,18 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- Eleven Rust rules follow Clippy's output on probe files of their pattern:
+  `redundant-comparison`, `impossible-comparison`, `panicking-unwrap`,
+  `match-str-case-mismatch`, `while-float`, `mut-from-ref`,
+  `to-string-shadows-display`, `serde-visit-string-only`,
+  `infinite-iterator`, `non-octal-permissions` and `unsafe-pointer-deref`.
+  They no longer report an or-pattern arm, `x == 5 && x == 6`, `||`,
+  `repeat_with` or `repeat_n`, an `unwrap` after the value is shadowed, or
+  a function without `unsafe` code returning `&mut`. They now find raw
+  pointer arguments passed to unsafe functions or methods, hexadecimal
+  permissions, float loops on typed locals, and unwraps under `!`, `&&`
+  and `while` ([ADR-0026](docs/adr/0026-rust.md), "Probing Clippy").
+
 - C and C++'s `common/commented-out-code` judges a comment as a whole: one
   that is mostly prose with a line or two of code in it (an explanation,
   a licence, a usage note with an example) is documentation, not code. A
