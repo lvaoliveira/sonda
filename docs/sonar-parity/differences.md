@@ -788,7 +788,10 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
     doesn't use the constructor's parameters (a literal, `kName` or
     `ALL_CAPS`, `ns::value`, a template parameter, `x_()`), at the first
     constructor in the class that sets it so; one that reads another
-    member isn't.
+    member isn't. When another constructor sets the member otherwise, only
+    a value two constructors share is reported (`a11_(1.0)` in two of
+    five); a class template whose constructors delegate is left, except
+    for an empty `x_()`.
   - `cpp/unused-parameter` (S1172): not in `Class::method(...)`, which a
     declaration (perhaps virtual) fixes, nor in a template's
     specialization, nor a virtual function or an override; the
@@ -881,9 +884,13 @@ On the two projects, 1,108 of SonarCloud's issues and 387 of sonda's:
   live or which files a build includes; SonarCloud analyzes only what the
   compilation database compiles (zlib's inactive fast paths, an ESP32-only
   source).
-- **Members SonarCloud skipped (105, S3230):** a literal initializer it
-  didn't report, in a class it reported others of; nothing visible (a
-  template, a header, another constructor) told them apart.
+- **Members SonarCloud skipped (56, S3230):** 38 are in files the build
+  doesn't compile (ESP32 sources and products, an inactive `#if`, tests it
+  reported almost nothing in). The other 18 are single constructors whose
+  body then reads a format (`glyph_count_(0)`, then
+  `glyph_count_ = ReadBeU16(reader)`, though a gradient's overwritten
+  member is reported), a test double, and eight others nothing visible
+  tells apart.
 - **Commented-out code SonarCloud leaves (17, S125):** blocks of
   declarations only (`// Color a = color::Transparent;` four times, though
   a lone `// bool owns_buffer_;` is reported), single calls
