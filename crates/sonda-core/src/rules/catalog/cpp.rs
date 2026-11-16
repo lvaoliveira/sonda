@@ -5,10 +5,12 @@
 use super::java_security::text;
 use super::prelude::*;
 
-/// Off: SonarCloud reports about a third of what this finds, and nothing
-/// visible tells its reports from the rest (an else, nesting, use in the
-/// body); C++ can't be measured on SonarQube 26.7.
-pub(super) static OFF_BY_DEFAULT: &[&str] = &["cpp/init-statement"];
+/// Off: SonarCloud reports about a third of what each finds, and nothing
+/// visible tells its reports from the rest (for the init-statement, an
+/// else, nesting, use in the body; for const member functions, which of
+/// those that touch no member, or only read, it reports); C++ can't be
+/// measured on SonarQube 26.7.
+pub(super) static OFF_BY_DEFAULT: &[&str] = &["cpp/init-statement", "cpp/const-member-function"];
 
 pub(super) static RULES: &[Rule] = &[
     Rule {
@@ -726,6 +728,45 @@ pub(super) static RULES: &[Rule] = &[
             lang: Lang::Cpp,
             bad: "int high(uint8_t b) { return b >> 4; }",
             good: "int high(std::byte b) { return std::to_integer<int>(b >> 4); }",
+        }),
+    },
+    Rule {
+        id: "cpp/const-member-function",
+        name: "Member functions that don't change their object should be const",
+        description: "A member function that writes no field and calls only const functions can \
+                      be declared `const`, which lets callers holding a const object use it and \
+                      says it changes nothing.",
+        message: "Declare this member function \"const\"; it doesn't change its object.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S5817")],
+        check: Check::Structural,
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "class Box {\n public:\n  int area() { return w_ * h_; }\n private:\n  int w_, h_;\n};",
+            good: "class Box {\n public:\n  int area() const { return w_ * h_; }\n private:\n  int w_, h_;\n};",
+        }),
+    },
+    Rule {
+        id: "cpp/const-reference-variable",
+        name: "A loop's reference that changes nothing should be const",
+        description: "A range-for variable bound by non-const reference and only used through \
+                      `->` never changes the element it refers to; `const auto&` says so.",
+        message: "Make this a reference to const; the loop doesn't change the element.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 1,
+        sonar: &[exact("S5350")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(for_range_loop declarator: (reference_declarator)) @match",
+            filter: Some(Keep(reference_only_dereferenced)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "void f(std::vector<Rule*>& rules) { for (auto& rule : rules) { rule->apply(); } }",
+            good: "void f(std::vector<Rule*>& rules) { for (const auto& rule : rules) { rule->apply(); } }",
         }),
     },
 ];
@@ -1960,6 +2001,77 @@ fn bounded_by_a_count(n: Node, counts: &[&[u8]], src: &[u8]) -> bool {
         })
 }
 
+/// `for (auto& x : xs)`, not const, whose `x` the body only uses as
+/// `x->...` or a smart pointer's `x.get()`: what it points to may change,
+/// the element doesn't. Not in a
+/// const member function, where `auto&` over a member is const already.
+fn reference_only_dereferenced(for_loop: Node, src: &[u8]) -> bool {
+    let (Some(ty), Some(declarator), Some(body)) = (
+        for_loop.child_by_field_name("type"),
+        for_loop.child_by_field_name("declarator"),
+        for_loop.child_by_field_name("body"),
+    ) else {
+        return false;
+    };
+    let before_name = &src[for_loop.start_byte()..declarator.start_byte()];
+    if text(ty, src).windows(5).any(|w| w == b"const")
+        || before_name.windows(5).any(|w| w == b"const")
+        || in_const_member_function(for_loop, src)
+    {
+        return false;
+    }
+    declarator
+        .named_children(&mut declarator.walk())
+        .find(|c| c.kind() == "identifier")
+        .is_some_and(|name| only_read_through(body, text(name, src), src))
+}
+
+/// Whether `node` is in a member function declared `const`.
+fn in_const_member_function(node: Node, src: &[u8]) -> bool {
+    let mut up = node.parent();
+    while let Some(n) = up {
+        if n.kind() == "function_definition" {
+            return function_declarator(n).is_some_and(|d| {
+                d.children(&mut d.walk())
+                    .any(|c| c.kind() == "type_qualifier" && text(c, src) == b"const")
+            });
+        }
+        up = n.parent();
+    }
+    false
+}
+
+/// Whether `body` uses `name`, and only as `name->...` or a smart
+/// pointer's const accessor (`name.get()`).
+fn only_read_through(body: Node, name: &[u8], src: &[u8]) -> bool {
+    let reads = |n: Node| {
+        n.parent().is_some_and(|p| {
+            p.kind() == "field_expression"
+                && p.child_by_field_name("argument") == Some(n)
+                && p.child_by_field_name("operator")
+                    .is_some_and(|o| match text(o, src) {
+                        b"->" => true,
+                        b"." => p
+                            .child_by_field_name("field")
+                            .is_some_and(|f| matches!(text(f, src), b"get" | b"data" | b"isNull")),
+                        _ => false,
+                    })
+        })
+    };
+    let mut uses = 0;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && text(n, src) == name {
+            if !reads(n) {
+                return false;
+            }
+            uses += 1;
+        }
+        stack.extend(n.named_children(&mut n.walk()));
+    }
+    uses > 0
+}
+
 /// A default-capture lambda that leaves its expression: passed to a call,
 /// or stored in a local that is; not one in a constructor's initializer
 /// list, nor one only called where it's defined.
@@ -2506,5 +2618,9 @@ mod tests {
         // Only indexed, in a loop the count bounds; not passed on.
         let spans = "void a(Color* p, int count) {\n  for (int i = 0; i < count; ++i) p[i] = 0;\n}\nvoid b(Color* p, int count) {\n  for (int i = 0; i < count; ++i) p[i] = 0;\n  g(p);\n}";
         assert_eq!(flagged("cpp/pointer-and-count", spans), [1]);
+        // Only `->` and a smart pointer's accessor; not in a const member
+        // function, where `auto&` over a member is const already.
+        let loops = "void f(std::vector<Rule*>& rules) {\n  for (auto& r : rules) { r->apply(); }\n  for (auto& r : rules) { r.reset(); }\n  for (const auto& r : rules) { r->apply(); }\n  for (auto& r : rules) { use(r.get()); }\n}\nvoid C::g() const {\n  for (auto& r : rules_) { r->apply(); }\n}";
+        assert_eq!(flagged("cpp/const-reference-variable", loops), [2, 5]);
     }
 }

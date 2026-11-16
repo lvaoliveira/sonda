@@ -7,7 +7,9 @@
 //! loses only the semantic ones, with a warning.
 
 pub(crate) mod cpp_bytes;
+pub(crate) mod cpp_const;
 pub(crate) mod cpp_index;
+pub(crate) mod cpp_walk;
 mod cs;
 pub(crate) mod cs_cfg;
 pub(crate) mod cs_index;

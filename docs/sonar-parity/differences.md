@@ -29,7 +29,7 @@ the steps, the commands and what was learned along the way.
 | Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
 | Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
 | Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
-| qutepart-cpp⁴ | C++ (Qt) | `1099377` | 353 of 748 | 39 |
+| qutepart-cpp⁴ | C++ (Qt) | `0e5a022` | 365 of 746 | 40 |
 | roo_display⁴ | C++ (embedded), C | `f139977` | 2,231 of 2,958 | 347 |
 
 ¹ `asyncio`, `email`, `json`, `http`, `logging`, `concurrent` and `urllib`
@@ -841,15 +841,35 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   byte, or a field or member function the index finds declared as one in
   another file. Not the right operand, nor an operation cast straight back
   to a byte type. All 169 of roo_display's, and 7 extra.
+- **Const member functions** (`cpp/const-member-function`, S5817, on the
+  same index, off by default): a member function that writes no field of
+  its class or a base, deeply (through a member pointer, a local pointing
+  into one, a range-for reference to one, what a member call returns),
+  passes no non-scalar field to a call, and calls only const functions on
+  the object and its fields; not virtual, static or a friend. With a base
+  outside the project, a name the index can't place counts against it,
+  unless spelled like a macro. It finds 36 of the two projects' 81, and 66
+  SonarCloud doesn't report: mostly functions that touch no member or only
+  read, which SonarCloud reports in some classes and not others, with
+  nothing visible to tell them apart. The same reason keeps
+  `cpp/init-statement` off.
+- **Loop references** (`cpp/const-reference-variable`, S5350, one file): a
+  range-for variable bound by non-const reference and used only through
+  `->` or a smart pointer's `get()`, `data()`, `isNull()`; not in a const
+  member function, where `auto&` over a member is const already. 13 of
+  qutepart-cpp's 28, none extra. The rest are local pointers and loops
+  calling the element's own functions, whose constness needs the type
+  (Qt's, or the C library's in roo_display's zlib).
 
 ### Still open in C and C++
 
-On the two projects, 1,122 of SonarCloud's issues and 386 of sonda's:
+On the two projects, 1,108 of SonarCloud's issues and 387 of sonda's:
 
-- **No sonda rule yet (527):** the largest, S5817 (83, const member
-  functions), S5350 (44, pointers and references to const); then about a
-  hundred keys with fewer.
-- **Off by default:** S6004 (126).
+- **No sonda rule yet (399):** about a hundred keys, none with more than
+  18 issues: S5951 (a needless `const` qualifier), S886 (loops to
+  rewrite), S6230 (`= default`), S995 (pointer parameters to const),
+  S5812 (nested namespaces to concatenate).
+- **Off by default:** S6004 (125), S5817 (84).
 - **SonarCloud's commented-out code in generated tables (140):** roo_display's
   font files comment each glyph, `// "&" (U+0026), uncompressed`, which
   SonarCloud reports as code.

@@ -182,7 +182,7 @@ pub(crate) fn analyze(
         has_syntax_errors: root.has_error(),
         facts: match lang {
             Lang::CSharp => cs_facts(&ctx, root, deadline),
-            Lang::Cpp => cpp_facts(&ctx, root, deadline),
+            Lang::Cpp => cpp_facts(&ctx, root, deadline, rules),
             _ => java_facts(&ctx, lang, root, deadline)
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
@@ -768,10 +768,14 @@ const CPP_SUPPRESSED_LINES: &str = "cpp-suppressed-lines";
 
 /// The facts the project-level C++ rules need from this file: the classes
 /// it defines (ADR-0020), and its lines with a suppression comment.
-fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant) -> Vec<(String, String)> {
+fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant, rules: &RuleSet) -> Vec<(String, String)> {
     let mut facts = Vec::new();
-    let index = crate::semantic::cpp_index::extract(root, ctx.src.as_bytes(), deadline);
-    if (!index.classes.is_empty() || !index.bytes.is_empty())
+    let parts = crate::semantic::cpp_index::Parts {
+        bytes: rules.get(rules::cpp_project::BYTE_OPERATION).is_some(),
+        bodies: rules.get(rules::cpp_project::CONST_FUNCTION).is_some(),
+    };
+    let index = crate::semantic::cpp_index::extract(root, ctx.src.as_bytes(), deadline, parts);
+    if (!index.classes.is_empty() || !index.bytes.is_empty() || !index.bodies.is_empty())
         && let Ok(json) = serde_json::to_string(&index)
     {
         facts.push((crate::semantic::cpp_index::FACT.to_string(), json));

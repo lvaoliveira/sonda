@@ -23,8 +23,8 @@ Windows, and on macOS in a workflow of its own (`macos.yml`) that doesn't
 block a merge: GitHub's macOS runners are often short of capacity. On a
 pull request, CI runs only the jobs that test what it changes
 (`scripts/ci-changes.sh`): a change to the docs runs none, one to the web
-app only the web and Docker jobs. Pushes to `main` and changes to the
-workflows run everything.
+app the web, Docker and `lint` jobs (`lint` checks its complexity). Pushes
+to `main` and changes to the workflows run everything.
 
 ```sh
 cargo fmt --all -- --check
@@ -33,6 +33,7 @@ cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc
 cargo doc --workspace --lib --no-deps
 cargo run -q -p sonda -- rules --format markdown | diff - docs/rules.md
+cargo run -q -p sonda -- scan . --no-gate -f json -o /tmp/self.json && scripts/check-complexity.sh /tmp/self.json
 cargo deny check && cargo audit
 ```
 
@@ -52,6 +53,12 @@ Please make sure your change also follows these:
   reach a report.
 - **No `unwrap`/`expect`/`panic!` on production paths** unless a comment
   states why it can't fail.
+- **No function over the complexity thresholds**, in any language:
+  cognitive complexity 15, as SonarQube's, and Python's function
+  complexity. `scripts/check-complexity.sh` lists any, and CI's `lint`
+  job fails on them, so a function is split when it's written rather
+  than refactored later. Split by what the code does: a helper per case
+  of a `match`, per kind of node, per step of a walk.
 - **Dependencies are rare.** Say in the PR why the standard library or an
   existing dependency isn't enough, and check its license against
   `deny.toml`.

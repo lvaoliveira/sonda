@@ -8,7 +8,10 @@
 //! nothing, and nothing is reported about it.
 
 use crate::semantic::cpp_bytes::{ByteSite, is_byte, is_byte_pointer};
-use crate::semantic::cpp_index::{ClassDecl, ClassId, FACT, FileIndex, MethodDecl, ProjectIndex};
+use crate::semantic::cpp_const::MemberBody;
+use crate::semantic::cpp_index::{
+    ClassDecl, ClassId, FACT, FileIndex, MethodDecl, ProjectIndex, without_template_arguments,
+};
 use crate::semantic::cs_index::Span;
 
 /// A finding: the rule, the index of the file it's in, and where.
@@ -16,9 +19,10 @@ pub(crate) type Finding = (&'static str, usize, Span);
 
 pub(crate) const HIDDEN_FUNCTION: &str = "cpp/hidden-inherited-function";
 pub(crate) const BYTE_OPERATION: &str = "cpp/std-byte";
+pub(crate) const CONST_FUNCTION: &str = "cpp/const-member-function";
 
 /// The rules this module checks.
-pub(crate) const RULES: &[&str] = &[HIDDEN_FUNCTION, BYTE_OPERATION];
+pub(crate) const RULES: &[&str] = &[HIDDEN_FUNCTION, BYTE_OPERATION, CONST_FUNCTION];
 
 /// Checks the active rules on every file's summary.
 pub(crate) fn run<'f>(
@@ -49,6 +53,14 @@ fn check_file(index: &ProjectIndex, f: usize, active: &[&str], found: &mut Vec<F
             hidden_functions(index, (f, c), found);
         }
     }
+    if active.contains(&CONST_FUNCTION) {
+        found.extend(
+            file.bodies
+                .iter()
+                .filter(|body| could_be_const(index, body))
+                .map(|body| (CONST_FUNCTION, f, body.span)),
+        );
+    }
     if active.contains(&BYTE_OPERATION) {
         found.extend(
             file.bytes
@@ -57,6 +69,135 @@ fn check_file(index: &ProjectIndex, f: usize, active: &[&str], found: &mut Vec<F
                 .map(|site| (BYTE_OPERATION, f, site.span)),
         );
     }
+}
+
+/// A member function whose body changes nothing the index shows is its
+/// object's: it writes none of the class's fields (or its bases'), calls
+/// only const member functions on the object, and only const functions on
+/// its fields, other than through a pointer; and it isn't virtual. When a
+/// base is outside the project, a name or call the index can't place could
+/// be one of the base's, and counts against it, unless it's spelled like a
+/// macro (`QCOMPARE`).
+fn could_be_const(index: &ProjectIndex, body: &MemberBody) -> bool {
+    if body.escapes {
+        return false;
+    }
+    let Some(class) = index.resolve_declaring(&body.scope, &body.class, &body.name) else {
+        return false;
+    };
+    let chain: Vec<ClassId> = std::iter::once(class)
+        .chain(index.ancestors(class))
+        .collect();
+    let unknown_base = chain.iter().any(|c| {
+        index
+            .class(*c)
+            .bases
+            .iter()
+            .any(|b| index.resolve(*c, b).is_none())
+    });
+    let declared = index
+        .class(class)
+        .methods
+        .iter()
+        .filter(|m| m.name == body.name);
+    if declared
+        .clone()
+        .any(|m| m.static_ || m.const_ || is_virtual(index, class, m))
+    {
+        return false;
+    }
+    let field = |name: &str| {
+        chain
+            .iter()
+            .find_map(|c| index.class(*c).fields.iter().find(|f| f.name == name))
+    };
+    let unplaced = |name: &str| unknown_base && !spelled_like_a_macro(name);
+    // A name it writes is a field, or one the index can't place: either
+    // way, not something a const function may write.
+    if !body.writes.is_empty() {
+        return false;
+    }
+    // A field passed to a call may be changed through a reference or
+    // pointer parameter, unless it's a plain number.
+    if body
+        .passed
+        .iter()
+        .any(|p| field(p).is_none_or(|f| !is_scalar(&f.ty)))
+    {
+        return false;
+    }
+    let calls_ok = body.calls.iter().all(|c| {
+        // A functor member, `setter_(0)`: its call operator may change it.
+        if field(c).is_some() {
+            return false;
+        }
+        let own: Vec<&MethodDecl> = chain
+            .iter()
+            .flat_map(|id| index.class(*id).methods.iter().filter(|m| &m.name == c))
+            .collect();
+        if own.is_empty() {
+            !unplaced(c)
+        } else {
+            own.iter().any(|m| m.const_ || m.static_)
+        }
+    });
+    calls_ok
+        && body
+            .member_calls
+            .iter()
+            .all(|(object, method)| match field(object) {
+                Some(f) => field_call_is_const(index, class, &f.ty, method),
+                None => false,
+            })
+}
+
+/// A number or `bool`, passed by value whatever the parameter.
+fn is_scalar(ty: &str) -> bool {
+    let ty = ty.replace("const", "");
+    matches!(
+        ty.as_str(),
+        "int"
+            | "unsigned"
+            | "unsignedint"
+            | "long"
+            | "short"
+            | "bool"
+            | "char"
+            | "float"
+            | "double"
+            | "size_t"
+    ) || ty.starts_with("int") && ty.ends_with("_t")
+        || ty.starts_with("uint") && ty.ends_with("_t")
+}
+
+/// Whether calling `method` on a field of type `ty`, or on what it points
+/// or refers to, leaves it unchanged: a class in the project whose
+/// `method` is const.
+fn field_call_is_const(index: &ProjectIndex, owner: ClassId, ty: &str, method: &str) -> bool {
+    let ty = ty
+        .replace("const", "")
+        .replace("mutable", "")
+        .trim_end_matches(['*', '&'])
+        .to_string();
+    let Some(class) = index.resolve_in(
+        &index.class(owner).scope,
+        &without_template_arguments(&ty),
+        None,
+    ) else {
+        return false;
+    };
+    std::iter::once(class)
+        .chain(index.ancestors(class))
+        .flat_map(|c| index.class(c).methods.iter())
+        .any(|m| m.name == method && (m.const_ || m.static_))
+}
+
+/// `QCOMPARE`, `Q_INIT_RESOURCE`: a macro, not a function of a base.
+fn spelled_like_a_macro(name: &str) -> bool {
+    name.len() > 1
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// A byte-oriented operation whose operand the file shows is a byte, or is
@@ -216,6 +357,23 @@ mod tests {
                 at("spec.cpp", 6),
                 at("spec.cpp", 12),
             ]
+        );
+    }
+    /// The class declared in a header, its member functions defined in
+    /// another file: what they write and call decides.
+    #[test]
+    fn const_member_functions() {
+        let header = (
+            "box.h",
+            "class Inner {\n public:\n  int get() const;\n  void set();\n};\nclass Box {\n public:\n  int area();\n  void grow();\n  int peek();\n  int poke();\n  int sum(int* out);\n  virtual int v();\n  int w_, h_;\n  Inner* in_;\n  int* buf_;\n};",
+        );
+        let source = (
+            "box.cpp",
+            "int Box::area() { return w_ * h_; }\nvoid Box::grow() { w_ += 1; }\nint Box::peek() { return in_->get(); }\nint Box::poke() { in_->set(); return 0; }\nint Box::sum(int* out) { int* p = buf_; *p = 1; *out = w_; return 0; }\nint Box::v() { return w_; }",
+        );
+        assert_eq!(
+            flagged("cpp/const-member-function", &[header, source]),
+            [at("box.cpp", 1), at("box.cpp", 3)]
         );
     }
 }

@@ -6,7 +6,8 @@
 //! declared in another file, is left to the project pass, which knows the
 //! field's type from the index (ADR-0020).
 
-use super::cpp_index::{compact_text, named, node_text, span_of, without_template_arguments};
+use super::cpp_index::{compact_text, named, node_text, span_of};
+use super::cpp_walk::{Owner, declared, functions};
 use super::cs_index::Span;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -65,7 +66,6 @@ const BYTE_FUNCTIONS: &[&str] = &["pgm_read_byte", "pgm_read_byte_near", "pgm_re
 
 struct Finder<'s> {
     src: &'s [u8],
-    deadline: Instant,
     /// Functions this file declares returning a byte, by name.
     byte_functions: Vec<&'s str>,
     sites: Vec<ByteSite>,
@@ -75,12 +75,14 @@ struct Finder<'s> {
 pub(crate) fn sites(root: Node, src: &[u8], deadline: Instant) -> Vec<ByteSite> {
     let mut f = Finder {
         src,
-        deadline,
         byte_functions: BYTE_FUNCTIONS.to_vec(),
         sites: Vec::new(),
     };
     f.collect_byte_functions(root);
-    f.walk(root, &mut Vec::new(), None);
+    functions(root, src, deadline, &mut |function, owner| {
+        f.function(function, owner);
+        f.sites.len() < MAX_SITES
+    });
     f.sites
 }
 
@@ -102,17 +104,6 @@ impl Locals<'_> {
             .max_by_key(|(_, _, start, _)| *start)
             .map(|(_, ty, _, _)| ty.as_str())
     }
-}
-
-/// What a function body is written in: its class, as written, and the
-/// scope to resolve that from.
-#[derive(Clone)]
-struct Context {
-    class: String,
-    scope: Vec<String>,
-    /// The fields the class's body declares, when the function is in it:
-    /// their types need no index.
-    fields: Vec<(String, String)>,
 }
 
 impl<'s> Finder<'s> {
@@ -149,86 +140,8 @@ impl<'s> Finder<'s> {
         }
     }
 
-    /// Walks to each function body, keeping the namespaces and classes
-    /// around it.
-    fn walk(&mut self, n: Node, scope: &mut Vec<String>, class: Option<&Context>) {
-        if Instant::now() > self.deadline || self.sites.len() >= MAX_SITES {
-            return;
-        }
-        match n.kind() {
-            "namespace_definition" => {
-                let depth = scope.len();
-                match n.child_by_field_name("name") {
-                    Some(name) => {
-                        scope.extend(self.text(name).split("::").map(|s| s.trim().to_string()))
-                    }
-                    None => scope.push(String::new()),
-                }
-                for c in named(n) {
-                    self.walk(c, scope, class);
-                }
-                scope.truncate(depth);
-            }
-            "class_specifier" | "struct_specifier" => {
-                let Some(name) = n.child_by_field_name("name") else {
-                    for c in named(n) {
-                        self.walk(c, scope, class);
-                    }
-                    return;
-                };
-                let simple = match name.kind() {
-                    "template_type" | "qualified_identifier" => {
-                        name.child_by_field_name("name").unwrap_or(name)
-                    }
-                    _ => name,
-                };
-                let context = Context {
-                    class: self.text(simple).to_string(),
-                    scope: scope.clone(),
-                    fields: n
-                        .child_by_field_name("body")
-                        .map(|body| self.fields(body))
-                        .unwrap_or_default(),
-                };
-                scope.push(context.class.clone());
-                for c in named(n) {
-                    self.walk(c, scope, Some(&context));
-                }
-                scope.pop();
-            }
-            "function_definition" => {
-                let owner = self.owner(n, scope, class);
-                self.function(n, owner.as_ref());
-            }
-            _ => {
-                for c in named(n) {
-                    self.walk(c, scope, class);
-                }
-            }
-        }
-    }
-
-    /// The class a function is a member of: the one it's defined in, or the
-    /// one its name qualifies (`void Spec::draw()`).
-    fn owner(&self, function: Node, scope: &[String], class: Option<&Context>) -> Option<Context> {
-        let mut d = function.child_by_field_name("declarator")?;
-        while matches!(d.kind(), "pointer_declarator" | "reference_declarator") {
-            d = d.child_by_field_name("declarator")?;
-        }
-        let name = d.child_by_field_name("declarator")?;
-        if name.kind() == "qualified_identifier" {
-            let scope_text = self.compact(name.child_by_field_name("scope")?);
-            return Some(Context {
-                class: without_template_arguments(&scope_text),
-                scope: scope.to_vec(),
-                fields: Vec::new(),
-            });
-        }
-        class.cloned()
-    }
-
     /// The sites in a function's body.
-    fn function(&mut self, function: Node, owner: Option<&Context>) {
+    fn function(&mut self, function: Node, owner: Option<&Owner>) {
         let Some(body) = function.child_by_field_name("body") else {
             return;
         };
@@ -303,30 +216,6 @@ impl<'s> Finder<'s> {
                     )
                 })
         })
-    }
-
-    /// The data members a class body declares, with their types.
-    fn fields(&self, body: Node) -> Vec<(String, String)> {
-        let mut out = Vec::new();
-        for member in named(body) {
-            if member.kind() != "field_declaration" {
-                continue;
-            }
-            let Some(ty) = member.child_by_field_name("type") else {
-                continue;
-            };
-            let before: String =
-                String::from_utf8_lossy(&self.src[member.start_byte()..ty.end_byte()])
-                    .split_whitespace()
-                    .collect();
-            let mut cursor = member.walk();
-            for d in member.children_by_field_name("declarator", &mut cursor) {
-                if let (Some(name), suffix) = declared(d) {
-                    out.push((self.text(name).to_string(), before.clone() + &suffix));
-                }
-            }
-        }
-        out
     }
 
     /// `(roo::byte)(x << 4)`: the operation's result goes straight into a
@@ -404,7 +293,7 @@ impl<'s> Finder<'s> {
 
     /// What `operand` is: a byte the file shows, or a class's field or
     /// member function, whose type the index knows.
-    fn classify(&self, operand: Node, types: &Locals, owner: Option<&Context>) -> Option<ByteSite> {
+    fn classify(&self, operand: Node, types: &Locals, owner: Option<&Owner>) -> Option<ByteSite> {
         match operand.kind() {
             "parenthesized_expression" => self.classify(operand.named_child(0)?, types, owner),
             "cast_expression" => {
@@ -425,12 +314,7 @@ impl<'s> Finder<'s> {
 
     /// `static_cast<uint8_t>(x)`, a function returning a byte, or a member
     /// function called on a local (`color.r()`).
-    fn classify_call(
-        &self,
-        call: Node,
-        types: &Locals,
-        owner: Option<&Context>,
-    ) -> Option<ByteSite> {
+    fn classify_call(&self, call: Node, types: &Locals, owner: Option<&Owner>) -> Option<ByteSite> {
         let f = call.child_by_field_name("function")?;
         if f.kind() == "template_function"
             && f.child_by_field_name("name")
@@ -464,7 +348,7 @@ impl<'s> Finder<'s> {
         &self,
         member: Node,
         types: &Locals,
-        owner: Option<&Context>,
+        owner: Option<&Owner>,
     ) -> Option<ByteSite> {
         let object = member.child_by_field_name("argument")?;
         let field = self.text(member.child_by_field_name("field")?);
@@ -488,7 +372,7 @@ impl<'s> Finder<'s> {
         &self,
         element: Node,
         types: &Locals,
-        owner: Option<&Context>,
+        owner: Option<&Owner>,
     ) -> Option<ByteSite> {
         if element.kind() == "pointer_expression"
             && element
@@ -511,7 +395,7 @@ impl<'s> Finder<'s> {
 /// A name the function doesn't declare, read as a field of the class it's
 /// a member of: decided here when the class's body around it declares the
 /// field, else left to the index.
-fn own_field(owner: Option<&Context>, name: &str, element: bool) -> Option<ByteSite> {
+fn own_field(owner: Option<&Owner>, name: &str, element: bool) -> Option<ByteSite> {
     let o = owner?;
     if let Some((_, ty)) = o.fields.iter().find(|(f, _)| f == name) {
         let byte = if element {
@@ -545,31 +429,6 @@ fn find_kind<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
         return Some(n);
     }
     named(n).into_iter().find_map(|c| find_kind(c, kind))
-}
-
-/// The name a declarator declares, and what it adds to the type: `*`, `&`,
-/// `[]`.
-fn declared(d: Node) -> (Option<Node>, String) {
-    let mut suffix = String::new();
-    let mut d = d;
-    for _ in 0..8 {
-        match d.kind() {
-            "identifier" | "field_identifier" => return (Some(d), suffix),
-            "pointer_declarator" => suffix.push('*'),
-            "reference_declarator" => suffix.push('&'),
-            "array_declarator" => suffix.push_str("[]"),
-            "init_declarator" => {}
-            _ => return (None, suffix),
-        }
-        match d
-            .child_by_field_name("declarator")
-            .or_else(|| named(d).into_iter().next())
-        {
-            Some(next) => d = next,
-            None => return (None, suffix),
-        }
-    }
-    (None, suffix)
 }
 
 /// The class a variable's type names: `Spec` for `constSpec&` or `Spec*`;

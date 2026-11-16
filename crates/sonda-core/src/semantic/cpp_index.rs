@@ -36,6 +36,9 @@ pub(crate) struct MethodDecl {
     pub(crate) virtual_: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) static_: bool,
+    /// Declared `const`: it can't change the object.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) const_: bool,
     /// Its return type as written, whitespace removed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) ret: String,
@@ -84,6 +87,10 @@ pub(crate) struct FileIndex {
     /// knows (`cpp_bytes`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) bytes: Vec<super::cpp_bytes::ByteSite>,
+    /// What each non-const member function's body does to its object
+    /// (`cpp_const`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) bodies: Vec<super::cpp_const::MemberBody>,
 }
 
 /// How many classes a file may summarize: a generated file declaring more
@@ -97,7 +104,7 @@ struct Extractor<'s> {
 }
 
 /// The classes a C++ file defines, and its byte-oriented operations.
-pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
+pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant, parts: Parts) -> FileIndex {
     let mut x = Extractor {
         src,
         deadline,
@@ -106,8 +113,25 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant) -> FileIndex {
     x.walk(root, &mut Vec::new());
     FileIndex {
         classes: x.classes,
-        bytes: super::cpp_bytes::sites(root, src, deadline),
+        bytes: if parts.bytes {
+            super::cpp_bytes::sites(root, src, deadline)
+        } else {
+            Vec::new()
+        },
+        bodies: if parts.bodies {
+            super::cpp_const::bodies(root, src, deadline)
+        } else {
+            Vec::new()
+        },
     }
+}
+
+/// Which parts of a summary that look into function bodies to extract:
+/// only those an active rule reads.
+#[derive(Clone, Copy)]
+pub(crate) struct Parts {
+    pub(crate) bytes: bool,
+    pub(crate) bodies: bool,
 }
 
 /// A node's source text.
@@ -352,6 +376,7 @@ impl<'s> Extractor<'s> {
                     .iter()
                     .any(|w| matches!(*w, "override" | "final")),
             static_: own.contains(&"static"),
+            const_: specifiers.contains(&"const"),
             ret: member
                 .child_by_field_name("type")
                 .map(|t| self.compact(t))
@@ -450,7 +475,7 @@ fn unqualified(ty: &str) -> String {
 }
 
 /// `ns::Base` for `ns::Base<T>`.
-pub(super) fn without_template_arguments(name: &str) -> String {
+pub(crate) fn without_template_arguments(name: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
     for c in name.chars() {
@@ -558,6 +583,33 @@ impl<'a> ProjectIndex<'a> {
             .map(|m| m.ret.as_str())
     }
 
+    /// The class `name`, written in `scope`, that declares a member function
+    /// `method`: among the classes of that name, the one `resolve_in`
+    /// picks if it does, else the only one that does.
+    pub(crate) fn resolve_declaring(
+        &self,
+        scope: &[String],
+        name: &str,
+        method: &str,
+    ) -> Option<ClassId> {
+        let declares = |id: ClassId| self.class(id).methods.iter().any(|m| m.name == method);
+        if let Some(id) = self
+            .resolve_in(scope, name, None)
+            .filter(|id| declares(*id))
+        {
+            return Some(id);
+        }
+        let simple = name.rsplit("::").next().unwrap_or(name);
+        let mut found = self
+            .by_name
+            .get(simple)?
+            .iter()
+            .copied()
+            .filter(|id| declares(*id));
+        let first = found.next()?;
+        found.next().is_none().then_some(first)
+    }
+
     /// The type of `id`'s field `name`, declared in it or a base.
     pub(crate) fn field_type(&self, id: ClassId, name: &str) -> Option<&'a str> {
         std::iter::once(id)
@@ -595,7 +647,15 @@ mod tests {
         p.set_language(&tree_sitter_cpp::LANGUAGE.into()).unwrap();
         let tree = p.parse(src, None).unwrap();
         let far = Instant::now() + std::time::Duration::from_secs(60);
-        extract(tree.root_node(), src.as_bytes(), far)
+        extract(
+            tree.root_node(),
+            src.as_bytes(),
+            far,
+            Parts {
+                bytes: true,
+                bodies: true,
+            },
+        )
     }
 
     #[test]
