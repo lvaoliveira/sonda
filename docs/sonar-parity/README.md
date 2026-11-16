@@ -1,7 +1,7 @@
 # Compatibility with SonarQube rules
 
 Which SonarQube rule keys have an equivalent in sonda ([ADR-0007](../adr/0007-sonarqube-rule-parity.md)).
-Refreshed by `scripts/sonar_parity.py` on 2026-11-04, against SonarQube 26.7.0.124771.
+Refreshed by `scripts/sonar_parity.py` on 2026-11-16, against SonarQube 26.7.0.124771.
 
 - **done**: a sonda rule covers it (`exact` in sonda's catalog);
   **partial**: a sonda rule is related but differs, for example syntactic where
@@ -15,14 +15,14 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-04, against SonarQube 26.7.0.1
 
 | Language | Rules (not deprecated) | Done | Partial | Todo: syntactic | Todo: types | Todo: dataflow |
 |---|---|---|---|---|---|---|
-| JavaScript | 461 | 419 | 41 | 1 | 0 | 0 |
-| TypeScript | 481 | 439 | 41 | 1 | 0 | 0 |
+| JavaScript | 461 | 418 | 41 | 2 | 0 | 0 |
+| TypeScript | 481 | 438 | 41 | 2 | 0 | 0 |
 | Python | 397 | 384 | 12 | 1 | 0 | 0 |
 | Java | 703 | 691 | 12 | 0 | 0 | 0 |
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
-| C# | 446 | 427 | 17 | 2 | 0 | 0 |
-| Rust | 85 | 34 | 33 | 18 | 0 | 0 |
+| C# | 446 | 429 | 15 | 2 | 0 | 0 |
+| Rust | 85 | 34 | 40 | 11 | 0 | 0 |
 
 ## Known gaps
 

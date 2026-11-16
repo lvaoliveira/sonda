@@ -91,7 +91,7 @@ csharpsquid:S1939,code_smell,minor,yes,all,syntactic,done,cs/redundant-base-type
 csharpsquid:S1940,code_smell,minor,yes,all,syntactic,done,cs/inverted-comparison,,
 csharpsquid:S1944,code_smell,critical,yes,all,syntactic,todo,,,
 csharpsquid:S1994,code_smell,critical,yes,all,syntactic,done,cs/for-update-other-variable,,
-csharpsquid:S2068,vulnerability,major,yes,main,syntactic,partial,cs/hardcoded-credential,259 798,A07
+csharpsquid:S2068,vulnerability,major,yes,main,syntactic,done,cs/hardcoded-credential,259 798,A07
 csharpsquid:S2077,vulnerability,major,yes,main,syntactic,partial,cs/sql-built-dynamically,89 943,A03
 csharpsquid:S2092,vulnerability,minor,yes,main,syntactic,done,cs/cookie-not-secure,311 315 614,A04 A05
 csharpsquid:S2094,code_smell,minor,yes,all,syntactic,done,cs/empty-class,,
@@ -389,7 +389,7 @@ csharpsquid:S5766,vulnerability,major,yes,all,syntactic,partial,cs/deserializati
 csharpsquid:S5856,bug,critical,yes,all,syntactic,done,cs/invalid-regex,,
 csharpsquid:S6354,code_smell,major,no,main,syntactic,done,cs/untestable-clock,,
 csharpsquid:S6377,vulnerability,major,yes,main,syntactic,partial,cs/xml-signature-unverified-key,347,A02
-csharpsquid:S6418,vulnerability,blocker,yes,main,syntactic,partial,cs/hardcoded-credential,798,A07
+csharpsquid:S6418,vulnerability,blocker,yes,main,syntactic,done,cs/hardcoded-secret,798,A07
 csharpsquid:S6419,code_smell,major,yes,main,syntactic,done,cs/azure-function-static-state,,
 csharpsquid:S6420,code_smell,major,yes,main,syntactic,done,cs/azure-function-client-recreated,,
 csharpsquid:S6421,code_smell,major,no,main,syntactic,done,cs/azure-function-without-try,,
