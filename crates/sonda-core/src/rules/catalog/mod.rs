@@ -74,6 +74,7 @@ mod py_regex;
 mod py_security;
 mod regex_checks;
 mod rs;
+mod rs_extra;
 mod rs_more;
 pub(super) mod standards;
 
@@ -192,6 +193,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cs_semantic::RULES, cs_semantic::OFF_BY_DEFAULT),
     (rs::RULES, rs::OFF_BY_DEFAULT),
     (rs_more::RULES, rs_more::OFF_BY_DEFAULT),
+    (rs_extra::RULES, rs_extra::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

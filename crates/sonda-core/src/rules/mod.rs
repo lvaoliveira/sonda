@@ -40,6 +40,7 @@ pub(crate) const JS_LICENSE_HEADER: &str = "js/missing-license-header";
 pub(crate) const PY_MODULE_NAME: &str = "py/module-name";
 pub(crate) const PY_PARSE_FAILURE: &str = "py/parse-failure";
 pub(crate) const JAVA_PARSE_FAILURE: &str = "java/parse-failure";
+pub(crate) const RS_PARSE_FAILURE: &str = "rs/parse-failure";
 pub(crate) const JAVA_PACKAGE_INFO_MISSING: &str = "java/package-info-missing";
 pub(crate) const JAVA_PACKAGE_INFO_ONLY: &str = "java/package-info-only";
 pub(crate) const JAVA_COMPONENT_NOT_SCANNED: &str = "java/component-not-scanned";
