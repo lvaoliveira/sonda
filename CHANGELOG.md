@@ -9,6 +9,11 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Two more Rust rules, Clippy's correctness lints: lint attributes on
+  imports, which apply to nothing, and comparisons with a type's minimum or
+  maximum, always true, always false or an equality
+  ([ADR-0026](docs/adr/0026-rust.md), "Batch 5").
+
 - More Rust rules from SonarQube's Rust set, Clippy's correctness lints:
   inconsistent open options, bad and ineffective bit masks, `Hash` beside
   `Borrow<str>` and `Borrow<[u8]>`, recursive formatting, key closures

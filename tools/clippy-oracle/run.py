@@ -73,6 +73,8 @@ LINTS = {
     'rs/overflow-check-panics': 'panicking_overflow_checks',
     'rs/eager-transmute': 'eager_transmute',
     'rs/size-of-as-element-count': 'size_of_in_element_count',
+    'rs/useless-lint-attribute': 'useless_attribute',
+    'rs/absurd-extreme-comparison': 'absurd_extreme_comparisons',
 }
 RULE_OF = {lint: rule for rule, lint in LINTS.items()}
 # A rule that follows a second lint.
