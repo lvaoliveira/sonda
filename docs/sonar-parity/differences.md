@@ -775,7 +775,10 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   - `cpp/redundant-static` (S3609): constexpr at namespace scope, and
     anything in an unnamed namespace; not `static const`.
   - `cpp/mutable-global` (S5421): `extern` too; a pointer must be const at
-    every level.
+    every level; under an `#if` at file scope too. Not an object of a class
+    the file defines with a constructor, a base or a virtual function (a
+    test's emulator, a do-nothing device), which SonarCloud leaves; a plain
+    struct's, or a library class's (`QMutex`), is reported.
   - `cpp/typedef` (S5416), `cpp/unscoped-enum` (S3642),
     `cpp/inline-constexpr` (S5408), `cpp/redundant-virtual` (S3471),
     `cpp/deprecated-code` (S1133), `cpp/default-special-member` (S3490),
@@ -910,7 +913,8 @@ On the two projects, 1,108 of SonarCloud's issues and 387 of sonda's:
   of three drivers, though a fourth driver's, of the same shape, is
   reported. Nothing in the text tells them apart from blocks it reports.
 - **sonda only, not pinned down (the rest):** S6177 (54, see
-  above), S5421 (31), S1242 (20, see above), S6022 (7, see above), S5025 (17, mostly a `new` stored in a member), S5950
+  above), S5421 (21: 18 in a syntax highlighter's sample of invalid
+  C++, whose declarations only a compiler tells apart), S1242 (20, see above), S6022 (7, see above), S5025 (17, mostly a `new` stored in a member), S5950
   (17), S1186 (16), S1172 (14, callbacks and constructors), S5827 (12), a
   few each for the rest.
 

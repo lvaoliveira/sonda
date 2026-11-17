@@ -293,6 +293,12 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- C++'s `cpp/mutable-global` reports a global under an `#if` at file
+  scope, and leaves an object of a class the file defines with a
+  constructor, a base or a virtual function (a test's emulator, a
+  do-nothing device). On qutepart-cpp and roo_display, sonda raises 4 more
+  of SonarCloud's issues and 7 fewer it doesn't.
+
 - C++'s `cpp/using-enum` reads a nested scope (`Box::ClipResult::kEmpty`),
   which it used to skip, and tells enumerations of one name apart by
   their qualifiers (`arc::AreaType`, `round_rect::AreaType`). On
