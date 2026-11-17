@@ -1995,16 +1995,35 @@ fn enumerator_uses<'t, 's>(body: Node<'t>, src: &'s [u8]) -> Vec<(&'s [u8], Vec<
         }
         if n.kind() == "qualified_identifier" {
             if let Some(scope) = enumerator_scope(n, src) {
-                match uses.iter_mut().find(|(s, _)| *s == scope) {
-                    Some((_, nodes)) => nodes.push(n),
-                    None => uses.push((scope, vec![n])),
-                }
+                add_use(&mut uses, scope, n);
             }
             continue;
         }
         stack.extend(n.named_children(&mut n.walk()));
     }
     uses
+}
+
+/// Files a use under its enumeration: `arc::AreaType` and
+/// `internal::arc::AreaType` name one, `round_rect::AreaType` another.
+fn add_use<'t, 's>(uses: &mut Vec<(&'s [u8], Vec<Node<'t>>)>, scope: &'s [u8], n: Node<'t>) {
+    match uses.iter_mut().find(|(s, _)| same_scope(s, scope)) {
+        Some((s, nodes)) => {
+            nodes.push(n);
+            if scope.len() > s.len() {
+                *s = scope;
+            }
+        }
+        None => uses.push((scope, vec![n])),
+    }
+}
+
+/// Whether two scopes name the same thing, one qualifying the other
+/// further: `BlendingMode` and `roo_display::BlendingMode`.
+fn same_scope(a: &[u8], b: &[u8]) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    long.ends_with(short)
+        && (long.len() == short.len() || long[..long.len() - short.len()].ends_with(b"::"))
 }
 
 /// The innermost block holding every node, from the first's.
@@ -2026,10 +2045,18 @@ fn innermost_block_around<'t>(nodes: &[Node<'t>]) -> Option<Node<'t>> {
 /// `Scope` of a `Scope::Value` that reads as an enumerator: both
 /// capitalized (`kValue` counts), used as a value.
 fn enumerator_scope<'s>(id: Node, src: &'s [u8]) -> Option<&'s [u8]> {
-    let name = id
+    // `Box::ClipResult::kEmpty` nests: the last scope is the enumeration's.
+    let mut inner = id;
+    while let Some(n) = inner
+        .child_by_field_name("name")
+        .filter(|n| n.kind() == "qualified_identifier")
+    {
+        inner = n;
+    }
+    let name = inner
         .child_by_field_name("name")
         .filter(|n| n.kind() == "identifier")?;
-    let scope = id.child_by_field_name("scope")?;
+    let scope = inner.child_by_field_name("scope")?;
     if id.parent().is_some_and(|p| {
         p.kind() == "call_expression" && p.child_by_field_name("function") == Some(id)
     }) {
@@ -2039,7 +2066,10 @@ fn enumerator_scope<'s>(id: Node, src: &'s [u8]) -> Option<&'s [u8]> {
         t.first().is_some_and(u8::is_ascii_uppercase)
             || (t.len() > 1 && t[0] == b'k' && t[1].is_ascii_uppercase())
     };
-    let scope_text = text(scope, src);
+    let full = text(id, src);
+    let scope_text = full[..name.start_byte() - id.start_byte()]
+        .strip_suffix(b"::")
+        .unwrap_or_else(|| text(scope, src));
     let last = scope_text
         .rsplit(|b| *b == b':')
         .next()
@@ -2884,6 +2914,10 @@ mod tests {
         // nor two uses.
         let enums = "int f(Mode m) {\n  switch (m) {\n    case Mode::kA: return 1;\n    case Mode::kB: return 2;\n    case Mode::kC: return 3;\n  }\n  return 0;\n}\nvoid g() { h(QStyle::A, QStyle::B, QStyle::C); x(Mode::kA, Mode::kB); }";
         assert_eq!(flagged("cpp/using-enum", enums), [2]);
+        // `Box::Clip::kEmpty` nests its scope; `arc::Area` and
+        // `internal::arc::Area` are one enumeration, `rect::Area` another.
+        let nested = "void f(Box::Clip c) {\n  if (c == Box::Clip::kEmpty) {}\n  if (c == Box::Clip::kSome) {}\n  if (c == Box::Clip::kAll) {}\n}\nvoid g(int k) {\n  switch (k) {\n    case 0: {\n      switch (a()) {\n        case arc::Area::kIn: break;\n        case internal::arc::Area::kOut: break;\n        case arc::Area::kMixed: break;\n      }\n    }\n    case 1: { int y = rect::Area::kIn + rect::Area::kOut; }\n  }\n}";
+        assert_eq!(flagged("cpp/using-enum", nested), [1, 9]);
         let deduced = "void f(int n) {\n  std::vector<Color> a(8, Color(0));\n  Color c;\n  std::vector<Color> b(8, c);\n  std::vector<uint8_t> d(8, 128);\n  std::uniform_int_distribution<int> e(0, 6);\n  std::uniform_int_distribution<int16_t> g(0, 6);\n  std::uniform_int_distribution<> h(0, n);\n}";
         assert_eq!(
             flagged("cpp/deducible-template-arguments", deduced),

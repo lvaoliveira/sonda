@@ -826,8 +826,15 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
   - `cpp/using-enum` (S6177): three or more `Scope::Value` uses of one
     enumeration in a function, at the smallest block holding them all. A
     Qt class's values (`QStyle::State_Selected`) aren't an enumeration's
-    scope. SonarCloud sometimes reports inner blocks separately instead
-    (an `if` and its `else`); nothing visible told when.
+    scope. `Box::ClipResult::kEmpty` counts for `ClipResult`;
+    `arc::AreaType` and `internal::arc::AreaType` are one enumeration,
+    `round_rect::AreaType` another. Along a chain of blocks holding the
+    same uses SonarCloud picks the innermost, as sonda does; where the
+    uses branch into several blocks it reports the outer block in some
+    functions (a 116-line one) and the inner ones in others (a 122-line
+    one), and no count, size or share told which. A struct of constants
+    declared in a header (`Theme::Colors::BracketMatching`) reads as an
+    enumeration.
   - `cpp/deducible-template-arguments` (S6012): `std::vector<T> v(n,
     T(...))`, or with a local declared `T`, and a
     `std::uniform_int_distribution<int>` from int literals, or `<>`; a
@@ -902,7 +909,7 @@ On the two projects, 1,108 of SonarCloud's issues and 387 of sonda's:
   examples after a line of prose (`// stuff like:`), and the wiring notes
   of three drivers, though a fourth driver's, of the same shape, is
   reported. Nothing in the text tells them apart from blocks it reports.
-- **sonda only, not pinned down (the rest):** S6177 (40, see
+- **sonda only, not pinned down (the rest):** S6177 (54, see
   above), S5421 (31), S1242 (20, see above), S6022 (7, see above), S5025 (17, mostly a `new` stored in a member), S5950
   (17), S1186 (16), S1172 (14, callbacks and constructors), S5827 (12), a
   few each for the rest.

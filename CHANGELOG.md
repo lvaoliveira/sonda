@@ -293,6 +293,13 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- C++'s `cpp/using-enum` reads a nested scope (`Box::ClipResult::kEmpty`),
+  which it used to skip, and tells enumerations of one name apart by
+  their qualifiers (`arc::AreaType`, `round_rect::AreaType`). On
+  qutepart-cpp and roo_display, sonda raises 12 more of SonarCloud's
+  issues; it also raises 14 more SonarCloud doesn't, where SonarCloud
+  picks a smaller block, or the scope is a struct of constants.
+
 - C++'s `cpp/initializer-list-constant` leaves a constructor whose
   signature doesn't parse (`const byte* data PROGMEM`): SonarCloud's build,
   without the macro, doesn't compile it either.
