@@ -9,6 +9,11 @@ file, the report formats and the public library API.
 
 ### Added
 
+- C and C++'s `cpp/shadowed-variable` (S1117): a local in an inner block
+  under the name of an outer local or a parameter, or a parameter under a
+  field's of its class. On qutepart-cpp and roo_display it raises 11 of
+  SonarCloud's 24 issues, and 2 it doesn't.
+
 - C++'s `cpp/constructor-body-assignment` (S3230's other half): a
   constructor that assigns a member a parameter or a constant in its body
   (`cacheDirty_ = true;`), where the initializer list would set it once.
