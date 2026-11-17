@@ -49,6 +49,7 @@ pub fn render(r: &Report) -> String {
     write_duplications(&mut out, r);
     write_vulnerabilities(&mut out, r);
     write_warnings(&mut out, r);
+    write_baseline(&mut out, r);
     write_summary(&mut out, r);
     write_dependencies(&mut out, r);
     write_gate(&mut out, r);
@@ -130,6 +131,23 @@ fn write_warnings(out: &mut String, r: &Report) {
         for w in r.warnings {
             let _ = writeln!(out, "  {}", terminal_safe(w));
         }
+    }
+}
+
+/// What the baseline file left out, so a gate it turned green can be seen.
+fn write_baseline(out: &mut String, r: &Report) {
+    let Some(b) = r.baseline else {
+        return;
+    };
+    let file = terminal_safe(&b.file);
+    let _ = writeln!(out, "\nBaseline ({file})");
+    let _ = writeln!(out, "  {} issues left out.", b.hidden);
+    if b.unmatched > 0 {
+        let _ = writeln!(
+            out,
+            "  {} entries match no issue now; `sonda scan --write-baseline {file}` refreshes the file.",
+            b.unmatched
+        );
     }
 }
 

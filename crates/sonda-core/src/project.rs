@@ -23,4 +23,6 @@ pub struct ProjectAnalysis {
     /// Known vulnerabilities in them, when checked against advisories
     /// (`ScanOptions::advisories`); `None` when not checked.
     pub(crate) vulnerabilities: Option<Vec<Vulnerability>>,
+    /// What the baseline file left out (ADR-0029); `None` when none applied.
+    pub(crate) baseline: Option<crate::baseline::Applied>,
 }

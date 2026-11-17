@@ -51,6 +51,9 @@ pub struct Report<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vulnerabilities: Option<&'a [crate::advisories::Vulnerability]>,
     pub warnings: &'a [String],
+    /// What the baseline file left out (ADR-0029); absent when none applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<&'a crate::baseline::Applied>,
     /// The `[rules]` settings of the project's sonda.toml the scan ran
     /// with, so the server can show why a rule reports nothing (ADR-0016).
     pub rule_settings: RuleSettings<'a>,
@@ -233,6 +236,7 @@ pub fn build(outcome: &Outcome, only_new: bool) -> Report<'_> {
         dependencies: &scan.dependencies,
         vulnerabilities: scan.vulnerabilities.as_deref(),
         warnings: &scan.warnings,
+        baseline: scan.baseline.as_ref(),
         rule_settings: RuleSettings::from_config(&outcome.rules),
         rule_profile: None,
         active_rules: &outcome.active_rules,

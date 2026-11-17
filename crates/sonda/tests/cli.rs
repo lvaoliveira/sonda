@@ -916,6 +916,155 @@ fn an_xml_file_that_is_not_a_coverage_report_is_an_error() {
 }
 
 #[test]
+fn a_baseline_hides_the_issues_it_lists_and_only_those() {
+    let dir = project(&[("src/app.js", "var x = 1;\neval(x);\n")]);
+    let root = dir.path();
+    let scan = |extra: &[&str]| {
+        sonda()
+            .args(["scan", "-f", "json"])
+            .args(extra)
+            .arg(root)
+            .output()
+            .unwrap()
+    };
+    let issues = |out: &Output| json(out)["issues"].as_array().unwrap().len();
+
+    let before = scan(&[]);
+    assert_eq!(code(&before), 1, "the eval fails the gate");
+    let found = issues(&before);
+    assert!(found >= 2);
+
+    // Writing accepts what is there: exit 0, whatever the gate says.
+    let file = root.join("baseline.json");
+    let written = scan(&["--write-baseline", file.to_str().unwrap()]);
+    assert_eq!(code(&written), 0, "{}", stderr(&written));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("{\n  \"version\": 1,\n  \"issues\": [\n    {\"fingerprint\":\""));
+    assert!(text.ends_with("  ]\n}\n"));
+    assert_eq!(text.matches("\"fingerprint\"").count(), found);
+
+    let hidden = scan(&["--baseline", file.to_str().unwrap()]);
+    assert_eq!(code(&hidden), 0, "{}", stderr(&hidden));
+    let report = json(&hidden);
+    assert_eq!(report["issues"].as_array().unwrap().len(), 0);
+    assert_eq!(report["measures"]["vulnerabilities"], 0.0);
+    assert_eq!(
+        report["baseline"],
+        json!({ "file": file.to_str().unwrap(), "hidden": found, "unmatched": 0 })
+    );
+
+    // Without a baseline nothing is left out, and no `baseline` is reported.
+    let off = scan(&["--no-baseline"]);
+    assert_eq!((code(&off), issues(&off)), (1, found));
+    assert!(json(&off).get("baseline").is_none());
+
+    // `sonda-baseline.json` in the project is read without being asked.
+    std::fs::rename(&file, root.join("sonda-baseline.json")).unwrap();
+    let auto = scan(&[]);
+    assert_eq!((code(&auto), issues(&auto)), (0, 0));
+    assert_eq!(json(&auto)["baseline"]["file"], "sonda-baseline.json");
+    assert_eq!(code(&scan(&["--no-baseline"])), 1);
+
+    // A new issue is reported; an edited line is a different issue.
+    std::fs::write(root.join("src/app.js"), "var x = 1;\neval(x);\neval(y);\n").unwrap();
+    let grown = scan(&[]);
+    assert_eq!(code(&grown), 1);
+    let new = json(&grown);
+    let lines: Vec<_> = new["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["line"].clone())
+        .collect();
+    assert!(
+        !lines.is_empty() && lines.iter().all(|l| *l == 3),
+        "{lines:?}"
+    );
+    std::fs::write(root.join("src/app.js"), "var x = 2;\neval(x);\n").unwrap();
+    assert_eq!(code(&scan(&[])), 0, "the line edited is a var, not an eval");
+    assert!(
+        issues(&scan(&[])) >= 1,
+        "var x = 2 is not the baselined line"
+    );
+
+    // Entries that match nothing are counted and said, not an error.
+    std::fs::write(root.join("src/app.js"), "const x = 1;\n").unwrap();
+    let stale = scan(&[]);
+    assert_eq!((code(&stale), issues(&stale)), (0, 0));
+    assert_eq!(json(&stale)["baseline"]["unmatched"], found);
+    let out = run(&["scan"], root);
+    assert!(
+        stdout(&out).contains(&format!("{found} entries match no issue now")),
+        "{}",
+        stdout(&out)
+    );
+    assert!(stdout(&out).contains("--write-baseline sonda-baseline.json"));
+}
+
+#[test]
+fn a_baseline_that_cannot_be_read_is_an_error_not_an_empty_one() {
+    let dir = project(&[
+        ("app.js", "eval(x);\n"),
+        ("bad.json", "{\"version\":2,\"issues\":[]}"),
+        ("junk.json", "not json"),
+    ]);
+    let root = dir.path();
+    for (args, expected) in [
+        (vec!["--baseline", "bad.json"], "version 2"),
+        (vec!["--baseline", "junk.json"], "not a baseline"),
+        (vec!["--baseline", "missing.json"], "cannot read"),
+    ] {
+        let mut cmd = sonda();
+        cmd.arg("scan").current_dir(root).args(&args).arg(".");
+        let out = cmd.output().unwrap();
+        assert_eq!(code(&out), 2, "{args:?}");
+        assert!(
+            stderr(&out).contains(expected),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+    // `scan.baseline` stays inside the project, and must exist.
+    for (toml, expected) in [
+        ("[scan]\nbaseline = \"../x.json\"\n", "inside the project"),
+        ("[scan]\nbaseline = \"/etc/x.json\"\n", "inside the project"),
+        ("[scan]\nbaseline = \"missing.json\"\n", "cannot read"),
+    ] {
+        std::fs::write(root.join("sonda.toml"), toml).unwrap();
+        let out = run(&["scan"], root);
+        assert_eq!(code(&out), 2, "{toml}");
+        assert!(stderr(&out).contains(expected), "{toml}: {}", stderr(&out));
+    }
+    std::fs::write(root.join("sonda.toml"), "[scan]\nbaseline = \"bad.json\"\n").unwrap();
+    assert_eq!(
+        code(&run(&["scan"], root)),
+        2,
+        "a configured baseline is read"
+    );
+    // One baseline at a time, and none while uploading or writing.
+    for args in [
+        vec!["--baseline", "a.json", "--no-baseline"],
+        vec!["--baseline", "a.json", "--write-baseline", "b.json"],
+        vec!["--no-baseline", "--write-baseline", "b.json"],
+        vec![
+            "--baseline",
+            "a.json",
+            "--save-upload",
+            "u.json",
+            "--project",
+            "p",
+            "--branch",
+            "b",
+            "--commit",
+            "ab",
+        ],
+    ] {
+        let out = run(&[&["scan"], args.as_slice()].concat(), root);
+        assert_eq!(code(&out), 2, "{args:?}");
+    }
+}
+
+#[test]
 fn init_writes_a_working_config_once() {
     let dir = project(&[("app.py", "x = 1\n")]);
     let config = dir.path().join("sonda.toml");

@@ -56,6 +56,7 @@ curl -fsSL https://sonda.sh/install | sh
 sonda scan [PATH]                         # analyze, print a report, exit 1 if the gate fails
 sonda scan . --new-code origin/main       # judge only what changed since main
 sonda scan . --coverage lcov.info         # import coverage: LCOV, JaCoCo or Cobertura (repeatable)
+sonda scan . --write-baseline sonda-baseline.json   # accept today's issues; later scans leave them out
 sonda scan . --format sarif -o sonda.sarif
 sonda scan . --format json --only-new     # list only issues on new code
 sonda scan . --advisories osv/            # also check dependencies against OSV records in osv/
@@ -85,6 +86,8 @@ sonda upload --saved sonda-upload.json.gz --server https://sonda.example.com \
 In a GitHub Actions `pull_request` job, an upload belongs to the pull request ([ADR-0021](docs/adr/0021-pull-request-decoration.md)): sonda reads its number, base and head branches, head commit and repository from the event, and the server keeps its analyses apart from branches, removing them 30 days after the last one. Pass the head branch as `--branch` (`${{ github.head_ref }}`). Elsewhere, `--pull-request 12 --pull-request-base main` say the same. A pull request from a fork isn't uploaded, since its CI has no secrets to upload with: the scan runs and says so. For forks, Dependabot, or a server GitHub's runners can't reach, scan and upload in separate workflows instead ([ADR-0028](docs/adr/0028-scan-then-upload-apart.md)): sonda ships both as reusable workflows, and [docs/server.md](docs/server.md#pull-requests-ci-cant-upload-scan-then-upload-apart) shows how to call them. Branch names like `pr:12` are kept for pull requests. A server older than this answers that it doesn't know the field, and sonda uploads to the branch instead.
 
 Without `--new-code`, sonda picks what new code is compared with ([ADR-0010](docs/adr/0010-default-new-code.md)): in a GitHub Actions pull request, its base branch; in a push, the commits it pushed; on a branch with commits its default branch lacks, their merge base; otherwise (a local run on `main`, say) uncommitted changes. The report says which it used. `--new-code none` (or `scan.new_code = "none"`) counts the whole project as new code.
+
+A baseline file ([ADR-0029](docs/adr/0029-baseline-file.md)) lists issues to accept without suppressing them line by line: `sonda scan --write-baseline sonda-baseline.json` writes every issue found (and exits 0), and scans then leave those issues out of the list, the counts, the gate and SARIF. `sonda-baseline.json` in the project is read by itself; `--baseline FILE` or `scan.baseline` names another, `--no-baseline` ignores it. An issue whose line was edited, or whose file moved, is reported again, and the report says how many issues were left out and how many entries match nothing now. It is for CLI-only use: an uploading scan ignores it, since the server would then see those issues as fixed; accept issues there instead.
 
 Each issue in a JSON or SARIF report has a `fingerprint` that stays the same across scans while the flagged line's text does not change, even if the line moves or is re-indented. Each file in a JSON report has the `sha256` of the bytes analyzed and, with `--coverage`, its `coverage` as `covered` and `uncovered` line numbers, its `branch_coverage` (`line`, `taken`, `total`) and its `function_coverage` (`name`, `line`, `calls`) when the LCOV report has branch and function records. The JSON format is versioned by `report_version`. Its `dependencies` list each package's ecosystem, name, version, package URL, lockfile, whether it's direct where the lockfile says, and its license where recorded. Its `rule_settings` are the `[rules]` settings of `sonda.toml` the scan ran with (`disabled`, `enabled` and `severity`), so a sonda server can show why a rule reports nothing ([ADR-0016](docs/adr/0016-rule-settings-on-the-server.md)), and, from `sonda scan --upload`, its `rule_profile`, the server's rule profile it applied (`name`, `revision`). Its `active_rules` are the ids of the rules the scan ran, so a server can tell a fixed finding from one whose rule didn't run. A taint finding (ADR-0027) has a `flow`: the path its value took, each step a `message`, a span (`line`, `column`, `end_line`, `end_column`) and, when the step is in another file than the issue, that file's `path`, from the source to the sink; other issues have none. SARIF has the same path as the result's `codeFlows`. `sonda sbom` stamps the SBOM with the current time, or with `SOURCE_DATE_EPOCH` when set, for reproducible output.
 
@@ -129,6 +132,7 @@ skip_generated = true      # skip files whose first lines say they're generated
 file_timeout_secs = 10     # per-file parse + rule-matching budget
 git_timeout_secs = 120     # each git process used for new code
 new_code = "auto"          # or "none", or a git ref such as "origin/main" (ADR-0010)
+# baseline = "sonda-baseline.json"   # issues to leave out; read from the project by default (ADR-0029)
 
 [rules]
 enabled = ["js/prefer-const"]   # rules that are off by default (`sonda rules` marks them)
@@ -252,10 +256,10 @@ it plugs in.
 - [ ] More lockfile formats: Go, Gradle, Bun's binary `bun.lockb` ([docs/roadmap.md](docs/roadmap.md#dependencies-sbom-and-known-vulnerabilities))
 - [x] JaCoCo and Cobertura coverage import
 - [ ] Caching, to skip re-analyzing unchanged files
-- [ ] Baseline file to accept existing issues without suppressing them line by line
+- [x] Baseline file to accept existing issues without suppressing them line by line
 - [ ] More languages (Go, PHP, Ruby, Kotlin)
 
-The last three are in [docs/roadmap.md](docs/roadmap.md#scanner-additions)
+The last two are in [docs/roadmap.md](docs/roadmap.md#scanner-additions)
 too, with the smaller deferred items.
 
 ## License
