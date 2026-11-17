@@ -389,7 +389,7 @@ pub(super) static RULES: &[Rule] = &[
         sonar: &[exact("S5421")],
         check: Check::Query {
             langs: CPP_ONLY,
-            query: "[(translation_unit (declaration) @match) (namespace_definition body: (declaration_list (declaration) @match))]",
+            query: "[(translation_unit (declaration) @match) (namespace_definition body: (declaration_list (declaration) @match)) (preproc_if (declaration) @match) (preproc_ifdef (declaration) @match) (preproc_else (declaration) @match) (preproc_elif (declaration) @match)]",
             filter: Some(Find(mutable_global)),
         },
         example: Some(Example {
@@ -1446,12 +1446,95 @@ fn type_repeated_on_the_right(declaration: Node, src: &[u8]) -> bool {
     }
 }
 
+/// Whether a declaration sits in the file or a namespace, through any
+/// `#if` around it, not in a function or a class.
+fn at_namespace_scope(declaration: Node) -> bool {
+    let mut up = declaration.parent();
+    while let Some(p) = up {
+        match p.kind() {
+            "preproc_if" | "preproc_ifdef" | "preproc_else" | "preproc_elif"
+            | "preproc_elifdef" => {
+                up = p.parent();
+            }
+            "translation_unit" => return true,
+            "declaration_list" => {
+                return p
+                    .parent()
+                    .is_some_and(|n| n.kind() == "namespace_definition");
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A global object of a class the file defines with a constructor, a base
+/// or a virtual function (a test's emulator, a do-nothing device): an
+/// object, not mutable data. A plain struct, or a class from elsewhere, is
+/// data as far as the file shows.
+fn object_with_behavior(declaration: Node, src: &[u8]) -> bool {
+    let Some(ty) = declaration.child_by_field_name("type") else {
+        return false;
+    };
+    if matches!(ty.kind(), "class_specifier" | "struct_specifier") {
+        return class_with_behavior(ty, src);
+    }
+    if ty.kind() != "type_identifier" {
+        return false;
+    }
+    let name = text(ty, src);
+    let mut root = declaration;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "class_specifier" | "struct_specifier")
+            && n.child_by_field_name("name")
+                .is_some_and(|c| text(c, src) == name)
+            && class_with_behavior(n, src)
+        {
+            return true;
+        }
+        if !matches!(n.kind(), "function_definition" | "compound_statement") {
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+    }
+    false
+}
+
+/// Whether a class's definition gives it a constructor, a base or a
+/// virtual function.
+fn class_with_behavior(class: Node, src: &[u8]) -> bool {
+    let Some(body) = class.child_by_field_name("body") else {
+        return false;
+    };
+    let name = class.child_by_field_name("name").map(|n| text(n, src));
+    let based = class
+        .named_children(&mut class.walk())
+        .any(|c| c.kind() == "base_class_clause");
+    based
+        || has_word(body, b"virtual", src)
+        || body.named_children(&mut body.walk()).any(|member| {
+            matches!(
+                member.kind(),
+                "function_definition" | "declaration" | "field_declaration"
+            ) && function_declarator(member)
+                .and_then(|d| d.child_by_field_name("declarator"))
+                .is_some_and(|d| Some(text(d, src)) == name)
+        })
+}
+
 /// A namespace-scope variable that isn't const, or a pointer that isn't
 /// const at every level.
 fn mutable_global<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     // `extern` ones too (as SonarCloud reports them); not a function, nor
     // what the parser recovered from an error (a macro it can't expand).
-    if function_declarator(declaration).is_some() || declaration.has_error() {
+    if function_declarator(declaration).is_some()
+        || declaration.has_error()
+        || !at_namespace_scope(declaration)
+        || object_with_behavior(declaration, src)
+    {
         return None;
     }
     let constant = has_word(declaration, b"const", src) || has_word(declaration, b"constexpr", src);
@@ -2811,6 +2894,10 @@ mod tests {
         assert_eq!(flagged("cpp/mergeable-if", ifs), [3]);
         let globals = "static int counter = 0;\nstatic const char* name = \"x\";\nstatic const char* const fixed = \"y\";\nextern int other;\nconstexpr int kMax = 3;\nstatic constexpr int kSize = 6;\nint twice(int x);";
         assert_eq!(flagged("cpp/mutable-global", globals), [1, 2, 4]);
+        // Under an `#if` too, not in a function's; not an object of a class
+        // the file gives a constructor, a base or a virtual function.
+        let objects = "#if 1\nint x;\n#endif\nstruct Stats { int n; };\nStats stats;\nstruct Emu { Emu() { init(); } };\nstatic Emu emu;\nclass Dummy : public Touch { void f() override {} };\nstatic Dummy dummy;\nstruct Hw { Hw() {} } hw;\nQMutex lock;\nvoid f() {\n#if 1\n  int y;\n#endif\n}";
+        assert_eq!(flagged("cpp/mutable-global", objects), [2, 5, 11]);
         assert_eq!(flagged("cpp/redundant-static", globals), [6]);
         let misc = "inline constexpr int twice(int x) { return 2 * x; }\ntypedef unsigned char byte_t;\nenum Color { kRed };\nenum class Mode { kA };\nvoid f(int* a, const void* p) {\n  a[0] = a[1] = 0;\n  const char* c = static_cast<const char*>(p);\n  auto q = std::unique_ptr<int>(new int(1));\n}\nvoid g(int x = 0);";
         assert_eq!(flagged("cpp/inline-constexpr", misc), [1]);
