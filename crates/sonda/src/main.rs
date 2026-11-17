@@ -73,8 +73,8 @@ struct ScanArgs {
     /// defaults to `auto`.
     #[arg(long, value_name = "REF")]
     new_code: Option<String>,
-    /// LCOV coverage report(s) to import.
-    #[arg(long, value_name = "LCOV")]
+    /// Coverage report(s) to import: LCOV, JaCoCo XML or Cobertura XML.
+    #[arg(long, value_name = "FILE")]
     coverage: Vec<PathBuf>,
     /// Check dependencies against the OSV records in DIR (an unzipped OSV
     /// export): fills the vulnerable_dependencies gate metrics and lists

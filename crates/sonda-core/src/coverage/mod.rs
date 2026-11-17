@@ -1,10 +1,61 @@
-//! LCOV coverage data (`--coverage lcov.info`). LCOV is produced by
-//! istanbul/c8/vitest (JS/TS), coverage.py (`coverage lcov`), gcov/lcov and
-//! llvm-cov (C/C++), and can be converted from JaCoCo. Parsing is pure;
-//! reading the report files is done by the scanner.
+//! Coverage data (`--coverage <file>`), in the format the file's content
+//! shows: LCOV, which istanbul/c8/vitest (JS/TS), coverage.py (`coverage
+//! lcov`), gcov/lcov and llvm-cov (C/C++) produce, or the XML of JaCoCo
+//! (Java, Kotlin) and Cobertura (Python, Java, C#, JavaScript). Parsing is
+//! pure; reading the report files is done by the scanner.
+
+mod cobertura;
+mod jacoco;
+mod resolve;
+mod xml;
+
+pub(crate) use resolve::Resolver;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Component, Path};
+
+/// What one file of an XML report holds, before it is matched to a scanned file.
+#[derive(Debug, Default)]
+pub(crate) struct FileData {
+    lines: BTreeMap<usize, u64>,
+    branches: BTreeMap<(usize, String, String), u64>,
+    functions: BTreeMap<(usize, String), u64>,
+}
+
+impl FileData {
+    fn add_line(&mut self, line: usize, hits: u64) {
+        let total = self.lines.entry(line).or_insert(0);
+        *total = total.saturating_add(hits);
+    }
+
+    fn add_branch(&mut self, line: usize, block: &str, branch: &str, taken: u64) {
+        let key = (line, block.to_string(), branch.to_string());
+        let total = self.branches.entry(key).or_insert(0);
+        *total = total.saturating_add(taken);
+    }
+
+    fn add_function(&mut self, line: usize, name: &str, calls: u64) {
+        let total = self.functions.entry((line, name.to_string())).or_insert(0);
+        *total = total.saturating_add(calls);
+    }
+}
+
+/// The paths an XML report's file might be, most likely first; the scanner
+/// picks the first that names a scanned file.
+#[derive(Debug)]
+pub(crate) struct Candidates {
+    pub(crate) paths: Vec<String>,
+    /// Whether a scanned file whose path ends with a candidate is a match
+    /// (JaCoCo names a file from its source root: `com/acme/Util.java`).
+    pub(crate) suffix: bool,
+}
+
+/// Whether a report is XML (JaCoCo or Cobertura) rather than LCOV.
+pub(crate) fn is_xml(text: &str) -> bool {
+    text.trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with('<')
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct Coverage {
@@ -19,6 +70,46 @@ pub(crate) struct Coverage {
 }
 
 impl Coverage {
+    /// Adds one JaCoCo or Cobertura report; `resolve` says which scanned file
+    /// each of its files is. Fails when the XML is neither.
+    pub(crate) fn merge_xml(
+        &mut self,
+        text: &str,
+        roots: &[&Path],
+        resolve: impl Fn(&Candidates) -> String,
+    ) -> Result<(), String> {
+        let text = text.trim_start_matches('\u{feff}');
+        let mut root = None;
+        xml::scan(text, |event| {
+            if let xml::Event::Start(tag) = event {
+                root = Some(tag.name.to_string());
+                return false;
+            }
+            true
+        });
+        let files = match root.as_deref() {
+            Some("report") => jacoco::parse(text),
+            Some("coverage") => cobertura::parse(text, roots),
+            _ => return Err("not a JaCoCo or Cobertura report".to_string()),
+        };
+        for (candidates, data) in files {
+            self.add_file(&resolve(&candidates), data);
+        }
+        Ok(())
+    }
+
+    fn add_file(&mut self, path: &str, data: FileData) {
+        if !data.lines.is_empty() {
+            let entry = self.files.entry(path.to_string()).or_default();
+            for (line, hits) in data.lines {
+                let total = entry.entry(line).or_insert(0);
+                *total = total.saturating_add(hits);
+            }
+        }
+        add_all(&mut self.branches, path, data.branches);
+        add_all(&mut self.functions, path, data.functions);
+    }
+
     /// Adds one LCOV report. `SF:` paths under a root are made relative to the
     /// first of `roots` they are under (pass the scan root as given and
     /// canonicalized, so symlinked roots such as macOS `/tmp` match).
@@ -160,6 +251,37 @@ impl Coverage {
     }
 }
 
+/// Adds `from` into `path`'s entry of `into`, summing counts, if it has any.
+fn add_all<K: Ord>(
+    into: &mut HashMap<String, BTreeMap<K, u64>>,
+    path: &str,
+    from: BTreeMap<K, u64>,
+) {
+    if from.is_empty() {
+        return;
+    }
+    let entry = into.entry(path.to_string()).or_default();
+    for (key, n) in from {
+        let total = entry.entry(key).or_insert(0);
+        *total = total.saturating_add(n);
+    }
+}
+
+/// `a/b/../c` as `a/c`; none if it climbs above the root.
+pub(crate) fn normalize(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
 fn relative_path(p: &Path, roots: &[&Path]) -> String {
     // Not gated on `is_absolute()`: on Windows a path like `/repo/a.js` has
     // no drive letter, so it is not "absolute", yet it can still start with
@@ -235,6 +357,56 @@ mod tests {
         );
     }
 
+    fn merged(xml: &str) -> Result<Coverage, String> {
+        let mut cov = Coverage::default();
+        cov.merge_xml(xml, &[Path::new("/root")], |c| c.paths[0].clone())?;
+        Ok(cov)
+    }
+
+    #[test]
+    fn xml_is_told_from_lcov_and_checked_for_its_kind() {
+        assert!(is_xml("\u{feff}  <?xml version=\"1.0\"?><report/>"));
+        assert!(!is_xml("TN:\nSF:a.js\nend_of_record\n"));
+        assert!(merged("<report><package name=\"p\"><sourcefile name=\"A.java\"><line nr=\"1\" ci=\"1\"/></sourcefile></package></report>").is_ok());
+        assert!(merged("\u{feff}<coverage/>").is_ok());
+        for other in ["<project/>", "<?xml version=\"1.0\"?>", "<!-- x -->", "<"] {
+            assert!(merged(other).is_err(), "{other}");
+        }
+    }
+
+    #[test]
+    fn reports_merge_by_summing_like_lcov_does() {
+        let report = "<report><package name=\"p\"><sourcefile name=\"A.java\">\
+                      <line nr=\"1\" ci=\"2\" cb=\"1\" mb=\"1\"/></sourcefile></package></report>";
+        let mut cov = merged(report).unwrap();
+        cov.merge_xml(report, &[], |c| c.paths[0].clone()).unwrap();
+        assert_eq!(cov.files["p/A.java"], BTreeMap::from([(1, 4)]));
+        let branches = &cov.branches["p/A.java"];
+        assert_eq!(branches.values().copied().collect::<Vec<_>>(), [2, 0]);
+    }
+
+    #[test]
+    fn hostile_xml_costs_bounded_time_and_memory() {
+        // Counts are capped, nesting needs no recursion, and an entity
+        // that names more entities is never expanded.
+        let cov = merged(
+            "<!DOCTYPE report [<!ENTITY a \"&b;&b;&b;\"><!ENTITY b \"&a;&a;&a;\">]>\
+             <report><package name=\"&a;\"><sourcefile name=\"A.java\">\
+             <line nr=\"1\" ci=\"1\" mb=\"4000000000\" cb=\"4000000000\"/></sourcefile></package></report>",
+        )
+        .unwrap();
+        assert_eq!(cov.branches["&a;/A.java"].len(), 256);
+        let max = u64::MAX;
+        let huge = format!(
+            "<report><package name=\"p\"><sourcefile name=\"A.java\">\
+             <line nr=\"1\" mi=\"{max}\" ci=\"{max}\" mb=\"{max}\" cb=\"{max}\"/>\
+             </sourcefile></package></report>"
+        );
+        assert_eq!(merged(&huge).unwrap().files["p/A.java"][&1], max);
+        let deep = "<a>".repeat(200_000);
+        assert!(merged(&format!("<report>{deep}")).is_ok());
+    }
+
     fn lcov_record() -> impl Strategy<Value = String> {
         let path = prop::sample::select(vec!["a.js", "src/b.py", "/root/c.c"]);
         let lines = prop::collection::vec((1usize..50, 0u64..5), 0..10);
@@ -252,6 +424,17 @@ mod tests {
             text in prop_oneof![any::<String>(), "(SF:|DA:|end_of_record|[0-9,\\n-])*"]
         ) {
             Coverage::default().merge_lcov(&text, &[Path::new("/root")]);
+        }
+
+        #[test]
+        fn xml_parsers_accept_any_input_without_panicking(
+            text in prop_oneof![
+                any::<String>(),
+                "<(report|coverage|package|class|method|sourcefile|line|counter|source|lines)([ ]+[a-z]+=\"[0-9a-z/%() ]{0,6}\")*[/]?>[a-z/]{0,4}</?[a-z]*>?"
+                    .prop_map(|s| format!("<report>{s}</report>")),
+            ]
+        ) {
+            let _ = Coverage::default().merge_xml(&text, &[Path::new("/root")], |c| c.paths[0].clone());
         }
 
         #[test]

@@ -15,8 +15,8 @@ name: sonda pull request scan
 #       with:
 #         project: shop
 #
-# This job runs no tests. For coverage, a job before it uploads the LCOV
-# reports as an artifact, which `coverage-artifact` names and `coverage`
+# This job runs no tests. For coverage, a job before it uploads the coverage
+# reports (LCOV, JaCoCo or Cobertura) as an artifact, which `coverage-artifact` names and `coverage`
 # lists (docs/server.md shows one).
 on:
   workflow_call:
@@ -34,13 +34,13 @@ on:
         default: ''
       coverage-artifact:
         description: >-
-          An artifact of this run with LCOV reports, downloaded into the
+          An artifact of this run with coverage reports, downloaded into the
           checkout. It keeps its files' paths from their common directory.
         type: string
         default: ''
       coverage:
         description: >-
-          The LCOV reports to import, space-separated, from the repository's
+          The coverage reports to import (LCOV, JaCoCo or Cobertura), space-separated, from the repository's
           root. One that's missing (its tests failed, say) is skipped with a
           warning, and the gate says coverage has no data.
         type: string
