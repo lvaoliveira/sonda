@@ -62,10 +62,11 @@ pub(crate) fn analyze(
 ) -> Result<FileAnalysis, FileError> {
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar())?;
-    // Newer Python syntax, rewritten in place for the grammar; rules read
-    // `src` itself, at the same positions.
+    // Newer Python syntax and Qt's macros, rewritten in place for the
+    // grammar; rules read `src` itself, at the same positions.
     let parsed = match lang {
         Lang::Python => crate::py_syntax::for_parser(src),
+        Lang::Cpp => crate::cpp_syntax::for_parser(src),
         _ => std::borrow::Cow::Borrowed(src),
     };
     let bytes = parsed.as_bytes();

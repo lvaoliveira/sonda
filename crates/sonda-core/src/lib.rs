@@ -40,6 +40,7 @@ pub mod upload;
 
 mod analysis;
 mod coverage;
+mod cpp_syntax;
 mod duplication;
 mod error;
 mod gate;

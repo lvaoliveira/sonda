@@ -420,6 +420,27 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "cpp/constructor-body-assignment",
+        name: "Members should be initialized in the initializer list, not assigned in the constructor",
+        description: "Assigning a member in the constructor's body first gives it a default value, \
+                      then replaces it; the initializer list sets it once.",
+        message: "Initialize this member in the constructor's initializer list instead of assigning it here.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 2,
+        sonar: &[exact("S3230")],
+        check: Check::Query {
+            langs: CPP_ONLY,
+            query: "(function_definition body: (compound_statement (expression_statement (assignment_expression) @match)))",
+            filter: Some(Keep(assigned_in_constructor)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "A::A(Owner* o) { owner_ = o; }",
+            good: "A::A(Owner* o) : owner_(o) {}",
+        }),
+    },
+    Rule {
         id: "cpp/unused-parameter",
         name: "Unused function parameters should be removed",
         description: "A parameter the body never reads misleads callers; leave it unnamed, or mark it \
@@ -1455,6 +1476,151 @@ fn mutable_global<'t>(declaration: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     })
 }
 
+/// A constructor's top-level `member = value;` that the initializer list
+/// could do: the name isn't a parameter, a local or a variable of the file,
+/// the list doesn't set it already, and the value reads only parameters and
+/// named constants.
+fn assigned_in_constructor(assign: Node, src: &[u8]) -> bool {
+    let Some(function) = assign
+        .parent()
+        .and_then(|s| s.parent())
+        .and_then(|b| b.parent())
+    else {
+        return false;
+    };
+    if text_of_field(assign, "operator", src) != Some(&b"="[..])
+        || signature_unparsed(function)
+        || constructor_of(function, src).is_none()
+    {
+        return false;
+    }
+    let (Some(name), Some(body), Some(right)) = (
+        assign
+            .child_by_field_name("left")
+            .and_then(|l| assigned_member(l, src)),
+        function.child_by_field_name("body"),
+        assign.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    let params = parameter_names(function, src);
+    if params.contains(&name)
+        || constant_name(name)
+        || declared_names(body, src).contains(&name)
+        || declared_at_file_scope(function, name, src)
+    {
+        return false;
+    }
+    let initialized = function
+        .named_children(&mut function.walk())
+        .find(|c| c.kind() == "field_initializer_list")
+        .is_some_and(|list| member_initializer(list, name, src).is_some());
+    !initialized && reads_only(right, &params, src)
+}
+
+/// `x` or `this->x`: the name an assignment's left side sets.
+fn assigned_member<'s>(left: Node, src: &'s [u8]) -> Option<&'s [u8]> {
+    match left.kind() {
+        "identifier" => Some(text(left, src)),
+        "field_expression" if left.named_child(0).is_some_and(|t| t.kind() == "this") => {
+            left.child_by_field_name("field").map(|f| text(f, src))
+        }
+        _ => None,
+    }
+}
+
+/// Whether an expression reads nothing but the parameters and named
+/// constants: no `this`, member, local or lambda.
+fn reads_only(expr: Node, params: &[&[u8]], src: &[u8]) -> bool {
+    let mut stack = vec![expr];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "this" | "lambda_expression" => return false,
+            "identifier" => {
+                let name = text(n, src);
+                let type_name = name.first().is_some_and(u8::is_ascii_uppercase);
+                if !params.contains(&name) && !constant_name(name) && !type_name {
+                    return false;
+                }
+            }
+            _ => stack.extend(n.named_children(&mut n.walk())),
+        }
+    }
+    true
+}
+
+/// Whether a function's signature didn't parse, as a parameter followed by
+/// a macro (`const byte* data PROGMEM`) doesn't: a build that doesn't
+/// define the macro doesn't compile the function either.
+fn signature_unparsed(function: Node) -> bool {
+    function
+        .child_by_field_name("declarator")
+        .is_some_and(|d| d.has_error())
+}
+
+/// A field's text, such as an assignment's operator.
+fn text_of_field<'s>(node: Node, field: &str, src: &'s [u8]) -> Option<&'s [u8]> {
+    node.child_by_field_name(field).map(|n| text(n, src))
+}
+
+/// The names the declarations under a node declare.
+fn declared_names<'s>(node: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut names = Vec::new();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "declaration" {
+            let mut cursor = n.walk();
+            for d in n.children_by_field_name("declarator", &mut cursor) {
+                names.push(innermost_name(d, src));
+            }
+        }
+        if n.kind() != "lambda_expression" {
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+    }
+    names
+}
+
+/// The identifier a declarator declares, under its pointers, initializer
+/// and arguments: `reader` for `reader(data)` and `*p = nullptr`.
+fn innermost_name<'s>(declarator: Node, src: &'s [u8]) -> &'s [u8] {
+    let mut d = declarator;
+    while let Some(inner) = d.child_by_field_name("declarator") {
+        d = inner;
+    }
+    text(d, src)
+}
+
+/// Whether the file declares `name` outside any function: a global.
+fn declared_at_file_scope(node: Node, name: &[u8], src: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "declaration" => {
+                let mut cursor = n.walk();
+                let found = n
+                    .children_by_field_name("declarator", &mut cursor)
+                    .any(|d| innermost_name(d, src) == name);
+                if found {
+                    return true;
+                }
+            }
+            "translation_unit"
+            | "namespace_definition"
+            | "declaration_list"
+            | "linkage_specification" => {
+                stack.extend(n.named_children(&mut n.walk()));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// A member's initializer that doesn't depend on the constructor's
 /// parameters, when the class's other constructors in the file agree: none
 /// sets the member otherwise, or another one sets it to the same value.
@@ -1463,6 +1629,9 @@ fn initializes_to_a_constant(init: Node, src: &[u8]) -> bool {
     let Some((constructor, list)) = init.parent().and_then(|l| Some((l.parent()?, l))) else {
         return false;
     };
+    if signature_unparsed(constructor) {
+        return false;
+    }
     let Some(member) = independent_member(init, &parameter_names(constructor, src), src) else {
         return false;
     };
@@ -2670,6 +2839,18 @@ mod tests {
         // initializer.
         let delegating = "template <typename R>\nstruct S {\n  S(const R& r) : S(r.Open()) {}\n  S(Stream s) : s_(std::move(s)), n_(0), c_() {}\n};\nstruct P {\n  P() : P(0) {}\n  P(int x) : x_(x), n_(0) {}\n};";
         assert_eq!(flagged("cpp/initializer-list-constant", delegating), [4, 8]);
+        // A constructor's top-level assignment of a parameter or a constant,
+        // not of a local, a global, `this` or another member; nor in a
+        // constructor whose signature didn't parse.
+        let assigns = "int g_count;\nA::A(Q* q) : B(q) {\n  connect(q, [this] { f(); });\n  q_ = q;\n  dirty_ = true;\n  f_ = QFuture<int>();\n  int n = 0;\n  n = 1;\n  g_count = 2;\n  t_ = new T(this);\n  w_ = q_->width();\n  if (q) { z_ = 0; }\n}\nvoid A::f() { y_ = 0; }\nF::F(const char* data PROGMEM) : n_(0) { k_ = 0; }";
+        assert_eq!(
+            flagged("cpp/constructor-body-assignment", assigns),
+            [4, 5, 6]
+        );
+        assert!(flagged("cpp/initializer-list-constant", assigns).is_empty());
+        // Qt's macros don't hide the class from the parser.
+        let qt = "class L : public QListView {\n    Q_OBJECT\n  public:\n    L(Q* q) : QListView(q), q_(q), index_(-1) {}\n  public slots:\n    void f();\n};";
+        assert_eq!(flagged("cpp/initializer-list-constant", qt), [4]);
         let params = "struct S { void m(int x); virtual void v(int x) {} };\nvoid S::m(int x) {}\ntemplate <> int pick<1>(int x) { return 0; }\nstatic int read(const char* PROGMEM p) { return 0; }\nint add(int a, int b, int c) { return a + b; }\nauto l = [](int x, int y) { return x; };";
         assert_eq!(flagged("cpp/unused-parameter", params), [5, 6]);
         let memory = "struct W : QWidget {\n  W() : t_(new QTimer(this)), q_(new Thing()) {\n    a_ = new QAction(\"x\", menu);\n    p_.reset(new Thing());\n    v_.emplace_back(new Thing());\n    std::unique_ptr<Thing> u(new Thing());\n    Thing* raw = new Thing();\n    delete raw;\n  }\n};";
