@@ -3,7 +3,7 @@
 
 use crate::analysis::{self, FileAnalysis};
 use crate::config::{Config, ScanConfig};
-use crate::coverage::Coverage;
+use crate::coverage::{self, Coverage, Resolver, normalize};
 use crate::deps::{self, Dependency, Ecosystem, FileKind};
 use crate::duplication;
 use crate::error::Error;
@@ -1011,6 +1011,13 @@ fn load_coverage(
             source,
         })?;
         let bases = report_dirs(path, canonical_root.as_deref());
+        if coverage::is_xml(&text) {
+            let resolver = Resolver::new(scanned, &bases);
+            coverage
+                .merge_xml(&text, &roots, |c| resolver.resolve(c))
+                .map_err(|e| Error::InvalidArgument(format!("{}: {e}", path.display())))?;
+            continue;
+        }
         coverage.merge_lcov_resolving(&text, &roots, |rel| {
             if Path::new(&rel).is_absolute() {
                 return rel;
@@ -1039,21 +1046,6 @@ fn report_dirs(report: &Path, canonical_root: Option<&Path>) -> Vec<String> {
         .filter(|dir| !dir.as_os_str().is_empty())
         .map(|dir| relative(dir, Path::new("")))
         .collect()
-}
-
-/// `a/b/../c` as `a/c`; none if it climbs above the root.
-fn normalize(path: &str) -> Option<String> {
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            _ => parts.push(part),
-        }
-    }
-    Some(parts.join("/"))
 }
 
 fn relative(path: &Path, root: &Path) -> String {

@@ -29,7 +29,7 @@ Quality gate: FAILED
 - **Rules** for bugs, vulnerabilities and code smells. See [docs/rules.md](docs/rules.md).
 - **Metrics**: lines of code, comment lines, functions, cyclomatic and cognitive complexity, and technical debt.
 - **Duplication**: token-based copy-paste detection across files.
-- **Coverage**: imported from LCOV, which istanbul/c8/vitest, coverage.py, gcov/lcov and llvm-cov all produce. Relative paths are matched from the report's directory up to the scan root, so a report written where tests ran in a subdirectory (`node/coverage/lcov.info`) finds its files.
+- **Coverage**: imported from LCOV (istanbul/c8/vitest, coverage.py, gcov/lcov, llvm-cov), JaCoCo XML (Maven and Gradle, for Java and Kotlin) or Cobertura XML (coverage.py's `coverage xml`, coverlet, istanbul's `cobertura` reporter), told apart by the file's content. Relative paths are matched from the report's directory up to the scan root, so a report written where tests ran in a subdirectory (`node/coverage/lcov.info`) finds its files.
 - **New code**: everything changed since the merge base with a branch (committed or not), plus untracked files. Each issue and metric is reported both overall and for new code, the "clean as you code" approach.
 - **Quality gate**: configurable conditions on any metric. Exit code 1 when it fails.
 - **Output**: human-readable text, JSON, or SARIF 2.1.0 for GitHub code scanning, GitLab and IDEs. Security rules carry their CWE ids and OWASP Top 10 categories.
@@ -55,7 +55,7 @@ curl -fsSL https://sonda.sh/install | sh
 ```sh
 sonda scan [PATH]                         # analyze, print a report, exit 1 if the gate fails
 sonda scan . --new-code origin/main       # judge only what changed since main
-sonda scan . --coverage lcov.info         # import coverage (repeatable)
+sonda scan . --coverage lcov.info         # import coverage: LCOV, JaCoCo or Cobertura (repeatable)
 sonda scan . --format sarif -o sonda.sarif
 sonda scan . --format json --only-new     # list only issues on new code
 sonda scan . --advisories osv/            # also check dependencies against OSV records in osv/
@@ -231,7 +231,6 @@ earlier
   Community Build.
 - Pull request decoration on GitLab and Bitbucket, single sign-on, and some
   of the server's screens ([roadmap](docs/roadmap.md)).
-- Coverage formats other than LCOV (JaCoCo and Cobertura XML are planned).
 
 ## Roadmap
 
@@ -251,12 +250,12 @@ it plugs in.
 - [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md#single-sign-on-openid-connect))
 - [ ] AI auto-fix: the server opens a pull request with a fix, which a person reviews; Copy as prompt covers fixing with an assistant today ([docs/roadmap.md](docs/roadmap.md#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests))
 - [ ] More lockfile formats: Go, Gradle, Bun's binary `bun.lockb` ([docs/roadmap.md](docs/roadmap.md#dependencies-sbom-and-known-vulnerabilities))
-- [ ] JaCoCo and Cobertura coverage import
+- [x] JaCoCo and Cobertura coverage import
 - [ ] Caching, to skip re-analyzing unchanged files
 - [ ] Baseline file to accept existing issues without suppressing them line by line
 - [ ] More languages (Go, PHP, Ruby, Kotlin)
 
-The last four are in [docs/roadmap.md](docs/roadmap.md#scanner-additions)
+The last three are in [docs/roadmap.md](docs/roadmap.md#scanner-additions)
 too, with the smaller deferred items.
 
 ## License

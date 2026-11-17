@@ -712,6 +712,9 @@ through the uncovered blocks and untaken branches. It's built from the
 per-file coverage in the report (`sonda scan --coverage lcov.info`): lines
 from LCOV's `DA` records, branches from `BRDA`, functions from `FN` and
 `FNDA`, shown as Lines, Branches and Functions columns like Istanbul's.
+JaCoCo's and Cobertura's XML fill the same columns, and `--coverage` tells
+the formats apart by their content. JaCoCo counts branches per line and
+whether a method ran, not how often, so its functions show 0 or 1 calls.
 Reports without branch or function records show "—" for them. Files the
 coverage reports don't list show "no data":
 Istanbul and c8 list only the files the tests loaded unless told to
@@ -915,7 +918,11 @@ jobs:
 An artifact keeps its files' paths from their common directory, so a lone
 `coverage/lcov.info` lands at the root as `lcov.info`, and reports from
 several directories keep theirs. Relative `SF:` paths resolve from where the
-report lands, then from the root.
+report lands, then from the root. A JaCoCo or Cobertura report's files are
+matched the same way, and then by the end of their path (JaCoCo's
+`com/acme/Util.java` finds `src/main/java/com/acme/Util.java`), as the
+checkout path in a report rarely is the local one; a name that fits several
+files is left unmatched rather than guessed.
 
 ```yaml
 # .github/workflows/sonda-upload.yml
