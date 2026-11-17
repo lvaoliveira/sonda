@@ -9,6 +9,12 @@ file, the report formats and the public library API.
 
 ### Added
 
+- C++'s `cpp/constructor-body-assignment` (S3230's other half): a
+  constructor that assigns a member a parameter or a constant in its body
+  (`cacheDirty_ = true;`), where the initializer list would set it once.
+  Not when the value needs `this`, a local or another member. On
+  qutepart-cpp it raises SonarCloud's 4 issues, and none it doesn't.
+
 - Two more Rust rules, Clippy's correctness lints: lint attributes on
   imports, which apply to nothing, and comparisons with a type's minimum or
   maximum, always true, always false or an equality
@@ -225,6 +231,13 @@ file, the report formats and the public library API.
 
 ### Fixed
 
+- C++ classes with Qt's macros (`Q_OBJECT`, `Q_PROPERTY(...)`,
+  `public slots:`, `signals:`, a statement's `emit`) parse: the macros are
+  blanked for the parser, positions unchanged, as moc's headers turn them
+  into ordinary C++. Every rule used to miss the class around them. On
+  qutepart-cpp, sonda raises 6 more of SonarCloud's issues and 7 fewer it
+  doesn't.
+
 - The Issues page fits its panel to the window, and follows the window as
   it grows or shrinks; the list, the filters and the issue each scroll
   inside it. The panel used to grow with its
@@ -279,6 +292,10 @@ file, the report formats and the public library API.
   them. When everything fits on one line, it stays on the right.
 
 ### Changed rule results
+
+- C++'s `cpp/initializer-list-constant` leaves a constructor whose
+  signature doesn't parse (`const byte* data PROGMEM`): SonarCloud's build,
+  without the macro, doesn't compile it either.
 
 - Seven Rust rules report what Clippy does, rewritten against its output
   on probe files: `possible-missing-comma`, `while-immutable-condition`,
