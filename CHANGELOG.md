@@ -7,6 +7,29 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-17
+
+Taint analysis now follows a request's value to the query, command or path
+it ends up in, in C#, JavaScript, TypeScript and Python, within a file and
+across a project's files, and reports the path it took
+([ADR-0027](docs/adr/0027-taint-analysis.md)). Rust has many more rules,
+checked against Clippy, C++ has 19 and more, and Java, C#, Python and
+JavaScript were compared with SonarQube on real projects, which changed
+many rules' results (see **Changed rule results**). Coverage reads JaCoCo's
+and Cobertura's XML beside LCOV, and a **baseline file**
+([ADR-0029](docs/adr/0029-baseline-file.md)) accepts today's issues for
+CLI-only use. A pull request whose CI can't reach the server, or has no
+token (a fork's), is scanned on GitHub's runner and uploaded apart, then
+decorated like any other ([ADR-0028](docs/adr/0028-scan-then-upload-apart.md)),
+and a decoration follows triage without a new scan. The server sends
+security headers and has a written threat model, and its administration is
+split into tabs. **Upgrading:** back up first, then rerun
+`scripts/setup-server.sh` (or pull the new image); migrations 0028 and
+0029 run when the server starts, and 0029 builds three indexes on the
+issues table, which takes longer on a very large database. A scan that
+reports a different number of issues than 0.2.1 did on the same code is
+expected: see **Changed rule results**.
+
 ### Added
 
 - C and C++'s `cpp/shadowed-variable` (S1117): a local in an inner block

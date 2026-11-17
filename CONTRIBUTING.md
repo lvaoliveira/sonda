@@ -206,7 +206,8 @@ other processes, and say why in a comment.
 ## Releasing
 
 1. In a pull request: set `version` in `Cargo.toml` (the workspace's, which
-   every crate shares), update both lockfiles (`cargo update -w`, and
+   every crate shares, and the `sonda-core` requirement beside it, which a
+   new minor version no longer satisfies), update both lockfiles (`cargo update -w`, and
    `cargo update --manifest-path fuzz/Cargo.toml -p sonda-core` for the
    fuzz crate's own), and move `CHANGELOG.md`'s `Unreleased` entries under
    `## [x.y.z] - date`, with a short summary first. Merge it.
