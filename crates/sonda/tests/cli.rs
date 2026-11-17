@@ -818,6 +818,103 @@ fn coverage_report_feeds_the_coverage_measures() {
     assert_eq!(code(&out), 1, "{}", String::from_utf8_lossy(&out.stdout));
 }
 
+/// The `files` entry of `path` in a JSON report.
+fn file_report<'a>(report: &'a Value, path: &str) -> &'a Value {
+    report["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == path)
+        .unwrap()
+}
+
+#[test]
+fn jacoco_report_is_matched_to_files_by_package_path() {
+    let java = "package com.acme;\nclass Util {\n    int add(int a, int b) {\n        return a + b;\n    }\n}\n";
+    let jacoco = "<?xml version=\"1.0\"?>\n<!DOCTYPE report PUBLIC \"-//JACOCO//DTD Report 1.1//EN\" \"report.dtd\">\n\
+        <report name=\"x\"><package name=\"com/acme\">\
+        <class name=\"com/acme/Util\" sourcefilename=\"Util.java\">\
+        <method name=\"add\" desc=\"(II)I\" line=\"3\"><counter type=\"METHOD\" missed=\"0\" covered=\"1\"/></method></class>\
+        <sourcefile name=\"Util.java\"><line nr=\"3\" mi=\"0\" ci=\"2\"/><line nr=\"4\" mi=\"2\" ci=\"0\" mb=\"1\" cb=\"1\"/></sourcefile>\
+        </package></report>";
+    let dir = project(&[
+        ("src/main/java/com/acme/Util.java", java),
+        ("target/site/jacoco/jacoco.xml", jacoco),
+    ]);
+    let out = sonda()
+        .args(["scan", "--no-gate", "-f", "json", "--coverage"])
+        .arg(dir.path().join("target/site/jacoco/jacoco.xml"))
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let report = json(&out);
+    assert_eq!(report["measures"]["coverage"], 50.0);
+    let file = file_report(&report, "src/main/java/com/acme/Util.java");
+    assert_eq!(
+        file["coverage"],
+        json!({ "covered": [3], "uncovered": [4] })
+    );
+    assert_eq!(
+        file["branch_coverage"],
+        json!([{ "line": 4, "taken": 1, "total": 2 }])
+    );
+    assert_eq!(
+        file["function_coverage"],
+        json!([{ "name": "add", "line": 3, "calls": 1 }])
+    );
+}
+
+#[test]
+fn cobertura_report_is_matched_through_its_sources_or_the_filename() {
+    let cobertura = |source: &str| {
+        format!(
+            "<?xml version=\"1.0\" ?><coverage><sources><source>{source}</source></sources>\
+             <packages><package name=\"pkg\"><classes><class name=\"m.py\" filename=\"pkg/m.py\">\
+             <lines><line number=\"1\" hits=\"1\"/><line number=\"2\" hits=\"0\"/></lines>\
+             </class></classes></package></packages></coverage>"
+        )
+    };
+    let dir = project(&[("src/pkg/m.py", "x = 1\ny = 2\n")]);
+    let root = dir.path().to_string_lossy().into_owned();
+    // `filename` is relative to a source directory; a CI's own checkout path
+    // matches nothing here, so the filename alone is tried after it.
+    for (source, report_dir) in [
+        (format!("{root}/src"), "."),
+        ("/ci/work".to_string(), "src"),
+    ] {
+        std::fs::write(dir.path().join("coverage.xml"), cobertura(&source)).unwrap();
+        let out = sonda()
+            .args(["scan", "--no-gate", "-f", "json", "--coverage"])
+            .arg(dir.path().join("coverage.xml"))
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        let report = json(&out);
+        assert_eq!(
+            report["measures"]["coverage"], 50.0,
+            "{source} {report_dir}"
+        );
+        let file = file_report(&report, "src/pkg/m.py");
+        assert_eq!(
+            file["coverage"],
+            json!({ "covered": [1], "uncovered": [2] })
+        );
+    }
+}
+
+#[test]
+fn an_xml_file_that_is_not_a_coverage_report_is_an_error() {
+    let dir = project(&[("app.py", "x = 1\n"), ("other.xml", "<project/>")]);
+    let out = sonda()
+        .args(["scan", "--coverage"])
+        .arg(dir.path().join("other.xml"))
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 2);
+    assert!(stderr(&out).contains("not a JaCoCo or Cobertura report"));
+}
+
 #[test]
 fn init_writes_a_working_config_once() {
     let dir = project(&[("app.py", "x = 1\n")]);

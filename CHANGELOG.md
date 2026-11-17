@@ -14,6 +14,14 @@ file, the report formats and the public library API.
   field's of its class. On qutepart-cpp and roo_display it raises 11 of
   SonarCloud's 24 issues, and 2 it doesn't.
 
+- Coverage import of JaCoCo's and Cobertura's XML reports, beside LCOV:
+  `--coverage jacoco.xml` or `coverage.xml`, the format told from the
+  file's content. JaCoCo's files are matched to scanned ones by their
+  package path, Cobertura's through its `<source>` directories; both fill
+  the same line, branch and function coverage as LCOV. Checked against
+  coverage.py's own Cobertura output (the same numbers as its LCOV) and a
+  real `jacoco.xml` (its line and branch totals, exactly).
+
 - C++'s `cpp/constructor-body-assignment` (S3230's other half): a
   constructor that assigns a member a parameter or a constant in its body
   (`cacheDirty_ = true;`), where the initializer list would set it once.
