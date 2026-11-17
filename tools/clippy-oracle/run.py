@@ -73,6 +73,15 @@ LINTS = {
     'rs/overflow-check-panics': 'panicking_overflow_checks',
     'rs/eager-transmute': 'eager_transmute',
     'rs/size-of-as-element-count': 'size_of_in_element_count',
+    'rs/useless-lint-attribute': 'useless_attribute',
+    'rs/absurd-extreme-comparison': 'absurd_extreme_comparisons',
+    'rs/possible-missing-comma': 'possible_missing_comma',
+    'rs/unused-io-amount': 'unused_io_amount',
+    'rs/enum-clike-unportable': 'enum_clike_unportable_variant',
+    'rs/inverted-saturating-sub': 'inverted_saturating_sub',
+    'rs/while-immutable-condition': 'while_immutable_condition',
+    'rs/unit-cmp': 'unit_cmp',
+    'rs/unit-hash': 'unit_hash',
 }
 RULE_OF = {lint: rule for rule, lint in LINTS.items()}
 # A rule that follows a second lint.

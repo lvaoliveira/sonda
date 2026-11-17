@@ -15,6 +15,11 @@ file, the report formats and the public library API.
   Not when the value needs `this`, a local or another member. On
   qutepart-cpp it raises SonarCloud's 4 issues, and none it doesn't.
 
+- Two more Rust rules, Clippy's correctness lints: lint attributes on
+  imports, which apply to nothing, and comparisons with a type's minimum or
+  maximum, always true, always false or an equality
+  ([ADR-0026](docs/adr/0026-rust.md), "Batch 5").
+
 - More Rust rules from SonarQube's Rust set, Clippy's correctness lints:
   inconsistent open options, bad and ineffective bit masks, `Hash` beside
   `Borrow<str>` and `Borrow<[u8]>`, recursive formatting, key closures
@@ -291,6 +296,14 @@ file, the report formats and the public library API.
 - C++'s `cpp/initializer-list-constant` leaves a constructor whose
   signature doesn't parse (`const byte* data PROGMEM`): SonarCloud's build,
   without the macro, doesn't compile it either.
+
+- Seven Rust rules report what Clippy does, rewritten against its output
+  on probe files: `possible-missing-comma`, `while-immutable-condition`,
+  `enum-clike-unportable`, `inverted-saturating-sub`, `unused-io-amount`,
+  `unit-cmp` and `unit-hash`. On the probes they now agree with Clippy on
+  98 lines, where they agreed on 40 and reported 5 it doesn't;
+  `unit-cmp` no longer reports `assert_eq!(x, ())`, which asserts that
+  something returns unit ([ADR-0026](docs/adr/0026-rust.md), "Batch 5").
 
 - C++'s `cpp/initializer-list-constant` looks at every constructor of the
   class: a member another constructor sets from its parameters is reported

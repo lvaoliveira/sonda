@@ -444,7 +444,7 @@ pub(super) static RULES: &[Rule] = &[
 // ---------------------------------------------------------------- helpers
 
 /// The expression inside any parentheses.
-fn unparen(mut n: Node) -> Node {
+pub(super) fn unparen(mut n: Node) -> Node {
     while n.kind() == "parenthesized_expression" {
         match n.named_child(0) {
             Some(inner) => n = inner,
@@ -454,20 +454,20 @@ fn unparen(mut n: Node) -> Node {
     n
 }
 
-fn operator<'a>(n: Node, src: &'a [u8]) -> &'a [u8] {
+pub(super) fn operator<'a>(n: Node, src: &'a [u8]) -> &'a [u8] {
     n.child_by_field_name("operator")
         .map_or(&[][..], |o| text(o, src))
 }
 
 /// The operands of a binary expression, without their parentheses.
-fn operands<'t>(n: Node<'t>) -> Option<(Node<'t>, Node<'t>)> {
+pub(super) fn operands<'t>(n: Node<'t>) -> Option<(Node<'t>, Node<'t>)> {
     Some((
         unparen(n.child_by_field_name("left")?),
         unparen(n.child_by_field_name("right")?),
     ))
 }
 
-fn method_is(call: Node, src: &[u8], names: &[&str]) -> bool {
+pub(super) fn method_is(call: Node, src: &[u8], names: &[&str]) -> bool {
     method(call).is_some_and(|m| names.iter().any(|n| text(m, src) == n.as_bytes()))
 }
 
@@ -507,13 +507,13 @@ fn squeezed(n: Node, src: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn ancestors(n: Node) -> impl Iterator<Item = Node> {
+pub(super) fn ancestors(n: Node) -> impl Iterator<Item = Node> {
     std::iter::successors(n.parent(), |p| p.parent())
 }
 
 /// The nodes under `root`, `root` included, not descending into the kinds
 /// `skip` names.
-fn descendants<'t>(root: Node<'t>, skip: &[&str]) -> Vec<Node<'t>> {
+pub(super) fn descendants<'t>(root: Node<'t>, skip: &[&str]) -> Vec<Node<'t>> {
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -536,7 +536,10 @@ fn has_unsafe_modifier(function: Node, src: &[u8]) -> bool {
 
 /// The type and value a local is declared with: the last `let` before `at`
 /// in the enclosing function, or else its parameter.
-fn declaration<'t>(at: Node<'t>, src: &[u8]) -> Option<(Option<Node<'t>>, Option<Node<'t>>)> {
+pub(super) fn declaration<'t>(
+    at: Node<'t>,
+    src: &[u8],
+) -> Option<(Option<Node<'t>>, Option<Node<'t>>)> {
     let name = text(at, src);
     let function = ancestors(at).find(|n| n.kind() == "function_item")?;
     let body = function.child_by_field_name("body")?;
@@ -568,7 +571,7 @@ fn declaration<'t>(at: Node<'t>, src: &[u8]) -> Option<(Option<Node<'t>>, Option
 }
 
 /// A literal's type suffix: `u8` in `1u8`, `f64` in `2.0f64`.
-fn literal_suffix(literal: Node, src: &[u8]) -> &'static str {
+pub(super) fn literal_suffix(literal: Node, src: &[u8]) -> &'static str {
     let t = text(literal, src);
     let hex = t.starts_with(b"0x");
     const SUFFIXES: &[&str] = &[
@@ -1556,7 +1559,7 @@ fn recursive_formatting<'t>(imp: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
 }
 
 /// A macro's arguments: its token tree split at the top-level commas.
-fn macro_arguments(tokens: Node) -> Vec<Vec<Node>> {
+pub(super) fn macro_arguments(tokens: Node) -> Vec<Vec<Node>> {
     let mut args = vec![Vec::new()];
     let mut c = tokens.walk();
     let children: Vec<Node> = tokens.children(&mut c).collect();

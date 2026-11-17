@@ -899,7 +899,7 @@ fn is_bool_match(node: Node, src: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::analysis::analyze;
     use crate::config::Config;
     use crate::lang::Lang;
@@ -908,8 +908,13 @@ mod tests {
 
     /// The lines `rule` reports in `src`, with the off-by-default rules on.
     fn lines(rule: &str, src: &str) -> Vec<usize> {
+        lines_with(rule, src, super::OFF_BY_DEFAULT)
+    }
+
+    /// The same, with `enabled` as the rules switched on: shared by the other batches' tests.
+    pub(in super::super) fn lines_with(rule: &str, src: &str, enabled: &[&str]) -> Vec<usize> {
         let mut cfg = Config::default();
-        cfg.rules.enabled = super::OFF_BY_DEFAULT.iter().map(|&id| id.into()).collect();
+        cfg.rules.enabled = enabled.iter().map(|&id| id.into()).collect();
         let rules = RuleSet::new(&cfg.rules).unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         let a = analyze("t.rs", Lang::Rust, src, &rules, &cfg, deadline).unwrap();
