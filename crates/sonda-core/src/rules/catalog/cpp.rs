@@ -527,19 +527,16 @@ pub(super) static RULES: &[Rule] = &[
     },
     Rule {
         id: "cpp/operator-hidden-friend",
-        name: "Comparison operators should be hidden friends",
-        description: "A free `operator==` takes part in every overload resolution in its namespace; a \
-                      hidden friend is found only for its class.",
+        name: "Binary operators should be hidden friends",
+        description: "A free `operator==` or `operator<<` takes part in every overload resolution in \
+                      its namespace; a hidden friend is found only for its class. Reported when a \
+                      parameter is one of the project's classes, not an enumeration's.",
         message: "Make this overloaded operator a hidden friend of its class.",
         category: CodeSmell,
         severity: Minor,
         effort_minutes: 5,
         sonar: &[exact("S2807")],
-        check: Check::Query {
-            langs: CPP_ONLY,
-            query: "(function_definition declarator: (function_declarator declarator: (operator_name))) @match",
-            filter: Some(Keep(free_symmetric_operator)),
-        },
+        check: Check::Structural,
         example: Some(Example {
             lang: Lang::Cpp,
             bad: "struct P { int x; };\nbool operator==(const P& a, const P& b) { return a.x == b.x; }",
@@ -2909,49 +2906,6 @@ fn casts_to_mutable_chars(cast: Node, src: &[u8]) -> bool {
     })
 }
 
-/// A comparison or equality operator defined outside the classes it
-/// compares, taking two parameters.
-fn free_symmetric_operator(function: Node, src: &[u8]) -> bool {
-    // Not in a class: a member, or a friend already.
-    let mut up = function.parent();
-    while let Some(n) = up {
-        if matches!(n.kind(), "field_declaration_list" | "friend_declaration") {
-            return false;
-        }
-        up = n.parent();
-    }
-    let Some(d) = function_declarator(function) else {
-        return false;
-    };
-    let op = d
-        .child_by_field_name("declarator")
-        .map_or(&b""[..], |n| text(n, src));
-    let comparison = [
-        &b"operator=="[..],
-        b"operator!=",
-        b"operator<",
-        b"operator>",
-        b"operator<=",
-        b"operator>=",
-    ]
-    .iter()
-    .any(|o| {
-        let squeezed: Vec<u8> = op
-            .iter()
-            .filter(|b| !b.is_ascii_whitespace())
-            .copied()
-            .collect();
-        squeezed == *o
-    });
-    let two = d.child_by_field_name("parameters").is_some_and(|p| {
-        p.named_children(&mut p.walk())
-            .filter(|c| c.kind() == "parameter_declaration")
-            .count()
-            == 2
-    });
-    comparison && two
-}
-
 /// A case whose statements don't end in a jump, followed by another case.
 fn falls_into_next_case(case: Node, src: &[u8]) -> bool {
     let Some(next) = case.next_named_sibling() else {
@@ -3216,8 +3170,6 @@ mod tests {
             flagged("cpp/protected-member-variable", protected_fields),
             [1]
         );
-        let operators = "struct V { bool operator==(const V&) const; };\nbool operator<(const V& a, const V& b) { return true; }\nstruct F { friend bool operator==(const F&, const F&) { return true; } };";
-        assert_eq!(flagged("cpp/operator-hidden-friend", operators), [2]);
         let old = "int sum(a, b)\n  int a;\n  int b;\n{ return a + b; }\nvoid w() { char* s = (char*)\"text\"; const char* t = (const char*)\"x\"; }";
         assert_eq!(flagged_in("cpp/old-style-parameters", Lang::C, old), [2]);
         assert_eq!(flagged_in("cpp/cast-drops-const", Lang::C, old), [5]);

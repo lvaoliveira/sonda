@@ -816,8 +816,11 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
     returns ends its case.
   - `cpp/old-style-parameters` (S1198), `cpp/cast-drops-const` (S859, a
     string literal cast to a non-const pointer), also in C;
-    `cpp/operator-hidden-friend` (S2807, a two-operand comparison defined
-    outside its class), `cpp/protected-member-variable` (S3656).
+    `cpp/operator-hidden-friend` (S2807, a two-operand operator defined
+    outside its class, `==`, `<<` and `|` among them but not `!=`, which
+    C++20 derives from `==`; a parameter must be one of the project's
+    classes, from the index, not an enumeration or a library's type),
+    `cpp/protected-member-variable` (S3656).
 - **Third batch:**
   - `cpp/default-capture` (S3608): a `[&]` or `[=]` lambda passed to a
     call, directly or through a local; not one only called where it's

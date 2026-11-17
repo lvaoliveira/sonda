@@ -9,6 +9,7 @@
 pub(crate) mod cpp_bytes;
 pub(crate) mod cpp_const;
 pub(crate) mod cpp_index;
+pub(crate) mod cpp_operators;
 pub(crate) mod cpp_walk;
 mod cs;
 pub(crate) mod cs_cfg;

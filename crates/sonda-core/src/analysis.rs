@@ -780,9 +780,13 @@ fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant, rules: &RuleSet) -> Vec<(
     let parts = crate::semantic::cpp_index::Parts {
         bytes: rules.get(rules::cpp_project::BYTE_OPERATION).is_some(),
         bodies: rules.get(rules::cpp_project::CONST_FUNCTION).is_some(),
+        operators: rules.get(rules::cpp_project::HIDDEN_FRIEND).is_some(),
     };
     let index = crate::semantic::cpp_index::extract(root, ctx.src.as_bytes(), deadline, parts);
-    if (!index.classes.is_empty() || !index.bytes.is_empty() || !index.bodies.is_empty())
+    if (!index.classes.is_empty()
+        || !index.bytes.is_empty()
+        || !index.bodies.is_empty()
+        || !index.operators.is_empty())
         && let Ok(json) = serde_json::to_string(&index)
     {
         facts.push((crate::semantic::cpp_index::FACT.to_string(), json));

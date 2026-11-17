@@ -33660,7 +33660,7 @@ struct s { const char* msg; }; void f(struct s* p) { p->msg = "bad input"; }
 
 ## cpp/operator-hidden-friend
 
-**Comparison operators should be hidden friends.** A free `operator==` takes part in every overload resolution in its namespace; a hidden friend is found only for its class.
+**Binary operators should be hidden friends.** A free `operator==` or `operator<<` takes part in every overload resolution in its namespace; a hidden friend is found only for its class. Reported when a parameter is one of the project's classes, not an enumeration's.
 
 SonarQube: S2807
 

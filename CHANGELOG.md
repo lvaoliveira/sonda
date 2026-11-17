@@ -315,6 +315,14 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- C++'s `cpp/operator-hidden-friend` reports every binary operator
+  defined outside its class (`operator<<` for a stream, `operator|`), not
+  only comparisons, and no longer `!=`, which C++20 derives from `==`. It
+  runs on the project's index: a parameter must be one of the project's
+  classes, not an enumeration declared in a header. On roo_display it
+  raises all 38 of SonarCloud's issues, where it raised 15, and none it
+  doesn't, where it raised 3.
+
 - C++'s `cpp/mutable-global` reports a global under an `#if` at file
   scope, and leaves an object of a class the file defines with a
   constructor, a base or a virtual function (a test's emulator, a
