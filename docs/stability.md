@@ -18,7 +18,11 @@ change any of it, and says so in the [changelog](../CHANGELOG.md).
 
   Options may be added. The text report is for people and may change; use
   the JSON or SARIF report in scripts.
-- **`sonda.toml`.** Its keys and what they mean. Keys may be added; an
+- **`sonda.toml`, and the baseline file.** Its keys and what they mean, and
+  `sonda-baseline.json`'s format ([ADR-0029](adr/0029-baseline-file.md)): a
+  baseline written by one 1.x release is read by every later one. A change
+  to how issues are fingerprinted would break that, so it needs a new
+  fingerprint tag and a baseline `version`. Keys may be added; an
   unknown key is still an error, so a typo doesn't pass silently.
 - **The JSON and SARIF reports.** Fields are added without a new
   `report_version`; removing or changing one bumps it. The JSON report is

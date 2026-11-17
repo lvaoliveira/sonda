@@ -14,6 +14,15 @@ file, the report formats and the public library API.
   field's of its class. On qutepart-cpp and roo_display it raises 11 of
   SonarCloud's 24 issues, and 2 it doesn't.
 
+- A baseline file ([ADR-0029](docs/adr/0029-baseline-file.md)): `sonda scan
+  --write-baseline sonda-baseline.json` accepts every issue found, and later
+  scans leave those out of the issue list, the counts, the gate and SARIF.
+  `sonda-baseline.json` in the project is read by itself; `--baseline`,
+  `scan.baseline` and `--no-baseline` choose otherwise. Matching is by the
+  issue's fingerprint, so an edited line is reported again. The report says
+  how many issues it hid and how many entries match nothing. For CLI-only
+  use: an uploading scan ignores it.
+
 - Coverage import of JaCoCo's and Cobertura's XML reports, beside LCOV:
   `--coverage jacoco.xml` or `coverage.xml`, the format told from the
   file's content. JaCoCo's files are matched to scanned ones by their
