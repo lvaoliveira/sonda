@@ -34,6 +34,10 @@ git_timeout_secs = 120
 # "none": the whole project is new code.
 # Any other value is a git ref, such as "origin/main".
 new_code = "auto"
+# A baseline file whose issues are left out (--baseline overrides it), a path
+# inside the project. Unset, sonda-baseline.json is read when it exists.
+# `sonda scan --write-baseline sonda-baseline.json` writes one.
+# baseline = "sonda-baseline.json"
 
 [rules]
 # Rules that are off by default to turn on. `sonda rules` lists them all,
@@ -126,6 +130,9 @@ pub struct ScanConfig {
     pub git_timeout_secs: u64,
     /// `auto`, `none`, or a git ref (ADR-0010).
     pub new_code: String,
+    /// The baseline file (ADR-0029), relative to the scan root and inside
+    /// it; unset reads `sonda-baseline.json` when there is one.
+    pub baseline: Option<String>,
 }
 
 impl Default for ScanConfig {
@@ -146,6 +153,7 @@ impl Default for ScanConfig {
             file_timeout_secs: 10,
             git_timeout_secs: 120,
             new_code: "auto".into(),
+            baseline: None,
         }
     }
 }

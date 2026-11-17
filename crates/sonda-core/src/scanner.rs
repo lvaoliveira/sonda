@@ -2,6 +2,7 @@
 //! reports and asks `git` for new code, then runs the domain analysis.
 
 use crate::analysis::{self, FileAnalysis};
+use crate::baseline::{self, Baseline};
 use crate::config::{Config, ScanConfig};
 use crate::coverage::{self, Coverage, Resolver, normalize};
 use crate::deps::{self, Dependency, Ecosystem, FileKind};
@@ -43,6 +44,21 @@ pub struct ScanOptions {
     /// A directory of OSV records to check dependencies against (ADR-0009);
     /// without it, dependency metrics have no data.
     pub advisories: Option<PathBuf>,
+    /// The baseline file whose issues are left out (ADR-0029).
+    pub baseline: BaselineChoice,
+}
+
+/// Which baseline file a scan reads (ADR-0029).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BaselineChoice {
+    /// `scan.baseline` in the config, else `sonda-baseline.json` in the
+    /// root when it exists.
+    #[default]
+    Auto,
+    /// This file, which must exist.
+    File(PathBuf),
+    /// None.
+    Off,
 }
 
 /// Where files are parsed.
@@ -551,6 +567,8 @@ fn scan_files(
             .sort_by(|a, b| (a.line, a.column, a.rule).cmp(&(b.line, b.column, b.rule)));
     }
 
+    let baseline = apply_baseline(opts, cfg, &mut files)?;
+
     let started = Instant::now();
     let tokens: Vec<&[analysis::Token]> = files.iter().map(|f| f.tokens.as_slice()).collect();
     let duplication = duplication::detect(
@@ -578,7 +596,64 @@ fn scan_files(
         dependencies: Vec::new(),
         vulnerabilities: None,
         new_code_basis,
+        baseline,
     })
+}
+
+/// Removes the issues the baseline file lists, if there is one (ADR-0029).
+fn apply_baseline(
+    opts: &ScanOptions,
+    cfg: &Config,
+    files: &mut [analysis::FileAnalysis],
+) -> Result<Option<baseline::Applied>, Error> {
+    let Some((path, shown)) = baseline_path(opts, cfg)? else {
+        return Ok(None);
+    };
+    let io = |source| Error::Io {
+        path: path.clone(),
+        source,
+    };
+    if std::fs::metadata(&path).map_err(io)?.len() > baseline::MAX_BYTES {
+        return Err(Error::InvalidArgument(format!(
+            "{shown}: a baseline over {} MiB is not read",
+            baseline::MAX_BYTES >> 20
+        )));
+    }
+    let text = std::fs::read_to_string(&path).map_err(io)?;
+    let parsed =
+        Baseline::parse(&text).map_err(|e| Error::InvalidArgument(format!("{shown}: {e}")))?;
+    let applied = parsed.apply(files, shown);
+    info!(
+        hidden = applied.hidden,
+        unmatched = applied.unmatched,
+        "applied the baseline"
+    );
+    Ok(Some(applied))
+}
+
+/// The baseline file to read, and how to show its name.
+fn baseline_path(opts: &ScanOptions, cfg: &Config) -> Result<Option<(PathBuf, String)>, Error> {
+    match (&opts.baseline, &cfg.scan.baseline) {
+        (BaselineChoice::Off, _) => Ok(None),
+        (BaselineChoice::File(path), _) => Ok(Some((path.clone(), path.display().to_string()))),
+        (BaselineChoice::Auto, Some(rel)) => {
+            let inside = Path::new(rel)
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)));
+            if !inside {
+                return Err(Error::Config(format!(
+                    "scan.baseline '{rel}' must be a path inside the project"
+                )));
+            }
+            Ok(Some((opts.root.join(rel), rel.clone())))
+        }
+        (BaselineChoice::Auto, None) => {
+            let path = opts.root.join(baseline::DEFAULT_FILE);
+            Ok(path
+                .is_file()
+                .then(|| (path, baseline::DEFAULT_FILE.to_string())))
+        }
+    }
 }
 
 /// A file found by the walk.
@@ -1204,6 +1279,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
 
@@ -1259,6 +1335,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let covered: Vec<_> = r
@@ -1337,6 +1414,7 @@ mod tests {
                 isolation: Isolation::InProcess,
                 jobs: None,
                 advisories: None,
+                baseline: Default::default(),
             };
             let r = scan(&opts, &cfg, &rules).unwrap();
             let paths: Vec<_> = r.files.iter().map(|f| f.path.clone()).collect();
@@ -1379,6 +1457,7 @@ mod tests {
                 isolation: Isolation::InProcess,
                 jobs: None,
                 advisories: None,
+                baseline: Default::default(),
             };
             let r = scan(&opts, &cfg, &rules).unwrap();
             let paths: Vec<_> = r.files.iter().map(|f| f.path.clone()).collect();
@@ -1413,6 +1492,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         assert_eq!(r.files.len(), 1);
@@ -1447,6 +1527,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let lines: Vec<usize> = r
@@ -1483,6 +1564,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let hits: Vec<(&str, &str)> = r
@@ -1532,6 +1614,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let hits: Vec<(&str, usize)> = r
@@ -1586,6 +1669,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let hits: Vec<(&str, &str, usize)> = r
@@ -1624,6 +1708,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let mut paths = collect_files(root, cfg).unwrap().files;
         let mut walk_warnings = vec!["z: walk error".to_string(), "a: walk error".to_string()];
@@ -1708,6 +1793,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let out = outcome(scan(&opts, &cfg, &rules).unwrap(), &cfg);
         let text = report::render(&report::build(&out, false), Format::Text);
@@ -1783,6 +1869,7 @@ mod tests {
             isolation: Isolation::InProcess,
             jobs: None,
             advisories: None,
+            baseline: Default::default(),
         };
         let r = scan_files(&opts, &cfg, &rules, paths, warnings, &[]).unwrap();
         assert!(r.files.is_empty(), "nothing outside the root was analyzed");

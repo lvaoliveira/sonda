@@ -28,6 +28,7 @@
 //! - shared types: `model`, `lang`
 
 pub mod advisories;
+pub mod baseline;
 pub mod codeowners;
 pub mod config;
 pub mod deps;
@@ -65,7 +66,7 @@ pub use gate::{
 pub use measures::Measures;
 pub use project::ProjectAnalysis;
 pub use sandbox::SandboxMode;
-pub use scanner::{Isolation, ScanOptions};
+pub use scanner::{BaselineChoice, Isolation, ScanOptions};
 
 use config::Config;
 use std::path::Path;
@@ -109,6 +110,12 @@ pub fn run(options: &ScanOptions, config: &Config) -> Result<Outcome, Error> {
         rules: config.rules.clone(),
         active_rules: rules.ids(),
     })
+}
+
+/// The baseline file (ADR-0029) that accepts every issue `outcome` found:
+/// scan with `BaselineChoice::Off` to write one.
+pub fn baseline_file(outcome: &Outcome) -> String {
+    baseline::render(&outcome.analysis.files)
 }
 
 /// Lines of `new` (1-based) that were added or changed relative to `old`:
@@ -316,6 +323,7 @@ mod architecture {
         ("analysis.rs", include_str!("analysis.rs")),
         ("duplication.rs", include_str!("duplication.rs")),
         ("newcode.rs", include_str!("newcode.rs")),
+        ("baseline.rs", include_str!("baseline.rs")),
         ("coverage/mod.rs", include_str!("coverage/mod.rs")),
         ("coverage/xml.rs", include_str!("coverage/xml.rs")),
         ("coverage/jacoco.rs", include_str!("coverage/jacoco.rs")),

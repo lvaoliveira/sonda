@@ -3,9 +3,9 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use sonda_core::config;
 use sonda_core::report::{self, Format};
 use sonda_core::rules::{self, RULES};
-use sonda_core::{Isolation, SandboxMode, ScanOptions};
+use sonda_core::{BaselineChoice, Isolation, SandboxMode, ScanOptions, baseline};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod upload;
@@ -81,6 +81,22 @@ struct ScanArgs {
     /// the vulnerabilities. Same records, same result.
     #[arg(long, value_name = "DIR")]
     advisories: Option<PathBuf>,
+    /// Leave out the issues listed in this baseline file (default:
+    /// scan.baseline in sonda.toml, else sonda-baseline.json in the project
+    /// when there is one).
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["no_baseline", "write_baseline", "uploading"]
+    )]
+    baseline: Option<PathBuf>,
+    /// Scan without any baseline.
+    #[arg(long, conflicts_with_all = ["write_baseline"])]
+    no_baseline: bool,
+    /// Write every issue found to FILE as a baseline, and exit 0 whatever the
+    /// gate says: it accepts what is there. Use it again to refresh the file.
+    #[arg(long, value_name = "FILE", conflicts_with = "uploading")]
+    write_baseline: Option<PathBuf>,
     /// Only list issues on new code (measures and gate still cover everything).
     #[arg(long)]
     only_new: bool,
@@ -402,6 +418,44 @@ fn save_target(args: &ScanArgs) -> Result<Option<upload::Saved>> {
     upload::Saved::check(path, target).map(Some)
 }
 
+impl ScanArgs {
+    /// Which baseline this scan reads. An analysis that is uploaded has none,
+    /// since the server would then see the baseline's issues as fixed
+    /// (ADR-0029); writing a baseline scans without one too.
+    fn baseline_choice(&self) -> BaselineChoice {
+        let uploading = self.upload || self.save_upload.is_some();
+        match &self.baseline {
+            Some(file) => BaselineChoice::File(file.clone()),
+            None if self.no_baseline || self.write_baseline.is_some() || uploading => {
+                BaselineChoice::Off
+            }
+            None => BaselineChoice::Auto,
+        }
+    }
+}
+
+/// Says so when a baseline that would have applied is left out because the
+/// analysis is uploaded (ADR-0029).
+fn note_baseline_ignored(no_baseline: bool, cfg: &config::Config, root: &Path) {
+    if !no_baseline && (cfg.scan.baseline.is_some() || root.join(baseline::DEFAULT_FILE).is_file())
+    {
+        eprintln!(
+            "sonda: the baseline file is ignored when uploading; accept issues on the server"
+        );
+    }
+}
+
+/// `--write-baseline`: every issue the scan found, as a baseline file.
+fn write_baseline(file: Option<&Path>, outcome: &sonda_core::Outcome) -> Result<()> {
+    let Some(file) = file else {
+        return Ok(());
+    };
+    std::fs::write(file, sonda_core::baseline_file(outcome))
+        .with_context(|| format!("writing {}", file.display()))?;
+    eprintln!("sonda: baseline written to {}", file.display());
+    Ok(())
+}
+
 fn scan(args: ScanArgs) -> Result<ExitCode> {
     let upload = upload_target(&args)?;
     let saved = save_target(&args)?;
@@ -424,6 +478,7 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
             sandbox: args.sandbox.into(),
         }
     };
+    let baseline = args.baseline_choice();
     let opts = ScanOptions {
         root: args.path,
         new_code_ref: args.new_code,
@@ -431,12 +486,17 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         isolation,
         jobs: args.jobs,
         advisories: args.advisories,
+        baseline,
     };
     let root = opts.root.clone();
+    if upload.is_some() || saved.is_some() {
+        note_baseline_ignored(args.no_baseline, &cfg, &root);
+    }
     let mut outcome = sonda_core::run(&opts, &cfg)?;
     outcome.rules = toml_rules;
     let scan_duration = started.elapsed();
-    let passed = outcome.gate.passed;
+    write_baseline(args.write_baseline.as_deref(), &outcome)?;
+    let passed = outcome.gate.passed || args.write_baseline.is_some();
     let build = |only_new| {
         let mut r = report::build(&outcome, only_new);
         r.rule_profile = applied.clone();
