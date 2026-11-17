@@ -838,6 +838,14 @@ ones; it raised 60 of qutepart-cpp's 642 C++ issues and 152 of roo_display's
     one), and no count, size or share told which. A struct of constants
     declared in a header (`Theme::Colors::BracketMatching`) reads as an
     enumeration.
+  - `cpp/shadowed-variable` (S1117), C and C++: a local in an inner block
+    under the name of an outer local or a parameter, and a parameter or a
+    local under the name of a field of its class when the file holds the
+    class. Not across a lambda, nor a constructor's `x(x)`. SonarCloud
+    also reports a field of a class declared in a header, an enumerator
+    hiding a static member, and uses inside macros that capture a local;
+    the file doesn't show those. It reports one struct's
+    `this->x = x;` setter and not another's of the same shape.
   - `cpp/deducible-template-arguments` (S6012): `std::vector<T> v(n,
     T(...))`, or with a local declared `T`, and a
     `std::uniform_int_distribution<int>` from int literals, or `<>`; a

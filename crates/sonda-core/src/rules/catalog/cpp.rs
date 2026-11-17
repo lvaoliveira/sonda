@@ -653,6 +653,27 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "cpp/shadowed-variable",
+        name: "Variables should not shadow outer ones",
+        description: "A variable declared in an inner block under the name of one outside it hides \
+                      the outer one there: a reader, or a later edit, easily takes one for the other.",
+        message: "Rename this variable: it shadows a variable declared in an outer scope.",
+        category: CodeSmell,
+        severity: Major,
+        effort_minutes: 5,
+        sonar: &[exact("S1117")],
+        check: Check::Query {
+            langs: C_CPP,
+            query: "(function_definition body: (compound_statement)) @match",
+            filter: Some(FindAll(shadowing_locals)),
+        },
+        example: Some(Example {
+            lang: Lang::Cpp,
+            bad: "void f(int n) { for (int i = 0; i < n; ++i) { int n = i * 2; g(n); } }",
+            good: "void f(int n) { for (int i = 0; i < n; ++i) { int twice = i * 2; g(twice); } }",
+        }),
+    },
+    Rule {
         id: "cpp/using-enum",
         name: "Repeated enumerators should come in with \"using enum\"",
         description: "A block that spells out `Mode::kA`, `Mode::kB`, `Mode::kC` reads shorter with \
@@ -2050,6 +2071,207 @@ fn unused_parameters<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
         .collect()
 }
 
+/// The parameters and locals of a function that take the name of a field
+/// of its class (when the file holds the class), of a parameter, or of a
+/// local of an enclosing block declared before them; not across a lambda.
+fn shadowing_locals<'t>(function: Node<'t>, src: &[u8]) -> Vec<Node<'t>> {
+    let Some(body) = function.child_by_field_name("body") else {
+        return Vec::new();
+    };
+    let fields = class_fields(function, src);
+    let params: Vec<Node<'t>> = parameter_list(function)
+        .map(|list| {
+            list.named_children(&mut list.walk())
+                .filter_map(parameter_name)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut found: Vec<Node<'t>> = params
+        .iter()
+        .copied()
+        .filter(|p| {
+            let word = text(*p, src);
+            fields.contains(&word)
+                && !macro_name(word)
+                && !initializes_its_field(function, word, src)
+        })
+        .collect();
+    // (name, its scope) for what's declared so far, in source order.
+    let mut seen: Vec<(&[u8], Node<'t>)> = params.iter().map(|n| (text(*n, src), body)).collect();
+    for name in locals_in_order(body) {
+        let Some(scope) = local_scope(name) else {
+            continue;
+        };
+        let word = text(name, src);
+        if macro_name(word) {
+            continue;
+        }
+        if fields.contains(&word)
+            || seen
+                .iter()
+                .any(|(w, s)| *w == word && s.id() != scope.id() && encloses(*s, scope))
+        {
+            found.push(name);
+        }
+        seen.push((word, scope));
+    }
+    found
+}
+
+/// `PROGMEM` in `T* PROGMEM p`: a macro the parser takes for the name.
+fn macro_name(word: &[u8]) -> bool {
+    constant_name(word) && !word.iter().any(u8::is_ascii_lowercase)
+}
+
+/// Whether a constructor's initializer list sets the field of a
+/// parameter's name from it, `x(x)` or `x(std::move(x))`: the usual idiom.
+fn initializes_its_field(function: Node, name: &[u8], src: &[u8]) -> bool {
+    function
+        .named_children(&mut function.walk())
+        .find(|c| c.kind() == "field_initializer_list")
+        .and_then(|list| member_initializer(list, name, src))
+        .and_then(|init| {
+            init.named_children(&mut init.walk())
+                .find(|c| matches!(c.kind(), "argument_list" | "initializer_list"))
+        })
+        .is_some_and(|args| mentions_word(text(args, src), name))
+}
+
+/// The names of a body's locals, in source order, outside lambdas.
+fn locals_in_order(body: Node) -> Vec<Node> {
+    let mut order = Vec::new();
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "lambda_expression" {
+            continue;
+        }
+        if let Some(names) = declared_locals(n) {
+            order.extend(names);
+        }
+        let mut children: Vec<Node> = n.named_children(&mut n.walk()).collect();
+        children.reverse();
+        stack.extend(children);
+    }
+    order
+}
+
+/// The data members of the class a method belongs to, when the file holds
+/// the class's body: the class around it, or `A`'s for `A::f`.
+fn class_fields<'s>(function: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    let mut member = function;
+    while let Some(p) = member
+        .parent()
+        .filter(|p| p.kind() == "template_declaration")
+    {
+        member = p;
+    }
+    let class = match member
+        .parent()
+        .filter(|p| p.kind() == "field_declaration_list")
+    {
+        Some(list) => Some(list),
+        None => {
+            let scope = class_scope(function, src);
+            let scope = scope.rsplit(|b| *b == b':').next().unwrap_or(scope);
+            (!scope.is_empty())
+                .then(|| class_body_named(function, scope, src))
+                .flatten()
+        }
+    };
+    let Some(list) = class else {
+        return Vec::new();
+    };
+    list.named_children(&mut list.walk())
+        .filter(|f| f.kind() == "field_declaration" && function_declarator(*f).is_none())
+        .flat_map(|f| {
+            f.children_by_field_name("declarator", &mut f.walk())
+                .filter_map(|d| {
+                    let mut d = d;
+                    while d.kind() != "field_identifier" {
+                        d = d.child_by_field_name("declarator")?;
+                    }
+                    Some(text(d, src))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The body of the class or struct named `name` in the node's file.
+fn class_body_named<'t>(node: Node<'t>, name: &[u8], src: &[u8]) -> Option<Node<'t>> {
+    let mut root = node;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "class_specifier" | "struct_specifier")
+            && n.child_by_field_name("name")
+                .is_some_and(|c| text(c, src) == name)
+            && let Some(body) = n.child_by_field_name("body")
+        {
+            return Some(body);
+        }
+        if !matches!(n.kind(), "function_definition" | "compound_statement") {
+            stack.extend(n.named_children(&mut n.walk()));
+        }
+    }
+    None
+}
+
+/// The names a node declares as locals: a declaration's variables, a
+/// range-for's or a catch's.
+fn declared_locals(n: Node) -> Option<Vec<Node>> {
+    let declarators: Vec<Node> = match n.kind() {
+        "declaration" => n
+            .children_by_field_name("declarator", &mut n.walk())
+            .collect(),
+        "for_range_loop" => n.child_by_field_name("declarator").into_iter().collect(),
+        _ => return None,
+    };
+    Some(declarators.into_iter().filter_map(variable_name).collect())
+}
+
+/// The identifier a local's declarator names. In a body, `T x(y);` is a
+/// variable the parser reads as a function's declaration.
+fn variable_name(declarator: Node) -> Option<Node> {
+    let mut d = declarator;
+    loop {
+        match d.kind() {
+            "identifier" => return Some(d),
+            "structured_binding_declarator" => return None,
+            _ => d = d.child_by_field_name("declarator")?,
+        }
+    }
+}
+
+/// The block or statement a local belongs to: the innermost block, loop,
+/// `if`, `switch` or `catch` around its declaration.
+fn local_scope(name: Node) -> Option<Node> {
+    let mut up = name.parent();
+    while let Some(p) = up {
+        if matches!(
+            p.kind(),
+            "compound_statement"
+                | "for_statement"
+                | "for_range_loop"
+                | "if_statement"
+                | "while_statement"
+                | "switch_statement"
+                | "catch_clause"
+        ) {
+            return Some(p);
+        }
+        up = p.parent();
+    }
+    None
+}
+
+/// Whether `outer` holds `inner`.
+fn encloses(outer: Node, inner: Node) -> bool {
+    outer.start_byte() <= inner.start_byte() && inner.end_byte() <= outer.end_byte()
+}
+
 /// The smallest block holding every use of an enumeration's values in a
 /// function that uses them three times or more: `Mode::kA` and
 /// `Mode::Error`, a capitalized value under a capitalized scope, not a type
@@ -2898,6 +3120,19 @@ mod tests {
         // the file gives a constructor, a base or a virtual function.
         let objects = "#if 1\nint x;\n#endif\nstruct Stats { int n; };\nStats stats;\nstruct Emu { Emu() { init(); } };\nstatic Emu emu;\nclass Dummy : public Touch { void f() override {} };\nstatic Dummy dummy;\nstruct Hw { Hw() {} } hw;\nQMutex lock;\nvoid f() {\n#if 1\n  int y;\n#endif\n}";
         assert_eq!(flagged("cpp/mutable-global", objects), [2, 5, 11]);
+        // A local in an inner block under an outer local's or a parameter's
+        // name, or a field's of the class in the file; not a sibling block's,
+        // a lambda's, a macro the parser takes for a name, nor `x(x)`.
+        let shadows = "void f(int n) {\n  Ctx dc(a);\n  for (int i = 0; i < n; ++i) { int n = i; }\n  { Ctx dc(b); }\n  { int k; }\n  { int k; }\n  auto l = [](int n) { return n; };\n  const byte* PROGMEM p = 0;\n  { const byte* PROGMEM q = 0; }\n}\nstruct S {\n  int size;\n  S(int size) : size(size) {}\n  void init(int size) { this->size = size; }\n};";
+        assert_eq!(flagged("cpp/shadowed-variable", shadows), [3, 4, 14]);
+        assert_eq!(
+            flagged_in(
+                "cpp/shadowed-variable",
+                Lang::C,
+                "void f(void) {\n  int x;\n  if (x) { int x = 1; }\n}"
+            ),
+            [3]
+        );
         assert_eq!(flagged("cpp/redundant-static", globals), [6]);
         let misc = "inline constexpr int twice(int x) { return 2 * x; }\ntypedef unsigned char byte_t;\nenum Color { kRed };\nenum class Mode { kA };\nvoid f(int* a, const void* p) {\n  a[0] = a[1] = 0;\n  const char* c = static_cast<const char*>(p);\n  auto q = std::unique_ptr<int>(new int(1));\n}\nvoid g(int x = 0);";
         assert_eq!(flagged("cpp/inline-constexpr", misc), [1]);
