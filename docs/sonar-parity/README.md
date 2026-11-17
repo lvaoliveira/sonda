@@ -22,7 +22,7 @@ Refreshed by `scripts/sonar_parity.py` on 2026-11-16, against SonarQube 26.7.0.1
 | C | not available on this SonarQube edition | | | | | |
 | C++ | not available on this SonarQube edition | | | | | |
 | C# | 446 | 429 | 15 | 2 | 0 | 0 |
-| Rust | 85 | 34 | 40 | 11 | 0 | 0 |
+| Rust | 85 | 35 | 41 | 9 | 0 | 0 |
 
 ## Known gaps
 
