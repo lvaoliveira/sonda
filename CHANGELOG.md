@@ -280,6 +280,14 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- Seven Rust rules report what Clippy does, rewritten against its output
+  on probe files: `possible-missing-comma`, `while-immutable-condition`,
+  `enum-clike-unportable`, `inverted-saturating-sub`, `unused-io-amount`,
+  `unit-cmp` and `unit-hash`. On the probes they now agree with Clippy on
+  98 lines, where they agreed on 40 and reported 5 it doesn't;
+  `unit-cmp` no longer reports `assert_eq!(x, ())`, which asserts that
+  something returns unit ([ADR-0026](docs/adr/0026-rust.md), "Batch 5").
+
 - C++'s `cpp/initializer-list-constant` looks at every constructor of the
   class: a member another constructor sets from its parameters is reported
   only when two constructors share the constant, and a class template
