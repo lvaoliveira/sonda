@@ -645,6 +645,50 @@ fn new_code_follows_the_pull_request_push_or_branch() {
     );
 }
 
+/// git is optional (as in a container without it): the scan counts the
+/// whole project as new code and says why, and a reference, which needs git,
+/// says where it was set and how to scan without git.
+#[test]
+fn scans_without_git() {
+    let dir = project(&[("app.py", "x = 1\n")]);
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    let no_git = tempfile::tempdir().unwrap();
+    let scan = |args: &[&str]| {
+        sonda()
+            .env("PATH", no_git.path())
+            .args(args)
+            .arg(root)
+            .output()
+            .unwrap()
+    };
+
+    let report = json(&scan(&["scan", "--no-gate", "-f", "json"]));
+    assert_eq!(report["new_code_basis"], "whole_project");
+    assert_eq!(
+        report["new_code_description"],
+        "the whole project (git is not installed)"
+    );
+
+    let out = scan(&["scan", "--new-code", "main"]);
+    assert_eq!(code(&out), 2);
+    assert!(
+        stderr(&out).contains("new code is set to \"main\" (--new-code), which needs git"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("--new-code none"), "{}", stderr(&out));
+
+    std::fs::write(root.join("sonda.toml"), "[scan]\nnew_code = \"main\"\n").unwrap();
+    let out = scan(&["scan"]);
+    assert_eq!(code(&out), 2);
+    assert!(
+        stderr(&out).contains("(scan.new_code in sonda.toml)"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 #[test]
 fn only_new_lists_new_issues_but_gate_sees_everything() {
     let dir = project(&[("old.js", "eval(a);\n")]);
