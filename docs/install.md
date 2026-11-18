@@ -180,7 +180,7 @@ On a platform without a release binary, build it with
 [Rust](https://rustup.rs) 1.90 or newer. It takes a few minutes:
 
 ```sh
-cargo install --git https://github.com/lvaoliveira/sonda --tag v0.2.1 sonda
+cargo install --git https://github.com/lvaoliveira/sonda --tag v0.3.0 sonda
 ```
 
 From a clone instead: `cargo install --path crates/sonda`.
@@ -273,7 +273,7 @@ It needs Docker with Compose v2, `git` and `openssl`, on an amd64 or arm64
 machine. From a clone of the release:
 
 ```sh
-git clone --depth 1 --branch v0.2.1 https://github.com/lvaoliveira/sonda.git && cd sonda
+git clone --depth 1 --branch v0.3.0 https://github.com/lvaoliveira/sonda.git && cd sonda
 scripts/setup-server.sh
 ```
 
