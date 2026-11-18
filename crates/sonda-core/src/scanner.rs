@@ -438,6 +438,25 @@ fn new_code_reference(
     )
 }
 
+/// A reference given by `--new-code` or `scan.new_code` needs git; when git
+/// isn't installed, say which setting asked for it and how to scan without
+/// git, instead of only "git is not installed".
+fn explain_missing_git(e: Error, reference: &str, from_cli: bool) -> Error {
+    if !git::is_not_installed(&e) {
+        return e;
+    }
+    let setting = if from_cli {
+        "--new-code"
+    } else {
+        "scan.new_code in sonda.toml"
+    };
+    Error::InvalidArgument(format!(
+        "new code is set to {reference:?} ({setting}), which needs git, but git is not \
+         installed or not on PATH. Install git, or scan without it: --new-code none \
+         (or scan.new_code = \"none\") counts the whole project as new code"
+    ))
+}
+
 /// Each file's analysis, or the warning for why it has none: in this
 /// process or in workers, with the same warning text in both modes, so
 /// reports do not depend on the mode.
@@ -505,7 +524,8 @@ fn scan_files(
             let contents = paths
                 .iter()
                 .map(|c| (c.rel.as_str(), read_capped(c, max_bytes).ok().flatten()));
-            let new_code = git::new_code(root, r, max_bytes, git_timeout, contents)?;
+            let new_code = git::new_code(root, r, max_bytes, git_timeout, contents)
+                .map_err(|e| explain_missing_git(e, r, opts.new_code_ref.is_some()))?;
             info!(reference = %r, basis = new_code_basis.kind(), elapsed_ms = ms(started), "computed new code");
             new_code
         }

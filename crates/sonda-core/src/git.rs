@@ -19,6 +19,15 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+/// [`Error::Git`]'s message when the `git` program can't be found: git is
+/// only needed to compare with a branch, so callers explain that.
+const NOT_INSTALLED: &str = "git is not installed, or not on PATH";
+
+/// Whether `e` says git isn't installed (or isn't on `PATH`).
+pub(crate) fn is_not_installed(e: &Error) -> bool {
+    matches!(e, Error::Git(m) if m == NOT_INSTALLED)
+}
+
 /// Computes new code against the merge base of HEAD and `reference`.
 /// `files` yields each scanned file's root-relative path and current content
 /// (`None` when unreadable or too large; such files are skipped). Base-branch
@@ -201,15 +210,19 @@ pub(crate) fn github_event(var: &dyn Fn(&str) -> Option<String>) -> Option<serde
 /// otherwise HEAD, so uncommitted changes are new code. Reads refs and
 /// commits only (ADR-0002).
 pub(crate) fn auto_reference(root: &Path, ci: &Ci, timeout: Duration) -> Result<Auto, Error> {
-    let Some(head) = git_ok(
-        root,
-        &["rev-parse", "--verify", "-q", "HEAD^{commit}"],
+    let head = match run_with_timeout(
+        git_command(root).args(["rev-parse", "--verify", "-q", "HEAD^{commit}"]),
         timeout,
-    )?
-    else {
-        return Ok(Auto::Nothing(
-            "not a git repository with commits, or git is not installed".into(),
-        ));
+    ) {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Ok(out) => return Ok(Auto::Nothing(why_no_head(&out.stderr))),
+        Err(e) if is_not_installed(&e) => {
+            return Ok(Auto::Nothing("git is not installed".into()));
+        }
+        Err(Error::Git(e)) if e.starts_with("failed to run git") => {
+            return Ok(Auto::Nothing(e));
+        }
+        Err(e) => return Err(e),
     };
     let head = head.trim();
     let exists = |reference: &str| -> Result<bool, Error> {
@@ -268,14 +281,37 @@ fn default_branch(root: &Path, timeout: Duration) -> Result<Option<String>, Erro
     Ok(None)
 }
 
+/// Why `rev-parse HEAD` failed, from git's error output: most often not a
+/// repository, but in a container the repository is often owned by another
+/// user than the one scanning, which git refuses to read (`safe.directory`).
+/// Only git's own suggested command is quoted, without control characters.
+fn why_no_head(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    if !stderr.contains("dubious ownership") {
+        return "not a git repository with commits".into();
+    }
+    let fix = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("git config --global --add safe.directory "))
+        .filter(|l| l.len() <= 300 && !l.chars().any(char::is_control))
+        .unwrap_or("git config --global --add safe.directory <the repository's path>");
+    format!(
+        "git refuses to read this repository because another user owns it; \
+         to compare with a branch, allow it with `{fix}`"
+    )
+}
+
 /// Like [`git`], but a failing command (an unknown ref, not a repository)
-/// is `None`; only a timeout or a missing git is an error.
+/// is `None`, and so is a missing git; only a timeout is an error.
 fn git_ok(dir: &Path, args: &[&str], timeout: Duration) -> Result<Option<String>, Error> {
     tracing::debug!(?args, "running git");
     let out = match run_with_timeout(git_command(dir).args(args), timeout) {
         Ok(out) => out,
         // No git at all is like no repository: nothing to compare with.
-        Err(Error::Git(e)) if e.starts_with("failed to run git") => return Ok(None),
+        Err(Error::Git(e)) if e == NOT_INSTALLED || e.starts_with("failed to run git") => {
+            return Ok(None);
+        }
         Err(e) => return Err(e),
     };
     Ok(out
@@ -350,7 +386,13 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output, Erro
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+        .map_err(|e| {
+            Error::Git(if e.kind() == std::io::ErrorKind::NotFound {
+                NOT_INSTALLED.into()
+            } else {
+                format!("failed to run git: {e}")
+            })
+        })?;
     let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
         return Err(Error::Internal("git pipes missing".into()));
     };
@@ -750,7 +792,43 @@ mod tests {
     #[test]
     fn auto_outside_a_repository_finds_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(auto(dir.path()), Auto::Nothing(_)));
+        let Auto::Nothing(why) = auto(dir.path()) else {
+            panic!("found a reference outside a repository");
+        };
+        assert_eq!(why, "not a git repository with commits");
+    }
+
+    #[test]
+    fn a_missing_git_is_told_apart() {
+        let err =
+            run_with_timeout(&mut Command::new("sonda-test-no-such-program"), TIMEOUT).unwrap_err();
+        assert!(is_not_installed(&err), "{err}");
+        assert!(!is_not_installed(&Error::Git("rev-parse failed: x".into())));
+    }
+
+    /// git 2.36+ refuses a repository another user owns, as a mounted one
+    /// in a container often is; the reason should say so, not "not a
+    /// repository".
+    #[test]
+    fn a_repository_git_refuses_is_explained() {
+        let refused = b"fatal: detected dubious ownership in repository at '/work'\n\
+            To add an exception for this directory, call:\n\
+            \n\
+            \tgit config --global --add safe.directory /work\n";
+        let why = why_no_head(refused);
+        assert!(why.contains("another user owns it"), "{why}");
+        assert!(
+            why.contains("`git config --global --add safe.directory /work`"),
+            "{why}"
+        );
+        // A path with control characters isn't quoted.
+        let hostile = b"fatal: detected dubious ownership\n\
+            git config --global --add safe.directory /w\x1b[2Jork\n";
+        assert!(why_no_head(hostile).contains("<the repository's path>"));
+        assert_eq!(
+            why_no_head(b"fatal: not a git repository (or any of the parent directories): .git\n"),
+            "not a git repository with commits"
+        );
     }
 
     /// Regression: `git diff` against the working tree used to run the
