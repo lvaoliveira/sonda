@@ -201,6 +201,15 @@ extracts the byte sites and the bodies only when their rule is on: with
 the defaults, scanning roo_display takes 0.72 s, as before; with the rule
 on, 0.76 s.
 
+**Operators as hidden friends (S2807).** A free `operator<<(Stream&,
+BlendingMode)` can be a hidden friend only if `BlendingMode` is a class,
+and the enumeration is declared in a header. The summary records each
+binary operator a file defines outside any class (`semantic/cpp_operators.rs`),
+with its namespaces and its parameters' types; the project pass reports
+it when one of them resolves to a class of the project. On roo_display it
+finds SonarCloud's 38, and none it doesn't; reading the file alone, it
+reported 12 operators for enumerations.
+
 ## Consequences
 
 - **What stays unseen:** types from referenced packages aren't in the project, so they resolve to nothing. That costs recall. The framework's own types do resolve, through the summary of its reference packs ([ADR-0022](0022-platform-types.md)). By ADR-0015's bar, a rule that implements its key's documented behavior on every declaration in the project is `exact`, and all eighteen are.

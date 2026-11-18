@@ -20,9 +20,15 @@ pub(crate) type Finding = (&'static str, usize, Span);
 pub(crate) const HIDDEN_FUNCTION: &str = "cpp/hidden-inherited-function";
 pub(crate) const BYTE_OPERATION: &str = "cpp/std-byte";
 pub(crate) const CONST_FUNCTION: &str = "cpp/const-member-function";
+pub(crate) const HIDDEN_FRIEND: &str = "cpp/operator-hidden-friend";
 
 /// The rules this module checks.
-pub(crate) const RULES: &[&str] = &[HIDDEN_FUNCTION, BYTE_OPERATION, CONST_FUNCTION];
+pub(crate) const RULES: &[&str] = &[
+    HIDDEN_FUNCTION,
+    BYTE_OPERATION,
+    CONST_FUNCTION,
+    HIDDEN_FRIEND,
+];
 
 /// Checks the active rules on every file's summary.
 pub(crate) fn run<'f>(
@@ -59,6 +65,20 @@ fn check_file(index: &ProjectIndex, f: usize, active: &[&str], found: &mut Vec<F
                 .iter()
                 .filter(|body| could_be_const(index, body))
                 .map(|body| (CONST_FUNCTION, f, body.span)),
+        );
+    }
+    if active.contains(&HIDDEN_FRIEND) {
+        // A parameter of one of the project's classes, which could befriend
+        // it; an enumeration, or a library's type, resolves to nothing.
+        found.extend(
+            file.operators
+                .iter()
+                .filter(|site| {
+                    site.types
+                        .iter()
+                        .any(|ty| index.resolve_in(&site.scope, ty, None).is_some())
+                })
+                .map(|site| (HIDDEN_FRIEND, f, site.span)),
         );
     }
     if active.contains(&BYTE_OPERATION) {
@@ -357,6 +377,23 @@ mod tests {
                 at("spec.cpp", 6),
                 at("spec.cpp", 12),
             ]
+        );
+    }
+    /// Shapes from SonarCloud's analysis of roo_display: the classes and
+    /// enumerations in a header, the operators in another file.
+    #[test]
+    fn operators_as_hidden_friends() {
+        let header = (
+            "box.h",
+            "namespace gfx {\nclass Box {\n public:\n  bool operator==(const Box&) const;\n};\nenum class Mode { kA, kB };\nstruct F { friend bool operator==(const F&, const F&) { return true; } };\n}",
+        );
+        let source = (
+            "box.cpp",
+            "namespace gfx {\nbool operator<(const Box& a, const Box& b) { return true; }\nstd::ostream& operator<<(std::ostream& os, const Box& b) { return os; }\nStream& operator<<(Stream& os, Mode m) { return os; }\nbool operator!=(const Box& a, const Box& b) { return false; }\nQDebug operator<<(QDebug d, const QString& s) { return d; }\nBox operator+(const Box& a, int n) { return a; }\n}",
+        );
+        assert_eq!(
+            flagged("cpp/operator-hidden-friend", &[header, source]),
+            [at("box.cpp", 2), at("box.cpp", 3), at("box.cpp", 7)]
         );
     }
     /// The class declared in a header, its member functions defined in
