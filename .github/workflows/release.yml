@@ -477,4 +477,7 @@ jobs:
             sh -s -- --dir "$RUNNER_TEMP/bin" 2> "$RUNNER_TEMP/log" || { cat "$RUNNER_TEMP/log"; exit 1; }
           cat "$RUNNER_TEMP/log"
           grep -q "attestation OK" "$RUNNER_TEMP/log"
-          "$RUNNER_TEMP/bin/sonda" --version | grep -qw -- "${GITHUB_REF_NAME#v}"
+          # A release candidate's binary reports Cargo.toml's version, 0.3.0,
+          # not the tag's 0.3.0-rc.1.
+          version=${GITHUB_REF_NAME#v}
+          "$RUNNER_TEMP/bin/sonda" --version | grep -qw -- "${version%%-*}"
