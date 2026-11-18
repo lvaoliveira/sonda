@@ -1,3 +1,11 @@
 # Supply chain: never install a package version published less than 14 days
 # ago (minutes). Fresh releases are how hijacked packages spread.
 minimumReleaseAge: 20160
+
+# picomatch ReDoS (GHSA-fc5q-39xc-vjpf, <= 4.0.7, no patched release yet). It
+# is only reachable through the dev toolchain (vite/vitest/eslint glob
+# matching on patterns we write ourselves), never in the shipped bundle. Drop
+# this when a fixed picomatch exists and the lockfile has it.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
