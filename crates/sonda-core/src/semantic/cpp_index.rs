@@ -91,6 +91,9 @@ pub(crate) struct FileIndex {
     /// (`cpp_const`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) bodies: Vec<super::cpp_const::MemberBody>,
+    /// Binary operators defined outside any class (`cpp_operators`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) operators: Vec<super::cpp_operators::OperatorSite>,
 }
 
 /// How many classes a file may summarize: a generated file declaring more
@@ -123,6 +126,11 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant, parts: Parts) -
         } else {
             Vec::new()
         },
+        operators: if parts.operators {
+            super::cpp_operators::sites(root, src, deadline)
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -132,6 +140,7 @@ pub(crate) fn extract(root: Node, src: &[u8], deadline: Instant, parts: Parts) -
 pub(crate) struct Parts {
     pub(crate) bytes: bool,
     pub(crate) bodies: bool,
+    pub(crate) operators: bool,
 }
 
 /// A node's source text.
@@ -654,6 +663,7 @@ mod tests {
             Parts {
                 bytes: true,
                 bodies: true,
+                operators: true,
             },
         )
     }

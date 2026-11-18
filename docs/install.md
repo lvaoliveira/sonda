@@ -191,6 +191,29 @@ From a clone instead: `cargo install --path crates/sonda`.
 clone and installs it to `~/.local/bin`, or to the directory you give it.
 Rerun it after `git pull` to keep the CLI at the clone's version.
 
+### In a container
+
+The install script works in a container like anywhere else; it needs
+`curl` and CA certificates (`ca-certificates` on Debian and Ubuntu).
+
+**git is optional.** sonda only uses it to find new code, the changes the
+quality gate judges. Without git, the default (`new_code = "auto"`) counts
+the whole project as new code, and the report says why. Only a branch or
+other ref, from `--new-code origin/main` or `scan.new_code` in
+`sonda.toml`, needs git: then sonda stops and says which setting asked for
+it. Install git in the image to compare with a branch, or pass
+`--new-code none` to scan without it.
+
+With git installed, git refuses a repository that another user owns, as a
+mounted one often is: the report says so, and gives the command to allow
+it, such as `git config --global --add safe.directory /src`.
+
+**The project can be read-only.** `sonda scan` only reads `sonda.toml`, and
+needs none at all: the defaults apply without one. Only `sonda init` writes
+one, into the folder you give it (`sonda init /tmp`, say), and
+`--config FILE` reads one from outside the project. Reports go to standard
+output unless you pass `-o`.
+
 ### In GitHub Actions
 
 Download the release binary rather than building it on each run:

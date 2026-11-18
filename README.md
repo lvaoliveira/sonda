@@ -131,7 +131,7 @@ skip_minified = true       # skip JS/TS that looks minified (average line > 200 
 skip_generated = true      # skip files whose first lines say they're generated
 file_timeout_secs = 10     # per-file parse + rule-matching budget
 git_timeout_secs = 120     # each git process used for new code
-new_code = "auto"          # or "none", or a git ref such as "origin/main" (ADR-0010)
+new_code = "auto"          # or "none", or a git ref such as "origin/main" (needs git; ADR-0010)
 # baseline = "sonda-baseline.json"   # issues to leave out; read from the project by default (ADR-0029)
 
 [rules]

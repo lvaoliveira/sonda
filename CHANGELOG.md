@@ -276,6 +276,16 @@ expected: see **Changed rule results**.
 
 ### Fixed
 
+- Scanning without git, as in a container, is explained instead of failing
+  cryptically. A `--new-code` or `scan.new_code` ref without git used to
+  stop with "failed to run git: No such file or directory"; it now says
+  which setting needs git and that `--new-code none` scans without it. When
+  git refuses a repository another user owns (`safe.directory`, common with
+  a mounted one), the report's reason for counting the whole project as new
+  code says so and gives git's command to allow it, instead of "not a git
+  repository with commits, or git is not installed". [Installing
+  sonda](docs/install.md#in-a-container) has a section on containers.
+
 - C++ classes with Qt's macros (`Q_OBJECT`, `Q_PROPERTY(...)`,
   `public slots:`, `signals:`, a statement's `emit`) parse: the macros are
   blanked for the parser, positions unchanged, as moc's headers turn them
@@ -337,6 +347,14 @@ expected: see **Changed rule results**.
   them. When everything fits on one line, it stays on the right.
 
 ### Changed rule results
+
+- C++'s `cpp/operator-hidden-friend` reports every binary operator
+  defined outside its class (`operator<<` for a stream, `operator|`), not
+  only comparisons, and no longer `!=`, which C++20 derives from `==`. It
+  runs on the project's index: a parameter must be one of the project's
+  classes, not an enumeration declared in a header. On roo_display it
+  raises all 38 of SonarCloud's issues, where it raised 15, and none it
+  doesn't, where it raised 3.
 
 - C++'s `cpp/mutable-global` reports a global under an `#if` at file
   scope, and leaves an object of a class the file defines with a
