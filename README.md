@@ -217,7 +217,7 @@ SonarQube's rules for JavaScript, TypeScript, Python, Java and C#; Rust is
 earlier
 ([progress](docs/sonar-parity/README.md)). It does not (yet) have:
 
-- **Taint analysis through every method's result.** Seven C# rules
+- **Taint analysis for Rust and C/C++.** Seven C# rules
   follow a value from an ASP.NET Core request into a SQL query, an OS
   command, a file path, a redirect, an outgoing request, an XPath expression
   or an LDAP filter within a file, through the functions it calls, and six
@@ -227,11 +227,11 @@ earlier
   Flask, Django, FastAPI or aiohttp request, all through the project's
   other files too, and eight Java rules follow one from a servlet, Spring
   or JAX-RS request into the same kinds of sink, through the methods of
-  the same file and on into the project's other files, in a method's
-  parameter; each shows its path
+  the same file and into and out of the project's other files; each shows
+  its path
   ([ADR-0027](docs/adr/0027-taint-analysis.md), phases T1 to T4). Java's
-  doesn't follow a method's result back into another file's sink yet, and
-  only a method of one arity by name. For injection
+  can't tell apart overloads of one name and arity, so it follows none of
+  them. For injection
   elsewhere, sonda has narrower rules that
   flag the risky shape itself, such as a query built from strings
   (`sql-built-dynamically` in Java, JavaScript, Python and C#). SonarQube's
@@ -253,7 +253,7 @@ it plugs in.
 - [x] Pull request decoration on GitHub ([ADR-0021](docs/adr/0021-pull-request-decoration.md))
 - [x] Dependencies: SBOMs and known vulnerabilities ([ADR-0009](docs/adr/0009-dependencies-and-advisories.md))
 - [ ] An equivalent for every SonarQube rule key in the supported languages ([ADR-0007](docs/adr/0007-sonarqube-rule-parity.md); progress in [docs/sonar-parity/](docs/sonar-parity/README.md))
-- [ ] Taint analysis for injection-style vulnerabilities: built for C#, JavaScript/TypeScript and Python (across files for JavaScript/TypeScript, Python and, for the values it passes on, Java) ([ADR-0027](docs/adr/0027-taint-analysis.md))
+- [ ] Taint analysis for injection-style vulnerabilities: built for C#, JavaScript/TypeScript and Python (across files for JavaScript/TypeScript, Python and Java) ([ADR-0027](docs/adr/0027-taint-analysis.md))
 - [ ] Reachability: rank findings by whether a public entry point reaches them ([docs/roadmap.md](docs/roadmap.md#security-cweowasp-mapping-hotspots-reachability))
 - [ ] Pull request decoration on GitLab and Bitbucket ([docs/roadmap.md](docs/roadmap.md#pull-request-decoration-github-gitlab-and-bitbucket))
 - [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md#single-sign-on-openid-connect))

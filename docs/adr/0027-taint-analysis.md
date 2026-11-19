@@ -19,9 +19,9 @@
   `java/ssrf`, `java/code-injection`, `java/xpath-injection` and
   `java/ldap-injection`, within one file, through its methods (T3) and into
   other files' methods (T4: a value passed to a method of the project that
-  reaches a sink or is passed on, resolved with the Java index and an
-  interface's or base class's implementations); not yet a method's result
-  that reaches a sink in the caller's file.
+  reaches a sink or is passed on, and a method's result that reaches a
+  sink in the caller's file, resolved with the Java index and an
+  interface's or base class's implementations).
 - Date: 2026-11-07
 
 ## Context
