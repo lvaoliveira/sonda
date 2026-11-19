@@ -20,7 +20,7 @@ the steps, the commands and what was learned along the way.
 |---|---|---|---|---|
 | arandu | JavaScript | `57f6e9b` | 145 of 150 | 4 |
 | sonda | TypeScript (TSX), Rust | `8252a7b` | 85 of 85 | 0 |
-| CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 37 |
+| CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 24 |
 | ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 124 of 173 | 15 |
@@ -232,13 +232,17 @@ And in a third:
 
 ### What remains in Python
 
-On CPython, 39 of SonarQube's issues and 37 of sonda's:
+On CPython, 39 of SonarQube's issues and 24 of sonda's:
 
 **Known gaps**, needing what sonda doesn't read (other modules, or the
 standard library's signatures):
-- `py/unused-parameter`, sonda only (14): methods that override a method
-  of a base class in another module; SonarQube follows the import, sonda
-  can't see the base.
+- `py/unused-parameter`, sonda only (3): methods that override a method
+  of a base class sonda can't read (`logging`'s `shouldRollover`, declared
+  in the standard library's signatures); SonarQube knows the base's
+  methods, sonda only that the base exists. A method of a class that
+  extends one imported from another module of the project or a library, and
+  one that is handed over as a callback (`add_done_callback(self._done)`),
+  are left alone, which removed 11 of the 14 CPython had.
 - S930 (5): calls with an argument the callee doesn't take, the callee in
   another module or a C extension (`binascii.b2a_base64(wrapcol=...)`).
 - S2638 (1): an override whose signature differs from `list.pop`'s.
@@ -268,9 +272,15 @@ SonarQube follows:
 - `py/mergeable-if` (10): an exact copy of one case isn't reported by
   SonarQube either; removing its comment and its docstring together makes
   it reported, either one alone doesn't.
-- About 20 issues, one or two per key: S1481 (2), S5857 (2), S8572 (2),
-  S125 (1 each way), S1192 (`"%s:%s"`), S3358, S5843, S5869, S6035,
-  S6659, S7483, S8513, S8786.
+- About 18 issues, one or two per key: S1481 (2), S8572 (2: `error` with
+  `exc_info=True` in a handler), S125 (1 each way), S1192 (`"%s:%s"`,
+  five times in a file), S3358, S5843, S5869, S6035, S6659, S7483, S8513,
+  S8786. Where sonda's is the only report, the code reads as the rule says
+  (a nested conditional, `h[:4] == b'..'`, two `endswith` calls in an `or`).
+
+And one that was an error, fixed: S5857 reported `.*?\?=`, a lazy dot
+before a two-character end, which a negated class doesn't match the same
+way; it is reported only when the character ends the sequence.
 
 On ha-budgetthuis-prices, both of sonda's own (S7503 on an options flow
 step, S7632 on a `# noqa` with an explanation) aren't explained.

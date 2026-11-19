@@ -360,8 +360,11 @@ pub(super) fn ends_with_reluctant(r: &Regex) -> bool {
 pub(super) fn reluctant_dot_before_literal(r: &Regex) -> bool {
     let dot_lazy = |n: &Rx| matches!(n, Rx::Repeat { inner, max: None, mode: Mode::Lazy, .. } if **inner == Rx::Any);
     any_node(r, |n| match n {
-        Rx::Concat(items) => items.windows(2).any(|w| {
-            (dot_lazy(&w[0]) || matches!(&w[0], Rx::Group { inner, .. } if dot_lazy(inner)))
+        // The character ends the sequence: `".*?"`. Followed by more, as in
+        // `.*?\?=`, a negated class would match less than the lazy dot does.
+        Rx::Concat(items) => items.windows(2).enumerate().any(|(i, w)| {
+            i + 2 == items.len()
+                && (dot_lazy(&w[0]) || matches!(&w[0], Rx::Group { inner, .. } if dot_lazy(inner)))
                 && matches!(w[1], Rx::Char(c) if !c.is_alphanumeric())
         }),
         _ => false,

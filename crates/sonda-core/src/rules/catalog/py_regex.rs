@@ -943,6 +943,13 @@ mod tests {
     }
 
     #[test]
+    fn a_reluctant_dot_followed_by_more_than_one_character_is_no_class() {
+        // `[^?]*` would stop at the first `?`, where `.*?` goes on to `?=`.
+        let src = "import re\nre.compile(r'=\\?(.*?)\\?=')\nre.compile(r'a.*?\\?=b')\nre.compile(r'\"(.*?)\"')\n";
+        assert_eq!(flagged("py/regex-reluctant-instead-of-class", src), [4]);
+    }
+
+    #[test]
     fn backtracking() {
         let src = "import re\nre.search(r'(a+)+b')\nre.search(r'(a+b)+')\nre.search(r'(a|a)*')\nre.search(r'(\\w+\\s?)*')\nre.search(r'(a|b)*')\nre.search(r'\\d*\\d*x')\nre.search(r'\\d*,\\d*')\nre.search(r'.*.*')";
         assert_eq!(
