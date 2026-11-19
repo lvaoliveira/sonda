@@ -3834,7 +3834,10 @@ fn async_function_never_awaits(function: Node, src: &[u8]) -> bool {
     let Some(body) = body_of(function) else {
         return false;
     };
-    if is_stub_body(body) {
+    // A method of a class extending one imported from another module may
+    // override an `async def` that its base says callers await (measured on
+    // SonarQube 26.7).
+    if is_stub_body(body) || overrides_an_imported_method(function, src) {
         return false;
     }
     find_in_scope(body, SCOPE_STOPS, |n| {
@@ -4303,6 +4306,9 @@ mod tests {
         // and a method handed over as a callback, keep their signatures.
         let src = "from . import base\nfrom lib import Base\nclass A(base.Loop):\n    def _make(self, sock, waiter):\n        return sock\nclass B(Base):\n    def run(self, x, y):\n        return x\nclass C:\n    def _done(self, fd, fut):\n        return fd\n    def start(self):\n        self.loop.add_done_callback(self._done)\n    def plain(self, a, b):\n        return a\n    def called(self, a, b):\n        return a\n    def go(self):\n        self.called(1, 2)\n";
         assert_eq!(flagged("py/unused-parameter", src), [14, 16]);
+        // S7503: not for a method of a class extending an imported one.
+        let src = "from lib import Base\nclass A(Base):\n    async def run(self, x):\n        return x\nclass B:\n    async def run(self, x):\n        return x\n";
+        assert_eq!(flagged("py/async-without-await", src), [6]);
         // S1481: a name that says it's thrown away.
         let src = "def f(g):\n    dummy = g()\n    unused_x = g()\n    y = g()\n";
         assert_eq!(flagged("py/unused-local", src), [4]);

@@ -18,10 +18,10 @@ the steps, the commands and what was learned along the way.
 
 | Project | Language | Commit | SonarQube's issues sonda raises | sonda's issues SonarQube doesn't |
 |---|---|---|---|---|
-| arandu | JavaScript | `57f6e9b` | 145 of 150 | 4 |
+| arandu | JavaScript | `5944f12` | 147 of 152 | 4 |
 | sonda | TypeScript (TSX), Rust | `8252a7b` | 85 of 85 | 0 |
 | CPython, 7 packages¹ | Python | `bf6623a` | 471 of 510 | 24 |
-| ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 2 |
+| ha-budgetthuis-prices | Python | `f563c0d` | 3 of 3 | 0 |
 | Apache Commons Lang | Java | `5d2715b` | 890 of 918 | 2 |
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 124 of 173 | 15 |
 | eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
@@ -282,8 +282,14 @@ And one that was an error, fixed: S5857 reported `.*?\?=`, a lazy dot
 before a two-character end, which a negated class doesn't match the same
 way; it is reported only when the character ends the sequence.
 
-On ha-budgetthuis-prices, both of sonda's own (S7503 on an options flow
-step, S7632 on a `# noqa` with an explanation) aren't explained.
+On ha-budgetthuis-prices, sonda's two (S7503 on an options flow step, S7632
+on `# noqa: BLE001 - why`) were errors, measured on SonarQube 26.7 and fixed:
+it doesn't report an `async def` in a class that extends one imported from
+another module (the base may say callers await it), and it takes an
+explanation after the last code of a `noqa` list as text, not as part of the
+code. On arandu, sonda's four are S2077 on `db.prepare(` with a template
+literal that interpolates a column list, which 26.7 doesn't recognize as a
+query call.
 
 ## Java, measured
 

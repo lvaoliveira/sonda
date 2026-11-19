@@ -15,12 +15,17 @@ file, the report formats and the public library API.
   address starts with a field or a property of the class
   (`$"{_urlBase}{path}"`) is left alone, since what follows can't change the
   host. On Prowlarr it removed six reports SonarCloud's analysis doesn't make.
+- `py/async-without-await` leaves a method of a class that extends one
+  imported from another module, and `py/suppression-comment-format` takes
+  an explanation after the last code of a `noqa` list (`# noqa: BLE001 -
+  why`), both as SonarQube 26.7 does.
 - `js/invariant-return` leaves a function that can run off its end: that
   returns `undefined`, a value its `return`s don't give (measured on
   SonarQube 26.7). `js/implicit-global` leaves webpack's own
   (`__webpack_public_path__`). `js/array-for-existence` reports an array only
   when it's checked twice or in a callback or another function, as 26.7 does,
-  not for one `includes` in the function that declares it.
+  not for one `includes` in the function that declares it (a loop counts as
+  repeated).
 
 - `py/unused-parameter` leaves alone a method of a class that extends one
   imported from another module (of the project or a library), and a method
