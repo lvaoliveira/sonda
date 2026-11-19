@@ -14,6 +14,11 @@
   `py/sql-injection`, `py/command-injection`, `py/path-injection`,
   `py/open-redirect`, `py/ssrf`, `py/code-injection`,
   `py/xpath-injection` and `py/ldap-injection`.
+  Java built for T2, on its binder (ADR-0008 S1): `java/sql-injection`,
+  `java/command-injection`, `java/path-injection`, `java/open-redirect`,
+  `java/ssrf`, `java/code-injection`, `java/xpath-injection` and
+  `java/ldap-injection`, within one file; not yet through other methods
+  (T3) or files (T4).
 - Date: 2026-11-07
 
 ## Context

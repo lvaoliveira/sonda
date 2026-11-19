@@ -1302,22 +1302,11 @@ mod tests {
     }
 }
 
-macro_rules! py_taint_rule_fn {
-    ($name:ident, $kind:ident) => {
-        /// A request's value reaching this kind of sink (ADR-0027).
-        fn $name<'t>(
-            m: &crate::semantic::Model<'t>,
-            src: &[u8],
-        ) -> crate::semantic::taint::TaintResult<'t> {
-            crate::semantic::py_taint::find(m, src, crate::semantic::taint::SinkKind::$kind)
-        }
-    };
-}
-py_taint_rule_fn!(sql_injection, Sql);
-py_taint_rule_fn!(command_injection, Command);
-py_taint_rule_fn!(path_injection, Path);
-py_taint_rule_fn!(open_redirect, Redirect);
-py_taint_rule_fn!(ssrf, Ssrf);
-py_taint_rule_fn!(code_injection, Code);
-py_taint_rule_fn!(xpath_injection, XPath);
-py_taint_rule_fn!(ldap_injection, Ldap);
+taint_rule_fn!(py_taint, sql_injection, Sql);
+taint_rule_fn!(py_taint, command_injection, Command);
+taint_rule_fn!(py_taint, path_injection, Path);
+taint_rule_fn!(py_taint, open_redirect, Redirect);
+taint_rule_fn!(py_taint, ssrf, Ssrf);
+taint_rule_fn!(py_taint, code_injection, Code);
+taint_rule_fn!(py_taint, xpath_injection, XPath);
+taint_rule_fn!(py_taint, ldap_injection, Ldap);

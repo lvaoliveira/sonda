@@ -7,6 +7,21 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Added
+
+- Taint analysis for Java ([ADR-0027](docs/adr/0027-taint-analysis.md)):
+  eight rules, `java/sql-injection` (S3649), `java/command-injection`
+  (S2076), `java/path-injection` (S2083), `java/open-redirect` (S5146),
+  `java/ssrf` (S5144), `java/code-injection` (S5334),
+  `java/xpath-injection` (S2091) and `java/ldap-injection` (S2078), follow a
+  request's value from a servlet's, Spring's or JAX-RS's request into the
+  sink, through variables, string operations, builders and collections,
+  within one file, and report the path it took. A value that is checked
+  (`matches`, `startsWith`, a canonical path, an allow-list's `contains`)
+  is taken as validated. Java gets a binder (scopes and symbols, ADR-0008
+  S1) for it. Not yet: a value passed through another method or another
+  file.
+
 ### Fixed
 
 - Scanning JavaScript or TypeScript no longer overflows the stack on a file

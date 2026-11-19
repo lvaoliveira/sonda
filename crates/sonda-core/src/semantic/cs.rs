@@ -15,13 +15,10 @@
 //! Each declaration keeps the type written where it's declared (none for
 //! `var`), which rules use to approximate typed analyses.
 
-use super::{DeclKind, Function, Model, Ref, ScopeId, ScopeKind};
-use std::collections::HashSet;
+use super::walk::{Binder, Param};
+use super::{DeclKind, Model, ScopeId, ScopeKind};
 use std::time::Instant;
 use tree_sitter::Node;
-
-/// Nodes between deadline checks.
-const CHECK_EVERY: u32 = 4096;
 
 const TYPES: &[&str] = &[
     "class_declaration",
@@ -77,88 +74,38 @@ const NOT_EXPRESSIONS: &[&str] = &[
     "with_initializer",
 ];
 
-struct Binder<'t, 's> {
-    m: Model<'t>,
-    src: &'s [u8],
-    /// Ids of nodes that name a declaration, or a member rather than a
-    /// variable.
-    not_refs: HashSet<usize>,
+/// The binder of Cs: the shared one, and the rules of the language.
+struct Cs<'t, 's>(Binder<'t, 's>);
+
+impl<'t, 's> std::ops::Deref for Cs<'t, 's> {
+    type Target = Binder<'t, 's>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cs<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 pub(super) fn build<'t>(root: Node<'t>, src: &[u8], deadline: Instant) -> Option<Model<'t>> {
-    let mut b = Binder {
-        m: Model::new(),
-        src,
-        not_refs: HashSet::new(),
-    };
-    let mut walk = Walk {
-        scopes: vec![(0, 0)],
-        types: Vec::new(),
-        ancestors: Vec::new(),
-        depth: 0,
-    };
-    let mut cursor = root.walk();
-    let mut visited = 0u32;
-    loop {
-        visited += 1;
-        if visited.is_multiple_of(CHECK_EVERY) && Instant::now() >= deadline {
-            return None;
-        }
-        let node = cursor.node();
-        let field = cursor.field_name();
-        let scope = walk.scopes.last().map_or(0, |s| s.1);
-        let type_scope = walk.types.last().map(|t| t.1);
-        if let Some(opened) = b.visit(node, &walk.ancestors, field, scope, type_scope) {
-            walk.scopes.push((walk.depth, opened));
-            if TYPES.contains(&node.kind()) {
-                walk.types.push((walk.depth, opened));
-            }
-        }
-        if cursor.goto_first_child() {
-            walk.ancestors.push(node);
-            walk.depth += 1;
-            continue;
-        }
-        if !walk.leave(&mut cursor) {
-            b.m.root = Some(root);
-            b.m.resolve();
-            return Some(b.m);
-        }
+    let mut b = Cs(Binder::new(src));
+    let done = super::walk::run(
+        root,
+        deadline,
+        |node, ancestors, field, scope, type_scope| {
+            let opened = b.visit(node, ancestors, field, scope, type_scope)?;
+            Some((opened, TYPES.contains(&node.kind())))
+        },
+    );
+    if !done {
+        return None;
     }
-}
-
-/// Where `build`'s walk is: the scopes and the type scopes open, each with
-/// the depth of the node that opened it, and the nodes above the cursor.
-struct Walk<'t> {
-    scopes: Vec<(usize, ScopeId)>,
-    /// The innermost type scope, for `this.x`.
-    types: Vec<(usize, ScopeId)>,
-    ancestors: Vec<Node<'t>>,
-    depth: usize,
-}
-
-impl<'t> Walk<'t> {
-    /// Leaves the node at the cursor for the next one that isn't below it,
-    /// closing the scopes the nodes left opened; false at the end of the
-    /// tree.
-    fn leave(&mut self, cursor: &mut tree_sitter::TreeCursor<'t>) -> bool {
-        loop {
-            while self.scopes.len() > 1 && self.scopes.last().is_some_and(|s| s.0 >= self.depth) {
-                self.scopes.pop();
-            }
-            while self.types.last().is_some_and(|t| t.0 >= self.depth) {
-                self.types.pop();
-            }
-            if cursor.goto_next_sibling() {
-                return true;
-            }
-            if !cursor.goto_parent() {
-                return false;
-            }
-            self.ancestors.pop();
-            self.depth -= 1;
-        }
-    }
+    b.m.root = Some(root);
+    b.m.resolve();
+    Some(b.0.m)
 }
 
 fn has_modifier(declaration: Node, word: &str, src: &[u8]) -> bool {
@@ -168,11 +115,7 @@ fn has_modifier(declaration: Node, word: &str, src: &[u8]) -> bool {
         .any(|c| c.kind() == "modifier" && c.utf8_text(src).is_ok_and(|t| t == word))
 }
 
-impl<'t> Binder<'t, '_> {
-    fn text(&self, node: Node) -> String {
-        node.utf8_text(self.src).unwrap_or_default().to_string()
-    }
-
+impl<'t> Cs<'t, '_> {
     /// Handles one node; returns the scope it opens for its children.
     fn visit(
         &mut self,
@@ -403,23 +346,7 @@ impl<'t> Binder<'t, '_> {
         if let Some(name) = node.child_by_field_name("name") {
             self.declare_function_name(node, name, scope);
         }
-        let inner = self.m.push_scope(scope, ScopeKind::Function);
-        let list = Self::parameter_list(node);
-        let mut params = Vec::with_capacity(list.len());
-        for (name, ty, declarator) in list {
-            let first = self.m.decls.len();
-            self.declare(inner, name, DeclKind::Param, ty, false);
-            if let Some(d) = self.m.decls.last_mut() {
-                d.declarator = Some(declarator);
-            }
-            params.push((first..self.m.decls.len()).collect());
-        }
-        self.m.functions.push(Function {
-            node,
-            scope: inner,
-            params,
-        });
-        inner
+        self.0.function(node, scope, Self::parameter_list(node))
     }
 
     /// A method's or a local function's name is declared; another
@@ -443,7 +370,7 @@ impl<'t> Binder<'t, '_> {
     /// (name, type, declaring node) per parameter. A `params T[] rest`
     /// parameter has its type and name on the list itself; a lambda's lone
     /// parameter (`x => ...`) is the list.
-    fn parameter_list(node: Node<'t>) -> Vec<(Node<'t>, Option<Node<'t>>, Node<'t>)> {
+    fn parameter_list(node: Node<'t>) -> Vec<Param<'t>> {
         let mut list = Vec::new();
         let Some(p) = node.child_by_field_name("parameters") else {
             return list;
@@ -538,23 +465,6 @@ impl<'t> Binder<'t, '_> {
         }
     }
 
-    fn declare(
-        &mut self,
-        scope: ScopeId,
-        name: Node<'t>,
-        kind: DeclKind,
-        ty: Option<Node<'t>>,
-        is_static: bool,
-    ) {
-        self.not_refs.insert(name.id());
-        let text = self.text(name);
-        self.m.declare(scope, text, kind, name);
-        if let Some(d) = self.m.decls.last_mut() {
-            d.ty = ty;
-            d.is_static = is_static;
-        }
-    }
-
     fn reference(
         &mut self,
         node: Node<'t>,
@@ -573,14 +483,7 @@ impl<'t> Binder<'t, '_> {
             return;
         };
         let (read, write) = self.access(node, parent, ancestors, field);
-        self.m.refs.push(Ref {
-            name: self.text(node),
-            node,
-            scope,
-            read,
-            write,
-            decl: None,
-        });
+        self.add_ref(node, scope, read, write);
     }
 
     /// The scope an identifier under `parent` refers into, or None when

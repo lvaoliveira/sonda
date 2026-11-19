@@ -1,6 +1,20 @@
 //! The rule catalog, one module per language. Each rule records the
 //! SonarQube rules it corresponds to (ADR-0007).
 
+/// A taint rule's `find` function (ADR-0027): a request's value reaching
+/// this kind of sink, found by the language's taint engine. Defined before
+/// the modules, so each of them can use it.
+macro_rules! taint_rule_fn {
+    ($engine:ident, $name:ident, $kind:ident) => {
+        fn $name<'t>(
+            m: &crate::semantic::Model<'t>,
+            src: &[u8],
+        ) -> crate::semantic::taint::TaintResult<'t> {
+            crate::semantic::$engine::find(m, src, crate::semantic::taint::SinkKind::$kind)
+        }
+    };
+}
+
 mod c;
 mod common;
 mod cpp;

@@ -3,6 +3,17 @@
 
 use super::prelude::*;
 
+/// A servlet whose `doGet` has `$body`, for the taint rules' examples.
+macro_rules! servlet {
+    ($body:literal) => {
+        concat!(
+            "class C extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n",
+            $body,
+            "  }\n}\n"
+        )
+    };
+}
+
 pub(super) static RULES: &[Rule] = &[
     Rule {
         id: "java/sql-built-dynamically",
@@ -662,6 +673,178 @@ pub(super) static RULES: &[Rule] = &[
             good: "class A { void f() { context.sendBroadcast(intent, \"com.example.PERM\"); } }",
         }),
     },
+    Rule {
+        id: "java/sql-injection",
+        name: "SQL queries should not be built from a request's values",
+        description: "A value from the request (a parameter, a header, a path variable, a request body) that reaches a query's text lets whoever sends the request change what the query does. Pass it as a parameter of a `PreparedStatement`, a `JdbcTemplate` or a named query instead. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this query from the request's values; pass them as parameters.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S3649")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: sql_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!(
+                "    String id = request.getParameter(\"id\");\n    stmt.executeQuery(\"SELECT * FROM o WHERE id = '\" + id + \"'\");\n"
+            ),
+            good: servlet!(
+                "    String id = request.getParameter(\"id\");\n    PreparedStatement ps = conn.prepareStatement(\"SELECT * FROM o WHERE id = ?\");\n    ps.setString(1, id);\n"
+            ),
+        }),
+    },
+    Rule {
+        id: "java/command-injection",
+        name: "OS commands should not be built from a request's values",
+        description: "A value from the request that reaches a command lets whoever sends it run, or add to, a command on the server. Run a fixed program with `ProcessBuilder`, passing the value as one of its arguments, without a shell. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this command from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2076")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: command_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!(
+                "    Runtime.getRuntime().exec(\"ping -c 1 \" + request.getParameter(\"host\"));\n"
+            ),
+            good: servlet!("    Runtime.getRuntime().exec(\"ping -c 1 localhost\");\n"),
+        }),
+    },
+    Rule {
+        id: "java/path-injection",
+        name: "File paths should not be built from a request's values",
+        description: "A value from the request that reaches a file path lets whoever sends it read or write files outside the folder meant for them, with `../`. Build the path from a fixed folder and a file name you checked (`Paths.get(base).resolve(name).normalize()`, then test it with `startsWith(base)`). The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this file path from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2083")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: path_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!(
+                "    new FileInputStream(\"/srv/files/\" + request.getParameter(\"name\"));\n"
+            ),
+            good: servlet!("    new FileInputStream(\"/srv/files/report.txt\");\n"),
+        }),
+    },
+    Rule {
+        id: "java/open-redirect",
+        name: "Redirects should not go where a request's values say",
+        description: "A value from the request that reaches a redirect lets whoever sends it send visitors to a site of their choosing. Redirect to a path you build, or to an address you checked against a list. The issue shows the path the value took (ADR-0027).",
+        message: "Don't redirect to an address taken from the request.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S5146")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: open_redirect,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!("    response.sendRedirect(request.getParameter(\"next\"));\n"),
+            good: servlet!("    response.sendRedirect(\"/home\");\n"),
+        }),
+    },
+    Rule {
+        id: "java/ssrf",
+        name: "Requests to other servers should not go where a request's values say",
+        description: "A value from the request that reaches the address of a request the server makes lets whoever sends it make the server call internal services or other hosts. Check the address against a list of hosts you allow. The issue shows the path the value took (ADR-0027).",
+        message: "Don't call an address taken from the request.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S5144")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: ssrf,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!("    new URL(request.getParameter(\"url\")).openStream();\n"),
+            good: servlet!("    new URL(\"https://api.example.com/data\").openStream();\n"),
+        }),
+    },
+    Rule {
+        id: "java/code-injection",
+        name: "Code should not be built from a request's values",
+        description: "A value from the request that reaches code the program evaluates (a script engine, a Spring expression, OGNL) lets whoever sends it run code on the server. Don't evaluate text that came from the request. The issue shows the path the value took (ADR-0027).",
+        message: "Don't evaluate code built from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S5334")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: code_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!(
+                "    ScriptEngine engine = manager.getEngineByName(\"js\");\n    engine.eval(request.getParameter(\"code\"));\n"
+            ),
+            good: servlet!(
+                "    ScriptEngine engine = manager.getEngineByName(\"js\");\n    engine.eval(\"1 + 1\");\n"
+            ),
+        }),
+    },
+    Rule {
+        id: "java/xpath-injection",
+        name: "XPath expressions should not be built from a request's values",
+        description: "A value from the request that reaches an XPath expression lets whoever sends it change what the expression selects. Pass it as a variable (`XPathVariableResolver`) instead. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this XPath expression from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2091")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: xpath_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!(
+                "    XPath xpath = factory.newXPath();\n    xpath.evaluate(\"//user[@name='\" + request.getParameter(\"name\") + \"']\", doc);\n"
+            ),
+            good: servlet!(
+                "    XPath xpath = factory.newXPath();\n    xpath.evaluate(\"//user[@name=$name]\", doc);\n"
+            ),
+        }),
+    },
+    Rule {
+        id: "java/ldap-injection",
+        name: "LDAP searches should not be built from a request's values",
+        description: "A value from the request that reaches an LDAP filter lets whoever sends it change what the search matches. Escape it for LDAP, or use a query builder that does. The issue shows the path the value took (ADR-0027).",
+        message: "Don't build this LDAP filter from the request's values.",
+        category: Vulnerability,
+        severity: Blocker,
+        effort_minutes: 30,
+        sonar: &[exact("S2078")],
+        check: Check::Taint {
+            langs: JAVA,
+            find: ldap_injection,
+        },
+        example: Some(Example {
+            lang: Lang::Java,
+            bad: servlet!(
+                "    DirContext ctx = open();\n    ctx.search(\"ou=people\", \"(uid=\" + request.getParameter(\"uid\") + \")\", null);\n"
+            ),
+            good: servlet!(
+                "    DirContext ctx = open();\n    ctx.search(\"ou=people\", \"(uid={0})\", new Object[] { request.getParameter(\"uid\") }, null);\n"
+            ),
+        }),
+    },
 ];
 
 // ---------------------------------------------------- filters
@@ -1286,3 +1469,12 @@ mod tests {
         assert_eq!(flagged("java/public-tmp", src), [2, 4, 6]);
     }
 }
+
+taint_rule_fn!(java_taint, sql_injection, Sql);
+taint_rule_fn!(java_taint, command_injection, Command);
+taint_rule_fn!(java_taint, path_injection, Path);
+taint_rule_fn!(java_taint, open_redirect, Redirect);
+taint_rule_fn!(java_taint, ssrf, Ssrf);
+taint_rule_fn!(java_taint, code_injection, Code);
+taint_rule_fn!(java_taint, xpath_injection, XPath);
+taint_rule_fn!(java_taint, ldap_injection, Ldap);
