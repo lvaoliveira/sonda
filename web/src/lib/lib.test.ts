@@ -7,6 +7,7 @@ import { isRepository, localServer, newFileUrl, newSecretUrl, parseRepository, p
 import { compactCount, formatAge, formatEffort, trimTrailing } from './format'
 import { initials } from './identity'
 import { DEFAULT_FILTER, filterFromParams, issueSearchParams, toQuery } from './issues'
+import { falsePositiveReportUrl } from './links'
 import { languageLabel, projectScore, SEVERITY } from './visual'
 import { copyText } from './clipboard'
 import { generatePassword } from './password'
@@ -232,6 +233,23 @@ describe('connecting a repository', () => {
     expect(url.pathname).toBe('/acme/shop/new/release/2.x')
     expect(url.searchParams.get('filename')).toBe('.github/workflows/sonda.yml')
     expect(url.searchParams.get('value')).toBe('name: sonda\n')
+  })
+})
+
+describe('reporting a false positive', () => {
+  it("opens Sonda's form with only the rule and the version", () => {
+    const url = new URL(falsePositiveReportUrl('js/no-var', '0.3.0'))
+    expect(url.origin + url.pathname).toBe('https://github.com/lvaoliveira/sonda/issues/new')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      template: 'false-positive.yml',
+      title: 'False positive: js/no-var',
+      rule: 'js/no-var',
+      version: '0.3.0',
+    })
+  })
+
+  it('leaves the version out when the server does not say', () => {
+    expect(new URL(falsePositiveReportUrl('py/x', null)).searchParams.has('version')).toBe(false)
   })
 })
 

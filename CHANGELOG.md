@@ -9,6 +9,12 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Reporting a false positive: a form on GitHub that asks for the rule's id,
+  the version, the smallest code that shows it and whether SonarQube reports
+  it, and a link to it, with the rule and version filled in, on an issue
+  marked a false positive in the server. Nothing is sent unless the reporter
+  posts it.
+
 - Taint analysis for Java ([ADR-0027](docs/adr/0027-taint-analysis.md)):
   eight rules, `java/sql-injection` (S3649), `java/command-injection`
   (S2076), `java/path-injection` (S2083), `java/open-redirect` (S5146),

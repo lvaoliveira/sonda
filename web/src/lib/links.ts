@@ -46,3 +46,15 @@ export function cweUrl(id: number): string {
 export function componentLabel(path: string): string {
   return path === '.' ? '(root)' : `${path}/`
 }
+
+/**
+ * Sonda's form for reporting a false positive, with the rule and the server's
+ * version filled in. Only these two: the code, and anything else, is for the
+ * reporter to paste, so nothing of a project leaves the server unless it's
+ * posted on GitHub.
+ */
+export function falsePositiveReportUrl(rule: string, version: string | null): string {
+  const params = new URLSearchParams({ template: 'false-positive.yml', title: `False positive: ${rule}`, rule })
+  if (version) params.set('version', version)
+  return `https://github.com/lvaoliveira/sonda/issues/new?${params}`
+}
