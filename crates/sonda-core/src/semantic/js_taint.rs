@@ -2165,13 +2165,29 @@ impl<'a, 't> Cx<'a, 't> {
     /// An exported value's functions: a function, a name set to one, a
     /// class's methods, a default-exported object's members.
     fn export_value(&self, out: &mut Vec<(Key, usize)>, name: &str, value: Node<'t>) {
+        self.export_value_at(out, name, value, 0);
+    }
+
+    /// `export_value` and `export_declared` call each other through a name's
+    /// declaration, so `const f = f;` (or `a = b; b = a`) loops: `depth`
+    /// stops it, as `MAX_DEPTH` does for the walks above.
+    fn export_value_at(
+        &self,
+        out: &mut Vec<(Key, usize)>,
+        name: &str,
+        value: Node<'t>,
+        depth: u32,
+    ) {
+        if depth >= MAX_DEPTH {
+            return;
+        }
         let value = unwrap(value);
         if let Some(&j) = self.fn_index.get(&value.id()) {
             out.push((export_key(name, None), j));
             return;
         }
         match value.kind() {
-            "identifier" => self.export_declared(out, name, value),
+            "identifier" => self.export_declared(out, name, value, depth),
             "class_declaration" | "abstract_class_declaration" | "class" => {
                 let Some(body) = value.child_by_field_name("body") else {
                     return;
@@ -2200,7 +2216,13 @@ impl<'a, 't> Cx<'a, 't> {
 
     /// An exported name: what its declaration is, a function, a variable's
     /// value or a class.
-    fn export_declared(&self, out: &mut Vec<(Key, usize)>, name: &str, value: Node<'t>) {
+    fn export_declared(
+        &self,
+        out: &mut Vec<(Key, usize)>,
+        name: &str,
+        value: Node<'t>,
+        depth: u32,
+    ) {
         let Some(d) = self.decl(value) else { return };
         let Some(parent) = self.m.decls[d].node.parent() else {
             return;
@@ -2213,11 +2235,11 @@ impl<'a, 't> Cx<'a, 't> {
             }
             "variable_declarator" => {
                 if let Some(v) = parent.child_by_field_name("value") {
-                    self.export_value(out, name, v);
+                    self.export_value_at(out, name, v, depth + 1);
                 }
             }
             "class_declaration" | "abstract_class_declaration" => {
-                self.export_value(out, name, parent);
+                self.export_value_at(out, name, parent, depth + 1);
             }
             _ => {}
         }
@@ -3081,6 +3103,21 @@ mod tests {
 
     fn flow(i: &Issue) -> Vec<&str> {
         i.flow.iter().map(|s| s.message.as_str()).collect()
+    }
+
+    /// Found by the fuzzer: an exported name whose declaration refers back to
+    /// itself, directly or through another name, recursed until the stack
+    /// ran out.
+    #[test]
+    fn self_referential_exports_terminate() {
+        for src in [
+            "export const f = f;\n",
+            "const a = b;\nconst b = a;\nexport { a };\nmodule.exports = a;\n",
+            "const a = b;\nconst b = a;\nexport default a;\n",
+        ] {
+            js("js/taint-sql-injection", src);
+            ts("js/taint-sql-injection", src);
+        }
     }
 
     /// An Express route around `body`, with `db` and the modules it needs.
