@@ -7,6 +7,13 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Fixed
+
+- Scanning JavaScript or TypeScript no longer overflows the stack on a file
+  whose exported name is declared in terms of itself, such as
+  `export const f = f;` or `const a = b; const b = a; export { a };`. Found
+  by the fuzzer.
+
 ## [0.3.0] - 2026-11-17
 
 Taint analysis now follows a request's value to the query, command or path
