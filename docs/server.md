@@ -133,7 +133,11 @@ matched to the branch's earlier ones by fingerprint:
 
 - **New:** a fingerprint the branch has not seen.
 - **Kept:** an issue still present. It moves to its new line, and its status
-  (confirmed, accepted, false positive), reason and assignee stay.
+  (confirmed, accepted, false positive), reason and assignee stay. Marking
+  an issue a false positive keeps it out of the gate and tells Sonda
+  nothing; the issue page links to Sonda's form for reporting it, with the
+  rule and the server's version filled in, and only what the reporter posts
+  on GitHub leaves the server.
 - **Fixed:** an issue missing from the upload.
 - **Set aside:** an issue missing because the scan didn't run its rule (a
   rule profile or `sonda.toml` turned it off; the report's `active_rules`

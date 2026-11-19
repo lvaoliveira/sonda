@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router'
-import { type Async, useApi, useAsync } from '@/api/hooks'
+import { type Async, useApi, useAsync, useShell } from '@/api/hooks'
 import { type FacetKey, type FlowStep, type IssueDetail, type IssuePage, type IssuePatch, type IssueSummary, PROMPT_LIMIT, type TriageStatus } from '@/api/types'
 import { AppShell } from '@/components/shell/AppShell'
 import { CodeViewer, Tokens } from '@/components/sonda/CodeViewer'
@@ -12,6 +12,7 @@ import { formatAge, formatEffort, formatNumber, shortDate } from '@/lib/format'
 import { DEFAULT_FILTER, filterFromParams, type IssueFilter, issuesUrl, PAGE_SIZE, toQuery } from '@/lib/issues'
 import { CATEGORY_LABEL, DECISION_PROMPT, languageLabel, SEVERITY, SEVERITY_ORDER, STATUS_COLOR, STATUS_LABEL } from '@/lib/visual'
 import { copyText } from '@/lib/clipboard'
+import { falsePositiveReportUrl } from '@/lib/links'
 
 /** Every project's issues. A link for one project goes to its own Issues tab instead. */
 export function IssuesPage() {
@@ -710,6 +711,7 @@ function IssueView({
   onCopyPrompt: () => void
 }>) {
   const api = useApi()
+  const shell = useShell()
   const detail = useAsync(() => api.issue(id), [api, id, version])
   // The decision being explained, while its reason is asked for.
   const [deciding, setDeciding] = useState<{ id: number; status: keyof typeof DECISION_PROMPT } | null>(null)
@@ -759,6 +761,15 @@ function IssueView({
         {issue.reason && (issue.status === 'accepted' || issue.status === 'false_positive') && (
           <p className="m-0 text-[13px] text-fg-muted">
             {STATUS_LABEL[issue.status]}: “{issue.reason}”
+          </p>
+        )}
+        {issue.status === 'false_positive' && (
+          <p className="m-0 text-[12.5px] text-fg-faint">
+            Marking it keeps it out of your gate, and tells Sonda nothing.{' '}
+            <a href={falsePositiveReportUrl(issue.rule, shell?.version ?? null)} target="_blank" rel="noopener noreferrer">
+              Report it to Sonda
+            </a>{' '}
+            so the rule gets fixed: you review the form on GitHub, and only what you post is sent.
           </p>
         )}
       </div>

@@ -129,6 +129,12 @@ describe('Issues', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Marked false positive')
     expect(await within(detail).findByText('False positive: “The input is a constant.”')).toBeInTheDocument()
     expect(within(detail).getByRole('button', { name: 'Reopen' })).toBeInTheDocument()
+    // The report is the user's to post: a link to the form, with the rule.
+    const report = within(detail).getByRole('link', { name: 'Report it to Sonda' })
+    const url = new URL(report.getAttribute('href') ?? '')
+    expect(url.searchParams.get('template')).toBe('false-positive.yml')
+    expect(url.searchParams.get('rule')).toMatch(/^[a-z]+\//)
+    expect(report).toHaveAttribute('target', '_blank')
   })
 
   it('shows the whole path of an issue, not only its file name', async () => {
