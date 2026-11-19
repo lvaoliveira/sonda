@@ -17,13 +17,16 @@ pub(crate) mod cs_index;
 pub(crate) mod cs_infer;
 pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
+mod java;
 pub(crate) mod java_index;
+pub(crate) mod java_taint;
 mod js;
 pub(crate) mod js_taint;
 mod py;
 pub(crate) mod py_taint;
 pub(crate) mod taint;
 pub(crate) mod taint_project;
+mod walk;
 
 use crate::lang::Lang;
 use std::collections::HashMap;
@@ -332,6 +335,7 @@ pub(crate) fn build<'t>(
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => js::build(root, src, deadline),
         Lang::CSharp => cs::build(root, src, deadline),
         Lang::Python => py::build(root, src, deadline),
+        Lang::Java => java::build(root, src, deadline),
         _ => None,
     }
 }
@@ -341,7 +345,7 @@ pub(crate) fn build<'t>(
 pub(crate) fn supports(lang: Lang) -> bool {
     matches!(
         lang,
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp | Lang::Python
+        Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp | Lang::Python | Lang::Java
     )
 }
 
