@@ -1,4 +1,4 @@
-//! Taint analysis for Java, phases T2 and T3 (ADR-0027): which values that came from
+//! Taint analysis for Java, phases T2 to T4 (ADR-0027): which values that came from
 //! a request reach a sink, and by what path.
 //!
 //! Like JavaScript's and Python's, it's **flow-insensitive**, over the
@@ -27,9 +27,19 @@
 //! sinks it reaches inside the method or the methods it calls. A call is
 //! resolved only when it's unambiguous: on `this` or nothing, on `new T(..)`
 //! or on a variable declared as `T`, with one method of that name and arity
-//! in the class. Not yet: other files' methods (T4).
+//! in the class.
+//!
+//! A call to a method of another file (T4) is a callee the project pass
+//! resolves with the Java index: the declared type of what it's called on,
+//! as written, the types the call is inside of, and the method's name and
+//! arity. The file reports the request's values it passes to such a call,
+//! and a summary per method for the values other files pass to it. Not yet:
+//! the result of another file's method reaching a sink here. Overloads of
+//! one name and arity can't be told apart, so none is followed.
 
-use super::taint::{Finding, SinkKind, Step, TaintResult, cap};
+use super::taint::{
+    CallFact, Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult, cap,
+};
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -560,6 +570,13 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
     words.iter().any(|w| has(w))
 }
 
+/// Whether the file can read a request or define a method other files
+/// call: it has a class with a method.
+fn might_pass_values(src: &[u8]) -> bool {
+    let has = |n: &[u8]| src.windows(n.len()).any(|w| w == n);
+    has(b"class ") || has(b"interface ") || has(b"record ") || has(b"enum ")
+}
+
 /// Calls that, with a value as argument or receiver, read as checking it
 /// for this kind of sink: the value is taken as validated.
 fn check_words(kind: SinkKind) -> &'static [&'static str] {
@@ -600,7 +617,10 @@ fn check_words(kind: SinkKind) -> &'static [&'static str] {
 // ---------------------------------------------------------------- entry
 
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
-    if !might_have_sinks(src, kind) {
+    // A file with neither a sink nor a request can still define a method
+    // that other files' values reach, or pass one on, which only the
+    // project pass can follow; those are the files with methods.
+    if !might_have_sinks(src, kind) && !might_pass_values(src) {
         return TaintResult::default();
     }
     let Some(root) = m.root else {
@@ -615,10 +635,12 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     let mut findings = cx.reached(&tainted);
     findings.sort_by_key(|f| (f.sink.start_byte(), f.steps.len()));
     findings.dedup_by_key(|f| f.sink.id());
-    TaintResult {
-        findings,
-        ..TaintResult::default()
-    }
+    let facts = Facts {
+        summaries: cx.exported_summaries(),
+        calls: cx.passed_to_other_files(&tainted),
+        returns: Vec::new(),
+    };
+    TaintResult { findings, facts }
 }
 
 // ---------------------------------------------------------------- the file
@@ -658,6 +680,8 @@ struct Cx<'a, 't> {
     evaluations: Cell<u64>,
     /// The methods of this file by name, for a call to one of them (T3).
     methods: HashMap<String, Vec<usize>>,
+    /// The file's package, for the names other files call its types by.
+    package: String,
     summaries: RefCell<HashMap<SummaryKey, Rc<Summary<'t>>>>,
     /// The summaries being computed: a method that calls itself, or two
     /// that call each other, has nothing more to learn.
@@ -678,6 +702,9 @@ struct Summary<'t> {
     /// The sinks the value reaches inside the method, or in methods it
     /// calls, each with the path from the parameter and the sink.
     sinks: Vec<(Path<'t>, Node<'t>)>,
+    /// The other files' methods the value is passed on to: the path to the
+    /// call, the callee, and its argument.
+    calls: Vec<(Path<'t>, Callee, usize)>,
 }
 
 /// Summaries per file, at most: past it, calls to other methods give
@@ -704,6 +731,7 @@ impl<'a, 't> Cx<'a, 't> {
             returns: Vec::new(),
             evaluations: Cell::new(0),
             methods: HashMap::new(),
+            package: package_of(root, src),
             summaries: RefCell::default(),
             busy: RefCell::default(),
         };
@@ -1391,8 +1419,178 @@ impl<'a, 't> Cx<'a, 't> {
                 summary
                     .sinks
                     .extend(nested.into_iter().map(|f| (f.steps, f.sink)));
+                for (mut path, callee, arg) in self.passed_on(call, state) {
+                    path.push(Step {
+                        node: call,
+                        message: format!("passed to `{}`", callee.display()),
+                    });
+                    summary.calls.push((path, callee, arg));
+                }
             }
         }
+    }
+
+    // ------------------------------------------------------------ other files (T4)
+
+    /// The other file's method a call calls, as this file writes it: the
+    /// type of what it's called on, as declared, or the class named
+    /// directly. The project pass resolves it, and finds nothing for a
+    /// library's.
+    fn external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if call.kind() != "method_invocation" || self.local_callee(call).is_some() {
+            return None;
+        }
+        let method = self.text(call.child_by_field_name("name")?);
+        let object = unwrap(call.child_by_field_name("object")?);
+        let written = match object.kind() {
+            "identifier" => match self.decl_of(object) {
+                Some(d) => self.text(self.m.decls[d].ty?),
+                None => {
+                    let t = self.text(object);
+                    if !t.starts_with(char::is_uppercase) {
+                        return None;
+                    }
+                    t
+                }
+            },
+            "field_access" if object.child_by_field_name("object")?.kind() == "this" => {
+                let d = self.decl_of(object.child_by_field_name("field")?)?;
+                self.text(self.m.decls[d].ty?)
+            }
+            "object_creation_expression" => self.text(object.child_by_field_name("type")?),
+            _ => return None,
+        };
+        let (qualifier, name) = split_type(written);
+        if name.is_empty() || LIBRARY_TYPES.contains(&name.as_str()) {
+            return None;
+        }
+        Some(Callee::Java {
+            qualifier,
+            name,
+            within: self.enclosing_types(call),
+            method: method.to_string(),
+            arity: arguments(call).len(),
+        })
+    }
+
+    /// The names of the types `node` is inside of, outermost first.
+    fn enclosing_types(&self, node: Node<'t>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut n = node.parent();
+        while let Some(p) = n {
+            if matches!(
+                p.kind(),
+                "class_declaration"
+                    | "interface_declaration"
+                    | "enum_declaration"
+                    | "record_declaration"
+            ) && let Some(name) = p.child_by_field_name("name")
+            {
+                out.push(self.text(name).to_string());
+            }
+            n = p.parent();
+        }
+        out.reverse();
+        out
+    }
+
+    /// The tainted arguments of a call to another file's method: the path
+    /// to the call, the callee and the argument.
+    fn passed_on(
+        &self,
+        call: Node<'t>,
+        state: &HashMap<DeclId, Path<'t>>,
+    ) -> Vec<(Path<'t>, Callee, usize)> {
+        let Some(callee) = self.external_callee(call) else {
+            return Vec::new();
+        };
+        arguments(call)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, a)| Some((self.taint(a, state, 0)?, callee.clone(), i)))
+            .collect()
+    }
+
+    /// The request's values this file passes to other files' methods.
+    fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
+        self.calls
+            .iter()
+            .flat_map(|&call| {
+                self.passed_on(call, state)
+                    .into_iter()
+                    .map(move |(steps, callee, arg)| CallFact {
+                        steps: cap(steps),
+                        call,
+                        callee,
+                        arg,
+                    })
+            })
+            .collect()
+    }
+
+    /// What the methods of the file do with a value passed to them, for
+    /// other files: which parameters reach a sink, or another file's
+    /// method.
+    fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
+        let mut out = Vec::new();
+        for j in 0..self.m.functions.len() {
+            let Some(key) = self.method_key(j) else {
+                continue;
+            };
+            let mut fact = SummaryFact {
+                key,
+                returns_sql: false,
+                to_sink: Vec::new(),
+                to_return: Vec::new(),
+                returns_source: None,
+                to_call: Vec::new(),
+            };
+            for p in 0..self.m.functions[j].params.len().min(MAX_PARAMS) {
+                let s = self.summary(j, Some(p));
+                fact.to_sink.extend(
+                    s.sinks
+                        .iter()
+                        .map(|(steps, sink)| (p, cap(steps.clone()), *sink)),
+                );
+                fact.to_call.extend(
+                    s.calls
+                        .iter()
+                        .map(|(steps, callee, arg)| (p, cap(steps.clone()), callee.clone(), *arg)),
+                );
+            }
+            if !fact.to_sink.is_empty() || !fact.to_call.is_empty() {
+                out.push(fact);
+            }
+        }
+        out
+    }
+
+    /// What other files call method `j` by: its type's full name, and its
+    /// name and arity. None for a method of an anonymous class.
+    fn method_key(&self, j: usize) -> Option<Key> {
+        let f = &self.m.functions[j];
+        if f.node.kind() != "method_declaration" || self.class_of(j).is_none() {
+            return None;
+        }
+        let name = self.text(f.node.child_by_field_name("name")?);
+        // Overloads of one arity can't be told apart by a call's name and
+        // arity: none of them is followed.
+        let class = self.class_of(j);
+        let same = self.methods.get(name)?.iter().filter(|&&k| {
+            self.m.functions[k].params.len() == f.params.len() && self.class_of(k) == class
+        });
+        if same.count() > 1 {
+            return None;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        if !self.package.is_empty() {
+            parts.push(self.package.clone());
+        }
+        parts.extend(self.enclosing_types(f.node));
+        Some(Key {
+            export: parts.join("."),
+            member: Some(format!("{name}/{}", f.params.len())),
+        })
     }
 
     fn method_name(&self, method: Node<'t>) -> &'a str {
@@ -1598,6 +1796,89 @@ impl<'a, 't> Cx<'a, 't> {
 
 // ---------------------------------------------------------------- syntax
 
+/// Parameters followed per method for other files, at most.
+const MAX_PARAMS: usize = 12;
+
+/// Types of the JDK and common libraries: a call on one is no call to
+/// another file of the project.
+const LIBRARY_TYPES: &[&str] = &[
+    "String",
+    "StringBuilder",
+    "StringBuffer",
+    "Object",
+    "Integer",
+    "Long",
+    "Double",
+    "Boolean",
+    "Math",
+    "System",
+    "Objects",
+    "Optional",
+    "List",
+    "ArrayList",
+    "Map",
+    "HashMap",
+    "Set",
+    "HashSet",
+    "Collection",
+    "Collections",
+    "Arrays",
+    "Stream",
+    "Collectors",
+    "Files",
+    "Paths",
+    "Path",
+    "File",
+    "URI",
+    "URL",
+    "UUID",
+    "LocalDate",
+    "LocalDateTime",
+    "Instant",
+    "Duration",
+    "Logger",
+    "LoggerFactory",
+    "Thread",
+    "Class",
+    "Enumeration",
+    "Iterator",
+    "Matcher",
+    "Pattern",
+    "HttpServletRequest",
+    "HttpServletResponse",
+    "ResponseEntity",
+    "Model",
+    "Cookie",
+];
+
+/// The file's package, `com.shop.orders`; empty without one.
+fn package_of(root: Node, src: &[u8]) -> String {
+    let mut c = root.walk();
+    let Some(p) = root
+        .named_children(&mut c)
+        .find(|n| n.kind() == "package_declaration")
+    else {
+        return String::new();
+    };
+    let text = p.utf8_text(src).unwrap_or_default();
+    text.trim_start_matches("package")
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_string()
+}
+
+/// A type as written, as its qualifier and its name: `java.util.List<T>`
+/// is (`java.util`, `List`).
+fn split_type(t: &str) -> (String, String) {
+    let t = t.split('<').next().unwrap_or(t);
+    let t = t.trim_end_matches("[]").trim_end_matches("...").trim();
+    match t.rsplit_once('.') {
+        Some((q, n)) => (q.to_string(), n.to_string()),
+        None => (String::new(), t.to_string()),
+    }
+}
+
 /// Whether `n` is inside `outer`.
 fn inside(n: Node, outer: Node) -> bool {
     outer.start_byte() <= n.start_byte() && n.end_byte() <= outer.end_byte()
@@ -1798,5 +2079,89 @@ mod tests {
             flagged("java/sql-injection", ambiguous),
             Vec::<usize>::new()
         );
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    /// The taint issues of a project of Java files, `(path, source)`.
+    fn project(files: &[(&str, &str)]) -> Vec<crate::model::Issue> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<_> = files
+            .iter()
+            .map(|(path, src)| {
+                analyze(path, Lang::Java, src, &rules, &cfg, far_deadline()).unwrap()
+            })
+            .collect();
+        crate::analysis::taint_project_rules(&mut analyzed, &rules);
+        analyzed
+            .into_iter()
+            .flat_map(|f| f.issues)
+            .filter(|i| i.rule.starts_with("java/") && !i.flow.is_empty())
+            .collect()
+    }
+
+    const CONTROLLER: &str = "package com.shop.web;\nimport com.shop.orders.OrderService;\n@RestController class OrderController {\n  @Autowired private OrderService orders;\n  @GetMapping(\"/o\")\n  Object find(@RequestParam String id) {\n    return orders.find(id);\n  }\n}\n";
+
+    #[test]
+    fn a_request_value_into_another_files_method_that_queries() {
+        let service = "package com.shop.orders;\n@Service class OrderService {\n  Object find(String id) {\n    return jdbc.queryForList(\"SELECT * FROM o WHERE id = \" + id);\n  }\n}\n";
+        let found = project(&[
+            ("web/OrderController.java", CONTROLLER),
+            ("orders/OrderService.java", service),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].rule, "java/sql-injection");
+        assert_eq!(found[0].path, "orders/OrderService.java");
+        let flow: Vec<&str> = found[0].flow.iter().map(|s| s.message.as_str()).collect();
+        assert_eq!(
+            flow.first().copied(),
+            Some("request parameter `id` (`@RequestParam`)")
+        );
+        assert!(flow.contains(&"passed to `find`"), "{flow:?}");
+        assert_eq!(flow.last().copied(), Some("passed to `queryForList`"));
+    }
+
+    #[test]
+    fn through_an_interface_to_its_implementation_and_on_to_a_third_file() {
+        let iface =
+            "package com.shop.orders;\ninterface OrderService { Object find(String id); }\n";
+        let service = "package com.shop.orders;\nimport com.shop.data.OrderDao;\n@Service class OrderServiceImpl implements OrderService {\n  private OrderDao dao;\n  public Object find(String id) { return dao.byId(id); }\n}\n";
+        let dao = "package com.shop.data;\n@Repository class OrderDao {\n  Object byId(String id) {\n    return stmt.executeQuery(\"SELECT * FROM o WHERE id = \" + id);\n  }\n}\n";
+        let found = project(&[
+            ("web/OrderController.java", CONTROLLER),
+            ("orders/OrderService.java", iface),
+            ("orders/OrderServiceImpl.java", service),
+            ("data/OrderDao.java", dao),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "data/OrderDao.java");
+        let files: Vec<Option<&str>> = found[0].flow.iter().map(|s| s.path.as_deref()).collect();
+        assert!(
+            files.contains(&Some("orders/OrderServiceImpl.java")),
+            "{files:?}"
+        );
+    }
+
+    #[test]
+    fn a_method_that_doesnt_reach_a_sink_or_isnt_the_one_called_gives_nothing() {
+        let service = "package com.shop.orders;\n@Service class OrderService {\n  Object find(String id) { return null; }\n  Object find(String id, String other) {\n    return jdbc.queryForList(\"SELECT \" + id);\n  }\n}\n";
+        let found = project(&[
+            ("web/OrderController.java", CONTROLLER),
+            ("orders/OrderService.java", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+        // Overloads of one arity can't be told apart by a call.
+        let overloaded = "package com.shop.orders;\n@Service class OrderService {\n  Object find(String id) {\n    return jdbc.queryForList(\"SELECT \" + id);\n  }\n  Object find(Long id) { return null; }\n}\n";
+        assert!(
+            project(&[
+                ("web/OrderController.java", CONTROLLER),
+                ("orders/OrderService.java", overloaded),
+            ])
+            .is_empty()
+        );
+        // A type the project doesn't declare is a library's.
+        let lib = "package com.shop.web;\nimport org.lib.Mailer;\n@RestController class C {\n  private Mailer mailer;\n  void f(@RequestParam String id) { mailer.send(id); }\n}\n";
+        assert!(project(&[("web/C.java", lib)]).is_empty());
     }
 }

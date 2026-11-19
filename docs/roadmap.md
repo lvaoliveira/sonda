@@ -16,7 +16,7 @@ breaking that promise.
 | [Safari and `Secure` cookies](#smaller-items) | **before** (M4) | Sign-in has to work in the browsers people use. |
 | [Pull request decoration](#pull-request-decoration-github-gitlab-and-bitbucket): GitLab and Bitbucket | after | GitHub's is built; the others reuse its design. |
 | [Single sign-on](#single-sign-on-openid-connect) | after | Users, roles and tokens work without it; it adds sign-in methods, not changes. |
-| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 to T4 are built: seven C# rules, `cs/sql-injection` and its kin, and six for JavaScript and TypeScript, within and across files, eight for Python, and eight for Java through the methods of one file ([ADR-0027](adr/0027-taint-analysis.md)); the shape rules cover injection where they don't reach. |
+| [Taint analysis](#security-cweowasp-mapping-hotspots-reachability) | after | T1 to T4 are built: seven C# rules, `cs/sql-injection` and its kin, and six for JavaScript and TypeScript, within and across files, eight for Python, and eight for Java, through the methods of the file and into other files' ([ADR-0027](adr/0027-taint-analysis.md)); the shape rules cover injection where they don't reach. |
 | [Reachability](#security-cweowasp-mapping-hotspots-reachability) | after | Ranks findings the server already reports. |
 | [More lockfile formats](#dependencies-sbom-and-known-vulnerabilities) | after | Adds ecosystems; the SBOM formats don't change. |
 | [AI auto-fix](#ai-auto-fix-issues-bugs-and-coverage-gaps-as-pull-requests) | after | Copy as prompt covers fixing with an assistant today ([ADR-0025](adr/0025-fixing-with-an-ai-assistant.md)). |
@@ -144,7 +144,8 @@ own groundwork, smallest first:
    file; T2, six JavaScript and TypeScript rules; and T4 for JavaScript and
    TypeScript, across files, are built; T4 for C#; and Python's eight
    rules, within and across files; Java's eight rules, from
-   `java/sql-injection` to `java/ldap-injection`, are built through the methods of one file (T2, T3); other files (T4) are next).
+   `java/sql-injection` to `java/ldap-injection`, are built through the methods of one file (T2, T3) and into other files' methods (T4,
+   the forward half: a method's result back into a sink is next)).
    The `*/sql-built-dynamically`-style rules flag the risky shape
    meanwhile, and stay.
 4. **Reachability.** Whether a finding is on a path from a public entry

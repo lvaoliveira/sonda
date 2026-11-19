@@ -142,13 +142,27 @@ pub(crate) enum Callee {
         method: String,
         arity: usize,
     },
+    /// `orders.find(id)` with `orders` declared as `OrderService`: the type
+    /// as written (its qualifier and name), the types the call is inside of
+    /// (outermost first), and the method's name and arity. The project pass
+    /// resolves the type as Java does, with the java-index fact, and an
+    /// interface or a base class to its implementations too.
+    Java {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        qualifier: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        within: Vec<String>,
+        method: String,
+        arity: usize,
+    },
 }
 
 impl Callee {
     /// The name the path shows: `find`, `UserService.find`.
     pub(crate) fn display(&self) -> String {
         match self {
-            Callee::Cs { method, .. } => method.clone(),
+            Callee::Cs { method, .. } | Callee::Java { method, .. } => method.clone(),
             Callee::Py { name, member, .. } => match (name.as_deref(), member.as_deref()) {
                 (Some(n), Some(m)) => format!("{n}.{m}"),
                 (_, Some(m)) => m.to_string(),

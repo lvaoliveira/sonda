@@ -17,8 +17,11 @@
   Java built for T2, on its binder (ADR-0008 S1): `java/sql-injection`,
   `java/command-injection`, `java/path-injection`, `java/open-redirect`,
   `java/ssrf`, `java/code-injection`, `java/xpath-injection` and
-  `java/ldap-injection`, within one file and through its methods (T3); not
-  yet through other files (T4).
+  `java/ldap-injection`, within one file, through its methods (T3) and into
+  other files' methods (T4: a value passed to a method of the project that
+  reaches a sink or is passed on, resolved with the Java index and an
+  interface's or base class's implementations); not yet a method's result
+  that reaches a sink in the caller's file.
 - Date: 2026-11-07
 
 ## Context

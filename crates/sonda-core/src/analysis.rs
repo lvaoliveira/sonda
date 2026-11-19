@@ -2505,8 +2505,9 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
     keys.sort_unstable();
     keys.dedup();
     let keys: Vec<String> = keys.into_iter().map(str::to_string).collect();
-    // C#'s indexes, parsed once for every C# rule.
+    // C#'s and Java's indexes, parsed once for every rule of the language.
     let mut cs_parsed: Option<Vec<(usize, semantic::cs_index::FileIndex)>> = None;
+    let mut java_parsed: Option<Vec<(usize, semantic::java_index::FileIndex)>> = None;
     for key in keys {
         let Some(active) = rules.get(&key[tp::FACT_PREFIX.len()..]) else {
             continue;
@@ -2524,6 +2525,14 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
         let found = if key[tp::FACT_PREFIX.len()..].starts_with("cs/") {
             let parsed = cs_parsed.get_or_insert_with(|| cs_indexes(files));
             let index = CsTaintIndex::new(parsed);
+            tp::compose(
+                &paths,
+                &facts,
+                Some(&|from, callee| index.resolve(from, callee)),
+            )
+        } else if key[tp::FACT_PREFIX.len()..].starts_with("java/") {
+            let parsed = java_parsed.get_or_insert_with(|| java_indexes(files));
+            let index = JavaTaintIndex::new(parsed);
             tp::compose(
                 &paths,
                 &facts,
@@ -2664,6 +2673,126 @@ impl<'a> CsTaintIndex<'a> {
                 ));
             }
         }
+        out.sort_by(|a, b| (a.0, &a.1.export).cmp(&(b.0, &b.1.export)));
+        out.dedup();
+        out
+    }
+}
+
+/// The files' Java indexes (ADR-0020), by their position in `files`.
+fn java_indexes(files: &[FileAnalysis]) -> Vec<(usize, semantic::java_index::FileIndex)> {
+    files
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            let (_, json) = f
+                .facts
+                .iter()
+                .find(|(k, _)| k == semantic::java_index::FACT)?;
+            Some((i, serde_json::from_str(json).ok()?))
+        })
+        .collect()
+}
+
+/// The Java index, for the project pass's Java calls: a call's type,
+/// written in one file, to the summaries of its method in the project, in
+/// the type, the classes it extends, and the types that implement or
+/// extend it.
+struct JavaTaintIndex<'a> {
+    files: Vec<usize>,
+    index: semantic::java_index::ProjectIndex<'a>,
+    /// Each type's implementations and subtypes in the project.
+    below: HashMap<semantic::java_index::TypeId, Vec<semantic::java_index::TypeId>>,
+}
+
+/// Superclasses followed, and subtypes' levels, at most.
+const MAX_JAVA_LEVELS: usize = 16;
+
+impl<'a> JavaTaintIndex<'a> {
+    fn new(parsed: &'a [(usize, semantic::java_index::FileIndex)]) -> Self {
+        let index =
+            semantic::java_index::ProjectIndex::new(parsed.iter().map(|(_, x)| x).collect());
+        let mut below: HashMap<_, Vec<_>> = HashMap::new();
+        for (f, file) in index.files().iter().enumerate() {
+            for t in 0..file.types.len() {
+                for above in index.supertypes((f, t)) {
+                    below.entry(above).or_default().push((f, t));
+                }
+            }
+        }
+        JavaTaintIndex {
+            files: parsed.iter().map(|(i, _)| *i).collect(),
+            index,
+            below,
+        }
+    }
+
+    /// `id`, what it extends, and what implements or extends it.
+    fn related(&self, id: semantic::java_index::TypeId) -> Vec<semantic::java_index::TypeId> {
+        let mut out = vec![id];
+        let mut up = id;
+        for _ in 0..MAX_JAVA_LEVELS {
+            match self.index.superclass(up) {
+                Some(s) if !out.contains(&s) => {
+                    out.push(s);
+                    up = s;
+                }
+                _ => break,
+            }
+        }
+        let mut level = vec![id];
+        for _ in 0..MAX_JAVA_LEVELS {
+            let next: Vec<_> = level
+                .iter()
+                .flat_map(|t| self.below.get(t).into_iter().flatten().copied())
+                .filter(|t| !out.contains(t))
+                .collect();
+            if next.is_empty() {
+                break;
+            }
+            out.extend(next.iter().copied());
+            level = next;
+        }
+        out
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Java {
+            qualifier,
+            name,
+            within,
+            method,
+            arity,
+        } = callee
+        else {
+            return Vec::new();
+        };
+        let Some(at) = self.files.iter().position(|i| *i == from) else {
+            return Vec::new();
+        };
+        let Some(id) = self.index.resolve(at, within, qualifier, name) else {
+            return Vec::new();
+        };
+        let member = format!("{method}/{arity}");
+        let mut out: Vec<(usize, semantic::taint::Key)> = self
+            .related(id)
+            .into_iter()
+            .map(|t| {
+                let full =
+                    semantic::java_index::full_name(self.index.files()[t.0], self.index.decl(t));
+                (
+                    self.files[t.0],
+                    semantic::taint::Key {
+                        export: full,
+                        member: Some(member.clone()),
+                    },
+                )
+            })
+            .collect();
         out.sort_by(|a, b| (a.0, &a.1.export).cmp(&(b.0, &b.1.export)));
         out.dedup();
         out
