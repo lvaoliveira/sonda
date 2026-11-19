@@ -7,12 +7,25 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-19
+
+A fix for a crash, and dependency updates. Scanning JavaScript or TypeScript
+could abort the whole scan with a stack overflow on a file that exports a
+name declared in terms of itself, which the fuzzer found; nothing else
+changes, and there are no migrations, so upgrading is replacing the binary
+or the image.
+
 ### Fixed
 
 - Scanning JavaScript or TypeScript no longer overflows the stack on a file
   whose exported name is declared in terms of itself, such as
   `export const f = f;` or `const a = b; const b = a; export { a };`. Found
   by the fuzzer.
+
+- A release candidate's own install check compared the installed binary's
+  version with the tag (`0.3.0-rc.1`) instead of Cargo.toml's (`0.3.0`), so
+  the first candidate's release run reported a failure after publishing
+  everything.
 
 ## [0.3.0] - 2026-11-17
 
