@@ -1,4 +1,4 @@
-//! Taint analysis for Java, phase T2 (ADR-0027): which values that came from
+//! Taint analysis for Java, phases T2 and T3 (ADR-0027): which values that came from
 //! a request reach a sink, and by what path.
 //!
 //! Like JavaScript's and Python's, it's **flow-insensitive**, over the
@@ -20,13 +20,20 @@
 //! `getHeader`, `getQueryString`, a cookie's value, ...) and the parameters a
 //! framework fills from the request: Spring's (`@RequestParam`,
 //! `@PathVariable`, `@RequestBody`, ...) and JAX-RS's (`@QueryParam`,
-//! `@PathParam`, `@FormParam`, ...). Not yet: values followed through other
-//! methods of the file (T3) or other files' (T4).
+//! `@PathParam`, `@FormParam`, ...).
+//!
+//! A call to a method of the same file (T3) is followed through its summary,
+//! per parameter: whether the parameter reaches the return value, and which
+//! sinks it reaches inside the method or the methods it calls. A call is
+//! resolved only when it's unambiguous: on `this` or nothing, on `new T(..)`
+//! or on a variable declared as `T`, with one method of that name and arity
+//! in the class. Not yet: other files' methods (T4).
 
 use super::taint::{Finding, SinkKind, Step, TaintResult, cap};
 use super::{DeclId, Model};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use tree_sitter::Node;
 
 type Path<'t> = Vec<Step<'t>>;
@@ -649,7 +656,33 @@ struct Cx<'a, 't> {
     calls: Vec<Node<'t>>,
     returns: Vec<Node<'t>>,
     evaluations: Cell<u64>,
+    /// The methods of this file by name, for a call to one of them (T3).
+    methods: HashMap<String, Vec<usize>>,
+    summaries: RefCell<HashMap<SummaryKey, Rc<Summary<'t>>>>,
+    /// The summaries being computed: a method that calls itself, or two
+    /// that call each other, has nothing more to learn.
+    busy: RefCell<HashSet<SummaryKey>>,
 }
+
+/// A method of the file, and the parameter a summary follows (none: the
+/// value the method reads itself).
+type SummaryKey = (usize, Option<usize>);
+
+/// What a request's value does inside a method of the file, for one of
+/// its parameters (or none, for a value the method reads itself).
+#[derive(Default)]
+struct Summary<'t> {
+    /// A request's value the method returns, with the path from the
+    /// parameter.
+    returns: Option<Path<'t>>,
+    /// The sinks the value reaches inside the method, or in methods it
+    /// calls, each with the path from the parameter and the sink.
+    sinks: Vec<(Path<'t>, Node<'t>)>,
+}
+
+/// Summaries per file, at most: past it, calls to other methods give
+/// nothing.
+const MAX_SUMMARIES: usize = 256;
 
 impl<'a, 't> Cx<'a, 't> {
     fn new(m: &'a Model<'t>, src: &'a [u8], kind: SinkKind, root: Node<'t>) -> Option<Self> {
@@ -670,6 +703,9 @@ impl<'a, 't> Cx<'a, 't> {
             calls: Vec::new(),
             returns: Vec::new(),
             evaluations: Cell::new(0),
+            methods: HashMap::new(),
+            summaries: RefCell::default(),
+            busy: RefCell::default(),
         };
         for (i, d) in m.decls.iter().enumerate() {
             if d.ty
@@ -680,6 +716,7 @@ impl<'a, 't> Cx<'a, 't> {
         }
         cx.collect(root)?;
         cx.annotated_parameters();
+        cx.index_methods();
         Some(cx)
     }
 
@@ -883,13 +920,27 @@ impl<'a, 't> Cx<'a, 't> {
     /// None if the file is past a limit.
     fn run(&self) -> Option<HashMap<DeclId, Path<'t>>> {
         let mut tainted = self.initial.clone();
+        self.propagate(None, &mut tainted)?;
+        Some(tainted)
+    }
+
+    /// The fixed point over the writes, all of the file's or those inside
+    /// `within`; None past a limit.
+    fn propagate(
+        &self,
+        within: Option<Node<'t>>,
+        tainted: &mut HashMap<DeclId, Path<'t>>,
+    ) -> Option<()> {
         for _ in 0..MAX_ROUNDS {
             let mut changed = false;
             for w in &self.writes {
-                if tainted.contains_key(&w.target) || self.checked.contains(&w.target) {
+                if tainted.contains_key(&w.target)
+                    || self.checked.contains(&w.target)
+                    || within.is_some_and(|f| !inside(w.target_node, f))
+                {
                     continue;
                 }
-                let Some(mut path) = self.taint(w.value, &tainted, 0) else {
+                let Some(mut path) = self.taint(w.value, tainted, 0) else {
                     continue;
                 };
                 let name = self.text(w.target_node);
@@ -911,7 +962,7 @@ impl<'a, 't> Cx<'a, 't> {
                 return None;
             }
             if !changed {
-                return Some(tainted);
+                return Some(());
             }
         }
         None
@@ -1037,6 +1088,9 @@ impl<'a, 't> Cx<'a, 't> {
             return Some(path);
         }
         let args = arguments(call);
+        if let Some(path) = self.through_method(call, &args, state, depth) {
+            return Some(path);
+        }
         let object = object?;
         if BUILDER_METHODS.contains(&name) {
             return self
@@ -1055,6 +1109,296 @@ impl<'a, 't> Cx<'a, 't> {
         let receiver = self.taint(object, state, depth)?;
         let getter = name.starts_with("get") && name != "getClass";
         (PROPAGATING_METHODS.contains(&name) || getter).then_some(receiver)
+    }
+
+    // ------------------------------------------------------------ methods of the file (T3)
+
+    /// Indexes the methods of the file by name.
+    fn index_methods(&mut self) {
+        for (j, f) in self.m.functions.iter().enumerate() {
+            if f.node.kind() != "method_declaration" {
+                continue;
+            }
+            if let Some(name) = f.node.child_by_field_name("name") {
+                self.methods
+                    .entry(self.text(name).to_string())
+                    .or_default()
+                    .push(j);
+            }
+        }
+    }
+
+    /// The method of this file a call calls, when it's unambiguous: a call
+    /// on `this` or on nothing, on `new T(..)`, or on a variable declared
+    /// as `T`, with `T` a class of the file.
+    fn local_callee(&self, call: Node<'t>) -> Option<usize> {
+        let name = self.text(call.child_by_field_name("name")?);
+        let arity = arguments(call).len();
+        let named: Vec<usize> = self
+            .methods
+            .get(name)?
+            .iter()
+            .copied()
+            .filter(|&j| self.accepts(j, arity))
+            .collect();
+        let owner = match call.child_by_field_name("object").map(unwrap) {
+            None => None,
+            Some(o) if o.kind() == "this" => None,
+            Some(o) if o.kind() == "object_creation_expression" => {
+                Some(last_name(self.text(o.child_by_field_name("type")?)).to_string())
+            }
+            Some(o) if o.kind() == "identifier" => {
+                let d = self.decl_of(o)?;
+                Some(type_name(self.m.decls[d].ty?, self.src))
+            }
+            Some(_) => return None,
+        };
+        let candidates: Vec<usize> = match &owner {
+            Some(t) => named
+                .into_iter()
+                .filter(|&j| self.class_of(j).as_deref() == Some(t.as_str()))
+                .collect(),
+            // Among the classes the call is inside of.
+            None => named
+                .into_iter()
+                .filter(|&j| {
+                    self.class_of(j)
+                        .is_some_and(|c| self.encloses_class(call, &c))
+                })
+                .collect(),
+        };
+        match candidates.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// Whether method `j` takes `arity` arguments.
+    fn accepts(&self, j: usize, arity: usize) -> bool {
+        let params = &self.m.functions[j].params;
+        let variadic = self.m.functions[j]
+            .node
+            .child_by_field_name("parameters")
+            .is_some_and(|l| {
+                let mut c = l.walk();
+                l.named_children(&mut c)
+                    .any(|p| p.kind() == "spread_parameter")
+            });
+        params.len() == arity || (variadic && arity + 1 >= params.len())
+    }
+
+    /// The name of the class method `j` is declared in.
+    fn class_of(&self, j: usize) -> Option<String> {
+        let mut n = self.m.functions[j].node.parent();
+        while let Some(p) = n {
+            if matches!(
+                p.kind(),
+                "class_declaration"
+                    | "interface_declaration"
+                    | "enum_declaration"
+                    | "record_declaration"
+            ) {
+                return Some(self.text(p.child_by_field_name("name")?).to_string());
+            }
+            if p.kind() == "object_creation_expression" {
+                return None;
+            }
+            n = p.parent();
+        }
+        None
+    }
+
+    /// Whether `node` is inside the class called `class`.
+    fn encloses_class(&self, node: Node<'t>, class: &str) -> bool {
+        let mut n = node.parent();
+        while let Some(p) = n {
+            if p.child_by_field_name("name")
+                .is_some_and(|c| self.text(c) == class)
+                && matches!(
+                    p.kind(),
+                    "class_declaration" | "enum_declaration" | "record_declaration"
+                )
+            {
+                return true;
+            }
+            n = p.parent();
+        }
+        false
+    }
+
+    /// What a call to a method of the file returns: a request's value the
+    /// method reads itself, or the one of a tainted argument that reaches
+    /// its return value.
+    fn through_method(
+        &self,
+        call: Node<'t>,
+        args: &[Node<'t>],
+        state: &HashMap<DeclId, Path<'t>>,
+        depth: u32,
+    ) -> Option<Path<'t>> {
+        let j = self.local_callee(call)?;
+        let name = self.text(call.child_by_field_name("name")?);
+        if let Some(mut path) = self.summary(j, None).returns.clone() {
+            path.push(Step {
+                node: call,
+                message: format!("returned by `{name}`"),
+            });
+            return Some(path);
+        }
+        for (i, a) in args.iter().enumerate() {
+            let Some(mut path) = self.taint(*a, state, depth) else {
+                continue;
+            };
+            let Some(returned) = self.summary(j, Some(i)).returns.clone() else {
+                continue;
+            };
+            path.push(Step {
+                node: call,
+                message: format!("passed to `{name}`"),
+            });
+            path.extend(returned);
+            path.push(Step {
+                node: call,
+                message: format!("returned by `{name}`"),
+            });
+            return Some(path);
+        }
+        None
+    }
+
+    /// The sinks a request's value reaches inside the methods of the file
+    /// that the calls with a tainted argument call.
+    fn reached_through_methods(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<Finding<'t>> {
+        let mut out = Vec::new();
+        for &call in &self.calls {
+            if call.kind() != "method_invocation" {
+                continue;
+            }
+            out.extend(self.sinks_through(call, state));
+        }
+        out
+    }
+
+    /// The findings at the sinks inside the method `call` calls, for its
+    /// tainted arguments.
+    fn sinks_through(&self, call: Node<'t>, state: &HashMap<DeclId, Path<'t>>) -> Vec<Finding<'t>> {
+        let Some(j) = self.local_callee(call) else {
+            return Vec::new();
+        };
+        let name = self.text(call.child_by_field_name("name").unwrap_or(call));
+        let mut out = Vec::new();
+        for (i, a) in arguments(call).into_iter().enumerate() {
+            let Some(path) = self.taint(a, state, 0) else {
+                continue;
+            };
+            for (inside, sink) in &self.summary(j, Some(i)).sinks {
+                let mut steps = path.clone();
+                steps.push(Step {
+                    node: call,
+                    message: format!("passed to `{name}`"),
+                });
+                steps.extend(inside.iter().cloned());
+                out.push(Finding {
+                    sink: *sink,
+                    steps: cap(steps),
+                });
+            }
+        }
+        out
+    }
+
+    /// What a request's value does in method `j`, for its parameter `p`
+    /// (or for nothing but what the method reads itself).
+    fn summary(&self, j: usize, p: Option<usize>) -> Rc<Summary<'t>> {
+        if let Some(s) = self.summaries.borrow().get(&(j, p)) {
+            return s.clone();
+        }
+        if self.summaries.borrow().len() >= MAX_SUMMARIES || !self.busy.borrow_mut().insert((j, p))
+        {
+            return Rc::default();
+        }
+        let summary = Rc::new(self.summarize(j, p).unwrap_or_default());
+        self.busy.borrow_mut().remove(&(j, p));
+        self.summaries.borrow_mut().insert((j, p), summary.clone());
+        summary
+    }
+
+    fn summarize(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
+        let f = &self.m.functions[j];
+        let mut state: HashMap<DeclId, Path<'t>> = HashMap::new();
+        if let Some(p) = p {
+            for &d in f.params.get(p)? {
+                let decl = &self.m.decls[d];
+                if decl
+                    .ty
+                    .is_some_and(|t| INERT_TYPES.contains(&type_name(t, self.src).as_str()))
+                {
+                    return Some(Summary::default());
+                }
+                state.insert(
+                    d,
+                    vec![Step {
+                        node: decl.node,
+                        message: format!(
+                            "`{}`'s parameter `{}`",
+                            self.method_name(f.node),
+                            decl.name
+                        ),
+                    }],
+                );
+            }
+        }
+        self.propagate(Some(f.node), &mut state)?;
+        let mut summary = Summary::default();
+        for &r in &self.returns {
+            if !inside(r, f.node) {
+                continue;
+            }
+            if let Some(path) = r.named_child(0).and_then(|v| self.taint(v, &state, 0)) {
+                summary.returns = Some(path);
+                break;
+            }
+        }
+        if p.is_some() {
+            self.summary_sinks(f.node, &state, &mut summary);
+        }
+        Some(summary)
+    }
+
+    /// The sinks inside `method` that `state`'s values reach, directly or
+    /// through the methods it calls.
+    fn summary_sinks(
+        &self,
+        method: Node<'t>,
+        state: &HashMap<DeclId, Path<'t>>,
+        summary: &mut Summary<'t>,
+    ) {
+        for &call in &self.calls {
+            if !inside(call, method) {
+                continue;
+            }
+            if let Some((name, args)) = self.sink_call(call)
+                && let Some(mut path) = args.into_iter().find_map(|a| self.taint(a, state, 0))
+            {
+                path.push(Step {
+                    node: call,
+                    message: format!("passed to `{name}`"),
+                });
+                summary.sinks.push((path, call));
+            }
+            if call.kind() == "method_invocation" {
+                let nested = self.sinks_through(call, state);
+                summary
+                    .sinks
+                    .extend(nested.into_iter().map(|f| (f.steps, f.sink)));
+            }
+        }
+    }
+
+    fn method_name(&self, method: Node<'t>) -> &'a str {
+        method
+            .child_by_field_name("name")
+            .map_or("method", |n| self.text(n))
     }
 
     /// A request's accessor: `request.getParameter("id")`. Its path starts
@@ -1107,6 +1451,7 @@ impl<'a, 't> Cx<'a, 't> {
                 }
             }
         }
+        out.extend(self.reached_through_methods(state));
         if self.kind == SinkKind::Redirect {
             for &r in &self.returns {
                 let Some(value) = r.named_child(0) else {
@@ -1252,6 +1597,11 @@ impl<'a, 't> Cx<'a, 't> {
 }
 
 // ---------------------------------------------------------------- syntax
+
+/// Whether `n` is inside `outer`.
+fn inside(n: Node, outer: Node) -> bool {
+    outer.start_byte() <= n.start_byte() && n.end_byte() <= outer.end_byte()
+}
 
 /// The arguments of a call or a `new`.
 fn arguments(call: Node) -> Vec<Node> {
@@ -1411,5 +1761,42 @@ mod tests {
     fn a_redirect_view_name_built_from_a_value() {
         let src = "@Controller class C {\n  @GetMapping(\"/go\")\n  String go(@RequestParam String to) {\n    return \"redirect:\" + to;\n  }\n}";
         assert_eq!(flagged("java/open-redirect", src), [4]);
+    }
+
+    #[test]
+    fn a_value_through_a_helper_that_returns_it() {
+        let src = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    String p = request.getParameter(\"p\");\n    String bar = new Helper().clean(request, p);\n    stmt.executeQuery(\"SELECT \" + bar);\n  }\n  private static class Helper {\n    String clean(HttpServletRequest request, String param) {\n      String x = param.trim();\n      return x;\n    }\n  }\n}";
+        assert_eq!(flagged("java/sql-injection", src), [5]);
+    }
+
+    #[test]
+    fn a_helper_that_returns_a_constant_clears_the_value() {
+        let src = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    String p = request.getParameter(\"p\");\n    String bar = clean(p);\n    stmt.executeQuery(\"SELECT \" + bar);\n  }\n  private String clean(String param) {\n    return \"safe\";\n  }\n}";
+        assert_eq!(flagged("java/sql-injection", src), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_sink_inside_a_helper() {
+        let src = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    find(request.getParameter(\"id\"));\n  }\n  private void find(String id) throws Exception {\n    stmt.executeQuery(\"SELECT * FROM t WHERE id = \" + id);\n  }\n  private void safe(String id) throws Exception {\n    stmt.executeQuery(\"SELECT 1\");\n  }\n}";
+        assert_eq!(flagged("java/sql-injection", src), [6]);
+    }
+
+    #[test]
+    fn a_sink_two_helpers_down_and_a_helper_that_reads_the_request() {
+        let src = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    outer(request.getParameter(\"id\"));\n    String own = fromRequest(request);\n    runIt(own);\n  }\n  private void outer(String a) throws Exception { inner(a); }\n  private void inner(String b) throws Exception {\n    stmt.executeQuery(\"SELECT \" + b);\n  }\n  private String fromRequest(HttpServletRequest r) { return r.getParameter(\"q\"); }\n  private void runIt(String q) throws Exception {\n    stmt.executeUpdate(\"DELETE \" + q);\n  }\n}";
+        assert_eq!(flagged("java/sql-injection", src), [9, 13]);
+    }
+
+    #[test]
+    fn recursive_helpers_end_and_overloads_of_one_arity_are_skipped() {
+        // `other` resolves to the class's own, not the nested class's.
+        let src = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    String p = request.getParameter(\"p\");\n    String a = twice(p);\n    String b = other(p);\n    stmt.executeQuery(\"SELECT \" + b);\n  }\n  String twice(String s) { return twice(s); }\n  String other(String s) { return s; }\n  static class A { String other(String s) { return s; } }\n}";
+        assert_eq!(flagged("java/sql-injection", src), [6]);
+        // Two methods of one name and arity: which one is called isn't known.
+        let ambiguous = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    String c = pick(request.getParameter(\"p\"));\n    stmt.executeQuery(\"SELECT \" + c);\n  }\n  String pick(String s) { return s; }\n  String pick(Integer n) { return \"1\"; }\n}";
+        assert_eq!(
+            flagged("java/sql-injection", ambiguous),
+            Vec::<usize>::new()
+        );
     }
 }

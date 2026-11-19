@@ -16,11 +16,11 @@ file, the report formats and the public library API.
   `java/xpath-injection` (S2091) and `java/ldap-injection` (S2078), follow a
   request's value from a servlet's, Spring's or JAX-RS's request into the
   sink, through variables, string operations, builders and collections,
-  within one file, and report the path it took. A value that is checked
+  within one file, through the methods it calls, and report the path it
+  took. A value that is checked
   (`matches`, `startsWith`, a canonical path, an allow-list's `contains`)
   is taken as validated. Java gets a binder (scopes and symbols, ADR-0008
-  S1) for it. Not yet: a value passed through another method or another
-  file.
+  S1) for it. Not yet: a value passed into another file.
 
 ### Fixed
 
