@@ -3260,6 +3260,7 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
     // A body with nothing in it is an interface, not dead code.
     if !is_top_level_def(function)
         || overrides_a_library_method(function, fname, src)
+        || overrides_an_imported_method(function, src)
         || is_stub_body(body)
     {
         return false;
@@ -3268,8 +3269,12 @@ fn parameter_is_unused(name: Node, src: &[u8]) -> bool {
     if reads_its_locals(whole) {
         return false;
     }
-    // A method that a base class of this file declares is an override.
-    if overrides_a_method_of_this_file(function, fname, src) {
+    // A method that a base class of this file declares is an override, and
+    // one that is handed over as a callback has the signature its caller
+    // chose.
+    if overrides_a_method_of_this_file(function, fname, src)
+        || is_used_as_a_value(function, fname, src)
+    {
         return false;
     }
     // Mentioned in code, not in the docstring or a comment.
@@ -3325,6 +3330,114 @@ fn overrides_a_library_method(function: Node, fname: &[u8], src: &[u8]) -> bool 
             .is_some_and(|c| {
                 c.kind() == "class_definition" && extends_a_standard_library_class(c, src)
             })
+}
+
+/// A method of a class that extends a class imported from another module,
+/// of the project or a library: it may override a method whose signature
+/// belongs to that base, which sonda can't read. The standard library's are
+/// handled above, for public methods; its private methods are the class's
+/// own.
+fn overrides_an_imported_method(function: Node, src: &[u8]) -> bool {
+    let Some(class) = function
+        .parent()
+        .filter(|b| b.kind() == "block")
+        .and_then(|b| b.parent())
+        .filter(|c| c.kind() == "class_definition")
+    else {
+        return false;
+    };
+    let Some(supers) = class.child_by_field_name("superclasses") else {
+        return false;
+    };
+    let imported = names_bound_by_other_imports(tree_root(class), src);
+    statements(supers).iter().any(|base| {
+        let t = text(*base, src);
+        let first = t
+            .split(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
+            .next()
+            .unwrap_or_default();
+        imported.contains(&first)
+    })
+}
+
+/// The names the file's top-level imports bind, from modules that aren't the
+/// standard library's: a relative import, the project's own, or a library's.
+fn names_bound_by_other_imports<'s>(root: Node, src: &'s [u8]) -> Vec<&'s [u8]> {
+    statements(root)
+        .into_iter()
+        .filter(|s| matches!(s.kind(), "import_statement" | "import_from_statement"))
+        .filter(|s| !imports_from_the_standard_library(*s, src))
+        .flat_map(|s| imported_names(s, src))
+        .collect()
+}
+
+/// `import io`, `from logging import handlers`.
+fn imports_from_the_standard_library(import: Node, src: &[u8]) -> bool {
+    let in_stdlib = |module: &[u8]| {
+        STDLIB_MODULES.iter().any(|m| {
+            module.starts_with(m.as_bytes()) && module.get(m.len()).is_none_or(|b| *b == b'.')
+        })
+    };
+    if import.kind() == "import_from_statement" {
+        return import
+            .child_by_field_name("module_name")
+            .is_some_and(|m| in_stdlib(text(m, src)));
+    }
+    let mut cursor = import.walk();
+    let mut names = import.children_by_field_name("name", &mut cursor);
+    names.all(|n| {
+        let module = match n.kind() {
+            "aliased_import" => n.child_by_field_name("name").map(|m| text(m, src)),
+            _ => Some(text(n, src)),
+        };
+        module.is_some_and(in_stdlib)
+    })
+}
+
+/// The root of the tree `n` is in.
+fn tree_root(mut n: Node) -> Node {
+    while let Some(p) = n.parent() {
+        n = p;
+    }
+    n
+}
+
+/// Whether the method's name is used somewhere in the file without being
+/// called, `loop.add_reader(fd, self._read_ready)`: it's a callback, and
+/// the signature is its caller's.
+fn is_used_as_a_value(function: Node, fname: &[u8], src: &[u8]) -> bool {
+    let mut stack = vec![tree_root(function)];
+    while let Some(n) = stack.pop() {
+        let is_name = match n.kind() {
+            "identifier" => text(n, src) == fname,
+            _ => false,
+        };
+        if is_name && !is_definition_or_call(n) {
+            return true;
+        }
+        let mut c = n.walk();
+        stack.extend(n.children(&mut c));
+    }
+    false
+}
+
+/// The `def`'s own name, or the name of a call's function (`f(...)`,
+/// `self.f(...)`).
+fn is_definition_or_call(name: Node) -> bool {
+    let Some(p) = name.parent() else {
+        return false;
+    };
+    match p.kind() {
+        "function_definition" => true,
+        "call" => p.child_by_field_name("function") == Some(name),
+        "attribute" => {
+            p.child_by_field_name("attribute") == Some(name)
+                && p.parent().is_some_and(|c| {
+                    c.kind() == "call" && c.child_by_field_name("function") == Some(p)
+                })
+        }
+        _ => false,
+    }
 }
 
 /// `locals()`, `vars()`, `eval(` or `exec(`: the body may read any name.
@@ -4186,6 +4299,10 @@ mod tests {
         // S1172: a word in the docstring isn't a use; an f-string field is.
         let src = "def f(domain, b):\n    \"\"\"Given cookie domain.\"\"\"\n    return f'{b}'\n";
         assert_eq!(flagged("py/unused-parameter", src), [1]);
+        // An override of a method of a class imported from another module,
+        // and a method handed over as a callback, keep their signatures.
+        let src = "from . import base\nfrom lib import Base\nclass A(base.Loop):\n    def _make(self, sock, waiter):\n        return sock\nclass B(Base):\n    def run(self, x, y):\n        return x\nclass C:\n    def _done(self, fd, fut):\n        return fd\n    def start(self):\n        self.loop.add_done_callback(self._done)\n    def plain(self, a, b):\n        return a\n    def called(self, a, b):\n        return a\n    def go(self):\n        self.called(1, 2)\n";
+        assert_eq!(flagged("py/unused-parameter", src), [14, 16]);
         // S1481: a name that says it's thrown away.
         let src = "def f(g):\n    dummy = g()\n    unused_x = g()\n    y = g()\n";
         assert_eq!(flagged("py/unused-local", src), [4]);

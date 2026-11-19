@@ -7,6 +7,18 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Changed rule results
+
+- `py/unused-parameter` leaves alone a method of a class that extends one
+  imported from another module (of the project or a library), and a method
+  that the file hands over as a callback (`add_done_callback(self._done)`):
+  their signatures belong to the base or the caller. On CPython's `Lib` it
+  removed 11 of the 14 reports SonarQube doesn't make, with none of its own
+  lost.
+- `py/regex-reluctant-instead-of-class` (and Java's) reports a lazy dot only
+  before a character that ends the pattern's sequence (`".*?"`), not before
+  a longer end such as `.*?\?=`, where a negated class would match less.
+
 ### Added
 
 - Reporting a false positive: a form on GitHub that asks for the rule's id,
