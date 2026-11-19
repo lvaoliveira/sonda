@@ -65,6 +65,24 @@ Please make sure your change also follows these:
 - **Docs move with the code.** Update README, ARCHITECTURE, the ADRs and
   `CHANGELOG.md` (under `Unreleased`) when behavior changes.
 
+## A rule that reports what it shouldn't
+
+A false positive is a bug in a rule, and a good one to fix. Reports come
+through the [false positive form](https://github.com/lvaoliveira/sonda/issues/new?template=false-positive.yml)
+(the `false-positive` label): the rule's id, the version, the smallest code
+that shows it, and whether SonarQube reports it too.
+
+1. Reproduce it: add the code to the rule's tests, as a case it must leave
+   alone, and see the test fail.
+2. Decide which kind it is. If SonarQube reports the same thing, sonda is
+   at parity and the question is whether the rule should differ (say why in
+   its description, as `js/sort-without-compare` does for strings). If
+   SonarQube doesn't, sonda is wrong: fix the rule, and when a
+   [comparison](#rules-equivalent-to-sonarqubes) already covers the
+   language, rerun it.
+3. Fix the rule's query or its filter, never the example alone, and keep
+   what it still has to flag in the test beside the new case.
+
 ## Adding a rule
 
 Most rules are a tree-sitter query that captures the offending node as
