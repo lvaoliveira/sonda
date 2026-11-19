@@ -33,12 +33,15 @@
 //! resolves with the Java index: the declared type of what it's called on,
 //! as written, the types the call is inside of, and the method's name and
 //! arity. The file reports the request's values it passes to such a call,
-//! and a summary per method for the values other files pass to it. Not yet:
-//! the result of another file's method reaching a sink here. Overloads of
-//! one name and arity can't be told apart, so none is followed.
+//! a summary per method for the values other files pass to it, and the
+//! results of other files' methods that reach a sink here (their paths start
+//! at the call, and are a request's value only if the project pass finds
+//! the method returns one). Overloads of one name and arity can't be told
+//! apart, so none is followed.
 
 use super::taint::{
-    CallFact, Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult, cap,
+    CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
+    cap,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
@@ -47,6 +50,28 @@ use std::rc::Rc;
 use tree_sitter::Node;
 
 type Path<'t> = Vec<Step<'t>>;
+
+/// A path that starts at another file's method's result: a request's value
+/// only if that method returns one, which the project pass decides (T4).
+/// Its first step is the call, with this message.
+const FROM_CALL: &str = "\u{1}";
+
+fn from_call(path: &Path) -> bool {
+    path.first().is_some_and(|s| s.message == FROM_CALL)
+}
+
+/// The first of `paths` that holds a request's value; failing that, the
+/// first that may, if another file's method returns one.
+fn best<'t>(paths: impl Iterator<Item = Option<Path<'t>>>) -> Option<Path<'t>> {
+    let mut maybe = None;
+    for path in paths.flatten() {
+        if !from_call(&path) {
+            return Some(path);
+        }
+        maybe.get_or_insert(path);
+    }
+    maybe
+}
 
 /// Rounds of the fixed point; past it, the file reports nothing.
 const MAX_ROUNDS: usize = 64;
@@ -638,7 +663,7 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     let facts = Facts {
         summaries: cx.exported_summaries(),
         calls: cx.passed_to_other_files(&tainted),
-        returns: Vec::new(),
+        returns: cx.return_facts.take(),
     };
     TaintResult { findings, facts }
 }
@@ -682,6 +707,10 @@ struct Cx<'a, 't> {
     methods: HashMap<String, Vec<usize>>,
     /// The file's package, for the names other files call its types by.
     package: String,
+    /// Whether other files' methods' results count, as paths that start at\n    /// the call: for the file's own run, not a summary's.
+    from_calls: Cell<bool>,
+    /// Other files' methods' results that reach a sink here.
+    return_facts: RefCell<Vec<ReturnFact<'t>>>,
     summaries: RefCell<HashMap<SummaryKey, Rc<Summary<'t>>>>,
     /// The summaries being computed: a method that calls itself, or two
     /// that call each other, has nothing more to learn.
@@ -732,6 +761,8 @@ impl<'a, 't> Cx<'a, 't> {
             evaluations: Cell::new(0),
             methods: HashMap::new(),
             package: package_of(root, src),
+            from_calls: Cell::new(false),
+            return_facts: RefCell::default(),
             summaries: RefCell::default(),
             busy: RefCell::default(),
         };
@@ -948,6 +979,7 @@ impl<'a, 't> Cx<'a, 't> {
     /// None if the file is past a limit.
     fn run(&self) -> Option<HashMap<DeclId, Path<'t>>> {
         let mut tainted = self.initial.clone();
+        self.from_calls.set(true);
         self.propagate(None, &mut tainted)?;
         Some(tainted)
     }
@@ -962,29 +994,9 @@ impl<'a, 't> Cx<'a, 't> {
         for _ in 0..MAX_ROUNDS {
             let mut changed = false;
             for w in &self.writes {
-                if tainted.contains_key(&w.target)
-                    || self.checked.contains(&w.target)
-                    || within.is_some_and(|f| !inside(w.target_node, f))
-                {
-                    continue;
+                if within.is_none_or(|f| inside(w.target_node, f)) {
+                    changed |= self.apply(w, tainted);
                 }
-                let Some(mut path) = self.taint(w.value, tainted, 0) else {
-                    continue;
-                };
-                let name = self.text(w.target_node);
-                path.push(Step {
-                    node: w.target_node,
-                    message: match w.how {
-                        How::Read => format!("read into `{name}`"),
-                        How::Added => format!("added to `{name}`"),
-                        How::Assigned if is_built(w.value) => {
-                            format!("concatenated into `{name}`")
-                        }
-                        How::Assigned => format!("assigned to `{name}`"),
-                    },
-                });
-                tainted.insert(w.target, path);
-                changed = true;
             }
             if self.evaluations.get() > MAX_EVALUATIONS {
                 return None;
@@ -994,6 +1006,40 @@ impl<'a, 't> Cx<'a, 't> {
             }
         }
         None
+    }
+
+    /// One write: the target holds its value's path, unless it's validated
+    /// or already holds one that surely comes from a request. Whether the
+    /// target changed.
+    fn apply(&self, w: &Write<'t>, tainted: &mut HashMap<DeclId, Path<'t>>) -> bool {
+        // A path that may start at another file's method is replaced by one
+        // that surely holds a request's value.
+        if tainted.get(&w.target).is_some_and(|p| !from_call(p)) || self.checked.contains(&w.target)
+        {
+            return false;
+        }
+        let Some(mut path) = self.taint(w.value, tainted, 0) else {
+            return false;
+        };
+        if tainted.contains_key(&w.target) && from_call(&path) {
+            return false;
+        }
+        path.push(Step {
+            node: w.target_node,
+            message: self.binding_message(w),
+        });
+        tainted.insert(w.target, path);
+        true
+    }
+
+    fn binding_message(&self, w: &Write<'t>) -> String {
+        let name = self.text(w.target_node);
+        match w.how {
+            How::Read => format!("read into `{name}`"),
+            How::Added => format!("added to `{name}`"),
+            How::Assigned if is_built(w.value) => format!("concatenated into `{name}`"),
+            How::Assigned => format!("assigned to `{name}`"),
+        }
     }
 
     // ------------------------------------------------------------ expressions
@@ -1040,9 +1086,7 @@ impl<'a, 't> Cx<'a, 't> {
             "array_initializer" => {
                 let mut c = n.walk();
                 let elements: Vec<Node<'t>> = n.named_children(&mut c).collect();
-                elements
-                    .into_iter()
-                    .find_map(|e| self.taint(e, state, next))
+                best(elements.into_iter().map(|e| self.taint(e, state, next)))
             }
             "field_access" => self.field_taint(n, state, next),
             "method_invocation" => self.call_taint(n, state, next),
@@ -1080,9 +1124,11 @@ impl<'a, 't> Cx<'a, 't> {
         if !PROPAGATING_NEW.contains(&last_name(self.text(ty))) {
             return None;
         }
-        arguments(n)
-            .into_iter()
-            .find_map(|a| self.taint(a, state, depth))
+        best(
+            arguments(n)
+                .into_iter()
+                .map(|a| self.taint(a, state, depth)),
+        )
     }
 
     /// The path of the first of `n`'s `fields` that holds a request's value.
@@ -1093,10 +1139,12 @@ impl<'a, 't> Cx<'a, 't> {
         state: &HashMap<DeclId, Path<'t>>,
         depth: u32,
     ) -> Option<Path<'t>> {
-        fields
-            .iter()
-            .filter_map(|f| n.child_by_field_name(f))
-            .find_map(|o| self.taint(o, state, depth))
+        best(
+            fields
+                .iter()
+                .filter_map(|f| n.child_by_field_name(f))
+                .map(|o| self.taint(o, state, depth)),
+        )
     }
 
     /// What a call returns: a request's value for a request's accessor, and
@@ -1121,9 +1169,10 @@ impl<'a, 't> Cx<'a, 't> {
         }
         let object = object?;
         if BUILDER_METHODS.contains(&name) {
-            return self
-                .taint(object, state, depth)
-                .or_else(|| args.into_iter().find_map(|a| self.taint(a, state, depth)));
+            return best(
+                std::iter::once(self.taint(object, state, depth))
+                    .chain(args.into_iter().map(|a| self.taint(a, state, depth))),
+            );
         }
         // `String.format(..)`, or written out: `java.net.URLDecoder.decode(..)`.
         let class = match object.kind() {
@@ -1132,9 +1181,18 @@ impl<'a, 't> Cx<'a, 't> {
             _ => None,
         };
         if class.is_some_and(|c| PROPAGATING_CLASSES.contains(&c)) {
-            return args.into_iter().find_map(|a| self.taint(a, state, depth));
+            return best(args.into_iter().map(|a| self.taint(a, state, depth)));
         }
-        let receiver = self.taint(object, state, depth)?;
+        let Some(receiver) = self.taint(object, state, depth) else {
+            // Another file's method: what it returns is for the project
+            // pass to say.
+            return (self.from_calls.get() && self.external_callee(call).is_some()).then(|| {
+                vec![Step {
+                    node: call,
+                    message: FROM_CALL.to_string(),
+                }]
+            });
+        };
         let getter = name.starts_with("get") && name != "getClass";
         (PROPAGATING_METHODS.contains(&name) || getter).then_some(receiver)
     }
@@ -1316,7 +1374,7 @@ impl<'a, 't> Cx<'a, 't> {
         let name = self.text(call.child_by_field_name("name").unwrap_or(call));
         let mut out = Vec::new();
         for (i, a) in arguments(call).into_iter().enumerate() {
-            let Some(path) = self.taint(a, state, 0) else {
+            let Some(path) = self.taint(a, state, 0).filter(|p| !from_call(p)) else {
                 continue;
             };
             for (inside, sink) in &self.summary(j, Some(i)).sinks {
@@ -1352,6 +1410,15 @@ impl<'a, 't> Cx<'a, 't> {
     }
 
     fn summarize(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
+        // A summary is what the method does with its parameter, whatever
+        // other files' methods return.
+        let before = self.from_calls.replace(false);
+        let summary = self.summarize_method(j, p);
+        self.from_calls.set(before);
+        summary
+    }
+
+    fn summarize_method(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
         let f = &self.m.functions[j];
         let mut state: HashMap<DeclId, Path<'t>> = HashMap::new();
         if let Some(p) = p {
@@ -1507,7 +1574,10 @@ impl<'a, 't> Cx<'a, 't> {
         arguments(call)
             .into_iter()
             .enumerate()
-            .filter_map(|(i, a)| Some((self.taint(a, state, 0)?, callee.clone(), i)))
+            .filter_map(|(i, a)| {
+                let path = self.taint(a, state, 0).filter(|p| !from_call(p))?;
+                Some((path, callee.clone(), i))
+            })
             .collect()
     }
 
@@ -1557,12 +1627,52 @@ impl<'a, 't> Cx<'a, 't> {
                         .iter()
                         .map(|(steps, callee, arg)| (p, cap(steps.clone()), callee.clone(), *arg)),
                 );
+                if let Some(returned) = &s.returns {
+                    fact.to_return.push((p, cap(returned.clone())));
+                }
             }
-            if !fact.to_sink.is_empty() || !fact.to_call.is_empty() {
+            fact.returns_source = self.summary(j, None).returns.clone().map(cap);
+            if !fact.to_sink.is_empty()
+                || !fact.to_call.is_empty()
+                || !fact.to_return.is_empty()
+                || fact.returns_source.is_some()
+            {
                 out.push(fact);
             }
         }
         out
+    }
+
+    /// Another file's method's result reaching the sink `sink`: the call,
+    /// the request's values in its arguments, and the path after it.
+    fn record_return(&self, sink: Node<'t>, path: Path<'t>, state: &HashMap<DeclId, Path<'t>>) {
+        let call = path[0].node;
+        let Some(callee) = self.external_callee(call) else {
+            return;
+        };
+        let args = arguments(call)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                let p = self.taint(a, state, 0).filter(|p| !from_call(p))?;
+                Some((i, cap(p)))
+            })
+            .collect();
+        let mut returns = self.return_facts.borrow_mut();
+        if returns
+            .iter()
+            .any(|r| r.sink.id() == sink.id() && r.call.id() == call.id())
+        {
+            return;
+        }
+        returns.push(ReturnFact {
+            call,
+            callee,
+            args,
+            after: cap(path[1..].to_vec()),
+            sink,
+            needs_sql: false,
+        });
     }
 
     /// What other files call method `j` by: its type's full name, and its
@@ -1635,17 +1745,18 @@ impl<'a, 't> Cx<'a, 't> {
             let Some((name, args)) = self.sink_call(call) else {
                 continue;
             };
-            for a in args {
-                if let Some(mut path) = self.taint(a, state, 0) {
-                    path.push(Step {
-                        node: call,
-                        message: format!("passed to `{name}`"),
-                    });
+            if let Some(mut path) = best(args.into_iter().map(|a| self.taint(a, state, 0))) {
+                path.push(Step {
+                    node: call,
+                    message: format!("passed to `{name}`"),
+                });
+                if from_call(&path) {
+                    self.record_return(call, path, state);
+                } else {
                     out.push(Finding {
                         sink: call,
                         steps: cap(path),
                     });
-                    break;
                 }
             }
         }
@@ -1656,7 +1767,7 @@ impl<'a, 't> Cx<'a, 't> {
                     continue;
                 };
                 if self.redirect_prefix(value)
-                    && let Some(mut path) = self.taint(value, state, 0)
+                    && let Some(mut path) = self.taint(value, state, 0).filter(|p| !from_call(p))
                 {
                     path.push(Step {
                         node: value,
@@ -2163,5 +2274,37 @@ mod tests {
         // A type the project doesn't declare is a library's.
         let lib = "package com.shop.web;\nimport org.lib.Mailer;\n@RestController class C {\n  private Mailer mailer;\n  void f(@RequestParam String id) { mailer.send(id); }\n}\n";
         assert!(project(&[("web/C.java", lib)]).is_empty());
+    }
+
+    #[test]
+    fn another_files_method_returning_the_value_to_a_sink_here() {
+        let controller = "package com.shop.web;\nimport com.shop.sql.Where;\n@RestController class C {\n  @GetMapping(\"/o\")\n  Object find(@RequestParam String name) throws Exception {\n    String q = Where.eq(name);\n    return stmt.executeQuery(q);\n  }\n}\n";
+        let helper = "package com.shop.sql;\nclass Where {\n  static String eq(String n) { return \"SELECT * FROM o WHERE n = '\" + n + \"'\"; }\n}\n";
+        let found = project(&[("web/C.java", controller), ("sql/Where.java", helper)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "web/C.java");
+        let flow: Vec<&str> = found[0].flow.iter().map(|s| s.message.as_str()).collect();
+        assert!(flow.contains(&"returned by `eq`"), "{flow:?}");
+        assert_eq!(flow.last().copied(), Some("passed to `executeQuery`"));
+        // A method that returns a constant gives nothing.
+        let constant = "package com.shop.sql;\nclass Where {\n  static String eq(String n) { return \"SELECT 1\"; }\n}\n";
+        assert!(project(&[("web/C.java", controller), ("sql/Where.java", constant)]).is_empty());
+    }
+
+    #[test]
+    fn another_files_method_that_reads_the_request_itself() {
+        let controller = "package com.shop.web;\nimport com.shop.web.Params;\n@RestController class C {\n  Object find(HttpServletRequest request) throws Exception {\n    String id = Params.id(request);\n    return stmt.executeQuery(\"SELECT * FROM o WHERE id = \" + id);\n  }\n}\n";
+        let params = "package com.shop.web;\nclass Params {\n  static String id(HttpServletRequest r) { return r.getParameter(\"id\"); }\n}\n";
+        let found = project(&[("web/C.java", controller), ("web/Params.java", params)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "web/C.java");
+    }
+
+    #[test]
+    fn a_value_that_may_come_from_another_file_doesnt_hide_one_that_does() {
+        // The ternary's first branch is another class's method, which might
+        // return a request's value; the second surely is one.
+        let src = "class S extends HttpServlet {\n  void doGet(HttpServletRequest request, HttpServletResponse response) throws Exception {\n    String id = request.getParameter(\"id\");\n    String pick = (id == null ? Random.next() : id) + \".jpg\";\n    new File(\"/pics\", pick);\n    String again = Util.read();\n    again = request.getParameter(\"a\");\n    new FileInputStream(again);\n  }\n}";
+        assert_eq!(flagged("java/path-injection", src), [5, 8]);
     }
 }
