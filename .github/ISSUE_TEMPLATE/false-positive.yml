@@ -1,0 +1,60 @@
+name: False positive
+description: "A finding that is wrong: the code is fine, or the rule does not mean this."
+title: "False positive: "
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. A wrong finding is worth a fix, and the smallest example that shows it makes the fix quick.
+
+        **Don't paste anything private.** A few lines that show the problem are enough, and you can rename things. The scan never sends your code anywhere on its own; only what you write here is posted.
+  - type: input
+    id: rule
+    attributes:
+      label: Rule
+      description: The rule's id, as the report shows it, such as `js/no-var`.
+      placeholder: js/no-var
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sonda version
+      description: "`sonda --version`, or the version beside the wordmark in the server."
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: The smallest code that shows it
+      description: Paste it as it is, with the language's usual layout. If the finding needs other files (a call into another class, a type from another file), say which and what they declare.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why the finding is wrong
+      description: What the code does, and what you expected sonda to say instead (nothing, or a different rule).
+    validations:
+      required: true
+  - type: dropdown
+    id: sonarqube
+    attributes:
+      label: Does SonarQube report it?
+      description: Sonda takes SonarQube's rules as its reference, so this tells which kind of difference it is.
+      options:
+        - I don't know, or don't use SonarQube
+        - "No, SonarQube doesn't report it"
+        - "Yes, SonarQube reports it too (and I think it's wrong as well)"
+    validations:
+      required: false
+  - type: checkboxes
+    id: private
+    attributes:
+      label: Checklist
+      options:
+        - label: I removed anything private from the code above.
+          required: true
