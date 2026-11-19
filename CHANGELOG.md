@@ -9,6 +9,19 @@ file, the report formats and the public library API.
 
 ### Changed rule results
 
+- C# taint (`cs/path-injection`, `cs/open-redirect`, `cs/ssrf` and the rest):
+  a value tested with a collection's `Contains` (`ValidExtensions.Contains(
+  extension)`) is taken as validated, and a request or a redirect whose
+  address starts with a field or a property of the class
+  (`$"{_urlBase}{path}"`) is left alone, since what follows can't change the
+  host. On Prowlarr it removed six reports SonarCloud's analysis doesn't make.
+- `js/invariant-return` leaves a function that can run off its end: that
+  returns `undefined`, a value its `return`s don't give (measured on
+  SonarQube 26.7). `js/implicit-global` leaves webpack's own
+  (`__webpack_public_path__`). `js/array-for-existence` reports an array only
+  when it's checked twice or in a callback or another function, as 26.7 does,
+  not for one `includes` in the function that declares it.
+
 - `py/unused-parameter` leaves alone a method of a class that extends one
   imported from another module (of the project or a library), and a method
   that the file hands over as a callback (`add_done_callback(self._done)`):

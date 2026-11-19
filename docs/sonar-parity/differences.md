@@ -26,9 +26,9 @@ the steps, the commands and what was learned along the way.
 | apigen.springboot² | Java (Spring Boot) | `ef13838` | 124 of 173 | 15 |
 | eGovFrame common components² | Java (Spring) | `14313bc` | 3,726 of 4,878 | 868 |
 | eGovFrame common components² | JavaScript (browser scripts) | `14313bc` | 450 of 454 | 279 |
-| Prowlarr³ | C# | `d2d1fc0` | 1,433 of 1,787 | 29 |
-| Prowlarr³ | JavaScript (React) | `d2d1fc0` | 563 of 588 | 8 |
-| Prowlarr³ | TypeScript (React) | `d2d1fc0` | 137 of 150 | 3 |
+| Prowlarr³ | C# | `46c468c` | 1,434 of 1,788 | 23 |
+| Prowlarr³ | JavaScript (React) | `46c468c` | 563 of 588 | 6 |
+| Prowlarr³ | TypeScript (React) | `46c468c` | 137 of 150 | 2 |
 | qutepart-cpp⁴ | C++ (Qt) | `0e5a022` | 365 of 746 | 40 |
 | roo_display⁴ | C++ (embedded), C | `f139977` | 2,231 of 2,958 | 347 |
 
@@ -655,7 +655,7 @@ container, with SonarScanner for .NET, one case per method.
 
 ### Still open in C#
 
-On Prowlarr, 354 of SonarCloud's C# issues and 29 of sonda's:
+On Prowlarr, 354 of SonarCloud's C# issues and 23 of sonda's (it was 29: six taint reports were errors, fixed):
 
 - **Known gap, data flow (155):** S2259 (125), S2583 (22), S2589 (8).
 - **Known gap, types from other files (92):** S2325 (47), a class whose
@@ -664,10 +664,15 @@ On Prowlarr, 354 of SonarCloud's C# issues and 29 of sonda's:
   declares; S1244 (7), S1125 (3) and S1075 (3), a property or constructor
   declared in another file. One sonda only: S6967 on a controller whose
   `[V1ApiController]`, declared elsewhere, works as `[ApiController]`.
-- **Known gaps, libraries and the security engine (27 SonarCloud only, 6
-  sonda only):** S6966 (11), a method with an async variant in a library;
-  S6549 (9), S2083 (5) and S5145 (2), and on sonda's side S2083 (5) and
-  S5146 (1), from SonarCloud's commercial taint analysis.
+- **Known gaps, libraries and the security engine (27 SonarCloud only):**
+  S6966 (11), a method with an async variant in a library; S6549 (9), S2083
+  (5) and S5145 (2), from SonarCloud's commercial taint analysis. sonda's
+  own six (S2083 ×5, S5146) were errors: an upload's extension tested with
+  `ValidExtensions.Contains(extension)` before it names a file, and a
+  redirect to `$"{_urlBase}{context.Request.Path}"`, whose start is the
+  server's own base path. A value tested for membership in a collection is
+  taken as validated, and a request or redirect that starts with a field
+  or a property can't change where it goes.
 - **SonarCloud differs from SonarQube 26.7 (9 sonda only):** S6667 (6) on
   a catch that logs the exception's message and rethrows, S107 (2) on a
   controller's constructor, S125 (1) on a prose line ending with `;`: 26.7
@@ -728,7 +733,7 @@ read them).
 
 ### Still open in Prowlarr's frontend
 
-38 of SonarCloud's issues and 11 of sonda's:
+38 of SonarCloud's issues and 8 of sonda's:
 
 - **Known gap, types (8 and 2):** S6759 (6 and 2), whether a component's
   props type, often from another file, is read-only; S8907 (2), Lodash on
