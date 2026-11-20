@@ -22,17 +22,19 @@
 //! function with a route attribute (`#[get("/<id>")]`), and what a request
 //! object's methods return (`req.query_string()`, `req.headers()`).
 //!
-//! Not yet: values followed through other files (T4).
+//! Values are followed through other files (T4), in both directions: into
+//! another file's function, and out of it, when it returns one.
 
 use super::taint::{
-    CallFact, Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult,
+    CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
 };
 use super::taint_core::{
-    Flow, How, Path, Reaches, Summaries, Write, at_sinks, call_facts, decl_index, exported, finish,
-    flow_for, held, inside, short, through_returns, through_sinks, tick,
+    FROM_CALL, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, call_facts, decl_index,
+    exported, finish, flow_for, from_call, held, inside, note_return, record_return, short,
+    through_returns, through_sinks, tick,
 };
 use super::{DeclId, Model};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use tree_sitter::Node;
@@ -482,7 +484,7 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     let facts = Facts {
         summaries: cx.exported_summaries(),
         calls: cx.passed_to_other_files(&tainted),
-        returns: Vec::new(),
+        returns: cx.return_facts.take(),
     };
     TaintResult { findings, facts }
 }
@@ -536,6 +538,11 @@ struct Cx<'a, 't> {
     methods: HashMap<String, Vec<usize>>,
     evaluations: Cell<u64>,
     summaries: Summaries<SummaryKey, Summary<'t>>,
+    /// Whether another file's function's result counts as maybe holding a
+    /// request's value: for the file's own run, not for a summary.
+    from_calls: Cell<bool>,
+    /// Another file's function's result reaching a sink here.
+    return_facts: RefCell<Vec<ReturnFact<'t>>>,
 }
 
 impl<'a, 't> Cx<'a, 't> {
@@ -557,6 +564,8 @@ impl<'a, 't> Cx<'a, 't> {
             methods: HashMap::new(),
             evaluations: Cell::new(0),
             summaries: Summaries::new(MAX_SUMMARIES),
+            from_calls: Cell::new(false),
+            return_facts: RefCell::new(Vec::new()),
         };
         cx.index();
         cx.uses = cx.uses(root);
@@ -981,6 +990,7 @@ impl<'a, 't> Cx<'a, 't> {
     /// if the file is past a limit.
     fn run(&self) -> Option<HashMap<DeclId, Path<'t>>> {
         let mut tainted = self.initial.clone();
+        self.from_calls.set(true);
         self.propagate(None, &mut tainted)?;
         Some(tainted)
     }
@@ -1261,7 +1271,9 @@ impl<'a, 't> Cx<'a, 't> {
             return Some(path);
         }
         if let Some(segments) = self.path_of(call) {
-            return self.path_call_taint(&segments, &args, state, depth);
+            return self
+                .path_call_taint(&segments, &args, state, depth)
+                .or_else(|| self.maybe_from(call));
         }
         let (receiver, name) = self.method_of(call)?;
         if let Some(path) = self.request_value(call, receiver, name) {
@@ -1291,8 +1303,21 @@ impl<'a, 't> Cx<'a, 't> {
                 return None;
             }
         }
-        let tainted = self.taint(receiver, state, depth)?;
+        let Some(tainted) = self.taint(receiver, state, depth) else {
+            return self.maybe_from(call);
+        };
         PROPAGATING_METHODS.contains(&name).then_some(tainted)
+    }
+
+    /// What another file's function's result may hold: a request's value, if
+    /// that function returns one. The project pass decides.
+    fn maybe_from(&self, call: Node<'t>) -> Option<Path<'t>> {
+        (self.from_calls.get() && self.external_callee(call).is_some()).then(|| {
+            vec![Step {
+                node: call,
+                message: FROM_CALL.to_string(),
+            }]
+        })
     }
 
     /// `String::from(x)`, `PathBuf::from(x)`, `Some(x)`: the text of an
@@ -1355,7 +1380,14 @@ impl<'a, 't> Cx<'a, 't> {
         let mut out = at_sinks(
             &self.calls,
             |c| self.sink_call(c),
-            |a| self.taint(a, state, 0),
+            |a| {
+                let path = self.taint(a, state, 0)?;
+                if from_call(&path) {
+                    self.record_return(a, &path, state);
+                    return None;
+                }
+                Some(path)
+            },
         );
         out.extend(self.reached_through_functions(state));
         out
@@ -1402,7 +1434,8 @@ impl<'a, 't> Cx<'a, 't> {
                     .iter()
                     .any(|(t, fs)| *t == before && fs.contains(&last)) =>
             {
-                Some((shown, args))
+                // `fs::write(path, contents)`: the contents aren't a path.
+                Some((shown, if last == "write" { first(args) } else { args }))
             }
             SinkKind::Redirect if before == "Redirect" && REDIRECT_FUNCTIONS.contains(&last) => {
                 Some((shown, first(args)))
@@ -1637,7 +1670,7 @@ impl<'a, 't> Cx<'a, 't> {
             call,
             self.function_name(j),
             arguments(call),
-            |a| self.taint(a, state, 0),
+            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
             |i| self.summary(j, Some(i)).sinks.clone(),
         )
     }
@@ -1907,22 +1940,6 @@ impl<'a, 't> Cx<'a, 't> {
         None
     }
 
-    /// The tainted arguments of a call to another file's function.
-    fn passed_on(
-        &self,
-        call: Node<'t>,
-        state: &HashMap<DeclId, Path<'t>>,
-    ) -> Vec<(Path<'t>, Callee, usize)> {
-        let Some(callee) = self.external_callee(call) else {
-            return Vec::new();
-        };
-        arguments(call)
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, a)| Some((self.taint(a, state, 0)?, callee.clone(), i)))
-            .collect()
-    }
-
     /// The request's values this file passes to other files' functions.
     fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
         call_facts(&self.calls, |call| self.passed_on(call, state))
@@ -1936,8 +1953,46 @@ impl<'a, 't> Cx<'a, 't> {
             |j| self.function_key(j),
             |j| self.m.functions[j].params.len(),
             |j, p| self.summary(j, Some(p)),
-            |_, _, _| {},
+            |j, p, fact| note_return(fact, p, self.summary(j, p).returns.clone()),
         )
+    }
+
+    /// Another file's function's result reaching a sink through the argument
+    /// `arg` of the sink call: the call, the request's values in its
+    /// arguments, and the path after it.
+    fn record_return(
+        &self,
+        sink_arg: Node<'t>,
+        path: &Path<'t>,
+        state: &HashMap<DeclId, Path<'t>>,
+    ) {
+        let call = path[0].node;
+        let Some(callee) = self.external_callee(call) else {
+            return;
+        };
+        let Some(sink) = self.calls.iter().copied().find(|c| {
+            inside(sink_arg, *c)
+                && self
+                    .sink_call(*c)
+                    .is_some_and(|(_, args)| args.iter().any(|a| a.id() == sink_arg.id()))
+        }) else {
+            return;
+        };
+        let name = self.sink_call(sink).map(|(n, _)| n).unwrap_or_default();
+        let mut after = path[1..].to_vec();
+        after.push(Step {
+            node: sink,
+            message: format!("passed to `{name}`"),
+        });
+        record_return(
+            &self.return_facts,
+            call,
+            callee,
+            arguments(call),
+            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
+            after,
+            sink,
+        );
     }
 
     /// What other files call function `j` by: its name, or its type and its name
@@ -1968,7 +2023,7 @@ impl<'a, 't> Cx<'a, 't> {
     }
 }
 
-flow_for!(Cx);
+flow_for!(Cx, from_call);
 
 // ---------------------------------------------------------------- syntax
 
@@ -2097,11 +2152,6 @@ fn is_a_check_by_name(name: &str) -> bool {
 /// Text built by concatenation or formatting, which the path says.
 fn is_built(n: Node) -> bool {
     matches!(n.kind(), "binary_expression" | "macro_invocation")
-}
-
-/// The first of `paths` that holds a request's value.
-fn best<'t>(paths: impl Iterator<Item = Option<Path<'t>>>) -> Option<Path<'t>> {
-    paths.flatten().next()
 }
 
 #[cfg(test)]
@@ -2286,5 +2336,46 @@ mod tests {
         assert_eq!(found[0].path, "src/db.rs");
         let files: Vec<Option<&str>> = found[0].flow.iter().map(|s| s.path.as_deref()).collect();
         assert!(files.contains(&Some("src/service.rs")), "{files:?}");
+    }
+
+    #[test]
+    fn what_is_written_is_not_the_path() {
+        let src = "async fn f(Query(q): Query<R>) {\n    std::fs::write(\"/srv/out\", q.text).unwrap();\n    std::fs::write(&q.name, \"x\").unwrap();\n}";
+        assert_eq!(flagged("rs/path-injection", src), [3]);
+    }
+
+    #[test]
+    fn another_modules_result_reaching_a_sink() {
+        let sink = "use rusqlite::Connection;\nuse crate::text;\nuse axum::extract::Query;\nasync fn h(Query(p): Query<P>) {\n    let n = text::wrap(&p.name);\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM u WHERE n = '{n}'\"), []).unwrap();\n}\n";
+        // The helper hands back what it was given.
+        let wrap = "pub fn wrap(x: &str) -> String {\n    format!(\"<{x}>\")\n}\n";
+        let found = project(&[("src/main.rs", sink), ("src/text.rs", wrap)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "src/main.rs");
+        let flow: Vec<&str> = found[0].flow.iter().map(|s| s.message.as_str()).collect();
+        assert!(
+            flow.iter().any(|m| m.starts_with("returned by")),
+            "{flow:?}"
+        );
+        // A helper that returns a constant clears it.
+        let constant = "pub fn wrap(x: &str) -> String {\n    String::from(\"fixed\")\n}\n";
+        assert!(project(&[("src/main.rs", sink), ("src/text.rs", constant)]).is_empty());
+        // The call's own result is no request's value when nothing reaches it.
+        let alone = "use rusqlite::Connection;\nuse crate::text;\nfn f() {\n    let n = text::wrap(\"a\");\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM u WHERE n = '{n}'\"), []).unwrap();\n}\n";
+        assert!(project(&[("src/main.rs", alone), ("src/text.rs", wrap)]).is_empty());
+    }
+
+    #[test]
+    fn another_modules_function_that_reads_the_request_itself() {
+        let main = "use rusqlite::Connection;\nuse crate::input;\nasync fn h(req: HttpRequest) {\n    let id = input::id(&req);\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM u WHERE id = {id}\"), []).unwrap();\n}\n";
+        let input =
+            "pub fn id(req: &HttpRequest) -> String {\n    req.query_string().to_string()\n}\n";
+        let found = project(&[("src/main.rs", main), ("src/input.rs", input)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        // A method of a type another file declares.
+        let main = "use rusqlite::Connection;\nuse crate::input::Reader;\nasync fn h(req: HttpRequest, r: Reader) {\n    let id = r.read(&req);\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM u WHERE id = {id}\"), []).unwrap();\n}\n";
+        let reader = "pub struct Reader;\nimpl Reader {\n    pub fn read(&self, req: &HttpRequest) -> String {\n        req.query_string().to_string()\n    }\n}\n";
+        let found = project(&[("src/main.rs", main), ("src/input.rs", reader)]);
+        assert_eq!(found.len(), 1, "{found:?}");
     }
 }

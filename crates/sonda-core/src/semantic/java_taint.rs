@@ -44,36 +44,15 @@ use super::taint::{
     cap,
 };
 use super::taint_core::{
-    Flow, How, Path, Reaches, Summaries, Write, call_facts, decl_index, exported, finish, flow_for,
-    inside, short, through_returns, through_sinks, tick,
+    FROM_CALL, Flow, How, Path, Reaches, Summaries, Write, best, call_facts, decl_index, exported,
+    finish, flow_for, from_call, inside, note_return, record_return, short, through_returns,
+    through_sinks, tick,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use tree_sitter::Node;
-
-/// A path that starts at another file's method's result: a request's value
-/// only if that method returns one, which the project pass decides (T4).
-/// Its first step is the call, with this message.
-const FROM_CALL: &str = "\u{1}";
-
-fn from_call(path: &Path) -> bool {
-    path.first().is_some_and(|s| s.message == FROM_CALL)
-}
-
-/// The first of `paths` that holds a request's value; failing that, the
-/// first that may, if another file's method returns one.
-fn best<'t>(paths: impl Iterator<Item = Option<Path<'t>>>) -> Option<Path<'t>> {
-    let mut maybe = None;
-    for path in paths.flatten() {
-        if !from_call(&path) {
-            return Some(path);
-        }
-        maybe.get_or_insert(path);
-    }
-    maybe
-}
 
 /// Writes in one file; past it, the file reports nothing.
 const MAX_WRITES: usize = 50_000;
@@ -1438,26 +1417,6 @@ impl<'a, 't> Cx<'a, 't> {
         out
     }
 
-    /// The tainted arguments of a call to another file's method: the path
-    /// to the call, the callee and the argument.
-    fn passed_on(
-        &self,
-        call: Node<'t>,
-        state: &HashMap<DeclId, Path<'t>>,
-    ) -> Vec<(Path<'t>, Callee, usize)> {
-        let Some(callee) = self.external_callee(call) else {
-            return Vec::new();
-        };
-        arguments(call)
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, a)| {
-                let path = self.taint(a, state, 0).filter(|p| !from_call(p))?;
-                Some((path, callee.clone(), i))
-            })
-            .collect()
-    }
-
     /// The request's values this file passes to other files' methods.
     fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
         call_facts(&self.calls, |call| self.passed_on(call, state))
@@ -1472,14 +1431,7 @@ impl<'a, 't> Cx<'a, 't> {
             |j| self.method_key(j),
             |j| self.m.functions[j].params.len(),
             |j, p| self.summary(j, Some(p)),
-            |j, p, fact| match p {
-                Some(p) => {
-                    if let Some(returned) = &self.summary(j, Some(p)).returns {
-                        fact.to_return.push((p, cap(returned.clone())));
-                    }
-                }
-                None => fact.returns_source = self.summary(j, None).returns.clone().map(cap),
-            },
+            |j, p, fact| note_return(fact, p, self.summary(j, p).returns.clone()),
         )
     }
 
@@ -1490,29 +1442,15 @@ impl<'a, 't> Cx<'a, 't> {
         let Some(callee) = self.external_callee(call) else {
             return;
         };
-        let args = arguments(call)
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, a)| {
-                let p = self.taint(a, state, 0).filter(|p| !from_call(p))?;
-                Some((i, cap(p)))
-            })
-            .collect();
-        let mut returns = self.return_facts.borrow_mut();
-        if returns
-            .iter()
-            .any(|r| r.sink.id() == sink.id() && r.call.id() == call.id())
-        {
-            return;
-        }
-        returns.push(ReturnFact {
+        record_return(
+            &self.return_facts,
             call,
             callee,
-            args,
-            after: cap(path[1..].to_vec()),
+            arguments(call),
+            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
+            path[1..].to_vec(),
             sink,
-            needs_sql: false,
-        });
+        );
     }
 
     /// What other files call method `j` by: its type's full name, and its

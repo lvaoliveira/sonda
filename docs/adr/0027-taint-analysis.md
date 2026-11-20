@@ -28,8 +28,9 @@
   through the functions of one file and into other files' (T4: a value
   passed to a function of another module, or a method of a type another file
   declares, read as Rust's modules do: `crate::`, `self::`, `super::`, child
-  modules and workspace crates, through the file's `use`s); not yet a
-  function's result that reaches a sink in the caller's file.
+  modules and workspace crates, through the file's `use`s), and a function's
+  result that reaches a sink in the caller's file, as for Java: the call's
+  result may hold a request's value, which the project pass settles.
 - Date: 2026-11-07
 
 ## Context
