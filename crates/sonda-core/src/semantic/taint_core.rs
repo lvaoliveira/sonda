@@ -5,7 +5,7 @@
 //! and how a call is read; the loop that carries a request's value from one
 //! variable to the next is the same.
 
-use super::taint::{Finding, Step, cap};
+use super::taint::{CallFact, Callee, Finding, Key, Step, SummaryFact, cap};
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -277,6 +277,87 @@ macro_rules! flow_for {
     };
 }
 pub(super) use flow_for;
+
+/// What a function's summary holds that other files need: the sinks and the
+/// other files' functions a parameter's value reaches inside it.
+pub(super) trait Reaches<'t> {
+    fn sinks(&self) -> &[(Path<'t>, Node<'t>)];
+    fn calls(&self) -> &[(Path<'t>, Callee, usize)];
+}
+
+/// Parameters followed per function for other files, at most.
+const MAX_PARAMS: usize = 12;
+
+/// The summaries of a file's functions that other files need: for each
+/// function (`key` names it, none for one they can't call), what each of its
+/// parameters (`params` of them) reaches, and what `refine` adds (a parameter's
+/// result, or what the function reads itself, for `None`).
+pub(super) fn exported<'t, S: Reaches<'t>>(
+    functions: usize,
+    key: impl Fn(usize) -> Option<Key>,
+    params: impl Fn(usize) -> usize,
+    summary: impl Fn(usize, usize) -> Rc<S>,
+    refine: impl Fn(usize, Option<usize>, &mut SummaryFact<'t>),
+) -> Vec<SummaryFact<'t>> {
+    let mut out = Vec::new();
+    for j in 0..functions {
+        let Some(key) = key(j) else {
+            continue;
+        };
+        let mut fact = SummaryFact {
+            key,
+            returns_sql: false,
+            to_sink: Vec::new(),
+            to_return: Vec::new(),
+            returns_source: None,
+            to_call: Vec::new(),
+        };
+        for p in 0..params(j).min(MAX_PARAMS) {
+            let s = summary(j, p);
+            fact.to_sink.extend(
+                s.sinks()
+                    .iter()
+                    .map(|(steps, sink)| (p, cap(steps.clone()), *sink)),
+            );
+            fact.to_call.extend(
+                s.calls()
+                    .iter()
+                    .map(|(steps, callee, arg)| (p, cap(steps.clone()), callee.clone(), *arg)),
+            );
+            refine(j, Some(p), &mut fact);
+        }
+        refine(j, None, &mut fact);
+        if !fact.to_sink.is_empty()
+            || !fact.to_call.is_empty()
+            || !fact.to_return.is_empty()
+            || fact.returns_source.is_some()
+        {
+            out.push(fact);
+        }
+    }
+    out
+}
+
+/// The request's values a file passes to other files' functions: for each
+/// call (`passed_on` says its tainted arguments), a fact.
+pub(super) fn call_facts<'t>(
+    calls: &[Node<'t>],
+    passed_on: impl Fn(Node<'t>) -> Vec<(Path<'t>, Callee, usize)>,
+) -> Vec<CallFact<'t>> {
+    calls
+        .iter()
+        .flat_map(|&call| {
+            passed_on(call)
+                .into_iter()
+                .map(move |(steps, callee, arg)| CallFact {
+                    steps: cap(steps),
+                    call,
+                    callee,
+                    arg,
+                })
+        })
+        .collect()
+}
 
 /// What a variable holds, unless a check validated it.
 pub(super) fn held<'t>(

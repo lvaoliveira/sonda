@@ -44,8 +44,8 @@ use super::taint::{
     cap,
 };
 use super::taint_core::{
-    Flow, How, Path, Summaries, Write, decl_index, finish, flow_for, inside, short,
-    through_returns, through_sinks, tick,
+    Flow, How, Path, Reaches, Summaries, Write, call_facts, decl_index, exported, finish, flow_for,
+    inside, short, through_returns, through_sinks, tick,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
@@ -692,6 +692,16 @@ struct Cx<'a, 't> {
 
 /// A method of the file, and the parameter a summary follows (none: the
 /// value the method reads itself).
+impl<'t> Reaches<'t> for Summary<'t> {
+    fn sinks(&self) -> &[(Path<'t>, Node<'t>)] {
+        &self.sinks
+    }
+
+    fn calls(&self) -> &[(Path<'t>, Callee, usize)] {
+        &self.calls
+    }
+}
+
 type SummaryKey = (usize, Option<usize>);
 
 /// What a request's value does inside a method of the file, for one of
@@ -1450,64 +1460,27 @@ impl<'a, 't> Cx<'a, 't> {
 
     /// The request's values this file passes to other files' methods.
     fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
-        self.calls
-            .iter()
-            .flat_map(|&call| {
-                self.passed_on(call, state)
-                    .into_iter()
-                    .map(move |(steps, callee, arg)| CallFact {
-                        steps: cap(steps),
-                        call,
-                        callee,
-                        arg,
-                    })
-            })
-            .collect()
+        call_facts(&self.calls, |call| self.passed_on(call, state))
     }
 
     /// What the methods of the file do with a value passed to them, for
     /// other files: which parameters reach a sink, or another file's
     /// method.
     fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
-        let mut out = Vec::new();
-        for j in 0..self.m.functions.len() {
-            let Some(key) = self.method_key(j) else {
-                continue;
-            };
-            let mut fact = SummaryFact {
-                key,
-                returns_sql: false,
-                to_sink: Vec::new(),
-                to_return: Vec::new(),
-                returns_source: None,
-                to_call: Vec::new(),
-            };
-            for p in 0..self.m.functions[j].params.len().min(MAX_PARAMS) {
-                let s = self.summary(j, Some(p));
-                fact.to_sink.extend(
-                    s.sinks
-                        .iter()
-                        .map(|(steps, sink)| (p, cap(steps.clone()), *sink)),
-                );
-                fact.to_call.extend(
-                    s.calls
-                        .iter()
-                        .map(|(steps, callee, arg)| (p, cap(steps.clone()), callee.clone(), *arg)),
-                );
-                if let Some(returned) = &s.returns {
-                    fact.to_return.push((p, cap(returned.clone())));
+        exported(
+            self.m.functions.len(),
+            |j| self.method_key(j),
+            |j| self.m.functions[j].params.len(),
+            |j, p| self.summary(j, Some(p)),
+            |j, p, fact| match p {
+                Some(p) => {
+                    if let Some(returned) = &self.summary(j, Some(p)).returns {
+                        fact.to_return.push((p, cap(returned.clone())));
+                    }
                 }
-            }
-            fact.returns_source = self.summary(j, None).returns.clone().map(cap);
-            if !fact.to_sink.is_empty()
-                || !fact.to_call.is_empty()
-                || !fact.to_return.is_empty()
-                || fact.returns_source.is_some()
-            {
-                out.push(fact);
-            }
-        }
-        out
+                None => fact.returns_source = self.summary(j, None).returns.clone().map(cap),
+            },
+        )
     }
 
     /// Another file's method's result reaching the sink `sink`: the call,
@@ -1775,9 +1748,6 @@ impl<'a, 't> Cx<'a, 't> {
 flow_for!(Cx, from_call);
 
 // ---------------------------------------------------------------- syntax
-
-/// Parameters followed per method for other files, at most.
-const MAX_PARAMS: usize = 12;
 
 /// Types of the JDK and common libraries: a call on one is no call to
 /// another file of the project.

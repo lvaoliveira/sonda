@@ -25,11 +25,11 @@
 //! Not yet: values followed through other files (T4).
 
 use super::taint::{
-    CallFact, Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult, cap,
+    CallFact, Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult,
 };
 use super::taint_core::{
-    Flow, How, Path, Summaries, Write, at_sinks, decl_index, finish, flow_for, held, inside, short,
-    through_returns, through_sinks, tick,
+    Flow, How, Path, Reaches, Summaries, Write, at_sinks, call_facts, decl_index, exported, finish,
+    flow_for, held, inside, short, through_returns, through_sinks, tick,
 };
 use super::{DeclId, Model};
 use std::cell::Cell;
@@ -41,8 +41,6 @@ use tree_sitter::Node;
 const MAX_WRITES: usize = 50_000;
 /// Summaries per file, at most: past it, calls to other functions give nothing.
 const MAX_SUMMARIES: usize = 256;
-/// Parameters followed per function for other files, at most.
-const MAX_PARAMS: usize = 12;
 
 /// Crates a call into is no call to the project's own modules.
 const LIBRARY_CRATES: &[&str] = &[
@@ -500,6 +498,16 @@ struct Summary<'t> {
     /// The other files' functions the value is passed on to: the path to the
     /// call, the callee and its argument.
     calls: Vec<(Path<'t>, Callee, usize)>,
+}
+
+impl<'t> Reaches<'t> for Summary<'t> {
+    fn sinks(&self) -> &[(Path<'t>, Node<'t>)] {
+        &self.sinks
+    }
+
+    fn calls(&self) -> &[(Path<'t>, Callee, usize)] {
+        &self.calls
+    }
 }
 
 type SummaryKey = (usize, Option<usize>);
@@ -1917,55 +1925,19 @@ impl<'a, 't> Cx<'a, 't> {
 
     /// The request's values this file passes to other files' functions.
     fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
-        self.calls
-            .iter()
-            .flat_map(|&call| {
-                self.passed_on(call, state)
-                    .into_iter()
-                    .map(move |(steps, callee, arg)| CallFact {
-                        steps: cap(steps),
-                        call,
-                        callee,
-                        arg,
-                    })
-            })
-            .collect()
+        call_facts(&self.calls, |call| self.passed_on(call, state))
     }
 
     /// What the functions of the file do with a value passed to them, for
     /// other files.
     fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
-        let mut out = Vec::new();
-        for j in 0..self.m.functions.len() {
-            let Some(key) = self.function_key(j) else {
-                continue;
-            };
-            let mut fact = SummaryFact {
-                key,
-                returns_sql: false,
-                to_sink: Vec::new(),
-                to_return: Vec::new(),
-                returns_source: None,
-                to_call: Vec::new(),
-            };
-            for p in 0..self.m.functions[j].params.len().min(MAX_PARAMS) {
-                let s = self.summary(j, Some(p));
-                fact.to_sink.extend(
-                    s.sinks
-                        .iter()
-                        .map(|(steps, sink)| (p, cap(steps.clone()), *sink)),
-                );
-                fact.to_call.extend(
-                    s.calls
-                        .iter()
-                        .map(|(steps, callee, arg)| (p, cap(steps.clone()), callee.clone(), *arg)),
-                );
-            }
-            if !fact.to_sink.is_empty() || !fact.to_call.is_empty() {
-                out.push(fact);
-            }
-        }
-        out
+        exported(
+            self.m.functions.len(),
+            |j| self.function_key(j),
+            |j| self.m.functions[j].params.len(),
+            |j, p| self.summary(j, Some(p)),
+            |_, _, _| {},
+        )
     }
 
     /// What other files call function `j` by: its name, or its type and its name
