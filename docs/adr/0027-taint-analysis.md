@@ -25,7 +25,11 @@
   Rust built for T2 and T3, on its binder (ADR-0008 S1): `rs/sql-injection`,
   `rs/command-injection`, `rs/path-injection`, `rs/open-redirect` and
   `rs/ssrf`, from a web handler's extractors and a request's accessors,
-  through the functions of one file; not yet across files (T4).
+  through the functions of one file and into other files' (T4: a value
+  passed to a function of another module, or a method of a type another file
+  declares, read as Rust's modules do: `crate::`, `self::`, `super::`, child
+  modules and workspace crates, through the file's `use`s); not yet a
+  function's result that reaches a sink in the caller's file.
 - Date: 2026-11-07
 
 ## Context

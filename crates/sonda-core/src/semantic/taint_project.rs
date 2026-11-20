@@ -218,7 +218,7 @@ impl<'f, 'r> Composer<'f, 'r> {
             .into_iter()
             .find_map(|(file, k)| summary(file, &k).map(|s| vec![s]))
             .unwrap_or_default(),
-            Callee::Cs { .. } | Callee::Java { .. } => self
+            Callee::Cs { .. } | Callee::Java { .. } | Callee::Rs { .. } => self
                 .cs
                 .map(|r| r(from, callee))
                 .unwrap_or_default()

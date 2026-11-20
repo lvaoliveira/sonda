@@ -20,7 +20,12 @@ file, the report formats and the public library API.
   can't inject, an address only starts where its start says, and a value that is
   checked (`starts_with`, `contains`, `path_is_valid(..)`) is validated.
   Rust gets a binder (scopes and symbols, ADR-0008 S1) for it, which is
-  order-sensitive as `let` shadowing is. Not yet: across files.
+  order-sensitive as `let` shadowing is. A value passed to a function of
+  another module (`db::find(x)`, `use crate::db::find`, `super::db::find`,
+  a workspace crate's) or to a method of a type another file declares
+  (`repo.find(x)`, `self.repo.find(x)`) is followed into it, each step of the
+  path in its file. Not yet: another file's function returning a request's
+  value to a sink in the caller's file.
 
 ### Changed rule results
 

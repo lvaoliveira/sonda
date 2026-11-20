@@ -218,7 +218,7 @@ SonarQube's rules for JavaScript, TypeScript, Python, Java and C#; Rust is
 earlier
 ([progress](docs/sonar-parity/README.md)). It does not (yet) have:
 
-- **Taint analysis for C/C++, and across Rust's files.** Seven C# rules
+- **Taint analysis for C/C++.** Seven C# rules
   follow a value from an ASP.NET Core request into a SQL query, an OS
   command, a file path, a redirect, an outgoing request, an XPath expression
   or an LDAP filter within a file, through the functions it calls, and six
@@ -232,7 +232,8 @@ earlier
   Rust rules follow one from an axum or actix-web handler's extractors
   (`Query`, `Path`, `Json`, `Form`), a routed function's parameters or a
   request's accessors into the same kinds of sink, through the functions
-  of the same file; each shows its path
+  of the same file and the modules the handler calls into; each shows its
+  path
   ([ADR-0027](docs/adr/0027-taint-analysis.md), phases T1 to T4). Java's
   can't tell apart overloads of one name and arity, so it follows none of
   them. For injection
@@ -257,7 +258,7 @@ it plugs in.
 - [x] Pull request decoration on GitHub ([ADR-0021](docs/adr/0021-pull-request-decoration.md))
 - [x] Dependencies: SBOMs and known vulnerabilities ([ADR-0009](docs/adr/0009-dependencies-and-advisories.md))
 - [ ] An equivalent for every SonarQube rule key in the supported languages ([ADR-0007](docs/adr/0007-sonarqube-rule-parity.md); progress in [docs/sonar-parity/](docs/sonar-parity/README.md))
-- [ ] Taint analysis for injection-style vulnerabilities: built for C#, JavaScript/TypeScript, Python, Java and Rust (across files for JavaScript/TypeScript, Python and Java) ([ADR-0027](docs/adr/0027-taint-analysis.md))
+- [ ] Taint analysis for injection-style vulnerabilities: built for C#, JavaScript/TypeScript, Python, Java and Rust (across files for JavaScript/TypeScript, Python, Java and Rust) ([ADR-0027](docs/adr/0027-taint-analysis.md))
 - [ ] Reachability: rank findings by whether a public entry point reaches them ([docs/roadmap.md](docs/roadmap.md#security-cweowasp-mapping-hotspots-reachability))
 - [ ] Pull request decoration on GitLab and Bitbucket ([docs/roadmap.md](docs/roadmap.md#pull-request-decoration-github-gitlab-and-bitbucket))
 - [ ] Single sign-on (OpenID Connect): designed, deferred ([docs/roadmap.md](docs/roadmap.md#single-sign-on-openid-connect))
