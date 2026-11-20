@@ -2433,7 +2433,9 @@ fn all_returns_identical(function: Node, src: &[u8]) -> bool {
         return false;
     };
     let returns = returns_of(body);
-    if returns.len() < 2 {
+    // A function that can run off its end also returns `undefined`, which is
+    // another value than the ones its `return`s give.
+    if returns.len() < 2 || !always_ends_in_a_jump(body) {
         return false;
     }
     let mut values = returns.iter().map(|r| r.named_child(0));
@@ -2445,6 +2447,32 @@ fn all_returns_identical(function: Node, src: &[u8]) -> bool {
         "number" | "string" | "true" | "false" | "null"
     ) && values
         .all(|v| v.is_some_and(|v| v.kind() == first.kind() && text(v, src) == text(first, src)))
+}
+
+/// Whether control can't run off the end of `statement`: it ends in a `return`
+/// or a `throw`, or is an `if` whose branches both do.
+fn always_ends_in_a_jump(statement: Node) -> bool {
+    match statement.kind() {
+        "return_statement" | "throw_statement" => true,
+        "statement_block" => {
+            let mut cursor = statement.walk();
+            let last = statement
+                .named_children(&mut cursor)
+                .filter(|c| c.kind() != "comment")
+                .last();
+            last.is_some_and(always_ends_in_a_jump)
+        }
+        "if_statement" => {
+            let branch = |b: Option<Node>| b.is_some_and(always_ends_in_a_jump);
+            branch(statement.child_by_field_name("consequence"))
+                && branch(
+                    statement
+                        .child_by_field_name("alternative")
+                        .and_then(|e| e.named_child(0)),
+                )
+        }
+        _ => false,
+    }
 }
 
 fn if_on_line_where_previous_ended<'t>(block: Node<'t>, _: &[u8]) -> Option<Node<'t>> {
@@ -2913,6 +2941,11 @@ class G extends A { constructor() { super(...arguments); } }";
     fn invariant_returns() {
         let src = "function a(x) { if (x) { return 1; } return 1; }\nfunction b(x) { if (x) { return 1; } return 2; }\nfunction c(x) { if (x) { return 1; } }\nfunction d(x) { const f = () => { return 2; }; if (x) { return 1; } return 1; }";
         assert_eq!(flagged("js/invariant-return", JS, src), [1, 4]);
+        // Falling off the end returns `undefined`: another value (a callback
+        // that `return false`s to stop an iteration, and otherwise returns
+        // nothing).
+        let src = "function a(x) { if (x) { return false; } if (x === 2) { return false; } }\nfunction b(x) { if (x) { return false; } else { return false; } }\nfunction c(x) { if (x) { return false; } if (x === 2) { return false; } return false; }";
+        assert_eq!(flagged("js/invariant-return", JS, src), [2, 3]);
     }
 
     #[test]

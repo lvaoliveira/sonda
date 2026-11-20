@@ -672,11 +672,13 @@ const COMMONJS: &[&str] = &["exports", "module", "require", "__filename", "__dir
 fn implicit_globals<'t>(m: &Model<'t>, _: &[u8]) -> Vec<Node<'t>> {
     let mut seen: Vec<&str> = Vec::new();
     let mut found = Vec::new();
-    for r in m
-        .refs
-        .iter()
-        .filter(|r| r.write && r.decl.is_none() && !COMMONJS.contains(&r.name.as_str()))
-    {
+    for r in m.refs.iter().filter(|r| {
+        r.write
+                && r.decl.is_none()
+                && !COMMONJS.contains(&r.name.as_str())
+                // webpack's own: `__webpack_public_path__ = '/static/'`.
+                && !r.name.starts_with("__webpack_")
+    }) {
         if !seen.contains(&r.name.as_str()) {
             seen.push(r.name.as_str());
             found.push(r.node);
@@ -762,6 +764,13 @@ mod tests {
     fn commonjs_namespaces_and_named_function_expressions() {
         let js = "exports = module.exports = create;\nobj.range = function range(s) { var range = s.get(); return range; };";
         assert!(flagged("js/implicit-global", Lang::JavaScript, js).is_empty());
+        // webpack's runtime globals are assigned on purpose.
+        let webpack =
+            "__webpack_public_path__ = '/static/';\n__webpack_nonce__ = 'n';\nundeclared = 1;\n";
+        assert_eq!(
+            flagged("js/implicit-global", Lang::JavaScript, webpack),
+            [3]
+        );
         assert!(flagged("js/redeclared", Lang::JavaScript, js).is_empty());
         let ts = "namespace util {\n  export const assertEqual = (x: number) => x;\n  const hidden = 1;\n}";
         assert_eq!(flagged("js/unused-variable", Lang::TypeScript, ts), [3]);

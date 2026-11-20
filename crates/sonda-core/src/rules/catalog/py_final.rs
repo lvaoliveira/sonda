@@ -1109,7 +1109,12 @@ fn suppression_is_malformed(comment: Node, src: &[u8]) -> bool {
             return rest_original.starts_with(|c: char| c.is_ascii_punctuation());
         };
         let list = list.split('#').next().unwrap_or("").trim();
-        return list.is_empty() || !list.split(',').all(|k| rule_key(k.trim()));
+        // The last code may be followed by an explanation: `# noqa: BLE001 -
+        // why` (measured on SonarQube 26.7).
+        let mut codes: Vec<&str> = list.split(',').map(str::trim).collect();
+        let last = codes.pop().unwrap_or("");
+        let last = last.split_whitespace().next().unwrap_or("");
+        return list.is_empty() || !(codes.iter().all(|k| rule_key(k)) && rule_key(last));
     }
     false
 }
@@ -1426,6 +1431,10 @@ mod tests {
             flagged("py/suppression-comment-format", src),
             [3, 4, 6, 7, 9]
         );
+        // An explanation after the last code is fine; one in the middle of
+        // the list is not.
+        let src = "a = 1  # noqa: BLE001 - surfaced as UpdateFailed\nb = 2  # noqa: E501, W291 reason\nc = 3  # noqa: E501 why, W291\nd = 4  # noqa: BLE001 # why";
+        assert_eq!(flagged("py/suppression-comment-format", src), [3]);
     }
 
     #[test]

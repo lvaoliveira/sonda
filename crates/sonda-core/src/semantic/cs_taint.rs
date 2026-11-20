@@ -1725,6 +1725,19 @@ fn bare_name(n: Node) -> Node {
     }
 }
 
+/// The leftmost part of a concatenation or an interpolation, past the
+/// parentheses.
+fn leftmost_part(n: Node) -> Option<Node> {
+    let mut first = n;
+    loop {
+        first = match first.kind() {
+            "binary_expression" => first.child_by_field_name("left")?,
+            "parenthesized_expression" => first.named_child(0)?,
+            _ => return Some(first),
+        };
+    }
+}
+
 fn children(n: Node) -> Vec<Node> {
     let mut c = n.walk();
     n.named_children(&mut c).collect()
@@ -2472,35 +2485,66 @@ impl<'t> Analysis<'_, 't> {
         matches!(self.kind, SinkKind::Ssrf | SinkKind::Redirect) && self.fixed_prefix(n, 4)
     }
 
-    fn fixed_prefix(&self, n: Node, depth: u8) -> bool {
-        // The leftmost part of a concatenation or interpolation.
-        let mut first = n;
-        loop {
-            match first.kind() {
-                "binary_expression" => match first.child_by_field_name("left") {
-                    Some(l) => first = l,
+    /// An interpolated string whose first part, past the opening `$"`, is a
+    /// configured member: `$"{_urlBase}{path}"`.
+    fn starts_with_a_configured_member(&self, interpolated: Node) -> bool {
+        children(interpolated)
+            .into_iter()
+            .find(|c| c.kind() != "interpolation_start")
+            .filter(|c| c.kind() == "interpolation")
+            .and_then(|c| {
+                children(c)
+                    .into_iter()
+                    .find(|e| e.kind() != "interpolation_brace")
+            })
+            .is_some_and(|e| self.is_configured_member(e))
+    }
+
+    /// A field or a property of the class (`_urlBase`), which is set where the
+    /// server is configured, not by the request.
+    fn is_configured_member(&self, expr: Node) -> bool {
+        let name = match expr.kind() {
+            "identifier" => expr,
+            "member_access_expression"
+                if expr
+                    .child_by_field_name("expression")
+                    .is_some_and(|e| e.kind() == "this_expression") =>
+            {
+                match expr.child_by_field_name("name") {
+                    Some(n) => n,
                     None => return false,
-                },
-                "parenthesized_expression" => match first.named_child(0) {
-                    Some(inner) => first = inner,
-                    None => return false,
-                },
-                _ => break,
+                }
             }
-        }
+            _ => return false,
+        };
+        self.m
+            .decl_of(name)
+            .is_some_and(|d| matches!(d.kind, DeclKind::Field | DeclKind::Property))
+    }
+
+    fn fixed_prefix(&self, n: Node, depth: u8) -> bool {
+        let Some(first) = leftmost_part(n) else {
+            return false;
+        };
         let prefix: String = match first.kind() {
             "string_literal" | "verbatim_string_literal" => {
                 let t = self.text(first);
                 t.trim_start_matches('@').trim_matches('"').to_string()
             }
-            "interpolated_string_expression" => children(first)
-                .into_iter()
-                .take_while(|c| c.kind() != "interpolation")
-                .filter(|c| c.kind() == "string_content")
-                .map(|c| self.text(c))
-                .collect(),
+            "interpolated_string_expression" => {
+                if self.starts_with_a_configured_member(first) {
+                    return true;
+                }
+                children(first)
+                    .into_iter()
+                    .take_while(|c| c.kind() != "interpolation")
+                    .filter(|c| c.kind() == "string_content")
+                    .map(|c| self.text(c))
+                    .collect()
+            }
             // `KoboImageHost + suffix`, `newPath + query`: what the name
             // was set to where it's declared.
+            "identifier" if depth > 0 && self.is_configured_member(first) => return true,
             "identifier" if depth > 0 => {
                 return self
                     .m
@@ -2577,6 +2621,15 @@ impl<'t> Analysis<'_, 't> {
                     .map(|a| self.text(a).to_string()),
             );
         }
+        // `ValidExtensions.Contains(extension)`: a value tested for membership
+        // in a list or a set is one the code chose.
+        if name == "Contains" && self.is_collection_membership(call) {
+            out.extend(
+                arguments(call)
+                    .into_iter()
+                    .map(|a| self.text(a).to_string()),
+            );
+        }
         if self.kind == SinkKind::Path && name == "StartsWith" {
             out.extend(
                 f.child_by_field_name("expression")
@@ -2591,6 +2644,17 @@ impl<'t> Analysis<'_, 't> {
             }
         }
         out
+    }
+
+    /// A `Contains` call of a collection (`List<T>`, `HashSet<T>`, LINQ's), not
+    /// of a string, which tests for a substring.
+    fn is_collection_membership(&self, call: Node) -> bool {
+        self.infer.call(call).is_some_and(|c| {
+            c.methods.iter().any(|m| {
+                matches!(m, Found::Platform { declaring, member, .. }
+                    if member.name == "Contains" && declaring.name != "System.String")
+            })
+        })
     }
 
     /// Whether a function by this name validates a value for this sink
@@ -3120,6 +3184,36 @@ mod tests {
         ] {
             assert!(!flagged_in(rule, u, body), "{body}");
         }
+    }
+
+    #[test]
+    fn a_redirect_after_a_configured_prefix_and_a_path_checked_against_a_list() {
+        // The prefix is the server's own base path: what follows can't change
+        // the host. After the request's value, it could.
+        let after = |expr: &str| {
+            format!(
+                "{USINGS}public class Mw : ControllerBase {{\nprivate readonly string _urlBase;\n\
+                 public object Get(string v) {{\nreturn Redirect({expr});\n}}\n}}\n"
+            )
+        };
+        assert!(issues_of("cs/open-redirect", &after("$\"{_urlBase}{v}\"")).is_empty());
+        assert!(issues_of("cs/open-redirect", &after("_urlBase + v")).is_empty());
+        assert!(!issues_of("cs/open-redirect", &after("$\"{v}{_urlBase}\"")).is_empty());
+        // An extension tested against a list the code owns is validated;
+        // a string's own `Contains` isn't a list.
+        let upload = |check: &str| {
+            format!(
+                "{USINGS}using System.Collections.Generic;\nusing System.IO;\n\
+                 public class Up : ControllerBase {{\n\
+                 private static readonly List<string> Valid = new List<string> {{ \".zip\", \".db\" }};\n\
+                 public void Post(string v) {{\nvar extension = Path.GetExtension(v);\n{check}\n\
+                 var path = Path.Combine(\"/tmp\", $\"backup{{extension}}\");\nFile.OpenRead(path);\n}}\n}}\n"
+            )
+        };
+        let rule = "cs/path-injection";
+        assert!(issues_of(rule, &upload("if (!Valid.Contains(extension)) return;")).is_empty());
+        assert!(!issues_of(rule, &upload("if (v.Contains(\"x\")) return;")).is_empty());
+        assert!(!issues_of(rule, &upload("")).is_empty());
     }
 
     #[test]

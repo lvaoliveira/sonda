@@ -1674,10 +1674,12 @@ fn is_lookup_array(value: Node, src: &[u8]) -> bool {
 }
 
 /// Whether every use of `name` in its scope, comments and property names
-/// aside, calls includes() on it, and there's at least one.
+/// aside, calls includes() on it, there are two or more, or one in a function
+/// that runs again and again, a loop or a function (measured on SonarQube
+/// 26.7: one check in the function that declares the array isn't reported).
 fn only_asks_includes(scope: Node, name: Node, src: &[u8]) -> bool {
     let n = text(name, src);
-    let (mut asks, mut other) = (0, 0);
+    let (mut asks, mut other, mut repeated) = (0, 0, false);
     super::js_syntax::walk(scope, &mut |node| {
         if matches!(node.kind(), "identifier" | "shorthand_property_identifier")
             && node.id() != name.id()
@@ -1685,13 +1687,42 @@ fn only_asks_includes(scope: Node, name: Node, src: &[u8]) -> bool {
         {
             if asks_includes(node, src) {
                 asks += 1;
+                repeated |= runs_again_and_again(node, scope);
             } else {
                 other += 1;
             }
         }
         other == 0
     });
-    asks >= 1 && other == 0
+    other == 0 && (asks >= 2 || (asks == 1 && repeated))
+}
+
+/// Whether a function or a loop lies between `node` and `scope`: what's
+/// inside it runs more than once.
+fn runs_again_and_again(node: Node, scope: Node) -> bool {
+    let mut p = node.parent();
+    while let Some(n) = p {
+        if n.id() == scope.id() {
+            return false;
+        }
+        if matches!(
+            n.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "method_definition"
+                | "generator_function"
+                | "generator_function_declaration"
+                | "for_statement"
+                | "for_in_statement"
+                | "while_statement"
+                | "do_statement"
+        ) {
+            return true;
+        }
+        p = n.parent();
+    }
+    false
 }
 
 /// `name.includes(...)`, with `name` the identifier given.
@@ -2340,6 +2371,10 @@ mod tests {
         let used =
             "const HOURS = [10, 17];\nfunction f(h) { return HOURS.includes(h) ? HOURS[0] : 0; }";
         assert!(flagged("js/array-for-existence", JS, used).is_empty());
+        // One check in the function that declares the array isn't repeated;
+        // two are, and so is one in a callback.
+        let src = "function one(c) {\n  const n = c.filter((i) => i.id).map((i) => i.name);\n  return n.includes('M');\n}\nfunction two(c) {\n  const n = c.map((i) => i.name);\n  return n.includes('A') && n.includes('B');\n}\nfunction three(l) {\n  const a = ['a', 'b', 'c'];\n  return l.filter((x) => a.includes(x));\n}\nfunction four(x) {\n  const a = ['a', 'b', 'c'];\n  return a.includes(x);\n}\nfunction five(l) {\n  const a = ['a', 'b', 'c'];\n  for (const x of l) { if (a.includes(x)) { use(x); } }\n}";
+        assert_eq!(flagged("js/array-for-existence", JS, src), [6, 10, 18]);
     }
 
     /// A control character that bounds a range in a class is deliberate.
