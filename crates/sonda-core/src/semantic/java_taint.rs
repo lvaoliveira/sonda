@@ -43,13 +43,15 @@ use super::taint::{
     CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
     cap,
 };
+use super::taint_core::{
+    Flow, How, Path, Summaries, Write, decl_index, finish, flow_for, inside, short,
+    through_returns, through_sinks, tick,
+};
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use tree_sitter::Node;
-
-type Path<'t> = Vec<Step<'t>>;
 
 /// A path that starts at another file's method's result: a request's value
 /// only if that method returns one, which the project pass decides (T4).
@@ -73,15 +75,8 @@ fn best<'t>(paths: impl Iterator<Item = Option<Path<'t>>>) -> Option<Path<'t>> {
     maybe
 }
 
-/// Rounds of the fixed point; past it, the file reports nothing.
-const MAX_ROUNDS: usize = 64;
 /// Writes in one file; past it, the file reports nothing.
 const MAX_WRITES: usize = 50_000;
-/// How deep an expression is followed for its taint.
-const MAX_DEPTH: u32 = 64;
-/// Expressions followed for their taint in one file, at most: past it,
-/// what's left is untainted, so a pathological file costs a bounded time.
-const MAX_EVALUATIONS: u64 = 5_000_000;
 
 // ---------------------------------------------------------------- tables
 
@@ -657,9 +652,7 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     let Some(tainted) = cx.run() else {
         return TaintResult::default();
     };
-    let mut findings = cx.reached(&tainted);
-    findings.sort_by_key(|f| (f.sink.start_byte(), f.steps.len()));
-    findings.dedup_by_key(|f| f.sink.id());
+    let findings = finish(cx.reached(&tainted));
     let facts = Facts {
         summaries: cx.exported_summaries(),
         calls: cx.passed_to_other_files(&tainted),
@@ -669,23 +662,6 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
 }
 
 // ---------------------------------------------------------------- the file
-
-/// A write of a value into a variable.
-struct Write<'t> {
-    target: DeclId,
-    target_node: Node<'t>,
-    value: Node<'t>,
-    how: How,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum How {
-    Assigned,
-    /// `q += x`, `sb.append(x)`: the target keeps what it had.
-    Added,
-    /// `for (String s : xs)`.
-    Read,
-}
 
 struct Cx<'a, 't> {
     m: &'a Model<'t>,
@@ -711,10 +687,7 @@ struct Cx<'a, 't> {
     from_calls: Cell<bool>,
     /// Other files' methods' results that reach a sink here.
     return_facts: RefCell<Vec<ReturnFact<'t>>>,
-    summaries: RefCell<HashMap<SummaryKey, Rc<Summary<'t>>>>,
-    /// The summaries being computed: a method that calls itself, or two
-    /// that call each other, has nothing more to learn.
-    busy: RefCell<HashSet<SummaryKey>>,
+    summaries: Summaries<SummaryKey, Summary<'t>>,
 }
 
 /// A method of the file, and the parameter a summary follows (none: the
@@ -746,12 +719,7 @@ impl<'a, 't> Cx<'a, 't> {
             m,
             src,
             kind,
-            by_node: m
-                .decls
-                .iter()
-                .enumerate()
-                .map(|(i, d)| (d.node.id(), i))
-                .collect(),
+            by_node: decl_index(m),
             requests: HashSet::new(),
             initial: HashMap::new(),
             checked: HashSet::new(),
@@ -763,8 +731,7 @@ impl<'a, 't> Cx<'a, 't> {
             package: package_of(root, src),
             from_calls: Cell::new(false),
             return_facts: RefCell::default(),
-            summaries: RefCell::default(),
-            busy: RefCell::default(),
+            summaries: Summaries::new(MAX_SUMMARIES),
         };
         for (i, d) in m.decls.iter().enumerate() {
             if d.ty
@@ -984,64 +951,6 @@ impl<'a, 't> Cx<'a, 't> {
         Some(tainted)
     }
 
-    /// The fixed point over the writes, all of the file's or those inside
-    /// `within`; None past a limit.
-    fn propagate(
-        &self,
-        within: Option<Node<'t>>,
-        tainted: &mut HashMap<DeclId, Path<'t>>,
-    ) -> Option<()> {
-        for _ in 0..MAX_ROUNDS {
-            let mut changed = false;
-            for w in &self.writes {
-                if within.is_none_or(|f| inside(w.target_node, f)) {
-                    changed |= self.apply(w, tainted);
-                }
-            }
-            if self.evaluations.get() > MAX_EVALUATIONS {
-                return None;
-            }
-            if !changed {
-                return Some(());
-            }
-        }
-        None
-    }
-
-    /// One write: the target holds its value's path, unless it's validated
-    /// or already holds one that surely comes from a request. Whether the
-    /// target changed.
-    fn apply(&self, w: &Write<'t>, tainted: &mut HashMap<DeclId, Path<'t>>) -> bool {
-        // A path that may start at another file's method is replaced by one
-        // that surely holds a request's value.
-        if tainted.get(&w.target).is_some_and(|p| !from_call(p)) || self.checked.contains(&w.target)
-        {
-            return false;
-        }
-        let Some(mut path) = self.taint(w.value, tainted, 0) else {
-            return false;
-        };
-        if tainted.contains_key(&w.target) && from_call(&path) {
-            return false;
-        }
-        path.push(Step {
-            node: w.target_node,
-            message: self.binding_message(w),
-        });
-        tainted.insert(w.target, path);
-        true
-    }
-
-    fn binding_message(&self, w: &Write<'t>) -> String {
-        let name = self.text(w.target_node);
-        match w.how {
-            How::Read => format!("read into `{name}`"),
-            How::Added => format!("added to `{name}`"),
-            How::Assigned if is_built(w.value) => format!("concatenated into `{name}`"),
-            How::Assigned => format!("assigned to `{name}`"),
-        }
-    }
-
     // ------------------------------------------------------------ expressions
 
     /// The path a request's value takes to `n`, if `n` holds one.
@@ -1051,9 +960,7 @@ impl<'a, 't> Cx<'a, 't> {
         state: &HashMap<DeclId, Path<'t>>,
         depth: u32,
     ) -> Option<Path<'t>> {
-        let evaluated = self.evaluations.get() + 1;
-        self.evaluations.set(evaluated);
-        if depth > MAX_DEPTH || evaluated > MAX_EVALUATIONS {
+        if !tick(&self.evaluations, depth) {
             return None;
         }
         let next = depth + 1;
@@ -1324,32 +1231,14 @@ impl<'a, 't> Cx<'a, 't> {
     ) -> Option<Path<'t>> {
         let j = self.local_callee(call)?;
         let name = self.text(call.child_by_field_name("name")?);
-        if let Some(mut path) = self.summary(j, None).returns.clone() {
-            path.push(Step {
-                node: call,
-                message: format!("returned by `{name}`"),
-            });
-            return Some(path);
-        }
-        for (i, a) in args.iter().enumerate() {
-            let Some(mut path) = self.taint(*a, state, depth) else {
-                continue;
-            };
-            let Some(returned) = self.summary(j, Some(i)).returns.clone() else {
-                continue;
-            };
-            path.push(Step {
-                node: call,
-                message: format!("passed to `{name}`"),
-            });
-            path.extend(returned);
-            path.push(Step {
-                node: call,
-                message: format!("returned by `{name}`"),
-            });
-            return Some(path);
-        }
-        None
+        through_returns(
+            call,
+            name,
+            self.summary(j, None).returns.clone(),
+            args,
+            |a| self.taint(a, state, depth),
+            |i| self.summary(j, Some(i)).returns.clone(),
+        )
     }
 
     /// The sinks a request's value reaches inside the methods of the file
@@ -1372,41 +1261,19 @@ impl<'a, 't> Cx<'a, 't> {
             return Vec::new();
         };
         let name = self.text(call.child_by_field_name("name").unwrap_or(call));
-        let mut out = Vec::new();
-        for (i, a) in arguments(call).into_iter().enumerate() {
-            let Some(path) = self.taint(a, state, 0).filter(|p| !from_call(p)) else {
-                continue;
-            };
-            for (inside, sink) in &self.summary(j, Some(i)).sinks {
-                let mut steps = path.clone();
-                steps.push(Step {
-                    node: call,
-                    message: format!("passed to `{name}`"),
-                });
-                steps.extend(inside.iter().cloned());
-                out.push(Finding {
-                    sink: *sink,
-                    steps: cap(steps),
-                });
-            }
-        }
-        out
+        through_sinks(
+            call,
+            name,
+            arguments(call),
+            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
+            |i| self.summary(j, Some(i)).sinks.clone(),
+        )
     }
 
     /// What a request's value does in method `j`, for its parameter `p`
     /// (or for nothing but what the method reads itself).
     fn summary(&self, j: usize, p: Option<usize>) -> Rc<Summary<'t>> {
-        if let Some(s) = self.summaries.borrow().get(&(j, p)) {
-            return s.clone();
-        }
-        if self.summaries.borrow().len() >= MAX_SUMMARIES || !self.busy.borrow_mut().insert((j, p))
-        {
-            return Rc::default();
-        }
-        let summary = Rc::new(self.summarize(j, p).unwrap_or_default());
-        self.busy.borrow_mut().remove(&(j, p));
-        self.summaries.borrow_mut().insert((j, p), summary.clone());
-        summary
+        self.summaries.get((j, p), || self.summarize(j, p))
     }
 
     fn summarize(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
@@ -1905,6 +1772,8 @@ impl<'a, 't> Cx<'a, 't> {
     }
 }
 
+flow_for!(Cx, from_call);
+
 // ---------------------------------------------------------------- syntax
 
 /// Parameters followed per method for other files, at most.
@@ -1990,11 +1859,6 @@ fn split_type(t: &str) -> (String, String) {
     }
 }
 
-/// Whether `n` is inside `outer`.
-fn inside(n: Node, outer: Node) -> bool {
-    outer.start_byte() <= n.start_byte() && n.end_byte() <= outer.end_byte()
-}
-
 /// The arguments of a call or a `new`.
 fn arguments(call: Node) -> Vec<Node> {
     let Some(list) = call.child_by_field_name("arguments") else {
@@ -2032,17 +1896,6 @@ fn last_name(t: &str) -> &str {
 /// Text built by concatenation, which the path says: `"a" + b`.
 fn is_built(n: Node) -> bool {
     matches!(n.kind(), "binary_expression")
-}
-
-/// A call's text, short enough for a step's message.
-fn short(t: &str) -> String {
-    let one_line: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.chars().count() <= 60 {
-        one_line
-    } else {
-        let cut: String = one_line.chars().take(57).collect();
-        format!("{cut}...")
-    }
 }
 
 #[cfg(test)]
