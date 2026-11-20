@@ -531,6 +531,8 @@ struct Cx<'a, 't> {
     captures: HashMap<usize, Vec<DeclId>>,
     /// What the file's `use`s name.
     uses: HashMap<String, Vec<String>>,
+    /// The module a `use m::*;` brings in, when the file has just one.
+    glob: Option<Vec<String>>,
     writes: Vec<Write<'t>>,
     calls: Vec<Node<'t>>,
     /// Each function's name, to its index, and each method's by name.
@@ -558,6 +560,7 @@ impl<'a, 't> Cx<'a, 't> {
             structs: HashMap::new(),
             captures: HashMap::new(),
             uses: HashMap::new(),
+            glob: None,
             writes: Vec::new(),
             calls: Vec::new(),
             functions: HashMap::new(),
@@ -569,6 +572,7 @@ impl<'a, 't> Cx<'a, 't> {
         };
         cx.index();
         cx.uses = cx.uses(root);
+        cx.glob = cx.glob(root);
         cx.collect(root)?;
         cx.sources();
         Some(cx)
@@ -1795,6 +1799,26 @@ impl<'a, 't> Cx<'a, 't> {
         out
     }
 
+    /// The module of the file's only `use m::*;`: with two, a bare name could
+    /// be either's, so none is followed.
+    fn glob(&self, root: Node<'t>) -> Option<Vec<String>> {
+        let mut c = root.walk();
+        let mut globs = root
+            .named_children(&mut c)
+            .filter(|n| n.kind() == "use_declaration")
+            .filter_map(|u| u.child_by_field_name("argument"))
+            .filter(|a| a.kind() == "use_wildcard")
+            .filter_map(|a| a.named_child(0))
+            .map(|m| {
+                self.text(m)
+                    .split("::")
+                    .map(|w| w.trim().to_string())
+                    .collect::<Vec<_>>()
+            });
+        let only = globs.next()?;
+        globs.next().is_none().then_some(only)
+    }
+
     fn collect_use(&self, n: Node<'t>, prefix: &[String], out: &mut HashMap<String, Vec<String>>) {
         let words = |t: &str| {
             t.split("::")
@@ -1854,7 +1878,12 @@ impl<'a, 't> Cx<'a, 't> {
             None if segments.len() >= 2 && first.starts_with(char::is_lowercase) => {
                 vec![first.to_string()]
             }
-            None => return None,
+            // `use crate::db::*;` brought in `find` and `Repo`.
+            None => {
+                let mut path = self.glob.clone()?;
+                path.push(first.to_string());
+                path
+            }
         };
         full.extend(segments[1..].iter().map(|s| s.to_string()));
         let root = full.first()?.as_str();
@@ -1867,7 +1896,12 @@ impl<'a, 't> Cx<'a, 't> {
             return None;
         }
         if let Some(segments) = self.path_of(call) {
-            let path = self.through_uses(&segments)?;
+            // `f(x)` with `f` a local (a closure) isn't any module's function.
+            let local = segments.len() == 1
+                && call
+                    .child_by_field_name("function")
+                    .is_some_and(|f| self.decl_of(f).is_some());
+            let path = self.through_uses(&segments).filter(|_| !local)?;
             return (path.len() >= 2).then_some(Callee::Rs { path, method: None });
         }
         let (receiver, name) = self.method_of(call)?;
@@ -2376,6 +2410,34 @@ mod tests {
         let main = "use rusqlite::Connection;\nuse crate::input::Reader;\nasync fn h(req: HttpRequest, r: Reader) {\n    let id = r.read(&req);\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM u WHERE id = {id}\"), []).unwrap();\n}\n";
         let reader = "pub struct Reader;\nimpl Reader {\n    pub fn read(&self, req: &HttpRequest) -> String {\n        req.query_string().to_string()\n    }\n}\n";
         let found = project(&[("src/main.rs", main), ("src/input.rs", reader)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn a_glob_import_names_the_functions_of_its_module() {
+        let closure = "use crate::db::*;\nuse axum::extract::Query;\nasync fn h(Query(p): Query<P>) {\n    let find = |x: &str| x.len();\n    find(&p.name);\n}\n";
+        assert!(project(&[("src/main.rs", closure), ("src/db.rs", DB)]).is_empty());
+        let main = |use_line: &str| {
+            format!(
+                "use axum::extract::Query;\n{use_line}\nasync fn h(Query(p): Query<P>) {{\n    find(&p.name);\n}}\n"
+            )
+        };
+        let found = project(&[
+            ("src/main.rs", &main("use crate::db::*;")),
+            ("src/db.rs", DB),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "src/db.rs");
+        // Two globs: a bare name could be either's.
+        let two = main("use crate::db::*;\nuse crate::other::*;");
+        assert!(project(&[("src/main.rs", &two), ("src/db.rs", DB)]).is_empty());
+        // A library's glob names no module of the project.
+        let lib = main("use std::fs::*;");
+        assert!(project(&[("src/main.rs", &lib), ("src/db.rs", DB)]).is_empty());
+        // A type from a glob, and its method.
+        let repo = "use rusqlite::Connection;\npub struct UserRepo { conn: Connection }\nimpl UserRepo {\n    pub fn find(&self, name: &str) {\n        self.conn.execute(&format!(\"DELETE FROM u WHERE n = '{name}'\"), []).unwrap();\n    }\n}\n";
+        let by_type = "use crate::repo::*;\nuse axum::extract::Query;\nasync fn h(Query(p): Query<P>, r: UserRepo) {\n    r.find(&p.name);\n}\n";
+        let found = project(&[("src/main.rs", by_type), ("src/repo.rs", repo)]);
         assert_eq!(found.len(), 1, "{found:?}");
     }
 }
