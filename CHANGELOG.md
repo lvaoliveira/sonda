@@ -27,7 +27,8 @@ file, the report formats and the public library API.
   path in its file. A function of another module that returns a request's
   value, or a parameter's, to a sink in the caller's file is followed too
   (`let n = text::wrap(&p.name);` into a query). `fs::write(path, contents)`
-  takes only its first argument as the path.
+  takes only its first argument as the path. A glob import (`use crate::db::*;`)
+  names the functions and types of its module when the file has just one.
 
 ### Changed rule results
 
