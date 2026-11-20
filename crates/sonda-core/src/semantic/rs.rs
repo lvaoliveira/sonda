@@ -20,7 +20,6 @@
 
 use super::walk::{Binder, Opened};
 use super::{DeclId, DeclKind, Function, Model, ScopeId, ScopeKind};
-use std::collections::HashMap;
 use std::time::Instant;
 use tree_sitter::Node;
 
@@ -346,40 +345,7 @@ impl<'t> Rs<'t, '_> {
     /// Links each reference to the declaration of its name that has taken
     /// effect before it, nearest scope first, and counts reads and writes.
     fn resolve(&mut self) {
-        let m = &mut self.b.m;
-        let mut found: Vec<Option<DeclId>> = Vec::with_capacity(m.refs.len());
-        for r in &m.refs {
-            let pos = r.node.start_byte();
-            let mut scope = Some(r.scope);
-            let mut decl = None;
-            while let Some(s) = scope {
-                let hit = m
-                    .decls_named(s, &r.name)
-                    .iter()
-                    .rev()
-                    .find(|&&d| self.effect[d] <= pos)
-                    .copied();
-                if hit.is_some() {
-                    decl = hit;
-                    break;
-                }
-                scope = m.scopes[s].parent;
-            }
-            found.push(decl);
-        }
-        m.ref_index = m
-            .refs
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.node.id(), i))
-            .collect::<HashMap<_, _>>();
-        for (r, decl) in m.refs.iter_mut().zip(found) {
-            r.decl = decl;
-            if let Some(d) = decl {
-                m.decls[d].reads += u32::from(r.read);
-                m.decls[d].writes += u32::from(r.write);
-            }
-        }
+        self.b.m.resolve_in_order(&self.effect);
     }
 }
 

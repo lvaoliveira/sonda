@@ -74,7 +74,8 @@ follow-ups:
 | S4: types, with the platform's declarations as data ([ADR-0022](0022-platform-types.md)) | none | built (`semantic/cs_infer.rs`, `semantic/dotnet.rs`) |
 | Summaries across files ([ADR-0020](0020-cross-file-declarations.md)) | none | declarations (`semantic/cs_index.rs`) |
 
-Python, Java and C/C++ have no semantic layer yet.
+Python, Java, Rust and C/C++ have a binder (S1, `semantic/py.rs`, `java.rs`,
+`rs.rs`, `cpp.rs`) and nothing past it.
 
 The constraints are the ones every rule has. Analysis runs per file in
 sandboxed workers; the analyzed code is never run; every loop is bounded and
