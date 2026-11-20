@@ -24,7 +24,10 @@ mod js;
 pub(crate) mod js_taint;
 mod py;
 pub(crate) mod py_taint;
+mod rs;
+pub(crate) mod rs_taint;
 pub(crate) mod taint;
+pub(crate) mod taint_core;
 pub(crate) mod taint_project;
 mod walk;
 
@@ -336,6 +339,7 @@ pub(crate) fn build<'t>(
         Lang::CSharp => cs::build(root, src, deadline),
         Lang::Python => py::build(root, src, deadline),
         Lang::Java => java::build(root, src, deadline),
+        Lang::Rust => rs::build(root, src, deadline),
         _ => None,
     }
 }

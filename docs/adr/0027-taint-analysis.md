@@ -22,6 +22,10 @@
   reaches a sink or is passed on, and a method's result that reaches a
   sink in the caller's file, resolved with the Java index and an
   interface's or base class's implementations).
+  Rust built for T2 and T3, on its binder (ADR-0008 S1): `rs/sql-injection`,
+  `rs/command-injection`, `rs/path-injection`, `rs/open-redirect` and
+  `rs/ssrf`, from a web handler's extractors and a request's accessors,
+  through the functions of one file; not yet across files (T4).
 - Date: 2026-11-07
 
 ## Context

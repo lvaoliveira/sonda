@@ -7,6 +7,21 @@ file, the report formats and the public library API.
 
 ## [Unreleased]
 
+### Added
+
+- Taint analysis for Rust ([ADR-0027](docs/adr/0027-taint-analysis.md)): five
+  rules, `rs/sql-injection`, `rs/command-injection`, `rs/path-injection`,
+  `rs/open-redirect` and `rs/ssrf`, follow a request's value from an axum or
+  actix-web handler (`Query`, `Path`, `Json`, `Form`, a routed function's
+  parameters, `req.query_string()`) through `format!`, `String` operations,
+  builders and the functions of the file into `sqlx`, `rusqlite` and
+  `tokio-postgres` queries, `Command`, `File`/`fs`, `Redirect` and HTTP
+  clients, and report the path it took. A number (`page: u32`, `parse::<u64>()`)
+  can't inject, an address only starts where its start says, and a value that is
+  checked (`starts_with`, `contains`, `path_is_valid(..)`) is validated.
+  Rust gets a binder (scopes and symbols, ADR-0008 S1) for it, which is
+  order-sensitive as `let` shadowing is. Not yet: across files.
+
 ### Changed rule results
 
 - C# taint (`cs/path-injection`, `cs/open-redirect`, `cs/ssrf` and the rest):

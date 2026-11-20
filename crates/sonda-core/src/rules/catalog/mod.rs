@@ -92,6 +92,7 @@ mod rs_correctness;
 mod rs_correctness2;
 mod rs_extra;
 mod rs_more;
+mod rs_security;
 pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, FindAll, FindSaying, Keep};
@@ -212,6 +213,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (rs_extra::RULES, rs_extra::OFF_BY_DEFAULT),
     (rs_correctness::RULES, rs_correctness::OFF_BY_DEFAULT),
     (rs_correctness2::RULES, rs_correctness2::OFF_BY_DEFAULT),
+    (rs_security::RULES, rs_security::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.
