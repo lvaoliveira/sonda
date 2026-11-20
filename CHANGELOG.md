@@ -24,8 +24,10 @@ file, the report formats and the public library API.
   another module (`db::find(x)`, `use crate::db::find`, `super::db::find`,
   a workspace crate's) or to a method of a type another file declares
   (`repo.find(x)`, `self.repo.find(x)`) is followed into it, each step of the
-  path in its file. Not yet: another file's function returning a request's
-  value to a sink in the caller's file.
+  path in its file. A function of another module that returns a request's
+  value, or a parameter's, to a sink in the caller's file is followed too
+  (`let n = text::wrap(&p.name);` into a query). `fs::write(path, contents)`
+  takes only its first argument as the path.
 
 ### Changed rule results
 

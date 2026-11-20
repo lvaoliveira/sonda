@@ -5,7 +5,7 @@
 //! and how a call is read; the loop that carries a request's value from one
 //! variable to the next is the same.
 
-use super::taint::{CallFact, Callee, Finding, Key, Step, SummaryFact, cap};
+use super::taint::{CallFact, Callee, Finding, Key, ReturnFact, Step, SummaryFact, cap};
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -55,6 +55,22 @@ pub(super) trait Flow<'t> {
     /// file's method's result), so a sure one replaces it.
     fn is_maybe(&self, _path: &Path<'t>) -> bool {
         false
+    }
+    /// The other file's function a call calls, if it is one.
+    fn external(&self, call: Node<'t>) -> Option<Callee>;
+    /// A call's arguments.
+    fn call_arguments(&self, call: Node<'t>) -> Vec<Node<'t>>;
+
+    /// The tainted arguments of a call to another file's function: the path
+    /// to the call, the callee and the argument.
+    fn passed_on(
+        &self,
+        call: Node<'t>,
+        state: &HashMap<DeclId, Path<'t>>,
+    ) -> Vec<(Path<'t>, Callee, usize)> {
+        tainted_arguments(self.external(call), self.call_arguments(call), |a| {
+            self.eval(a, state)
+        })
     }
 
     /// The fixed point over the writes, all of the file's or those inside
@@ -257,6 +273,17 @@ macro_rules! flow_for {
                 self.taint(value, state, 0)
             }
 
+            fn external(
+                &self,
+                call: ::tree_sitter::Node<'t>,
+            ) -> Option<$crate::semantic::taint::Callee> {
+                self.external_callee(call)
+            }
+
+            fn call_arguments(&self, call: ::tree_sitter::Node<'t>) -> Vec<::tree_sitter::Node<'t>> {
+                arguments(call)
+            }
+
             fn label(&self, w: &$crate::semantic::taint_core::Write<'t>) -> String {
                 use $crate::semantic::taint_core::How;
                 let name = self.text(w.target_node);
@@ -409,4 +436,93 @@ pub(super) fn short(t: &str) -> String {
         let cut: String = one_line.chars().take(57).collect();
         format!("{cut}...")
     }
+}
+
+/// Another file's function's result reaching `sink` through `call`: noted once
+/// per sink and call. `args` are the call's arguments (`taint` says which hold
+/// a request's value), `after` the path from the result to the sink.
+pub(super) fn record_return<'t>(
+    returns: &RefCell<Vec<ReturnFact<'t>>>,
+    call: Node<'t>,
+    callee: Callee,
+    args: Vec<Node<'t>>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+    after: Path<'t>,
+    sink: Node<'t>,
+) {
+    let mut returns = returns.borrow_mut();
+    if returns
+        .iter()
+        .any(|r| r.sink.id() == sink.id() && r.call.id() == call.id())
+    {
+        return;
+    }
+    let args = args
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, a)| Some((i, cap(taint(a)?))))
+        .collect();
+    returns.push(ReturnFact {
+        call,
+        callee,
+        args,
+        after: cap(after),
+        sink,
+        needs_sql: false,
+    });
+}
+
+/// A path that starts at another file's function's result: a request's value
+/// only if that function returns one, which the project pass decides (T4).
+/// Its first step is the call, with this message.
+pub(super) const FROM_CALL: &str = "\u{1}";
+
+pub(super) fn from_call(path: &Path) -> bool {
+    path.first().is_some_and(|s| s.message == FROM_CALL)
+}
+
+/// The first of `paths` that holds a request's value; failing that, the
+/// first that may, if another file's function returns one.
+pub(super) fn best<'t>(paths: impl Iterator<Item = Option<Path<'t>>>) -> Option<Path<'t>> {
+    let mut maybe = None;
+    for path in paths.flatten() {
+        if !from_call(&path) {
+            return Some(path);
+        }
+        maybe.get_or_insert(path);
+    }
+    maybe
+}
+
+/// What a function returns, for other files: a request's value it reads
+/// itself (`p` is None) or its parameter `p`'s.
+pub(super) fn note_return<'t>(
+    fact: &mut SummaryFact<'t>,
+    p: Option<usize>,
+    returns: Option<Path<'t>>,
+) {
+    match p {
+        Some(p) => fact.to_return.extend(returns.map(|r| (p, cap(r)))),
+        None => fact.returns_source = returns.map(cap),
+    }
+}
+
+/// The arguments of a call to another file's function (`callee`) that hold a
+/// request's value for sure: the path to the call, the callee and the
+/// argument's position.
+pub(super) fn tainted_arguments<'t>(
+    callee: Option<Callee>,
+    args: Vec<Node<'t>>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) -> Vec<(Path<'t>, Callee, usize)> {
+    let Some(callee) = callee else {
+        return Vec::new();
+    };
+    args.into_iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            let path = taint(a).filter(|p| !from_call(p))?;
+            Some((path, callee.clone(), i))
+        })
+        .collect()
 }

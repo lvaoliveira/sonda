@@ -411,6 +411,9 @@ mod tests {
             .with_writer(move || writer.clone())
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
+        // Tests run in parallel, each with its own subscriber: a callsite
+        // another test first saw as disabled stays cached that way.
+        tracing::callsite::rebuild_interest_cache();
         let response = app().oneshot(request).await.unwrap();
         let id = response.headers()[&REQUEST_ID].to_str().unwrap().to_owned();
         let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
