@@ -24,7 +24,9 @@
 //!
 //! Not yet: values followed through other files (T4).
 
-use super::taint::{Finding, SinkKind, Step, TaintResult};
+use super::taint::{
+    CallFact, Callee, Facts, Finding, Key, SinkKind, Step, SummaryFact, TaintResult, cap,
+};
 use super::taint_core::{
     Flow, How, Path, Summaries, Write, at_sinks, decl_index, finish, flow_for, held, inside, short,
     through_returns, through_sinks, tick,
@@ -39,6 +41,65 @@ use tree_sitter::Node;
 const MAX_WRITES: usize = 50_000;
 /// Summaries per file, at most: past it, calls to other functions give nothing.
 const MAX_SUMMARIES: usize = 256;
+/// Parameters followed per function for other files, at most.
+const MAX_PARAMS: usize = 12;
+
+/// Crates a call into is no call to the project's own modules.
+const LIBRARY_CRATES: &[&str] = &[
+    "std",
+    "core",
+    "alloc",
+    "tokio",
+    "serde",
+    "serde_json",
+    "axum",
+    "actix_web",
+    "actix",
+    "actix_files",
+    "reqwest",
+    "sqlx",
+    "diesel",
+    "rusqlite",
+    "tokio_postgres",
+    "postgres",
+    "anyhow",
+    "thiserror",
+    "tracing",
+    "log",
+    "futures",
+    "chrono",
+    "uuid",
+    "regex",
+    "url",
+    "http",
+    "hyper",
+    "tower",
+    "tower_http",
+    "bytes",
+    "rand",
+    "once_cell",
+    "itertools",
+    "clap",
+    "rocket",
+    "warp",
+    "tide",
+    "ureq",
+    "surf",
+    "isahc",
+    "mysql",
+    "sea_orm",
+    "async_trait",
+    "parking_lot",
+    "dashmap",
+    "time",
+    "base64",
+    "sha2",
+    "hex",
+    "tempfile",
+    "walkdir",
+    "glob",
+    "ignore",
+];
 
 // ---------------------------------------------------------------- tables
 
@@ -405,7 +466,9 @@ fn check_words(kind: SinkKind) -> &'static [&'static str] {
 // ---------------------------------------------------------------- entry
 
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
-    if !might_have_sinks(src, kind) {
+    // A file with neither a sink nor a request can still define a function
+    // that other files' values reach, or pass one on: any file with functions.
+    if !might_have_sinks(src, kind) && !src.windows(3).any(|w| w == b"fn ") {
         return TaintResult::default();
     }
     let Some(root) = m.root else {
@@ -418,10 +481,12 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
         return TaintResult::default();
     };
     let findings = finish(cx.reached(&tainted));
-    TaintResult {
-        findings,
-        ..TaintResult::default()
-    }
+    let facts = Facts {
+        summaries: cx.exported_summaries(),
+        calls: cx.passed_to_other_files(&tainted),
+        returns: Vec::new(),
+    };
+    TaintResult { findings, facts }
 }
 
 // ---------------------------------------------------------------- the file
@@ -432,6 +497,9 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
 struct Summary<'t> {
     returns: Option<Path<'t>>,
     sinks: Vec<(Path<'t>, Node<'t>)>,
+    /// The other files' functions the value is passed on to: the path to the
+    /// call, the callee and its argument.
+    calls: Vec<(Path<'t>, Callee, usize)>,
 }
 
 type SummaryKey = (usize, Option<usize>);
@@ -451,6 +519,8 @@ struct Cx<'a, 't> {
     structs: HashMap<String, HashMap<String, String>>,
     /// The names a format string captures, by the string's node.
     captures: HashMap<usize, Vec<DeclId>>,
+    /// What the file's `use`s name.
+    uses: HashMap<String, Vec<String>>,
     writes: Vec<Write<'t>>,
     calls: Vec<Node<'t>>,
     /// Each function's name, to its index, and each method's by name.
@@ -472,6 +542,7 @@ impl<'a, 't> Cx<'a, 't> {
             checked: HashSet::new(),
             structs: HashMap::new(),
             captures: HashMap::new(),
+            uses: HashMap::new(),
             writes: Vec::new(),
             calls: Vec::new(),
             functions: HashMap::new(),
@@ -480,6 +551,7 @@ impl<'a, 't> Cx<'a, 't> {
             summaries: Summaries::new(MAX_SUMMARIES),
         };
         cx.index();
+        cx.uses = cx.uses(root);
         cx.collect(root)?;
         cx.sources();
         Some(cx)
@@ -599,6 +671,19 @@ impl<'a, 't> Cx<'a, 't> {
 
     /// Records `pattern = value` for each name the pattern binds.
     fn write_pattern(&mut self, pattern: Node<'t>, value: Node<'t>, how: How) {
+        // `let (a, b) = (x, y);`: each name gets its own element.
+        let tuple = unwrap(value);
+        if pattern.kind() == "tuple_pattern" && tuple.kind() == "tuple_expression" {
+            let (mut c, mut d) = (pattern.walk(), tuple.walk());
+            let names: Vec<Node<'t>> = pattern.named_children(&mut c).collect();
+            let items: Vec<Node<'t>> = tuple.named_children(&mut d).collect();
+            if names.len() == items.len() {
+                for (name, item) in names.into_iter().zip(items) {
+                    self.write_pattern(name, item, how);
+                }
+                return;
+            }
+        }
         for b in super::rs::pattern_bindings(pattern, self.src) {
             if let Some(&target) = self.by_node.get(&b.id()) {
                 self.writes.push(Write {
@@ -1630,6 +1715,283 @@ impl<'a, 't> Cx<'a, 't> {
             summary
                 .sinks
                 .extend(nested.into_iter().map(|f| (f.steps, f.sink)));
+            for (mut path, callee, arg) in self.passed_on(call, state) {
+                path.push(Step {
+                    node: call,
+                    message: format!("passed to `{}`", callee.display()),
+                });
+                summary.calls.push((path, callee, arg));
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ other files (T4)
+
+    /// What the file's `use`s name: each name to the path it stands for.
+    fn uses(&self, root: Node<'t>) -> HashMap<String, Vec<String>> {
+        let mut out = HashMap::new();
+        let mut c = root.walk();
+        for u in root
+            .named_children(&mut c)
+            .filter(|n| n.kind() == "use_declaration")
+        {
+            if let Some(arg) = u.child_by_field_name("argument") {
+                self.collect_use(arg, &[], &mut out);
+            }
+        }
+        // `mod db;` is a child module, which `db::find` names.
+        let mut c = root.walk();
+        for m in root
+            .named_children(&mut c)
+            .filter(|n| n.kind() == "mod_item" && n.child_by_field_name("body").is_none())
+        {
+            if let Some(name) = m.child_by_field_name("name") {
+                let name = self.text(name).to_string();
+                out.entry(name.clone())
+                    .or_insert_with(|| vec!["self".into(), name]);
+            }
+        }
+        out
+    }
+
+    fn collect_use(&self, n: Node<'t>, prefix: &[String], out: &mut HashMap<String, Vec<String>>) {
+        let words = |t: &str| {
+            t.split("::")
+                .map(|w| w.trim().to_string())
+                .collect::<Vec<_>>()
+        };
+        match n.kind() {
+            "identifier" | "scoped_identifier" | "crate" | "self" | "super" => {
+                let mut path = prefix.to_vec();
+                path.extend(words(self.text(n)));
+                // `use a::{self, b}`: `a` itself.
+                if path.last().is_some_and(|l| l == "self") {
+                    path.pop();
+                }
+                if let Some(alias) = path.last().cloned() {
+                    out.insert(alias, path);
+                }
+            }
+            "use_as_clause" => {
+                if let (Some(p), Some(a)) = (
+                    n.child_by_field_name("path"),
+                    n.child_by_field_name("alias"),
+                ) {
+                    let mut path = prefix.to_vec();
+                    path.extend(words(self.text(p)));
+                    out.insert(self.text(a).to_string(), path);
+                }
+            }
+            "scoped_use_list" => {
+                let mut base = prefix.to_vec();
+                if let Some(p) = n.child_by_field_name("path") {
+                    base.extend(words(self.text(p)));
+                }
+                if let Some(list) = n.child_by_field_name("list") {
+                    self.collect_use(list, &base, out);
+                }
+            }
+            "use_list" => {
+                let mut c = n.walk();
+                for child in n.named_children(&mut c) {
+                    self.collect_use(child, prefix, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `segments` with its first name taken through the file's `use`s. None
+    /// for a name that doesn't come from one of the project's modules: a
+    /// library's (`std`, a crate this analysis models), or no import at all.
+    fn through_uses(&self, segments: &[&str]) -> Option<Vec<String>> {
+        let first = *segments.first()?;
+        let mut full: Vec<String> = match self.uses.get(first) {
+            Some(path) => path.clone(),
+            None if matches!(first, "crate" | "self" | "super") => vec![first.to_string()],
+            // `store::db::find(..)`: a crate or a module written out.
+            None if segments.len() >= 2 && first.starts_with(char::is_lowercase) => {
+                vec![first.to_string()]
+            }
+            None => return None,
+        };
+        full.extend(segments[1..].iter().map(|s| s.to_string()));
+        let root = full.first()?.as_str();
+        (!LIBRARY_CRATES.contains(&root)).then_some(full)
+    }
+
+    /// The other file's function a call calls, as this file writes it.
+    fn external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if self.local_callee(call).is_some() {
+            return None;
+        }
+        if let Some(segments) = self.path_of(call) {
+            let path = self.through_uses(&segments)?;
+            return (path.len() >= 2).then_some(Callee::Rs { path, method: None });
+        }
+        let (receiver, name) = self.method_of(call)?;
+        let ty = self.receiver_type(unwrap(receiver))?;
+        let path = self.through_uses(&ty.iter().map(String::as_str).collect::<Vec<_>>())?;
+        Some(Callee::Rs {
+            path,
+            method: Some(name.to_string()),
+        })
+    }
+
+    /// The path of a receiver's declared type: a variable's, or a field of
+    /// `self`'s (`self.repo`), with `&`, `Arc<..>` and the like peeled off.
+    fn receiver_type(&self, receiver: Node<'t>) -> Option<Vec<String>> {
+        let declared = match receiver.kind() {
+            "identifier" => self
+                .text(self.m.decls[self.decl_of(receiver)?].ty?)
+                .to_string(),
+            "field_expression" => {
+                let (value, field) = (
+                    receiver.child_by_field_name("value")?,
+                    receiver.child_by_field_name("field")?,
+                );
+                if value.kind() != "self" {
+                    return None;
+                }
+                let imp = self.enclosing_impl_type(receiver)?;
+                self.structs.get(&imp)?.get(self.text(field))?.clone()
+            }
+            _ => return None,
+        };
+        let mut t = declared.as_str();
+        // Peel wrappers: `&mut Arc<UserRepo>`, `Option<Box<dyn Store>>`.
+        loop {
+            let trimmed = t
+                .trim()
+                .trim_start_matches('&')
+                .trim_start_matches("mut ")
+                .trim_start_matches("dyn ")
+                .trim_start_matches("impl ")
+                .trim();
+            // `Arc<T>` or `std::sync::Arc<T>`: the type argument.
+            let inner = trimmed.split_once('<').and_then(|(head, rest)| {
+                let wrapper = head.rsplit("::").next().unwrap_or(head);
+                (["Arc", "Rc", "Box", "Option", "RefCell", "Mutex", "RwLock"].contains(&wrapper))
+                    .then(|| rest.strip_suffix('>'))
+                    .flatten()
+            });
+            match inner {
+                Some(i) => t = i,
+                None => {
+                    t = trimmed;
+                    break;
+                }
+            }
+        }
+        let t = t.split('<').next().unwrap_or(t);
+        Some(t.split("::").map(|w| w.trim().to_string()).collect())
+    }
+
+    /// The name of the type of the `impl` a node is in.
+    fn enclosing_impl_type(&self, n: Node<'t>) -> Option<String> {
+        let mut p = n.parent();
+        while let Some(x) = p {
+            if x.kind() == "impl_item" {
+                return Some(self.outer_type(x.child_by_field_name("type")?));
+            }
+            p = x.parent();
+        }
+        None
+    }
+
+    /// The tainted arguments of a call to another file's function.
+    fn passed_on(
+        &self,
+        call: Node<'t>,
+        state: &HashMap<DeclId, Path<'t>>,
+    ) -> Vec<(Path<'t>, Callee, usize)> {
+        let Some(callee) = self.external_callee(call) else {
+            return Vec::new();
+        };
+        arguments(call)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, a)| Some((self.taint(a, state, 0)?, callee.clone(), i)))
+            .collect()
+    }
+
+    /// The request's values this file passes to other files' functions.
+    fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
+        self.calls
+            .iter()
+            .flat_map(|&call| {
+                self.passed_on(call, state)
+                    .into_iter()
+                    .map(move |(steps, callee, arg)| CallFact {
+                        steps: cap(steps),
+                        call,
+                        callee,
+                        arg,
+                    })
+            })
+            .collect()
+    }
+
+    /// What the functions of the file do with a value passed to them, for
+    /// other files.
+    fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
+        let mut out = Vec::new();
+        for j in 0..self.m.functions.len() {
+            let Some(key) = self.function_key(j) else {
+                continue;
+            };
+            let mut fact = SummaryFact {
+                key,
+                returns_sql: false,
+                to_sink: Vec::new(),
+                to_return: Vec::new(),
+                returns_source: None,
+                to_call: Vec::new(),
+            };
+            for p in 0..self.m.functions[j].params.len().min(MAX_PARAMS) {
+                let s = self.summary(j, Some(p));
+                fact.to_sink.extend(
+                    s.sinks
+                        .iter()
+                        .map(|(steps, sink)| (p, cap(steps.clone()), *sink)),
+                );
+                fact.to_call.extend(
+                    s.calls
+                        .iter()
+                        .map(|(steps, callee, arg)| (p, cap(steps.clone()), callee.clone(), *arg)),
+                );
+            }
+            if !fact.to_sink.is_empty() || !fact.to_call.is_empty() {
+                out.push(fact);
+            }
+        }
+        out
+    }
+
+    /// What other files call function `j` by: its name, or its type and its name
+    /// for a method.
+    fn function_key(&self, j: usize) -> Option<Key> {
+        let f = &self.m.functions[j];
+        if f.node.kind() != "function_item" {
+            return None;
+        }
+        let name = self.text(f.node.child_by_field_name("name")?).to_string();
+        match self.impl_type(j) {
+            Some(ty) => Some(Key {
+                export: ty,
+                member: Some(name),
+            }),
+            None => {
+                // A function inside another function isn't one a file can name.
+                let nested = f
+                    .node
+                    .parent()
+                    .is_some_and(|b| b.parent().is_some_and(|p| p.kind() == "function_item"));
+                (!nested).then_some(Key {
+                    export: name,
+                    member: None,
+                })
+            }
         }
     }
 }
@@ -1823,6 +2185,12 @@ mod tests {
     }
 
     #[test]
+    fn a_tuple_pattern_takes_its_elements_one_by_one() {
+        let src = "use rusqlite::Connection;\nasync fn f(Query(p): Query<P>, cfg: Config) {\n    let (table, name) = (cfg.table.clone(), p.name);\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM {table} WHERE n = '{name}'\"), []).unwrap();\n    c.execute(&format!(\"DELETE FROM {table}\"), []).unwrap();\n}";
+        assert_eq!(flagged("rs/sql-injection", src), [5]);
+    }
+
+    #[test]
     fn checked_and_numeric_values_are_left_alone() {
         let src = "async fn f(Path(name): Path<String>) {\n    if name.contains(\"..\") { return; }\n    std::fs::read(&name).unwrap();\n}\nasync fn g(Path(id): Path<u64>) {\n    std::fs::read(format!(\"/srv/{id}\")).unwrap();\n}\nasync fn h(Path(n): Path<String>) {\n    let id: u64 = n.parse().unwrap();\n    std::fs::read(format!(\"/srv/{}\", id)).unwrap();\n}";
         assert_eq!(flagged("rs/path-injection", src), Vec::<usize>::new());
@@ -1844,5 +2212,107 @@ mod tests {
     fn only_the_start_of_an_address_sets_where_it_goes() {
         let src = "async fn a(Query(q): Query<R>) -> Redirect {\n    Redirect::to(&format!(\"/orders/{}\", q.id))\n}\nasync fn b(Query(q): Query<R>) -> Redirect {\n    let base = \"/home\";\n    Redirect::to(&format!(\"{base}?next={}\", q.next))\n}\nasync fn c(Query(q): Query<R>) -> Redirect {\n    Redirect::to(&format!(\"{}?x=1\", q.next))\n}\nasync fn d(Query(q): Query<R>) -> Redirect {\n    Redirect::to(&(\"/p/\".to_string() + &q.page))\n}\nasync fn e(Query(q): Query<R>) -> Redirect {\n    Redirect::to(&(String::from(\"//\") + &q.host))\n}";
         assert_eq!(flagged("rs/open-redirect", src), [9, 15]);
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    /// The Rust taint issues of a project of files, `(path, source)`.
+    fn project(files: &[(&str, &str)]) -> Vec<crate::model::Issue> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<_> = files
+            .iter()
+            .map(|(path, src)| {
+                analyze(path, Lang::Rust, src, &rules, &cfg, far_deadline()).unwrap()
+            })
+            .collect();
+        crate::analysis::taint_project_rules(&mut analyzed, &rules);
+        analyzed
+            .into_iter()
+            .flat_map(|f| f.issues)
+            .filter(|i| i.rule.starts_with("rs/") && !i.flow.is_empty())
+            .collect()
+    }
+
+    const DB: &str = "use rusqlite::Connection;\npub fn find(name: &str) {\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(&format!(\"DELETE FROM u WHERE n = '{name}'\"), []).unwrap();\n}\npub fn count() {\n    let c = Connection::open(\"x\").unwrap();\n    c.execute(\"DELETE FROM u\", []).unwrap();\n}\n";
+
+    #[test]
+    fn a_value_into_a_function_of_another_module() {
+        for (use_line, call) in [
+            ("use crate::db;", "db::find(&p.name)"),
+            ("use crate::db::find;", "find(&p.name)"),
+            ("use crate::db::find as lookup;", "lookup(&p.name)"),
+            ("use crate::db::{self, count};", "db::find(&p.name)"),
+            ("", "crate::db::find(&p.name)"),
+        ] {
+            let main = format!(
+                "use axum::extract::Query;\n{use_line}\nasync fn h(Query(p): Query<P>) {{\n    {call};\n}}\n"
+            );
+            for db_path in ["src/db.rs", "src/db/mod.rs"] {
+                let found = project(&[("src/main.rs", &main), (db_path, DB)]);
+                assert_eq!(found.len(), 1, "{use_line} {call} {db_path}: {found:?}");
+                assert_eq!(found[0].path, db_path);
+                let flow: Vec<&str> = found[0].flow.iter().map(|s| s.message.as_str()).collect();
+                assert_eq!(flow.first().copied(), Some("request parameter `p`"));
+                assert!(
+                    flow.iter().any(|m| m.starts_with("passed to `")),
+                    "{flow:?}"
+                );
+            }
+        }
+        // Another function of that module, and a value that isn't the request's.
+        let main = "use crate::db;\nuse axum::extract::Query;\nasync fn h(Query(p): Query<P>) {\n    db::count();\n    db::find(\"constant\");\n}\n";
+        assert!(project(&[("src/main.rs", main), ("src/db.rs", DB)]).is_empty());
+    }
+
+    #[test]
+    fn super_a_child_module_a_workspace_crate_and_a_library() {
+        let handler =
+            "use axum::extract::Query;\nmod db;\nasync fn h(Query(p): Query<P>) {\n    CALL;\n}\n";
+        for (path, call, db) in [
+            ("src/web/mod.rs", "super::db::find(&p.name)", "src/db.rs"),
+            ("src/lib.rs", "db::find(&p.name)", "src/db.rs"),
+            (
+                "crates/web/src/lib.rs",
+                "store::db::find(&p.name)",
+                "crates/store/src/db.rs",
+            ),
+        ] {
+            let found = project(&[(path, &handler.replace("CALL", call)), (db, DB)]);
+            assert_eq!(found.len(), 1, "{path} {call}: {found:?}");
+        }
+        // A library's function isn't a module of the project.
+        let lib = "use axum::extract::Query;\nuse std::fs;\nasync fn h(Query(p): Query<P>) {\n    fs::remove_file(&p.name);\n}\n";
+        // (The call is a sink itself, in the file; the module of that name isn't
+        // reached.)
+        let found = project(&[("src/main.rs", lib), ("src/fs.rs", DB)]);
+        assert!(found.iter().all(|i| i.path != "src/fs.rs"), "{found:?}");
+    }
+
+    #[test]
+    fn a_method_of_a_type_another_file_declares() {
+        let repo = "use rusqlite::Connection;\npub struct UserRepo { conn: Connection }\nimpl UserRepo {\n    pub fn find(&self, name: &str) {\n        self.conn.execute(&format!(\"DELETE FROM u WHERE n = '{name}'\"), []).unwrap();\n    }\n}\n";
+        let by_param = "use crate::repo::UserRepo;\nuse axum::extract::Query;\nasync fn h(State(repo): State<UserRepo>, Query(p): Query<P>, r: UserRepo) {\n    r.find(&p.name);\n}\n";
+        let by_field = "use crate::repo::UserRepo;\nuse axum::extract::Query;\nstruct Service { repo: std::sync::Arc<UserRepo> }\nimpl Service {\n    async fn h(&self, Query(p): Query<P>) {\n        self.repo.find(&p.name);\n    }\n}\n";
+        for main in [by_param, by_field] {
+            let found = project(&[("src/main.rs", main), ("src/repo.rs", repo)]);
+            assert_eq!(found.len(), 1, "{main}: {found:?}");
+            assert_eq!(found[0].path, "src/repo.rs");
+        }
+    }
+
+    #[test]
+    fn through_a_second_module() {
+        let service = "use crate::db;\npub fn run(name: &str) {\n    db::find(name);\n}\n";
+        let main = "use crate::service;\nuse axum::extract::Query;\nasync fn h(Query(p): Query<P>) {\n    service::run(&p.name);\n}\n";
+        let found = project(&[
+            ("src/main.rs", main),
+            ("src/service.rs", service),
+            ("src/db.rs", DB),
+        ]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "src/db.rs");
+        let files: Vec<Option<&str>> = found[0].flow.iter().map(|s| s.path.as_deref()).collect();
+        assert!(files.contains(&Some("src/service.rs")), "{files:?}");
     }
 }

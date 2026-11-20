@@ -156,6 +156,16 @@ pub(crate) enum Callee {
         method: String,
         arity: usize,
     },
+    /// `db::find(x)`, `User::find(x)` or `repo.find(x)`: the path as written,
+    /// with its first name taken through the file's `use`s, and for a method
+    /// call on a typed receiver, the receiver's type path and the method. The
+    /// project pass reads the path as Rust's modules do, from the calling
+    /// file's own module (`crate::`, `self::`, `super::`, a child module).
+    Rs {
+        path: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        method: Option<String>,
+    },
 }
 
 impl Callee {
@@ -163,6 +173,10 @@ impl Callee {
     pub(crate) fn display(&self) -> String {
         match self {
             Callee::Cs { method, .. } | Callee::Java { method, .. } => method.clone(),
+            Callee::Rs { path, method } => method
+                .clone()
+                .or_else(|| path.last().cloned())
+                .unwrap_or_default(),
             Callee::Py { name, member, .. } => match (name.as_deref(), member.as_deref()) {
                 (Some(n), Some(m)) => format!("{n}.{m}"),
                 (_, Some(m)) => m.to_string(),

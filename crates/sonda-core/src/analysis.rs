@@ -2538,6 +2538,13 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                 &facts,
                 Some(&|from, callee| index.resolve(from, callee)),
             )
+        } else if key[tp::FACT_PREFIX.len()..].starts_with("rs/") {
+            let index = RsTaintIndex::new(&paths);
+            tp::compose(
+                &paths,
+                &facts,
+                Some(&|from, callee| index.resolve(from, callee)),
+            )
         } else {
             tp::compose(&paths, &facts, None)
         };
@@ -2672,6 +2679,145 @@ impl<'a> CsTaintIndex<'a> {
                     },
                 ));
             }
+        }
+        out.sort_by(|a, b| (a.0, &a.1.export).cmp(&(b.0, &b.1.export)));
+        out.dedup();
+        out
+    }
+}
+
+/// Rust's modules, for the project pass: which file is which module of which
+/// crate, from where the files lie (`src/db/mod.rs` and `src/db.rs` are
+/// `crate::db`), and what a path written in one file names.
+struct RsTaintIndex {
+    /// Each file's crate source root and module path, if it's in one.
+    modules: Vec<Option<(String, Vec<String>)>>,
+    by_module: HashMap<(String, Vec<String>), Vec<usize>>,
+    /// A workspace crate's name (its folder's, with `_`) to its source root.
+    crates: HashMap<String, String>,
+}
+
+impl RsTaintIndex {
+    fn new(paths: &[&str]) -> Self {
+        let modules: Vec<_> = paths.iter().map(|p| Self::module_of(p)).collect();
+        let mut by_module: HashMap<(String, Vec<String>), Vec<usize>> = HashMap::new();
+        let mut crates = HashMap::new();
+        for (i, m) in modules.iter().enumerate() {
+            if let Some((root, module)) = m {
+                by_module
+                    .entry((root.clone(), module.clone()))
+                    .or_default()
+                    .push(i);
+                let dir = root
+                    .trim_end_matches("/src")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("");
+                if !dir.is_empty() && root.ends_with("src") {
+                    crates.insert(dir.replace('-', "_"), root.clone());
+                }
+            }
+        }
+        RsTaintIndex {
+            modules,
+            by_module,
+            crates,
+        }
+    }
+
+    /// `crates/api/src/db/mod.rs` is (`crates/api/src`, [`db`]); `src/lib.rs`
+    /// and `src/main.rs` are the root, and a `bin` file isn't one of them.
+    fn module_of(path: &str) -> Option<(String, Vec<String>)> {
+        let p = path.replace('\\', "/");
+        let at = if p.starts_with("src/") {
+            0
+        } else {
+            p.find("/src/")? + 1
+        };
+        let root = p[..at + 3].to_string();
+        let rest = p[at + 4..].strip_suffix(".rs")?;
+        let mut parts: Vec<String> = rest.split('/').map(str::to_string).collect();
+        if parts.first().is_some_and(|f| f == "bin") {
+            return None;
+        }
+        if parts.last().is_some_and(|l| l == "mod") {
+            parts.pop();
+        } else if parts.len() == 1 && matches!(parts[0].as_str(), "lib" | "main") {
+            parts.clear();
+        }
+        Some((root, parts))
+    }
+
+    /// The absolute module path a call's path starts at, and what's left of it.
+    fn absolute(&self, from: usize, path: &[String]) -> Option<(String, Vec<String>)> {
+        let (root, here) = self.modules.get(from)?.clone()?;
+        let first = path.first()?.as_str();
+        let rest = &path[1..];
+        match first {
+            "crate" => Some((root, rest.to_vec())),
+            "self" => Some((root, [here, rest.to_vec()].concat())),
+            "super" => {
+                let mut module = here;
+                let mut rest = path;
+                while rest.first().is_some_and(|s| s == "super") {
+                    module.pop();
+                    rest = &rest[1..];
+                }
+                Some((root, [module, rest.to_vec()].concat()))
+            }
+            name if self.crates.contains_key(name) => {
+                Some((self.crates[name].clone(), rest.to_vec()))
+            }
+            // A child module of this file's.
+            name => {
+                let child = [here.clone(), vec![name.to_string()]].concat();
+                self.by_module
+                    .contains_key(&(root.clone(), child))
+                    .then(|| (root, [here, path.to_vec()].concat()))
+            }
+        }
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Rs { path, method } = callee else {
+            return Vec::new();
+        };
+        let Some((root, abs)) = self.absolute(from, path) else {
+            return Vec::new();
+        };
+        let key = |export: &str, member: Option<&str>| semantic::taint::Key {
+            export: export.to_string(),
+            member: member.map(str::to_string),
+        };
+        let in_module = |module: &[String]| -> Vec<usize> {
+            self.by_module
+                .get(&(root.clone(), module.to_vec()))
+                .cloned()
+                .unwrap_or_default()
+        };
+        let mut out = Vec::new();
+        match (method, abs.split_last()) {
+            // `repo.find(x)`: the type is the path's last name.
+            (Some(m), Some((ty, module))) => {
+                out.extend(in_module(module).into_iter().map(|f| (f, key(ty, Some(m)))));
+            }
+            // `db::find(x)`: a function of a module; `User::find(x)`: a function
+            // of a type in a module.
+            (None, Some((name, module))) => {
+                out.extend(in_module(module).into_iter().map(|f| (f, key(name, None))));
+                if let Some((ty, outer)) = module.split_last() {
+                    out.extend(
+                        in_module(outer)
+                            .into_iter()
+                            .map(|f| (f, key(ty, Some(name)))),
+                    );
+                }
+            }
+            _ => {}
         }
         out.sort_by(|a, b| (a.0, &a.1.export).cmp(&(b.0, &b.1.export)));
         out.dedup();
