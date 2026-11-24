@@ -18,6 +18,7 @@ macro_rules! taint_rule_fn {
 mod c;
 mod common;
 mod cpp;
+mod cpp_security;
 mod cs;
 mod cs_bugs;
 mod cs_classes;
@@ -214,6 +215,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (rs_correctness::RULES, rs_correctness::OFF_BY_DEFAULT),
     (rs_correctness2::RULES, rs_correctness2::OFF_BY_DEFAULT),
     (rs_security::RULES, rs_security::OFF_BY_DEFAULT),
+    (cpp_security::RULES, cpp_security::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

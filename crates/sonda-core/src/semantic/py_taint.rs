@@ -635,6 +635,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
         SinkKind::Code => &[b"eval(", b"exec("],
         SinkKind::XPath => &[b"xpath", b"XPath"],
         SinkKind::Ldap => &[b"ldap"],
+        SinkKind::Format => &[],
     };
     words.iter().any(|w| has(w))
 }
@@ -1454,7 +1455,11 @@ impl<'a, 't> Cx<'a, 't> {
                 module == "urllib.parse" && name.starts_with("quote")
             }
             SinkKind::Command => module == "shlex" && name == "quote",
-            SinkKind::Code | SinkKind::Sql | SinkKind::XPath | SinkKind::Ldap => false,
+            SinkKind::Code
+            | SinkKind::Sql
+            | SinkKind::XPath
+            | SinkKind::Ldap
+            | SinkKind::Format => false,
         };
         let propagates =
             PROPAGATING_MODULES.contains(&module) || (module == "os" && name == "fspath");

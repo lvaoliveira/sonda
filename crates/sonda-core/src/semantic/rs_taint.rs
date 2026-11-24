@@ -29,9 +29,10 @@ use super::taint::{
     CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
 };
 use super::taint_core::{
-    FROM_CALL, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, call_facts, decl_index,
-    exported, finish, flow_for, from_call, held, inside, note_return, record_return, short,
-    through_returns, through_sinks, tick,
+    FROM_CALL, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, call_facts,
+    checked_names, decl_index, exported, finish, flow_for, from_call, held, inside, note_return,
+    outcome, record_return, return_values, short, sinks_in, through_returns, through_sinks, tick,
+    walk,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
@@ -424,7 +425,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
             b"hyper",
             b"client",
         ],
-        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code => return false,
+        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Format => return false,
     };
     words.iter().any(|w| has(w))
 }
@@ -615,32 +616,17 @@ impl<'a, 't> Cx<'a, 't> {
     /// Walks the file once, in source order, for its writes, calls, structs
     /// and checks. None past a limit.
     fn collect(&mut self, root: Node<'t>) -> Option<()> {
-        let mut stack = vec![root];
         let mut checks: Vec<Node<'t>> = Vec::new();
         let words = check_words(self.kind);
-        while let Some(n) = stack.pop() {
+        walk(root, |n| {
             self.visit(n, words, &mut checks);
-            if self.writes.len() > MAX_WRITES {
-                return None;
-            }
-            let mut c = n.walk();
-            let children: Vec<Node<'t>> = n.named_children(&mut c).collect();
-            stack.extend(children.into_iter().rev());
-        }
+            self.writes.len() <= MAX_WRITES
+        })?;
         // A variable named as a check's receiver or argument is validated.
-        for call in checks {
-            let mut named: Vec<Node<'t>> = arguments(call);
-            if let Some(f) = call.child_by_field_name("function")
-                && f.kind() == "field_expression"
-            {
-                named.extend(f.child_by_field_name("value"));
-            }
-            for n in named {
-                if let Some(d) = self.decl_of(unwrap(n)) {
-                    self.checked.insert(d);
-                }
-            }
-        }
+        let named = checked_names(checks, arguments, ("field_expression", "value"), |n| {
+            self.decl_of(unwrap(n))
+        });
+        self.checked.extend(named);
         Some(())
     }
 
@@ -1704,62 +1690,43 @@ impl<'a, 't> Cx<'a, 't> {
             }
         }
         self.propagate(Some(f.node), &mut state)?;
-        let mut summary = Summary::default();
         let body = f.node.child_by_field_name("body");
         let mut values = body.map(tail_values).unwrap_or_default();
-        values.extend(self.return_values(f.node));
-        if let Some(path) = best(values.into_iter().map(|v| self.taint(v, &state, 0))) {
-            summary.returns = Some(path);
-        }
+        values.extend(return_values(
+            f.node,
+            &["function_item", "closure_expression"],
+            "return_expression",
+        ));
+        let sinks = p.is_some().then(|| {
+            sinks_in(
+                &self.calls,
+                f.node,
+                |c| self.sink_call(c),
+                |a| self.taint(a, &state, 0),
+                |c| self.sinks_through(c, &state),
+            )
+        });
+        let (returns, sinks) = outcome(values, |v| self.taint(v, &state, 0), sinks);
+        let mut summary = Summary {
+            returns,
+            sinks,
+            calls: Vec::new(),
+        };
         if p.is_some() {
-            self.summary_sinks(f.node, &state, &mut summary);
+            self.summary_calls(f.node, &state, &mut summary);
         }
         Some(summary)
     }
 
-    /// The `return x;` values of a function, not those of the closures in it.
-    fn return_values(&self, function: Node<'t>) -> Vec<Node<'t>> {
-        let mut out = Vec::new();
-        let mut stack = vec![function];
-        while let Some(n) = stack.pop() {
-            if n.id() != function.id() && matches!(n.kind(), "function_item" | "closure_expression")
-            {
-                continue;
-            }
-            if n.kind() == "return_expression"
-                && let Some(v) = n.named_child(0)
-            {
-                out.push(v);
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
-        }
-        out
-    }
-
-    fn summary_sinks(
+    /// The other files' functions a request's value in `function` is passed
+    /// on to.
+    fn summary_calls(
         &self,
         function: Node<'t>,
         state: &HashMap<DeclId, Path<'t>>,
         summary: &mut Summary<'t>,
     ) {
-        for &call in &self.calls {
-            if !inside(call, function) {
-                continue;
-            }
-            if let Some((name, args)) = self.sink_call(call)
-                && let Some(mut path) = best(args.into_iter().map(|a| self.taint(a, state, 0)))
-            {
-                path.push(Step {
-                    node: call,
-                    message: format!("passed to `{name}`"),
-                });
-                summary.sinks.push((path, call));
-            }
-            let nested = self.sinks_through(call, state);
-            summary
-                .sinks
-                .extend(nested.into_iter().map(|f| (f.steps, f.sink)));
+        for &call in self.calls.iter().filter(|c| inside(**c, function)) {
             for (mut path, callee, arg) in self.passed_on(call, state) {
                 path.push(Step {
                     node: call,
