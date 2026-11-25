@@ -35,6 +35,8 @@ pub(crate) enum SinkKind {
     Ldap,
     /// Code the program runs: `eval`, `new Function`, `vm.runInContext`.
     Code,
+    /// The format of a `printf`: a value there reads or writes memory.
+    Format,
 }
 
 /// A long path keeps its first and last steps.

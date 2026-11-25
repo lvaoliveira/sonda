@@ -90,6 +90,13 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("rs/path-injection", &[22], &[A01]),
     ("rs/open-redirect", &[601], &[A01]),
     ("rs/ssrf", &[918], &[A10]),
+    ("c/sql-injection", &[89, 943], &[A03]),
+    ("c/command-injection", &[78, 88], &[A03]),
+    ("c/path-injection", &[22], &[A01]),
+    ("c/open-redirect", &[601], &[A01]),
+    ("c/ssrf", &[918], &[A10]),
+    // CWE-134 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
+    ("c/format-string", &[134], &[]),
     ("java/sql-injection", &[89, 943], &[A03]),
     ("java/command-injection", &[78, 88], &[A03]),
     ("java/path-injection", &[22], &[A01]),

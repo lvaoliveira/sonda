@@ -526,3 +526,102 @@ pub(super) fn tainted_arguments<'t>(
         })
         .collect()
 }
+
+/// Walks the syntax tree once, in source order; `visit` says whether to go
+/// on. None when it stopped the walk.
+pub(super) fn walk<'t>(root: Node<'t>, mut visit: impl FnMut(Node<'t>) -> bool) -> Option<()> {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if !visit(n) {
+            return None;
+        }
+        let mut c = n.walk();
+        let children: Vec<Node<'t>> = n.named_children(&mut c).collect();
+        stack.extend(children.into_iter().rev());
+    }
+    Some(())
+}
+
+/// The values a function returns (`returns` is the kind of a return
+/// statement), not those of the functions inside it (`nested` are their kinds).
+pub(super) fn return_values<'t>(
+    function: Node<'t>,
+    nested: &[&str],
+    returns: &str,
+) -> Vec<Node<'t>> {
+    let mut out = Vec::new();
+    let mut stack = vec![function];
+    while let Some(n) = stack.pop() {
+        if n.id() != function.id() && nested.contains(&n.kind()) {
+            continue;
+        }
+        if n.kind() == returns
+            && let Some(v) = n.named_child(0)
+        {
+            out.push(v);
+        }
+        let mut c = n.walk();
+        stack.extend(n.named_children(&mut c));
+    }
+    out
+}
+
+/// The sinks inside `function` that its tainted values reach, each with the
+/// path to it: the calls that are sinks (`sink_of`), and what the calls into
+/// other functions of the file reach (`through`).
+pub(super) fn sinks_in<'t>(
+    calls: &[Node<'t>],
+    function: Node<'t>,
+    sink_of: impl Fn(Node<'t>) -> Option<(String, Vec<Node<'t>>)>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+    through: impl Fn(Node<'t>) -> Vec<Finding<'t>>,
+) -> Vec<(Path<'t>, Node<'t>)> {
+    let mut out = Vec::new();
+    for &call in calls.iter().filter(|c| inside(**c, function)) {
+        if let Some((name, args)) = sink_of(call)
+            && let Some(mut path) = best(args.into_iter().map(&taint))
+        {
+            path.push(step(call, format!("passed to `{name}`")));
+            out.push((path, call));
+        }
+        out.extend(through(call).into_iter().map(|f| (f.steps, f.sink)));
+    }
+    out
+}
+
+/// What a function does with the values it holds: the path of what it
+/// returns (`values` are the expressions it returns), and, for a function
+/// whose parameter holds one, the sinks that reach (`sinks_in`).
+pub(super) fn outcome<'t>(
+    values: Vec<Node<'t>>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+    sinks: Option<Vec<(Path<'t>, Node<'t>)>>,
+) -> (Option<Path<'t>>, Vec<(Path<'t>, Node<'t>)>) {
+    (
+        best(values.into_iter().map(taint)),
+        sinks.unwrap_or_default(),
+    )
+}
+
+/// The variables named as the receiver or an argument of a check: those the
+/// check validates. `arguments` are a call's, `receiver` is the field of a
+/// method call's function that names the object, `resolve` the variable an
+/// expression is.
+pub(super) fn checked_names<'t>(
+    checks: Vec<Node<'t>>,
+    arguments: impl Fn(Node<'t>) -> Vec<Node<'t>>,
+    receiver: (&str, &str),
+    resolve: impl Fn(Node<'t>) -> Option<DeclId>,
+) -> HashSet<DeclId> {
+    let mut out = HashSet::new();
+    for call in checks {
+        let mut named = arguments(call);
+        if let Some(f) = call.child_by_field_name("function")
+            && f.kind() == receiver.0
+        {
+            named.extend(f.child_by_field_name(receiver.1));
+        }
+        out.extend(named.into_iter().filter_map(&resolve));
+    }
+    out
+}

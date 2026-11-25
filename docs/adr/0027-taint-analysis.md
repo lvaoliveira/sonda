@@ -31,6 +31,15 @@
   modules and workspace crates, through the file's `use`s), and a function's
   result that reaches a sink in the caller's file, as for Java: the call's
   result may hold a request's value, which the project pass settles.
+  C and C++ built for T2 and T3, on their binder (ADR-0008 S1): `c/sql-injection`,
+  `c/command-injection`, `c/path-injection`, `c/open-redirect`, `c/ssrf` and
+  `c/format-string`, from a web framework's request (cpp-httplib, Crow,
+  Drogon, Pistache), a socket's `recv` and a CGI variable, through the
+  functions of one file. C's functions that build text write into an
+  argument (`snprintf`, `strcat`, `memcpy`), so a call like that is a write
+  of its source arguments into its destination. Values don't cross files yet.
+  The command line, standard input and the environment are the program's
+  own, not a request's.
 - Date: 2026-11-07
 
 ## Context

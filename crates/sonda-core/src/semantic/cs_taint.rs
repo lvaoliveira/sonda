@@ -1386,7 +1386,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
         ],
         SinkKind::XPath => &[b"SelectNodes", b"SelectSingleNode", b"XPath", b"Evaluate"],
         SinkKind::Ldap => &[b"DirectorySearcher", b"Filter"],
-        SinkKind::Code => &[],
+        SinkKind::Code | SinkKind::Format => &[],
     };
     needles.iter().any(|n| has(n))
 }

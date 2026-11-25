@@ -544,7 +544,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
             b"undici",
         ],
         SinkKind::Code => &[b"eval", b"Function", b"vm", b"setTimeout", b"setInterval"],
-        SinkKind::XPath | SinkKind::Ldap => &[],
+        SinkKind::XPath | SinkKind::Ldap | SinkKind::Format => &[],
     };
     words.iter().any(|w| has(w))
 }

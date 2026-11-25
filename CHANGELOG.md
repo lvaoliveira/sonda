@@ -9,6 +9,19 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Taint analysis for C and C++ ([ADR-0027](docs/adr/0027-taint-analysis.md)): six
+  rules, `c/sql-injection`, `c/command-injection`, `c/path-injection`,
+  `c/open-redirect`, `c/ssrf` and `c/format-string`, follow a request's value
+  from a cpp-httplib, Crow, Drogon or Pistache request, a socket's `recv` or a
+  CGI variable (`getenv("QUERY_STRING")`) through `std::string` operations,
+  `snprintf`, `strcat` and `memcpy` (which write into an argument) and the
+  functions of the file into `sqlite3_exec`, `mysql_query`, `PQexec`,
+  `QSqlQuery`, `system`, `popen`, `exec*`, `fopen`, `std::ifstream`,
+  `std::filesystem`, a redirect, `CURLOPT_URL` and the format of `printf` and
+  `syslog`, and report the path it took. The command line, standard input and
+  the environment are the program's own, so `argv` and `getenv("HOME")` aren't
+  sources. A number can't inject and a value that is checked (`strstr`,
+  `find`, `realpath`, `starts_with`) is validated. Values don't cross files yet.
 - Taint analysis for Rust ([ADR-0027](docs/adr/0027-taint-analysis.md)): five
   rules, `rs/sql-injection`, `rs/command-injection`, `rs/path-injection`,
   `rs/open-redirect` and `rs/ssrf`, follow a request's value from an axum or
