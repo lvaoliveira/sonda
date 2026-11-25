@@ -6,6 +6,7 @@
 //! deadline: a file that runs out of time keeps its syntactic findings and
 //! loses only the semantic ones, with a warning.
 
+mod cpp;
 pub(crate) mod cpp_bytes;
 pub(crate) mod cpp_const;
 pub(crate) mod cpp_index;
@@ -281,6 +282,46 @@ impl<'t> Model<'t> {
             .flat_map(|(id, s)| s.names.values().map(move |d| (id, d.as_slice())))
     }
 
+    /// Like `resolve`, for languages whose declarations take effect where
+    /// they're written (`effect`, a byte, per declaration): a reference
+    /// resolves to the last declaration of its name that has taken effect
+    /// before it, in the nearest scope that has one.
+    fn resolve_in_order(&mut self, effect: &[usize]) {
+        let mut found: Vec<Option<DeclId>> = Vec::with_capacity(self.refs.len());
+        for r in &self.refs {
+            let pos = r.node.start_byte();
+            let mut scope = Some(r.scope);
+            let mut decl = None;
+            while let Some(s) = scope {
+                let hit = self
+                    .decls_named(s, &r.name)
+                    .iter()
+                    .rev()
+                    .find(|&&d| effect[d] <= pos)
+                    .copied();
+                if hit.is_some() {
+                    decl = hit;
+                    break;
+                }
+                scope = self.scopes[s].parent;
+            }
+            found.push(decl);
+        }
+        self.ref_index = self
+            .refs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.node.id(), i))
+            .collect::<HashMap<_, _>>();
+        for (r, decl) in self.refs.iter_mut().zip(found) {
+            r.decl = decl;
+            if let Some(d) = decl {
+                self.decls[d].reads += u32::from(r.read);
+                self.decls[d].writes += u32::from(r.write);
+            }
+        }
+    }
+
     /// Links each reference to the nearest declaration of its name, and
     /// counts reads and writes. Declarations are visible in their whole scope
     /// (hoisting), which is what matters for finding unused or misused ones.
@@ -340,7 +381,7 @@ pub(crate) fn build<'t>(
         Lang::Python => py::build(root, src, deadline),
         Lang::Java => java::build(root, src, deadline),
         Lang::Rust => rs::build(root, src, deadline),
-        _ => None,
+        Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
     }
 }
 
@@ -349,7 +390,15 @@ pub(crate) fn build<'t>(
 pub(crate) fn supports(lang: Lang) -> bool {
     matches!(
         lang,
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx | Lang::CSharp | Lang::Python | Lang::Java
+        Lang::JavaScript
+            | Lang::TypeScript
+            | Lang::Tsx
+            | Lang::CSharp
+            | Lang::Python
+            | Lang::Java
+            | Lang::Rust
+            | Lang::C
+            | Lang::Cpp
     )
 }
 
