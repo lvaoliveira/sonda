@@ -380,6 +380,28 @@ pub(super) static RULES: &[Rule] = &[
         }),
     },
     Rule {
+        id: "go/shadowed-variable",
+        name: "Variables should not shadow outer ones that are used afterwards",
+        description: "A `:=` or `var` statement in an inner block with the name of a variable declared outside it makes a new \
+                      variable, so the outer one keeps its old value: `err` assigned in an `if` and then \
+                      returned unchanged is the usual bug. Only an outer variable that is used after the \
+                      inner block is reported.",
+        message: "This declaration hides a variable of an outer scope that is used after it.",
+        category: CodeSmell,
+        severity: Minor,
+        effort_minutes: 5,
+        sonar: &[],
+        check: Check::Semantic {
+            langs: GO,
+            find: shadowing_declarations,
+        },
+        example: Some(Example {
+            lang: Lang::Go,
+            bad: "package p\n\nfunc f() error {\n\tvar err error\n\tif true {\n\t\terr := g()\n\t\t_ = err\n\t}\n\treturn err\n}\n\nfunc g() error { return nil }\n",
+            good: "package p\n\nfunc f() error {\n\tvar err error\n\tif true {\n\t\terr = g()\n\t}\n\treturn err\n}\n\nfunc g() error { return nil }\n",
+        }),
+    },
+    Rule {
         id: "go/underscore-in-name",
         name: "Function names should not contain underscores",
         description: "Go names are MixedCaps, not snake_case: `parse_line` should be `parseLine`. Tests, \
@@ -403,6 +425,91 @@ pub(super) static RULES: &[Rule] = &[
 ];
 
 // ---------------------------------------------------------------- filters
+
+/// Where the scope a name was declared in ends: the end of the statement or
+/// block that holds its declaration.
+fn scope_end(name: Node) -> usize {
+    let mut p = name.parent();
+    while let Some(x) = p {
+        if matches!(
+            x.kind(),
+            "block"
+                | "if_statement"
+                | "for_statement"
+                | "expression_switch_statement"
+                | "type_switch_statement"
+                | "select_statement"
+                | "expression_case"
+                | "default_case"
+                | "type_case"
+                | "communication_case"
+                | "func_literal"
+                | "function_declaration"
+                | "method_declaration"
+        ) {
+            return x.end_byte();
+        }
+        p = x.parent();
+    }
+    name.end_byte()
+}
+
+/// Whether a declaration is a statement of a block, as `err := g()` is, and
+/// not part of the head of an `if`, a `for` or a `switch`, whose variable
+/// lives only as long as the statement does.
+fn is_block_statement(declarator: Node) -> bool {
+    let mut n = declarator;
+    while let Some(p) = n.parent() {
+        match p.kind() {
+            "var_declaration" | "var_spec_list" => n = p,
+            "statement_list" => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The declarations that hide a local of an outer scope that the code uses
+/// after the inner one ends. Left alone: a variable of a statement's head
+/// (`if err := f(); err != nil`, a `range`, a type switch), a parameter
+/// (`t.Run("x", func(t *testing.T) {...})` is the idiom), and a declaration
+/// that starts from the outer variable (`x := x`).
+fn shadowing_declarations<'t>(m: &crate::semantic::Model<'t>, _src: &[u8]) -> Vec<Node<'t>> {
+    use crate::semantic::DeclKind::{Const, Let, Param, Var};
+    let local = |k| matches!(k, Var | Let | Param | Const);
+    let mut found = Vec::new();
+    for d in &m.decls {
+        let Some(declarator) = d.declarator.filter(|n| is_block_statement(*n)) else {
+            continue;
+        };
+        if d.kind != Var {
+            continue;
+        }
+        let end = scope_end(d.node);
+        let mut scope = m.scopes[d.scope].parent;
+        while let Some(s) = scope.filter(|s| *s != 0) {
+            let hidden = m.decls_named(s, &d.name).iter().copied().find(|&o| {
+                let outer = &m.decls[o];
+                let within = |r: &crate::semantic::Ref| {
+                    r.node.start_byte() >= declarator.start_byte()
+                        && r.node.end_byte() <= declarator.end_byte()
+                };
+                local(outer.kind)
+                    && outer.node.start_byte() < d.node.start_byte()
+                    && m.refs
+                        .iter()
+                        .any(|r| r.decl == Some(o) && r.node.start_byte() >= end)
+                    && !m.refs.iter().any(|r| r.decl == Some(o) && within(r))
+            });
+            if hidden.is_some() {
+                found.push(d.node);
+                break;
+            }
+            scope = m.scopes[s].parent;
+        }
+    }
+    found
+}
 
 fn is_self_assignment(n: Node, src: &[u8]) -> bool {
     let (Some(l), Some(r), Some(op)) = (
@@ -799,6 +906,24 @@ mod tests {
     fn only_a_mode_anyone_can_write_is_flagged() {
         let src = "import \"os\"\n\nfunc f(p string) {\n\tos.Chmod(p, 0755)\n\tos.Chmod(p, 0777)\n\tos.WriteFile(p, nil, 0o666)\n\tos.WriteFile(p, nil, 0o644)\n\tos.Chmod(p, os.FileMode(0602))\n}\n";
         assert_eq!(flagged("go/permissive-file-mode", src), [5, 6, 8]);
+    }
+
+    #[test]
+    fn a_name_is_hidden_only_when_the_outer_one_is_used_after() {
+        let src = "func g() error { return nil }\n\nfunc used() error {\n\tvar err error\n\tif true {\n\t\terr := g()\n\t\t_ = err\n\t}\n\treturn err\n}\n\nfunc unused() {\n\terr := g()\n\t_ = err\n\tif true {\n\t\terr := g()\n\t\t_ = err\n\t}\n}\n\nfunc siblings(a, b bool) {\n\tif a {\n\t\tx := 1\n\t\t_ = x\n\t}\n\tif b {\n\t\tx := 2\n\t\t_ = x\n\t}\n}\n";
+        assert_eq!(flagged("go/shadowed-variable", src), [6]);
+    }
+
+    #[test]
+    fn statement_heads_type_switches_and_copies_are_not_shadowing_slips() {
+        let src = "func g() error { return nil }\n\nfunc f(v interface{}, xs []int) error {\n\tvar err error\n\tif err := g(); err != nil {\n\t\treturn err\n\t}\n\tswitch v := v.(type) {\n\tcase int:\n\t\t_ = v\n\t}\n\tfor _, x := range xs {\n\t\tx := x\n\t\t_ = x\n\t}\n\treturn err\n}\n";
+        assert!(flagged("go/shadowed-variable", src).is_empty());
+    }
+
+    #[test]
+    fn a_callbacks_parameter_named_like_a_variable_is_the_idiom() {
+        let src = "func f(items []int) int {\n\tn := 0\n\tadd := func(n int) int { return n + 1 }\n\tfor _, i := range items {\n\t\tn += add(i)\n\t}\n\treturn n\n}\n";
+        assert!(flagged("go/shadowed-variable", src).is_empty());
     }
 
     #[test]
