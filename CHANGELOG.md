@@ -9,6 +9,13 @@ file, the report formats and the public library API.
 
 ### Added
 
+- `sonda scan --cache[=DIR]` keeps each file's analysis (default `.sonda/cache`)
+  and reuses it on a later scan for every file whose bytes, path, configuration
+  and sonda version are the same ([ADR-0030](docs/adr/0030-scan-cache.md)). The
+  report is the same with and without it; what crosses files is worked out again
+  each scan. A warm scan of redis takes 0.2 s, not 2.2 s. Off by default; the
+  cache ignores itself in git. `ScanOptions` has a new `cache` field.
+
 - Taint analysis for C and C++ ([ADR-0027](docs/adr/0027-taint-analysis.md)): six
   rules, `c/sql-injection`, `c/command-injection`, `c/path-injection`,
   `c/open-redirect`, `c/ssrf` and `c/format-string`, follow a request's value
