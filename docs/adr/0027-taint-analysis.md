@@ -31,13 +31,24 @@
   modules and workspace crates, through the file's `use`s), and a function's
   result that reaches a sink in the caller's file, as for Java: the call's
   result may hold a request's value, which the project pass settles.
-  C and C++ built for T2 and T3, on their binder (ADR-0008 S1): `c/sql-injection`,
+  C and C++ built (T2 to T4, on their binder, ADR-0008 S1): `c/sql-injection`,
   `c/command-injection`, `c/path-injection`, `c/open-redirect`, `c/ssrf` and
   `c/format-string`, from a web framework's request (cpp-httplib, Crow,
   Drogon, Pistache), a socket's `recv` and a CGI variable, through the
-  functions of one file. C's functions that build text write into an
-  argument (`snprintf`, `strcat`, `memcpy`), so a call like that is a write
-  of its source arguments into its destination. Values don't cross files yet.
+  functions of the file and across files. C's functions that build text write
+  into an argument (`snprintf`, `strcat`, `memcpy`), so a call like that is a
+  write of its source arguments into its destination. A call to another
+  file's function is found by the name as written (`find`, `db::find`,
+  `repo.find` with `repo` declared as `Repo`, tried in the namespaces and
+  classes the call is in and the file's `using namespace`s) and its number of
+  arguments, in the file that a quoted `#include` of the calling file leads
+  to: the header itself, or the source file of the same name (`db.h` and
+  `db.cpp`). A function that's `static`, in an anonymous namespace, nested, or
+  one of several of the same name and arity in its file is skipped, so an
+  overload isn't guessed. Only a parameter that can hold text (a character
+  pointer, a string type) and a function that can return it are summarized
+  for other files; a C program's structs and numbers aren't, which keeps the
+  cost down.
   The command line, standard input and the environment are the program's
   own, not a request's.
 - Date: 2026-11-07

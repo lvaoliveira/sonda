@@ -2545,6 +2545,13 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                 &facts,
                 Some(&|from, callee| index.resolve(from, callee)),
             )
+        } else if key[tp::FACT_PREFIX.len()..].starts_with("c/") {
+            let index = CppTaintIndex::new(&paths);
+            tp::compose(
+                &paths,
+                &facts,
+                Some(&|from, callee| index.resolve(from, callee)),
+            )
         } else {
             tp::compose(&paths, &facts, None)
         };
@@ -2821,6 +2828,102 @@ impl RsTaintIndex {
         }
         out.sort_by(|a, b| (a.0, &a.1.export).cmp(&(b.0, &b.1.export)));
         out.dedup();
+        out
+    }
+}
+
+/// How the project pass resolves a C or C++ call: by the name it was
+/// written with, tried in each scope it may be in, in the files the calling
+/// file's quoted includes lead to.
+struct CppTaintIndex {
+    /// Each file's path without its extension, split into names.
+    stems: Vec<Vec<String>>,
+    /// Each file's own path, split into names.
+    paths: Vec<Vec<String>>,
+}
+
+impl CppTaintIndex {
+    fn new(paths: &[&str]) -> Self {
+        let split = |p: &str| -> Vec<String> {
+            p.replace('\\', "/")
+                .split('/')
+                .filter(|s| !s.is_empty() && *s != ".")
+                .map(str::to_string)
+                .collect()
+        };
+        let stems = paths
+            .iter()
+            .map(|p| {
+                let mut parts = split(p);
+                if let Some(last) = parts.last_mut()
+                    && let Some((stem, _)) = last.rsplit_once('.')
+                {
+                    *last = stem.to_string();
+                }
+                parts
+            })
+            .collect();
+        CppTaintIndex {
+            stems,
+            paths: paths.iter().map(|p| split(p)).collect(),
+        }
+    }
+
+    /// Whether `file` is what an include names: the header itself, or the
+    /// source file of the same name (`db/users.h` and `db/users.cpp`).
+    fn includes(&self, file: usize, include: &str) -> bool {
+        let mut want: Vec<&str> = include
+            .split('/')
+            .filter(|s| !s.is_empty() && *s != ".." && *s != ".")
+            .collect();
+        let Some(last) = want.pop() else {
+            return false;
+        };
+        let stem = last.rsplit_once('.').map_or(last, |(s, _)| s);
+        let (stems, path) = (&self.stems[file], &self.paths[file]);
+        let ends_with = |have: &[String], tail: &[&str]| {
+            have.len() >= tail.len()
+                && have[have.len() - tail.len()..]
+                    .iter()
+                    .map(String::as_str)
+                    .eq(tail.iter().copied())
+        };
+        want.push(stem);
+        let same_stem = ends_with(stems, &want);
+        want.pop();
+        want.push(last);
+        same_stem || ends_with(path, &want)
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Cpp {
+            path,
+            arity,
+            scopes,
+            includes,
+        } = callee
+        else {
+            return Vec::new();
+        };
+        let files: Vec<usize> = (0..self.stems.len())
+            .filter(|&f| f != from && includes.iter().any(|i| self.includes(f, i)))
+            .collect();
+        let mut out = Vec::new();
+        for scope in std::iter::once("").chain(scopes.iter().map(String::as_str)) {
+            let mut name = path.clone();
+            if !scope.is_empty() {
+                name.insert(0, scope.to_string());
+            }
+            let key = semantic::taint::Key {
+                export: name.join("::"),
+                member: Some(arity.to_string()),
+            };
+            out.extend(files.iter().map(|&f| (f, key.clone())));
+        }
         out
     }
 }

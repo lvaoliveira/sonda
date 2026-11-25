@@ -21,7 +21,11 @@ file, the report formats and the public library API.
   `syslog`, and report the path it took. The command line, standard input and
   the environment are the program's own, so `argv` and `getenv("HOME")` aren't
   sources. A number can't inject and a value that is checked (`strstr`,
-  `find`, `realpath`, `starts_with`) is validated. Values don't cross files yet.
+  `find`, `realpath`, `starts_with`) is validated. A value crosses files too:
+  into a function another file defines, and out of one whose result reaches a
+  sink, found by the name as written and its number of arguments in the file a
+  quoted `#include` leads to (`db.h` and `db.cpp`); an overload, a `static`
+  function or a call no included header leads to isn't followed.
 - Taint analysis for Rust ([ADR-0027](docs/adr/0027-taint-analysis.md)): five
   rules, `rs/sql-injection`, `rs/command-injection`, `rs/path-injection`,
   `rs/open-redirect` and `rs/ssrf`, follow a request's value from an axum or

@@ -25,14 +25,12 @@
 //! Values are followed through other files (T4), in both directions: into
 //! another file's function, and out of it, when it returns one.
 
-use super::taint::{
-    CallFact, Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, SummaryFact, TaintResult,
-};
+use super::taint::{Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    FROM_CALL, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, call_facts,
-    checked_names, decl_index, exported, finish, flow_for, from_call, held, inside, note_return,
-    outcome, record_return, return_values, short, sinks_in, through_returns, through_sinks, tick,
-    walk,
+    Exports, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, calls_in, checked_names,
+    decl_index, exports_for, finish, flow_for, from_call, held, inside, maybe_path, outcome,
+    record_return_at_sink, return_values, short, sinks_in, sure_path, through_returns,
+    through_sinks, tick, walk,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
@@ -1302,11 +1300,8 @@ impl<'a, 't> Cx<'a, 't> {
     /// What another file's function's result may hold: a request's value, if
     /// that function returns one. The project pass decides.
     fn maybe_from(&self, call: Node<'t>) -> Option<Path<'t>> {
-        (self.from_calls.get() && self.external_callee(call).is_some()).then(|| {
-            vec![Step {
-                node: call,
-                message: FROM_CALL.to_string(),
-            }]
+        maybe_path(self.from_calls.get(), call, || {
+            self.external_callee(call).is_some()
         })
     }
 
@@ -1371,12 +1366,9 @@ impl<'a, 't> Cx<'a, 't> {
             &self.calls,
             |c| self.sink_call(c),
             |a| {
-                let path = self.taint(a, state, 0)?;
-                if from_call(&path) {
-                    self.record_return(a, &path, state);
-                    return None;
-                }
-                Some(path)
+                sure_path(self.taint(a, state, 0), |path| {
+                    self.record_return(a, path, state)
+                })
             },
         );
         out.extend(self.reached_through_functions(state));
@@ -1707,34 +1699,16 @@ impl<'a, 't> Cx<'a, 't> {
             )
         });
         let (returns, sinks) = outcome(values, |v| self.taint(v, &state, 0), sinks);
-        let mut summary = Summary {
+        let calls = if p.is_some() {
+            calls_in(self, &self.calls, f.node, &state)
+        } else {
+            Vec::new()
+        };
+        Some(Summary {
             returns,
             sinks,
-            calls: Vec::new(),
-        };
-        if p.is_some() {
-            self.summary_calls(f.node, &state, &mut summary);
-        }
-        Some(summary)
-    }
-
-    /// The other files' functions a request's value in `function` is passed
-    /// on to.
-    fn summary_calls(
-        &self,
-        function: Node<'t>,
-        state: &HashMap<DeclId, Path<'t>>,
-        summary: &mut Summary<'t>,
-    ) {
-        for &call in self.calls.iter().filter(|c| inside(**c, function)) {
-            for (mut path, callee, arg) in self.passed_on(call, state) {
-                path.push(Step {
-                    node: call,
-                    message: format!("passed to `{}`", callee.display()),
-                });
-                summary.calls.push((path, callee, arg));
-            }
-        }
+            calls,
+        })
     }
 
     // ------------------------------------------------------------ other files (T4)
@@ -1941,23 +1915,6 @@ impl<'a, 't> Cx<'a, 't> {
         None
     }
 
-    /// The request's values this file passes to other files' functions.
-    fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
-        call_facts(&self.calls, |call| self.passed_on(call, state))
-    }
-
-    /// What the functions of the file do with a value passed to them, for
-    /// other files.
-    fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
-        exported(
-            self.m.functions.len(),
-            |j| self.function_key(j),
-            |j| self.m.functions[j].params.len(),
-            |j, p| self.summary(j, Some(p)),
-            |j, p, fact| note_return(fact, p, self.summary(j, p).returns.clone()),
-        )
-    }
-
     /// Another file's function's result reaching a sink through the argument
     /// `arg` of the sink call: the call, the request's values in its
     /// arguments, and the path after it.
@@ -1967,32 +1924,14 @@ impl<'a, 't> Cx<'a, 't> {
         path: &Path<'t>,
         state: &HashMap<DeclId, Path<'t>>,
     ) {
-        let call = path[0].node;
-        let Some(callee) = self.external_callee(call) else {
-            return;
-        };
-        let Some(sink) = self.calls.iter().copied().find(|c| {
-            inside(sink_arg, *c)
-                && self
-                    .sink_call(*c)
-                    .is_some_and(|(_, args)| args.iter().any(|a| a.id() == sink_arg.id()))
-        }) else {
-            return;
-        };
-        let name = self.sink_call(sink).map(|(n, _)| n).unwrap_or_default();
-        let mut after = path[1..].to_vec();
-        after.push(Step {
-            node: sink,
-            message: format!("passed to `{name}`"),
-        });
-        record_return(
+        record_return_at_sink(
             &self.return_facts,
-            call,
-            callee,
-            arguments(call),
-            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
-            after,
-            sink,
+            &self.calls,
+            |c| self.sink_call(c),
+            |c| Some((self.external_callee(c)?, arguments(c))),
+            sink_arg,
+            path,
+            |a| self.taint(a, state, 0),
         );
     }
 
@@ -2025,6 +1964,7 @@ impl<'a, 't> Cx<'a, 't> {
 }
 
 flow_for!(Cx, from_call);
+exports_for!(Cx);
 
 // ---------------------------------------------------------------- syntax
 
