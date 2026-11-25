@@ -1,11 +1,12 @@
-//! Taint analysis for C and C++, phases T2 and T3 (ADR-0027): which values
+//! Taint analysis for C and C++, phases T2 to T4 (ADR-0027): which values
 //! that came from a request reach a sink, and by what path.
 //!
 //! Like the other languages', it's **flow-insensitive** over the scopes of the
 //! C/C++ binder (S1): a variable that is ever written a request's value holds
 //! it wherever the binding is visible, and the whole file is one fixed point
 //! over its writes. A function of the file is followed through its summary
-//! (T3), per parameter.
+//! (T3), per parameter; a function of another file, by its name and number of
+//! arguments in the files the quoted `#include`s lead to (T4).
 //!
 //! Precision before recall, as the ADR says:
 //! - the command line, standard input and the environment are the program's
@@ -23,14 +24,15 @@
 //! `strcat` and `memcpy` write into an argument, so a call like that is a
 //! write of its source arguments into its destination.
 
-use super::taint::{Callee, Facts, Finding, SinkKind, Step, TaintResult};
+use super::taint::{Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, checked_names, decl_index, finish,
-    flow_for, held, inside, outcome, return_values, sinks_in, through_returns, through_sinks, tick,
-    walk,
+    Exports, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best_of, calls_in,
+    checked_names, decl_index, exports_for, finish, flow_for, from_call, held, inside, maybe_path,
+    outcome, record_return_at_sink, return_values, sinks_in, sure_path, through_returns,
+    through_sinks, tick, walk,
 };
 use super::{DeclId, DeclKind, Model};
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use tree_sitter::Node;
@@ -291,22 +293,32 @@ fn check_words(kind: SinkKind) -> &'static [&'static str] {
 // ---------------------------------------------------------------- entry
 
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
-    if !might_have_sinks(src, kind) || !might_have_sources(src) {
+    // A file with neither a sink nor a source can still define a function
+    // other files' values reach, or pass one on: any that includes a header
+    // of the project.
+    if !(might_have_sinks(src, kind) || might_have_sources(src) || has_project_include(src)) {
         return TaintResult::default();
     }
-    let Some(root) = m.root else {
-        return TaintResult::default();
-    };
-    let Some(cx) = Cx::new(m, src, kind, root) else {
-        return TaintResult::default();
-    };
-    let Some(tainted) = cx.run() else {
-        return TaintResult::default();
-    };
-    TaintResult {
+    file_taint(m, src, kind).unwrap_or_default()
+}
+
+/// What the file's functions and requests do, None past a limit.
+fn file_taint<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Option<TaintResult<'t>> {
+    let cx = Cx::new(m, src, kind, m.root?)?;
+    let tainted = cx.run()?;
+    Some(TaintResult {
         findings: finish(cx.reached(&tainted)),
-        facts: Facts::default(),
-    }
+        facts: Facts {
+            summaries: cx.exported_summaries(),
+            calls: cx.passed_to_other_files(&tainted),
+            returns: cx.return_facts.take(),
+        },
+    })
+}
+
+/// Whether the file includes a header by a quoted path: one of the project's.
+fn has_project_include(src: &[u8]) -> bool {
+    src.windows(10).any(|w| w == b"#include \"") || src.windows(9).any(|w| w == b"#include\"")
 }
 
 // ---------------------------------------------------------------- the file
@@ -317,7 +329,8 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
 struct Summary<'t> {
     returns: Option<Path<'t>>,
     sinks: Vec<(Path<'t>, Node<'t>)>,
-    /// Never filled until values cross files (T4).
+    /// The other files' functions the value is passed on to: the path to the
+    /// call, the callee and its argument.
     calls: Vec<(Path<'t>, Callee, usize)>,
 }
 
@@ -355,6 +368,28 @@ struct Cx<'a, 't> {
     by_name: HashMap<&'a str, Vec<usize>>,
     evaluations: Cell<u64>,
     summaries: Summaries<SummaryKey, Summary<'t>>,
+    /// The file's quoted `#include`s and its `using namespace`s, for calls
+    /// to other files' functions.
+    includes: Vec<String>,
+    usings: Vec<String>,
+    /// Whether a call to another file's function may return a request's value
+    /// (the project pass decides); set once the fixed point starts.
+    from_calls: Cell<bool>,
+    return_facts: RefCell<Vec<ReturnFact<'t>>>,
+    /// What other files call each function by, worked out once.
+    keys: OnceCell<Vec<Option<Key>>>,
+    /// The other file's function each call calls, worked out once per call.
+    callees: RefCell<HashMap<usize, Option<Callee>>>,
+    /// The namespaces and classes of the file, outermost first.
+    scopes: Vec<ScopeRange<'a>>,
+}
+
+/// Where a namespace or a class is in the file; no name for an anonymous
+/// namespace.
+struct ScopeRange<'a> {
+    start: usize,
+    end: usize,
+    name: Option<&'a str>,
 }
 
 impl<'a, 't> Cx<'a, 't> {
@@ -378,8 +413,16 @@ impl<'a, 't> Cx<'a, 't> {
             by_name: HashMap::new(),
             evaluations: Cell::new(0),
             summaries: Summaries::new(MAX_SUMMARIES),
+            includes: Vec::new(),
+            usings: Vec::new(),
+            from_calls: Cell::new(false),
+            return_facts: RefCell::new(Vec::new()),
+            keys: OnceCell::new(),
+            callees: RefCell::new(HashMap::new()),
+            scopes: Vec::new(),
         };
         cx.index();
+        cx.preamble(root);
         cx.collect(root)?;
         cx.sources();
         Some(cx)
@@ -433,6 +476,7 @@ impl<'a, 't> Cx<'a, 't> {
     /// Records what one node writes, calls or checks.
     fn visit(&mut self, n: Node<'t>, words: &[&str], checks: &mut Vec<Node<'t>>) {
         match n.kind() {
+            "namespace_definition" | "class_specifier" | "struct_specifier" => self.scope(n),
             "init_declarator" => self.initialization(n),
             "assignment_expression" => self.assignment(n),
             "for_range_loop" => self.range_loop(n),
@@ -440,6 +484,21 @@ impl<'a, 't> Cx<'a, 't> {
             "binary_expression" => self.binary(n),
             _ => {}
         }
+    }
+
+    /// Notes where a namespace or a class is. A class or a struct with no
+    /// name (or no body: `struct stat st;`) isn't a scope names go through.
+    fn scope(&mut self, n: Node<'t>) {
+        let name = n.child_by_field_name("name").map(|x| self.text(x));
+        let namespace = n.kind() == "namespace_definition";
+        if n.child_by_field_name("body").is_none() || (name.is_none() && !namespace) {
+            return;
+        }
+        self.scopes.push(ScopeRange {
+            start: n.start_byte(),
+            end: n.end_byte(),
+            name,
+        });
     }
 
     /// `T x = v;`, `T x(v);`, `T x{v};`: the variable gets the value.
@@ -826,6 +885,7 @@ impl<'a, 't> Cx<'a, 't> {
 
     fn run(&self) -> Option<HashMap<DeclId, Path<'t>>> {
         let mut tainted = self.initial.clone();
+        self.from_calls.set(true);
         self.propagate(None, &mut tainted)?;
         Some(tainted)
     }
@@ -855,19 +915,11 @@ impl<'a, 't> Cx<'a, 't> {
                 if op != "+" {
                     return None;
                 }
-                best(
-                    ["left", "right"]
-                        .into_iter()
-                        .filter_map(|s| n.child_by_field_name(s))
-                        .map(|c| self.taint(c, state, next)),
-                )
+                best_of(n, &["left", "right"], |c| self.taint(c, state, next))
             }
-            "conditional_expression" => best(
-                ["consequence", "alternative"]
-                    .into_iter()
-                    .filter_map(|s| n.child_by_field_name(s))
-                    .map(|c| self.taint(c, state, next)),
-            ),
+            "conditional_expression" => best_of(n, &["consequence", "alternative"], |c| {
+                self.taint(c, state, next)
+            }),
             "assignment_expression" => self.taint(n.child_by_field_name("right")?, state, next),
             "field_expression" => self.field_taint(n, state, next),
             "call_expression" => self.call_taint(n, state, next),
@@ -973,7 +1025,11 @@ impl<'a, 't> Cx<'a, 't> {
         let mut out = at_sinks(
             &self.calls,
             |c| self.sink_call(c),
-            |a| self.taint(a, state, 0),
+            |a| {
+                sure_path(self.taint(a, state, 0), |path| {
+                    self.record_return(a, path, state)
+                })
+            },
         );
         for &call in &self.calls {
             out.extend(self.sinks_through(call, state));
@@ -1278,7 +1334,9 @@ impl<'a, 't> Cx<'a, 't> {
         state: &HashMap<DeclId, Path<'t>>,
         depth: u32,
     ) -> Option<Path<'t>> {
-        let j = self.local_callee(call)?;
+        let Some(j) = self.local_callee(call) else {
+            return self.maybe_from(call);
+        };
         through_returns(
             call,
             self.names[j],
@@ -1299,7 +1357,7 @@ impl<'a, 't> Cx<'a, 't> {
             call,
             name,
             arguments(call),
-            |a| self.taint(a, state, 0),
+            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
             reached,
         )
     }
@@ -1346,25 +1404,303 @@ impl<'a, 't> Cx<'a, 't> {
                 &self.calls,
                 f.node,
                 |c| self.sink_call(c),
-                |a| self.taint(a, &state, 0),
+                |a| self.taint(a, &state, 0).filter(|p| !from_call(p)),
                 |c| self.sinks_through(c, &state),
             )
         });
         let (returns, sinks) = outcome(values, |v| self.taint(v, &state, 0), sinks);
+        let calls = if p.is_some() {
+            calls_in(self, &self.calls, f.node, &state)
+        } else {
+            Vec::new()
+        };
         Some(Summary {
             returns,
             sinks,
-            calls: Vec::new(),
+            calls,
         })
-    }
-
-    /// Another file's function a call calls: none until values cross files.
-    fn external_callee(&self, _call: Node<'t>) -> Option<Callee> {
-        None
     }
 }
 
-flow_for!(Cx);
+// ---------------------------------------------------------------- other files (T4)
+
+impl<'a, 't> Cx<'a, 't> {
+    /// The file's quoted `#include`s and `using namespace`s.
+    fn preamble(&mut self, root: Node<'t>) {
+        let mut c = root.walk();
+        for n in root.named_children(&mut c) {
+            match n.kind() {
+                "preproc_include" => {
+                    if let Some(p) = n
+                        .child_by_field_name("path")
+                        .filter(|p| p.kind() == "string_literal")
+                    {
+                        self.includes
+                            .push(self.text(p).trim_matches('"').to_string());
+                    }
+                }
+                "using_declaration" => {
+                    let t = self.text(n);
+                    if let Some(ns) = t.strip_prefix("using namespace") {
+                        let ns = ns.trim().trim_end_matches(';').trim();
+                        if !ns.is_empty() {
+                            self.usings.push(ns.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// What another file's function's result may hold: a request's value, if
+    /// that function returns one. The project pass decides.
+    fn maybe_from(&self, call: Node<'t>) -> Option<Path<'t>> {
+        maybe_path(self.from_calls.get(), call, || {
+            self.external_callee(call).is_some()
+        })
+    }
+
+    /// The other file's function a call calls, as this file writes it: only
+    /// for a name the file doesn't define, a library doesn't own, and a
+    /// header of the project may have declared.
+    fn external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if let Some(known) = self.callees.borrow().get(&call.id()) {
+            return known.clone();
+        }
+        let callee = self.find_external_callee(call);
+        self.callees.borrow_mut().insert(call.id(), callee.clone());
+        callee
+    }
+
+    fn find_external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if call.kind() != "call_expression"
+            || self.includes.is_empty()
+            || self.local_callee(call).is_some()
+        {
+            return None;
+        }
+        let (segments, receiver) = self.parts(call)?;
+        let name = *segments.last()?;
+        if self.defined_here(name)
+            || PROPAGATING_CALLS.contains(&name)
+            || self.sink_call(call).is_some()
+        {
+            return None;
+        }
+        let path: Vec<String> = match receiver {
+            // `repo.find(x)`: the receiver's declared type, and the method.
+            Some(r) => {
+                let mut ty = self.receiver_type(r)?;
+                ty.push(name.to_string());
+                ty
+            }
+            None => {
+                // A name bound to a variable (a function pointer, a lambda).
+                if segments.len() == 1
+                    && call
+                        .child_by_field_name("function")
+                        .and_then(|f| self.decl_of(f))
+                        .is_some_and(|d| {
+                            !matches!(self.m.decls[d].kind, DeclKind::Function | DeclKind::Method)
+                        })
+                {
+                    return None;
+                }
+                segments.iter().map(|s| s.to_string()).collect()
+            }
+        };
+        if path.first().is_some_and(|f| f == "std") {
+            return None;
+        }
+        Some(Callee::Cpp {
+            path,
+            arity: arguments(call).len(),
+            scopes: self.scopes_of(call),
+            includes: self.includes.clone(),
+        })
+    }
+
+    /// The path of a receiver's declared type, as the project may define it.
+    fn receiver_type(&self, receiver: Node<'t>) -> Option<Vec<String>> {
+        type_path(self.type_of(receiver)?)
+    }
+
+    /// The scopes a name written at `n` may be in: the namespaces and
+    /// classes it's inside of, outermost first, each with those around it
+    /// (`a`, `a::B`), and the file's `using namespace`s.
+    fn scopes_of(&self, n: Node<'t>) -> Vec<String> {
+        let names = self.scope_names(n);
+        let mut out: Vec<String> = (1..=names.len()).map(|i| names[..i].join("::")).collect();
+        out.extend(self.usings.iter().cloned());
+        out
+    }
+
+    /// The names of the namespaces and classes around a node, outermost
+    /// first; from the ranges the walk recorded, because asking a node for
+    /// its parents costs a walk down from the root each time.
+    fn scope_names(&self, n: Node<'t>) -> Vec<&'a str> {
+        self.scopes
+            .iter()
+            .filter(|s| s.start <= n.start_byte() && n.end_byte() <= s.end)
+            .filter_map(|s| s.name)
+            .collect()
+    }
+
+    /// Whether parameter `p` of function `j` can hold text: a character
+    /// pointer or array, a string type, or a type this file doesn't show. A
+    /// struct, a number or a handle can't carry what injects by itself, and
+    /// a summary for each of a C program's many such parameters costs more
+    /// than it finds.
+    fn takes_text(&self, j: usize, p: usize) -> bool {
+        const TEXTUAL: &[&str] = &[
+            "char",
+            "string",
+            "String",
+            "str",
+            "Str",
+            "byte",
+            "Byte",
+            "uint8",
+            "void",
+            "auto",
+            "QByteArray",
+            "span",
+        ];
+        let Some(names) = self.m.functions[j].params.get(p) else {
+            return false;
+        };
+        names.iter().any(|&d| match self.m.decls[d].ty {
+            Some(t) => {
+                let t = self.text(t);
+                TEXTUAL.iter().any(|w| t.contains(w)) || TEXT_TYPES.contains(&last_name(t).as_str())
+            }
+            None => true,
+        })
+    }
+
+    /// Whether function `j` can return text: a character pointer, a string
+    /// type, a deduced type, or a pointer to nothing in particular.
+    fn returns_text(&self, j: usize) -> bool {
+        let f = self.m.functions[j].node;
+        let Some(ty) = f.child_by_field_name("type").map(|t| self.text(t)) else {
+            return true;
+        };
+        let pointer = f
+            .child_by_field_name("declarator")
+            .is_some_and(|d| d.kind() == "pointer_declarator");
+        ty == "auto"
+            || (ty.contains("void") && pointer)
+            || [
+                "char",
+                "string",
+                "String",
+                "str",
+                "Str",
+                "byte",
+                "uint8",
+                "QByteArray",
+            ]
+            .iter()
+            .any(|w| ty.contains(w))
+            || TEXT_TYPES.contains(&last_name(ty).as_str())
+    }
+
+    /// What other files call function `j` by: its qualified name and its
+    /// number of parameters. None for one they can't name: `static`, in an
+    /// anonymous namespace, nested, or one of several of the same name and
+    /// arity in this file.
+    fn function_key(&self, j: usize) -> Option<Key> {
+        self.keys
+            .get_or_init(|| {
+                let raw: Vec<Option<Key>> = (0..self.m.functions.len())
+                    .map(|j| self.raw_key(j))
+                    .collect();
+                let mut count: HashMap<&Key, usize> = HashMap::new();
+                for k in raw.iter().flatten() {
+                    *count.entry(k).or_default() += 1;
+                }
+                let unique: Vec<bool> = raw
+                    .iter()
+                    .map(|k| k.as_ref().is_some_and(|k| count[k] == 1))
+                    .collect();
+                raw.into_iter()
+                    .zip(unique)
+                    .map(|(k, u)| k.filter(|_| u))
+                    .collect()
+            })
+            .get(j)
+            .cloned()
+            .flatten()
+    }
+
+    /// Function `j`'s qualified name and arity, whether or not another has the
+    /// same.
+    fn raw_key(&self, j: usize) -> Option<Key> {
+        let f = &self.m.functions[j];
+        let mut c = f.node.walk();
+        if f.node
+            .children(&mut c)
+            .any(|n| n.kind() == "storage_class_specifier" && self.text(n) == "static")
+            || self.is_internal(f.node)
+        {
+            return None;
+        }
+        let (name, qualifiers) = function_name_parts(f.node)?;
+        let mut parts: Vec<String> = self
+            .scope_names(f.node)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        for q in qualifiers {
+            let words = self.text(q).split("::").map(|w| w.trim().to_string());
+            parts.extend(words.filter(|w| !w.is_empty()));
+        }
+        parts.push(self.text(name).to_string());
+        Some(Key {
+            export: parts.join("::"),
+            member: Some(f.params.len().to_string()),
+        })
+    }
+
+    /// Whether no other file can name a function: it's in an anonymous
+    /// namespace, or inside another function.
+    fn is_internal(&self, function: Node<'t>) -> bool {
+        let (start, end) = (function.start_byte(), function.end_byte());
+        let around = |s: usize, e: usize| s <= start && end <= e && (s, e) != (start, end);
+        self.scopes
+            .iter()
+            .any(|s| s.name.is_none() && around(s.start, s.end))
+            || self
+                .m
+                .functions
+                .iter()
+                .any(|o| around(o.node.start_byte(), o.node.end_byte()))
+    }
+
+    /// Another file's function's result reaching a sink through the argument
+    /// `sink_arg` of the sink call: the call, the request's values in its
+    /// arguments, and the path after it.
+    fn record_return(
+        &self,
+        sink_arg: Node<'t>,
+        path: &Path<'t>,
+        state: &HashMap<DeclId, Path<'t>>,
+    ) {
+        record_return_at_sink(
+            &self.return_facts,
+            &self.calls,
+            |c| self.sink_call(c),
+            |c| Some((self.external_callee(c)?, arguments(c))),
+            sink_arg,
+            path,
+            |a| self.taint(a, state, 0),
+        );
+    }
+}
+
+flow_for!(Cx, from_call);
+exports_for!(Cx, takes_text, returns_text);
 
 // ---------------------------------------------------------------- syntax
 
@@ -1430,6 +1766,12 @@ fn declared_name(d: Node) -> Option<Node> {
 /// The node that names a function a definition defines, if it has a plain
 /// name: `f`, a method's `f`, `C::f`. None for a constructor-like or operator.
 fn function_name(function: Node) -> Option<Node> {
+    function_name_parts(function).map(|(name, _)| name)
+}
+
+/// The name a definition defines, and the scopes it's qualified with
+/// (`a::B::f` has `a` and `B`), outermost first.
+fn function_name_parts(function: Node) -> Option<(Node, Vec<Node>)> {
     if function.kind() != "function_definition" {
         return None;
     }
@@ -1451,10 +1793,14 @@ fn function_name(function: Node) -> Option<Node> {
             _ => return None,
         }
     }
+    let mut scopes = Vec::new();
     for _ in 0..16 {
         match d.kind() {
-            "identifier" | "field_identifier" => return Some(d),
-            "qualified_identifier" => d = d.child_by_field_name("name")?,
+            "identifier" | "field_identifier" => return Some((d, scopes)),
+            "qualified_identifier" => {
+                scopes.extend(d.child_by_field_name("scope"));
+                d = d.child_by_field_name("name")?;
+            }
             _ => return None,
         }
     }
@@ -1502,6 +1848,47 @@ fn is_a_check_by_name(name: &str) -> bool {
 }
 
 /// Text built by concatenation, which the path says.
+/// The path of the type a declaration names, as the project may define it:
+/// smart pointers and references peeled off, nothing for the standard
+/// library's types, the text types and `auto`.
+fn type_path(ty: &str) -> Option<Vec<String>> {
+    let mut t = ty.trim();
+    for _ in 0..4 {
+        let Some((head, rest)) = t.split_once('<') else {
+            break;
+        };
+        let wrapper = head.rsplit("::").next().unwrap_or(head).trim();
+        if ![
+            "unique_ptr",
+            "shared_ptr",
+            "weak_ptr",
+            "optional",
+            "reference_wrapper",
+        ]
+        .contains(&wrapper)
+        {
+            break;
+        }
+        t = rest
+            .rsplit_once('>')
+            .map_or(rest, |(inner, _)| inner)
+            .trim();
+    }
+    let t = t.split('<').next().unwrap_or(t);
+    let words: String = t
+        .split_whitespace()
+        .filter(|w| !matches!(*w, "const" | "volatile" | "struct" | "class"))
+        .collect();
+    let path: Vec<String> = words
+        .split("::")
+        .map(|w| w.trim_matches(['&', '*']).to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let first = path.first()?;
+    let last = path.last()?;
+    (first != "std" && first != "auto" && !TEXT_TYPES.contains(&last.as_str())).then_some(path)
+}
+
 fn is_built(n: Node) -> bool {
     n.kind() == "binary_expression"
 }
@@ -1572,5 +1959,100 @@ mod tests {
     fn a_crow_route_parameter() {
         let src = "#include \"crow.h\"\nint main() {\n    crow::SimpleApp app;\n    CROW_ROUTE(app, \"/run/<string>\")([](const std::string& name) {\n        system((\"./job \" + name).c_str());\n        return \"ok\";\n    });\n}\n";
         assert_eq!(flagged("c/command-injection", src), [5]);
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    fn project(files: &[(&str, &str)]) -> Vec<crate::model::Issue> {
+        let cfg = Config::default();
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        let mut analyzed: Vec<_> = files
+            .iter()
+            .map(|(path, src)| {
+                let lang = if path.ends_with(".c") {
+                    Lang::C
+                } else {
+                    Lang::Cpp
+                };
+                analyze(path, lang, src, &rules, &cfg, far_deadline()).unwrap()
+            })
+            .collect();
+        crate::analysis::taint_project_rules(&mut analyzed, &rules);
+        analyzed
+            .into_iter()
+            .flat_map(|f| f.issues)
+            .filter(|i| i.rule.starts_with("c/") && !i.flow.is_empty())
+            .collect()
+    }
+
+    const HANDLER: &str = "#include <httplib.h>\n#include \"util.h\"\n";
+
+    #[test]
+    fn a_request_value_into_another_files_function() {
+        let handler = format!(
+            "{HANDLER}void ping(const httplib::Request& req) {{\n    run_ping(req.get_param_value(\"host\"));\n}}\n"
+        );
+        let util = "#include \"util.h\"\nvoid run_ping(std::string host) {\n    std::string cmd = \"ping \" + host;\n    system(cmd.c_str());\n}\n";
+        let found = project(&[("src/handler.cpp", &handler), ("src/util.cpp", util)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].rule, "c/command-injection");
+        assert_eq!(found[0].path, "src/util.cpp");
+        assert!(
+            found[0]
+                .flow
+                .iter()
+                .any(|s| s.path.as_deref() == Some("src/handler.cpp")),
+            "{:?}",
+            found[0].flow
+        );
+    }
+
+    #[test]
+    fn another_files_function_result_into_a_sink() {
+        let handler = format!(
+            "{HANDLER}void show(const httplib::Request& req) {{\n    std::string f = data_path(req.get_param_value(\"f\"));\n    FILE* h = fopen(f.c_str(), \"r\");\n}}\n"
+        );
+        let keeps = "#include \"util.h\"\nstd::string data_path(std::string n) {\n    return \"/data/\" + n;\n}\n";
+        let found = project(&[("handler.cpp", &handler), ("util.cpp", keeps)]);
+        assert_eq!(
+            found.iter().map(|i| i.rule).collect::<Vec<_>>(),
+            ["c/path-injection"]
+        );
+        // A function that doesn't pass its argument on isn't a flow.
+        let fixed = "#include \"util.h\"\nstd::string data_path(std::string n) {\n    return \"/data/fixed\";\n}\n";
+        assert!(project(&[("handler.cpp", &handler), ("util.cpp", fixed)]).is_empty());
+    }
+
+    #[test]
+    fn a_method_of_a_typed_receiver_and_a_qualified_name() {
+        let handler = "#include <httplib.h>\n#include \"users.h\"\n#include \"db.h\"\nvoid get(const httplib::Request& req, Users& users) {\n    users.find(req.get_param_value(\"id\"));\n    db::lookup(req.get_param_value(\"id\"));\n}\n";
+        let users = "#include \"users.h\"\nvoid Users::find(std::string id) {\n    sqlite3_exec(db, (\"SELECT * FROM u WHERE id=\" + id).c_str(), 0, 0, 0);\n}\n";
+        let lookup = "#include \"db.h\"\nnamespace db {\nvoid lookup(std::string id) {\n    sqlite3_exec(h, (\"SELECT 1 WHERE id=\" + id).c_str(), 0, 0, 0);\n}\n}\n";
+        let found = project(&[
+            ("users.cpp", users),
+            ("db.cpp", lookup),
+            ("handler.cpp", handler),
+        ]);
+        let mut at: Vec<_> = found.iter().map(|i| i.path.as_str()).collect();
+        at.sort_unstable();
+        assert_eq!(at, ["db.cpp", "users.cpp"], "{found:?}");
+    }
+
+    #[test]
+    fn a_name_no_included_header_leads_to_is_not_followed() {
+        // No include of util's header: the call may be anything's.
+        let handler = "#include <httplib.h>\n#include \"other.h\"\nvoid ping(const httplib::Request& req) {\n    run_ping(req.get_param_value(\"host\"));\n}\n";
+        let util = "void run_ping(std::string host) {\n    system(host.c_str());\n}\n";
+        assert!(project(&[("handler.cpp", handler), ("util.cpp", util)]).is_empty());
+        // Two functions of the name and arity in one file: which is unknown.
+        let two = "#include \"util.h\"\nvoid run_ping(std::string h) { system(h.c_str()); }\nnamespace x { }\nvoid run_ping(int n) { }\n";
+        let h2 = format!(
+            "{HANDLER}void ping(const httplib::Request& req) {{\n    run_ping(req.get_param_value(\"host\"));\n}}\n"
+        );
+        assert!(project(&[("handler.cpp", &h2), ("util.cpp", two)]).is_empty());
+        // A `static` function can't be called from another file.
+        let internal =
+            "#include \"util.h\"\nstatic void run_ping(std::string h) { system(h.c_str()); }\n";
+        assert!(project(&[("handler.cpp", &h2), ("util.cpp", internal)]).is_empty());
     }
 }
