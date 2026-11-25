@@ -3,7 +3,7 @@
 //! with the depth of the node that opened it, and the nodes above the
 //! cursor. A binder only says what each node declares and opens.
 
-use super::{DeclKind, Function, Model, Ref, ScopeId, ScopeKind};
+use super::{DeclId, DeclKind, Function, Model, Ref, ScopeId, ScopeKind};
 use std::collections::HashSet;
 use std::time::Instant;
 use tree_sitter::Node;
@@ -51,6 +51,23 @@ impl<'t, 's> Binder<'t, 's> {
             d.ty = ty;
             d.is_static = is_static;
         }
+    }
+
+    /// Declares `name`, for a language whose declarations take effect where
+    /// they're written (`Model::resolve_in_order`): `effect` gets `from`,
+    /// the byte this one takes effect at. Returns its id.
+    pub(super) fn declare_at(
+        &mut self,
+        effect: &mut Vec<usize>,
+        scope: ScopeId,
+        name: Node<'t>,
+        kind: DeclKind,
+        ty: Option<Node<'t>>,
+        from: usize,
+    ) -> DeclId {
+        self.declare(scope, name, kind, ty, false);
+        effect.push(from);
+        self.m.decls.len() - 1
     }
 
     /// A function's scope, holding its parameters.

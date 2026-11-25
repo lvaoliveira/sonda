@@ -63,19 +63,6 @@ enum Declared<'t> {
 }
 
 impl<'t> Cpp<'t, '_> {
-    fn declare_at(
-        &mut self,
-        scope: ScopeId,
-        name: Node<'t>,
-        kind: DeclKind,
-        ty: Option<Node<'t>>,
-        from: usize,
-    ) -> DeclId {
-        self.b.declare(scope, name, kind, ty, false);
-        self.effect.push(from);
-        self.b.m.decls.len() - 1
-    }
-
     fn visit(
         &mut self,
         node: Node<'t>,
@@ -105,13 +92,21 @@ impl<'t> Cpp<'t, '_> {
             }
             "enumerator" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    self.declare_at(scope, name, DeclKind::Const, None, 0);
+                    self.b
+                        .declare_at(&mut self.effect, scope, name, DeclKind::Const, None, 0);
                 }
                 None
             }
             "lambda_capture_initializer" => {
                 if let Some(name) = node.child_by_field_name("left") {
-                    self.declare_at(scope, name, DeclKind::Let, None, node.start_byte());
+                    self.b.declare_at(
+                        &mut self.effect,
+                        scope,
+                        name,
+                        DeclKind::Let,
+                        None,
+                        node.start_byte(),
+                    );
                 }
                 None
             }
@@ -179,13 +174,24 @@ impl<'t> Cpp<'t, '_> {
         from: usize,
     ) -> Vec<DeclId> {
         let ids: Vec<DeclId> = match self.declared(d) {
-            Some(Declared::Name(n)) => vec![self.declare_at(scope, n, kind, ty, from)],
+            Some(Declared::Name(n)) => {
+                vec![
+                    self.b
+                        .declare_at(&mut self.effect, scope, n, kind, ty, from),
+                ]
+            }
             Some(Declared::Function(n)) => {
-                vec![self.declare_at(scope, n, DeclKind::Function, ty, 0)]
+                vec![
+                    self.b
+                        .declare_at(&mut self.effect, scope, n, DeclKind::Function, ty, 0),
+                ]
             }
             Some(Declared::Bindings(names)) => names
                 .into_iter()
-                .map(|n| self.declare_at(scope, n, kind, ty, from))
+                .map(|n| {
+                    self.b
+                        .declare_at(&mut self.effect, scope, n, kind, ty, from)
+                })
                 .collect(),
             None => Vec::new(),
         };
@@ -235,7 +241,7 @@ impl<'t> Cpp<'t, '_> {
                 _ => DeclKind::Field,
             };
             if let Some(Declared::Function(n) | Declared::Name(n)) = self.declared(d) {
-                self.declare_at(scope, n, kind, ty, 0);
+                self.b.declare_at(&mut self.effect, scope, n, kind, ty, 0);
             }
         }
     }
@@ -247,7 +253,8 @@ impl<'t> Cpp<'t, '_> {
         node.child_by_field_name("body")?;
         let inner = self.b.m.push_scope(scope, ScopeKind::Type);
         if let Some(name) = node.child_by_field_name("name") {
-            self.declare_at(scope, name, DeclKind::Class, None, 0);
+            self.b
+                .declare_at(&mut self.effect, scope, name, DeclKind::Class, None, 0);
             self.classes.insert(self.b.text(name), inner);
             self.b.m.type_scopes.push((node, inner));
         }
@@ -286,10 +293,12 @@ impl<'t> Cpp<'t, '_> {
         if let Some(name) = name {
             match name.kind() {
                 "identifier" => {
-                    self.declare_at(scope, name, DeclKind::Function, None, 0);
+                    self.b
+                        .declare_at(&mut self.effect, scope, name, DeclKind::Function, None, 0);
                 }
                 "field_identifier" => {
-                    self.declare_at(scope, name, DeclKind::Method, None, 0);
+                    self.b
+                        .declare_at(&mut self.effect, scope, name, DeclKind::Method, None, 0);
                 }
                 // `C::f`: a member of a class defined earlier in the file.
                 "qualified_identifier" => {
@@ -450,35 +459,12 @@ fn in_condition(node: Node, ancestors: &[Node]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_model::{count, decl, with_model};
     use super::super::{DeclKind, Model, ScopeKind};
     use crate::lang::Lang;
-    use std::time::{Duration, Instant};
-
-    fn with_model(lang: Lang, src: &str, check: impl FnOnce(&Model)) {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&lang.grammar()).unwrap();
-        let tree = parser.parse(src, None).unwrap();
-        let model = super::build(
-            tree.root_node(),
-            src.as_bytes(),
-            Instant::now() + Duration::from_secs(10),
-        )
-        .unwrap();
-        check(&model);
-    }
 
     fn cpp(src: &str, check: impl FnOnce(&Model)) {
         with_model(Lang::Cpp, src, check);
-    }
-
-    /// The `n`th declaration called `name`, as (kind, reads, writes).
-    fn decl(m: &Model, name: &str, n: usize) -> (DeclKind, u32, u32) {
-        let d = m.decls.iter().filter(|d| d.name == name).nth(n).unwrap();
-        (d.kind, d.reads, d.writes)
-    }
-
-    fn count(m: &Model, name: &str) -> usize {
-        m.decls.iter().filter(|d| d.name == name).count()
     }
 
     #[test]

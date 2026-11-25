@@ -60,19 +60,6 @@ pub(super) fn build<'t>(root: Node<'t>, src: &[u8], deadline: Instant) -> Option
 }
 
 impl<'t> Rs<'t, '_> {
-    /// Declares `name` in `scope`, taking effect at byte `from`.
-    fn declare_at(
-        &mut self,
-        scope: ScopeId,
-        name: Node<'t>,
-        kind: DeclKind,
-        ty: Option<Node<'t>>,
-        from: usize,
-    ) {
-        self.b.declare(scope, name, kind, ty, false);
-        self.effect.push(from);
-    }
-
     /// Handles one node; returns the scope it opens for its children.
     fn visit(
         &mut self,
@@ -134,7 +121,8 @@ impl<'t> Rs<'t, '_> {
     /// A name an item declares, visible in its whole scope.
     fn item_name(&mut self, node: Node<'t>, scope: ScopeId, kind: DeclKind) {
         if let Some(name) = node.child_by_field_name("name") {
-            self.declare_at(scope, name, kind, None, 0);
+            self.b
+                .declare_at(&mut self.effect, scope, name, kind, None, 0);
         }
     }
 
@@ -153,7 +141,14 @@ impl<'t> Rs<'t, '_> {
                         if let Some(s) =
                             p.named_children(&mut p.walk()).find(|k| k.kind() == "self")
                         {
-                            self.declare_at(inner, s, DeclKind::Param, None, from);
+                            self.b.declare_at(
+                                &mut self.effect,
+                                inner,
+                                s,
+                                DeclKind::Param,
+                                None,
+                                from,
+                            );
                         }
                     }
                     "parameter" => {
@@ -221,7 +216,8 @@ impl<'t> Rs<'t, '_> {
     ) -> Vec<DeclId> {
         let first = self.b.m.decls.len();
         for n in pattern_bindings(pattern, self.b.src) {
-            self.declare_at(scope, n, DeclKind::Let, ty, from);
+            self.b
+                .declare_at(&mut self.effect, scope, n, DeclKind::Let, ty, from);
         }
         (first..self.b.m.decls.len()).collect()
     }
@@ -453,37 +449,18 @@ fn access(node: Node, parent: Node) -> (bool, bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_model::{count, decl, with_model};
     use super::super::{DeclKind, Model};
     use crate::lang::Lang;
-    use std::time::{Duration, Instant};
 
-    fn with_model(src: &str, check: impl FnOnce(&Model)) {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&Lang::Rust.grammar()).unwrap();
-        let tree = parser.parse(src, None).unwrap();
-        let model = super::build(
-            tree.root_node(),
-            src.as_bytes(),
-            Instant::now() + Duration::from_secs(10),
-        )
-        .unwrap();
-        check(&model);
-    }
-
-    /// The `n`th declaration called `name`, as (kind, reads, writes).
-    fn decl(m: &Model, name: &str, n: usize) -> (DeclKind, u32, u32) {
-        let d = m.decls.iter().filter(|d| d.name == name).nth(n).unwrap();
-        (d.kind, d.reads, d.writes)
-    }
-
-    fn count(m: &Model, name: &str) -> usize {
-        m.decls.iter().filter(|d| d.name == name).count()
+    fn rust(src: &str, check: impl FnOnce(&Model)) {
+        with_model(Lang::Rust, src, check);
     }
 
     #[test]
     fn a_let_shadows_from_the_end_of_its_statement() {
         let src = "fn f(line: &str) {\n    let line = line.trim();\n    let n = line.len();\n    let line = n;\n    use_it(line);\n}";
-        with_model(src, |m| {
+        rust(src, |m| {
             assert_eq!(count(m, "line"), 3);
             // The parameter is read by the first `let`'s initializer; the
             // first `let`'s line by `line.len()`; the last by `use_it`.
@@ -496,7 +473,7 @@ mod tests {
     #[test]
     fn parameters_patterns_and_closures() {
         let src = "fn h(Query(params): Query<P>, (a, b): (i32, i32), &mut c: &mut u8) {\n    let f = |x, (y, z)| x + y + z + a;\n    let g = |p: String| p;\n}";
-        with_model(src, |m| {
+        rust(src, |m| {
             for n in ["params", "a", "b", "c", "x", "y", "z", "p", "f", "g"] {
                 assert_eq!(count(m, n), 1, "{n}");
             }
@@ -510,7 +487,7 @@ mod tests {
     #[test]
     fn match_if_let_while_let_and_for() {
         let src = "fn f(o: Option<String>, v: Vec<u8>) {\n    match o {\n        Some(s) if s.len() > 1 => use_it(s),\n        None => {}\n        other => use_it(other),\n    }\n    if let Some(t) = pick() { use_it(t); } else { use_it(t); }\n    while let Some(w) = next() { use_it(w); }\n    for item in v.iter() { use_it(item); }\n}";
-        with_model(src, |m| {
+        rust(src, |m| {
             assert_eq!(decl(m, "s", 0).1, 2, "the guard and the arm");
             assert_eq!(count(m, "None"), 0);
             assert_eq!(decl(m, "other", 0).1, 1);
@@ -525,7 +502,7 @@ mod tests {
     #[test]
     fn items_are_visible_everywhere_and_self_resolves() {
         let src = "struct S { n: u32 }\nimpl S {\n    fn a(&self) -> u32 { self.n + helper() }\n}\nfn helper() -> u32 { 1 }\nconst LIMIT: u32 = 5;\nfn g() -> u32 { LIMIT + helper() }";
-        with_model(src, |m| {
+        rust(src, |m| {
             assert_eq!(decl(m, "helper", 0).0, DeclKind::Function);
             assert_eq!(decl(m, "helper", 0).1, 2);
             assert_eq!(decl(m, "LIMIT", 0).1, 1);
@@ -536,7 +513,7 @@ mod tests {
     #[test]
     fn paths_fields_attributes_and_macros() {
         let src = "use std::fs::read;\n#[get(\"/<id>\")]\nfn f(id: String) {\n    let s = format!(\"{}-{id}\", id);\n    let p = std::path::Path::new(&id);\n    println!(\"{}\", s);\n    let t = Thing { id, name: s };\n}";
-        with_model(src, |m| {
+        rust(src, |m| {
             let names: Vec<&str> = m.refs.iter().map(|r| r.name.as_str()).collect();
             assert!(!names.contains(&"std"), "{names:?}");
             assert!(!names.contains(&"get"), "{names:?}");

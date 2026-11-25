@@ -33,6 +33,8 @@ pub(crate) mod rs_taint;
 pub(crate) mod taint;
 pub(crate) mod taint_core;
 pub(crate) mod taint_project;
+#[cfg(test)]
+mod test_model;
 mod walk;
 
 use crate::lang::Lang;
