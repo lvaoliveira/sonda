@@ -24,14 +24,14 @@
 //! `os/exec`'s only if the file imports it), and a method of the file by its
 //! name, its number of arguments and the type of its receiver.
 
-use super::taint::{Callee, Facts, Finding, SinkKind, Step, TaintResult};
+use super::taint::{Callee, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    Flow, How, Path, Summaries, Summary, SummaryKey, Write, at_sinks, best, best_of, checked_names,
-    decl_index, finish, fixes_origin, flow_for, held, outcome, return_values, sinks_in,
-    sinks_local, through_local, tick, walk,
+    Body, Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, best, best_of,
+    checked_names, conclude, decl_index, exports_for, externals_for, fixes_origin, flow_for,
+    from_call, held, sinks_local, through_local, tick, walk,
 };
 use super::{DeclId, DeclKind, Model};
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use tree_sitter::Node;
@@ -44,22 +44,12 @@ const MAX_SUMMARIES: usize = 256;
 // ---------------------------------------------------------------- entry
 
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
-    if !might_have_sources(src) || !might_have_sinks(src, kind) {
+    // A file with neither a request nor a sink can still define a function
+    // other files' values reach, or pass one on: any file with functions.
+    if !(might_have_sources(src) || might_have_sinks(src, kind) || contains_any(src, &[b"func "])) {
         return TaintResult::default();
     }
-    let Some(root) = m.root else {
-        return TaintResult::default();
-    };
-    let Some(cx) = Cx::new(m, src, kind, root) else {
-        return TaintResult::default();
-    };
-    let Some(tainted) = cx.run() else {
-        return TaintResult::default();
-    };
-    TaintResult {
-        findings: finish(cx.reached(&tainted)),
-        facts: Facts::default(),
-    }
+    Cx::file_result(m, src, kind).unwrap_or_default()
 }
 
 fn contains_any(src: &[u8], words: &[&[u8]]) -> bool {
@@ -379,21 +369,43 @@ fn check_names(kind: SinkKind) -> &'static [&'static str] {
 }
 
 fn is_a_check_by_name(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
+    let lower = name.to_ascii_lowercase();
+    // A verb of checking that starts a word of the name (`isValid`,
+    // `checkPath`, `validateInput`), not one inside it: `safeQuery` consumes
+    // its argument rather than checking it, and `unsafeQuery` and `issueToken`
+    // check nothing.
+    let starts = |w: &str| {
+        lower.starts_with(w)
+            && name[w.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
+    };
     [
-        "valid",
-        "safe",
-        "sanitiz",
-        "allowed",
-        "whitelist",
-        "allowlist",
-        "within",
-        "inside",
+        "is",
+        "has",
+        "check",
+        "validate",
         "verify",
-        "authorized",
+        "ensure",
+        "assert",
+        "must",
+        "require",
+        "sanitize",
+        "authorize",
     ]
     .iter()
-    .any(|w| n.contains(w))
+    .any(|w| starts(w))
+        || ["valid", "safe", "allowed", "ok", "sanitized", "verified"]
+            .iter()
+            .any(|w| {
+                lower.ends_with(w)
+                    && !lower.ends_with(&format!("un{w}"))
+                    && !lower.ends_with(&format!("in{w}"))
+            })
+        || ["sanitiz", "allowlist", "whitelist", "within", "inside"]
+            .iter()
+            .any(|w| lower.contains(w))
 }
 
 // ---------------------------------------------------------------- the file
@@ -428,6 +440,16 @@ struct Cx<'a, 't> {
     by_name: HashMap<&'a str, Vec<usize>>,
     evaluations: Cell<u64>,
     summaries: Summaries<SummaryKey, Summary<'t>>,
+    /// The import path each name the file imports stands for.
+    import_paths: HashMap<&'a str, String>,
+    /// Whether a call to another file's function may return a request's value
+    /// (the project pass decides); set once the fixed point starts.
+    from_calls: Cell<bool>,
+    return_facts: RefCell<Vec<ReturnFact<'t>>>,
+    /// What other files call each function by, worked out once.
+    keys: OnceCell<Vec<Option<Key>>>,
+    /// The other file's function each call calls, worked out once per call.
+    callees: RefCell<HashMap<usize, Option<Callee>>>,
 }
 
 impl<'a, 't> Cx<'a, 't> {
@@ -447,6 +469,11 @@ impl<'a, 't> Cx<'a, 't> {
             by_name: HashMap::new(),
             evaluations: Cell::new(0),
             summaries: Summaries::new(MAX_SUMMARIES),
+            import_paths: HashMap::new(),
+            from_calls: Cell::new(false),
+            return_facts: RefCell::new(Vec::new()),
+            keys: OnceCell::new(),
+            callees: RefCell::new(HashMap::new()),
         };
         cx.index();
         cx.collect(root)?;
@@ -485,8 +512,9 @@ impl<'a, 't> Cx<'a, 't> {
                     .filter(|p| p.kind() == "import_spec")
                     .and_then(|p| p.child_by_field_name("path"))
                 {
-                    self.imports
-                        .insert(d, self.text(path).trim_matches(['"', '`']).to_string());
+                    let import = self.text(path).trim_matches(['"', '`']).to_string();
+                    self.import_paths.insert(decl.name.as_str(), import.clone());
+                    self.imports.insert(d, import);
                 }
             } else if let Some(k) = decl.ty.and_then(|t| request_kind(self.text(t))) {
                 self.requests.insert(d, k);
@@ -832,6 +860,7 @@ impl<'a, 't> Cx<'a, 't> {
 
     fn run(&self) -> Option<HashMap<DeclId, Path<'t>>> {
         let mut tainted = HashMap::new();
+        self.from_calls.set(true);
         self.propagate(None, &mut tainted)?;
         Some(tainted)
     }
@@ -966,14 +995,20 @@ impl<'a, 't> Cx<'a, 't> {
         ) {
             return Some(source_step(call, name));
         }
+        if matches!(self.kind, SinkKind::Redirect) && self.strips_leading_slashes(path, name, args)
+        {
+            return None;
+        }
         if self.starts_the_text() && path == "fmt" && name == "Sprintf" {
             return self.format_taint(args, state, depth);
         }
-        PROPAGATING_CALLS
+        let propagates = PROPAGATING_CALLS
             .iter()
-            .any(|(p, fs)| *p == path && fs.contains(&name))
-            .then(|| best(args.iter().map(|a| self.taint(*a, state, depth))))
-            .flatten()
+            .any(|(p, fs)| *p == path && fs.contains(&name));
+        if propagates {
+            return best(args.iter().map(|a| self.taint(*a, state, depth)));
+        }
+        self.maybe_from(call)
     }
 
     /// What `x.M(..)` returns: what a request's accessor gives, the text of
@@ -1055,6 +1090,20 @@ impl<'a, 't> Cx<'a, 't> {
         )
     }
 
+    /// `strings.Trim(x, "/")`, `strings.TrimLeft(x, "/\\")` and `path.Clean(x)`
+    /// leave no `//` at the start, so after a `/` the result stays on this
+    /// site: the usual way to make a redirect to a path safe.
+    fn strips_leading_slashes(&self, path: &str, name: &str, args: &[Node<'t>]) -> bool {
+        match (path, name) {
+            ("strings", "Trim" | "TrimLeft") => args
+                .get(1)
+                .and_then(|a| self.literal(*a))
+                .is_some_and(|set| set.contains('/')),
+            ("path" | "path/filepath", "Clean") => true,
+            _ => false,
+        }
+    }
+
     /// The text of a string literal written out.
     fn literal(&self, n: Node<'t>) -> Option<&'a str> {
         matches!(
@@ -1073,18 +1122,6 @@ impl<'a, 't> Cx<'a, 't> {
     }
 
     // ------------------------------------------------------------ sinks
-
-    fn reached(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<Finding<'t>> {
-        let mut out = at_sinks(
-            &self.calls,
-            |c| self.sink_call(c),
-            |a| self.taint(a, state, 0),
-        );
-        for &call in &self.calls {
-            out.extend(self.sinks_through(call, state));
-        }
-        out
-    }
 
     /// The sink a call is, for this kind, and the arguments that take the
     /// value.
@@ -1173,12 +1210,35 @@ impl<'a, 't> Cx<'a, 't> {
             };
         }
         match self.kind {
+            SinkKind::Sql if self.is_statement(receiver) => None,
             SinkKind::Sql => sql_position(name, args),
             SinkKind::Ssrf => (matches!(name, "Get" | "Head" | "Post" | "PostForm")
                 && self.is_client(receiver))
             .then(|| vec![0]),
             _ => None,
         }
+    }
+
+    /// Whether a receiver is a prepared statement, whose `Query` and `Exec`
+    /// take values for its placeholders, not text: declared as a `*sql.Stmt`,
+    /// made by `Prepare`, or called a statement.
+    fn is_statement(&self, receiver: Node<'t>) -> bool {
+        let Some(d) = self.decl_of(unwrap(receiver)) else {
+            return false;
+        };
+        let decl = &self.m.decls[d];
+        let name = decl.name.to_ascii_lowercase();
+        let typed = decl.ty.is_some_and(|t| self.text(t).contains("Stmt"));
+        let prepared = decl.declarator.is_some_and(|holder| {
+            holder
+                .child_by_field_name("right")
+                .or_else(|| holder.child_by_field_name("value"))
+                .is_some_and(|v| {
+                    let t = self.text(v);
+                    t.contains(".Prepare") || t.contains(".Preparex")
+                })
+        });
+        typed || prepared || name.contains("stmt") || name.contains("statement")
     }
 
     /// Whether a receiver reads as an HTTP client: declared as one, or
@@ -1252,7 +1312,9 @@ impl<'a, 't> Cx<'a, 't> {
         state: &HashMap<DeclId, Path<'t>>,
         depth: u32,
     ) -> Option<Path<'t>> {
-        let j = self.local_callee(call)?;
+        let Some(j) = self.local_callee(call) else {
+            return self.maybe_from(call);
+        };
         through_local(
             call,
             self.names[j],
@@ -1271,7 +1333,7 @@ impl<'a, 't> Cx<'a, 't> {
             self.names[j],
             arguments(call),
             |p| self.summary(j, p),
-            |a| self.taint(a, state, 0),
+            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
         )
     }
 
@@ -1300,35 +1362,255 @@ impl<'a, 't> Cx<'a, 't> {
             }
         }
         self.propagate(Some(f.node), &mut state)?;
-        let values = return_values(
-            f.node,
-            &["function_declaration", "method_declaration", "func_literal"],
-            "return_statement",
-        );
-        let sinks = p.is_some().then(|| {
-            sinks_in(
-                &self.calls,
-                f.node,
-                |c| self.sink_call(c),
-                |a| self.taint(a, &state, 0),
-                |c| self.sinks_through(c, &state),
-            )
-        });
-        let (returns, sinks) = outcome(values, |v| self.taint(v, &state, 0), sinks);
-        Some(Summary {
-            returns,
-            sinks,
-            calls: Vec::new(),
-        })
-    }
-
-    /// Another file's function a call calls: none until values cross files.
-    fn external_callee(&self, _call: Node<'t>) -> Option<Callee> {
-        None
+        Some(conclude(
+            self,
+            &Body {
+                function: f.node,
+                nested: &["function_declaration", "method_declaration", "func_literal"],
+                returns: "return_statement",
+                calls: &self.calls,
+            },
+            &state,
+            p,
+            |c| self.sink_call(c),
+            |a| self.taint(a, &state, 0),
+            |c| self.sinks_through(c, &state),
+        ))
     }
 }
 
-flow_for!(Cx);
+// ---------------------------------------------------------------- other files (T4)
+
+impl<'a, 't> Cx<'a, 't> {
+    fn find_external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if call.kind() != "call_expression" || self.local_callee(call).is_some() {
+            return None;
+        }
+        let arity = arguments(call).len();
+        let go = |package: Option<String>, receiver: Option<String>, name: &str| Callee::Go {
+            package,
+            receiver,
+            name: name.to_string(),
+            arity,
+        };
+        match self.target(call)? {
+            Target::Func(name) => {
+                let function = call.child_by_field_name("function")?;
+                // A builtin, a name of this file that isn't the one called
+                // (one with another arity), or a variable that holds a
+                // function.
+                let unknown = !BUILTINS.contains(&name)
+                    && !self.by_name.contains_key(name)
+                    && self.decl_of(function).is_none();
+                unknown.then(|| go(None, None, name))
+            }
+            Target::Package(path, name) => {
+                (!is_standard(&path)).then(|| go(Some(path), None, name))
+            }
+            Target::Method(receiver, name) => {
+                if self.is_request(receiver) {
+                    return None;
+                }
+                let (package, ty) = self.receiver_package_and_type(receiver)?;
+                let defined_here = self
+                    .by_name
+                    .get(name)
+                    .is_some_and(|js| js.iter().any(|&j| self.receivers[j] == ty));
+                (!defined_here).then(|| go(package, Some(ty), name))
+            }
+        }
+    }
+
+    /// The type a variable is declared with, and the import path of its
+    /// package when the type is `pkg.T`. None for a type that isn't a plain
+    /// name (a map, a function), or the standard library's.
+    fn receiver_package_and_type(&self, receiver: Node<'t>) -> Option<(Option<String>, String)> {
+        let d = self.decl_of(unwrap(receiver))?;
+        let written = match self.m.decls[d].ty {
+            Some(t) => self.text(t).to_string(),
+            None => self.inferred_type(d)?,
+        };
+        let ty = written.trim_start_matches(['*', '&']);
+        let ty = ty.split('[').next().unwrap_or(ty).trim();
+        let (package, name) = match ty.split_once('.') {
+            Some((pkg, name)) => {
+                let path = self.import_paths.get(pkg)?;
+                if is_standard(path) {
+                    return None;
+                }
+                (Some(path.clone()), name)
+            }
+            None => (None, ty),
+        };
+        let plain = !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        (plain && !NUMERIC_TYPES.contains(&ty) && ty != "string" && ty != "error")
+            .then(|| (package, name.to_string()))
+    }
+
+    /// The type of a variable declared without one, from what it starts as:
+    /// `s := &Store{}`, or `s := NewStore()` (Go's convention for a
+    /// constructor, here or in a package: `db.NewStore()` is `db.Store`).
+    fn inferred_type(&self, d: DeclId) -> Option<String> {
+        let decl = &self.m.decls[d];
+        let holder = decl.declarator?;
+        let (names, values) = match holder.kind() {
+            "short_var_declaration" => (
+                named_children(holder.child_by_field_name("left")?),
+                named_children(holder.child_by_field_name("right")?),
+            ),
+            "var_spec" => {
+                let mut c = holder.walk();
+                (
+                    holder.children_by_field_name("name", &mut c).collect(),
+                    named_children(holder.child_by_field_name("value")?),
+                )
+            }
+            _ => return None,
+        };
+        let at = names.iter().position(|n| n.id() == decl.node.id())?;
+        let value = match (names.len() == values.len(), values.len()) {
+            (true, _) => *values.get(at)?,
+            // `s, err := NewStore()`: the first result.
+            (false, 1) if at == 0 => values[0],
+            _ => return None,
+        };
+        let value = unwrap(value);
+        match value.kind() {
+            "composite_literal" => Some(self.text(value.child_by_field_name("type")?).to_string()),
+            "call_expression" => {
+                let function = value.child_by_field_name("function")?;
+                let (package, name) = match function.kind() {
+                    "identifier" => (None, self.text(function)),
+                    "selector_expression" => (
+                        Some(self.text(function.child_by_field_name("operand")?)),
+                        self.text(function.child_by_field_name("field")?),
+                    ),
+                    _ => return None,
+                };
+                let ty = name
+                    .strip_prefix("New")
+                    .or_else(|| name.strip_prefix("new"))
+                    .filter(|t| t.starts_with(char::is_uppercase))?;
+                Some(match package {
+                    Some(p) => format!("{p}.{ty}"),
+                    None => ty.to_string(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// What other files call function `j` by: its name, or its receiver's
+    /// type and its name for a method, and its number of parameters. None
+    /// for one they can't name (`init`, `main`, a literal, a variadic one,
+    /// a method with no named receiver type).
+    fn function_key(&self, j: usize) -> Option<Key> {
+        self.keys
+            .get_or_init(|| {
+                (0..self.m.functions.len())
+                    .map(|j| self.raw_key(j))
+                    .collect()
+            })
+            .get(j)
+            .cloned()
+            .flatten()
+    }
+
+    fn raw_key(&self, j: usize) -> Option<Key> {
+        let f = &self.m.functions[j];
+        let name = self.names[j];
+        if matches!(name, "" | "init" | "main" | "_") || self.is_variadic(f.node) {
+            return None;
+        }
+        let export = match f.node.kind() {
+            "function_declaration" => name.to_string(),
+            "method_declaration" if !self.receivers[j].is_empty() => {
+                format!("{}.{name}", self.receivers[j])
+            }
+            _ => return None,
+        };
+        Some(Key {
+            export,
+            member: Some(f.params.len().to_string()),
+        })
+    }
+
+    fn is_variadic(&self, function: Node<'t>) -> bool {
+        function.child_by_field_name("parameters").is_some_and(|p| {
+            named_children(p)
+                .iter()
+                .any(|c| c.kind() == "variadic_parameter_declaration")
+        })
+    }
+}
+
+/// The functions a program has without declaring them.
+const BUILTINS: &[&str] = &[
+    "append", "cap", "clear", "close", "complex", "copy", "delete", "imag", "len", "make", "max",
+    "min", "new", "panic", "print", "println", "real", "recover", "string", "any", "error",
+];
+
+/// Roots of the standard library's packages: an import under one of them
+/// isn't the project's.
+const STANDARD_ROOTS: &[&str] = &[
+    "archive",
+    "bufio",
+    "bytes",
+    "cmp",
+    "compress",
+    "container",
+    "context",
+    "crypto",
+    "database",
+    "debug",
+    "embed",
+    "encoding",
+    "errors",
+    "expvar",
+    "flag",
+    "fmt",
+    "go",
+    "hash",
+    "html",
+    "image",
+    "index",
+    "io",
+    "iter",
+    "log",
+    "maps",
+    "math",
+    "mime",
+    "net",
+    "os",
+    "path",
+    "plugin",
+    "reflect",
+    "regexp",
+    "runtime",
+    "slices",
+    "sort",
+    "strconv",
+    "strings",
+    "structs",
+    "sync",
+    "syscall",
+    "testing",
+    "text",
+    "time",
+    "unicode",
+    "unique",
+    "unsafe",
+    "weak",
+];
+
+fn is_standard(path: &str) -> bool {
+    let root = path.split('/').next().unwrap_or(path);
+    STANDARD_ROOTS.contains(&root) && !root.contains('.')
+}
+
+flow_for!(Cx, from_call);
+externals_for!(Cx);
+exports_for!(Cx);
 
 // ---------------------------------------------------------------- syntax
 
@@ -1428,6 +1710,7 @@ fn is_built(n: Node) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::analysis::tests::flagged_go as flagged;
+    use crate::lang::Lang;
 
     #[test]
     fn a_form_value_in_a_query_a_command_and_a_path() {
@@ -1467,6 +1750,24 @@ mod tests {
     }
 
     #[test]
+    fn a_function_called_unsafe_is_not_a_check_and_a_prepared_statement_binds() {
+        let src = "import (\n\t\"database/sql\"\n\t\"net/http\"\n)\n\nfunc h(db *sql.DB, r *http.Request) {\n\tid := r.FormValue(\"id\")\n\tunsafeQuery(db, id)\n\tisValid(id)\n\tstmt, _ := db.Prepare(\"SELECT * FROM t WHERE id = ?\")\n\tstmt.QueryRow(id)\n\tq := \"SELECT * FROM t WHERE id = \" + id\n\tdb.Query(q)\n}\n\nfunc unsafeQuery(db *sql.DB, x string) {}\nfunc isValid(x string) bool { return true }\n";
+        // `isValid(id)` does check it, so the last query is clear too.
+        assert!(flagged("go/sql-injection", src).is_empty());
+        let unchecked = src
+            .replace("\tisValid(id)\n", "")
+            .replace(
+                "\tunsafeQuery(db, id)\n",
+                "\tunsafeQuery(db, id)\n\tsafeLookup(db, id)\n",
+            )
+            .replace(
+                "func isValid",
+                "func safeLookup(db *sql.DB, x string) {}\nfunc isValid",
+            );
+        assert_eq!(flagged("go/sql-injection", &unchecked), [13]);
+    }
+
+    #[test]
     fn a_number_a_check_and_a_comparison_clear_the_value() {
         let src = "import (\n\t\"net/http\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n)\n\nfunc h(r *http.Request) {\n\tn, _ := strconv.Atoi(r.FormValue(\"n\"))\n\tos.Open(strconv.Itoa(n))\n\tname := r.FormValue(\"f\")\n\tif strings.HasPrefix(name, \"public/\") {\n\t\tos.Open(name)\n\t}\n\tkind := r.FormValue(\"k\")\n\tif kind == \"a\" {\n\t\tos.Open(kind)\n\t}\n}\n";
         assert!(flagged("go/path-injection", src).is_empty());
@@ -1492,10 +1793,130 @@ mod tests {
     }
 
     #[test]
+    fn a_path_with_its_leading_slashes_stripped_stays_on_the_site() {
+        let src = "import (\n\t\"net/http\"\n\t\"path\"\n\t\"strings\"\n)\n\nfunc h(w http.ResponseWriter, r *http.Request) {\n\tnext := r.FormValue(\"next\")\n\thttp.Redirect(w, r, \"/\"+strings.Trim(next, \"/\"), 302)\n\thttp.Redirect(w, r, \"/\"+strings.TrimLeft(next, \"/\\\\\"), 302)\n\thttp.Redirect(w, r, path.Clean(\"/\"+next), 302)\n\thttp.Redirect(w, r, \"/\"+strings.TrimSpace(next), 302)\n}\n";
+        assert_eq!(flagged("go/open-redirect", src), [12]);
+    }
+
+    #[test]
     fn chi_and_mux_route_parameters_and_a_client() {
         let chi = "import (\n\t\"net/http\"\n\n\t\"github.com/go-chi/chi/v5\"\n)\n\nfunc h(w http.ResponseWriter, r *http.Request) {\n\thttp.Get(chi.URLParam(r, \"url\"))\n}\n";
         assert_eq!(flagged("go/ssrf", chi), [8]);
         let mux = "import (\n\t\"net/http\"\n\n\t\"github.com/gorilla/mux\"\n)\n\nfunc h(client *http.Client, r *http.Request) {\n\tclient.Get(mux.Vars(r)[\"u\"])\n\tcache.Get(mux.Vars(r)[\"k\"])\n}\n";
         assert_eq!(flagged("go/ssrf", mux), [8]);
+    }
+
+    // ------------------------------------------------------------ across files (T4)
+
+    /// The lines `rule` flags in a project of Go files, as (path, line).
+    fn project(rule: &str, files: &[(&str, &str)]) -> Vec<(String, usize)> {
+        crate::analysis::tests::project_flagged(
+            rule,
+            Lang::Go,
+            files,
+            crate::analysis::taint_project_rules,
+        )
+    }
+
+    const HANDLER: &str = "package app\n\nimport \"net/http\"\n\nfunc show(w http.ResponseWriter, r *http.Request) {\n\tlookup(r.FormValue(\"id\"))\n}\n";
+
+    #[test]
+    fn a_helper_in_another_file_of_the_package() {
+        let store = "package app\n\nimport \"database/sql\"\n\nvar db *sql.DB\n\nfunc lookup(id string) {\n\tdb.Query(\"SELECT * FROM t WHERE id = '\" + id + \"'\")\n}\n";
+        let found = project(
+            "go/sql-injection",
+            &[("app/handler.go", HANDLER), ("app/store.go", store)],
+        );
+        assert_eq!(found, [("app/store.go".to_string(), 8)]);
+        // Another directory is another package.
+        let found = project(
+            "go/sql-injection",
+            &[("app/handler.go", HANDLER), ("other/store.go", store)],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_helpers_result_into_a_sink_and_a_helper_that_ignores_its_argument() {
+        let handler = "package app\n\nimport (\n\t\"net/http\"\n\t\"os\"\n)\n\nfunc show(w http.ResponseWriter, r *http.Request) {\n\tname := dataPath(r.FormValue(\"n\"))\n\tos.Open(name)\n}\n";
+        let keeps = "package app\n\nfunc dataPath(n string) string {\n\treturn \"/data/\" + n\n}\n";
+        let found = project(
+            "go/path-injection",
+            &[("app/handler.go", handler), ("app/paths.go", keeps)],
+        );
+        assert_eq!(found, [("app/handler.go".to_string(), 10)]);
+        let fixed =
+            "package app\n\nfunc dataPath(n string) string {\n\treturn \"/data/fixed\"\n}\n";
+        let found = project(
+            "go/path-injection",
+            &[("app/handler.go", handler), ("app/paths.go", fixed)],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_function_of_an_imported_package_of_the_project() {
+        let handler = "package app\n\nimport (\n\t\"net/http\"\n\n\t\"example.com/app/internal/db\"\n)\n\nfunc show(w http.ResponseWriter, r *http.Request) {\n\tdb.Find(r.FormValue(\"id\"))\n}\n";
+        let store = "package db\n\nimport \"database/sql\"\n\nvar conn *sql.DB\n\nfunc Find(id string) {\n\tconn.Query(\"SELECT * FROM t WHERE id = \" + id)\n}\n";
+        let found = project(
+            "go/sql-injection",
+            &[("app/handler.go", handler), ("internal/db/db.go", store)],
+        );
+        assert_eq!(found, [("internal/db/db.go".to_string(), 8)]);
+        // A package of another path with the same name isn't the one imported.
+        let found = project(
+            "go/sql-injection",
+            &[("app/handler.go", handler), ("vendor/other/db.go", store)],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_method_of_a_type_declared_in_another_file() {
+        let handler = "package app\n\nimport \"net/http\"\n\nfunc show(s *Store, r *http.Request) {\n\ts.Find(r.FormValue(\"id\"))\n}\n";
+        let store = "package app\n\nimport \"database/sql\"\n\ntype Store struct{ db *sql.DB }\n\nfunc (s *Store) Find(id string) {\n\ts.db.Query(\"SELECT * FROM t WHERE id = \" + id)\n}\n\nfunc (c *Cache) Find(id string) {}\n";
+        let found = project(
+            "go/sql-injection",
+            &[("app/handler.go", handler), ("app/store.go", store)],
+        );
+        assert_eq!(found, [("app/store.go".to_string(), 8)]);
+    }
+
+    #[test]
+    fn a_method_called_on_what_a_constructor_or_a_literal_made() {
+        let handler = "package app\n\nimport (\n\t\"net/http\"\n\n\t\"example.com/app/internal/db\"\n)\n\nfunc a(r *http.Request) {\n\tp := NewProfile()\n\tp.Find(r.FormValue(\"id\"))\n}\n\nfunc b(r *http.Request) {\n\tp := &Profile{}\n\tp.Find(r.FormValue(\"id\"))\n}\n\nfunc c(r *http.Request) {\n\tstore := db.NewStore()\n\tstore.Find(r.FormValue(\"id\"))\n}\n";
+        let profile = "package app\n\nimport \"database/sql\"\n\ntype Profile struct{ db *sql.DB }\n\nfunc NewProfile() *Profile { return &Profile{} }\n\nfunc (p *Profile) Find(id string) {\n\tp.db.Query(\"SELECT \" + id)\n}\n";
+        let store = "package db\n\nimport \"database/sql\"\n\ntype Store struct{ conn *sql.DB }\n\nfunc NewStore() *Store { return &Store{} }\n\nfunc (s *Store) Find(id string) {\n\ts.conn.Query(\"SELECT \" + id)\n}\n";
+        let found = project(
+            "go/sql-injection",
+            &[
+                ("app/handler.go", handler),
+                ("app/profile.go", profile),
+                ("internal/db/store.go", store),
+            ],
+        );
+        assert_eq!(
+            found,
+            [
+                ("app/profile.go".to_string(), 10),
+                ("internal/db/store.go".to_string(), 10)
+            ]
+        );
+    }
+
+    #[test]
+    fn what_no_file_of_the_project_defines_is_not_followed() {
+        // `lookup` isn't defined anywhere here, and `os.Getenv` is the library's.
+        let found = project("go/sql-injection", &[("app/handler.go", HANDLER)]);
+        assert!(found.is_empty(), "{found:?}");
+        let store = "package app\n\nimport \"database/sql\"\n\nvar db *sql.DB\n\nfunc lookup(id string, more ...string) {\n\tdb.Query(\"SELECT \" + id)\n}\n";
+        let found = project(
+            "go/sql-injection",
+            &[("app/handler.go", HANDLER), ("app/store.go", store)],
+        );
+        assert!(
+            found.is_empty(),
+            "a variadic function isn't one to guess: {found:?}"
+        );
     }
 }

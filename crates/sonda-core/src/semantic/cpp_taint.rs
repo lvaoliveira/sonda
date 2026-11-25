@@ -24,12 +24,11 @@
 //! `strcat` and `memcpy` write into an argument, so a call like that is a
 //! write of its source arguments into its destination.
 
-use super::taint::{Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
+use super::taint::{Callee, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, at_sinks, best_of, calls_in,
-    checked_names, decl_index, exports_for, finish, flow_for, from_call, held, inside, maybe_path,
-    outcome, record_return_at_sink, return_values, sinks_in, sure_path, through_returns,
-    through_sinks, tick, walk,
+    Body, Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, best_of, checked_names,
+    conclude, decl_index, exports_for, externals_for, flow_for, from_call, held, inside,
+    through_returns, through_sinks, tick, walk,
 };
 use super::{DeclId, DeclKind, Model};
 use std::cell::{Cell, OnceCell, RefCell};
@@ -299,21 +298,7 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     if !(might_have_sinks(src, kind) || might_have_sources(src) || has_project_include(src)) {
         return TaintResult::default();
     }
-    file_taint(m, src, kind).unwrap_or_default()
-}
-
-/// What the file's functions and requests do, None past a limit.
-fn file_taint<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> Option<TaintResult<'t>> {
-    let cx = Cx::new(m, src, kind, m.root?)?;
-    let tainted = cx.run()?;
-    Some(TaintResult {
-        findings: finish(cx.reached(&tainted)),
-        facts: Facts {
-            summaries: cx.exported_summaries(),
-            calls: cx.passed_to_other_files(&tainted),
-            returns: cx.return_facts.take(),
-        },
-    })
+    Cx::file_result(m, src, kind).unwrap_or_default()
 }
 
 /// Whether the file includes a header by a quoted path: one of the project's.
@@ -998,22 +983,6 @@ impl<'a, 't> Cx<'a, 't> {
 
     // ------------------------------------------------------------ sinks
 
-    fn reached(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<Finding<'t>> {
-        let mut out = at_sinks(
-            &self.calls,
-            |c| self.sink_call(c),
-            |a| {
-                sure_path(self.taint(a, state, 0), |path| {
-                    self.record_return(a, path, state)
-                })
-            },
-        );
-        for &call in &self.calls {
-            out.extend(self.sinks_through(call, state));
-        }
-        out
-    }
-
     /// The sink a call is, for this kind, and the arguments that take the
     /// value.
     fn sink_call(&self, call: Node<'t>) -> Option<(String, Vec<Node<'t>>)> {
@@ -1371,31 +1340,20 @@ impl<'a, 't> Cx<'a, 't> {
             }
         }
         self.propagate(Some(f.node), &mut state)?;
-        let values = return_values(
-            f.node,
-            &["function_definition", "lambda_expression"],
-            "return_statement",
-        );
-        let sinks = p.is_some().then(|| {
-            sinks_in(
-                &self.calls,
-                f.node,
-                |c| self.sink_call(c),
-                |a| self.taint(a, &state, 0).filter(|p| !from_call(p)),
-                |c| self.sinks_through(c, &state),
-            )
-        });
-        let (returns, sinks) = outcome(values, |v| self.taint(v, &state, 0), sinks);
-        let calls = if p.is_some() {
-            calls_in(self, &self.calls, f.node, &state)
-        } else {
-            Vec::new()
-        };
-        Some(Summary {
-            returns,
-            sinks,
-            calls,
-        })
+        Some(conclude(
+            self,
+            &Body {
+                function: f.node,
+                nested: &["function_definition", "lambda_expression"],
+                returns: "return_statement",
+                calls: &self.calls,
+            },
+            &state,
+            p,
+            |c| self.sink_call(c),
+            |a| self.taint(a, &state, 0),
+            |c| self.sinks_through(c, &state),
+        ))
     }
 }
 
@@ -1428,26 +1386,6 @@ impl<'a, 't> Cx<'a, 't> {
                 _ => {}
             }
         }
-    }
-
-    /// What another file's function's result may hold: a request's value, if
-    /// that function returns one. The project pass decides.
-    fn maybe_from(&self, call: Node<'t>) -> Option<Path<'t>> {
-        maybe_path(self.from_calls.get(), call, || {
-            self.external_callee(call).is_some()
-        })
-    }
-
-    /// The other file's function a call calls, as this file writes it: only
-    /// for a name the file doesn't define, a library doesn't own, and a
-    /// header of the project may have declared.
-    fn external_callee(&self, call: Node<'t>) -> Option<Callee> {
-        if let Some(known) = self.callees.borrow().get(&call.id()) {
-            return known.clone();
-        }
-        let callee = self.find_external_callee(call);
-        self.callees.borrow_mut().insert(call.id(), callee.clone());
-        callee
     }
 
     fn find_external_callee(&self, call: Node<'t>) -> Option<Callee> {
@@ -1654,29 +1592,10 @@ impl<'a, 't> Cx<'a, 't> {
                 .iter()
                 .any(|o| around(o.node.start_byte(), o.node.end_byte()))
     }
-
-    /// Another file's function's result reaching a sink through the argument
-    /// `sink_arg` of the sink call: the call, the request's values in its
-    /// arguments, and the path after it.
-    fn record_return(
-        &self,
-        sink_arg: Node<'t>,
-        path: &Path<'t>,
-        state: &HashMap<DeclId, Path<'t>>,
-    ) {
-        record_return_at_sink(
-            &self.return_facts,
-            &self.calls,
-            |c| self.sink_call(c),
-            |c| Some((self.external_callee(c)?, arguments(c))),
-            sink_arg,
-            path,
-            |a| self.taint(a, state, 0),
-        );
-    }
 }
 
 flow_for!(Cx, from_call);
+externals_for!(Cx);
 exports_for!(Cx, takes_text, returns_text);
 
 // ---------------------------------------------------------------- syntax

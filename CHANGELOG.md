@@ -9,6 +9,16 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Go's taint rules follow a value across files: into a function or a method of
+  another file of the package, and through `pkg.F(x)` into the directory of the
+  project that ends the import path, and back out of a function whose result
+  reaches a sink. A method is found by its receiver's type, including a variable
+  made by `&Store{}` or `NewStore()`. A prepared statement's `Query` and `Exec`
+  are no longer sinks (their arguments are bound), and a function named
+  `safeQuery` or `unsafeQuery` no longer counts as a check on its arguments;
+  only names that read as checks (`isValid`, `checkPath`, `validateInput`, ...)
+  do. `strings.Trim(x, "/")` and `path.Clean(x)` clear a value for a redirect.
+
 - Taint analysis for Go ([ADR-0027](docs/adr/0027-taint-analysis.md)): five rules,
   `go/sql-injection`, `go/command-injection`, `go/path-injection`,
   `go/open-redirect` and `go/ssrf`, follow a request's value from `net/http`'s

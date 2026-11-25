@@ -49,7 +49,7 @@
   pointer, a string type) and a function that can return it are summarized
   for other files; a C program's structs and numbers aren't, which keeps the
   cost down.
-  Go built for T2 and T3, on its binder (ADR-0031): `go/sql-injection`,
+  Go built (T2 to T4, on its binder, ADR-0031): `go/sql-injection`,
   `go/command-injection`, `go/path-injection`, `go/open-redirect` and
   `go/ssrf`, from a request object (`*http.Request`, gin's and echo's
   `Context`, fiber's `Ctx`: the form, the query, the path parameters, the
@@ -68,9 +68,24 @@
   the host, after `https://` the next part is the host, and a variable that
   comes first (`base + id`) sets it. The `Host` the client wrote isn't a source
   for a redirect: moving to `https://` + host is the usual way to move to
-  HTTPS, and a victim's browser can't be made to send another. Values don't cross files yet, which
-  for Go means the package's other files too: a package is a directory, and a
-  handler that calls a helper in the next file is the common shape.
+  HTTPS, and a victim's browser can't be made to send another.
+  `strings.Trim(x, "/")`, `strings.TrimLeft(x, "/")` and `path.Clean(x)` clear
+  a value for a redirect: after a `/` they leave nothing that moves it to
+  another site. Values cross files by the call's name and its number of
+  arguments, in the other files of the caller's package (a package is a
+  directory, and a handler that calls a helper in the next file is the common
+  shape), or, for `pkg.F(x)`, in the directory of the project that ends the
+  import path (the longest, if several do). A method is found by its
+  receiver's type: a variable declared with it, or made by a literal
+  (`&Store{}`) or a constructor (`NewStore()`, `db.NewStore()`). A test's
+  functions are its own package's and aren't what the program's files call. A
+  variadic function, `init` and `main` aren't summarized. A prepared
+  statement's `Query` and `Exec` take values for its placeholders, not text, so
+  they aren't sinks, and a function whose name says it checks (`isValid`,
+  `checkPath`, `validateInput`, a name ending in `Valid`, `Safe` or `Allowed`)
+  validates its arguments, but one that merely contains the word does not:
+  `safeQuery` consumes its argument and `unsafeQuery` checks nothing. A
+  package imported under a name its path doesn't give isn't resolved.
   The command line, standard input and the environment are the program's
   own, not a request's.
 - Date: 2026-11-07

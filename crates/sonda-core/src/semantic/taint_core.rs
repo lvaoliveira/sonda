@@ -416,6 +416,150 @@ pub(super) fn exported<'t, S: Reaches<'t>>(
     out
 }
 
+/// A function's body, for what its summary concludes from it.
+pub(super) struct Body<'a, 't> {
+    pub(super) function: Node<'t>,
+    /// The kinds of the functions nested in it, whose returns aren't its own.
+    pub(super) nested: &'a [&'a str],
+    /// The kind of a return statement.
+    pub(super) returns: &'a str,
+    /// The calls of the file.
+    pub(super) calls: &'a [Node<'t>],
+}
+
+/// What a function does with the values it holds, once they have spread
+/// through it (`state`): what it returns, and for a function whose parameter
+/// `p` holds one, the sinks that reaches and the other files' functions it
+/// passes it to.
+pub(super) fn conclude<'t, F: Flow<'t>>(
+    flow: &F,
+    body: &Body<'_, 't>,
+    state: &HashMap<DeclId, Path<'t>>,
+    p: Option<usize>,
+    sink_call: impl Fn(Node<'t>) -> Option<(String, Vec<Node<'t>>)>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+    through: impl Fn(Node<'t>) -> Vec<Finding<'t>>,
+) -> Summary<'t> {
+    let values = return_values(body.function, body.nested, body.returns);
+    let sinks = p.is_some().then(|| {
+        let sure = |a| taint(a).filter(|path| !from_call(path));
+        sinks_in(body.calls, body.function, sink_call, sure, through)
+    });
+    let (returns, sinks) = outcome(values, &taint, sinks);
+    let calls = if p.is_some() {
+        calls_in(flow, body.calls, body.function, state)
+    } else {
+        Vec::new()
+    };
+    Summary {
+        returns,
+        sinks,
+        calls,
+    }
+}
+
+/// What an engine does about other files' functions, the same in each: the
+/// context `$cx` has `calls`, `callees` (a memo from a call's node id to what
+/// it calls), `from_calls` and `return_facts` fields, `find_external_callee`,
+/// `sink_call`, `taint` and the file's `arguments`.
+macro_rules! externals_for {
+    ($cx:ident) => {
+        impl<'a, 't> $cx<'a, 't> {
+            /// What another file's function's result may hold: a request's
+            /// value, if that function returns one. The project pass decides.
+            fn maybe_from(&self, call: ::tree_sitter::Node<'t>) -> Option<Path<'t>> {
+                $crate::semantic::taint_core::maybe_path(self.from_calls.get(), call, || {
+                    self.external_callee(call).is_some()
+                })
+            }
+
+            /// The other file's function a call calls, worked out once per call.
+            fn external_callee(
+                &self,
+                call: ::tree_sitter::Node<'t>,
+            ) -> Option<$crate::semantic::taint::Callee> {
+                if let Some(known) = self.callees.borrow().get(&call.id()) {
+                    return known.clone();
+                }
+                let callee = self.find_external_callee(call);
+                self.callees.borrow_mut().insert(call.id(), callee.clone());
+                callee
+            }
+
+            /// Another file's function's result reaching a sink through the
+            /// argument `sink_arg` of the sink call: the call, the request's
+            /// values in its arguments, and the path after it.
+            fn record_return(
+                &self,
+                sink_arg: ::tree_sitter::Node<'t>,
+                path: &Path<'t>,
+                state: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+            ) {
+                $crate::semantic::taint_core::record_return_at_sink(
+                    &self.return_facts,
+                    &self.calls,
+                    |c| self.sink_call(c),
+                    |c| Some((self.external_callee(c)?, arguments(c))),
+                    sink_arg,
+                    path,
+                    |a| self.taint(a, state, 0),
+                );
+            }
+
+            /// Every sink a tainted value reaches, with its path: in a call, or
+            /// through a function of the file the call passes it to.
+            fn reached(
+                &self,
+                state: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+            ) -> Vec<$crate::semantic::taint::Finding<'t>> {
+                let mut out = $crate::semantic::taint_core::at_sinks(
+                    &self.calls,
+                    |c| self.sink_call(c),
+                    |a| {
+                        $crate::semantic::taint_core::sure_path(self.taint(a, state, 0), |path| {
+                            self.record_return(a, path, state)
+                        })
+                    },
+                );
+                for &call in &self.calls {
+                    out.extend(self.sinks_through(call, state));
+                }
+                out
+            }
+
+            /// What a file's requests and functions do, None past a limit.
+            fn file_result(
+                m: &'a $crate::semantic::Model<'t>,
+                src: &'a [u8],
+                kind: $crate::semantic::taint::SinkKind,
+            ) -> Option<$crate::semantic::taint::TaintResult<'t>> {
+                let cx = Self::new(m, src, kind, m.root?)?;
+                let tainted = cx.run()?;
+                let findings = $crate::semantic::taint_core::finish(cx.reached(&tainted));
+                Some($crate::semantic::taint::TaintResult {
+                    findings,
+                    facts: cx.facts(&tainted),
+                })
+            }
+
+            /// What the file gives the project pass: its functions'
+            /// summaries, the request's values it passes to other files, and
+            /// the results of other files' functions it passes to a sink.
+            fn facts(
+                &self,
+                tainted: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+            ) -> $crate::semantic::taint::Facts<'t> {
+                $crate::semantic::taint::Facts {
+                    summaries: self.exported_summaries(),
+                    calls: self.passed_to_other_files(tainted),
+                    returns: self.return_facts.take(),
+                }
+            }
+        }
+    };
+}
+pub(super) use externals_for;
+
 /// The request's values a file passes to other files' functions: for each
 /// call (`passed_on` says its tainted arguments), a fact.
 pub(super) fn call_facts<'t>(
