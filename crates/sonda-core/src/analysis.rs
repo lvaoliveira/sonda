@@ -4452,6 +4452,16 @@ fn calls_base_constructor(node: Node, src: &[u8]) -> bool {
         })
 }
 
+/// The parameters one declaration in a parameter list declares: Go's
+/// `a, b int` is two, so every name counts; any other has one.
+fn declared_names(declaration: Node) -> usize {
+    let mut cursor = declaration.walk();
+    declaration
+        .children_by_field_name("name", &mut cursor)
+        .count()
+        .max(1)
+}
+
 fn parameter_count(node: Node, syn: &Syntax, src: &[u8]) -> Option<usize> {
     if node.child_by_field_name("parameter").is_some() {
         return Some(1); // JS `x => ...`
@@ -4473,7 +4483,8 @@ fn parameter_count(node: Node, syn: &Syntax, src: &[u8]) -> Option<usize> {
     let n = params
         .named_children(&mut cursor)
         .filter(|c| !syn.comments.contains(&c.kind()))
-        .count();
+        .map(declared_names)
+        .sum::<usize>();
     // A method's `self` or `cls` isn't one the caller passes.
     let receiver = params
         .named_child(0)

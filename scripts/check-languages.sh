@@ -21,6 +21,7 @@ printf 'class A { int F(string a) => a.Length; }\n' > A.cs
 printf 'fn f(a: &str) -> usize { a.len() }\n' > a.rs
 printf 'int f(const char *a) { return a[0]; }\n' > a.c
 printf 'int f(const char *a) { return a[0]; }\n' > a.cpp
+printf 'package p\n\nfunc f(a string) int { return len(a) }\n' > a.go
 # Exit 1 is a failing gate, not an error.
 status=0
 "$sonda" scan . --format json -o report.json || status=$?
@@ -37,8 +38,8 @@ if jq -e '[.warnings[] | select(test("sandbox"))] | length > 0' report.json > /d
   exit 1
 fi
 analyzed=$(jq '.files | length' report.json)
-if [ "$analyzed" -ne 9 ]; then
-  echo "check-languages: $analyzed of 9 files analyzed" >&2
+if [ "$analyzed" -ne 10 ]; then
+  echo "check-languages: $analyzed of 10 files analyzed" >&2
   jq -r '.files[].path, .warnings[]' report.json >&2
   exit 1
 fi

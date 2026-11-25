@@ -383,6 +383,8 @@ pub(crate) fn build<'t>(
         Lang::Java => java::build(root, src, deadline),
         Lang::Rust => rs::build(root, src, deadline),
         Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
+        // No binder for Go yet: the rules that need names wait for one.
+        Lang::Go => None,
     }
 }
 

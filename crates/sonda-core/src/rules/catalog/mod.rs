@@ -40,6 +40,8 @@ mod cs_smells;
 mod cs_tail;
 mod cs_typed;
 mod cs_types;
+mod go;
+mod go_security;
 mod java;
 mod java_bugs;
 mod java_close;
@@ -216,6 +218,8 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (rs_correctness2::RULES, rs_correctness2::OFF_BY_DEFAULT),
     (rs_security::RULES, rs_security::OFF_BY_DEFAULT),
     (cpp_security::RULES, cpp_security::OFF_BY_DEFAULT),
+    (go::RULES, &[]),
+    (go_security::RULES, &[]),
 ];
 
 /// Every rule, in `MODULES` order.

@@ -373,6 +373,16 @@ impl Syntax {
                 types: RUST_TYPES,
                 rust: true,
             },
+            Lang::Go => Self {
+                line_comment: &["//"],
+                block_comments: true,
+                triple_quotes: false,
+                // Raw strings.
+                backticks: true,
+                keywords: GO_KEYWORDS,
+                types: GO_TYPES,
+                rust: false,
+            },
         }
     }
 }
@@ -561,6 +571,63 @@ const RUST_KEYWORDS: &[&str] = &[
 const RUST_TYPES: &[&str] = &[
     "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize", "str", "u8", "u16",
     "u32", "u64", "u128", "usize",
+];
+
+const GO_KEYWORDS: &[&str] = &[
+    "break",
+    "case",
+    "chan",
+    "const",
+    "continue",
+    "default",
+    "defer",
+    "else",
+    "fallthrough",
+    "for",
+    "func",
+    "go",
+    "goto",
+    "if",
+    "import",
+    "interface",
+    "map",
+    "package",
+    "range",
+    "return",
+    "select",
+    "struct",
+    "switch",
+    "type",
+    "var",
+    "true",
+    "false",
+    "nil",
+    "iota",
+];
+
+const GO_TYPES: &[&str] = &[
+    "any",
+    "bool",
+    "byte",
+    "comparable",
+    "complex64",
+    "complex128",
+    "error",
+    "float32",
+    "float64",
+    "int",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "rune",
+    "string",
+    "uint",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uintptr",
 ];
 
 const CS_KEYWORDS: &[&str] = &[

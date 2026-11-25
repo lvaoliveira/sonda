@@ -320,7 +320,7 @@ each project's main branch. Every filter is optional:
 | `project`, `branch` | One project; a branch other than its main one |
 | `severity`, `category`, `status`, `component` | Comma-separated values; `status` is `open`, `confirmed`, `accepted`, `false_positive` or `fixed` |
 | `file` | Any part of the path |
-| `language` | Comma-separated: `javascript`, `typescript`, `tsx`, `python`, `java`, `c`, `cpp`, `csharp`, `rust`, or one only a newer `sonda` reads |
+| `language` | Comma-separated: `javascript`, `typescript`, `tsx`, `python`, `java`, `c`, `cpp`, `csharp`, `rust`, `go`, or one only a newer `sonda` reads |
 | `assignee`, `new=true` | Assigned to someone; on new code only |
 | `ids` | Comma-separated issue ids: these only |
 | `offset`, `limit` | Paging; `limit` is 1-200, default 50 |
