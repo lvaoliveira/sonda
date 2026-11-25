@@ -9,6 +9,18 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Taint analysis for Go ([ADR-0027](docs/adr/0027-taint-analysis.md)): five rules,
+  `go/sql-injection`, `go/command-injection`, `go/path-injection`,
+  `go/open-redirect` and `go/ssrf`, follow a request's value from `net/http`'s
+  `*http.Request`, gin's and echo's `Context`, fiber's `Ctx`, chi's `URLParam`
+  or gorilla/mux's `Vars` through strings, `fmt.Sprintf`, `filepath.Join`,
+  decoders and the functions and methods of the file into `database/sql`'s
+  queries, `os/exec`, `os.Open` and the like, `http.Redirect` and outgoing
+  requests, and report the path it took. A value tested by `strings.HasPrefix`,
+  `filepath.IsLocal`, a regexp or `==` is validated; a number can't inject; a
+  redirect to `https://` + the `Host` header isn't one. Within a file only:
+  another file of the same package isn't followed yet.
+
 - Go ([ADR-0031](docs/adr/0031-go.md)): `.go` files are parsed, measured
   (functions, complexity, comments, duplication) and checked by 24 rules, with
   `go` as their language: bugs (`go/self-assignment`, `go/defer-in-loop`,

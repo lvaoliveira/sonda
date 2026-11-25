@@ -824,24 +824,7 @@ fn underscored_name<'t>(n: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::analyze;
-    use crate::analysis::tests::far_deadline;
-    use crate::config::Config;
-    use crate::lang::Lang;
-    use crate::rules::RuleSet;
-
-    /// The lines `rule` flags in a Go file.
-    fn flagged(rule: &str, body: &str) -> Vec<usize> {
-        let cfg = Config::default();
-        let rules = RuleSet::new(&cfg.rules).unwrap();
-        let src = format!("package p\n\n{body}");
-        let file = analyze("a.go", Lang::Go, &src, &rules, &cfg, far_deadline()).unwrap();
-        file.issues
-            .iter()
-            .filter(|i| i.rule == rule)
-            .map(|i| i.line - 2)
-            .collect()
-    }
+    use crate::analysis::tests::flagged_go as flagged;
 
     #[test]
     fn comparing_a_name_with_itself_is_the_nan_test() {
