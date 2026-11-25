@@ -9,6 +9,18 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Go ([ADR-0031](docs/adr/0031-go.md)): `.go` files are parsed, measured
+  (functions, complexity, comments, duplication) and checked by 21 rules, with
+  `go` as their language: bugs (`go/self-assignment`, `go/defer-in-loop`,
+  `go/unreachable-code`, `go/ignored-result`, ...), smells (`go/collapsible-if`,
+  `go/context-not-first`, ...) and vulnerabilities with CWE and OWASP
+  (`go/hardcoded-credentials`, `go/weak-hash`, `go/tls-unverified`,
+  `go/sql-concatenation`, `go/shell-command`, ...). A Go parameter list counts
+  every name (`a, b int` is two), and a file with Go's `// Code generated ... DO
+  NOT EDIT.` line before the package clause is skipped as generated, however
+  long the license above it. No binder yet, so no taint analysis or
+  name-based rules; not yet compared with SonarQube.
+
 - Taint analysis for C and C++ ([ADR-0027](docs/adr/0027-taint-analysis.md)): six
   rules, `c/sql-injection`, `c/command-injection`, `c/path-injection`,
   `c/open-redirect`, `c/ssrf` and `c/format-string`, follow a request's value

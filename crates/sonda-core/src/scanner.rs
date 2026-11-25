@@ -912,7 +912,11 @@ fn load_source(c: &Candidate, max_bytes: u64, scan: &ScanConfig) -> Result<Strin
         ));
     }
     if scan.skip_generated
-        && let Some(marker) = generated_marker(&src)
+        && let Some(marker) = generated_marker(&src).or_else(|| {
+            (c.lang == Lang::Go)
+                .then(|| go_generated_marker(&src))
+                .flatten()
+        })
     {
         return Err(format!(
             "{rel}: skipped, says it's generated (\"{marker}\"; scan.skip_generated = false analyzes it)"
@@ -1030,6 +1034,22 @@ fn generated_marker(src: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Go's own convention (golang.org/s/generatedcode): a line `// Code
+/// generated ... DO NOT EDIT.` before the package clause, however many
+/// comment lines (a license, say) come first.
+pub(crate) fn go_generated_marker(src: &str) -> Option<&'static str> {
+    for line in src.lines() {
+        let line = line.trim();
+        if line.starts_with("// Code generated ") && line.ends_with(" DO NOT EDIT.") {
+            return Some("Code generated ... DO NOT EDIT.");
+        }
+        if !(line.is_empty() || line.starts_with("//")) {
+            return None;
+        }
+    }
+    None
 }
 
 fn ms(since: Instant) -> u128 {

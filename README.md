@@ -2,7 +2,7 @@
 
 Open-source static analysis and quality gates, in the spirit of SonarQube, as a single fast binary.
 
-sonda scans JavaScript/TypeScript, Python, Java, C/C++, C# and Rust code for bugs, vulnerabilities and code smells. It measures size, complexity, duplication and coverage, and fails your CI build when **new code** does not meet your quality gate.
+sonda scans JavaScript/TypeScript, Python, Java, C/C++, C#, Rust and Go code for bugs, vulnerabilities and code smells. It measures size, complexity, duplication and coverage, and fails your CI build when **new code** does not meet your quality gate.
 
 ```
 $ sonda scan . --new-code origin/main --coverage coverage/lcov.info

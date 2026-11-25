@@ -1,0 +1,32 @@
+	package main
+
+import (
+	"fmt"
+	"os"
+)
+
+// A counter.
+type Counter struct {
+	names map[string]int
+}
+
+func (c *Counter) Add(name string) (int, error) {
+	if name == "" {
+		return 0, fmt.Errorf("empty name")
+	}
+	c.names[name]++
+	for i := 0; i < 3; i++ {
+		switch {
+		case i > 1:
+			defer fmt.Println(i)
+		}
+	}
+	return c.names[name], nil
+}
+
+func main() {
+	c := &Counter{names: map[string]int{}}
+	if _, err := c.Add(os.Args[0]); err != nil {
+		panic(err)
+	}
+}

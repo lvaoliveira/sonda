@@ -14,6 +14,7 @@ pub enum Lang {
     Cpp,
     CSharp,
     Rust,
+    Go,
 }
 
 pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
@@ -27,6 +28,7 @@ pub(crate) const C_ONLY: &[Lang] = &[Lang::C];
 pub(crate) const CPP_ONLY: &[Lang] = &[Lang::Cpp];
 pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
 pub(crate) const RUST: &[Lang] = &[Lang::Rust];
+pub(crate) const GO: &[Lang] = &[Lang::Go];
 /// Every language but Rust, for the `common/` rules SonarQube has no Rust key for.
 pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::JavaScript,
@@ -37,6 +39,7 @@ pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::C,
     Lang::Cpp,
     Lang::CSharp,
+    Lang::Go,
 ];
 /// Every supported language.
 pub const ALL: &[Lang] = &[
@@ -49,6 +52,7 @@ pub const ALL: &[Lang] = &[
     Lang::Cpp,
     Lang::CSharp,
     Lang::Rust,
+    Lang::Go,
 ];
 
 impl Lang {
@@ -67,6 +71,7 @@ impl Lang {
             "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => Lang::Cpp,
             "cs" => Lang::CSharp,
             "rs" => Lang::Rust,
+            "go" => Lang::Go,
             _ => return None,
         })
     }
@@ -91,6 +96,7 @@ impl Lang {
             Lang::Cpp => "cpp",
             Lang::CSharp => "csharp",
             Lang::Rust => "rust",
+            Lang::Go => "go",
         }
     }
 
@@ -105,6 +111,7 @@ impl Lang {
             Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
             Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Lang::Go => tree_sitter_go::LANGUAGE.into(),
         }
     }
 
@@ -116,6 +123,7 @@ impl Lang {
             Lang::C | Lang::Cpp => &C_SYNTAX,
             Lang::CSharp => &CSHARP_SYNTAX,
             Lang::Rust => &RUST_SYNTAX,
+            Lang::Go => &GO_SYNTAX,
         }
     }
 }
@@ -337,6 +345,28 @@ static RUST_SYNTAX: Syntax = Syntax {
     dup_ignore: &["use_declaration", "extern_crate_declaration"],
 };
 
+static GO_SYNTAX: Syntax = Syntax {
+    functions: &["function_declaration", "method_declaration", "func_literal"],
+    closures: &[],
+    wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    max_cognitive: 15,
+    receivers: &[],
+    // `for` is Go's only loop. A `select` is a switch of its own.
+    branches: &["for_statement"],
+    switches: &[
+        "expression_switch_statement",
+        "type_switch_statement",
+        "select_statement",
+    ],
+    cases: &["expression_case", "type_case", "communication_case"],
+    comments: &["comment"],
+    dup_ignore: &["import_declaration", "package_clause"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +387,7 @@ mod tests {
         assert_eq!(Lang::from_path(Path::new("x.hpp")), Some(Lang::Cpp));
         assert_eq!(Lang::from_path(Path::new("App.CS")), Some(Lang::CSharp));
         assert_eq!(Lang::from_path(Path::new("lib.rs")), Some(Lang::Rust));
+        assert_eq!(Lang::from_path(Path::new("main.go")), Some(Lang::Go));
         assert_eq!(Lang::from_path(Path::new("Makefile")), None);
     }
 
