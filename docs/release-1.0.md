@@ -148,7 +148,8 @@ built.
       count) and on a server with thousands of analyses (page and upload
       times); limits documented in [performance.md](performance.md).
 - [ ] Sign-in and the main pages checked in Safari and Firefox, not only
-      Chrome.
+      Chrome. Sign-in on `http://localhost` works in Safari (2026-11-25); Firefox
+      and the main pages aren't checked yet.
 - [ ] Every bug found gets a test that would have caught it, like the
       `docker-cli` sandbox check did for the musl one.
 
