@@ -19,6 +19,7 @@ pub(crate) mod cs_index;
 pub(crate) mod cs_infer;
 pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
+mod go;
 mod java;
 pub(crate) mod java_index;
 pub(crate) mod java_taint;
@@ -383,8 +384,7 @@ pub(crate) fn build<'t>(
         Lang::Java => java::build(root, src, deadline),
         Lang::Rust => rs::build(root, src, deadline),
         Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
-        // No binder for Go yet: the rules that need names wait for one.
-        Lang::Go => None,
+        Lang::Go => go::build(root, src, deadline),
     }
 }
 
@@ -402,6 +402,7 @@ pub(crate) fn supports(lang: Lang) -> bool {
             | Lang::Rust
             | Lang::C
             | Lang::Cpp
+            | Lang::Go
     )
 }
 
