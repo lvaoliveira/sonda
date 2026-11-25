@@ -3,6 +3,7 @@
 
 use crate::analysis::{self, FileAnalysis};
 use crate::baseline::{self, Baseline};
+use crate::cache::Cache;
 use crate::config::{Config, ScanConfig};
 use crate::coverage::{self, Coverage, Resolver, normalize};
 use crate::deps::{self, Dependency, Ecosystem, FileKind};
@@ -46,6 +47,11 @@ pub struct ScanOptions {
     pub advisories: Option<PathBuf>,
     /// The baseline file whose issues are left out (ADR-0029).
     pub baseline: BaselineChoice,
+    /// A directory (relative to `root`, unless absolute) that keeps what
+    /// each file's analysis gave, so a later scan skips the files that
+    /// didn't change (ADR-0030); `None` keeps nothing. The report is the
+    /// same either way.
+    pub cache: Option<PathBuf>,
 }
 
 /// Which baseline file a scan reads (ADR-0029).
@@ -467,15 +473,88 @@ fn analyze_all(
     paths: &[Candidate],
     max_bytes: u64,
     timeout: Duration,
+    cache: Option<&Cache>,
+) -> Result<Vec<Result<FileAnalysis, String>>, Error> {
+    let Some(cache) = cache else {
+        return analyze_files(opts, cfg, rules, paths, max_bytes, timeout);
+    };
+    let load = |c: &Candidate| load_source(c, max_bytes, &cfg.scan);
+    let pool = thread_pool(opts)?;
+    // What each file gave before, if the cache has it. A file that can't be
+    // read is a miss: analyzing it again says why, as it does without a cache.
+    let looked: Vec<(Option<String>, Option<FileAnalysis>)> = pool.install(|| {
+        paths
+            .par_iter()
+            .map(|c| {
+                let Ok(src) = load(c) else {
+                    return (None, None);
+                };
+                let key = cache.key(&c.rel, c.lang, &src);
+                let hit = cache.get(&key, &c.rel, c.lang, rules);
+                (Some(key), hit)
+            })
+            .collect()
+    });
+    let misses: Vec<Candidate> = paths
+        .iter()
+        .zip(&looked)
+        .filter(|(_, (_, hit))| hit.is_none())
+        .map(|(c, _)| c.clone())
+        .collect();
+    info!(
+        cached = paths.len() - misses.len(),
+        analyzed = misses.len(),
+        "looked up the cache"
+    );
+    let mut fresh = analyze_files(opts, cfg, rules, &misses, max_bytes, timeout)?.into_iter();
+    let mut out = Vec::with_capacity(paths.len());
+    let mut to_store = Vec::new();
+    for (key, hit) in looked {
+        match hit {
+            Some(f) => out.push(Ok(f)),
+            None => {
+                let r = fresh.next().ok_or_else(|| {
+                    Error::Internal("fewer results than files analyzed".to_string())
+                })?;
+                out.push(r);
+                if let Some(key) = key {
+                    to_store.push((key, out.len() - 1));
+                }
+            }
+        }
+    }
+    pool.install(|| {
+        to_store.par_iter().for_each(|(key, i)| {
+            if let Ok(f) = &out[*i] {
+                cache.put(key, f);
+            }
+        });
+    });
+    cache.prune();
+    Ok(out)
+}
+
+fn thread_pool(opts: &ScanOptions) -> Result<rayon::ThreadPool, Error> {
+    let threads = opts.jobs.map_or(0, NonZeroUsize::get); // 0: rayon's default
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| Error::Internal(format!("thread pool: {e}")))
+}
+
+/// Analyzes `paths`, all of them, with no cache.
+fn analyze_files(
+    opts: &ScanOptions,
+    cfg: &Config,
+    rules: &RuleSet,
+    paths: &[Candidate],
+    max_bytes: u64,
+    timeout: Duration,
 ) -> Result<Vec<Result<FileAnalysis, String>>, Error> {
     let load = |c: &Candidate| load_source(c, max_bytes, &cfg.scan);
     match &opts.isolation {
         Isolation::InProcess => {
-            let threads = opts.jobs.map_or(0, NonZeroUsize::get); // 0: rayon's default
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .map_err(|e| Error::Internal(format!("thread pool: {e}")))?;
+            let pool = thread_pool(opts)?;
             Ok(pool.install(|| {
                 paths
                     .par_iter()
@@ -491,6 +570,27 @@ fn analyze_all(
         Isolation::Workers { program, sandbox } => {
             WorkerPool::new(program, cfg, timeout, opts.jobs, *sandbox)?
                 .run(paths, |c| load(c).map(|src| (c.rel.as_str(), c.lang, src)))
+        }
+    }
+}
+
+/// The scan's cache, if it asked for one. One that can't be opened is a
+/// warning and a scan without it.
+fn open_cache(opts: &ScanOptions, cfg: &Config, warnings: &mut Vec<String>) -> Option<Cache> {
+    let dir = opts.cache.as_ref()?;
+    let dir = if dir.is_absolute() {
+        dir.clone()
+    } else {
+        opts.root.join(dir)
+    };
+    match Cache::open(&dir, cfg) {
+        Ok(cache) => Some(cache),
+        Err(e) => {
+            warnings.push(format!(
+                "{}: not used as the cache, so every file is analyzed: {e}",
+                dir.display()
+            ));
+            None
         }
     }
 }
@@ -533,7 +633,8 @@ fn scan_files(
     };
 
     let started = Instant::now();
-    let results = analyze_all(opts, cfg, rules, &paths, max_bytes, timeout)?;
+    let cache = open_cache(opts, cfg, &mut warnings);
+    let results = analyze_all(opts, cfg, rules, &paths, max_bytes, timeout, cache.as_ref())?;
 
     let mut files = Vec::with_capacity(results.len());
     for r in results {
@@ -677,6 +778,7 @@ fn baseline_path(opts: &ScanOptions, cfg: &Config) -> Result<Option<(PathBuf, St
 }
 
 /// A file found by the walk.
+#[derive(Clone)]
 struct Candidate {
     path: PathBuf,
     /// Root-relative, with `/` separators.
@@ -1300,6 +1402,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
 
@@ -1356,6 +1459,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let covered: Vec<_> = r
@@ -1435,6 +1539,7 @@ mod tests {
                 jobs: None,
                 advisories: None,
                 baseline: Default::default(),
+                cache: None,
             };
             let r = scan(&opts, &cfg, &rules).unwrap();
             let paths: Vec<_> = r.files.iter().map(|f| f.path.clone()).collect();
@@ -1478,6 +1583,7 @@ mod tests {
                 jobs: None,
                 advisories: None,
                 baseline: Default::default(),
+                cache: None,
             };
             let r = scan(&opts, &cfg, &rules).unwrap();
             let paths: Vec<_> = r.files.iter().map(|f| f.path.clone()).collect();
@@ -1513,6 +1619,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         assert_eq!(r.files.len(), 1);
@@ -1548,6 +1655,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let lines: Vec<usize> = r
@@ -1585,6 +1693,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let hits: Vec<(&str, &str)> = r
@@ -1635,6 +1744,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let hits: Vec<(&str, usize)> = r
@@ -1690,6 +1800,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan(&opts, &cfg, &rules).unwrap();
         let hits: Vec<(&str, &str, usize)> = r
@@ -1729,6 +1840,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let mut paths = collect_files(root, cfg).unwrap().files;
         let mut walk_warnings = vec!["z: walk error".to_string(), "a: walk error".to_string()];
@@ -1814,6 +1926,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let out = outcome(scan(&opts, &cfg, &rules).unwrap(), &cfg);
         let text = report::render(&report::build(&out, false), Format::Text);
@@ -1890,6 +2003,7 @@ mod tests {
             jobs: None,
             advisories: None,
             baseline: Default::default(),
+            cache: None,
         };
         let r = scan_files(&opts, &cfg, &rules, paths, warnings, &[]).unwrap();
         assert!(r.files.is_empty(), "nothing outside the root was analyzed");

@@ -37,6 +37,42 @@ files are skipped: 979 of VS Code's.
   - each git command, for new code, gets `scan.git_timeout_secs` (120 s).
     Raise it for very large histories.
 
+## Scanning faster
+
+`sonda scan --cache` keeps what each file's analysis gave in `.sonda/cache`
+(`--cache=DIR` for another directory), and a later scan reuses it for every
+file whose bytes, path, configuration and sonda version are the same
+([ADR-0030](adr/0030-scan-cache.md)). The report is byte for byte the same
+with it and without it; what crosses files is worked out again each scan.
+
+| Repository | No cache | Cold cache | Warm cache |
+|---|---|---|---|
+| [redis](https://github.com/redis/redis) (C) | 2.2 s | 1.8 s | 0.2 s |
+| [curl](https://github.com/curl/curl) (C) | 1.6 s | 1.7 s | 0.2 s |
+
+A scan with a warm cache still reads every file, hashes it and detects
+duplication, so it doesn't drop to nothing, and it grows with the size of
+the project, not with what changed. The cache is 30 to 40 MB for redis; it
+holds findings and token hashes, not source, and ignores itself in git.
+After each scan it drops the entries that scan didn't use.
+
+In CI, keep the directory between runs with the platform's cache, keyed by
+the commit, falling back to the latest one; a cache from an older commit is
+correct, and only the files that changed are analyzed again:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: .sonda/cache
+    key: sonda-${{ github.sha }}
+    restore-keys: sonda-
+- run: sonda scan . --cache
+```
+
+Delete the directory if you build sonda yourself between releases: a
+development build has the version of the last release, so it can't tell its
+own rule changes from the release's.
+
 ## Server
 
 A server loaded with 3,149 analyses of three JavaScript and TypeScript

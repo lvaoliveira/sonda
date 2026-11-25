@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Size and complexity of one file.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileMetrics {
     pub lines: usize,
     /// Lines containing code (not only comments or whitespace).
@@ -176,11 +176,11 @@ pub struct Issue {
 }
 
 /// One step of a taint finding's path.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowStep {
     /// The file the step is in, when it isn't the issue's: a path that
     /// crosses files (ADR-0027, T4). Relative to the project root.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// What happens to the value here: "request parameter `id`",
     /// "concatenated into `q`".
@@ -216,5 +216,21 @@ impl<const N: usize> std::fmt::Display for Digest<N> {
 impl<const N: usize> Serialize for Digest<N> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_str(self)
+    }
+}
+
+impl<'de, const N: usize> Deserialize<'de> for Digest<N> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let hex = String::deserialize(d)?;
+        let bad = || serde::de::Error::custom(format!("not {N} bytes of lowercase hex"));
+        if hex.len() != 2 * N || !hex.is_ascii() {
+            return Err(bad());
+        }
+        let mut out = [0u8; N];
+        for (byte, pair) in out.iter_mut().zip(hex.as_bytes().chunks(2)) {
+            let digits = std::str::from_utf8(pair).map_err(|_| bad())?;
+            *byte = u8::from_str_radix(digits, 16).map_err(|_| bad())?;
+        }
+        Ok(Digest(out))
     }
 }
