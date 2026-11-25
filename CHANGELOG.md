@@ -10,7 +10,7 @@ file, the report formats and the public library API.
 ### Added
 
 - Go ([ADR-0031](docs/adr/0031-go.md)): `.go` files are parsed, measured
-  (functions, complexity, comments, duplication) and checked by 21 rules, with
+  (functions, complexity, comments, duplication) and checked by 23 rules, with
   `go` as their language: bugs (`go/self-assignment`, `go/defer-in-loop`,
   `go/unreachable-code`, `go/ignored-result`, ...), smells (`go/collapsible-if`,
   `go/context-not-first`, ...) and vulnerabilities with CWE and OWASP
