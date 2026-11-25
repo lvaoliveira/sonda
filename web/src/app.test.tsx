@@ -203,7 +203,8 @@ describe('Issues: moving through the list', () => {
         // A fixed height, not a minimum: the list, the filters and the detail
         // scroll inside it, and the pager under the list stays on screen.
         await waitFor(() => expect(panel?.style.height).toBe(expected))
-        expect(panel?.style.gridTemplateRows).toBe('minmax(0, 1fr)')
+        // Serialized as browsers do (jsdom 31 and later): the 0 gets its unit.
+        expect(panel?.style.gridTemplateRows).toBe('minmax(0px, 1fr)')
         unmount()
       }
     } finally {

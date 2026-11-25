@@ -40,6 +40,7 @@ pub mod rules;
 pub mod upload;
 
 mod analysis;
+mod cache;
 mod coverage;
 mod cpp_syntax;
 mod duplication;

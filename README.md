@@ -69,6 +69,7 @@ sonda -v scan .                           # log progress to stderr (-vv, -vvv fo
 sonda scan . --jobs 4                     # limit parallelism (default: every CPU)
 sonda scan . --sandbox require            # refuse to scan if workers cannot be sandboxed
 sonda scan . --no-isolation               # parse in-process (debugging); see SECURITY.md
+sonda scan . --cache                      # keep each file's analysis in .sonda/cache; unchanged files are skipped next time
 sonda upload report.json --server https://sonda.example.com \
   --project payments --branch main --commit "$GITHUB_SHA"   # a project analysis token, from SONDA_TOKEN or SONDA_TOKEN_FILE
                                           # --project-version 2.3.0: a new version starts a new code period

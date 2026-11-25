@@ -110,6 +110,18 @@ struct ScanArgs {
     /// platform cannot; require fails the run instead (see SECURITY.md).
     #[arg(long, value_enum, default_value_t = SandboxArg::BestEffort)]
     sandbox: SandboxArg,
+    /// Keep what each file's analysis gave in DIR (default `.sonda/cache`,
+    /// relative to the scanned directory), so a later scan skips the files
+    /// that didn't change. The report is the same either way; the cache
+    /// ignores itself in git. See the docs' "Scanning faster".
+    #[arg(
+        long,
+        value_name = "DIR",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = ".sonda/cache"
+    )]
+    cache: Option<PathBuf>,
     /// Parse files in this process instead of in worker processes (for
     /// debugging; a parser crash then aborts the whole scan).
     #[arg(long)]
@@ -487,6 +499,7 @@ fn scan(args: ScanArgs) -> Result<ExitCode> {
         jobs: args.jobs,
         advisories: args.advisories,
         baseline,
+        cache: args.cache,
     };
     let root = opts.root.clone();
     if upload.is_some() || saved.is_some() {

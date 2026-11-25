@@ -26,7 +26,6 @@ breaking that promise.
 | [Last C# rules](#smaller-items) | after | Two rules, each needing a new layer. |
 | [OpenTelemetry traces](#smaller-items) | after | ADR-0019 decided traces wait. |
 | [Query matching on very deep nesting](#smaller-items) | after | Only code nested past 20,000 levels; the timeout bounds it. |
-| [Caching unchanged files](#scanner-additions) | after | Makes scans faster; reports stay the same. |
 | [More languages](#scanner-additions) | after | Go is built ([ADR-0031](adr/0031-go.md)); PHP, Ruby and Kotlin add languages, and the promised formats don't change. |
 
 Rule results improving after 1.0 is expected, and promised as such:
@@ -424,7 +423,6 @@ a design yet, and each gets an ADR when it starts.
 
 | Item | Why it waits | Where it plugs in |
 |---|---|---|
-| **Caching unchanged files** | Full scans are fast enough so far (VS Code's 4 million lines in 30 seconds on 12 workers, [performance.md](performance.md)), and cross-file analysis (ADR-0020's declarations, taint phase T4) makes a file's results depend on other files, so a file's hash alone can't key a cache. | A cache keyed by the file's hash, the sonda version, the rule settings and the cross-file inputs it read. Reports must stay byte-identical with and without it. |
 | **More languages (PHP, Ruby, Kotlin)** | Parity in the supported languages comes first ([ADR-0007](adr/0007-sonarqube-rule-parity.md)). | A tree-sitter grammar and a language module like the existing ones, with rules tracked against SonarQube's in [sonar-parity/](sonar-parity/README.md). |
 
 ## Smaller items
