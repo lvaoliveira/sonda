@@ -125,7 +125,7 @@ pub(crate) struct Found {
     pub(crate) steps: Vec<(usize, StepFact)>,
 }
 
-/// The C# and Java summaries a call can reach: (file, key) pairs, from
+/// The C#, Java, Rust and C/C++ summaries a call can reach: (file, key) pairs, from
 /// ADR-0020's index. The project pass passes one in; tests can pass none.
 pub(crate) type CsResolver<'r> = &'r dyn Fn(usize, &Callee) -> Vec<(usize, Key)>;
 
@@ -218,13 +218,14 @@ impl<'f, 'r> Composer<'f, 'r> {
             .into_iter()
             .find_map(|(file, k)| summary(file, &k).map(|s| vec![s]))
             .unwrap_or_default(),
-            Callee::Cs { .. } | Callee::Java { .. } | Callee::Rs { .. } => self
-                .cs
-                .map(|r| r(from, callee))
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|(file, key)| summary(file, &key))
-                .collect(),
+            Callee::Cs { .. } | Callee::Java { .. } | Callee::Rs { .. } | Callee::Cpp { .. } => {
+                self.cs
+                    .map(|r| r(from, callee))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|(file, key)| summary(file, &key))
+                    .collect()
+            }
         }
     }
 

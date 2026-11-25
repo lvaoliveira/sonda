@@ -386,6 +386,101 @@ pub(super) fn call_facts<'t>(
         .collect()
 }
 
+/// What an engine says of its file's functions, for the project pass: the
+/// summaries other files need, and the calls into other files.
+pub(super) trait Exports<'t>: Flow<'t> {
+    type Sum: Reaches<'t> + Default;
+    fn call_nodes(&self) -> &[Node<'t>];
+    fn function_count(&self) -> usize;
+    fn param_count(&self, j: usize) -> usize;
+    fn key_of(&self, j: usize) -> Option<Key>;
+    fn summary_of(&self, j: usize, p: Option<usize>) -> Rc<Self::Sum>;
+    fn returned_by(summary: &Self::Sum) -> Option<Path<'t>>;
+
+    /// Whether parameter `p` of function `j` is worth a summary for other
+    /// files: not one that can't hold what injects.
+    fn exports_param(&self, _j: usize, _p: usize) -> bool {
+        true
+    }
+
+    /// Whether function `j` can return what injects: not one whose result
+    /// is a number, a struct or nothing.
+    fn exports_return(&self, _j: usize) -> bool {
+        true
+    }
+
+    /// The request's values this file passes to other files' functions.
+    fn passed_to_other_files(&self, state: &HashMap<DeclId, Path<'t>>) -> Vec<CallFact<'t>> {
+        call_facts(self.call_nodes(), |call| self.passed_on(call, state))
+    }
+
+    /// What the functions of the file do with a value passed to them.
+    fn exported_summaries(&self) -> Vec<SummaryFact<'t>> {
+        let summary = |j: usize, p: Option<usize>| match p {
+            Some(p) if !self.exports_param(j, p) => Rc::new(Self::Sum::default()),
+            _ => self.summary_of(j, p),
+        };
+        exported(
+            self.function_count(),
+            |j| self.key_of(j),
+            |j| self.param_count(j),
+            |j, p| summary(j, Some(p)),
+            |j, p, fact| {
+                let returns = Self::returned_by(&summary(j, p));
+                let returns = returns.filter(|r| !from_call(r) && self.exports_return(j));
+                note_return(fact, p, returns);
+            },
+        )
+    }
+}
+
+/// `Exports` for an engine whose context is `$cx`, with `m`, `calls`,
+/// `function_key` and `summary` (whose `returns` is what a function returns).
+macro_rules! exports_for {
+    ($cx:ident $(, $worth:ident, $returns:ident)?) => {
+        impl<'a, 't> $crate::semantic::taint_core::Exports<'t> for $cx<'a, 't> {
+            type Sum = Summary<'t>;
+
+            fn call_nodes(&self) -> &[::tree_sitter::Node<'t>] {
+                &self.calls
+            }
+
+            fn function_count(&self) -> usize {
+                self.m.functions.len()
+            }
+
+            fn param_count(&self, j: usize) -> usize {
+                self.m.functions[j].params.len()
+            }
+
+            fn key_of(&self, j: usize) -> Option<$crate::semantic::taint::Key> {
+                self.function_key(j)
+            }
+
+            fn summary_of(&self, j: usize, p: Option<usize>) -> ::std::rc::Rc<Summary<'t>> {
+                self.summary(j, p)
+            }
+
+            fn returned_by(
+                summary: &Summary<'t>,
+            ) -> Option<$crate::semantic::taint_core::Path<'t>> {
+                summary.returns.clone()
+            }
+
+            $(
+                fn exports_param(&self, j: usize, p: usize) -> bool {
+                    self.$worth(j, p)
+                }
+
+                fn exports_return(&self, j: usize) -> bool {
+                    self.$returns(j)
+                }
+            )?
+        }
+    };
+}
+pub(super) use exports_for;
+
 /// What a variable holds, unless a check validated it.
 pub(super) fn held<'t>(
     decl: Option<DeclId>,
@@ -472,6 +567,81 @@ pub(super) fn record_return<'t>(
     });
 }
 
+/// The other files' functions a tainted value in `function` is passed on to:
+/// for each, the path to the call (ending at it), the callee and its argument.
+pub(super) fn calls_in<'t, F: Flow<'t>>(
+    flow: &F,
+    calls: &[Node<'t>],
+    function: Node<'t>,
+    state: &HashMap<DeclId, Path<'t>>,
+) -> Vec<(Path<'t>, Callee, usize)> {
+    let mut out = Vec::new();
+    for &call in calls.iter().filter(|c| inside(**c, function)) {
+        for (mut path, callee, arg) in flow.passed_on(call, state) {
+            path.push(step(call, format!("passed to `{}`", callee.display())));
+            out.push((path, callee, arg));
+        }
+    }
+    out
+}
+
+/// Another file's function's result reaching the sink call that `sink_arg` is
+/// an argument of, by `path` (which starts at the call to that function):
+/// noted for the project pass. `external` says the callee of a call and its
+/// arguments, `taint` which of them hold a request's value.
+pub(super) fn record_return_at_sink<'t>(
+    returns: &RefCell<Vec<ReturnFact<'t>>>,
+    calls: &[Node<'t>],
+    sink_call: impl Fn(Node<'t>) -> Option<(String, Vec<Node<'t>>)>,
+    external: impl Fn(Node<'t>) -> Option<(Callee, Vec<Node<'t>>)>,
+    sink_arg: Node<'t>,
+    path: &Path<'t>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) {
+    let call = path[0].node;
+    let Some((callee, args)) = external(call) else {
+        return;
+    };
+    let is_sink = |c: &Node<'t>| {
+        inside(sink_arg, *c)
+            && sink_call(*c).is_some_and(|(_, a)| a.iter().any(|a| a.id() == sink_arg.id()))
+    };
+    let Some(sink) = calls.iter().copied().find(is_sink) else {
+        return;
+    };
+    let name = sink_call(sink).map(|(n, _)| n).unwrap_or_default();
+    let mut after = path[1..].to_vec();
+    after.push(step(sink, format!("passed to `{name}`")));
+    let sure = |a| taint(a).filter(|p| !from_call(p));
+    record_return(returns, call, callee, args, sure, after, sink);
+}
+
+/// What a sink's argument holds: its path if surely a request's value; for
+/// one that starts at another file's function's result, `record` notes it
+/// for the project pass and it's no finding here.
+pub(super) fn sure_path<'t>(
+    path: Option<Path<'t>>,
+    record: impl FnOnce(&Path<'t>),
+) -> Option<Path<'t>> {
+    let path = path?;
+    if from_call(&path) {
+        record(&path);
+        return None;
+    }
+    Some(path)
+}
+
+/// The path of another file's function's result, which may hold a request's
+/// value (the project pass decides): only once the fixed point is running
+/// (`enabled`) and for a call that is such a function (`external`).
+pub(super) fn maybe_path<'t>(
+    enabled: bool,
+    call: Node<'t>,
+    external: impl FnOnce() -> bool,
+) -> Option<Path<'t>> {
+    (enabled && external()).then(|| vec![step(call, FROM_CALL.to_string())])
+}
+
 /// A path that starts at another file's function's result: a request's value
 /// only if that function returns one, which the project pass decides (T4).
 /// Its first step is the call, with this message.
@@ -492,6 +662,20 @@ pub(super) fn best<'t>(paths: impl Iterator<Item = Option<Path<'t>>>) -> Option<
         maybe.get_or_insert(path);
     }
     maybe
+}
+
+/// The best path of an expression's children named by `fields`.
+pub(super) fn best_of<'t>(
+    n: Node<'t>,
+    fields: &[&str],
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) -> Option<Path<'t>> {
+    best(
+        fields
+            .iter()
+            .filter_map(|f| n.child_by_field_name(f))
+            .map(taint),
+    )
 }
 
 /// What a function returns, for other files: a request's value it reads

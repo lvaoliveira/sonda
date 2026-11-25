@@ -168,6 +168,20 @@ pub(crate) enum Callee {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         method: Option<String>,
     },
+    /// `find(x)`, `db::find(x)` or `repo.find(x)`: the names as written (for
+    /// a method call, its receiver's declared type and the method), the
+    /// number of arguments, the scopes the name may be in (the namespaces and
+    /// classes the call is inside of, and the file's `using namespace`s, each
+    /// as `a::b`), and the file's quoted `#include`s. The project pass finds
+    /// the one definition whose file a header named there belongs to.
+    Cpp {
+        path: Vec<String>,
+        arity: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        scopes: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        includes: Vec<String>,
+    },
 }
 
 impl Callee {
@@ -175,6 +189,7 @@ impl Callee {
     pub(crate) fn display(&self) -> String {
         match self {
             Callee::Cs { method, .. } | Callee::Java { method, .. } => method.clone(),
+            Callee::Cpp { path, .. } => path.join("::"),
             Callee::Rs { path, method } => method
                 .clone()
                 .or_else(|| path.last().cloned())
