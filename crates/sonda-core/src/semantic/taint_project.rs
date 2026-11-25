@@ -218,14 +218,17 @@ impl<'f, 'r> Composer<'f, 'r> {
             .into_iter()
             .find_map(|(file, k)| summary(file, &k).map(|s| vec![s]))
             .unwrap_or_default(),
-            Callee::Cs { .. } | Callee::Java { .. } | Callee::Rs { .. } | Callee::Cpp { .. } => {
-                self.cs
-                    .map(|r| r(from, callee))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|(file, key)| summary(file, &key))
-                    .collect()
-            }
+            Callee::Cs { .. }
+            | Callee::Java { .. }
+            | Callee::Rs { .. }
+            | Callee::Cpp { .. }
+            | Callee::Go { .. } => self
+                .cs
+                .map(|r| r(from, callee))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(file, key)| summary(file, &key))
+                .collect(),
         }
     }
 

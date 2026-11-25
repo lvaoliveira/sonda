@@ -2552,6 +2552,13 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                 &facts,
                 Some(&|from, callee| index.resolve(from, callee)),
             )
+        } else if key[tp::FACT_PREFIX.len()..].starts_with("go/") {
+            let index = GoTaintIndex::new(&paths);
+            tp::compose(
+                &paths,
+                &facts,
+                Some(&|from, callee| index.resolve(from, callee)),
+            )
         } else {
             tp::compose(&paths, &facts, None)
         };
@@ -2925,6 +2932,91 @@ impl CppTaintIndex {
             out.extend(files.iter().map(|&f| (f, key.clone())));
         }
         out
+    }
+}
+
+/// How the project pass resolves a Go call. A package is a directory, so a
+/// call to a function of the caller's own package is to one in another file
+/// of its directory; a call through an import is to the directory whose path
+/// ends the import path (`internal/db` for `example.com/app/internal/db`),
+/// the longest such directory if several do.
+struct GoTaintIndex {
+    /// Each file's directory, `""` for the root, and whether it's a Go file
+    /// and a test's.
+    dirs: Vec<String>,
+    go: Vec<bool>,
+    tests: Vec<bool>,
+}
+
+impl GoTaintIndex {
+    fn new(paths: &[&str]) -> Self {
+        let normal: Vec<String> = paths.iter().map(|p| p.replace('\\', "/")).collect();
+        GoTaintIndex {
+            dirs: normal
+                .iter()
+                .map(|p| p.rsplit_once('/').map_or("", |(d, _)| d).to_string())
+                .collect(),
+            go: normal.iter().map(|p| p.ends_with(".go")).collect(),
+            tests: normal.iter().map(|p| p.ends_with("_test.go")).collect(),
+        }
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Go {
+            package,
+            receiver,
+            name,
+            arity,
+        } = callee
+        else {
+            return Vec::new();
+        };
+        let dirs: Vec<&str> = match package {
+            None => vec![self.dirs[from].as_str()],
+            Some(import) => self.directories_of(import),
+        };
+        let key = semantic::taint::Key {
+            export: match receiver {
+                Some(r) => format!("{r}.{name}"),
+                None => name.clone(),
+            },
+            member: Some(arity.to_string()),
+        };
+        (0..self.dirs.len())
+            .filter(|&f| {
+                f != from
+                    && self.go[f]
+                    && dirs.contains(&self.dirs[f].as_str())
+                    // A test's functions are its own package's: not what the
+                    // program's files call.
+                    && (!self.tests[f] || self.tests[from])
+            })
+            .map(|f| (f, key.clone()))
+            .collect()
+    }
+
+    /// The directories an import path names: those whose path ends it, at a
+    /// name boundary, and of those the longest.
+    fn directories_of(&self, import: &str) -> Vec<&str> {
+        let matches =
+            |d: &&str| !d.is_empty() && (import == *d || import.ends_with(&format!("/{d}")));
+        let mut found: Vec<&str> = self
+            .dirs
+            .iter()
+            .zip(&self.go)
+            .filter(|(_, go)| **go)
+            .map(|(d, _)| d.as_str())
+            .filter(matches)
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        let longest = found.iter().map(|d| d.matches('/').count()).max();
+        found.retain(|d| Some(d.matches('/').count()) == longest);
+        found
     }
 }
 

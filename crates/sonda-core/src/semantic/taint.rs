@@ -182,6 +182,19 @@ pub(crate) enum Callee {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         includes: Vec<String>,
     },
+    /// `helper(x)`, `store.Find(x)` or `util.Run(x)`: the function's name and
+    /// number of arguments; for a method, its receiver's type; and the
+    /// import path of the package it's in, none for the calling file's own
+    /// (a package is a directory, so its other files). The project pass finds
+    /// the directory, and the one function of that name in it.
+    Go {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receiver: Option<String>,
+        name: String,
+        arity: usize,
+    },
 }
 
 impl Callee {
@@ -190,6 +203,12 @@ impl Callee {
         match self {
             Callee::Cs { method, .. } | Callee::Java { method, .. } => method.clone(),
             Callee::Cpp { path, .. } => path.join("::"),
+            Callee::Go {
+                receiver: Some(r),
+                name,
+                ..
+            } => format!("{r}.{name}"),
+            Callee::Go { name, .. } => name.clone(),
             Callee::Rs { path, method } => method
                 .clone()
                 .or_else(|| path.last().cloned())
