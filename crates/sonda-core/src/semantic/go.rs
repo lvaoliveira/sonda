@@ -50,31 +50,19 @@ pub(super) fn build<'t>(root: Node<'t>, src: &[u8], deadline: Instant) -> Option
 }
 
 impl<'t> Go<'t, '_> {
-    /// Declares `name` as written at `node`, taking effect at `from`.
-    fn declare_at(
-        &mut self,
-        scope: ScopeId,
-        name: Node<'t>,
-        kind: DeclKind,
-        ty: Option<Node<'t>>,
-        from: usize,
-    ) -> DeclId {
-        self.b.declare(scope, name, kind, ty, false);
-        self.effect.push(from);
-        self.b.m.decls.len() - 1
-    }
-
     fn visit(&mut self, node: Node<'t>, ancestors: &[Node<'t>], scope: ScopeId) -> Opened {
         match node.kind() {
             "function_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    self.declare_at(scope, name, DeclKind::Function, None, 0);
+                    self.b
+                        .declare_at(&mut self.effect, scope, name, DeclKind::Function, None, 0);
                 }
                 Some((self.function(node, scope), false))
             }
             "method_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    self.declare_at(scope, name, DeclKind::Method, None, 0);
+                    self.b
+                        .declare_at(&mut self.effect, scope, name, DeclKind::Method, None, 0);
                 }
                 Some((self.function(node, scope), false))
             }
@@ -187,7 +175,9 @@ impl<'t> Go<'t, '_> {
                     out.push(Vec::new());
                     continue;
                 }
-                let id = self.declare_at(scope, name, DeclKind::Param, ty, from);
+                let id =
+                    self.b
+                        .declare_at(&mut self.effect, scope, name, DeclKind::Param, ty, from);
                 self.b.m.decls[id].declarator = Some(p);
                 out.push(vec![id]);
             }
@@ -205,7 +195,9 @@ impl<'t> Go<'t, '_> {
                 .child_by_field_name("value")
                 .map_or(alias.end_byte(), |v| v.end_byte());
             for name in identifiers(alias) {
-                let id = self.declare_at(inner, name, DeclKind::Let, None, from);
+                let id =
+                    self.b
+                        .declare_at(&mut self.effect, inner, name, DeclKind::Let, None, from);
                 self.b.m.decls[id].writes += 1;
             }
         }
@@ -224,7 +216,14 @@ impl<'t> Go<'t, '_> {
             if text == "_" {
                 self.b.not_refs.insert(name.id());
             } else if self.b.m.decls_named(scope, &text).is_empty() {
-                let id = self.declare_at(scope, name, DeclKind::Var, None, node.end_byte());
+                let id = self.b.declare_at(
+                    &mut self.effect,
+                    scope,
+                    name,
+                    DeclKind::Var,
+                    None,
+                    node.end_byte(),
+                );
                 self.b.m.decls[id].writes += 1;
                 self.b.m.decls[id].declarator = Some(node);
             }
@@ -251,7 +250,9 @@ impl<'t> Go<'t, '_> {
             } else {
                 DeclKind::Var
             };
-            let id = self.declare_at(scope, name, kind, ty, from);
+            let id = self
+                .b
+                .declare_at(&mut self.effect, scope, name, kind, ty, from);
             self.b.m.decls[id].writes += u32::from(initialized || is_const);
             self.b.m.decls[id].declarator = Some(node);
         }
@@ -276,7 +277,9 @@ impl<'t> Go<'t, '_> {
                 self.b.not_refs.insert(name.id());
                 continue;
             }
-            let id = self.declare_at(scope, name, DeclKind::Let, None, from);
+            let id = self
+                .b
+                .declare_at(&mut self.effect, scope, name, DeclKind::Let, None, from);
             self.b.m.decls[id].writes += 1;
         }
     }
@@ -295,7 +298,14 @@ impl<'t> Go<'t, '_> {
                 self.b.not_refs.insert(name.id());
                 continue;
             }
-            let id = self.declare_at(scope, name, DeclKind::Let, None, node.end_byte());
+            let id = self.b.declare_at(
+                &mut self.effect,
+                scope,
+                name,
+                DeclKind::Let,
+                None,
+                node.end_byte(),
+            );
             self.b.m.decls[id].writes += 1;
         }
     }
@@ -307,7 +317,8 @@ impl<'t> Go<'t, '_> {
     fn type_name(&mut self, node: Node<'t>, scope: ScopeId) -> Option<ScopeId> {
         let name = node.child_by_field_name("name")?;
         let from = if scope == 0 { 0 } else { node.start_byte() };
-        self.declare_at(scope, name, DeclKind::Class, None, from);
+        self.b
+            .declare_at(&mut self.effect, scope, name, DeclKind::Class, None, from);
         node.child_by_field_name("type_parameters")
             .map(|_| self.b.m.push_scope(scope, ScopeKind::Block))
     }
@@ -316,7 +327,14 @@ impl<'t> Go<'t, '_> {
         let mut c = node.walk();
         let names: Vec<Node<'t>> = node.children_by_field_name("name", &mut c).collect();
         for name in names {
-            self.declare_at(scope, name, DeclKind::Type, None, node.start_byte());
+            self.b.declare_at(
+                &mut self.effect,
+                scope,
+                name,
+                DeclKind::Type,
+                None,
+                node.start_byte(),
+            );
         }
     }
 
@@ -435,31 +453,12 @@ fn access(ancestors: &[Node], b: &Binder) -> (bool, bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_model::{count, decl, with_model};
     use super::super::{DeclKind, Model};
     use crate::lang::Lang;
-    use std::time::{Duration, Instant};
 
     fn go(src: &str, check: impl FnOnce(&Model)) {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&Lang::Go.grammar()).unwrap();
-        let tree = parser.parse(src, None).unwrap();
-        let model = super::build(
-            tree.root_node(),
-            src.as_bytes(),
-            Instant::now() + Duration::from_secs(10),
-        )
-        .unwrap();
-        check(&model);
-    }
-
-    /// The `n`th declaration called `name`, as (kind, reads, writes).
-    fn decl(m: &Model, name: &str, n: usize) -> (DeclKind, u32, u32) {
-        let d = m.decls.iter().filter(|d| d.name == name).nth(n).unwrap();
-        (d.kind, d.reads, d.writes)
-    }
-
-    fn count(m: &Model, name: &str) -> usize {
-        m.decls.iter().filter(|d| d.name == name).count()
+        with_model(Lang::Go, src, check);
     }
 
     #[test]
