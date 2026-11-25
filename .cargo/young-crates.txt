@@ -1,0 +1,7 @@
+# Crates a pull request may add or bump although crates.io published that
+# version less than 14 days ago (scripts/check-crate-age.sh). Only for a
+# security fix, as for Dependabot's security updates: one line,
+#
+#   name version  the advisory it fixes
+#
+# and remove the line once the version is 14 days old.

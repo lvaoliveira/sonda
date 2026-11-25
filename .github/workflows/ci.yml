@@ -392,6 +392,16 @@ jobs:
       - run: cargo audit --deny warnings
       # The advisories audit.toml ignores: still not built, and not overdue.
       - run: scripts/check-advisory-exceptions.sh
+      # Crates this pull request adds or bumps: published at least 14 days
+      # ago, like the ones Dependabot waits for (young-crates.txt lists a
+      # security fix that can't wait).
+      - name: Crates are past the 14-day release age
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          scripts/check-crate-age.sh "origin/$BASE_REF"
 
   # Reported, not gated, so it runs on main only: on pull requests it was a
   # fourth full run of the test suite, instrumented, that nobody read.
