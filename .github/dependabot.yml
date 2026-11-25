@@ -3,6 +3,9 @@ updates:
   # Version updates wait 14 days after a release, the same supply-chain rule
   # as pnpm's minimumReleaseAge (web/pnpm-workspace.yaml). Security updates
   # are not delayed: a fix for a known vulnerability outweighs the wait.
+  # A crate added or bumped by hand isn't held back by this: CI's
+  # scripts/check-crate-age.sh applies the same 14 days to it, and a security
+  # fix goes in .cargo/young-crates.txt.
   - package-ecosystem: cargo
     directory: /
     schedule:
