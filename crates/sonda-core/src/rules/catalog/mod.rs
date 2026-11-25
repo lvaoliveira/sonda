@@ -41,6 +41,7 @@ mod cs_tail;
 mod cs_typed;
 mod cs_types;
 mod go;
+mod go_injection;
 mod go_security;
 mod java;
 mod java_bugs;
@@ -220,6 +221,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (cpp_security::RULES, cpp_security::OFF_BY_DEFAULT),
     (go::RULES, &[]),
     (go_security::RULES, &[]),
+    (go_injection::RULES, go_injection::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

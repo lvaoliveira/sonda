@@ -4867,6 +4867,20 @@ pub(crate) mod tests {
         Instant::now() + std::time::Duration::from_secs(60)
     }
 
+    /// The lines of a Go file that `rule` flags, counted from the line after
+    /// `package p`'s blank one, for `body` as the rest of the file.
+    pub(crate) fn flagged_go(rule: &str, body: &str) -> Vec<usize> {
+        let cfg = crate::config::Config::default();
+        let rules = crate::rules::RuleSet::new(&cfg.rules).unwrap();
+        let src = format!("package p\n\n{body}");
+        let file = analyze("a.go", Lang::Go, &src, &rules, &cfg, far_deadline()).unwrap();
+        file.issues
+            .iter()
+            .filter(|i| i.rule == rule)
+            .map(|i| i.line - 2)
+            .collect()
+    }
+
     /// `rule`'s findings over files given as (path, source), analyzed as
     /// `lang` and then by the project `pass`, as (path, line), sorted.
     pub(crate) fn project_flagged(

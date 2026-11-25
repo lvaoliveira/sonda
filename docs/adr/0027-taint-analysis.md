@@ -49,6 +49,28 @@
   pointer, a string type) and a function that can return it are summarized
   for other files; a C program's structs and numbers aren't, which keeps the
   cost down.
+  Go built for T2 and T3, on its binder (ADR-0031): `go/sql-injection`,
+  `go/command-injection`, `go/path-injection`, `go/open-redirect` and
+  `go/ssrf`, from a request object (`*http.Request`, gin's and echo's
+  `Context`, fiber's `Ctx`: the form, the query, the path parameters, the
+  headers, the body, the cookies) and from chi's `URLParam` and gorilla/mux's
+  `Vars`, through the functions and methods of the file. A value is followed
+  through `+`, `fmt.Sprintf`, `strings`, `filepath.Join`, `url.Parse`, `append`,
+  conversions, indexing, fields, a struct literal, a `range`, and the values
+  `json.NewDecoder(r.Body).Decode(&x)`, `c.ShouldBindJSON(&x)`,
+  `json.Unmarshal` and `fmt.Fprintf(&sb, ...)` write into a variable. A call
+  is matched by what its package was imported as, and a method of the file by
+  its name, its number of arguments and the type of its receiver. A
+  `context.Context` isn't a request, a number can't inject, and a value tested
+  with `strings.HasPrefix`, `filepath.IsLocal`, a regexp or `==` is
+  validated. For a redirect or a request's address only the start sets where
+  it goes, as in the other languages: after `/orders/` a value can't change
+  the host, after `https://` the next part is the host, and a variable that
+  comes first (`base + id`) sets it. The `Host` the client wrote isn't a source
+  for a redirect: moving to `https://` + host is the usual way to move to
+  HTTPS, and a victim's browser can't be made to send another. Values don't cross files yet, which
+  for Go means the package's other files too: a package is a directory, and a
+  handler that calls a helper in the next file is the common shape.
   The command line, standard input and the environment are the program's
   own, not a request's.
 - Date: 2026-11-07

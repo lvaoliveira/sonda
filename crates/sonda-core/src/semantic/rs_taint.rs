@@ -27,10 +27,10 @@
 
 use super::taint::{Callee, Facts, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    Exports, Flow, How, Path, Reaches, Summaries, Write, at_sinks, best, calls_in, checked_names,
-    decl_index, exports_for, finish, flow_for, from_call, held, inside, maybe_path, outcome,
-    record_return_at_sink, return_values, short, sinks_in, sure_path, through_returns,
-    through_sinks, tick, walk,
+    Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, at_sinks, best, calls_in,
+    checked_names, decl_index, exports_for, finish, fixes_origin, flow_for, from_call, held,
+    inside, maybe_path, outcome, record_return_at_sink, return_values, short, sinks_in, sure_path,
+    through_returns, through_sinks, tick, walk,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, RefCell};
@@ -489,29 +489,6 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
 }
 
 // ---------------------------------------------------------------- the file
-
-/// What a request's value does inside a function of the file, for one of its
-/// parameters.
-#[derive(Default)]
-struct Summary<'t> {
-    returns: Option<Path<'t>>,
-    sinks: Vec<(Path<'t>, Node<'t>)>,
-    /// The other files' functions the value is passed on to: the path to the
-    /// call, the callee and its argument.
-    calls: Vec<(Path<'t>, Callee, usize)>,
-}
-
-impl<'t> Reaches<'t> for Summary<'t> {
-    fn sinks(&self) -> &[(Path<'t>, Node<'t>)] {
-        &self.sinks
-    }
-
-    fn calls(&self) -> &[(Path<'t>, Callee, usize)] {
-        &self.calls
-    }
-}
-
-type SummaryKey = (usize, Option<usize>);
 
 struct Cx<'a, 't> {
     m: &'a Model<'t>,
@@ -2056,21 +2033,6 @@ fn is_expression_tail(n: Node) -> bool {
             | "mod_item"
             | "attribute_item"
     )
-}
-
-/// Whether text, as the start of an address, fixes where it goes: a path on
-/// this site (`/orders/`, not `//host`), or a scheme and host with a path.
-fn fixes_origin(prefix: &str) -> bool {
-    let absolute = prefix.split_once("://").is_some_and(|(scheme, rest)| {
-        !scheme.is_empty()
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-            && rest.find('/').is_some_and(|slash| slash > 0)
-    });
-    let local =
-        prefix.starts_with('/') && prefix.chars().nth(1).is_some_and(|c| c != '/' && c != '\\');
-    absolute || local
 }
 
 /// A function whose name says it checks its argument.

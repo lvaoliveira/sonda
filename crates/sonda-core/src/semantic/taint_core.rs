@@ -305,6 +305,57 @@ macro_rules! flow_for {
 }
 pub(super) use flow_for;
 
+/// What a request's value does inside a function of the file, for one of its
+/// parameters (or, with none, for what the function reads itself).
+#[derive(Default)]
+pub(super) struct Summary<'t> {
+    pub(super) returns: Option<Path<'t>>,
+    pub(super) sinks: Vec<(Path<'t>, Node<'t>)>,
+    /// The other files' functions the value is passed on to: the path to the
+    /// call, the callee and its argument.
+    pub(super) calls: Vec<(Path<'t>, Callee, usize)>,
+}
+
+impl<'t> Reaches<'t> for Summary<'t> {
+    fn sinks(&self) -> &[(Path<'t>, Node<'t>)] {
+        &self.sinks
+    }
+
+    fn calls(&self) -> &[(Path<'t>, Callee, usize)] {
+        &self.calls
+    }
+}
+
+/// A function of the file, and the parameter a summary is for.
+pub(super) type SummaryKey = (usize, Option<usize>);
+
+/// What a call to a function of the file (`name`, whose summaries `summary`
+/// gives, for a parameter or for none) returns.
+pub(super) fn through_local<'t>(
+    call: Node<'t>,
+    name: &str,
+    args: &[Node<'t>],
+    summary: impl Fn(Option<usize>) -> Rc<Summary<'t>>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) -> Option<Path<'t>> {
+    let own = summary(None).returns.clone();
+    through_returns(call, name, own, args, taint, |i| {
+        summary(Some(i)).returns.clone()
+    })
+}
+
+/// The sinks a call to a function of the file reaches with its tainted
+/// arguments.
+pub(super) fn sinks_local<'t>(
+    call: Node<'t>,
+    name: &str,
+    args: Vec<Node<'t>>,
+    summary: impl Fn(Option<usize>) -> Rc<Summary<'t>>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) -> Vec<Finding<'t>> {
+    through_sinks(call, name, args, taint, |i| summary(Some(i)).sinks.clone())
+}
+
 /// What a function's summary holds that other files need: the sinks and the
 /// other files' functions a parameter's value reaches inside it.
 pub(super) trait Reaches<'t> {
@@ -640,6 +691,21 @@ pub(super) fn maybe_path<'t>(
     external: impl FnOnce() -> bool,
 ) -> Option<Path<'t>> {
     (enabled && external()).then(|| vec![step(call, FROM_CALL.to_string())])
+}
+
+/// Whether text, as the start of an address, fixes where it goes: a path on
+/// this site (`/orders/`, not `//host`), or a scheme and host with a path.
+pub(super) fn fixes_origin(prefix: &str) -> bool {
+    let absolute = prefix.split_once("://").is_some_and(|(scheme, rest)| {
+        !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+            && rest.find('/').is_some_and(|slash| slash > 0)
+    });
+    let local =
+        prefix.starts_with('/') && prefix.chars().nth(1).is_some_and(|c| c != '/' && c != '\\');
+    absolute || local
 }
 
 /// A path that starts at another file's function's result: a request's value

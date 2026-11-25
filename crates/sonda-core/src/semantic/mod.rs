@@ -20,6 +20,7 @@ pub(crate) mod cs_infer;
 pub(crate) mod cs_taint;
 pub(crate) mod dotnet;
 mod go;
+pub(crate) mod go_taint;
 mod java;
 pub(crate) mod java_index;
 pub(crate) mod java_taint;
