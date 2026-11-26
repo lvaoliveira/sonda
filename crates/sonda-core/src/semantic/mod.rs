@@ -26,6 +26,8 @@ pub(crate) mod java_index;
 pub(crate) mod java_taint;
 mod js;
 pub(crate) mod js_taint;
+mod php;
+pub(crate) mod php_taint;
 mod py;
 pub(crate) mod py_taint;
 mod rs;
@@ -388,8 +390,7 @@ pub(crate) fn build<'t>(
         Lang::Rust => rs::build(root, src, deadline),
         Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
         Lang::Go => go::build(root, src, deadline),
-        // No binder for PHP yet: the rules that need names wait for one.
-        Lang::Php => None,
+        Lang::Php => php::build(root, src, deadline),
     }
 }
 
@@ -408,6 +409,7 @@ pub(crate) fn supports(lang: Lang) -> bool {
             | Lang::C
             | Lang::Cpp
             | Lang::Go
+            | Lang::Php
     )
 }
 

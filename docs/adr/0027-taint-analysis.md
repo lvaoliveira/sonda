@@ -49,6 +49,17 @@
   pointer, a string type) and a function that can return it are summarized
   for other files; a C program's structs and numbers aren't, which keeps the
   cost down.
+  PHP built (T2 to T4, on its binder, ADR-0032): `php/sql-injection`,
+  `php/command-injection`, `php/path-injection`, `php/open-redirect`,
+  `php/ssrf`, `php/code-injection` and `php/xss` (the first to use
+  `SinkKind::Html`), from the superglobals, `php://input`, the headers and a
+  request object (Laravel's, Symfony's, PSR-7's), through concatenation,
+  interpolation, the functions that change text, the functions and methods of
+  the file, and across files by the function's name or the method's class
+  (PHP has no packages). A variable passed back through a sanitizer or a
+  numeric cast (`$id = (int) $id`) counts as validated, and a test looks
+  through `$octet[0]` and `strtolower($ext)`. The model is flow-insensitive:
+  see ADR-0032 for what that costs.
   Go built (T2 to T4, on its binder, ADR-0031): `go/sql-injection`,
   `go/command-injection`, `go/path-injection`, `go/open-redirect` and
   `go/ssrf`, from a request object (`*http.Request`, gin's and echo's

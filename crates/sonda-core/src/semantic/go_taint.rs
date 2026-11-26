@@ -24,16 +24,15 @@
 //! `os/exec`'s only if the file imports it), and a method of the file by its
 //! name, its number of arguments and the type of its receiver.
 
-use super::taint::{Callee, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
+use super::taint::{Callee, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    Body, Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, best, best_of,
-    checked_names, conclude, decl_index, exports_for, externals_for, fixes_origin, flow_for,
-    from_call, held, sinks_local, through_local, tick, walk,
+    Body, Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, address_path, best,
+    best_of, checked_names, conclude, contains_any, decl_index, evaluation_for, exports_for,
+    externals_for, flow_for, from_call, function_keys_for, held, locals_for, walk,
 };
 use super::{DeclId, DeclKind, Model};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use tree_sitter::Node;
 
 /// Writes in one file; past it, the file reports nothing.
@@ -50,12 +49,6 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
         return TaintResult::default();
     }
     Cx::file_result(m, src, kind).unwrap_or_default()
-}
-
-fn contains_any(src: &[u8], words: &[&[u8]]) -> bool {
-    words
-        .iter()
-        .any(|w| !w.is_empty() && src.windows(w.len()).any(|x| x == *w))
 }
 
 fn might_have_sources(src: &[u8]) -> bool {
@@ -91,7 +84,9 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
         ],
         SinkKind::Redirect => &[b"Redirect"],
         SinkKind::Ssrf => &[b"http.", b"Client", b"client", b"NewRequest"],
-        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Format => return false,
+        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Format | SinkKind::Html => {
+            return false;
+        }
     };
     contains_any(src, words)
 }
@@ -858,27 +853,6 @@ impl<'a, 't> Cx<'a, 't> {
 
     // ------------------------------------------------------------ evaluation
 
-    fn run(&self) -> Option<HashMap<DeclId, Path<'t>>> {
-        let mut tainted = HashMap::new();
-        self.from_calls.set(true);
-        self.propagate(None, &mut tainted)?;
-        Some(tainted)
-    }
-
-    /// The path a request's value takes to `n`, if `n` holds one.
-    fn taint(
-        &self,
-        n: Node<'t>,
-        state: &HashMap<DeclId, Path<'t>>,
-        depth: u32,
-    ) -> Option<Path<'t>> {
-        if tick(&self.evaluations, depth) {
-            self.expression(n, state, depth + 1)
-        } else {
-            None
-        }
-    }
-
     /// What `n`'s kind of expression holds, `next` levels down.
     fn expression(
         &self,
@@ -1035,16 +1009,8 @@ impl<'a, 't> Cx<'a, 't> {
         self.through_function(call, args, state, depth)
     }
 
-    /// For an address (a redirect, a request), only its start can change
-    /// where it goes.
-    fn starts_the_text(&self) -> bool {
-        matches!(self.kind, SinkKind::Redirect | SinkKind::Ssrf)
-    }
-
     /// `"/orders/" + id`, `"https://" + host + path`: the operands of a
-    /// concatenation, from the first. Text that fixes the origin leaves the
-    /// rest no say; a scheme leaves it to the next operand, the host; any
-    /// other start, or none, to every operand.
+    /// concatenation, from the first (see `address_path`).
     fn address_taint(
         &self,
         n: Node<'t>,
@@ -1053,41 +1019,8 @@ impl<'a, 't> Cx<'a, 't> {
     ) -> Option<Path<'t>> {
         let mut operands = Vec::new();
         concatenation(n, self.src, &mut operands);
-        let deciding = match operands.first().and_then(|o| self.literal(*o)) {
-            Some(start) if fixes_origin(start) => 0,
-            Some(start) if start.ends_with("://") || start == "//" => 2,
-            Some(_) => operands.len(),
-            // A variable first, as in `base + id`: it sets where the rest goes.
-            None => 1,
-        };
-        best(
-            operands
-                .iter()
-                .take(deciding)
-                .map(|o| self.taint(*o, state, depth)),
-        )
-    }
-
-    /// `fmt.Sprintf("https://%s%s", host, path)` as an address: the same,
-    /// by what the format says before its first verb.
-    fn format_taint(
-        &self,
-        args: &[Node<'t>],
-        state: &HashMap<DeclId, Path<'t>>,
-        depth: u32,
-    ) -> Option<Path<'t>> {
-        let format = args.first().and_then(|f| self.literal(*f));
-        let prefix = format.map(|f| f.split('%').next().unwrap_or(f));
-        let deciding = match prefix {
-            Some(start) if fixes_origin(start) => 0,
-            Some(start) if start.is_empty() || start.ends_with("://") || start == "//" => 2,
-            _ => args.len(),
-        };
-        best(
-            args.iter()
-                .take(deciding)
-                .map(|a| self.taint(*a, state, depth)),
-        )
+        let start = operands.first().and_then(|o| self.literal(*o));
+        address_path(&operands, start, |o| self.taint(o, state, depth))
     }
 
     /// `strings.Trim(x, "/")`, `strings.TrimLeft(x, "/\\")` and `path.Clean(x)`
@@ -1303,46 +1236,6 @@ impl<'a, 't> Cx<'a, 't> {
         declared.split('[').next().unwrap_or(declared).trim() == ty
     }
 
-    /// What a call to a function of the file returns: the value of a tainted
-    /// argument that reaches its result, or one it reads itself.
-    fn through_function(
-        &self,
-        call: Node<'t>,
-        args: &[Node<'t>],
-        state: &HashMap<DeclId, Path<'t>>,
-        depth: u32,
-    ) -> Option<Path<'t>> {
-        let Some(j) = self.local_callee(call) else {
-            return self.maybe_from(call);
-        };
-        through_local(
-            call,
-            self.names[j],
-            args,
-            |p| self.summary(j, p),
-            |a| self.taint(a, state, depth),
-        )
-    }
-
-    fn sinks_through(&self, call: Node<'t>, state: &HashMap<DeclId, Path<'t>>) -> Vec<Finding<'t>> {
-        let Some(j) = self.local_callee(call) else {
-            return Vec::new();
-        };
-        sinks_local(
-            call,
-            self.names[j],
-            arguments(call),
-            |p| self.summary(j, p),
-            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
-        )
-    }
-
-    /// What a request's value does in function `j`, for its parameter `p` (or
-    /// for nothing but what the function reads itself).
-    fn summary(&self, j: usize, p: Option<usize>) -> Rc<Summary<'t>> {
-        self.summaries.get((j, p), || self.summarize(j, p))
-    }
-
     fn summarize(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
         let f = &self.m.functions[j];
         let mut state: HashMap<DeclId, Path<'t>> = HashMap::new();
@@ -1500,22 +1393,6 @@ impl<'a, 't> Cx<'a, 't> {
         }
     }
 
-    /// What other files call function `j` by: its name, or its receiver's
-    /// type and its name for a method, and its number of parameters. None
-    /// for one they can't name (`init`, `main`, a literal, a variadic one,
-    /// a method with no named receiver type).
-    fn function_key(&self, j: usize) -> Option<Key> {
-        self.keys
-            .get_or_init(|| {
-                (0..self.m.functions.len())
-                    .map(|j| self.raw_key(j))
-                    .collect()
-            })
-            .get(j)
-            .cloned()
-            .flatten()
-    }
-
     fn raw_key(&self, j: usize) -> Option<Key> {
         let f = &self.m.functions[j];
         let name = self.names[j];
@@ -1610,6 +1487,9 @@ fn is_standard(path: &str) -> bool {
 
 flow_for!(Cx, from_call);
 externals_for!(Cx);
+locals_for!(Cx);
+evaluation_for!(Cx);
+function_keys_for!(Cx);
 exports_for!(Cx);
 
 // ---------------------------------------------------------------- syntax

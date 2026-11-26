@@ -97,6 +97,13 @@ pub(crate) static STANDARDS: &[(&str, &[u16], &[Owasp])] = &[
     ("c/ssrf", &[918], &[A10]),
     // CWE-134 has no OWASP Top 10 2025 category, so no 2021 one is claimed either.
     ("c/format-string", &[134], &[]),
+    ("php/sql-injection", &[89, 943], &[A03]),
+    ("php/command-injection", &[78, 88], &[A03]),
+    ("php/path-injection", &[22], &[A01]),
+    ("php/open-redirect", &[601], &[A01]),
+    ("php/ssrf", &[918], &[A10]),
+    ("php/code-injection", &[94, 95], &[A03]),
+    ("php/xss", &[79], &[A03]),
     ("php/eval", &[95], &[A03]),
     ("php/include-from-request", &[22, 98], &[A01, A03]),
     ("php/command-execution", &[78, 88], &[A03]),
