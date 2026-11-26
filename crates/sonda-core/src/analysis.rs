@@ -4360,7 +4360,10 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
             let child = cursor.node();
             if child.is_named() {
                 let is_else = cursor.field_name() == Some("alternative")
-                    || matches!(child.kind(), "else_clause" | "elif_clause");
+                    || matches!(
+                        child.kind(),
+                        "else_clause" | "elif_clause" | "else_if_clause"
+                    );
                 self.stack.push(if is_else {
                     Step::Else(child, nesting)
                 } else {
@@ -4377,7 +4380,7 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         match node.kind() {
             // Java: `else if` is an if_statement directly in the alternative field.
             "if_statement" | "if_expression" => self.stack.push(Step::If(node, nesting, true)),
-            "elif_clause" => {
+            "elif_clause" | "else_if_clause" => {
                 self.c.cyclomatic += 1;
                 self.c.cognitive += 1;
                 self.children(node, nesting + 1, None);
@@ -4957,6 +4960,21 @@ pub(crate) mod tests {
 
     pub(crate) fn far_deadline() -> Instant {
         Instant::now() + std::time::Duration::from_secs(60)
+    }
+
+    /// The lines of a PHP file that `rule` flags, counted from the line
+    /// after `<?php`, for `body` as the rest of the file.
+    pub(crate) fn flagged_php(rule: &str, body: &str) -> Vec<usize> {
+        let mut cfg = crate::config::Config::default();
+        cfg.rules.enabled = vec![rule.to_string()];
+        let rules = crate::rules::RuleSet::new(&cfg.rules).unwrap();
+        let src = format!("<?php\n{body}");
+        let file = analyze("a.php", Lang::Php, &src, &rules, &cfg, far_deadline()).unwrap();
+        file.issues
+            .iter()
+            .filter(|i| i.rule == rule)
+            .map(|i| i.line - 1)
+            .collect()
     }
 
     /// The lines of a Go file that `rule` flags, counted from the line after

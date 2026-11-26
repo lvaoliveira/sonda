@@ -15,6 +15,7 @@ pub enum Lang {
     CSharp,
     Rust,
     Go,
+    Php,
 }
 
 pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
@@ -29,6 +30,7 @@ pub(crate) const CPP_ONLY: &[Lang] = &[Lang::Cpp];
 pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
 pub(crate) const RUST: &[Lang] = &[Lang::Rust];
 pub(crate) const GO: &[Lang] = &[Lang::Go];
+pub(crate) const PHP: &[Lang] = &[Lang::Php];
 /// Every language but Rust, for the `common/` rules SonarQube has no Rust key for.
 pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::JavaScript,
@@ -40,6 +42,7 @@ pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::Cpp,
     Lang::CSharp,
     Lang::Go,
+    Lang::Php,
 ];
 /// Every supported language.
 pub const ALL: &[Lang] = &[
@@ -53,6 +56,7 @@ pub const ALL: &[Lang] = &[
     Lang::CSharp,
     Lang::Rust,
     Lang::Go,
+    Lang::Php,
 ];
 
 impl Lang {
@@ -72,6 +76,7 @@ impl Lang {
             "cs" => Lang::CSharp,
             "rs" => Lang::Rust,
             "go" => Lang::Go,
+            "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => Lang::Php,
             _ => return None,
         })
     }
@@ -97,6 +102,7 @@ impl Lang {
             Lang::CSharp => "csharp",
             Lang::Rust => "rust",
             Lang::Go => "go",
+            Lang::Php => "php",
         }
     }
 
@@ -112,6 +118,9 @@ impl Lang {
             Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
             Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
             Lang::Go => tree_sitter_go::LANGUAGE.into(),
+            // PHP in HTML, as a `.php` file has it: the text outside `<?php ?>`
+            // is a node of its own.
+            Lang::Php => tree_sitter_php::LANGUAGE_PHP.into(),
         }
     }
 
@@ -124,6 +133,7 @@ impl Lang {
             Lang::CSharp => &CSHARP_SYNTAX,
             Lang::Rust => &RUST_SYNTAX,
             Lang::Go => &GO_SYNTAX,
+            Lang::Php => &PHP_SYNTAX,
         }
     }
 }
@@ -367,6 +377,36 @@ static GO_SYNTAX: Syntax = Syntax {
     dup_ignore: &["import_declaration", "package_clause"],
 };
 
+static PHP_SYNTAX: Syntax = Syntax {
+    functions: &[
+        "function_definition",
+        "method_declaration",
+        "anonymous_function",
+        "arrow_function",
+    ],
+    closures: &[],
+    wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    max_cognitive: 15,
+    receivers: &[],
+    branches: &[
+        "for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+        "catch_clause",
+        "conditional_expression",
+    ],
+    switches: &["switch_statement", "match_expression"],
+    // A `default` arm adds nothing: it isn't one of these.
+    cases: &["case_statement", "match_conditional_expression"],
+    comments: &["comment"],
+    dup_ignore: &["namespace_use_declaration", "namespace_definition"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +428,8 @@ mod tests {
         assert_eq!(Lang::from_path(Path::new("App.CS")), Some(Lang::CSharp));
         assert_eq!(Lang::from_path(Path::new("lib.rs")), Some(Lang::Rust));
         assert_eq!(Lang::from_path(Path::new("main.go")), Some(Lang::Go));
+        assert_eq!(Lang::from_path(Path::new("index.PHP")), Some(Lang::Php));
+        assert_eq!(Lang::from_path(Path::new("view.phtml")), Some(Lang::Php));
         assert_eq!(Lang::from_path(Path::new("Makefile")), None);
     }
 

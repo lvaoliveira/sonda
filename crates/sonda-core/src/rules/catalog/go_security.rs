@@ -5,6 +5,7 @@
 //! isn't one.
 
 use super::go::{call_arguments, package_call, text_of, visit};
+use super::is_credential_name;
 use super::prelude::*;
 use crate::lang::GO;
 
@@ -204,54 +205,6 @@ pub(super) static RULES: &[Rule] = &[
 ];
 
 // ---------------------------------------------------------------- filters
-
-/// Words that make a name one that holds a credential.
-const CREDENTIAL_WORDS: &[&str] = &[
-    "password",
-    "passwd",
-    "pwd",
-    "secret",
-    "apikey",
-    "api_key",
-    "privatekey",
-    "private_key",
-    "accesskey",
-    "access_key",
-];
-
-/// Words that make a name about a credential, not one: where it's read from,
-/// or what a form calls it.
-const NOT_A_CREDENTIAL: &[&str] = &[
-    "env",
-    "file",
-    "path",
-    "url",
-    "name",
-    "label",
-    "prompt",
-    "hint",
-    "header",
-    "field",
-    "flag",
-    "param",
-    "regex",
-    "pattern",
-    "format",
-    "text",
-    "message",
-    "msg",
-    "title",
-    "placeholder",
-    "length",
-    "policy",
-    "hash",
-];
-
-fn is_credential_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    CREDENTIAL_WORDS.iter().any(|w| lower.contains(w))
-        && !NOT_A_CREDENTIAL.iter().any(|w| lower.contains(w))
-}
 
 /// A string literal that could be the credential itself: not empty, not a
 /// template (`%s`, `{{.X}}`, `${X}`), not a sentence.

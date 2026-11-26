@@ -388,6 +388,8 @@ pub(crate) fn build<'t>(
         Lang::Rust => rs::build(root, src, deadline),
         Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
         Lang::Go => go::build(root, src, deadline),
+        // No binder for PHP yet: the rules that need names wait for one.
+        Lang::Php => None,
     }
 }
 

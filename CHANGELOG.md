@@ -9,6 +9,16 @@ file, the report formats and the public library API.
 
 ### Added
 
+- PHP ([ADR-0032](docs/adr/0032-php.md)): `.php` files are parsed (PHP in HTML), measured
+  (functions, complexity, comments, duplication) and checked by 28 rules, with
+  `php` as their language: bugs (`php/unreachable-code`, `php/hash-loose-comparison`,
+  `php/removed-mysql-api`, ...), smells (`php/error-suppression`,
+  `php/collapsible-if`, ...) and vulnerabilities with CWE and OWASP (`php/eval`,
+  `php/include-from-request`, `php/command-execution`, `php/sql-concatenation`,
+  `php/unserialize`, `php/weak-hash`, ...). `php/method-name-underscore` is off
+  by default. No binder yet, so no taint analysis or name-based rules; not yet
+  compared with SonarQube.
+
 - Go's taint rules follow a value across files: into a function or a method of
   another file of the package, and through `pkg.F(x)` into the directory of the
   project that ends the import path, and back out of a function whose result

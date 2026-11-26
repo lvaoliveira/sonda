@@ -81,6 +81,8 @@ mod js_semantic;
 mod js_syntax;
 mod js_syntax2;
 mod js_vue;
+mod php;
+mod php_security;
 mod py;
 mod py_cdk;
 mod py_extra;
@@ -108,6 +110,61 @@ pub(super) use crate::model::Category::{Bug, CodeSmell, Vulnerability};
 pub(super) use crate::model::Severity::{Blocker, Critical, Info, Major, Minor};
 use std::sync::LazyLock;
 pub(super) use tree_sitter::Node;
+
+/// Whether a name holds a credential (a password, a secret, a key), for the
+/// rules about hard-coded ones in every language.
+/// Words that make a name one that holds a credential.
+const CREDENTIAL_WORDS: &[&str] = &[
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "apikey",
+    "api_key",
+    "privatekey",
+    "private_key",
+    "accesskey",
+    "access_key",
+];
+
+/// Words that make a name about a credential, not one: where it's read from,
+/// or what a form calls it.
+const NOT_A_CREDENTIAL: &[&str] = &[
+    "table",
+    "class",
+    "input",
+    "column",
+    "button",
+    "env",
+    "file",
+    "path",
+    "url",
+    "name",
+    "label",
+    "prompt",
+    "hint",
+    "header",
+    "field",
+    "flag",
+    "param",
+    "regex",
+    "pattern",
+    "format",
+    "text",
+    "message",
+    "msg",
+    "title",
+    "placeholder",
+    "length",
+    "policy",
+    "hash",
+];
+
+pub(super) fn is_credential_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    CREDENTIAL_WORDS.iter().any(|w| lower.contains(w))
+        && !NOT_A_CREDENTIAL.iter().any(|w| lower.contains(w))
+}
 
 /// What the catalog's files share, as `use super::prelude::*`: named here,
 /// so a file's imports say where its names come from, and the wildcard is
@@ -222,6 +279,8 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (go::RULES, &[]),
     (go_security::RULES, &[]),
     (go_injection::RULES, go_injection::OFF_BY_DEFAULT),
+    (php::RULES, php::OFF_BY_DEFAULT),
+    (php_security::RULES, &[]),
 ];
 
 /// Every rule, in `MODULES` order.
