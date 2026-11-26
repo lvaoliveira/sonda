@@ -416,6 +416,188 @@ pub(super) fn exported<'t, S: Reaches<'t>>(
     out
 }
 
+/// Whether `src` has any of `words`: the cheap test that keeps a file with
+/// nothing to find from being analyzed at all.
+pub(super) fn contains_any(src: &[u8], words: &[&[u8]]) -> bool {
+    words
+        .iter()
+        .any(|w| !w.is_empty() && src.windows(w.len()).any(|x| x == *w))
+}
+
+/// What an address built by concatenation holds: only its start can change
+/// where it goes. `start` is the text it begins with, if it begins with
+/// text. After one that fixes the origin (`/orders/`) no operand can; after a
+/// scheme (`https://`) the next is the host; after another start every one
+/// can; and when it begins with a variable (`$base . $id`), that one sets it.
+pub(super) fn address_path<'t>(
+    operands: &[Node<'t>],
+    start: Option<&str>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) -> Option<Path<'t>> {
+    let deciding = match start {
+        Some(s) if fixes_origin(s) => 0,
+        Some(s) if s.ends_with("://") || s == "//" => 2,
+        Some(_) => operands.len(),
+        None => 1,
+    };
+    best(operands.iter().take(deciding).map(|o| taint(*o)))
+}
+
+/// `sprintf("https://%s/p", $host)` as an address: the same, by what the
+/// format says before its first verb (`prefix`), the arguments being the
+/// format and what it takes.
+pub(super) fn format_path<'t>(
+    args: &[Node<'t>],
+    prefix: Option<&str>,
+    taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
+) -> Option<Path<'t>> {
+    let deciding = match prefix {
+        Some(s) if fixes_origin(s) => 0,
+        Some(s) if s.is_empty() || s.ends_with("://") || s == "//" => 2,
+        _ => args.len(),
+    };
+    best(args.iter().take(deciding).map(|a| taint(*a)))
+}
+
+/// The functions of the file a call can call, the same in each engine: the
+/// context `$cx` has `names`, `summaries`, `local_callee`, `summarize`,
+/// `maybe_from`, `taint` and the file's `arguments`.
+macro_rules! locals_for {
+    ($cx:ident) => {
+        impl<'a, 't> $cx<'a, 't> {
+            /// What a call to a function of the file returns: the value of a
+            /// tainted argument that reaches its result, or one it reads
+            /// itself; for another file's function, what it may hold.
+            fn through_function(
+                &self,
+                call: ::tree_sitter::Node<'t>,
+                args: &[::tree_sitter::Node<'t>],
+                state: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+                depth: u32,
+            ) -> Option<Path<'t>> {
+                let Some(j) = self.local_callee(call) else {
+                    return self.maybe_from(call);
+                };
+                $crate::semantic::taint_core::through_local(
+                    call,
+                    &self.names[j],
+                    args,
+                    |p| self.summary(j, p),
+                    |a| self.taint(a, state, depth),
+                )
+            }
+
+            fn sinks_through(
+                &self,
+                call: ::tree_sitter::Node<'t>,
+                state: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+            ) -> Vec<$crate::semantic::taint::Finding<'t>> {
+                let Some(j) = self.local_callee(call) else {
+                    return Vec::new();
+                };
+                $crate::semantic::taint_core::sinks_local(
+                    call,
+                    &self.names[j],
+                    arguments(call),
+                    |p| self.summary(j, p),
+                    |a| {
+                        self.taint(a, state, 0)
+                            .filter(|p| !$crate::semantic::taint_core::from_call(p))
+                    },
+                )
+            }
+
+            /// What a request's value does in function `j`, for its parameter
+            /// `p` (or for nothing but what the function reads itself).
+            fn summary(&self, j: usize, p: Option<usize>) -> ::std::rc::Rc<Summary<'t>> {
+                self.summaries.get((j, p), || self.summarize(j, p))
+            }
+        }
+    };
+}
+pub(super) use locals_for;
+
+/// How an engine walks an expression, the same in two of them: the context
+/// `$cx` has `from_calls`, `evaluations`, `kind`, `expression` (what a kind of
+/// expression holds), `literal` (a string written out) and `taint`'s helpers.
+macro_rules! evaluation_for {
+    ($cx:ident) => {
+        impl<'a, 't> $cx<'a, 't> {
+            /// The variables that hold a request's value, each with its path,
+            /// or None if the file is past a limit.
+            fn run(
+                &self,
+            ) -> Option<::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>> {
+                let mut tainted = ::std::collections::HashMap::new();
+                self.from_calls.set(true);
+                self.propagate(None, &mut tainted)?;
+                Some(tainted)
+            }
+
+            /// The path a request's value takes to `n`, if `n` holds one.
+            fn taint(
+                &self,
+                n: ::tree_sitter::Node<'t>,
+                state: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+                depth: u32,
+            ) -> Option<Path<'t>> {
+                if $crate::semantic::taint_core::tick(&self.evaluations, depth) {
+                    self.expression(n, state, depth + 1)
+                } else {
+                    None
+                }
+            }
+
+            /// For an address (a redirect, a request), only its start can
+            /// change where it goes.
+            fn starts_the_text(&self) -> bool {
+                matches!(
+                    self.kind,
+                    $crate::semantic::taint::SinkKind::Redirect
+                        | $crate::semantic::taint::SinkKind::Ssrf
+                )
+            }
+
+            /// `sprintf("https://%s/p", $host)` as an address: the same, by
+            /// what the format says before its first verb.
+            fn format_taint(
+                &self,
+                args: &[::tree_sitter::Node<'t>],
+                state: &::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>>,
+                depth: u32,
+            ) -> Option<Path<'t>> {
+                let format = args.first().and_then(|f| self.literal(*f));
+                let prefix = format.map(|f| f.split('%').next().unwrap_or(f));
+                $crate::semantic::taint_core::format_path(args, prefix, |a| {
+                    self.taint(a, state, depth)
+                })
+            }
+        }
+    };
+}
+pub(super) use evaluation_for;
+
+/// What other files call each function by, worked out once: the context
+/// `$cx` has `keys` and `raw_key`.
+macro_rules! function_keys_for {
+    ($cx:ident) => {
+        impl<'a, 't> $cx<'a, 't> {
+            fn function_key(&self, j: usize) -> Option<$crate::semantic::taint::Key> {
+                self.keys
+                    .get_or_init(|| {
+                        (0..self.m.functions.len())
+                            .map(|j| self.raw_key(j))
+                            .collect()
+                    })
+                    .get(j)
+                    .cloned()
+                    .flatten()
+            }
+        }
+    };
+}
+pub(super) use function_keys_for;
+
 /// A function's body, for what its summary concludes from it.
 pub(super) struct Body<'a, 't> {
     pub(super) function: Node<'t>,

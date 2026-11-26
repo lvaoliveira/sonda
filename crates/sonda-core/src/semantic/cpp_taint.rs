@@ -24,16 +24,15 @@
 //! `strcat` and `memcpy` write into an argument, so a call like that is a
 //! write of its source arguments into its destination.
 
-use super::taint::{Callee, Finding, Key, ReturnFact, SinkKind, Step, TaintResult};
+use super::taint::{Callee, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
     Body, Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, best_of, checked_names,
-    conclude, decl_index, exports_for, externals_for, flow_for, from_call, held, inside,
-    through_returns, through_sinks, tick, walk,
+    conclude, contains_any, decl_index, exports_for, externals_for, flow_for, from_call, held,
+    inside, locals_for, tick, walk,
 };
 use super::{DeclId, DeclKind, Model};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use tree_sitter::Node;
 
 /// Writes in one file; past it, the file reports nothing.
@@ -216,7 +215,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
         SinkKind::Redirect => &[b"redirect", b"location"],
         SinkKind::Ssrf => &[b"curlopt_url", b"httplib"],
         SinkKind::Format => &[b"printf", b"syslog", b"err(", b"errx(", b"warn(", b"warnx("],
-        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code => return false,
+        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Html => return false,
     };
     contains_any(src, words)
 }
@@ -234,13 +233,6 @@ fn might_have_sources(src: &[u8]) -> bool {
         b"fcgx_getparam",
     ];
     contains_any(src, words)
-}
-
-fn contains_any(src: &[u8], words: &[&[u8]]) -> bool {
-    let lower = src.to_ascii_lowercase();
-    words
-        .iter()
-        .any(|w| lower.windows(w.len()).any(|x| x == *w))
 }
 
 /// Calls that, with a value as argument or receiver, read as checking it.
@@ -1103,7 +1095,7 @@ fn function_sink<'t>(
         SinkKind::Redirect => redirect_sink(name, before, args, cx),
         SinkKind::Ssrf => ssrf_sink(name, before, args, cx),
         SinkKind::Format => format_sink(name, before),
-        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code => None,
+        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Html => None,
     }
 }
 
@@ -1269,49 +1261,6 @@ impl<'a, 't> Cx<'a, 't> {
             [only] => Some(*only),
             _ => None,
         }
-    }
-
-    /// What a call to a function of the file returns: the value of a tainted
-    /// argument that reaches its result, or one it reads itself.
-    fn through_function(
-        &self,
-        call: Node<'t>,
-        args: &[Node<'t>],
-        state: &HashMap<DeclId, Path<'t>>,
-        depth: u32,
-    ) -> Option<Path<'t>> {
-        let Some(j) = self.local_callee(call) else {
-            return self.maybe_from(call);
-        };
-        through_returns(
-            call,
-            self.names[j],
-            self.summary(j, None).returns.clone(),
-            args,
-            |a| self.taint(a, state, depth),
-            |i| self.summary(j, Some(i)).returns.clone(),
-        )
-    }
-
-    fn sinks_through(&self, call: Node<'t>, state: &HashMap<DeclId, Path<'t>>) -> Vec<Finding<'t>> {
-        let Some(j) = self.local_callee(call) else {
-            return Vec::new();
-        };
-        let reached = |i: usize| self.summary(j, Some(i)).sinks.clone();
-        let name = self.names[j];
-        through_sinks(
-            call,
-            name,
-            arguments(call),
-            |a| self.taint(a, state, 0).filter(|p| !from_call(p)),
-            reached,
-        )
-    }
-
-    /// What a request's value does in function `j`, for its parameter `p` (or
-    /// for nothing but what the function reads itself).
-    fn summary(&self, j: usize, p: Option<usize>) -> Rc<Summary<'t>> {
-        self.summaries.get((j, p), || self.summarize(j, p))
     }
 
     fn summarize(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
@@ -1596,6 +1545,7 @@ impl<'a, 't> Cx<'a, 't> {
 
 flow_for!(Cx, from_call);
 externals_for!(Cx);
+locals_for!(Cx);
 exports_for!(Cx, takes_text, returns_text);
 
 // ---------------------------------------------------------------- syntax

@@ -2522,45 +2522,30 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             })
             .collect();
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-        let found = if key[tp::FACT_PREFIX.len()..].starts_with("cs/") {
-            let parsed = cs_parsed.get_or_insert_with(|| cs_indexes(files));
-            let index = CsTaintIndex::new(parsed);
-            tp::compose(
-                &paths,
-                &facts,
-                Some(&|from, callee| index.resolve(from, callee)),
-            )
-        } else if key[tp::FACT_PREFIX.len()..].starts_with("java/") {
-            let parsed = java_parsed.get_or_insert_with(|| java_indexes(files));
-            let index = JavaTaintIndex::new(parsed);
-            tp::compose(
-                &paths,
-                &facts,
-                Some(&|from, callee| index.resolve(from, callee)),
-            )
-        } else if key[tp::FACT_PREFIX.len()..].starts_with("rs/") {
-            let index = RsTaintIndex::new(&paths);
-            tp::compose(
-                &paths,
-                &facts,
-                Some(&|from, callee| index.resolve(from, callee)),
-            )
-        } else if key[tp::FACT_PREFIX.len()..].starts_with("c/") {
-            let index = CppTaintIndex::new(&paths);
-            tp::compose(
-                &paths,
-                &facts,
-                Some(&|from, callee| index.resolve(from, callee)),
-            )
-        } else if key[tp::FACT_PREFIX.len()..].starts_with("go/") {
-            let index = GoTaintIndex::new(&paths);
-            tp::compose(
-                &paths,
-                &facts,
-                Some(&|from, callee| index.resolve(from, callee)),
-            )
-        } else {
-            tp::compose(&paths, &facts, None)
+        let found = match key[tp::FACT_PREFIX.len()..].split('/').next().unwrap_or("") {
+            "cs" => {
+                let parsed = cs_parsed.get_or_insert_with(|| cs_indexes(files));
+                let index = CsTaintIndex::new(parsed);
+                tp::compose(
+                    &paths,
+                    &facts,
+                    Some(&|from, callee| index.resolve(from, callee)),
+                )
+            }
+            "java" => {
+                let parsed = java_parsed.get_or_insert_with(|| java_indexes(files));
+                let index = JavaTaintIndex::new(parsed);
+                tp::compose(
+                    &paths,
+                    &facts,
+                    Some(&|from, callee| index.resolve(from, callee)),
+                )
+            }
+            "rs" => compose_by_path(&paths, &facts, RsTaintIndex::new, RsTaintIndex::resolve),
+            "c" => compose_by_path(&paths, &facts, CppTaintIndex::new, CppTaintIndex::resolve),
+            "go" => compose_by_path(&paths, &facts, GoTaintIndex::new, GoTaintIndex::resolve),
+            "php" => compose_by_path(&paths, &facts, PhpTaintIndex::new, PhpTaintIndex::resolve),
+            _ => tp::compose(&paths, &facts, None),
         };
         let issues: Vec<(usize, Issue)> = found
             .iter()
@@ -2583,6 +2568,22 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             }
         }
     }
+}
+
+/// Composes a rule's facts when a call is resolved from the files' paths
+/// alone: `new` builds the language's index from them, `resolve` reads it.
+fn compose_by_path<I>(
+    paths: &[&str],
+    facts: &[Option<semantic::taint_project::FileFacts>],
+    new: fn(&[&str]) -> I,
+    resolve: fn(&I, usize, &semantic::taint::Callee) -> Vec<(usize, semantic::taint::Key)>,
+) -> Vec<semantic::taint_project::Found> {
+    let index = new(paths);
+    semantic::taint_project::compose(
+        paths,
+        facts,
+        Some(&|from, callee| resolve(&index, from, callee)),
+    )
 }
 
 /// The issue a taint flow across files makes, at its sink, with its steps.
@@ -3017,6 +3018,51 @@ impl GoTaintIndex {
         let longest = found.iter().map(|d| d.matches('/').count()).max();
         found.retain(|d| Some(d.matches('/').count()) == longest);
         found
+    }
+}
+
+/// How the project pass resolves a PHP call. PHP has no packages: a function
+/// is global, and a class is found by its name, so a call is to the function
+/// of that name (and for a method, of that class) in any other PHP file. The
+/// files that define it are told by their summaries: this names every PHP
+/// file, and the pass keeps the ones that have one.
+struct PhpTaintIndex {
+    files: Vec<usize>,
+}
+
+impl PhpTaintIndex {
+    fn new(paths: &[&str]) -> Self {
+        let php = |p: &str| {
+            let lower = p.to_ascii_lowercase();
+            [".php", ".phtml", ".php5", ".php7", ".inc"]
+                .iter()
+                .any(|e| lower.ends_with(e))
+        };
+        PhpTaintIndex {
+            files: (0..paths.len()).filter(|&i| php(paths[i])).collect(),
+        }
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Php { class, name } = callee else {
+            return Vec::new();
+        };
+        let key = semantic::taint::Key {
+            export: match class {
+                Some(c) => format!("{c}::{name}"),
+                None => name.clone(),
+            },
+            member: None,
+        };
+        self.files
+            .iter()
+            .filter(|&&f| f != from)
+            .map(|&f| (f, key.clone()))
+            .collect()
     }
 }
 

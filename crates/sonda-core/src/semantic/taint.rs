@@ -37,6 +37,9 @@ pub(crate) enum SinkKind {
     Code,
     /// The format of a `printf`: a value there reads or writes memory.
     Format,
+    /// Text a page prints: a value there runs as script in the reader's
+    /// browser unless it was escaped for HTML.
+    Html,
 }
 
 /// A long path keeps its first and last steps.
@@ -195,6 +198,16 @@ pub(crate) enum Callee {
         name: String,
         arity: usize,
     },
+    /// `helper($x)`, `$store->find($x)`, `Store::find($x)` or `new Store($x)`:
+    /// the function's name, lowercase (PHP reads names without regard to case),
+    /// and for a method its class's, as written without a namespace. The
+    /// project pass looks for the one function of that name in the project's
+    /// other PHP files.
+    Php {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        class: Option<String>,
+        name: String,
+    },
 }
 
 impl Callee {
@@ -209,6 +222,11 @@ impl Callee {
                 ..
             } => format!("{r}.{name}"),
             Callee::Go { name, .. } => name.clone(),
+            Callee::Php {
+                class: Some(c),
+                name,
+            } => format!("{c}::{name}"),
+            Callee::Php { name, .. } => name.clone(),
             Callee::Rs { path, method } => method
                 .clone()
                 .or_else(|| path.last().cloned())

@@ -82,6 +82,7 @@ mod js_syntax;
 mod js_syntax2;
 mod js_vue;
 mod php;
+mod php_injection;
 mod php_security;
 mod py;
 mod py_cdk;
@@ -281,6 +282,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (go_injection::RULES, go_injection::OFF_BY_DEFAULT),
     (php::RULES, php::OFF_BY_DEFAULT),
     (php_security::RULES, &[]),
+    (php_injection::RULES, php_injection::OFF_BY_DEFAULT),
 ];
 
 /// Every rule, in `MODULES` order.

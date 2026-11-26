@@ -635,7 +635,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
         SinkKind::Code => &[b"eval(", b"exec("],
         SinkKind::XPath => &[b"xpath", b"XPath"],
         SinkKind::Ldap => &[b"ldap"],
-        SinkKind::Format => &[],
+        SinkKind::Format | SinkKind::Html => &[],
     };
     words.iter().any(|w| has(w))
 }
@@ -1459,7 +1459,8 @@ impl<'a, 't> Cx<'a, 't> {
             | SinkKind::Sql
             | SinkKind::XPath
             | SinkKind::Ldap
-            | SinkKind::Format => false,
+            | SinkKind::Format
+            | SinkKind::Html => false,
         };
         let propagates =
             PROPAGATING_MODULES.contains(&module) || (module == "os" && name == "fspath");

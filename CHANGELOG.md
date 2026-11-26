@@ -9,6 +9,20 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Taint analysis for PHP ([ADR-0027](docs/adr/0027-taint-analysis.md)): seven rules,
+  `php/sql-injection`, `php/command-injection`, `php/path-injection`,
+  `php/open-redirect`, `php/ssrf`, `php/code-injection` and `php/xss`, follow a
+  client's value from `$_GET`, `$_POST`, `$_REQUEST`, `$_COOKIE`, `$_FILES`,
+  `php://input`, the headers or a Laravel, Symfony or PSR-7 request through
+  concatenation, interpolation, the functions that change text and the
+  functions and methods of the file, and across files, into the queries,
+  commands, files and `include`s, redirects, outgoing requests, `eval` and
+  printed output they reach, and report the path it took. A PHP binder
+  reads the language's scoping (a function's variables, `global`, a
+  closure's `use`). A value passed through `htmlspecialchars`, `intval`,
+  `escapeshellarg`, a test such as `is_numeric` or `in_array`, or back into
+  itself through an escape function or a numeric cast, is validated.
+
 - PHP ([ADR-0032](docs/adr/0032-php.md)): `.php` files are parsed (PHP in HTML), measured
   (functions, complexity, comments, duplication) and checked by 28 rules, with
   `php` as their language: bugs (`php/unreachable-code`, `php/hash-loose-comparison`,

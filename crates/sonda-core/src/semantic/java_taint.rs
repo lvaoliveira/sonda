@@ -558,7 +558,7 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
         ],
         SinkKind::XPath => &[b"XPath", b"selectNodes", b"selectSingleNode"],
         SinkKind::Ldap => &[b"DirContext", b"LdapTemplate", b"LdapContext"],
-        SinkKind::Format => &[],
+        SinkKind::Format | SinkKind::Html => &[],
         SinkKind::Code => &[
             b"ScriptEngine",
             b"GroovyShell",
@@ -606,7 +606,8 @@ fn check_words(kind: SinkKind) -> &'static [&'static str] {
         | SinkKind::XPath
         | SinkKind::Ldap
         | SinkKind::Code
-        | SinkKind::Format => &[
+        | SinkKind::Format
+        | SinkKind::Html => &[
             "matches",
             "isNumeric",
             "isAlphanumeric",
@@ -1610,7 +1611,7 @@ impl<'a, 't> Cx<'a, 't> {
             SinkKind::XPath => XPATH_SINKS,
             SinkKind::Ldap => LDAP_SINKS,
             SinkKind::Code => CODE_SINKS,
-            SinkKind::Format => return None,
+            SinkKind::Format | SinkKind::Html => return None,
         };
         if self.kind == SinkKind::Redirect
             && matches!(name, "setHeader" | "addHeader" | "header")

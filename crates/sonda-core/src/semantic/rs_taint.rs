@@ -423,7 +423,9 @@ fn might_have_sinks(src: &[u8], kind: SinkKind) -> bool {
             b"hyper",
             b"client",
         ],
-        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Format => return false,
+        SinkKind::XPath | SinkKind::Ldap | SinkKind::Code | SinkKind::Format | SinkKind::Html => {
+            return false;
+        }
     };
     words.iter().any(|w| has(w))
 }
