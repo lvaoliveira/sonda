@@ -640,6 +640,61 @@ pub(super) fn conclude<'t, F: Flow<'t>>(
     }
 }
 
+/// A function's summary, the same in each engine whose parameters seed it:
+/// for parameter `p`, each of its declarations holds a request's value (none
+/// does when one `$skip`s: its value can't carry one, or is one already);
+/// that spreads through the body and is concluded. The context `$cx` has `m`,
+/// `names` and `calls` fields, `sink_call`, `taint` and `sinks_through`;
+/// `$nested` are the kinds of the functions nested in one, whose returns
+/// aren't its own.
+macro_rules! summarize_for {
+    ($cx:ident, $nested:expr, $skip:expr) => {
+        impl<'a, 't> $cx<'a, 't> {
+            fn summarize(
+                &self,
+                j: usize,
+                p: Option<usize>,
+            ) -> Option<$crate::semantic::taint_core::Summary<'t>> {
+                use $crate::semantic::taint_core::{Body, Flow, Path, Summary, conclude};
+                let f = &self.m.functions[j];
+                let mut state: ::std::collections::HashMap<$crate::semantic::DeclId, Path<'t>> =
+                    ::std::collections::HashMap::new();
+                if let Some(p) = p {
+                    for &d in f.params.get(p)? {
+                        if ($skip)(self, d) {
+                            return Some(Summary::default());
+                        }
+                        let decl = &self.m.decls[d];
+                        state.insert(
+                            d,
+                            vec![$crate::semantic::taint::Step {
+                                node: decl.node,
+                                message: format!("`{}`'s parameter `{}`", self.names[j], decl.name),
+                            }],
+                        );
+                    }
+                }
+                self.propagate(Some(f.node), &mut state)?;
+                Some(conclude(
+                    self,
+                    &Body {
+                        function: f.node,
+                        nested: $nested,
+                        returns: "return_statement",
+                        calls: &self.calls,
+                    },
+                    &state,
+                    p,
+                    |c| self.sink_call(c),
+                    |a| self.taint(a, &state, 0),
+                    |c| self.sinks_through(c, &state),
+                ))
+            }
+        }
+    };
+}
+pub(super) use summarize_for;
+
 /// What an engine does about other files' functions, the same in each: the
 /// context `$cx` has `calls`, `callees` (a memo from a call's node id to what
 /// it calls), `from_calls` and `return_facts` fields, `find_external_callee`,
@@ -1200,4 +1255,42 @@ pub(super) fn checked_names<'t>(
         out.extend(named.into_iter().filter_map(&resolve));
     }
     out
+}
+
+/// Whether a function's name says it checks its argument: a verb of checking
+/// that starts a word of the name (`isValid`, `checkPath`, `validate_input`),
+/// not one inside it (`safeQuery` consumes its argument rather than checking
+/// it, and `unsafeQuery` and `issueToken` check nothing); a name that ends in
+/// one of `ends`, what it checks for, but not its opposite (`unsafe`,
+/// `invalid`); or one that contains one of `contains`.
+pub(super) fn names_a_check(name: &str, ends: &[&str], contains: &[&str]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let starts = |w: &str| {
+        lower.starts_with(w)
+            && name[w.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
+    };
+    [
+        "is",
+        "has",
+        "check",
+        "validate",
+        "verify",
+        "ensure",
+        "assert",
+        "must",
+        "require",
+        "sanitize",
+        "authorize",
+    ]
+    .iter()
+    .any(|w| starts(w))
+        || ends.iter().any(|w| {
+            lower.ends_with(w)
+                && !lower.ends_with(&format!("un{w}"))
+                && !lower.ends_with(&format!("in{w}"))
+        })
+        || contains.iter().any(|w| lower.contains(w))
 }

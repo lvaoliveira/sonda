@@ -27,9 +27,9 @@
 
 use super::taint::{Callee, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
-    Body, Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, address_path, best,
-    best_of, checked_names, conclude, contains_any, decl_index, evaluation_for, exports_for,
-    externals_for, flow_for, from_call, function_keys_for, held, locals_for, walk,
+    Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, address_path, best, best_of,
+    checked_names, contains_any, decl_index, evaluation_for, exports_for, externals_for, flow_for,
+    from_call, function_keys_for, held, locals_for, names_a_check, summarize_for, walk,
 };
 use super::{DeclId, Model};
 use std::cell::{Cell, OnceCell, RefCell};
@@ -333,44 +333,13 @@ fn check_names(kind: SinkKind) -> &'static [&'static str] {
     }
 }
 
-/// A function whose name says it checks its argument: a word of checking at
-/// the start of the name (`validate_input`, `isValid`, `checkPath`), or the
-/// name ending in what it checks for. Not one that merely contains the word:
-/// `safeQuery` consumes its argument, and `unsafeQuery` checks nothing.
+/// A function whose name says it checks its argument.
 fn is_a_check_by_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    let starts = |w: &str| {
-        lower.starts_with(w)
-            && name[w.len()..]
-                .chars()
-                .next()
-                .is_none_or(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
-    };
-    [
-        "is",
-        "has",
-        "check",
-        "validate",
-        "verify",
-        "ensure",
-        "assert",
-        "must",
-        "require",
-        "sanitize",
-        "authorize",
-    ]
-    .iter()
-    .any(|w| starts(w))
-        || ["valid", "safe", "allowed", "sanitized", "verified"]
-            .iter()
-            .any(|w| {
-                lower.ends_with(w)
-                    && !lower.ends_with(&format!("un{w}"))
-                    && !lower.ends_with(&format!("in{w}"))
-            })
-        || ["sanitiz", "allowlist", "whitelist"]
-            .iter()
-            .any(|w| lower.contains(w))
+    names_a_check(
+        name,
+        &["valid", "safe", "allowed", "sanitized", "verified"],
+        &["sanitiz", "allowlist", "whitelist"],
+    )
 }
 
 /// The functions that make a value safe for where it goes, by kind: the
@@ -1646,46 +1615,6 @@ impl<'a, 't> Cx<'a, 't> {
         };
         Some(class)
     }
-
-    fn summarize(&self, j: usize, p: Option<usize>) -> Option<Summary<'t>> {
-        let f = &self.m.functions[j];
-        let mut state: HashMap<DeclId, Path<'t>> = HashMap::new();
-        if let Some(p) = p {
-            for &d in f.params.get(p)? {
-                if self.is_inert(d) || self.requests.contains(&d) {
-                    return Some(Summary::default());
-                }
-                let decl = &self.m.decls[d];
-                state.insert(
-                    d,
-                    vec![Step {
-                        node: decl.node,
-                        message: format!("`{}`'s parameter `{}`", self.names[j], decl.name),
-                    }],
-                );
-            }
-        }
-        self.propagate(Some(f.node), &mut state)?;
-        Some(conclude(
-            self,
-            &Body {
-                function: f.node,
-                nested: &[
-                    "function_definition",
-                    "method_declaration",
-                    "anonymous_function",
-                    "arrow_function",
-                ],
-                returns: "return_statement",
-                calls: &self.calls,
-            },
-            &state,
-            p,
-            |c| self.sink_call(c),
-            |a| self.taint(a, &state, 0),
-            |c| self.sinks_through(c, &state),
-        ))
-    }
 }
 
 // ---------------------------------------------------------------- other files (T4)
@@ -1766,6 +1695,16 @@ externals_for!(Cx);
 locals_for!(Cx);
 evaluation_for!(Cx);
 function_keys_for!(Cx);
+summarize_for!(
+    Cx,
+    &[
+        "function_definition",
+        "method_declaration",
+        "anonymous_function",
+        "arrow_function",
+    ],
+    |cx: &Cx, d| cx.is_inert(d) || cx.requests.contains(&d)
+);
 exports_for!(Cx);
 
 // ---------------------------------------------------------------- syntax
