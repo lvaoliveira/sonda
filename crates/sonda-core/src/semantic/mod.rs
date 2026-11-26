@@ -391,6 +391,8 @@ pub(crate) fn build<'t>(
         Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
         Lang::Go => go::build(root, src, deadline),
         Lang::Php => php::build(root, src, deadline),
+        // No binder for Ruby yet: the rules that need names wait for one.
+        Lang::Ruby => None,
     }
 }
 

@@ -383,6 +383,17 @@ impl Syntax {
                 types: PHP_TYPES,
                 rust: false,
             },
+            // `=begin ... =end` comments aren't marked: they start a line.
+            Lang::Ruby => Self {
+                line_comment: &["#"],
+                block_comments: false,
+                triple_quotes: false,
+                // The shell operator.
+                backticks: true,
+                keywords: RUBY_KEYWORDS,
+                types: &[],
+                rust: false,
+            },
             Lang::Go => Self {
                 line_comment: &["//"],
                 block_comments: true,
@@ -660,6 +671,13 @@ const PHP_KEYWORDS: &[&str] = &[
 
 const PHP_TYPES: &[&str] = &[
     "array", "bool", "float", "int", "iterable", "mixed", "never", "object", "string", "void",
+];
+
+const RUBY_KEYWORDS: &[&str] = &[
+    "alias", "and", "begin", "break", "case", "class", "def", "defined?", "do", "else", "elsif",
+    "end", "ensure", "false", "for", "if", "in", "module", "next", "nil", "not", "or", "redo",
+    "rescue", "retry", "return", "self", "super", "then", "true", "undef", "unless", "until",
+    "when", "while", "yield",
 ];
 
 const GO_KEYWORDS: &[&str] = &[

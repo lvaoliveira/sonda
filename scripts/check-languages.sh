@@ -25,6 +25,7 @@ printf 'package p\n\nfunc f(a string) int { return len(a) }\n' > a.go
 # The $ is PHP's, not the shell's.
 # shellcheck disable=SC2016
 printf '<?php\nfunction f($a) { return strlen($a); }\n' > a.php
+printf 'def f(a)\n  a.length\nend\n' > a.rb
 # Exit 1 is a failing gate, not an error.
 status=0
 "$sonda" scan . --format json -o report.json || status=$?
@@ -41,8 +42,8 @@ if jq -e '[.warnings[] | select(test("sandbox"))] | length > 0' report.json > /d
   exit 1
 fi
 analyzed=$(jq '.files | length' report.json)
-if [ "$analyzed" -ne 11 ]; then
-  echo "check-languages: $analyzed of 11 files analyzed" >&2
+if [ "$analyzed" -ne 12 ]; then
+  echo "check-languages: $analyzed of 12 files analyzed" >&2
   jq -r '.files[].path, .warnings[]' report.json >&2
   exit 1
 fi

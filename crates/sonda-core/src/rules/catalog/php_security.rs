@@ -3,9 +3,9 @@
 //! without regard to case; a rule that needs a value to be one a client
 //! chose waits for taint analysis.
 
-use super::is_credential_name;
 use super::php::{arguments, function_name, text_of, visit};
 use super::prelude::*;
+use super::{is_credential_name, looks_like_a_secret};
 use crate::lang::PHP;
 
 pub(super) static RULES: &[Rule] = &[
@@ -658,43 +658,8 @@ fn is_credential_value(v: Node, src: &[u8]) -> bool {
     }
     let mut interpolates = false;
     visit(v, &mut |c| interpolates |= c.kind() == "variable_name");
-    let t = text_of(v, src).trim_matches(['\'', '"']);
-    !interpolates
-        && t.len() >= 4
-        && !t.contains(char::is_whitespace)
-        && !t.contains(['%', '{', '$', '<'])
-        && !PLACEHOLDERS.iter().any(|w| t.to_ascii_lowercase().contains(w))
-        && !names_another_setting(t)
-        // `*****`, `-----`: a mask, not a secret.
-        && t.chars().any(|c| c.is_alphanumeric())
-        && t.chars().collect::<std::collections::HashSet<_>>().len() > 2
+    !interpolates && looks_like_a_secret(text_of(v, src).trim_matches(['\'', '"']))
 }
-
-/// A value with no digit that says `pass` or `key` (`FTP_PASS`, `api_key`,
-/// `user_pass`) names the setting that holds the secret, not the secret.
-fn names_another_setting(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    !value.chars().any(|c| c.is_ascii_digit())
-        && ["pass", "pwd", "key", "secret", "token"]
-            .iter()
-            .any(|w| lower.contains(w))
-}
-
-/// Words that make a value a placeholder, not a secret.
-const PLACEHOLDERS: &[&str] = &[
-    "here",
-    "your",
-    "example",
-    "change",
-    "xxx",
-    "password",
-    "secret",
-    "sample",
-    "dummy",
-    "placeholder",
-    "enter",
-    "insert",
-];
 
 /// A mode written as an octal literal: `0777`, `0o666`.
 fn octal_mode(n: Node, src: &[u8]) -> Option<u32> {

@@ -1,0 +1,35 @@
+# frozen_string_literal: true
+class Foo < Bar
+  def run(a, b = 1, *rest, key: 2, &blk)
+    if a && b
+      puts "x"
+    elsif b
+      puts "y"
+    else
+      [1, 2].each do |i|
+        puts i unless i.zero?
+      end
+    end
+    case a
+    when 1 then 2
+    when 2 then 3
+    else 4
+    end
+  rescue StandardError => e
+    raise e
+  end
+end
+
+module Billing
+  class Invoice < ApplicationRecord
+    has_many :lines
+
+    def total
+      lines.sum(&:amount)
+    end
+
+    def self.find_paid(name)
+      where("name = '#{name}'")
+    end
+  end
+end
