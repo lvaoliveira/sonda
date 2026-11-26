@@ -190,6 +190,7 @@ pub(crate) fn analyze(
         facts: match lang {
             Lang::CSharp => cs_facts(&ctx, root, deadline),
             Lang::Cpp => cpp_facts(&ctx, root, deadline, rules),
+            Lang::Php => php_facts(&ctx, root),
             _ => java_facts(&ctx, lang, root, deadline)
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
@@ -792,6 +793,17 @@ fn cpp_facts(ctx: &Ctx, root: Node, deadline: Instant, rules: &RuleSet) -> Vec<(
         facts.push((crate::semantic::cpp_index::FACT.to_string(), json));
     }
     facts.extend(suppressed_lines(ctx.src, CPP_SUPPRESSED_LINES));
+    facts
+}
+
+/// The facts the project-level PHP rules need from this file: its classes,
+/// with what each extends and the methods it defines.
+fn php_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
+    let mut facts = Vec::new();
+    let classes = crate::semantic::php_taint::classes(root, ctx.src.as_bytes());
+    if !classes.is_empty() {
+        push_json_fact(&mut facts, crate::semantic::php_taint::FACT, &classes);
+    }
     facts
 }
 
@@ -2544,7 +2556,14 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
             "rs" => compose_by_path(&paths, &facts, RsTaintIndex::new, RsTaintIndex::resolve),
             "c" => compose_by_path(&paths, &facts, CppTaintIndex::new, CppTaintIndex::resolve),
             "go" => compose_by_path(&paths, &facts, GoTaintIndex::new, GoTaintIndex::resolve),
-            "php" => compose_by_path(&paths, &facts, PhpTaintIndex::new, PhpTaintIndex::resolve),
+            "php" => {
+                let index = PhpTaintIndex::new(&paths, files);
+                tp::compose(
+                    &paths,
+                    &facts,
+                    Some(&|from, callee| index.resolve(from, callee)),
+                )
+            }
             _ => tp::compose(&paths, &facts, None),
         };
         let issues: Vec<(usize, Issue)> = found
@@ -3028,10 +3047,28 @@ impl GoTaintIndex {
 /// file, and the pass keeps the ones that have one.
 struct PhpTaintIndex {
     files: Vec<usize>,
+    /// Each class's parents (what it extends and uses) and the methods it
+    /// defines, over the project.
+    parents: HashMap<String, Vec<String>>,
+    methods: HashMap<String, std::collections::HashSet<String>>,
 }
 
 impl PhpTaintIndex {
-    fn new(paths: &[&str]) -> Self {
+    fn new(paths: &[&str], files: &[FileAnalysis]) -> Self {
+        let mut parents: HashMap<String, Vec<String>> = HashMap::new();
+        let mut methods: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        for f in files {
+            let Some((_, json)) = f.facts.iter().find(|(k, _)| k == semantic::php_taint::FACT)
+            else {
+                continue;
+            };
+            let classes: Vec<semantic::php_taint::ClassFact> =
+                serde_json::from_str(json).unwrap_or_default();
+            for c in classes {
+                parents.entry(c.name.clone()).or_default().extend(c.parents);
+                methods.entry(c.name).or_default().extend(c.methods);
+            }
+        }
         let php = |p: &str| {
             let lower = p.to_ascii_lowercase();
             [".php", ".phtml", ".php5", ".php7", ".inc"]
@@ -3040,7 +3077,28 @@ impl PhpTaintIndex {
         };
         PhpTaintIndex {
             files: (0..paths.len()).filter(|&i| php(paths[i])).collect(),
+            parents,
+            methods,
         }
+    }
+
+    /// The class `name` is defined in for a call on `class`: its own or the
+    /// nearest ancestor's (the class itself when none is known to define it).
+    fn defining_class(&self, class: &str, name: &str) -> String {
+        let mut lineage = vec![class.to_string()];
+        let mut i = 0;
+        while let Some(c) = lineage.get(i).cloned() {
+            if self.methods.get(&c).is_some_and(|m| m.contains(name)) {
+                return c;
+            }
+            for p in self.parents.get(&c).into_iter().flatten() {
+                if !lineage.contains(p) && lineage.len() < 16 {
+                    lineage.push(p.clone());
+                }
+            }
+            i += 1;
+        }
+        class.to_string()
     }
 
     fn resolve(
@@ -3053,7 +3111,10 @@ impl PhpTaintIndex {
         };
         let key = semantic::taint::Key {
             export: match class {
-                Some(c) => format!("{c}::{name}"),
+                Some(c) => format!(
+                    "{}::{name}",
+                    self.defining_class(c, &name.to_ascii_lowercase())
+                ),
                 None => name.clone(),
             },
             member: None,

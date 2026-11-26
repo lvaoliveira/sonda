@@ -9,6 +9,11 @@ file, the report formats and the public library API.
 
 ### Added
 
+- PHP taint analysis ([ADR-0032](docs/adr/0032-php.md)) follows a value past a
+  reassignment that always runs (`$ip = $_GET['ip']; $ip = $octets[0]`), through a
+  property one method sets and another reads (`$this->q`), and into a method a
+  class inherits from a parent class or a trait, in the file and across files.
+
 - Taint analysis for PHP ([ADR-0027](docs/adr/0027-taint-analysis.md)): seven rules,
   `php/sql-injection`, `php/command-injection`, `php/path-injection`,
   `php/open-redirect`, `php/ssrf`, `php/code-injection` and `php/xss`, follow a
