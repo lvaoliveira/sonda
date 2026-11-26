@@ -1302,3 +1302,117 @@ pub(super) fn names_a_check(name: &str, ends: &[&str], contains: &[&str]) -> boo
         })
         || contains.iter().any(|w| lower.contains(w))
 }
+
+/// Calls `f` on every node under `root`, in source order, until it says to
+/// stop: without a list of children per node, as `walk` makes.
+pub(super) fn each_node<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
+    let mut cursor = root.walk();
+    loop {
+        if !f(cursor.node()) {
+            return;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() || cursor.node().id() == root.id() {
+                return;
+            }
+        }
+    }
+}
+
+/// Whether a loop (one of `loops`) is around `n`, inside its function (one
+/// of `functions`).
+pub(super) fn in_loop(n: Node, loops: &[&str], functions: &[&str]) -> bool {
+    let mut p = n.parent();
+    while let Some(a) = p {
+        if loops.contains(&a.kind()) {
+            return true;
+        }
+        if functions.contains(&a.kind()) {
+            return false;
+        }
+        p = a.parent();
+    }
+    false
+}
+
+/// `x = v` as a statement of a block that always runs kills what `x` held
+/// before, for what the block reads after it: those reads get a version of
+/// the variable of their own, and its writes are also the writes of the one
+/// it replaced, for the reads past the block. The flow-insensitive model
+/// alone would keep `ip = params[:ip]` tainting `ip = octets[0]`.
+///
+/// For the `statements` of `block`: `killer` is the variable a statement
+/// reassigns, `variable` the kind of node that reads one, `decl_of` what a
+/// node names, and `declared_at` where a variable was first bound. Returns,
+/// for each new version in turn (numbered from `first_id`), the variable it
+/// replaces and the nodes that now name it.
+pub(super) fn version_plan<'t>(
+    block: Node<'t>,
+    variable: &str,
+    statements: &[Node<'t>],
+    killer: impl Fn(Node<'t>) -> Option<Node<'t>>,
+    decl_of: impl Fn(Node<'t>) -> Option<DeclId>,
+    declared_at: impl Fn(DeclId) -> usize,
+    first_id: DeclId,
+) -> Vec<(DeclId, Vec<Node<'t>>)> {
+    // The first assignment declares; only a reassignment kills anything. A
+    // version is as old as the variable it replaces.
+    let declared = |d: DeclId, plan: &[(DeclId, Vec<Node<'t>>)]| {
+        let mut d = d;
+        while d >= first_id {
+            d = plan[d - first_id].0;
+        }
+        declared_at(d)
+    };
+    let wanted: HashSet<DeclId> = statements
+        .iter()
+        .filter_map(|s| {
+            let d = decl_of(killer(*s)?)?;
+            (declared(d, &[]) < s.start_byte()).then_some(d)
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut reads: HashMap<DeclId, Vec<Node<'t>>> = HashMap::new();
+    each_node(block, |n| {
+        if n.kind() == variable
+            && let Some(d) = decl_of(n).filter(|d| wanted.contains(d))
+        {
+            reads.entry(d).or_default().push(n);
+        }
+        true
+    });
+    let mut moved_to: HashMap<usize, DeclId> = HashMap::new();
+    let mut plan: Vec<(DeclId, Vec<Node<'t>>)> = Vec::new();
+    for s in statements {
+        let Some(left) = killer(*s) else {
+            continue;
+        };
+        let Some(d) = moved_to.get(&left.id()).copied().or_else(|| decl_of(left)) else {
+            continue;
+        };
+        if declared(d, &plan) >= s.start_byte() {
+            continue;
+        }
+        let id = first_id + plan.len();
+        let after = s.end_byte();
+        let mut moved = Vec::new();
+        if let Some(nodes) = reads.get_mut(&d) {
+            let (later, rest): (Vec<_>, Vec<_>) = std::mem::take(nodes)
+                .into_iter()
+                .partition(|v| v.start_byte() >= after || v.id() == left.id());
+            *nodes = rest;
+            moved = later;
+        }
+        for v in &moved {
+            moved_to.insert(v.id(), id);
+        }
+        reads.insert(id, moved.clone());
+        plan.push((d, moved));
+    }
+    plan
+}

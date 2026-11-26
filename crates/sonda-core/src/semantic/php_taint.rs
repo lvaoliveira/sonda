@@ -28,8 +28,9 @@
 use super::taint::{Callee, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
     Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, address_path, best, best_of,
-    checked_names, contains_any, decl_index, evaluation_for, exports_for, externals_for, flow_for,
-    from_call, function_keys_for, held, locals_for, names_a_check, summarize_for, walk,
+    checked_names, contains_any, decl_index, each_node, evaluation_for, exports_for, externals_for,
+    flow_for, from_call, function_keys_for, held, in_loop, locals_for, names_a_check,
+    summarize_for, version_plan, walk,
 };
 use super::{Decl, DeclId, Model};
 use std::cell::{Cell, OnceCell, RefCell};
@@ -971,63 +972,29 @@ impl<'a, 't> Cx<'a, 't> {
     /// `$ip = $_GET['ip']` tainting `$ip = $octet[0] . '.' . $octet[1]`.
     fn version(&mut self, blocks: Vec<Node<'t>>) {
         for block in blocks {
-            if !in_loop(block) {
+            if !in_loop(block, LOOPS, FUNCTIONS) {
                 self.version_block(block);
             }
         }
     }
 
     fn version_block(&mut self, block: Node<'t>) {
-        // Only a reassignment of a variable declared before has anything to
-        // kill: most blocks have none.
-        let kills = |cx: &Self, s: Node<'t>| {
-            let left = cx.killer(s)?;
-            let d = cx.decl_of(left)?;
-            (cx.decl(d).node.start_byte() < s.start_byte()).then_some(left)
-        };
-        let wanted: HashSet<DeclId> = named_children(block)
-            .into_iter()
-            .filter_map(|s| kills(self, s))
-            .filter_map(|left| self.decl_of(left))
-            .collect();
-        if wanted.is_empty() {
-            return;
-        }
-        let mut reads: HashMap<DeclId, Vec<Node<'t>>> = HashMap::new();
-        each_node(block, |n| {
-            if n.kind() == "variable_name"
-                && let Some(d) = self.decl_of(n).filter(|d| wanted.contains(d))
-            {
-                reads.entry(d).or_default().push(n);
-            }
-            true
-        });
-        for s in named_children(block) {
-            let Some(left) = self.killer(s) else {
-                continue;
-            };
-            let Some(d) = self.decl_of(left) else {
-                continue;
-            };
-            // The first assignment declares; there's nothing to kill.
-            if self.decl(d).node.start_byte() >= s.start_byte() {
-                continue;
-            }
+        let first = self.m.decls.len() + self.versions.len();
+        let plan = version_plan(
+            block,
+            "variable_name",
+            &named_children(block),
+            |s| self.killer(s),
+            |n| self.decl_of(n),
+            |d| self.decl(d).node.start_byte(),
+            first,
+        );
+        for (parent, moved) in plan {
             let id = self.m.decls.len() + self.versions.len();
-            self.versions.push(Some(d));
-            let after = s.end_byte();
-            let mut moved = Vec::new();
-            if let Some(nodes) = reads.get_mut(&d) {
-                let (later, rest): (Vec<_>, Vec<_>) = std::mem::take(nodes)
-                    .into_iter()
-                    .partition(|v| v.start_byte() >= after || v.id() == left.id());
-                *nodes = rest;
-                moved = later;
-            }
-            for v in &moved {
+            self.versions.push(Some(parent));
+            for v in moved {
                 self.by_node.insert(v.id(), id);
             }
-            reads.insert(id, moved);
         }
     }
 
@@ -2178,42 +2145,20 @@ fn enclosing_class(n: Node, src: &[u8]) -> Option<String> {
     None
 }
 
-/// Calls `f` on every node under `root`, in source order, until it says to
-/// stop: without a list of children per node, as `walk` makes.
-fn each_node<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
-    let mut cursor = root.walk();
-    loop {
-        if !f(cursor.node()) {
-            return;
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() || cursor.node().id() == root.id() {
-                return;
-            }
-        }
-    }
-}
-
-/// Whether a loop is around `n`, inside its function.
-fn in_loop(n: Node) -> bool {
-    let mut p = n.parent();
-    while let Some(a) = p {
-        match a.kind() {
-            "while_statement" | "do_statement" | "for_statement" | "foreach_statement" => {
-                return true;
-            }
-            "function_definition"
-            | "method_declaration"
-            | "anonymous_function"
-            | "arrow_function" => return false,
-            _ => p = a.parent(),
-        }
-    }
-    false
-}
+/// The statements that run their body again, and the functions that end the
+/// search for one.
+const LOOPS: &[&str] = &[
+    "while_statement",
+    "do_statement",
+    "for_statement",
+    "foreach_statement",
+];
+const FUNCTIONS: &[&str] = &[
+    "function_definition",
+    "method_declaration",
+    "anonymous_function",
+    "arrow_function",
+];
 
 fn unwrap(mut n: Node) -> Node {
     while n.kind() == "parenthesized_expression" {
