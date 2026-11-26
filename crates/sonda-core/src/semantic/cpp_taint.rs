@@ -1296,6 +1296,7 @@ impl<'a, 't> Cx<'a, 't> {
                 nested: &["function_definition", "lambda_expression"],
                 returns: "return_statement",
                 calls: &self.calls,
+                implicit: None,
             },
             &state,
             p,

@@ -607,6 +607,9 @@ pub(super) struct Body<'a, 't> {
     pub(super) returns: &'a str,
     /// The calls of the file.
     pub(super) calls: &'a [Node<'t>],
+    /// The value a function returns without saying so (Ruby's last
+    /// expression), if the language has one.
+    pub(super) implicit: Option<fn(Node<'t>) -> Option<Node<'t>>>,
 }
 
 /// What a function does with the values it holds, once they have spread
@@ -622,7 +625,8 @@ pub(super) fn conclude<'t, F: Flow<'t>>(
     taint: impl Fn(Node<'t>) -> Option<Path<'t>>,
     through: impl Fn(Node<'t>) -> Vec<Finding<'t>>,
 ) -> Summary<'t> {
-    let values = return_values(body.function, body.nested, body.returns);
+    let mut values = return_values(body.function, body.nested, body.returns);
+    values.extend(body.implicit.and_then(|last| last(body.function)));
     let sinks = p.is_some().then(|| {
         let sure = |a| taint(a).filter(|path| !from_call(path));
         sinks_in(body.calls, body.function, sink_call, sure, through)
@@ -649,6 +653,9 @@ pub(super) fn conclude<'t, F: Flow<'t>>(
 /// aren't its own.
 macro_rules! summarize_for {
     ($cx:ident, $nested:expr, $skip:expr) => {
+        $crate::semantic::taint_core::summarize_for!($cx, $nested, $skip, "return_statement", None);
+    };
+    ($cx:ident, $nested:expr, $skip:expr, $returns:expr, $implicit:expr) => {
         impl<'a, 't> $cx<'a, 't> {
             fn summarize(
                 &self,
@@ -680,8 +687,9 @@ macro_rules! summarize_for {
                     &Body {
                         function: f.node,
                         nested: $nested,
-                        returns: "return_statement",
+                        returns: $returns,
                         calls: &self.calls,
+                        implicit: $implicit,
                     },
                     &state,
                     p,

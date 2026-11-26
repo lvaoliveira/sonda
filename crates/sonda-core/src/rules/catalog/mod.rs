@@ -101,6 +101,7 @@ mod rs_extra;
 mod rs_more;
 mod rs_security;
 mod ruby;
+mod ruby_injection;
 mod ruby_security;
 pub(super) mod standards;
 
@@ -326,6 +327,7 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (php_security::RULES, &[]),
     (ruby::RULES, ruby::OFF_BY_DEFAULT),
     (ruby_security::RULES, &[]),
+    (ruby_injection::RULES, &[]),
     (php_injection::RULES, php_injection::OFF_BY_DEFAULT),
 ];
 

@@ -9,6 +9,15 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Taint analysis for Ruby ([ADR-0027](docs/adr/0027-taint-analysis.md),
+  [ADR-0033](docs/adr/0033-ruby.md)): seven rules, `ruby/sql-injection`,
+  `ruby/command-injection`, `ruby/path-injection`, `ruby/open-redirect`,
+  `ruby/ssrf`, `ruby/code-injection` and `ruby/xss`, follow a value from `params`,
+  `cookies` or `request` through assignments, interpolation, blocks, instance
+  variables and the methods of the file (a method returns its last expression), into
+  the queries, commands, paths, redirects, outgoing requests, `eval`, `send`,
+  `constantize` and `raw`/`html_safe` they reach. A Ruby binder reads the language's
+  scoping (a `def` sees no outside locals, a block sees its surroundings).
 - Ruby ([ADR-0033](docs/adr/0033-ruby.md)): `.rb`, `.rake`, `.gemspec` and `.ru` files
   are parsed, measured (functions, complexity, comments, duplication) and checked by
   32 rules: seven bugs, nine code smells (`ruby/empty-method` is off by default) and
