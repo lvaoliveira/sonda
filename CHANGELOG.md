@@ -9,6 +9,12 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Ruby's taint analysis (ADR-0033) and PHP's share the code that gives the reads
+  after a reassignment that always runs a version of the variable, so `ip = params[:ip]`
+  followed by `ip = octets.join('.')` no longer taints the second. `ruby/sql-interpolation`,
+  `ruby/command-execution` and `ruby/html-safe` leave alone a string built from the
+  program's own values (a constant, a number, a table's name, a value quoted or escaped),
+  and `ruby/eval` a block.
 - Taint analysis for Ruby ([ADR-0027](docs/adr/0027-taint-analysis.md),
   [ADR-0033](docs/adr/0033-ruby.md)): seven rules, `ruby/sql-injection`,
   `ruby/command-injection`, `ruby/path-injection`, `ruby/open-redirect`,
