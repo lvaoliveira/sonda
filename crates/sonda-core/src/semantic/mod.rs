@@ -32,6 +32,8 @@ mod py;
 pub(crate) mod py_taint;
 mod rs;
 pub(crate) mod rs_taint;
+mod ruby;
+pub(crate) mod ruby_taint;
 pub(crate) mod taint;
 pub(crate) mod taint_core;
 pub(crate) mod taint_project;
@@ -391,8 +393,7 @@ pub(crate) fn build<'t>(
         Lang::C | Lang::Cpp => cpp::build(root, src, deadline),
         Lang::Go => go::build(root, src, deadline),
         Lang::Php => php::build(root, src, deadline),
-        // No binder for Ruby yet: the rules that need names wait for one.
-        Lang::Ruby => None,
+        Lang::Ruby => ruby::build(root, src, deadline),
     }
 }
 
@@ -412,6 +413,7 @@ pub(crate) fn supports(lang: Lang) -> bool {
             | Lang::Cpp
             | Lang::Go
             | Lang::Php
+            | Lang::Ruby
     )
 }
 
