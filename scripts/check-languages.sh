@@ -22,6 +22,8 @@ printf 'fn f(a: &str) -> usize { a.len() }\n' > a.rs
 printf 'int f(const char *a) { return a[0]; }\n' > a.c
 printf 'int f(const char *a) { return a[0]; }\n' > a.cpp
 printf 'package p\n\nfunc f(a string) int { return len(a) }\n' > a.go
+# The $ is PHP's, not the shell's.
+# shellcheck disable=SC2016
 printf '<?php\nfunction f($a) { return strlen($a); }\n' > a.php
 # Exit 1 is a failing gate, not an error.
 status=0
