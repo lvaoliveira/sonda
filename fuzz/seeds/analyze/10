@@ -1,0 +1,21 @@
+
+<?php
+namespace App;
+
+use PDO;
+
+final class Users
+{
+    public function __construct(private PDO $db) {}
+
+    public function find(string $id): ?array
+    {
+        if ($id === '') {
+            return null;
+        }
+        foreach ([1, 2, 3] as $n) {
+            echo $n > 1 ? "big" : "small";
+        }
+        return $this->db->query("SELECT * FROM users WHERE id = " . $id)->fetch();
+    }
+}

@@ -22,6 +22,7 @@ printf 'fn f(a: &str) -> usize { a.len() }\n' > a.rs
 printf 'int f(const char *a) { return a[0]; }\n' > a.c
 printf 'int f(const char *a) { return a[0]; }\n' > a.cpp
 printf 'package p\n\nfunc f(a string) int { return len(a) }\n' > a.go
+printf '<?php\nfunction f($a) { return strlen($a); }\n' > a.php
 # Exit 1 is a failing gate, not an error.
 status=0
 "$sonda" scan . --format json -o report.json || status=$?
@@ -38,8 +39,8 @@ if jq -e '[.warnings[] | select(test("sandbox"))] | length > 0' report.json > /d
   exit 1
 fi
 analyzed=$(jq '.files | length' report.json)
-if [ "$analyzed" -ne 10 ]; then
-  echo "check-languages: $analyzed of 10 files analyzed" >&2
+if [ "$analyzed" -ne 11 ]; then
+  echo "check-languages: $analyzed of 11 files analyzed" >&2
   jq -r '.files[].path, .warnings[]' report.json >&2
   exit 1
 fi
