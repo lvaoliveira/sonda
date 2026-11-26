@@ -17,7 +17,10 @@ file, the report formats and the public library API.
   variables and the methods of the file (a method returns its last expression), into
   the queries, commands, paths, redirects, outgoing requests, `eval`, `send`,
   `constantize` and `raw`/`html_safe` they reach. A Ruby binder reads the language's
-  scoping (a `def` sees no outside locals, a block sees its surroundings).
+  scoping (a `def` sees no outside locals, a block sees its surroundings). The
+  analysis follows a call to a method of another file, by its class: `Users.find`,
+  `Users.new` (its `initialize`), a call in a class to what it inherits from a
+  superclass or an included module, and `u.find` for `u = Users.new`.
 - Ruby ([ADR-0033](docs/adr/0033-ruby.md)): `.rb`, `.rake`, `.gemspec` and `.ru` files
   are parsed, measured (functions, complexity, comments, duplication) and checked by
   32 rules: seven bugs, nine code smells (`ruby/empty-method` is off by default) and

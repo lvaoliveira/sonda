@@ -223,7 +223,8 @@ impl<'f, 'r> Composer<'f, 'r> {
             | Callee::Rs { .. }
             | Callee::Cpp { .. }
             | Callee::Go { .. }
-            | Callee::Php { .. } => self
+            | Callee::Php { .. }
+            | Callee::Ruby { .. } => self
                 .cs
                 .map(|r| r(from, callee))
                 .unwrap_or_default()

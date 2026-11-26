@@ -208,6 +208,17 @@ pub(crate) enum Callee {
         class: Option<String>,
         name: String,
     },
+    /// `Users.find(x)`, `find(x)` in a class, `Users.new(x)` (its
+    /// `initialize`): a method by its class, as written without its modules,
+    /// and whether it's one of the class itself (`def self.find`). The project
+    /// pass looks for it in the class and what the class extends and includes.
+    Ruby {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        class: Option<String>,
+        name: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        singleton: bool,
+    },
 }
 
 impl Callee {
@@ -227,6 +238,12 @@ impl Callee {
                 name,
             } => format!("{c}::{name}"),
             Callee::Php { name, .. } => name.clone(),
+            Callee::Ruby {
+                class: Some(c),
+                name,
+                singleton,
+            } => format!("{c}{}{name}", if *singleton { "." } else { "#" }),
+            Callee::Ruby { name, .. } => name.clone(),
             Callee::Rs { path, method } => method
                 .clone()
                 .or_else(|| path.last().cloned())

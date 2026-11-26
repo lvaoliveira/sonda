@@ -191,6 +191,7 @@ pub(crate) fn analyze(
             Lang::CSharp => cs_facts(&ctx, root, deadline),
             Lang::Cpp => cpp_facts(&ctx, root, deadline, rules),
             Lang::Php => php_facts(&ctx, root),
+            Lang::Ruby => ruby_facts(&ctx, root),
             _ => java_facts(&ctx, lang, root, deadline)
                 .into_iter()
                 .chain(js_facts(&ctx, lang, root, rules))
@@ -803,6 +804,17 @@ fn php_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
     let classes = crate::semantic::php_taint::classes(root, ctx.src.as_bytes());
     if !classes.is_empty() {
         push_json_fact(&mut facts, crate::semantic::php_taint::FACT, &classes);
+    }
+    facts
+}
+
+/// The facts the project-level Ruby rules need from this file: its classes
+/// and modules, with what each extends, includes and defines.
+fn ruby_facts(ctx: &Ctx, root: Node) -> Vec<(String, String)> {
+    let mut facts = Vec::new();
+    let classes = crate::semantic::ruby_taint::classes(root, ctx.src.as_bytes());
+    if !classes.is_empty() {
+        push_json_fact(&mut facts, crate::semantic::ruby_taint::FACT, &classes);
     }
     facts
 }
@@ -2564,6 +2576,14 @@ pub(crate) fn taint_project_rules(files: &mut [FileAnalysis], rules: &RuleSet) {
                     Some(&|from, callee| index.resolve(from, callee)),
                 )
             }
+            "ruby" => {
+                let index = RubyTaintIndex::new(&paths, files);
+                tp::compose(
+                    &paths,
+                    &facts,
+                    Some(&|from, callee| index.resolve(from, callee)),
+                )
+            }
             _ => tp::compose(&paths, &facts, None),
         };
         let issues: Vec<(usize, Issue)> = found
@@ -3117,6 +3137,69 @@ impl PhpTaintIndex {
                 ),
                 None => name.clone(),
             },
+            member: None,
+        };
+        self.files
+            .iter()
+            .filter(|&&f| f != from)
+            .map(|&f| (f, key.clone()))
+            .collect()
+    }
+}
+
+/// The project pass's Ruby calls: a call to a method of a class resolves to
+/// the one the class, or what it extends and includes (in any file),
+/// defines, in the project's other Ruby files. The files that define it are
+/// told by their summaries: this names every Ruby file, and the pass keeps
+/// the ones that have one.
+struct RubyTaintIndex {
+    files: Vec<usize>,
+    classes: semantic::ruby_taint::ClassIndex,
+}
+
+impl RubyTaintIndex {
+    fn new(paths: &[&str], files: &[FileAnalysis]) -> Self {
+        let ruby = |p: &str| {
+            let lower = p.to_ascii_lowercase();
+            [".rb", ".rake", ".gemspec", ".ru"]
+                .iter()
+                .any(|e| lower.ends_with(e))
+        };
+        let classes = files
+            .iter()
+            .filter_map(|f| {
+                let (_, json) = f
+                    .facts
+                    .iter()
+                    .find(|(k, _)| k == semantic::ruby_taint::FACT)?;
+                serde_json::from_str::<Vec<semantic::ruby_taint::ClassFact>>(json).ok()
+            })
+            .flatten();
+        RubyTaintIndex {
+            files: (0..paths.len()).filter(|&i| ruby(paths[i])).collect(),
+            classes: semantic::ruby_taint::ClassIndex::new(classes),
+        }
+    }
+
+    fn resolve(
+        &self,
+        from: usize,
+        callee: &semantic::taint::Callee,
+    ) -> Vec<(usize, semantic::taint::Key)> {
+        let semantic::taint::Callee::Ruby {
+            class: Some(class),
+            name,
+            singleton,
+        } = callee
+        else {
+            return Vec::new();
+        };
+        let (class, singleton) = self
+            .classes
+            .defining(class, name, *singleton)
+            .unwrap_or((class.clone(), *singleton));
+        let key = semantic::taint::Key {
+            export: format!("{class}{}{name}", if singleton { "." } else { "#" }),
             member: None,
         };
         self.files
