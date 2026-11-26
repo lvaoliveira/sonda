@@ -16,6 +16,7 @@ pub enum Lang {
     Rust,
     Go,
     Php,
+    Ruby,
 }
 
 pub(crate) const JS_TS: &[Lang] = &[Lang::JavaScript, Lang::TypeScript, Lang::Tsx];
@@ -31,6 +32,7 @@ pub(crate) const CSHARP: &[Lang] = &[Lang::CSharp];
 pub(crate) const RUST: &[Lang] = &[Lang::Rust];
 pub(crate) const GO: &[Lang] = &[Lang::Go];
 pub(crate) const PHP: &[Lang] = &[Lang::Php];
+pub(crate) const RUBY: &[Lang] = &[Lang::Ruby];
 /// Every language but Rust, for the `common/` rules SonarQube has no Rust key for.
 pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::JavaScript,
@@ -43,6 +45,7 @@ pub(crate) const NOT_RUST: &[Lang] = &[
     Lang::CSharp,
     Lang::Go,
     Lang::Php,
+    Lang::Ruby,
 ];
 /// Every supported language.
 pub const ALL: &[Lang] = &[
@@ -57,6 +60,7 @@ pub const ALL: &[Lang] = &[
     Lang::Rust,
     Lang::Go,
     Lang::Php,
+    Lang::Ruby,
 ];
 
 impl Lang {
@@ -77,6 +81,7 @@ impl Lang {
             "rs" => Lang::Rust,
             "go" => Lang::Go,
             "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => Lang::Php,
+            "rb" | "rake" | "gemspec" | "ru" => Lang::Ruby,
             _ => return None,
         })
     }
@@ -103,6 +108,7 @@ impl Lang {
             Lang::Rust => "rust",
             Lang::Go => "go",
             Lang::Php => "php",
+            Lang::Ruby => "ruby",
         }
     }
 
@@ -121,6 +127,7 @@ impl Lang {
             // PHP in HTML, as a `.php` file has it: the text outside `<?php ?>`
             // is a node of its own.
             Lang::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+            Lang::Ruby => tree_sitter_ruby::LANGUAGE.into(),
         }
     }
 
@@ -134,6 +141,7 @@ impl Lang {
             Lang::Rust => &RUST_SYNTAX,
             Lang::Go => &GO_SYNTAX,
             Lang::Php => &PHP_SYNTAX,
+            Lang::Ruby => &RUBY_SYNTAX,
         }
     }
 }
@@ -407,6 +415,38 @@ static PHP_SYNTAX: Syntax = Syntax {
     dup_ignore: &["namespace_use_declaration", "namespace_definition"],
 };
 
+static RUBY_SYNTAX: Syntax = Syntax {
+    functions: &["method", "singleton_method"],
+    // A block, a `do` block and a lambda are part of the method around them.
+    closures: &["block", "do_block", "lambda"],
+    wildcard_arm_is_default: false,
+    cognitive_skips_or: false,
+    file_cognitive_nests_functions: false,
+    cognitive_includes_nested_functions: false,
+    max_parameters: 7,
+    max_cognitive: 15,
+    receivers: &[],
+    // `if`, `unless` and `elsif` are walked as ifs; these are the others,
+    // with the modifier forms (`x if y`, `x while y`).
+    branches: &[
+        "for",
+        "while",
+        "until",
+        "while_modifier",
+        "until_modifier",
+        "if_modifier",
+        "unless_modifier",
+        "rescue",
+        "rescue_modifier",
+        "conditional",
+    ],
+    switches: &["case", "case_match"],
+    // An `else` adds nothing: it isn't one of these.
+    cases: &["when", "in_clause"],
+    comments: &["comment"],
+    dup_ignore: &[],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +470,8 @@ mod tests {
         assert_eq!(Lang::from_path(Path::new("main.go")), Some(Lang::Go));
         assert_eq!(Lang::from_path(Path::new("index.PHP")), Some(Lang::Php));
         assert_eq!(Lang::from_path(Path::new("view.phtml")), Some(Lang::Php));
+        assert_eq!(Lang::from_path(Path::new("app.RB")), Some(Lang::Ruby));
+        assert_eq!(Lang::from_path(Path::new("a.gemspec")), Some(Lang::Ruby));
         assert_eq!(Lang::from_path(Path::new("Makefile")), None);
     }
 

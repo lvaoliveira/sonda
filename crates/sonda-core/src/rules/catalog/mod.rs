@@ -100,6 +100,8 @@ mod rs_correctness2;
 mod rs_extra;
 mod rs_more;
 mod rs_security;
+mod ruby;
+mod ruby_security;
 pub(super) mod standards;
 
 pub(super) use super::Filter::{Find, FindAll, FindSaying, Keep};
@@ -165,6 +167,46 @@ pub(super) fn is_credential_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     CREDENTIAL_WORDS.iter().any(|w| lower.contains(w))
         && !NOT_A_CREDENTIAL.iter().any(|w| lower.contains(w))
+}
+
+/// Words that make a value a placeholder, not a secret.
+const PLACEHOLDERS: &[&str] = &[
+    "here",
+    "your",
+    "example",
+    "change",
+    "xxx",
+    "password",
+    "secret",
+    "sample",
+    "dummy",
+    "placeholder",
+    "enter",
+    "insert",
+];
+
+/// A value with no digit that says `pass` or `key` (`FTP_PASS`, `api_key`,
+/// `user_pass`) names the setting that holds the secret, not the secret.
+fn names_another_setting(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    !value.chars().any(|c| c.is_ascii_digit())
+        && ["pass", "pwd", "key", "secret", "token"]
+            .iter()
+            .any(|w| lower.contains(w))
+}
+
+/// Whether the text of a string a credential's name is assigned could be the
+/// credential: not empty, a placeholder, a mask, a format or the name of
+/// another setting.
+pub(super) fn looks_like_a_secret(t: &str) -> bool {
+    t.len() >= 4
+        && !t.contains(char::is_whitespace)
+        && !t.contains(['%', '{', '$', '<'])
+        && !PLACEHOLDERS.iter().any(|w| t.to_ascii_lowercase().contains(w))
+        && !names_another_setting(t)
+        // `*****`, `-----`: a mask, not a secret.
+        && t.chars().any(|c| c.is_alphanumeric())
+        && t.chars().collect::<std::collections::HashSet<_>>().len() > 2
 }
 
 /// What the catalog's files share, as `use super::prelude::*`: named here,
@@ -282,6 +324,8 @@ static MODULES: &[(&[Rule], &[&str])] = &[
     (go_injection::RULES, go_injection::OFF_BY_DEFAULT),
     (php::RULES, php::OFF_BY_DEFAULT),
     (php_security::RULES, &[]),
+    (ruby::RULES, ruby::OFF_BY_DEFAULT),
+    (ruby_security::RULES, &[]),
     (php_injection::RULES, php_injection::OFF_BY_DEFAULT),
 ];
 

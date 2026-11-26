@@ -2,7 +2,7 @@
 
 Open-source static analysis and quality gates, in the spirit of SonarQube, as a single fast binary.
 
-sonda scans JavaScript/TypeScript, Python, Java, C/C++, C#, Rust, Go and PHP code for bugs, vulnerabilities and code smells. It measures size, complexity, duplication and coverage, and fails your CI build when **new code** does not meet your quality gate.
+sonda scans JavaScript/TypeScript, Python, Java, C/C++, C#, Rust, Go, PHP and Ruby code for bugs, vulnerabilities and code smells. It measures size, complexity, duplication and coverage, and fails your CI build when **new code** does not meet your quality gate.
 
 ```
 $ sonda scan . --new-code origin/main --coverage coverage/lcov.info
@@ -268,7 +268,7 @@ it plugs in.
 - [x] JaCoCo and Cobertura coverage import
 - [ ] Caching, to skip re-analyzing unchanged files
 - [x] Baseline file to accept existing issues without suppressing them line by line
-- [ ] More languages (Go, PHP, Ruby, Kotlin)
+- [ ] More languages (Go, PHP and Ruby are built; Kotlin)
 
 The last two are in [docs/roadmap.md](docs/roadmap.md#scanner-additions)
 too, with the smaller deferred items.

@@ -9,6 +9,14 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Ruby ([ADR-0033](docs/adr/0033-ruby.md)): `.rb`, `.rake`, `.gemspec` and `.ru` files
+  are parsed, measured (functions, complexity, comments, duplication) and checked by
+  32 rules: seven bugs, nine code smells (`ruby/empty-method` is off by default) and
+  sixteen vulnerabilities with CWE and OWASP, among them SQL built in a string,
+  commands, `eval`, `Marshal.load`, weak hashes and ciphers, hard-coded credentials,
+  `params` reaching `send`, `File.read` or `redirect_to`, `permit!`, `html_safe` and
+  a skipped CSRF check.
+
 - PHP taint analysis ([ADR-0032](docs/adr/0032-php.md)) follows a value past a
   reassignment that always runs (`$ip = $_GET['ip']; $ip = $octets[0]`), through a
   property one method sets and another reads (`$this->q`), and into a method a

@@ -4422,7 +4422,7 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
     /// An if, a branch (a loop, a catch...) or a switch: whether `node`
     /// was one.
     fn visit_control(&mut self, node: Node<'t>, kind: &str, nesting: u32) -> bool {
-        if matches!(kind, "if_statement" | "if_expression") {
+        if matches!(kind, "if_statement" | "if_expression" | "if" | "unless") {
             self.stack.push(Step::If(node, nesting, false));
             return true;
         }
@@ -4459,6 +4459,12 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
         self.c.cyclomatic += 1;
         self.c.cognitive += if flat { 1 } else { 1 + nesting };
         self.c.structures += u32::from(!flat);
+        self.queue_clauses(node, nesting);
+    }
+
+    /// Queues the parts of an if (or an `elsif`): the else branch at the
+    /// if's own nesting level, the rest one deeper.
+    fn queue_clauses(&mut self, node: Node<'t>, nesting: u32) {
         let mut cursor = node.walk();
         if !cursor.goto_first_child() {
             return;
@@ -4491,6 +4497,12 @@ impl<'a, 't> ComplexityWalker<'a, 't> {
                 self.c.cyclomatic += 1;
                 self.c.cognitive += 1;
                 self.children(node, nesting + 1, None);
+            }
+            // Ruby: the rest of the chain is in the `elsif`'s own alternative.
+            "elsif" => {
+                self.c.cyclomatic += 1;
+                self.c.cognitive += 1;
+                self.queue_clauses(node, nesting);
             }
             "else_clause" => match only_named_child(node) {
                 Some(inner) if matches!(inner.kind(), "if_statement" | "if_expression") => {
@@ -4545,7 +4557,10 @@ fn only_named_child(node: Node) -> Option<Node> {
 }
 
 fn logical_operator<'s>(node: Node, src: &'s [u8]) -> Option<&'s str> {
-    if !matches!(node.kind(), "binary_expression" | "boolean_operator") {
+    if !matches!(
+        node.kind(),
+        "binary_expression" | "boolean_operator" | "binary"
+    ) {
         return None;
     }
     let op = node.child_by_field_name("operator")?.utf8_text(src).ok()?;
@@ -5081,6 +5096,19 @@ pub(crate) mod tests {
             .iter()
             .filter(|i| i.rule == rule)
             .map(|i| i.line - 1)
+            .collect()
+    }
+
+    /// The lines of a Ruby file that `rule` flags, for `src` as the file.
+    pub(crate) fn flagged_ruby(rule: &str, src: &str) -> Vec<usize> {
+        let mut cfg = crate::config::Config::default();
+        cfg.rules.enabled = vec![rule.to_string()];
+        let rules = crate::rules::RuleSet::new(&cfg.rules).unwrap();
+        let file = analyze("a.rb", Lang::Ruby, src, &rules, &cfg, far_deadline()).unwrap();
+        file.issues
+            .iter()
+            .filter(|i| i.rule == rule)
+            .map(|i| i.line)
             .collect()
     }
 
