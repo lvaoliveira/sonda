@@ -31,7 +31,7 @@ use super::taint_core::{
     checked_names, contains_any, decl_index, evaluation_for, exports_for, externals_for, flow_for,
     from_call, function_keys_for, held, locals_for, names_a_check, summarize_for, walk,
 };
-use super::{DeclId, Model};
+use super::{Decl, DeclId, Model};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
@@ -42,6 +42,71 @@ const MAX_WRITES: usize = 50_000;
 const MAX_SUMMARIES: usize = 256;
 
 // ---------------------------------------------------------------- entry
+
+/// The fact a PHP file's classes are in, for the project pass.
+pub(crate) const FACT: &str = "php-classes";
+
+/// A class, trait or enum a file declares: what it extends and uses, and the
+/// methods it defines, all lowercase: where a call to a method it inherits
+/// goes.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ClassFact {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) parents: Vec<String>,
+    #[serde(default)]
+    pub(crate) methods: Vec<String>,
+}
+
+/// The classes of a file.
+pub(crate) fn classes(root: Node, src: &[u8]) -> Vec<ClassFact> {
+    let mut out = Vec::new();
+    let _ = walk(root, |n| {
+        out.extend(class_fact(n, src));
+        out.len() <= MAX_WRITES
+    });
+    out
+}
+
+/// What a class, trait or enum declaration extends, uses and defines.
+fn class_fact(n: Node, src: &[u8]) -> Option<ClassFact> {
+    if !matches!(
+        n.kind(),
+        "class_declaration" | "trait_declaration" | "enum_declaration"
+    ) {
+        return None;
+    }
+    let text = |n: Node| n.utf8_text(src).unwrap_or_default().to_ascii_lowercase();
+    let mut fact = ClassFact {
+        name: text(n.child_by_field_name("name")?),
+        ..ClassFact::default()
+    };
+    for part in named_children(n) {
+        if part.kind() == "base_clause" {
+            fact.parents.extend(
+                named_children(part)
+                    .into_iter()
+                    .map(|c| last_name(&text(c)).to_string()),
+            );
+        }
+    }
+    let body = n.child_by_field_name("body");
+    for member in body.map(named_children).unwrap_or_default() {
+        match member.kind() {
+            "use_declaration" => fact.parents.extend(
+                named_children(member)
+                    .into_iter()
+                    .filter(|c| matches!(c.kind(), "name" | "qualified_name"))
+                    .map(|c| last_name(&text(c)).to_string()),
+            ),
+            "method_declaration" => fact
+                .methods
+                .extend(member.child_by_field_name("name").map(text)),
+            _ => {}
+        }
+    }
+    Some(fact)
+}
 
 pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult<'t> {
     // A file with neither a request nor a sink can still define a function
@@ -565,6 +630,15 @@ struct Cx<'a, 't> {
     src: &'a [u8],
     kind: SinkKind,
     by_node: HashMap<usize, DeclId>,
+    /// The variable each version of one stands for: a reassignment that
+    /// always runs before a later read gets an id past the declarations'.
+    versions: Vec<Option<DeclId>>,
+    /// Each class's `$this->name`, as a variable of its own, and the ones that
+    /// hold a request object.
+    props: HashMap<(String, String), DeclId>,
+    request_props: HashSet<DeclId>,
+    /// The property each `$this->name` node is.
+    property_nodes: HashMap<usize, DeclId>,
     /// Variables that hold a request object.
     requests: HashSet<DeclId>,
     /// Variables a check reads as validating, for this kind of sink.
@@ -578,6 +652,9 @@ struct Cx<'a, 't> {
     by_name: HashMap<String, Vec<usize>>,
     /// Where each class is in the file: its range and its lowercase name.
     class_ranges: Vec<(usize, usize, String)>,
+    /// What each class of the file extends and uses, and the classes that
+    /// define each method.
+    parents: HashMap<String, Vec<String>>,
     evaluations: Cell<u64>,
     summaries: Summaries<SummaryKey, Summary<'t>>,
     /// Whether a call to another file's function may return a request's value
@@ -597,6 +674,10 @@ impl<'a, 't> Cx<'a, 't> {
             src,
             kind,
             by_node: decl_index(m),
+            versions: Vec::new(),
+            props: HashMap::new(),
+            request_props: HashSet::new(),
+            property_nodes: HashMap::new(),
             requests: HashSet::new(),
             checked: HashSet::new(),
             writes: Vec::new(),
@@ -605,6 +686,7 @@ impl<'a, 't> Cx<'a, 't> {
             classes: Vec::new(),
             by_name: HashMap::new(),
             class_ranges: Vec::new(),
+            parents: HashMap::new(),
             evaluations: Cell::new(0),
             summaries: Summaries::new(MAX_SUMMARIES),
             from_calls: Cell::new(false),
@@ -612,6 +694,9 @@ impl<'a, 't> Cx<'a, 't> {
             keys: OnceCell::new(),
             callees: RefCell::new(HashMap::new()),
         };
+        if might_have_sources(src) {
+            cx.prepare(root);
+        }
         cx.collect(root)?;
         cx.index();
         Some(cx)
@@ -672,7 +757,9 @@ impl<'a, 't> Cx<'a, 't> {
             ("member_call_expression", "object"),
             |n| self.checked_variable(n),
         );
-        self.checked.extend(named);
+        for d in named {
+            self.validate(d);
+        }
         Some(())
     }
 
@@ -683,6 +770,9 @@ impl<'a, 't> Cx<'a, 't> {
             | "trait_declaration"
             | "enum_declaration"
             | "interface_declaration" => {
+                if let Some(c) = class_fact(n, self.src) {
+                    self.parents.insert(c.name, c.parents);
+                }
                 if let Some(name) = n.child_by_field_name("name") {
                     self.class_ranges.push((
                         n.start_byte(),
@@ -732,12 +822,223 @@ impl<'a, 't> Cx<'a, 't> {
         if self.is_inert(target) {
             return;
         }
-        self.writes.push(Write {
-            target,
-            target_node,
-            value,
-            how,
+        // A version's writes are also the writes of every version it
+        // replaced, for the reads past the block it's in.
+        let mut id = Some(target);
+        while let Some(t) = id {
+            self.writes.push(Write {
+                target: t,
+                target_node,
+                value,
+                how,
+            });
+            id = self.replaced(t);
+        }
+    }
+
+    /// The variable a version replaced, None for a declaration.
+    fn replaced(&self, d: DeclId) -> Option<DeclId> {
+        d.checked_sub(self.m.decls.len())
+            .and_then(|i| self.versions.get(i).copied().flatten())
+    }
+
+    /// The declaration a variable, or a version of one, is.
+    fn decl(&self, d: DeclId) -> &Decl<'t> {
+        &self.m.decls[self.origin(d)]
+    }
+
+    fn origin(&self, d: DeclId) -> DeclId {
+        let mut d = d;
+        while let Some(r) = self.replaced(d) {
+            d = r;
+        }
+        d
+    }
+
+    /// A variable a check or a sanitizing assignment validates, and the
+    /// versions it replaced: the read past the block gets no other.
+    fn validate(&mut self, d: DeclId) {
+        let mut id = Some(d);
+        while let Some(t) = id {
+            self.checked.insert(t);
+            id = self.replaced(t);
+        }
+    }
+
+    // -------------------------------------------------------- properties
+
+    /// A variable for each property a class names through `$this`, and which
+    /// are declared to hold a request object: a method writes it, another
+    /// reads it.
+    fn prepare(&mut self, root: Node<'t>) {
+        let this = contains_any(self.src, &[b"$this"]);
+        let mut found: Vec<(Node<'t>, bool)> = Vec::new();
+        let mut blocks: Vec<Node<'t>> = Vec::new();
+        each_node(root, |n| {
+            match n.kind() {
+                "member_access_expression" | "nullsafe_member_access_expression" if this => {
+                    found.push((n, false));
+                }
+                "property_element" | "property_promotion_parameter" if this => {
+                    found.push((n, true));
+                }
+                "compound_statement" | "program" => blocks.push(n),
+                _ => {}
+            }
+            found.len() + blocks.len() <= MAX_WRITES
         });
+        self.properties(found);
+        self.version(blocks);
+    }
+
+    fn properties(&mut self, found: Vec<(Node<'t>, bool)>) {
+        for (n, declared) in found {
+            let key = if declared {
+                self.declared_property(n)
+            } else {
+                self.this_property(n)
+            };
+            let Some(key) = key else { continue };
+            let next = self.m.decls.len() + self.versions.len();
+            let id = *self.props.entry(key).or_insert(next);
+            if id == next {
+                self.versions.push(None);
+            }
+            self.property_nodes.insert(n.id(), id);
+            if declared && self.declared_request(n) {
+                self.request_props.insert(id);
+            }
+        }
+    }
+
+    /// The class and name of a property a declaration or a promoted
+    /// parameter introduces.
+    fn declared_property(&self, n: Node<'t>) -> Option<(String, String)> {
+        let name = n.child_by_field_name("name")?;
+        let class = enclosing_class(n, self.src)?;
+        Some((class, self.text(name).trim_start_matches('$').to_string()))
+    }
+
+    /// Whether the declaration's type is a request's.
+    fn declared_request(&self, n: Node<'t>) -> bool {
+        let holder = if n.kind() == "property_element" {
+            n.parent()
+        } else {
+            Some(n)
+        };
+        holder
+            .and_then(|h| h.child_by_field_name("type"))
+            .is_some_and(|t| {
+                REQUEST_TYPES.contains(&last_name(self.text(t).trim_start_matches('?')))
+            })
+    }
+
+    /// The class and name of `$this->name`.
+    fn this_property(&self, n: Node<'t>) -> Option<(String, String)> {
+        if !matches!(
+            n.kind(),
+            "member_access_expression" | "nullsafe_member_access_expression"
+        ) {
+            return None;
+        }
+        let object = n.child_by_field_name("object")?;
+        let name = n.child_by_field_name("name")?;
+        if self.text(object) != "$this" || name.kind() != "name" {
+            return None;
+        }
+        Some((enclosing_class(n, self.src)?, self.text(name).to_string()))
+    }
+
+    /// The variable `$this->name` is, if the file has one for it.
+    fn property_id(&self, n: Node<'t>) -> Option<DeclId> {
+        self.property_nodes.get(&n.id()).copied()
+    }
+
+    /// `$this->name` or `$this->name['k']`.
+    fn written_property(&self, n: Node<'t>) -> Option<DeclId> {
+        let mut n = n;
+        while n.kind() == "subscript_expression" {
+            n = n.named_child(0)?;
+        }
+        self.property_id(n)
+    }
+
+    // ---------------------------------------------------------- versions
+
+    /// `$x = v;` as a statement of a block (not in a loop) kills what `$x`
+    /// held before, for what the block reads after it: those reads get a
+    /// version of their own. The flow-insensitive model alone would keep
+    /// `$ip = $_GET['ip']` tainting `$ip = $octet[0] . '.' . $octet[1]`.
+    fn version(&mut self, blocks: Vec<Node<'t>>) {
+        for block in blocks {
+            if !in_loop(block) {
+                self.version_block(block);
+            }
+        }
+    }
+
+    fn version_block(&mut self, block: Node<'t>) {
+        // Only a reassignment of a variable declared before has anything to
+        // kill: most blocks have none.
+        let kills = |cx: &Self, s: Node<'t>| {
+            let left = cx.killer(s)?;
+            let d = cx.decl_of(left)?;
+            (cx.decl(d).node.start_byte() < s.start_byte()).then_some(left)
+        };
+        let wanted: HashSet<DeclId> = named_children(block)
+            .into_iter()
+            .filter_map(|s| kills(self, s))
+            .filter_map(|left| self.decl_of(left))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let mut reads: HashMap<DeclId, Vec<Node<'t>>> = HashMap::new();
+        each_node(block, |n| {
+            if n.kind() == "variable_name"
+                && let Some(d) = self.decl_of(n).filter(|d| wanted.contains(d))
+            {
+                reads.entry(d).or_default().push(n);
+            }
+            true
+        });
+        for s in named_children(block) {
+            let Some(left) = self.killer(s) else {
+                continue;
+            };
+            let Some(d) = self.decl_of(left) else {
+                continue;
+            };
+            // The first assignment declares; there's nothing to kill.
+            if self.decl(d).node.start_byte() >= s.start_byte() {
+                continue;
+            }
+            let id = self.m.decls.len() + self.versions.len();
+            self.versions.push(Some(d));
+            let after = s.end_byte();
+            let mut moved = Vec::new();
+            if let Some(nodes) = reads.get_mut(&d) {
+                let (later, rest): (Vec<_>, Vec<_>) = std::mem::take(nodes)
+                    .into_iter()
+                    .partition(|v| v.start_byte() >= after || v.id() == left.id());
+                *nodes = rest;
+                moved = later;
+            }
+            for v in &moved {
+                self.by_node.insert(v.id(), id);
+            }
+            reads.insert(id, moved);
+        }
+    }
+
+    /// The variable `s` is `$x = v;` for.
+    fn killer(&self, s: Node<'t>) -> Option<Node<'t>> {
+        let a = (s.kind() == "expression_statement")
+            .then(|| s.named_child(0))
+            .flatten()
+            .filter(|a| a.kind() == "assignment_expression")?;
+        let left = a.child_by_field_name("left")?;
+        (left.kind() == "variable_name").then_some(left)
     }
 
     /// `$a = v`, `$a[] = v`, `[$a, $b] = f()`: each variable gets the value.
@@ -773,9 +1074,17 @@ impl<'a, 't> Cx<'a, 't> {
                     self.write(d, target, value, how);
                 }
             }
+            // `$this->p = v`: the class's property holds the value.
+            "member_access_expression" | "nullsafe_member_access_expression" => {
+                if let Some(d) = self.property_id(target) {
+                    self.write(d, target, value, how);
+                }
+            }
             // `$a['k'] = v`, `$a[] = v`: the collection holds the value.
             "subscript_expression" => {
-                if let Some((d, node)) = self.base_of(target) {
+                if let Some(d) = self.written_property(target) {
+                    self.write(d, target, value, How::Added);
+                } else if let Some((d, node)) = self.base_of(target) {
                     self.write(d, node, value, How::Added);
                 }
             }
@@ -824,7 +1133,7 @@ impl<'a, 't> Cx<'a, 't> {
                 .child_by_field_name(side)
                 .and_then(|s| self.checked_variable(s))
             {
-                self.checked.insert(d);
+                self.validate(d);
             }
         }
     }
@@ -836,6 +1145,9 @@ impl<'a, 't> Cx<'a, 't> {
         for _ in 0..8 {
             match n.kind() {
                 "variable_name" => return self.decl_of(n),
+                "member_access_expression" | "nullsafe_member_access_expression" => {
+                    return self.property_id(n);
+                }
                 "subscript_expression" | "parenthesized_expression" => n = n.named_child(0)?,
                 "cast_expression" => n = n.child_by_field_name("value")?,
                 "function_call_expression"
@@ -864,7 +1176,7 @@ impl<'a, 't> Cx<'a, 't> {
             if c.kind() == "cast_expression"
                 && c.child_by_field_name("type")
                     .is_some_and(|t| NUMERIC_TYPES.contains(&self.text(t).trim()))
-                && variables(c).into_iter().any(|v| self.decl_of(v) == Some(d))
+                && variables(c).into_iter().any(|v| self.same(v, d))
             {
                 sanitized = true;
             }
@@ -876,13 +1188,13 @@ impl<'a, 't> Cx<'a, 't> {
                 _ => None,
             };
             if name.is_some_and(|f| sanitizers(self.kind).contains(&f.as_str()))
-                && variables(c).into_iter().any(|v| self.decl_of(v) == Some(d))
+                && variables(c).into_iter().any(|v| self.same(v, d))
             {
                 sanitized = true;
             }
         });
         if sanitized {
-            self.checked.insert(d);
+            self.validate(d);
         }
     }
 
@@ -971,11 +1283,20 @@ impl<'a, 't> Cx<'a, 't> {
             .or_else(|| self.m.decl_id_of(n))
     }
 
+    /// Whether `v` names the variable `d` is, in any of its versions.
+    fn same(&self, v: Node<'t>, d: DeclId) -> bool {
+        self.decl_of(v)
+            .is_some_and(|e| self.origin(e) == self.origin(d))
+    }
+
     /// A variable of a number's type, which can't hold what injects.
     fn is_inert(&self, d: DeclId) -> bool {
-        self.m.decls[d]
-            .ty
-            .is_some_and(|t| NUMERIC_TYPES.contains(&self.text(t).trim_start_matches('?')))
+        // A property has no declaration to read a type from.
+        self.origin(d) < self.m.decls.len()
+            && self
+                .decl(d)
+                .ty
+                .is_some_and(|t| NUMERIC_TYPES.contains(&self.text(t).trim_start_matches('?')))
     }
 
     // ------------------------------------------------------------ calls
@@ -1023,13 +1344,18 @@ impl<'a, 't> Cx<'a, 't> {
         for _ in 0..8 {
             match n.kind() {
                 "variable_name" => {
-                    return self.decl_of(n).is_some_and(|d| self.requests.contains(&d));
+                    return self
+                        .decl_of(n)
+                        .is_some_and(|d| self.requests.contains(&self.origin(d)));
                 }
                 "parenthesized_expression" => match n.named_child(0) {
                     Some(inner) => n = inner,
                     None => return false,
                 },
                 "member_access_expression" | "nullsafe_member_access_expression" => {
+                    if let Some(d) = self.property_id(n) {
+                        return self.request_props.contains(&d);
+                    }
                     let part = n
                         .child_by_field_name("name")
                         .map_or(String::new(), |p| self.text(p).to_ascii_lowercase());
@@ -1175,6 +1501,9 @@ impl<'a, 't> Cx<'a, 't> {
         state: &HashMap<DeclId, Path<'t>>,
         depth: u32,
     ) -> Option<Path<'t>> {
+        if let Some(d) = self.property_id(n) {
+            return held(Some(d), &self.checked, state);
+        }
         let object = n.child_by_field_name("object")?;
         if self.is_request(object) {
             return Some(vec![Step {
@@ -1531,7 +1860,7 @@ impl<'a, 't> Cx<'a, 't> {
         let Some(d) = self.decl_of(unwrap(receiver)) else {
             return false;
         };
-        let name = self.m.decls[d].name.to_ascii_lowercase();
+        let name = self.decl(d).name.to_ascii_lowercase();
         name.contains("stmt") || name.contains("statement")
     }
 
@@ -1553,6 +1882,11 @@ impl<'a, 't> Cx<'a, 't> {
             Target::Method(receiver, m) => (m, Some(self.class_of(receiver, call)?)),
             Target::Static(class, m) => (m, Some(self.named_class(&class, call)?)),
             Target::New(_) => return None,
+        };
+        // A method the class inherits is the nearest ancestor's.
+        let class = match class {
+            Some(c) => Some(self.defining_class(&c, &name)?),
+            None => None,
         };
         let candidates: Vec<usize> = self
             .by_name
@@ -1580,6 +1914,30 @@ impl<'a, 't> Cx<'a, 't> {
         }
     }
 
+    /// The class of the file that defines method `name` for `class`: its own
+    /// or the nearest ancestor's.
+    fn defining_class(&self, class: &str, name: &str) -> Option<String> {
+        let defines = |c: &str| {
+            self.by_name
+                .get(name)
+                .is_some_and(|js| js.iter().any(|&j| self.classes[j] == c))
+        };
+        let mut lineage = vec![class.to_string()];
+        let mut i = 0;
+        while let Some(c) = lineage.get(i).cloned() {
+            if defines(&c) {
+                return Some(c);
+            }
+            for p in self.parents.get(&c).into_iter().flatten() {
+                if !lineage.contains(p) && lineage.len() < 16 {
+                    lineage.push(p.clone());
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+
     /// The class a method is called on: `$this`'s, a variable declared with
     /// one, or made by `new`.
     fn class_of(&self, receiver: Node<'t>, call: Node<'t>) -> Option<String> {
@@ -1588,7 +1946,7 @@ impl<'a, 't> Cx<'a, 't> {
             return Some(self.class_at(call).to_string()).filter(|c| !c.is_empty());
         }
         let d = self.decl_of(receiver)?;
-        let written = match self.m.decls[d].ty {
+        let written = match self.decl(d).ty {
             Some(t) => self.text(t).to_string(),
             None => self.inferred_class(d)?,
         };
@@ -1599,14 +1957,14 @@ impl<'a, 't> Cx<'a, 't> {
     fn named_class(&self, class: &str, call: Node<'t>) -> Option<String> {
         match class {
             "self" | "static" => Some(self.class_at(call).to_string()).filter(|c| !c.is_empty()),
-            "parent" => None,
+            "parent" => self.parents.get(self.class_at(call))?.first().cloned(),
             _ => Some(last_name(class).to_ascii_lowercase()),
         }
     }
 
     /// The class of a variable declared without one, from `$x = new Foo(..)`.
     fn inferred_class(&self, d: DeclId) -> Option<String> {
-        let holder = self.m.decls[d].declarator?;
+        let holder = self.decl(d).declarator?;
         let value = (holder.kind() == "assignment_expression")
             .then(|| holder.child_by_field_name("right"))
             .flatten()?;
@@ -1641,18 +1999,12 @@ impl<'a, 't> Cx<'a, 't> {
                     return None;
                 }
                 let class = self.class_of(receiver, call)?;
-                let defined_here = self
-                    .by_name
-                    .get(&name)
-                    .is_some_and(|js| js.iter().any(|&j| self.classes[j] == class));
+                let defined_here = self.defining_class(&class, &name).is_some();
                 (!defined_here).then(|| php(Some(class), &name))
             }
             Target::Static(class, name) => {
                 let class = self.named_class(&class, call)?;
-                let defined_here = self
-                    .by_name
-                    .get(&name)
-                    .is_some_and(|js| js.iter().any(|&j| self.classes[j] == class));
+                let defined_here = self.defining_class(&class, &name).is_some();
                 (!defined_here).then(|| php(Some(class), &name))
             }
             Target::New(class) => Some(php(
@@ -1810,6 +2162,59 @@ fn concatenation<'t>(n: Node<'t>, src: &[u8], out: &mut Vec<Node<'t>>) {
 }
 
 /// An expression without the parentheses around it.
+/// The lowercase name of the class (or trait, enum) around `n`.
+fn enclosing_class(n: Node, src: &[u8]) -> Option<String> {
+    let mut p = n.parent();
+    while let Some(a) = p {
+        if matches!(
+            a.kind(),
+            "class_declaration" | "trait_declaration" | "enum_declaration"
+        ) {
+            let name = a.child_by_field_name("name")?;
+            return Some(name.utf8_text(src).ok()?.to_ascii_lowercase());
+        }
+        p = a.parent();
+    }
+    None
+}
+
+/// Calls `f` on every node under `root`, in source order, until it says to
+/// stop: without a list of children per node, as `walk` makes.
+fn each_node<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> bool) {
+    let mut cursor = root.walk();
+    loop {
+        if !f(cursor.node()) {
+            return;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() || cursor.node().id() == root.id() {
+                return;
+            }
+        }
+    }
+}
+
+/// Whether a loop is around `n`, inside its function.
+fn in_loop(n: Node) -> bool {
+    let mut p = n.parent();
+    while let Some(a) = p {
+        match a.kind() {
+            "while_statement" | "do_statement" | "for_statement" | "foreach_statement" => {
+                return true;
+            }
+            "function_definition"
+            | "method_declaration"
+            | "anonymous_function"
+            | "arrow_function" => return false,
+            _ => p = a.parent(),
+        }
+    }
+    false
+}
+
 fn unwrap(mut n: Node) -> Node {
     while n.kind() == "parenthesized_expression" {
         match n.named_child(0) {
@@ -1895,6 +2300,64 @@ mod tests {
         assert_eq!(flagged("php/sql-injection", src), [5, 6]);
     }
 
+    #[test]
+    fn a_reassignment_that_always_runs_kills_what_the_variable_held() {
+        // Past the `=`, `$t` is no request's value.
+        let src = "function h() {\n    $t = $_GET['t'];\n    $t = 'ping';\n    system($t);\n}\n";
+        assert!(flagged("php/command-injection", src).is_empty());
+        // Before it, it still is.
+        let src = "function h() {\n    $t = $_GET['t'];\n    system($t);\n    $t = 'ping';\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [3]);
+        // The octets of the checked address, put back together (DVWA).
+        let src = "function h() {\n    $t = $_GET['ip'];\n    $o = explode('.', $t);\n    if (is_numeric($o[0]) && is_numeric($o[1])) {\n        $t = $o[0] . '.' . $o[1];\n        shell_exec('ping ' . $t);\n    }\n}\n";
+        assert!(flagged("php/command-injection", src).is_empty());
+    }
+
+    #[test]
+    fn a_reassignment_that_may_not_run_or_run_again_keeps_the_value() {
+        // In a branch: the read after it may see either.
+        let src = "function h($c) {\n    $t = 'ls';\n    if ($c) {\n        $t = $_GET['t'];\n    }\n    system($t);\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [6]);
+        // Two blocks deep, both writes reach the read after them.
+        let src = "function h($c) {\n    $t = 'ls';\n    if ($c) {\n        $t = 'a';\n        if ($c) {\n            $t = $_GET['t'];\n        }\n    }\n    system($t);\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [9]);
+        // In a loop nothing is killed: the read at its top sees the last
+        // pass's write, and one after a reassignment is kept the same way.
+        let src = "function h($xs) {\n    $t = 'ls';\n    foreach ($xs as $x) {\n        $t = 'a';\n        system($t);\n        $t = $_GET['t'];\n    }\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [5]);
+        let src = "function h($xs) {\n    $t = 'ls';\n    foreach ($xs as $x) {\n        system($t);\n        $t = $_GET['t'];\n    }\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [4]);
+    }
+
+    #[test]
+    fn a_sanitizing_reassignment_still_clears_the_variable_past_its_block() {
+        let src = "function h($c) {\n    $n = 'x';\n    if ($c) {\n        $n = $_GET['n'];\n        $n = escapeshellarg($n);\n    }\n    system($n);\n}\n";
+        assert!(flagged("php/command-injection", src).is_empty());
+    }
+
+    #[test]
+    fn a_property_set_in_one_method_and_read_in_another() {
+        let src = "class C {\n    private $q;\n    function __construct() { $this->q = $_GET['q']; }\n    function run($db) {\n        $db->query(\"SELECT * FROM t WHERE a = $this->q\");\n    }\n}\n";
+        assert_eq!(flagged("php/sql-injection", src), [5]);
+        // One class's property is not another's.
+        let src = "class C {\n    function set() { $this->q = $_GET['q']; }\n}\nclass D {\n    function run($db) { $this->q = 'x'; system($this->q); }\n}\n";
+        assert!(flagged("php/command-injection", src).is_empty());
+        // Added to by an element, and read as one.
+        let src = "class C {\n    function add() { $this->args[] = $_GET['a']; }\n    function run() { system(implode(' ', $this->args)); }\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [3]);
+        // A check on the property clears it.
+        let src = "class C {\n    function set() { $this->id = $_GET['id']; }\n    function run($db) {\n        if (!is_numeric($this->id)) { return; }\n        $db->query(\"SELECT * FROM t WHERE id = $this->id\");\n    }\n}\n";
+        assert!(flagged("php/sql-injection", src).is_empty());
+    }
+
+    #[test]
+    fn a_property_that_holds_the_request() {
+        let src = "class C {\n    private Request $request;\n    function run($db) { $db->query('SELECT ' . $this->request->input('c')); }\n}\n";
+        assert_eq!(flagged("php/sql-injection", src), [3]);
+        let src = "class C {\n    function __construct(private Request $req) {}\n    function run() { system($this->req->get('c')); }\n}\n";
+        assert_eq!(flagged("php/command-injection", src), [3]);
+    }
+
     // ------------------------------------------------------------ across files (T4)
 
     /// The lines `rule` flags in a project of PHP files, as (path, line).
@@ -1947,6 +2410,39 @@ mod tests {
             &[("page.php", page), ("Store.php", store)],
         );
         assert_eq!(found, [("Store.php".to_string(), 4)]);
+    }
+
+    #[test]
+    fn a_method_a_class_inherits() {
+        // From a parent class and a trait in the same file.
+        let src = "class Base {\n    function find($db, $id) { $db->query(\"SELECT * FROM t WHERE id = $id\"); }\n}\ntrait T {\n    function drop($db, $id) { $db->query(\"DELETE FROM t WHERE id = $id\"); }\n}\nclass Repo extends Base {\n    use T;\n    function run($db) {\n        $this->find($db, $_GET['a']);\n        $this->drop($db, $_GET['b']);\n        parent::find($db, $_GET['c']);\n    }\n}\n";
+        assert_eq!(flagged("php/sql-injection", src), [2, 5]);
+    }
+
+    #[test]
+    fn an_override_is_the_method_called() {
+        let src = "class Base {\n    function find($db, $id) { $db->query(\"SELECT * FROM t WHERE id = $id\"); }\n}\nclass Repo extends Base {\n    function find($db, $id) { $db->query('SELECT 1'); }\n    function run($db) { $this->find($db, $_GET['a']); }\n}\n";
+        assert!(flagged("php/sql-injection", src).is_empty());
+    }
+
+    #[test]
+    fn a_method_inherited_from_a_class_in_another_file() {
+        let page = "<?php\nfunction a() {\n    $s = new Store();\n    $s->find($_GET['id']);\n}\n";
+        let store = "<?php\nclass Store extends Base {\n}\n";
+        let base = "<?php\nclass Base {\n    public function find($id) {\n        return mysqli_query($this->db, \"SELECT * FROM t WHERE id = $id\");\n    }\n}\n";
+        let found = project(
+            "php/sql-injection",
+            &[("page.php", page), ("Store.php", store), ("Base.php", base)],
+        );
+        assert_eq!(found, [("Base.php".to_string(), 4)]);
+        // A subclass's own method wins over the parent's.
+        let store =
+            "<?php\nclass Store extends Base {\n    public function find($id) { return 1; }\n}\n";
+        let found = project(
+            "php/sql-injection",
+            &[("page.php", page), ("Store.php", store), ("Base.php", base)],
+        );
+        assert!(found.is_empty());
     }
 
     #[test]
