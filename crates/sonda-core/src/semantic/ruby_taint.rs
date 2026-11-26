@@ -41,6 +41,166 @@ pub(crate) fn find<'t>(m: &Model<'t>, src: &[u8], kind: SinkKind) -> TaintResult
     Cx::file_result(m, src, kind).unwrap_or_default()
 }
 
+/// The fact a Ruby file's classes are in, for the project pass.
+pub(crate) const FACT: &str = "ruby-classes";
+
+/// A class or module a file declares: what it extends and includes, and the
+/// methods it defines, instance and its own (`def self.m`, `class << self`):
+/// where a call to a method it inherits goes.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ClassFact {
+    pub(crate) name: String,
+    /// The superclass and the modules `include`d or `prepend`ed.
+    #[serde(default)]
+    pub(crate) parents: Vec<String>,
+    /// The modules `extend`ed: their methods are the class's own.
+    #[serde(default)]
+    pub(crate) extends: Vec<String>,
+    #[serde(default)]
+    pub(crate) methods: Vec<String>,
+    #[serde(default)]
+    pub(crate) singletons: Vec<String>,
+}
+
+/// The classes of a file.
+pub(crate) fn classes(root: Node, src: &[u8]) -> Vec<ClassFact> {
+    let mut out = Vec::new();
+    let _ = walk(root, |n| {
+        out.extend(class_fact(n, src));
+        out.len() <= MAX_WRITES
+    });
+    out
+}
+
+/// What a class or a module extends, includes and defines.
+fn class_fact(n: Node, src: &[u8]) -> Option<ClassFact> {
+    if !matches!(n.kind(), "class" | "module") {
+        return None;
+    }
+    let text = |n: Node| n.utf8_text(src).unwrap_or_default();
+    let mut fact = ClassFact {
+        name: last_name(text(n.child_by_field_name("name")?)).to_string(),
+        ..ClassFact::default()
+    };
+    if let Some(sup) = named_children(n)
+        .into_iter()
+        .find(|c| c.kind() == "superclass")
+        .and_then(|c| c.named_child(0))
+    {
+        fact.parents.push(last_name(text(sup)).to_string());
+    }
+    let body = n.child_by_field_name("body");
+    for member in body.map(named_children).unwrap_or_default() {
+        class_member(member, src, &mut fact, false);
+    }
+    Some(fact)
+}
+
+/// One statement of a class's body: a method, a method of the class itself,
+/// an `include`.
+fn class_member(member: Node, src: &[u8], fact: &mut ClassFact, own: bool) {
+    let text = |n: Node| n.utf8_text(src).unwrap_or_default();
+    let name = |n: Node| n.child_by_field_name("name").map(|c| text(c).to_string());
+    match member.kind() {
+        "method" => {
+            let list = if own {
+                &mut fact.singletons
+            } else {
+                &mut fact.methods
+            };
+            list.extend(name(member));
+        }
+        "singleton_method" => fact.singletons.extend(name(member)),
+        "singleton_class" => {
+            let body = member.child_by_field_name("body");
+            for m in body.map(named_children).unwrap_or_default() {
+                class_member(m, src, fact, true);
+            }
+        }
+        // `include A, B`, `private def m`.
+        "call" if member.child_by_field_name("receiver").is_none() => {
+            let verb = call_name(member, src).unwrap_or_default();
+            for a in arguments(member) {
+                match (verb, a.kind()) {
+                    ("include" | "prepend", "constant" | "scope_resolution") => {
+                        fact.parents.push(last_name(text(a)).to_string());
+                    }
+                    ("extend", "constant" | "scope_resolution") => {
+                        fact.extends.push(last_name(text(a)).to_string());
+                    }
+                    (_, "method" | "singleton_method") => class_member(a, src, fact, own),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every class of the project, or of a file, by name: which one defines a
+/// method a class has.
+#[derive(Default)]
+pub(crate) struct ClassIndex {
+    classes: HashMap<String, ClassFact>,
+}
+
+impl ClassIndex {
+    pub(crate) fn new(facts: impl IntoIterator<Item = ClassFact>) -> Self {
+        let mut classes: HashMap<String, ClassFact> = HashMap::new();
+        for f in facts {
+            let c = classes.entry(f.name.clone()).or_insert_with(|| ClassFact {
+                name: f.name.clone(),
+                ..ClassFact::default()
+            });
+            c.parents.extend(f.parents);
+            c.extends.extend(f.extends);
+            c.methods.extend(f.methods);
+            c.singletons.extend(f.singletons);
+        }
+        ClassIndex { classes }
+    }
+
+    /// Whether a class extends or includes anything.
+    pub(crate) fn inherits(&self, class: &str) -> bool {
+        self.classes
+            .get(class)
+            .is_some_and(|f| !f.parents.is_empty() || !f.extends.is_empty())
+    }
+
+    /// The class that defines method `name` for `class`, and whether it's
+    /// one of that class's own: the class's, or the nearest ancestor's or
+    /// module's.
+    pub(crate) fn defining(
+        &self,
+        class: &str,
+        name: &str,
+        singleton: bool,
+    ) -> Option<(String, bool)> {
+        let mut queue = vec![(class.to_string(), singleton)];
+        let mut i = 0;
+        while let Some((c, own)) = queue.get(i).cloned() {
+            i += 1;
+            let Some(f) = self.classes.get(&c) else {
+                continue;
+            };
+            let defined = if own { &f.singletons } else { &f.methods };
+            if defined.iter().any(|m| m == name) {
+                return Some((c, own));
+            }
+            for p in &f.parents {
+                if queue.len() < 32 && !queue.contains(&(p.clone(), own)) {
+                    queue.push((p.clone(), own));
+                }
+            }
+            // A module a class extends gives it its methods as its own.
+            if own {
+                queue.extend(f.extends.iter().map(|e| (e.clone(), false)).take(8));
+            }
+        }
+        None
+    }
+}
+
 fn might_have_sources(src: &[u8]) -> bool {
     contains_any(src, &[b"params", b"cookies", b"request"])
 }
@@ -301,6 +461,8 @@ struct Cx<'a, 't> {
     /// Each class's `@name`, as a variable of its own.
     props: HashMap<(String, String), DeclId>,
     property_nodes: HashMap<usize, DeclId>,
+    /// The classes of the file: what a call to a method it inherits calls.
+    index: ClassIndex,
     /// Variables a check reads as validating, for this kind of sink.
     checked: HashSet<DeclId>,
     /// Expressions a check tested that no variable holds: `params[:t]` in
@@ -319,6 +481,8 @@ struct Cx<'a, 't> {
     return_facts: RefCell<Vec<ReturnFact<'t>>>,
     keys: OnceCell<Vec<Option<Key>>>,
     callees: RefCell<HashMap<usize, Option<Callee>>>,
+    /// The method of the file each call calls, worked out once per call.
+    locals: RefCell<HashMap<usize, Option<usize>>>,
 }
 
 impl<'a, 't> Cx<'a, 't> {
@@ -330,6 +494,7 @@ impl<'a, 't> Cx<'a, 't> {
             by_node: decl_index(m),
             props: HashMap::new(),
             property_nodes: HashMap::new(),
+            index: ClassIndex::default(),
             checked: HashSet::new(),
             checked_exprs: HashSet::new(),
             writes: Vec::new(),
@@ -343,6 +508,7 @@ impl<'a, 't> Cx<'a, 't> {
             return_facts: RefCell::new(Vec::new()),
             keys: OnceCell::new(),
             callees: RefCell::new(HashMap::new()),
+            locals: RefCell::new(HashMap::new()),
         };
         cx.properties(root);
         cx.collect(root)?;
@@ -377,12 +543,15 @@ impl<'a, 't> Cx<'a, 't> {
     /// The variable `@name` is, for each class that names it.
     fn properties(&mut self, root: Node<'t>) {
         let mut found: Vec<Node<'t>> = Vec::new();
+        let mut classes: Vec<ClassFact> = Vec::new();
         let _ = walk(root, |n| {
             if n.kind() == "instance_variable" {
                 found.push(n);
             }
+            classes.extend(class_fact(n, self.src));
             found.len() <= MAX_WRITES
         });
+        self.index = ClassIndex::new(classes);
         for n in found {
             let key = (
                 enclosing_class(n, self.src).unwrap_or_default(),
@@ -1100,32 +1269,84 @@ impl<'a, 't> Cx<'a, 't> {
 
     // -------------------------------------------------------- methods
 
-    /// The method of the file a call calls, if there is exactly one: on
-    /// nothing or `self`, in the class it's in; on a class, its `def self.m`.
-    fn local_callee(&self, call: Node<'t>) -> Option<usize> {
-        let (name, class, singleton) = if call.kind() == "identifier" {
-            (self.text(call), enclosing_class(call, self.src)?, None)
+    /// What a call calls: the method's name, its class, and whether it's the
+    /// class's own. On nothing or `self` it's a method of the class the call
+    /// is in; on a class (`Users.find`, `Users.new`) one of that class; on a
+    /// variable made by `Users.new`, an instance method of it.
+    fn call_target(&self, call: Node<'t>) -> Option<(String, String, bool)> {
+        let here = || Some((enclosing_class(call, self.src)?, singleton_context(call)));
+        if call.kind() == "identifier" {
+            let (class, own) = here()?;
+            return Some((self.text(call).to_string(), class, own));
+        }
+        let name = call_name(call, self.src)?;
+        let receiver = call.child_by_field_name("receiver");
+        let Some(r) = receiver.filter(|r| r.kind() != "self") else {
+            let (class, own) = here()?;
+            return Some((name.to_string(), class, own));
+        };
+        let written = self.text(r);
+        if r.kind() == "identifier" {
+            return Some((name.to_string(), self.inferred_class(r)?, false));
+        }
+        if !matches!(r.kind(), "constant" | "scope_resolution") {
+            return None;
+        }
+        let class = last_name(written).to_string();
+        // `Users.new(x)` runs `initialize`.
+        Some(if name == "new" {
+            ("initialize".to_string(), class, false)
         } else {
-            let name = call_name(call, self.src)?;
-            match receiver_text(call, self.src) {
-                None | Some("self") => (name, enclosing_class(call, self.src)?, None),
-                Some(r) if r.starts_with(|c: char| c.is_uppercase()) => {
-                    (name, last_name(r).to_string(), Some(true))
-                }
-                _ => return None,
-            }
+            (name.to_string(), class, true)
+        })
+    }
+
+    /// The class of a variable made by `x = Users.new(..)`.
+    fn inferred_class(&self, v: Node<'t>) -> Option<String> {
+        let d = self.decl_of(v)?;
+        let value = self
+            .m
+            .decls
+            .get(d)?
+            .declarator
+            .filter(|a| a.kind() == "assignment")?
+            .child_by_field_name("right")?;
+        let made = call_name(value, self.src) == Some("new");
+        let class = value.child_by_field_name("receiver")?;
+        (made && matches!(class.kind(), "constant" | "scope_resolution"))
+            .then(|| last_name(self.text(class)).to_string())
+    }
+
+    /// The method of the file a call calls, if there is exactly one: in the
+    /// class, or the nearest class or module of the file it inherits it from.
+    fn local_callee(&self, call: Node<'t>) -> Option<usize> {
+        if let Some(known) = self.locals.borrow().get(&call.id()) {
+            return *known;
+        }
+        let found = self.find_local_callee(call);
+        self.locals.borrow_mut().insert(call.id(), found);
+        found
+    }
+
+    fn find_local_callee(&self, call: Node<'t>) -> Option<usize> {
+        let (name, class, own) = self.call_target(call)?;
+        // Outside every class, a method is the file's own.
+        let (class, own) = if class.is_empty() {
+            (class, own)
+        } else {
+            self.index.defining(&class, &name, own)?
         };
         let arity = arguments(call).len();
         let candidates: Vec<usize> = self
             .by_name
-            .get(name)?
+            .get(&name)?
             .iter()
             .copied()
             .filter(|&j| {
                 let f = &self.m.functions[j];
                 self.classes[j] == class
+                    && singleton_context(f.node) == own
                     && arity <= f.params.len()
-                    && singleton.is_none_or(|s| (f.node.kind() == "singleton_method") == s)
             })
             .collect();
         match candidates.as_slice() {
@@ -1134,14 +1355,71 @@ impl<'a, 't> Cx<'a, 't> {
         }
     }
 
-    /// What another file's method is, called here: nothing yet, since the
-    /// project pass doesn't read Ruby.
-    fn find_external_callee(&self, _call: Node<'t>) -> Option<Callee> {
-        None
+    /// The method of another file a call calls: by its class, and the
+    /// project pass finds where the class or what it inherits defines it.
+    fn find_external_callee(&self, call: Node<'t>) -> Option<Callee> {
+        if self.local_callee(call).is_some() {
+            return None;
+        }
+        let (name, class, singleton) = self.call_target(call)?;
+        // On nothing, a method of another file is one the class inherits.
+        let on_nothing = call.kind() == "identifier"
+            || call
+                .child_by_field_name("receiver")
+                .is_none_or(|r| r.kind() == "self");
+        if class.is_empty()
+            || (on_nothing && !self.index.inherits(&class))
+            || (!on_nothing && is_library(self.text(call.child_by_field_name("receiver")?)))
+        {
+            return None;
+        }
+        Some(Callee::Ruby {
+            class: Some(class),
+            name,
+            singleton,
+        })
     }
 
-    fn raw_key(&self, _j: usize) -> Option<Key> {
-        None
+    /// Whether another file gains from what a method does with its parameter
+    /// `p`: not when its name is written once, where it's declared.
+    fn exports_a_param(&self, j: usize, p: usize) -> bool {
+        let f = &self.m.functions[j];
+        let text = self.text(f.node);
+        f.params.get(p).is_none_or(|ds| {
+            ds.iter().any(|&d| {
+                let name = &self.m.decls[d].name;
+                text.matches(name.as_str()).count() > 1
+            })
+        })
+    }
+
+    fn exports_a_return(&self, _j: usize) -> bool {
+        true
+    }
+
+    /// What other files call a method by: `Users#find`, `Users.find`.
+    fn raw_key(&self, j: usize) -> Option<Key> {
+        let f = &self.m.functions[j];
+        let name = &self.names[j];
+        let splat = f.node.child_by_field_name("parameters").is_some_and(|p| {
+            named_children(p)
+                .iter()
+                .any(|c| matches!(c.kind(), "splat_parameter" | "hash_splat_parameter"))
+        });
+        if name.is_empty() || splat {
+            return None;
+        }
+        let class = &self.classes[j];
+        let export = if class.is_empty() {
+            name.clone()
+        } else {
+            let sep = if singleton_context(f.node) { '.' } else { '#' };
+            format!("{class}{sep}{name}")
+        };
+        Some(Key {
+            export,
+            member: None,
+        })
     }
 }
 
@@ -1150,7 +1428,7 @@ locals_for!(Cx);
 evaluation_for!(Cx);
 function_keys_for!(Cx);
 externals_for!(Cx);
-exports_for!(Cx);
+exports_for!(Cx, exports_a_param, exports_a_return);
 
 fn never<'a, 't>(_: &Cx<'a, 't>, _: DeclId) -> bool {
     false
@@ -1313,6 +1591,84 @@ fn last_name(name: &str) -> &str {
     name.rsplit("::").next().unwrap_or(name)
 }
 
+/// Whether a class is Ruby's or a framework's own, which no file of the
+/// project defines a method of.
+fn is_library(class: &str) -> bool {
+    let first = class
+        .trim_start_matches("::")
+        .split("::")
+        .next()
+        .unwrap_or("");
+    matches!(
+        first,
+        "Rails"
+            | "File"
+            | "FileUtils"
+            | "IO"
+            | "Dir"
+            | "Time"
+            | "Date"
+            | "DateTime"
+            | "JSON"
+            | "YAML"
+            | "Psych"
+            | "Marshal"
+            | "Hash"
+            | "Array"
+            | "String"
+            | "Integer"
+            | "Float"
+            | "Kernel"
+            | "Process"
+            | "ENV"
+            | "Set"
+            | "Regexp"
+            | "Math"
+            | "Logger"
+            | "I18n"
+            | "ActiveSupport"
+            | "ActiveRecord"
+            | "ActionController"
+            | "ActionView"
+            | "ActionMailer"
+            | "ActiveModel"
+            | "ActiveJob"
+            | "Rack"
+            | "Net"
+            | "URI"
+            | "CGI"
+            | "ERB"
+            | "Base64"
+            | "Digest"
+            | "OpenSSL"
+            | "SecureRandom"
+            | "Open3"
+            | "Shellwords"
+            | "Pathname"
+            | "Thread"
+            | "Mutex"
+            | "Object"
+            | "Class"
+            | "Module"
+            | "Struct"
+            | "Gem"
+    )
+}
+
+/// Whether `n` is in the class itself, not in its instances: in a `def
+/// self.m`, or in `class << self`.
+pub(crate) fn singleton_context(n: Node) -> bool {
+    let mut p = Some(n);
+    while let Some(a) = p {
+        match a.kind() {
+            "singleton_method" | "singleton_class" => return true,
+            "class" | "module" => return false,
+            _ => p = a.parent(),
+        }
+    }
+    false
+}
+
 /// The name of the class or module around `n`, or `Some("")` outside any.
 fn enclosing_class(n: Node, src: &[u8]) -> Option<String> {
     let mut p = n.parent();
@@ -1447,6 +1803,93 @@ end
     fn a_string_that_starts_with_a_value_is_decided_by_that_value() {
         let src = "def a\n  redirect_to \"#{base}/x/#{params[:t]}\"\n  redirect_to \"#{params[:t]}/x\"\n  redirect_to \"/x/#{params[:t]}\"\nend\n";
         assert_eq!(flagged("ruby/open-redirect", src), [3]);
+    }
+
+    // ---------------------------------------------------- inheritance
+
+    #[test]
+    fn a_method_a_class_inherits_or_includes_in_the_file() {
+        let src = "module Runs\n  def run(c)\n    system(\"x #{c}\")\n  end\nend\nclass Base\n  def log(m)\n    system(\"echo #{m}\")\n  end\nend\nclass C < Base\n  include Runs\n  def a\n    log(params[:m])\n    run(params[:c])\n    self.class.zz(params[:z])\n  end\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [3, 8]);
+    }
+
+    #[test]
+    fn an_override_is_the_method_called_and_new_runs_initialize() {
+        let src = "class Base\n  def log(m)\n    system(\"echo #{m}\")\n  end\nend\nclass C < Base\n  def log(m)\n    nil\n  end\n  def a\n    log(params[:m])\n  end\nend\n";
+        assert!(flagged("ruby/command-injection", src).is_empty());
+        let src = "class Job\n  def initialize(cmd)\n    system(\"x #{cmd}\")\n  end\nend\ndef a\n  Job.new(params[:c])\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [3]);
+    }
+
+    #[test]
+    fn a_method_of_the_class_itself_and_one_in_class_self() {
+        let src = "class Shell\n  def self.run(c)\n    system(\"x #{c}\")\n  end\n  class << self\n    def go(c)\n      system(\"y #{c}\")\n    end\n  end\nend\ndef a\n  Shell.run(params[:c])\n  Shell.go(params[:c])\n  Shell.nope(params[:c])\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [3, 7]);
+    }
+
+    // ---------------------------------------------------- across files (T4)
+
+    /// The lines `rule` flags in a project of Ruby files, as (path, line).
+    fn project(rule: &str, files: &[(&str, &str)]) -> Vec<(String, usize)> {
+        crate::analysis::tests::project_flagged(
+            rule,
+            crate::lang::Lang::Ruby,
+            files,
+            crate::analysis::taint_project_rules,
+        )
+    }
+
+    #[test]
+    fn a_class_method_defined_in_another_file() {
+        let page = "class PingController\n  def show\n    Pinger.run(params[:host])\n    Pinger.argv(params[:host])\n  end\nend\n";
+        let pinger = "class Pinger\n  def self.run(host)\n    system(\"ping #{host}\")\n  end\n  def self.argv(host)\n    system('ping', host)\n  end\nend\n";
+        let found = project(
+            "ruby/command-injection",
+            &[("ping_controller.rb", page), ("pinger.rb", pinger)],
+        );
+        assert_eq!(found, [("pinger.rb".to_string(), 3)]);
+    }
+
+    #[test]
+    fn a_constructor_and_an_instance_method_in_another_file() {
+        let page = "class C\n  def a\n    s = Searcher.new(params[:q])\n    s.run(params[:t])\n  end\nend\n";
+        let searcher = "class Searcher\n  def initialize(q)\n    User.where(\"n = #{q}\")\n  end\n  def run(t)\n    User.order(t)\n  end\nend\n";
+        let found = project(
+            "ruby/sql-injection",
+            &[("c.rb", page), ("searcher.rb", searcher)],
+        );
+        assert_eq!(
+            found,
+            [
+                ("searcher.rb".to_string(), 3),
+                ("searcher.rb".to_string(), 6)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_method_inherited_from_a_class_or_a_concern_in_another_file() {
+        let app = "class ApplicationController\n  def filter\n    params[:f]\n  end\nend\n";
+        let concern = "module Exports\n  def export(path)\n    File.read(path)\n  end\nend\n";
+        let users = "class UsersController < ApplicationController\n  include Exports\n  def index\n    User.where(\"a = #{filter}\")\n    export(params[:p])\n  end\nend\n";
+        let found = project(
+            "ruby/sql-injection",
+            &[
+                ("users.rb", users),
+                ("app.rb", app),
+                ("concern.rb", concern),
+            ],
+        );
+        assert_eq!(found, [("users.rb".to_string(), 4)]);
+        let found = project(
+            "ruby/path-injection",
+            &[
+                ("users.rb", users),
+                ("app.rb", app),
+                ("concern.rb", concern),
+            ],
+        );
+        assert_eq!(found, [("concern.rb".to_string(), 3)]);
     }
 
     #[test]
