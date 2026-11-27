@@ -128,6 +128,22 @@ fn bad_repository_config_is_an_error_not_ignored() {
             "unknown variant `bugz`",
         ),
         ("[thresholds]\nparams = 3\n", "unknown field `params`"),
+        (
+            "[[rules.ignore]]\npaths = [\"a/**\"]\nrules = [\"js/nope\"]\n",
+            "unknown rule 'js/nope' in rules.ignore",
+        ),
+        (
+            "[[rules.ignore]]\npaths = [\"a/**\"]\nrules = [\"nope/*\"]\n",
+            "unknown rule 'nope/*' in rules.ignore",
+        ),
+        (
+            "[[rules.ignore]]\npaths = []\nrules = [\"js/no-var\"]\n",
+            "rules.ignore #1",
+        ),
+        (
+            "[[rules.ignore]]\npaths = [\"a/**\"]\nrule = [\"js/no-var\"]\n",
+            "unknown field `rule`",
+        ),
         ("[scan]\nfile_timeout_secs = 0\n", "scan.file_timeout_secs"),
     ] {
         let dir = project(&[("app.py", "x = 1\n"), ("sonda.toml", toml)]);
@@ -198,6 +214,37 @@ fn json_report_carries_the_rule_settings_from_sonda_toml() {
         report["rule_settings"],
         serde_json::json!({ "disabled": [], "enabled": [], "severity": {} })
     );
+}
+
+#[test]
+fn a_rule_ignored_in_a_path_still_leaves_the_file_and_the_other_rules() {
+    let toml = "[[rules.ignore]]\npaths = [\"legacy/**\"]\nrules = [\"js/no-var\", \"js/no-eval\"]\n\n[[rules.ignore]]\npaths = [\"*.generated.js\"]\nrules = [\"js/*\"]\n";
+    let src = "var x = 1;\neval(x);\nvar y = 2;\n";
+    let dir = project(&[
+        ("app/a.js", src),
+        ("legacy/b.js", src),
+        ("legacy/c.py", "x = 1\n"),
+        ("lib/d.generated.js", src),
+        ("sonda.toml", toml),
+    ]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    let rules_in = |path: &str| -> Vec<String> {
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["path"] == path)
+            .map(|i| i["rule"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(rules_in("app/a.js").contains(&"js/no-var".to_string()));
+    assert!(rules_in("app/a.js").contains(&"js/no-eval".to_string()));
+    // Ignored there, by id; and every `js/` rule, in the generated file.
+    assert!(!rules_in("legacy/b.js").contains(&"js/no-var".to_string()));
+    assert!(!rules_in("legacy/b.js").contains(&"js/no-eval".to_string()));
+    assert!(rules_in("lib/d.generated.js").is_empty());
+    // The files are still analyzed and measured.
+    assert_eq!(report["measures"]["files"], 4.0);
 }
 
 fn is_hex(v: &Value, len: usize) -> bool {

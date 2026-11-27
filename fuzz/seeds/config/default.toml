@@ -16,6 +16,11 @@ git_timeout_secs = 120
 # Rule ids to turn off. `sonda rules` lists them all.
 disabled = []
 
+# Rules that don't report in some paths.
+[[rules.ignore]]
+paths = ["db/legacy/**"]
+rules = ["ruby/*"]
+
 # Override the default severity of a rule.
 [rules.severity]
 # "js/no-console" = "info"

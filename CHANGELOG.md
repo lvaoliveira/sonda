@@ -9,6 +9,10 @@ file, the report formats and the public library API.
 
 ### Added
 
+- `[[rules.ignore]]` in `sonda.toml` ([ADR-0034](docs/adr/0034-rules-ignore.md)): `paths`
+  (gitignore-style) and `rules` (ids, or a prefix and `*`) say where a rule doesn't report;
+  the files are still analyzed and measured, unlike `scan.exclude`, and the other rules still
+  report there.
 - Ruby migrations, seeds, Rake tasks and `script/` and `bin/` files (ADR-0033) skip the
   vulnerability rules that read a file's shape (`ruby/sql-interpolation`,
   `ruby/command-execution`, `ruby/hardcoded-credentials`, ...), as test files do; taint
