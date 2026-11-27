@@ -2048,11 +2048,14 @@ pub(crate) fn is_tooling_file(path: &str, lang: Lang) -> bool {
     /// file names (without their extension, where it varies), suffixes.
     struct Own {
         dirs: &'static [&'static str],
+        /// Directories named for what they hold (`MySqlMigrations`).
+        dir_endings: &'static [&'static str],
         names: &'static [&'static str],
         suffixes: &'static [&'static str],
     }
     const NONE: Own = Own {
         dirs: &[],
+        dir_endings: &[],
         names: &[],
         suffixes: &[],
     };
@@ -2061,16 +2064,17 @@ pub(crate) fn is_tooling_file(path: &str, lang: Lang) -> bool {
             dirs: &["migrate", "post_migrate", "tasks", "bin"],
             names: &["rakefile"],
             suffixes: &[".rake"],
+            ..NONE
         },
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => Own {
             dirs: &["bin"],
             names: &["gulpfile", "gruntfile"],
-            suffixes: &[],
+            ..NONE
         },
         Lang::Python => Own {
             dirs: &["management", "bin"],
             names: &["manage", "fabfile", "setup", "noxfile", "tasks"],
-            suffixes: &[],
+            ..NONE
         },
         Lang::Go => Own {
             dirs: &["hack"],
@@ -2079,9 +2083,18 @@ pub(crate) fn is_tooling_file(path: &str, lang: Lang) -> bool {
         Lang::Rust => Own {
             dirs: &["xtask"],
             names: &["build"],
-            suffixes: &[],
+            ..NONE
         },
-        Lang::Java | Lang::CSharp | Lang::Php => NONE,
+        Lang::Java => Own {
+            dirs: &["liquibase", "flyway"],
+            ..NONE
+        },
+        Lang::CSharp => Own {
+            dirs: &["migrator", "seeder"],
+            dir_endings: &["migrations"],
+            ..NONE
+        },
+        Lang::Php => NONE,
         Lang::C | Lang::Cpp => return false,
     };
     let lower = path.to_ascii_lowercase();
@@ -2097,6 +2110,7 @@ pub(crate) fn is_tooling_file(path: &str, lang: Lang) -> bool {
                 d,
                 "migrations" | "migration" | "seeds" | "seeders" | "scripts" | "script"
             ) || own.dirs.contains(&d)
+                || own.dir_endings.iter().any(|e| d.ends_with(e))
         })
 }
 
@@ -5461,6 +5475,11 @@ pub(crate) mod tests {
             ("xtask/src/main.rs", Lang::Rust),
             ("build.rs", Lang::Rust),
             ("scripts/release.py", Lang::Python),
+            ("model/jpa/updater/liquibase/custom/AddX.java", Lang::Java),
+            ("src/main/java/flyway/V2__y.java", Lang::Java),
+            ("util/Migrator/DbMigrator.cs", Lang::CSharp),
+            ("util/MySqlMigrations/Migrations/A.cs", Lang::CSharp),
+            ("util/Seeder/Factories/UserSeeder.cs", Lang::CSharp),
         ] {
             assert!(is_tooling_file(path, lang), "{path}");
         }
@@ -5475,6 +5494,11 @@ pub(crate) mod tests {
             ("pkg/migrate/migrate.go", Lang::Go),
             ("src/setup_user.py", Lang::Python),
             ("src/main/java/App.java", Lang::Java),
+            // Another language's directory, and a name that only contains one.
+            ("util/Migrator/a.java", Lang::Java),
+            ("src/Seeder/a.cs", Lang::Go),
+            ("src/Migrationsish/A.cs", Lang::CSharp),
+            ("src/Liquibase/A.cs", Lang::CSharp),
             ("tools/security/hash.go", Lang::Go),
             ("tools/lib/parse.js", Lang::JavaScript),
             ("scripts/gen.c", Lang::C),
