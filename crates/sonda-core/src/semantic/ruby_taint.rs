@@ -19,10 +19,11 @@
 use super::taint::{Callee, Key, ReturnFact, SinkKind, Step, TaintResult};
 use super::taint_core::{
     Exports, Flow, How, Path, Summaries, Summary, SummaryKey, Write, address_path, best, best_of,
-    contains_any, decl_index, evaluation_for, exports_for, externals_for, flow_for, from_call,
-    function_keys_for, held, locals_for, names_a_check, summarize_for, walk,
+    contains_any, decl_index, each_node, evaluation_for, exports_for, externals_for, flow_for,
+    from_call, function_keys_for, held, in_loop, locals_for, names_a_check, summarize_for,
+    version_plan, walk,
 };
-use super::{DeclId, Model};
+use super::{Decl, DeclId, Model};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
@@ -386,8 +387,13 @@ fn check_names(kind: SinkKind) -> &'static [&'static str] {
 /// A method whose name says it checks its argument.
 fn is_a_check_by_name(name: &str) -> bool {
     // It marks text safe; it doesn't test it.
+    let bare = name.trim_end_matches(['?', '!']);
     name != "html_safe"
-        && names_a_check(
+        // `valid_type?`, `allowed_host?`, `permitted_params`.
+        && (["valid", "allowed", "permitted", "authorized"]
+            .iter()
+            .any(|w| bare.starts_with(w))
+            || names_a_check(
             name,
             &[
                 "valid",
@@ -398,7 +404,7 @@ fn is_a_check_by_name(name: &str) -> bool {
                 "permitted",
             ],
             &["sanitiz", "allowlist", "whitelist"],
-        )
+        ))
 }
 
 /// The methods that make a value safe for where it goes, by kind (those that
@@ -461,6 +467,10 @@ struct Cx<'a, 't> {
     /// Each class's `@name`, as a variable of its own.
     props: HashMap<(String, String), DeclId>,
     property_nodes: HashMap<usize, DeclId>,
+    /// The variable each version of one stands for (see `version`): a
+    /// reassignment that always runs gets an id past the declarations' and
+    /// the properties', which have none.
+    versions: Vec<Option<DeclId>>,
     /// The classes of the file: what a call to a method it inherits calls.
     index: ClassIndex,
     /// Variables a check reads as validating, for this kind of sink.
@@ -494,6 +504,7 @@ impl<'a, 't> Cx<'a, 't> {
             by_node: decl_index(m),
             props: HashMap::new(),
             property_nodes: HashMap::new(),
+            versions: Vec::new(),
             index: ClassIndex::default(),
             checked: HashSet::new(),
             checked_exprs: HashSet::new(),
@@ -510,7 +521,7 @@ impl<'a, 't> Cx<'a, 't> {
             callees: RefCell::new(HashMap::new()),
             locals: RefCell::new(HashMap::new()),
         };
-        cx.properties(root);
+        cx.prepare(root);
         cx.collect(root)?;
         cx.index();
         Some(cx)
@@ -540,16 +551,21 @@ impl<'a, 't> Cx<'a, 't> {
 
     // -------------------------------------------------------- variables
 
-    /// The variable `@name` is, for each class that names it.
-    fn properties(&mut self, root: Node<'t>) {
+    /// What one walk of the file finds for the rest: the variable `@name` is
+    /// for each class that names it, the classes, and the blocks of
+    /// statements.
+    fn prepare(&mut self, root: Node<'t>) {
         let mut found: Vec<Node<'t>> = Vec::new();
         let mut classes: Vec<ClassFact> = Vec::new();
-        let _ = walk(root, |n| {
+        let mut blocks: Vec<Node<'t>> = Vec::new();
+        each_node(root, |n| {
             if n.kind() == "instance_variable" {
                 found.push(n);
+            } else if STATEMENT_LISTS.contains(&n.kind()) {
+                blocks.push(n);
             }
             classes.extend(class_fact(n, self.src));
-            found.len() <= MAX_WRITES
+            found.len() + blocks.len() <= MAX_WRITES
         });
         self.index = ClassIndex::new(classes);
         for n in found {
@@ -557,9 +573,74 @@ impl<'a, 't> Cx<'a, 't> {
                 enclosing_class(n, self.src).unwrap_or_default(),
                 self.text(n).to_string(),
             );
-            let next = self.m.decls.len() + self.props.len();
+            let next = self.m.decls.len() + self.versions.len();
             let id = *self.props.entry(key).or_insert(next);
+            if id == next {
+                self.versions.push(None);
+            }
             self.property_nodes.insert(n.id(), id);
+        }
+        for block in blocks {
+            if !in_loop(block, LOOPS, FUNCTIONS) {
+                self.version_block(block);
+            }
+        }
+    }
+
+    fn version_block(&mut self, block: Node<'t>) {
+        let first = self.m.decls.len() + self.versions.len();
+        let plan = version_plan(
+            block,
+            "identifier",
+            &named_children(block),
+            |s| self.killer(s),
+            |n| self.decl_of(n),
+            |d| self.declaration(d).map_or(0, |d| d.node.start_byte()),
+            first,
+        );
+        for (parent, moved) in plan {
+            let id = self.m.decls.len() + self.versions.len();
+            self.versions.push(Some(parent));
+            for v in moved {
+                self.by_node.insert(v.id(), id);
+            }
+        }
+    }
+
+    /// The variable `x = v` reassigns, when it's a statement of a block.
+    fn killer(&self, s: Node<'t>) -> Option<Node<'t>> {
+        let left = (s.kind() == "assignment")
+            .then(|| s.child_by_field_name("left"))
+            .flatten()?;
+        (left.kind() == "identifier").then_some(left)
+    }
+
+    /// The variable a version replaced, None for a declaration.
+    fn replaced(&self, d: DeclId) -> Option<DeclId> {
+        d.checked_sub(self.m.decls.len())
+            .and_then(|i| self.versions.get(i).copied().flatten())
+    }
+
+    /// The declaration a variable, or a version of one, is.
+    fn origin(&self, d: DeclId) -> DeclId {
+        let mut d = d;
+        while let Some(r) = self.replaced(d) {
+            d = r;
+        }
+        d
+    }
+
+    fn declaration(&self, d: DeclId) -> Option<&Decl<'t>> {
+        self.m.decls.get(self.origin(d))
+    }
+
+    /// A variable a check or a sanitizing assignment validates, and the
+    /// versions it replaced: the read past the block gets no other.
+    fn validate(&mut self, d: DeclId) {
+        let mut id = Some(d);
+        while let Some(t) = id {
+            self.checked.insert(t);
+            id = self.replaced(t);
         }
     }
 
@@ -610,9 +691,7 @@ impl<'a, 't> Cx<'a, 't> {
             named.extend(call.child_by_field_name("receiver"));
             for v in named {
                 match self.checked_variable(v) {
-                    Some(d) => {
-                        self.checked.insert(d);
-                    }
+                    Some(d) => self.validate(d),
                     None if matches!(v.kind(), "element_reference" | "call") => {
                         self.checked_exprs.insert(squeezed(self.text(v)));
                     }
@@ -663,12 +742,18 @@ impl<'a, 't> Cx<'a, 't> {
     }
 
     fn write(&mut self, target: DeclId, target_node: Node<'t>, value: Node<'t>, how: How) {
-        self.writes.push(Write {
-            target,
-            target_node,
-            value,
-            how,
-        });
+        // A version's writes are also the writes of every one it replaced,
+        // for the reads past the block.
+        let mut id = Some(target);
+        while let Some(t) = id {
+            self.writes.push(Write {
+                target: t,
+                target_node,
+                value,
+                how,
+            });
+            id = self.replaced(t);
+        }
     }
 
     /// `a = v`, `a[i] = v`, `a, b = v`: each variable gets the value.
@@ -710,14 +795,20 @@ impl<'a, 't> Cx<'a, 't> {
             "==" | "===" | "!=" if !matches!(self.kind, SinkKind::Sql) => {
                 for side in [l, r] {
                     if let Some(d) = self.checked_variable(side) {
-                        self.checked.insert(d);
+                        self.validate(d);
                     }
+                }
+            }
+            // `type < Import`: a class of what the program knows.
+            "<" | "<=" if matches!(r.kind(), "constant" | "scope_resolution") => {
+                if let Some(d) = self.checked_variable(l) {
+                    self.validate(d);
                 }
             }
             "=~" | "!~" => {
                 for side in [l, r] {
                     if let Some(d) = self.checked_variable(side) {
-                        self.checked.insert(d);
+                        self.validate(d);
                     }
                 }
             }
@@ -731,7 +822,7 @@ impl<'a, 't> Cx<'a, 't> {
             .child_by_field_name("value")
             .and_then(|v| self.checked_variable(v))
         {
-            self.checked.insert(d);
+            self.validate(d);
         }
     }
 
@@ -774,11 +865,14 @@ impl<'a, 't> Cx<'a, 't> {
                 .child_by_field_name("receiver")
                 .into_iter()
                 .chain(arguments(c))
-                .any(|a| self.checked_variable(a) == Some(d));
+                .any(|a| {
+                    self.checked_variable(a)
+                        .is_some_and(|e| self.origin(e) == self.origin(d))
+                });
             sanitized |= makes_safe && mentions;
         });
         if sanitized {
-            self.checked.insert(d);
+            self.validate(d);
         }
     }
 
@@ -1142,7 +1236,8 @@ impl<'a, 't> Cx<'a, 't> {
             },
             None => match name {
                 "send_file" | "open" | "require" | "load" => first.into_iter().collect(),
-                "render" => pair_value(call, self.src, &["file", "template"]),
+                // Rails refuses `..` in a template's name; a file's is any path.
+                "render" => pair_value(call, self.src, &["file"]),
                 _ => Vec::new(),
             },
             _ => Vec::new(),
@@ -1305,9 +1400,7 @@ impl<'a, 't> Cx<'a, 't> {
     fn inferred_class(&self, v: Node<'t>) -> Option<String> {
         let d = self.decl_of(v)?;
         let value = self
-            .m
-            .decls
-            .get(d)?
+            .declaration(d)?
             .declarator
             .filter(|a| a.kind() == "assignment")?
             .child_by_field_name("right")?;
@@ -1655,6 +1748,31 @@ fn is_library(class: &str) -> bool {
     )
 }
 
+/// The statements that run their body again (a block is run once for each
+/// element), and the methods that end the search for one.
+const LOOPS: &[&str] = &[
+    "while",
+    "until",
+    "for",
+    "while_modifier",
+    "until_modifier",
+    "block",
+    "do_block",
+    "lambda",
+];
+const FUNCTIONS: &[&str] = &["method", "singleton_method"];
+
+/// The kinds of node whose children are statements.
+const STATEMENT_LISTS: &[&str] = &[
+    "program",
+    "then",
+    "else",
+    "body_statement",
+    "block_body",
+    "begin",
+    "ensure",
+];
+
 /// Whether `n` is in the class itself, not in its instances: in a `def
 /// self.m`, or in `class << self`.
 pub(crate) fn singleton_context(n: Node) -> bool {
@@ -1803,6 +1921,47 @@ end
     fn a_string_that_starts_with_a_value_is_decided_by_that_value() {
         let src = "def a\n  redirect_to \"#{base}/x/#{params[:t]}\"\n  redirect_to \"#{params[:t]}/x\"\n  redirect_to \"/x/#{params[:t]}\"\nend\n";
         assert_eq!(flagged("ruby/open-redirect", src), [3]);
+    }
+
+    #[test]
+    fn a_reassignment_that_always_runs_kills_what_the_variable_held() {
+        // Past the `=`, `t` is no request's value; before it, it is.
+        let src = "def a\n  t = params[:t]\n  system(\"x #{t}\")\n  t = 'ping'\n  system(\"x #{t}\")\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [3]);
+        // The octets of a checked address, put back together.
+        let src = "def a\n  ip = params[:ip]\n  o = ip.split('.')\n  if o[0] =~ /\\A\\d+\\z/ && o[1] =~ /\\A\\d+\\z/\n    ip = \"#{o[0]}.#{o[1]}\"\n    system(\"ping #{ip}\")\n  end\nend\n";
+        assert!(flagged("ruby/command-injection", src).is_empty());
+    }
+
+    #[test]
+    fn a_reassignment_that_may_not_run_or_run_again_keeps_the_value() {
+        // In a branch: the read after it may see either.
+        let src = "def a(c)\n  t = 'ls'\n  if c\n    t = params[:t]\n  end\n  system(t)\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [6]);
+        // Two blocks deep, both writes reach the read after them.
+        let src = "def a(c)\n  t = 'ls'\n  if c\n    t = 'a'\n    if c\n      t = params[:t]\n    end\n  end\n  system(t)\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [9]);
+        // A block runs again: nothing in it is killed.
+        let src = "def a(xs)\n  t = 'ls'\n  xs.each do |x|\n    system(t)\n    t = params[:t]\n  end\nend\n";
+        assert_eq!(flagged("ruby/command-injection", src), [4]);
+    }
+
+    #[test]
+    fn a_sanitizing_reassignment_still_clears_the_variable_past_its_block() {
+        let src = "def a(c)\n  n = 'x'\n  if c\n    n = params[:n]\n    n = Shellwords.escape(n)\n  end\n  system(\"ls #{n}\")\nend\n";
+        assert!(flagged("ruby/command-injection", src).is_empty());
+    }
+
+    #[test]
+    fn a_method_named_for_what_it_validates_is_a_check() {
+        let src = "def a\n  t = params[:t]\n  raise 'x' unless Model.valid_type?(t)\n  t.constantize\nend\ndef b\n  t = params[:t]\n  t.constantize\nend\n";
+        assert_eq!(flagged("ruby/code-injection", src), [8]);
+        // A class of what the program knows.
+        let src = "def a\n  t = params[:t]\n  return unless t < Base\n  system(\"x #{t}\")\nend\n";
+        assert!(flagged("ruby/command-injection", src).is_empty());
+        // A template name can't leave the folder; a file's can.
+        let src = "def a\n  render template: params[:t]\n  render file: params[:f]\nend\n";
+        assert_eq!(flagged("ruby/path-injection", src), [3]);
     }
 
     // ---------------------------------------------------- inheritance

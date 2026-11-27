@@ -44,7 +44,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: RUBY,
             query: "[(call) (subshell)] @match",
-            filter: Some(Keep(builds_a_command)),
+            filter: Some(Find(builds_a_command)),
         },
         example: Some(Example {
             lang: Lang::Ruby,
@@ -65,7 +65,7 @@ pub(super) static RULES: &[Rule] = &[
         check: Check::Query {
             langs: RUBY,
             query: "(call) @match",
-            filter: Some(Keep(builds_a_query)),
+            filter: Some(Find(builds_a_query)),
         },
         example: Some(Example {
             lang: Lang::Ruby,
@@ -349,14 +349,103 @@ pub(super) static RULES: &[Rule] = &[
 
 // ---------------------------------------------------------------- helpers
 
-/// Whether `n` is built from a value: a string with `#{}` in it, or two
-/// strings joined with `+` or `<<` where one isn't a literal.
+/// Methods whose result is the program's own: a number, a table's name, a
+/// value quoted or escaped for where it goes.
+const OWN_CALLS: &[&str] = &[
+    "to_i",
+    "to_f",
+    "to_r",
+    "id",
+    "pid",
+    "size",
+    "length",
+    "count",
+    "table_name",
+    "quoted_table_name",
+    "quote_table_name",
+    "quote_column_name",
+    "quote",
+    "quote_string",
+    "sanitize_sql",
+    "sanitize_sql_array",
+    "sanitize_sql_like",
+    "shellescape",
+    "shelljoin",
+    "escape",
+    "h",
+    "j",
+    "html_escape",
+    "escapeHTML",
+    "escape_html",
+    "escape_javascript",
+    "sanitize",
+    "strip_tags",
+    "content_tag",
+    "link_to",
+    "safe_join",
+];
+
+/// Whether an interpolated value is the program's own and not a request's: a
+/// constant, a number, `Rails.root`, a table's name, what a method made safe
+/// for where it goes.
+fn is_own(e: Node, src: &[u8]) -> bool {
+    match e.kind() {
+        "constant" | "scope_resolution" | "integer" | "float" | "self" | "simple_symbol"
+        | "nil" | "true" | "false" => true,
+        "string" => !interpolates(e),
+        // `table_name`, `topic_id`, `limit`: a table's, a number's.
+        "identifier" => {
+            let t = text_of(e, src);
+            matches!(
+                t,
+                "table_name" | "quoted_table_name" | "primary_key" | "limit" | "offset" | "id"
+            ) || t.ends_with("_id")
+                || t.ends_with("_ids")
+        }
+        "element_reference" => e
+            .child_by_field_name("object")
+            .is_some_and(|o| is_own(o, src)),
+        "parenthesized_statements" | "binary" => {
+            let mut c = e.walk();
+            e.named_children(&mut c).all(|k| is_own(k, src))
+        }
+        "call" => {
+            let name = method_name(e, src).unwrap_or_default();
+            let receiver = e.child_by_field_name("receiver");
+            OWN_CALLS.contains(&name)
+                || receiver_text(e, src).is_some_and(|r| r.starts_with("Rails"))
+                // `Notification.types`: what a class says of itself.
+                || (arguments(e).is_empty()
+                    && receiver.is_some_and(|r| matches!(r.kind(), "constant" | "scope_resolution")))
+                || (receiver.is_some_and(|r| matches!(r.kind(), "constant" | "scope_resolution"))
+                    && ["_name", "_path", "_dir", "_sql", "_column"]
+                        .iter()
+                        .any(|w| name.ends_with(w)))
+        }
+        _ => false,
+    }
+}
+
+/// Whether a string has `#{}` in it.
+fn interpolates(n: Node) -> bool {
+    let mut c = n.walk();
+    n.named_children(&mut c)
+        .any(|k| k.kind() == "interpolation")
+}
+
+/// Whether `n` is built from a value that isn't the program's own: a string
+/// with `#{x}` in it, or two strings joined with `+` or `<<` where one
+/// isn't a literal.
 fn is_built(n: Node, src: &[u8]) -> bool {
     match n.kind() {
         "string" | "subshell" | "heredoc_body" => {
             let mut c = n.walk();
             n.named_children(&mut c)
-                .any(|k| k.kind() == "interpolation")
+                .filter(|k| k.kind() == "interpolation")
+                .any(|k| {
+                    let mut c = k.walk();
+                    k.named_children(&mut c).any(|e| !is_own(e, src))
+                })
         }
         "binary" => {
             n.child_by_field_name("operator")
@@ -364,7 +453,7 @@ fn is_built(n: Node, src: &[u8]) -> bool {
                 && ["left", "right"]
                     .iter()
                     .filter_map(|f| n.child_by_field_name(f))
-                    .any(|o| !is_plain_literal(o))
+                    .any(|o| !is_plain_literal(o) && !is_own(o, src))
         }
         "parenthesized_statements" => n.named_child(0).is_some_and(|i| is_built(i, src)),
         _ => false,
@@ -409,7 +498,10 @@ fn evaluates_a_string(n: Node, src: &[u8]) -> bool {
         return false;
     };
     let args = arguments(n);
-    if n.child_by_field_name("block").is_some() || args.is_empty() {
+    // A block, or `&block`, is the safe form.
+    if n.child_by_field_name("block").is_some()
+        || args.first().is_none_or(|a| a.kind() == "block_argument")
+    {
         return false;
     }
     match name {
@@ -420,7 +512,7 @@ fn evaluates_a_string(n: Node, src: &[u8]) -> bool {
         // it is how a library generates its methods, and the names in it are
         // the library's own.
         "instance_eval" | "class_eval" | "module_eval" => {
-            !is_plain_literal(args[0]) && !is_built(args[0], src)
+            !is_plain_literal(args[0]) && !interpolates(args[0])
         }
         _ => false,
     }
@@ -431,13 +523,11 @@ fn command_argument<'t>(args: &[Node<'t>]) -> Option<Node<'t>> {
     args.iter().copied().find(|a| a.kind() != "hash")
 }
 
-fn builds_a_command(n: Node, src: &[u8]) -> bool {
+fn builds_a_command<'t>(n: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
     if n.kind() == "subshell" {
-        return is_built(n, src);
+        return is_built(n, src).then_some(n);
     }
-    let (Some(name), receiver) = (method_name(n, src), receiver_text(n, src)) else {
-        return false;
-    };
+    let (name, receiver) = (method_name(n, src)?, receiver_text(n, src));
     let runs = match (receiver, name) {
         (None | Some("Kernel"), "system" | "exec" | "spawn") => true,
         (Some("IO"), "popen") => true,
@@ -450,7 +540,8 @@ fn builds_a_command(n: Node, src: &[u8]) -> bool {
     let positional = args
         .iter()
         .filter(|a| a.kind() != "pair" && a.kind() != "hash");
-    runs && positional.count() == 1 && command_argument(&args).is_some_and(|a| is_built(a, src))
+    let command = command_argument(&args)?;
+    (runs && positional.count() == 1 && is_built(command, src)).then_some(command)
 }
 
 /// Methods that take SQL, or a part of it.
@@ -475,9 +566,9 @@ const SQL_METHODS: &[&str] = &[
     "count_by_sql",
 ];
 
-fn builds_a_query(n: Node, src: &[u8]) -> bool {
-    method_name(n, src).is_some_and(|m| SQL_METHODS.contains(&m))
-        && arguments(n).first().is_some_and(|a| is_built(*a, src))
+fn builds_a_query<'t>(n: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let first = *arguments(n).first()?;
+    (SQL_METHODS.contains(&method_name(n, src)?) && is_built(first, src)).then_some(first)
 }
 
 fn loads_objects(n: Node, src: &[u8]) -> bool {
@@ -492,7 +583,11 @@ fn loads_objects(n: Node, src: &[u8]) -> bool {
         ("YAML" | "Psych", "unsafe_load" | "unsafe_load_file") => true,
         // `YAML.load(File.read(path))` is the program's own configuration.
         ("YAML" | "Psych", "load") => arguments(n).first().is_some_and(|a| {
-            !matches!(a.kind(), "string") && !text_of(*a, src).starts_with("File.")
+            let text = text_of(*a, src);
+            !matches!(a.kind(), "string")
+                && !["File.read", "File.open", "IO.read", "File.binread"]
+                    .iter()
+                    .any(|r| text.contains(r))
         }),
         _ => false,
     }
@@ -601,11 +696,17 @@ fn hardcoded_credential<'t>(n: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
             n.child_by_field_name("right")?,
         )
     };
-    let mut interpolates = false;
-    visit(value, &mut |c| interpolates |= c.kind() == "interpolation");
     let literal = text_of(value, src).trim_matches(['"', '\'']);
+    // A string key that isn't a name (`"password-reset" => "static#show"`) is
+    // a route.
+    let named = name.kind() != "string"
+        || text_of(name, src)
+            .trim_matches(['"', '\''])
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_');
     (value.kind() == "string"
-        && !interpolates
+        && named
+        && !interpolates(value)
         && is_credential_name(&assigned_name(name, src)?)
         && looks_like_a_secret(literal))
     .then_some(value)
@@ -810,5 +911,33 @@ mod tests {
         assert_eq!(flagged("ruby/redirect-from-params", src), [1]);
         let src = "skip_before_action :verify_authenticity_token\nskip_before_action :login\nskip_forgery_protection\n";
         assert_eq!(flagged("ruby/csrf-disabled", src), [1, 3]);
+    }
+
+    #[test]
+    fn the_programs_own_values_in_a_string_are_not_built_from_values() {
+        // A constant, a table's name, a number, a value quoted for the query.
+        let src = "User.where(\"#{User.table_name}.id = 1\")\nUser.where(\"id = #{Limit::MAX}\")\nUser.where(\"id = #{id.to_i}\")\nUser.where(\"n = #{connection.quote(n)}\")\nUser.where(\"n = #{n}\")\nUser.where(\"t = #{Notification.types[:a]} and u = #{user_id} and #{table_name}.x = 1\")\n";
+        assert_eq!(flagged("ruby/sql-interpolation", src), [5]);
+        // The report is at the argument, not at the start of the chain.
+        let src = "User\n  .active\n  .where(\"n = #{n}\")\n";
+        assert_eq!(flagged("ruby/sql-interpolation", src), [3]);
+        let src = "system(\"ps -p #{pid.to_i}\")\nsystem(\"ls #{Rails.root}\")\nsystem(\"ls #{dir}\")\n`ls #{dir.shellescape}`\n";
+        assert_eq!(flagged("ruby/command-execution", src), [3]);
+    }
+
+    #[test]
+    fn escaped_values_in_a_string_marked_safe_are_not_a_finding() {
+        let src = "\"<b>#{h name}</b>\".html_safe\n\"<b>#{CGI.escapeHTML(n)}</b>\".html_safe\n\"<b>#{name}</b>\".html_safe\n";
+        assert_eq!(flagged("ruby/html-safe", src), [3]);
+    }
+
+    #[test]
+    fn eval_of_a_block_a_route_and_a_programs_own_file() {
+        let src = "instance_eval(&block)\ninstance_eval(code)\n";
+        assert_eq!(flagged("ruby/eval", src), [2]);
+        let src = "get \"password-reset\" => \"static#show\"\nOPTS = { \"password\" => \"s3cr3t-value\" }\n";
+        assert_eq!(flagged("ruby/hardcoded-credentials", src), [2]);
+        let src = "YAML.load(ERB.new(File.read(f)).result)\nYAML.load(body)\n";
+        assert_eq!(flagged("ruby/unsafe-deserialization", src), [2]);
     }
 }
