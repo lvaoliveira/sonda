@@ -286,40 +286,28 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
     .bind(cols.flow)
     .fetch_all(&mut *tx)
     .await?;
-    // Missing now: fixed, or set aside when the scan didn't run the rule.
-    // Without the list (an older CLI), every one is fixed, as before.
-    let gone: Vec<bool> = sqlx::query_scalar(
-        "UPDATE issues SET fixed_analysis_id = $3,
-             rule_not_run = $4::text[] IS NOT NULL AND NOT (rule = ANY($4))
-         WHERE project_id = $1 AND branch = $2
-           AND fixed_analysis_id IS NULL AND last_analysis_id <> $3
-         RETURNING rule_not_run",
-    )
-    .bind(project_id)
-    .bind(&a.meta.branch)
-    .bind(analysis_id)
-    .bind(&a.active_rules)
-    .fetch_all(&mut *tx)
-    .await?;
-    // Set aside earlier, its rule runs again and it's still missing: fixed
-    // now, by this analysis.
-    let fixed_since = match &a.active_rules {
-        Some(active) => sqlx::query(
-            "UPDATE issues SET fixed_analysis_id = $3, rule_not_run = false
-             WHERE project_id = $1 AND branch = $2 AND rule_not_run
-               AND rule = ANY($4) AND last_analysis_id <> $3",
+    // Missing now: fixed, or set aside when the scan didn't run the rule or a
+    // `[[rules.ignore]]` leaves it out of the path. Without the list (an older
+    // CLI), every one is fixed, as before.
+    let ignores = ignores_of(a.rule_settings.as_ref());
+    let (set_aside, fixed) = if ignores.is_empty() {
+        settle_by_rule(
+            &mut tx,
+            project_id,
+            &a.meta.branch,
+            analysis_id,
+            &a.active_rules,
         )
-        .bind(project_id)
-        .bind(&a.meta.branch)
-        .bind(analysis_id)
-        .bind(active)
-        .execute(&mut *tx)
         .await?
-        .rows_affected(),
-        None => 0,
+    } else {
+        settle_with_ignores(
+            &mut tx,
+            (project_id, &a.meta.branch, analysis_id),
+            &a.active_rules,
+            &ignores,
+        )
+        .await?
     };
-    let set_aside = gone.iter().filter(|&&n| n).count() as u64;
-    let fixed = gone.len() as u64 - set_aside + fixed_since;
     tx.commit().await?;
 
     Ok(Summary {
@@ -334,6 +322,130 @@ pub async fn ingest(pool: &PgPool, a: Analysis) -> Result<Summary, IngestError> 
             set_aside,
         },
     })
+}
+
+/// The `[[rules.ignore]]` of the analysis' settings (ADR-0034), as validated
+/// on ingest.
+fn ignores_of(settings: Option<&serde_json::Value>) -> sonda_core::config::PathIgnores {
+    let list: Vec<sonda_core::config::IgnoreRule> = settings
+        .and_then(|s| s.get("ignore"))
+        .and_then(|i| serde_json::from_value(i.clone()).ok())
+        .unwrap_or_default();
+    sonda_core::config::PathIgnores::new(&list).unwrap_or_else(|_| {
+        sonda_core::config::PathIgnores::new(&[]).expect("no entries are valid")
+    })
+}
+
+/// The tracked issues missing from this analysis, as fixed, or set aside when
+/// the scan didn't run their rule; and the ones set aside earlier whose rule
+/// runs again, as fixed now. Returns (set aside, fixed).
+async fn settle_by_rule(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: i64,
+    branch: &str,
+    analysis_id: i64,
+    active_rules: &Option<Vec<String>>,
+) -> Result<(u64, u64), sqlx::Error> {
+    let gone: Vec<bool> = sqlx::query_scalar(
+        "UPDATE issues SET fixed_analysis_id = $3,
+             rule_not_run = $4::text[] IS NOT NULL AND NOT (rule = ANY($4))
+         WHERE project_id = $1 AND branch = $2
+           AND fixed_analysis_id IS NULL AND last_analysis_id <> $3
+         RETURNING rule_not_run",
+    )
+    .bind(project_id)
+    .bind(branch)
+    .bind(analysis_id)
+    .bind(active_rules)
+    .fetch_all(&mut **tx)
+    .await?;
+    // Set aside earlier, its rule runs again and it's still missing: fixed
+    // now, by this analysis.
+    let fixed_since = match active_rules {
+        Some(active) => sqlx::query(
+            "UPDATE issues SET fixed_analysis_id = $3, rule_not_run = false
+             WHERE project_id = $1 AND branch = $2 AND rule_not_run
+               AND rule = ANY($4) AND last_analysis_id <> $3",
+        )
+        .bind(project_id)
+        .bind(branch)
+        .bind(analysis_id)
+        .bind(active)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected(),
+        None => 0,
+    };
+    let set_aside = gone.iter().filter(|&&n| n).count() as u64;
+    Ok((set_aside, gone.len() as u64 - set_aside + fixed_since))
+}
+
+/// The same, where `[[rules.ignore]]` also sets a finding aside: the path
+/// matches in Rust, since the patterns are gitignore's, not SQL's.
+async fn settle_with_ignores(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    (project_id, branch, analysis_id): (i64, &str, i64),
+    active_rules: &Option<Vec<String>>,
+    ignores: &sonda_core::config::PathIgnores,
+) -> Result<(u64, u64), sqlx::Error> {
+    let not_run = |rule: &str| {
+        active_rules
+            .as_ref()
+            .is_some_and(|active| !active.iter().any(|r| r == rule))
+    };
+    // Missing now, still open.
+    let missing: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, rule, path FROM issues
+         WHERE project_id = $1 AND branch = $2
+           AND fixed_analysis_id IS NULL AND last_analysis_id <> $3",
+    )
+    .bind(project_id)
+    .bind(branch)
+    .bind(analysis_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let (aside, fixed): (Vec<_>, Vec<_>) = missing
+        .into_iter()
+        .partition(|(_, rule, path)| not_run(rule) || ignores.applies(path, rule));
+    for (ids, rule_not_run) in [(&aside, true), (&fixed, false)] {
+        let ids: Vec<i64> = ids.iter().map(|(id, _, _)| *id).collect();
+        sqlx::query(
+            "UPDATE issues SET fixed_analysis_id = $1, rule_not_run = $2 WHERE id = ANY($3)",
+        )
+        .bind(analysis_id)
+        .bind(rule_not_run)
+        .bind(&ids)
+        .execute(&mut **tx)
+        .await?;
+    }
+    // Set aside earlier, its rule runs and no entry leaves it out now: fixed.
+    let mut fixed_since = 0;
+    if active_rules.is_some() {
+        let earlier: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, rule, path FROM issues
+             WHERE project_id = $1 AND branch = $2 AND rule_not_run
+               AND last_analysis_id <> $3",
+        )
+        .bind(project_id)
+        .bind(branch)
+        .bind(analysis_id)
+        .fetch_all(&mut **tx)
+        .await?;
+        let ids: Vec<i64> = earlier
+            .into_iter()
+            .filter(|(_, rule, path)| !not_run(rule) && !ignores.applies(path, rule))
+            .map(|(id, _, _)| id)
+            .collect();
+        fixed_since = sqlx::query(
+            "UPDATE issues SET fixed_analysis_id = $1, rule_not_run = false WHERE id = ANY($2)",
+        )
+        .bind(analysis_id)
+        .bind(&ids)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    }
+    Ok((aside.len() as u64, fixed.len() as u64 + fixed_since))
 }
 
 /// Issues as one array per column, for `UNNEST`.

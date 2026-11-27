@@ -247,6 +247,21 @@ fn a_rule_ignored_in_a_path_still_leaves_the_file_and_the_other_rules() {
     assert_eq!(report["measures"]["files"], 4.0);
 }
 
+#[test]
+fn json_report_lists_the_rules_ignored_by_path_only_when_there_are_some() {
+    // ADR-0034: the server shows them, and doesn't count what they leave out as fixed.
+    let toml = "[[rules.ignore]]\npaths = [\"legacy/**\", \"a/**\"]\nrules = [\"js/no-var\", \"js/eqeqeq\"]\n\n[[rules.ignore]]\npaths = [\"x/**\"]\nrules = [\"common/*\"]\n";
+    let dir = project(&[("app.js", "var x = 1;\n"), ("sonda.toml", toml)]);
+    let report = json(&run(&["scan", "--no-gate", "-f", "json"], dir.path()));
+    assert_eq!(
+        report["rule_settings"]["ignore"],
+        json!([
+            { "paths": ["x/**"], "rules": ["common/*"] },
+            { "paths": ["a/**", "legacy/**"], "rules": ["js/eqeqeq", "js/no-var"] },
+        ])
+    );
+}
+
 fn is_hex(v: &Value, len: usize) -> bool {
     v.as_str().is_some_and(|s| {
         s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))

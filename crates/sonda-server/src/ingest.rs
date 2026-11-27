@@ -111,6 +111,10 @@ struct RuleSettingsIn {
     disabled: Vec<String>,
     enabled: Vec<String>,
     severity: BTreeMap<String, Severity>,
+    /// `[[rules.ignore]]` (ADR-0034); absent from older CLIs and when there
+    /// are none.
+    #[serde(default)]
+    ignore: Vec<sonda_core::config::IgnoreRule>,
 }
 
 #[derive(Deserialize)]
@@ -813,11 +817,52 @@ fn validate_rule_settings(s: RuleSettingsIn) -> Result<Value, String> {
         return Err("the report's rule settings are invalid".into());
     }
     let sorted = |v: Vec<String>| v.into_iter().collect::<BTreeSet<_>>();
-    Ok(serde_json::json!({
+    let ignore = validate_ignores(s.ignore)?;
+    let mut settings = serde_json::json!({
         "disabled": sorted(s.disabled),
         "enabled": sorted(s.enabled),
         "severity": s.severity,
-    }))
+    });
+    if !ignore.is_empty() {
+        settings["ignore"] = serde_json::json!(ignore);
+    }
+    Ok(settings)
+}
+
+/// The most `[[rules.ignore]]` entries a report may carry, and the most
+/// paths or rules in one.
+const MAX_IGNORES: usize = 200;
+const MAX_IGNORE_ITEMS: usize = 200;
+
+/// Bounded, with patterns that compile (the server matches findings with
+/// them), each list sorted and deduplicated and the entries in an order of
+/// their own, as the CLI sends them.
+fn validate_ignores(
+    list: Vec<sonda_core::config::IgnoreRule>,
+) -> Result<Vec<sonda_core::config::IgnoreRule>, String> {
+    let invalid = || "the report's rule settings are invalid".to_string();
+    let ok = |s: &String| (1..=500).contains(&s.len()) && !s.chars().any(char::is_control);
+    if list.len() > MAX_IGNORES
+        || !list.iter().all(|e| {
+            e.paths.len() <= MAX_IGNORE_ITEMS
+                && e.rules.len() <= MAX_IGNORE_ITEMS
+                && e.paths.iter().chain(&e.rules).all(ok)
+        })
+    {
+        return Err(invalid());
+    }
+    sonda_core::config::PathIgnores::new(&list).map_err(|_| invalid())?;
+    let sorted = |v: Vec<String>| v.into_iter().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut out: Vec<sonda_core::config::IgnoreRule> = list
+        .into_iter()
+        .map(|e| sonda_core::config::IgnoreRule {
+            paths: sorted(e.paths),
+            rules: sorted(e.rules),
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.rules, &a.paths).cmp(&(&b.rules, &b.paths)));
+    out.dedup();
+    Ok(out)
 }
 
 fn validate_dependencies(deps: Vec<DependencyIn>) -> Result<Vec<StoredDependency>, String> {

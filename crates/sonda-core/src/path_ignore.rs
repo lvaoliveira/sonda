@@ -8,13 +8,16 @@ use crate::config::IgnoreRule;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::path::Path;
 
-pub(crate) struct PathIgnores {
+/// The matchers of `[[rules.ignore]]`: which rule doesn't report in which
+/// path. A server uses it to tell a finding that an analysis left out on
+/// purpose from one that was fixed.
+pub struct PathIgnores {
     entries: Vec<(Gitignore, Vec<String>)>,
 }
 
 impl PathIgnores {
     /// The matchers of the settings, or what's wrong with them.
-    pub(crate) fn new(list: &[IgnoreRule]) -> Result<Self, String> {
+    pub fn new(list: &[IgnoreRule]) -> Result<Self, String> {
         let mut entries = Vec::new();
         for (n, entry) in list.iter().enumerate() {
             if entry.paths.is_empty() || entry.rules.is_empty() {
@@ -37,12 +40,12 @@ impl PathIgnores {
         Ok(PathIgnores { entries })
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// Whether `rule` doesn't report in `path` (relative, `/`-separated).
-    pub(crate) fn applies(&self, path: &str, rule: &str) -> bool {
+    pub fn applies(&self, path: &str, rule: &str) -> bool {
         self.entries.iter().any(|(paths, rules)| {
             rules.iter().any(|r| matches_rule(r, rule))
                 && paths

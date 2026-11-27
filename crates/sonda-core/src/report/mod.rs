@@ -252,9 +252,42 @@ pub struct RuleSettings<'a> {
     pub enabled: Vec<&'a str>,
     /// Changed severities, by rule.
     pub severity: BTreeMap<&'a str, Severity>,
+    /// `[[rules.ignore]]`: where rules don't report, so a server can show why
+    /// a finding isn't there and not count it as fixed (ADR-0034). Left out
+    /// when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignore: Vec<IgnoreSetting<'a>>,
+}
+
+/// One `[[rules.ignore]]` entry, its lists sorted.
+#[derive(Serialize)]
+pub struct IgnoreSetting<'a> {
+    pub paths: Vec<&'a str>,
+    pub rules: Vec<&'a str>,
 }
 
 impl<'a> RuleSettings<'a> {
+    /// The entries, each list sorted and the entries in an order of their own,
+    /// so the report doesn't depend on how the file was written.
+    fn ignores(list: &'a [crate::config::IgnoreRule]) -> Vec<IgnoreSetting<'a>> {
+        let sorted = |v: &'a [String]| {
+            let mut v: Vec<&str> = v.iter().map(String::as_str).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let mut out: Vec<IgnoreSetting<'a>> = list
+            .iter()
+            .map(|e| IgnoreSetting {
+                paths: sorted(&e.paths),
+                rules: sorted(&e.rules),
+            })
+            .collect();
+        out.sort_by(|a, b| (&a.rules, &a.paths).cmp(&(&b.rules, &b.paths)));
+        out.dedup_by(|a, b| a.rules == b.rules && a.paths == b.paths);
+        out
+    }
+
     fn from_config(rules: &'a crate::config::RulesConfig) -> Self {
         let sorted = |ids: &'a [String]| {
             let mut v: Vec<&str> = ids.iter().map(String::as_str).collect();
@@ -270,6 +303,7 @@ impl<'a> RuleSettings<'a> {
                 .iter()
                 .map(|(k, v)| (k.as_str(), *v))
                 .collect(),
+            ignore: Self::ignores(&rules.ignore),
         }
     }
 }
