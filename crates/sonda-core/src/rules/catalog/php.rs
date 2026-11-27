@@ -6,28 +6,8 @@
 //! language removed, a block that can't be reached.
 
 use super::prelude::*;
+pub(super) use super::{squeezed, text_of, visit};
 use crate::lang::PHP;
-
-pub(super) fn text_of<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    std::str::from_utf8(&src[n.byte_range()]).unwrap_or_default()
-}
-
-/// Calls `f` for `n` and every node below it, in source order.
-pub(super) fn visit<'t>(n: Node<'t>, f: &mut impl FnMut(Node<'t>)) {
-    f(n);
-    let mut c = n.walk();
-    for child in n.children(&mut c) {
-        visit(child, f);
-    }
-}
-
-/// A node's text without whitespace.
-fn squeezed(n: Node, src: &[u8]) -> String {
-    text_of(n, src)
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
-}
 
 /// Whether evaluating `n` can have an effect, so two copies of it aren't the
 /// same value.

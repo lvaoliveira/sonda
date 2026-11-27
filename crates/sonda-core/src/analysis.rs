@@ -2034,6 +2034,39 @@ fn skipped_in_test_file(active: &ActiveRule, test_file: bool) -> bool {
         || (!test_file && TEST_CODE_RULES.contains(&active.rule.id))
 }
 
+/// Code an operator runs, not a request: a Rails migration, a seed, a Rake
+/// task, a script. What it builds into a query or a command is its author's
+/// own, so the vulnerability rules that read a file's shape skip it; a request's
+/// value reaching a sink (taint analysis) is still reported there.
+pub(crate) fn is_tooling_file(path: &str, lang: Lang) -> bool {
+    if lang != Lang::Ruby {
+        return false;
+    }
+    let mut segments = path.split(['/', '\\']).rev();
+    let name = segments.next().unwrap_or("");
+    name == "Rakefile"
+        || name.ends_with(".rake")
+        || name.starts_with("seeds.")
+        || segments.any(|d| {
+            matches!(
+                d,
+                "migrate"
+                    | "post_migrate"
+                    | "migrations"
+                    | "seeds"
+                    | "tasks"
+                    | "script"
+                    | "scripts"
+                    | "bin"
+            )
+        })
+}
+
+/// Vulnerability rules that read a file's shape skip tooling code.
+fn skipped_in_tooling_file(active: &ActiveRule, tooling: bool) -> bool {
+    tooling && active.rule.category == Category::Vulnerability
+}
+
 /// Rules about tests, which SonarQube runs on test code only.
 pub(crate) const TEST_CODE_RULES: &[&str] = &["java/incomplete-assertion"];
 
@@ -2227,6 +2260,7 @@ fn run_queries_in(
         return Ok(issues);
     };
     let test_file = is_test_file(ctx.path);
+    let tooling = is_tooling_file(ctx.path, lang);
     let path = ctx.path;
     // Declarations by name, for the filters that look one up.
     let _declarations = crate::lang::JS_TS
@@ -2238,6 +2272,7 @@ fn run_queries_in(
         for &(idx, filter) in &cq.patterns[m.pattern_index] {
             let active = &rules.active[idx];
             if skipped_in_test_file(active, test_file)
+                || skipped_in_tooling_file(active, tooling)
                 || skipped_for_path(active, path)
                 || needs_newer_java(active, ctx.java_version)
             {
@@ -5184,10 +5219,15 @@ pub(crate) mod tests {
 
     /// The lines of a Ruby file that `rule` flags, for `src` as the file.
     pub(crate) fn flagged_ruby(rule: &str, src: &str) -> Vec<usize> {
+        flagged_ruby_at("a.rb", rule, src)
+    }
+
+    /// The same, for the file at `path`.
+    pub(crate) fn flagged_ruby_at(path: &str, rule: &str, src: &str) -> Vec<usize> {
         let mut cfg = crate::config::Config::default();
         cfg.rules.enabled = vec![rule.to_string()];
         let rules = crate::rules::RuleSet::new(&cfg.rules).unwrap();
-        let file = analyze("a.rb", Lang::Ruby, src, &rules, &cfg, far_deadline()).unwrap();
+        let file = analyze(path, Lang::Ruby, src, &rules, &cfg, far_deadline()).unwrap();
         file.issues
             .iter()
             .filter(|i| i.rule == rule)
@@ -5322,6 +5362,47 @@ pub(crate) mod tests {
         assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(fnv1a(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn tooling_files_are_recognized_in_ruby_only() {
+        for path in [
+            "db/migrate/20240101_add_x.rb",
+            "db/post_migrate/1_x.rb",
+            "db/seeds.rb",
+            "db/seeds/dev.rb",
+            "lib/tasks/ci.rake",
+            "Rakefile",
+            "script/import.rb",
+            "app\\models\\tasks\\a.rb",
+        ] {
+            assert!(is_tooling_file(path, Lang::Ruby), "{path}");
+        }
+        for path in [
+            "app/models/user.rb",
+            "lib/migrator.rb",
+            "app/services/tasker.rb",
+        ] {
+            assert!(!is_tooling_file(path, Lang::Ruby), "{path}");
+        }
+        assert!(!is_tooling_file("db/migrate/1.py", Lang::Python));
+    }
+
+    #[test]
+    fn tooling_code_skips_the_shape_rules_but_not_a_requests_flow() {
+        let shape = "def up\n  execute \"UPDATE #{table} SET a = 1\"\nend\n";
+        assert_eq!(
+            flagged_ruby_at("app/models/m.rb", "ruby/sql-interpolation", shape),
+            [2]
+        );
+        assert!(flagged_ruby_at("db/migrate/1_m.rb", "ruby/sql-interpolation", shape).is_empty());
+        assert!(flagged_ruby_at("lib/tasks/t.rake", "ruby/sql-interpolation", shape).is_empty());
+        // A request's value is reported wherever it reaches a query.
+        let taint = "def a\n  User.where(\"n = #{params[:n]}\")\nend\n";
+        assert_eq!(
+            flagged_ruby_at("lib/tasks/t.rake", "ruby/sql-injection", taint),
+            [2]
+        );
     }
 
     #[test]
