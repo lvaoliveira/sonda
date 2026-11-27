@@ -262,11 +262,12 @@ function RepositorySettings({ rules }: Readonly<{ rules: ProjectRules }>) {
   const toml = rules.sondaToml
   const n = toml ? Object.keys(toml.severity).length : 0
   const ignore = toml?.ignore ?? []
+  const byPath = ignore.length > 0 ? `, ${countOf(ignore.length, 'ignore', 'ignores')} by path` : ''
   return (
     <Card id="sonda-toml" title="The repository's sonda.toml" subtitle={`Its [rules] settings, as the latest analysis of ${rules.mainBranch} recorded them`}>
       <p className="m-0 text-[13px] text-fg-muted">
         {toml
-          ? `${toml.disabled.length} disabled, ${toml.enabled.length} enabled, ${countOf(n, 'severity', 'severities')} changed${ignore.length > 0 ? `, ${countOf(ignore.length, 'ignore', 'ignores')} by path` : ''}. Where the server sets a rule, the server wins in scans that upload.`
+          ? `${toml.disabled.length} disabled, ${toml.enabled.length} enabled, ${countOf(n, 'severity', 'severities')} changed${byPath}. Where the server sets a rule, the server wins in scans that upload.`
           : 'Unknown: the latest analysis came from an older sonda. They show after the next upload.'}
       </p>
       {ignore.length > 0 && (
