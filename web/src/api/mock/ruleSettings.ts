@@ -1,5 +1,11 @@
 import type { ProjectRule, ProjectRuleSetting, ProjectRuleState, ProjectRules, Rule, RuleProfileDetail, RuleProfileSummary, RuleSetBy, RuleSettingChange, Severity, SondaTomlRules } from '../types'
 
+/** Whether an entry of the repository's `[[rules.ignore]]` names the rule, by id or by a prefix and `*`. */
+function ignoresRule(toml: SondaTomlRules | null | undefined, rule: string): boolean {
+  const names = (x: string) => (x.endsWith('*') ? rule.startsWith(x.slice(0, -1)) : x === rule)
+  return (toml?.ignore ?? []).some((i) => i.rules.some(names))
+}
+
 /** The repositories' `[rules]`, as their latest analyses recorded them; null when unknown. */
 const SONDA_TOML: Record<string, SondaTomlRules | null> = {
   'payments-platform': {
@@ -116,6 +122,7 @@ export function mockRuleSettings() {
           serverOff: inDefault && !inDefault.on ? inDefault.change : null,
           inProfiles: profiles.filter((p) => p.rules.has(r.id)).map((p) => ({ id: p.id, name: p.name, on: p.rules.get(r.id)!.on, severity: p.rules.get(r.id)!.severity })),
           offIn: counts.sondaToml + counts.server ? counts : null,
+          ignoredIn: projects.filter((p) => ignoresRule(SONDA_TOML[p], r.id)).length,
         }
       })
     },
@@ -127,7 +134,7 @@ export function mockRuleSettings() {
           const found = openIssues.filter((i) => i.project === project && i.rule === r.id).length
           const hidden = off(r.id, project)
           // The catalog's description, without the global counts.
-          const { serverOff: _s, inProfiles: _p, offIn: _o, openIssues: _i, projects: _n, ...info } = r
+          const { serverOff: _s, inProfiles: _p, offIn: _o, ignoredIn: _g, openIssues: _i, projects: _n, ...info } = r
           return { ...info, state: state(r, project), openIssues: hidden ? 0 : found, hiddenIssues: hidden ? found : 0 }
         })
       return {

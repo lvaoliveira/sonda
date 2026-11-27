@@ -114,6 +114,11 @@ function WhereOff({ rule, isAdmin, reload }: Readonly<{ rule: Rule; isAdmin: boo
       <p className="m-0 text-[13px] text-fg-muted">
         {offSummary(rule)}
       </p>
+      {rule.ignoredIn > 0 && (
+        <p className="m-0 text-[13px] text-fg-muted">
+          Not reported in some paths in {formatNumber(rule.ignoredIn)} {rule.ignoredIn === 1 ? 'project' : 'projects'}, by their sonda.toml. It still runs there.
+        </p>
+      )}
       {rule.inProfiles.length > 0 && (
         <p className="m-0 text-[13px] text-fg-muted">
           In profiles:{' '}

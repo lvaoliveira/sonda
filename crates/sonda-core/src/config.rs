@@ -191,6 +191,16 @@ pub struct IgnoreRule {
     pub rules: Vec<String>,
 }
 
+impl IgnoreRule {
+    /// Whether the entry names `rule`: by its id, or by a prefix and `*`.
+    #[must_use]
+    pub fn names(&self, rule: &str) -> bool {
+        self.rules
+            .iter()
+            .any(|r| crate::path_ignore::matches_rule(r, rule))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {

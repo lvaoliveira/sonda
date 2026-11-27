@@ -348,6 +348,8 @@ export interface Rule extends RuleInfo {
   inProfiles: { id: number; name: string; on: boolean; severity: Severity | null }[]
   /** In how many projects it's off, by what turned it off; null when on everywhere. */
   offIn: { sondaToml: number; server: number } | null
+  /** In how many projects a `[[rules.ignore]]` entry of their sonda.toml names it: it runs there, but not in some paths. */
+  ignoredIn: number
   /** Open or confirmed issues on each project's main branch. */
   openIssues: number
   projects: number

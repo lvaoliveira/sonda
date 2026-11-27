@@ -1350,6 +1350,14 @@ describe('Rule settings', () => {
     await user.click(screen.getByRole('option', { name: /Returned errors should be checked/ }))
     expect(await screen.findByRole('region', { name: "Where it's off" })).toHaveTextContent('Off in 1 project: 1 by their sonda.toml, 0 on the server.')
   })
+
+  it('shows in how many projects a sonda.toml leaves a rule out of some paths', async () => {
+    renderAt('/rules#py%2Fbroad-except')
+    const where = await screen.findByRole('region', { name: "Where it's off" })
+    expect(where).toHaveTextContent('Not reported in some paths in 1 project, by their sonda.toml. It still runs there.')
+    await userEvent.setup().click(screen.getByRole('option', { name: /Returned errors should be checked/ }))
+    expect(await screen.findByRole('region', { name: "Where it's off" })).not.toHaveTextContent('Not reported in some paths')
+  })
 })
 
 describe('Project settings', () => {

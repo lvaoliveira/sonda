@@ -9,6 +9,8 @@ file, the report formats and the public library API.
 
 ### Added
 
+- The Rules page says in how many projects a `[[rules.ignore]]` entry names each rule
+  (`ignoredIn` in `GET /api/rules`): it still runs there, but not in some paths.
 - The server shows `[[rules.ignore]]` ([ADR-0034](docs/adr/0034-rules-ignore.md)): the JSON
   report's `rule_settings` lists the entries as `ignore`, the project's Rules tab shows them
   and when they changed, and a finding an entry leaves out is set aside, not counted as

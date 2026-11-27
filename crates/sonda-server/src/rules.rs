@@ -64,6 +64,9 @@ pub struct RuleView {
     /// In how many projects it's off, by what turned it off; null when on
     /// everywhere.
     pub off_in: Option<crate::rule_settings::OffIn>,
+    /// In how many projects a `[[rules.ignore]]` entry of their sonda.toml
+    /// names it: it runs there, but not in some paths.
+    pub ignored_in: usize,
     /// Open or confirmed issues on each project's main branch.
     pub open_issues: i64,
     /// Projects with at least one of those.
@@ -154,6 +157,7 @@ pub async fn list(
                 server_off: overview.default_off.get(r.id).cloned(),
                 in_profiles: overview.in_profiles.get(r.id).cloned().unwrap_or_default(),
                 off_in: overview.off_in.get(r.id).copied(),
+                ignored_in: overview.ignored_in.get(r.id).copied().unwrap_or(0),
                 open_issues,
                 projects,
             }

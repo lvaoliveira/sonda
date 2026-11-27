@@ -1150,7 +1150,10 @@ Each rule also has:
 - `serverOff`: who turned it off on the server for every project, when and
   why; null when it isn't;
 - `offIn`: in how many projects it's off, by what turned it off
-  (`sondaToml`, `server`); null when it's on everywhere.
+  (`sondaToml`, `server`); null when it's on everywhere;
+- `ignoredIn`: in how many projects an entry of their `sonda.toml`'s
+  `[[rules.ignore]]` names it (by id or prefix): it still runs there, but not
+  in some paths (ADR-0034). Counted from each project's latest analysis.
 
 ### Rule profiles and settings
 

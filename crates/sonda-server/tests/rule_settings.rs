@@ -269,6 +269,23 @@ async fn rules_ignored_by_path_show_in_the_repositorys_settings_and_its_changes(
         view["sondaToml"]["ignore"],
         json!([{ "paths": ["legacy/**"], "rules": ["js/no-var"] }])
     );
+
+    // The Rules page counts the projects whose entries name a rule, by id or
+    // by prefix, and not those whose latest analysis has none.
+    let ignored_in = |catalog: &Value, id: &str| rule(catalog, id)["ignoredIn"].clone();
+    let catalog = get(&app, &ada, "/api/rules").await;
+    assert_eq!(ignored_in(&catalog, "js/no-var"), 1);
+    assert_eq!(ignored_in(&catalog, "js/no-eval"), 0);
+    let mut blog = upload_json_for(dir.path(), &files, "blog", "main");
+    blog["report"]["rule_settings"]["ignore"] = json!([{ "paths": ["gen/**"], "rules": ["js/*"] }]);
+    upload(&db, &blog).await;
+    let catalog = get(&app, &ada, "/api/rules").await;
+    assert_eq!(ignored_in(&catalog, "js/no-var"), 2);
+    assert_eq!(ignored_in(&catalog, "js/no-eval"), 1);
+    assert_eq!(ignored_in(&catalog, "py/all-not-strings"), 0);
+    upload(&db, &with(Value::Null)).await;
+    let catalog = get(&app, &ada, "/api/rules").await;
+    assert_eq!(ignored_in(&catalog, "js/no-var"), 1, "only blog's now");
 }
 
 #[tokio::test]

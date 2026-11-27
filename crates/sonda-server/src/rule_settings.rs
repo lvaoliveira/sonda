@@ -601,6 +601,9 @@ pub struct InProfile {
 pub(crate) struct RuleOverview {
     pub default_off: HashMap<String, Change>,
     pub off_in: HashMap<&'static str, OffIn>,
+    /// In how many projects a `[[rules.ignore]]` entry names the rule: it
+    /// still runs there, but not in some paths (ADR-0034).
+    pub ignored_in: HashMap<&'static str, usize>,
     pub in_profiles: HashMap<String, Vec<InProfile>>,
 }
 
@@ -609,6 +612,7 @@ pub(crate) async fn rule_overview(pool: &PgPool) -> Result<RuleOverview, sqlx::E
     let own = project_settings(pool).await?;
     let scans = latest_scans(pool).await?;
     let mut off_in: HashMap<&'static str, OffIn> = HashMap::new();
+    let mut ignored_in: HashMap<&'static str, usize> = HashMap::new();
     let none = HashMap::new();
     for &p in profiles.projects.keys() {
         let (toml, applied) = scans
@@ -622,7 +626,11 @@ pub(crate) async fn rule_overview(pool: &PgPool) -> Result<RuleOverview, sqlx::E
             .unwrap_or((None, false));
         let profile = &profiles.by_id[&profiles.of(Some(p))];
         let mine = own.get(&p).unwrap_or(&none);
+        let ignores = toml.map_or(&[][..], |t| t.ignore.as_slice());
         for r in RULES.iter() {
+            if ignores.iter().any(|i| i.names(r.id)) {
+                *ignored_in.entry(r.id).or_default() += 1;
+            }
             let d = rule_state(r, toml, profile.rules.get(r.id), mine.get(r.id), applied);
             if d.on {
                 continue;
@@ -659,6 +667,7 @@ pub(crate) async fn rule_overview(pool: &PgPool) -> Result<RuleOverview, sqlx::E
     Ok(RuleOverview {
         default_off,
         off_in,
+        ignored_in,
         in_profiles,
     })
 }
