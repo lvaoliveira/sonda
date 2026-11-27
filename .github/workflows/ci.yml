@@ -408,6 +408,19 @@ jobs:
   coverage:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # The server's database tests skip without PostgreSQL, and what only they
+    # reach would count as uncovered. Same image as the server job's.
+    services:
+      postgres:
+        image: postgres:15@sha256:64b99032e218b66b1d1a6334995056e1aa57f50a0c522cc856e72dff0e4b0d63
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      SONDA_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
