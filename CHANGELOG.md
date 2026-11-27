@@ -9,6 +9,10 @@ file, the report formats and the public library API.
 
 ### Added
 
+- Java and C# have path conventions for operators' code too (ADR-0033): Java `liquibase`
+  and `flyway`; C# `Migrator`, `Seeder` and directories ending in `Migrations`. Their
+  vulnerability rules that read a file's shape skip them. On Keycloak, Bitwarden, Jenkins,
+  nopCommerce and Jellyfin that is 37 findings, all migrations and seed data.
 - The server shows `[[rules.ignore]]` ([ADR-0034](docs/adr/0034-rules-ignore.md)): the JSON
   report's `rule_settings` lists the entries as `ignore`, the project's Rules tab shows them
   and when they changed, and a finding an entry leaves out is set aside, not counted as
