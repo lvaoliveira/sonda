@@ -36,6 +36,9 @@ pub(crate) struct Toml {
     enabled: BTreeSet<String>,
     #[serde(default)]
     severity: BTreeMap<String, String>,
+    /// `[[rules.ignore]]` (ADR-0034).
+    #[serde(default)]
+    ignore: Vec<sonda_core::config::IgnoreRule>,
 }
 
 /// What a rule's state, or severity, comes from.
@@ -217,8 +220,9 @@ pub struct TomlChange {
     pub at: String,
     pub rule: String,
     /// `disabled`, `re-enabled` (no longer disabled), `enabled` (an
-    /// off-by-default rule turned on), `unset` (no longer enabled) or
-    /// `severity`.
+    /// off-by-default rule turned on), `unset` (no longer enabled),
+    /// `severity`, `ignored` (an entry of `[[rules.ignore]]` names the rule)
+    /// or `no longer ignored`.
     pub change: &'static str,
 }
 
@@ -432,6 +436,32 @@ fn changes_between(
             .map(|r| change(r, "enabled")),
     );
     changes.extend(p.enabled.difference(&t.enabled).map(|r| change(r, "unset")));
+    // The rules an entry names that no entry named before, and the reverse.
+    let named = |toml: &Toml| -> BTreeSet<String> {
+        toml.ignore.iter().flat_map(|e| e.rules.clone()).collect()
+    };
+    let (before, now) = (named(p), named(t));
+    changes.extend(now.difference(&before).map(|r| change(r, "ignored")));
+    changes.extend(
+        before
+            .difference(&now)
+            .map(|r| change(r, "no longer ignored")),
+    );
+    // The same rule, other paths: one change for it.
+    for entry in &t.ignore {
+        for rule in entry.rules.iter().filter(|r| before.contains(*r)) {
+            let paths_of = |toml: &Toml| -> BTreeSet<String> {
+                toml.ignore
+                    .iter()
+                    .filter(|e| e.rules.contains(rule))
+                    .flat_map(|e| e.paths.clone())
+                    .collect()
+            };
+            if paths_of(p) != paths_of(t) && !changes.iter().any(|c| c.rule == *rule) {
+                changes.push(change(rule, "ignored"));
+            }
+        }
+    }
     let rules: BTreeSet<&String> = t.severity.keys().chain(p.severity.keys()).collect();
     changes.extend(
         rules

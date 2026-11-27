@@ -64,6 +64,33 @@ async fn latest(db: &TestDb, project: &str, measure: &str) -> (i64, bool) {
     .unwrap()
 }
 
+/// A migrated database, the app with the server's settings on, and an admin
+/// signed in; None without a database.
+async fn admin() -> Option<(TestDb, axum::Router, String)> {
+    let db = TestDb::new().await?;
+    db::migrate(&db.pool).await.unwrap();
+    let app = http::router(state_with(db.pool.clone(), true), None);
+    create_user(&db, "ada", "admin").await;
+    let ada = sign_in(&app, "ada", PASSWORD).await.unwrap();
+    Some((db, app, ada))
+}
+
+/// The repository's settings changes of a project's rules view, as
+/// (rule, change).
+fn toml_changes(view: &Value) -> Vec<(String, String)> {
+    view["tomlChanges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["rule"].as_str().unwrap().into(),
+                c["change"].as_str().unwrap().into(),
+            )
+        })
+        .collect()
+}
+
 fn rule<'a>(catalog: &'a Value, id: &str) -> &'a Value {
     catalog["rules"]
         .as_array()
@@ -198,14 +225,57 @@ async fn admins_turn_rules_off_globally_or_per_project() {
 }
 
 #[tokio::test]
-async fn the_repositorys_settings_show_with_conflicts_and_changes() {
-    let Some(db) = TestDb::new().await else {
+async fn rules_ignored_by_path_show_in_the_repositorys_settings_and_its_changes() {
+    let Some((db, app, ada)) = admin().await else {
         return;
     };
-    db::migrate(&db.pool).await.unwrap();
-    let app = http::router(state_with(db.pool.clone(), true), None);
-    create_user(&db, "ada", "admin").await;
-    let ada = sign_in(&app, "ada", PASSWORD).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("a.js", "var x = 1;\n")];
+    let with = |ignore: Value| {
+        let mut body = upload_json_for(dir.path(), &files, "shop", "main");
+        let settings = &mut body["report"]["rule_settings"];
+        if !ignore.is_null() {
+            settings["ignore"] = ignore;
+        }
+        body
+    };
+    upload(&db, &with(Value::Null)).await;
+    // An entry is added, then more paths for the rule, then it goes.
+    let entry = |paths: Value| json!([{ "paths": paths, "rules": ["js/no-var"] }]);
+    for ignore in [
+        entry(json!(["legacy/**"])),
+        entry(json!(["legacy/**", "vendor/**"])),
+        Value::Null,
+    ] {
+        let (status, s) = upload(&db, &with(ignore)).await;
+        assert_eq!(status, StatusCode::CREATED, "{s}");
+    }
+    let view = get(&app, &ada, "/api/projects/shop/rules").await;
+    // The latest analysis has none: the settings carry no `ignore`.
+    assert!(view["sondaToml"].get("ignore").is_none(), "{view}");
+    let changes = toml_changes(&view);
+    assert_eq!(
+        changes,
+        [
+            ("js/no-var".into(), "no longer ignored".into()),
+            ("js/no-var".into(), "ignored".into()),
+            ("js/no-var".into(), "ignored".into()),
+        ]
+    );
+    // One that is there is listed with its paths.
+    upload(&db, &with(entry(json!(["legacy/**"])))).await;
+    let view = get(&app, &ada, "/api/projects/shop/rules").await;
+    assert_eq!(
+        view["sondaToml"]["ignore"],
+        json!([{ "paths": ["legacy/**"], "rules": ["js/no-var"] }])
+    );
+}
+
+#[tokio::test]
+async fn the_repositorys_settings_show_with_conflicts_and_changes() {
+    let Some((db, app, ada)) = admin().await else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let files = [("a.js", "var x = 1;\n")];
     let with = |settings: Value| {
@@ -251,17 +321,7 @@ async fn the_repositorys_settings_show_with_conflicts_and_changes() {
         (&json!(true), &json!("default"))
     );
     assert!(state(&view, "py/no-eval").is_none());
-    let changes: Vec<(String, String)> = view["tomlChanges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| {
-            (
-                c["rule"].as_str().unwrap().into(),
-                c["change"].as_str().unwrap().into(),
-            )
-        })
-        .collect();
+    let changes = toml_changes(&view);
     assert_eq!(
         changes,
         [

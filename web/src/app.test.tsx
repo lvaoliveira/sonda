@@ -1296,6 +1296,12 @@ describe('Rule settings', () => {
     const toml = screen.getByRole('region', { name: "The repository's sonda.toml" })
     expect(toml).toHaveTextContent('1 disabled, 1 enabled, 1 severity changed')
     expect(within(toml).getByRole('list', { name: 'Changes in sonda.toml' })).toHaveTextContent('go/unchecked-errorturned off')
+    // Where its rules don't report, and when that changed.
+    expect(toml).toHaveTextContent('1 ignore by path')
+    const ignored = within(toml).getByRole('list', { name: 'Ignored by path' })
+    expect(ignored).toHaveTextContent('py/broad-exceptnot reported indb/legacy/**, **/*_generated.py')
+    expect(toml).toHaveTextContent(/set aside, not counted as fixed/)
+    expect(within(toml).getByRole('list', { name: 'Changes in sonda.toml' })).toHaveTextContent('py/broad-exceptignored in some paths')
   })
 
   it('lets admins disable and enable a rule for one project', async () => {

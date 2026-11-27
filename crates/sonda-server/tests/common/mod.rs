@@ -186,6 +186,16 @@ pub async fn post(app: axum::Router, token: Option<&str>, body: Vec<u8>) -> (Sta
     )
 }
 
+/// An analysis as `GET /api/analyses/{id}` shows it.
+pub async fn analysis_detail(db: &TestDb, id: i64) -> Value {
+    let (_, detail) = get(
+        http::router(state(db.pool.clone()), None),
+        &format!("/api/analyses/{id}"),
+    )
+    .await;
+    serde_json::from_str(&detail).unwrap()
+}
+
 pub async fn upload(db: &TestDb, body: &Value) -> (StatusCode, Value) {
     let app = http::router(state(db.pool.clone()), None);
     post(app, Some(TOKEN), gzip(&serde_json::to_vec(body).unwrap())).await

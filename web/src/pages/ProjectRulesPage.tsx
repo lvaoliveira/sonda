@@ -261,13 +261,31 @@ function ProfileChoice({ project, current, profiles, reload }: Readonly<{ projec
 function RepositorySettings({ rules }: Readonly<{ rules: ProjectRules }>) {
   const toml = rules.sondaToml
   const n = toml ? Object.keys(toml.severity).length : 0
+  const ignore = toml?.ignore ?? []
+  const byPath = ignore.length > 0 ? `, ${countOf(ignore.length, 'ignore', 'ignores')} by path` : ''
   return (
     <Card id="sonda-toml" title="The repository's sonda.toml" subtitle={`Its [rules] settings, as the latest analysis of ${rules.mainBranch} recorded them`}>
       <p className="m-0 text-[13px] text-fg-muted">
         {toml
-          ? `${toml.disabled.length} disabled, ${toml.enabled.length} enabled, ${countOf(n, 'severity', 'severities')} changed. Where the server sets a rule, the server wins in scans that upload.`
+          ? `${toml.disabled.length} disabled, ${toml.enabled.length} enabled, ${countOf(n, 'severity', 'severities')} changed${byPath}. Where the server sets a rule, the server wins in scans that upload.`
           : 'Unknown: the latest analysis came from an older sonda. They show after the next upload.'}
       </p>
+      {ignore.length > 0 && (
+        <>
+          <p className="m-0 text-[13px] text-fg-muted">
+            Rules that don't report in some paths. They still run there, so what they would find is set aside, not counted as fixed.
+          </p>
+          <ul aria-label="Ignored by path" className="m-0 flex list-none flex-col gap-1.5 p-0 text-[13px]">
+            {ignore.map((e) => (
+              <li key={`${e.rules.join(',')}|${e.paths.join(',')}`} className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-mono text-[12px]">{e.rules.join(', ')}</span>
+                <span className="text-fg-muted">not reported in</span>
+                <span className="font-mono text-[12px]">{e.paths.join(', ')}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {rules.tomlChanges.length > 0 && (
         <ul aria-label="Changes in sonda.toml" className="m-0 flex list-none flex-col gap-1.5 p-0 text-[13px]">
           {rules.tomlChanges.map((c) => (

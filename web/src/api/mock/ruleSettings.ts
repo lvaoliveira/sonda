@@ -6,6 +6,7 @@ const SONDA_TOML: Record<string, SondaTomlRules | null> = {
     disabled: ['go/unchecked-error'],
     enabled: ['rust/undocumented-unsafe'],
     severity: { 'py/broad-except': 'minor' },
+    ignore: [{ paths: ['db/legacy/**', '**/*_generated.py'], rules: ['py/broad-except'] }],
   },
   // Scanned with a sonda that didn't send them.
   'billing-service': null,
@@ -13,6 +14,7 @@ const SONDA_TOML: Record<string, SondaTomlRules | null> = {
 
 const TOML_CHANGES: Record<string, ProjectRules['tomlChanges']> = {
   'payments-platform': [
+    { analysisId: 911, sha: '5d0a6e2b13', at: '2026-11-02T10:00:00Z', rule: 'py/broad-except', change: 'ignored' },
     { analysisId: 909, sha: '3f1c2a7d9e', at: '2026-10-28T10:00:00Z', rule: 'go/unchecked-error', change: 'disabled' },
     { analysisId: 905, sha: '8b2e44c1aa', at: '2026-10-20T10:00:00Z', rule: 'rust/undocumented-unsafe', change: 'enabled' },
   ],

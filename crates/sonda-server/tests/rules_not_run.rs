@@ -5,9 +5,9 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{TestDb, get, state, upload, upload_json_for};
+use common::{TestDb, analysis_detail, upload, upload_json_for};
 use serde_json::{Value, json};
-use sonda_server::{db, http};
+use sonda_server::db;
 
 /// What the CLI would send for `files`, as if its scan ran every rule
 /// except `not_run`: their findings are absent, and so are their ids.
@@ -59,9 +59,7 @@ async fn a_finding_whose_rule_didnt_run_is_set_aside_not_fixed() {
     );
     let aside = s["analysis_id"].as_i64().unwrap();
     assert_eq!(eval_issue(&db).await, (Some(aside), true));
-    let app = http::router(state(db.pool.clone()), None);
-    let (_, detail) = get(app.clone(), &format!("/api/analyses/{aside}")).await;
-    let detail: Value = serde_json::from_str(&detail).unwrap();
+    let detail = analysis_detail(&db, aside).await;
     assert_eq!(detail["fixed"]["total"], 0, "not listed as fixed");
 
     // It runs again and finds it: back, but not "reopened".

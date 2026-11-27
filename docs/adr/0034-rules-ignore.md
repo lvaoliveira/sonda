@@ -53,11 +53,32 @@ per-path threshold, or per-path severity.
 - A project says where a rule doesn't apply in one place that is reviewed with
   the code, instead of disabling the rule everywhere or hiding the file from
   every measure.
-- The JSON report's `rule_settings` doesn't list the entries, so the server
-  can't show them yet, and an issue that was in an ignored path counts there
-  as gone (fixed) on the next analysis: the same as with a suppression
-  comment, and the same as when the file is excluded. Reporting them is
-  possible later: the report may add fields, and the server's validation of
-  `rule_settings` would need to learn it first.
+- The JSON report's `rule_settings` lists the entries as `ignore` (left out
+  when there are none), each list sorted, and the server shows them (below).
+  A report from an older `sonda` has none: what it ignored is unknown, not
+  none. A server that doesn't know the key ignores it, and then counts what
+  an ignore leaves out as fixed.
 - The built-in notions of test and tooling files stay as they are; this is for
   what they don't know.
+
+## On the server
+
+- **Upload.** `rule_settings.ignore` is a list of `{paths, rules}`: at most
+  200 entries of at most 200 patterns each, each 1 to 500 characters, and
+  the patterns must compile (a server matches findings with them, with the
+  same code as the CLI). One that doesn't, or a key besides `paths` and
+  `rules`, is refused. They are stored sorted, with the analysis' other
+  settings.
+- **Not fixed.** An issue the analysis doesn't have is *set aside*, as when
+  its rule didn't run (ADR-0018), when an entry names its rule and its path:
+  not counted as fixed (the upload's answer, the analysis' list of fixes, the
+  security page), and not as reopened when it comes back. It becomes fixed
+  once its rule runs, no entry leaves it out and it's still gone. The server
+  matches in Rust, not SQL, since the patterns are gitignore's; an analysis
+  without entries keeps the single SQL statement it had.
+- **The project's Rules tab** lists the entries under the repository's
+  `sonda.toml`, with what they mean, and the changes between analyses
+  (`ignored`, `no longer ignored`, by rule).
+- **What it doesn't do:** change what the server counts or hides. The
+  entries are the scanner's, and the findings they leave out were never
+  uploaded.

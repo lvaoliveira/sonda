@@ -421,6 +421,8 @@ export interface SondaTomlRules {
   disabled: string[]
   enabled: string[]
   severity: Record<string, Severity>
+  /** `[[rules.ignore]]` (ADR-0034): where rules don't report. Absent when there are none. */
+  ignore?: { paths: string[]; rules: string[] }[]
 }
 
 export interface ProjectRules {
@@ -437,7 +439,7 @@ export interface ProjectRules {
   /** Every rule for those languages, in catalog order. */
   rules: ProjectRule[]
   /** When the repository changed its settings, newest first. */
-  tomlChanges: { analysisId: number; sha: string; at: string; rule: string; change: 'disabled' | 're-enabled' | 'enabled' | 'unset' | 'severity' }[]
+  tomlChanges: { analysisId: number; sha: string; at: string; rule: string; change: 'disabled' | 're-enabled' | 'enabled' | 'unset' | 'severity' | 'ignored' | 'no longer ignored' }[]
 }
 
 export type ProjectRuleSetting = 'on' | 'off' | 'inherit'

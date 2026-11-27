@@ -75,6 +75,8 @@ export const TOML_CHANGE_LABEL: Record<ProjectRules['tomlChanges'][number]['chan
   enabled: 'turned on (off by default)',
   unset: 'back to off by default',
   severity: 'severity changed',
+  ignored: 'ignored in some paths',
+  'no longer ignored': 'no longer ignored in any path',
 }
 
 /** What the reason form asks before each decision that needs one (ADR-0014). */

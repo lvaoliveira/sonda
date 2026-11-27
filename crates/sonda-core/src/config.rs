@@ -176,6 +176,8 @@ pub struct RulesConfig {
     pub ignore: Vec<IgnoreRule>,
 }
 
+pub use crate::path_ignore::PathIgnores;
+
 /// `[[rules.ignore]]`: in the files `paths` match, the rules don't report.
 /// Unlike `scan.exclude`, the files are still analyzed and measured, and
 /// the other rules still report there.
