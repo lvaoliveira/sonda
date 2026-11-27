@@ -428,6 +428,7 @@ fn is_own(e: Node, src: &[u8]) -> bool {
 
 /// Whether a string has `#{}` in it.
 fn interpolates(n: Node) -> bool {
+    let n = text_of_heredoc(n);
     let mut c = n.walk();
     n.named_children(&mut c)
         .any(|k| k.kind() == "interpolation")
@@ -437,6 +438,7 @@ fn interpolates(n: Node) -> bool {
 /// with `#{x}` in it, or two strings joined with `+` or `<<` where one
 /// isn't a literal.
 fn is_built(n: Node, src: &[u8]) -> bool {
+    let n = text_of_heredoc(n);
     match n.kind() {
         "string" | "subshell" | "heredoc_body" => {
             let mut c = n.walk();
@@ -456,14 +458,29 @@ fn is_built(n: Node, src: &[u8]) -> bool {
                     .any(|o| !is_plain_literal(o) && !is_own(o, src))
         }
         "parenthesized_statements" => n.named_child(0).is_some_and(|i| is_built(i, src)),
+        // `<<~SQL.strip`: the text of the heredoc.
+        "call" => n
+            .child_by_field_name("receiver")
+            .is_some_and(|r| r.kind() == "heredoc_beginning" && is_built(r, src)),
         _ => false,
+    }
+}
+
+/// A heredoc's marker (`<<~SQL`) as its body, which holds the text; any other
+/// node as it is.
+fn text_of_heredoc(n: Node) -> Node {
+    if n.kind() == "heredoc_beginning" {
+        crate::semantic::ruby_taint::heredoc_body(n).unwrap_or(n)
+    } else {
+        n
     }
 }
 
 /// A string with nothing in it to evaluate, or a number.
 fn is_plain_literal(n: Node) -> bool {
+    let n = text_of_heredoc(n);
     match n.kind() {
-        "string" => {
+        "string" | "heredoc_body" => {
             let mut c = n.walk();
             n.named_children(&mut c)
                 .all(|k| k.kind() != "interpolation")
@@ -934,5 +951,14 @@ mod tests {
         assert_eq!(flagged("ruby/hardcoded-credentials", src), [2]);
         let src = "YAML.load(ERB.new(File.read(f)).result)\nYAML.load(body)\n";
         assert_eq!(flagged("ruby/unsafe-deserialization", src), [2]);
+    }
+
+    #[test]
+    fn a_heredoc_is_a_string_for_the_shape_rules() {
+        let src = "User.find_by_sql(<<~SQL)\n  SELECT * FROM t WHERE n = '#{n}'\nSQL\nUser.find_by_sql(<<~SQL)\n  SELECT * FROM #{User.table_name}\nSQL\nUser.find_by_sql(<<~SQL.strip)\n  SELECT #{n}\nSQL\nUser.find_by_sql(<<~'SQL')\n  SELECT '#{n}'\nSQL\n";
+        assert_eq!(flagged("ruby/sql-interpolation", src), [1, 7]);
+        // Code a library generates is its own; a heredoc with no `#{}` is text.
+        let src = "class_eval <<~RUBY\n  def #{name}; end\nRUBY\ninstance_eval <<~RUBY\n  1 + 1\nRUBY\ninstance_eval code\n";
+        assert_eq!(flagged("ruby/eval", src), [7]);
     }
 }
