@@ -5,8 +5,8 @@
 //! isn't one.
 
 use super::go::{call_arguments, package_call, text_of, visit};
-use super::is_credential_name;
 use super::prelude::*;
+use super::{is_credential_name, octal_value};
 use crate::lang::GO;
 
 pub(super) static RULES: &[Rule] = &[
@@ -433,12 +433,7 @@ fn octal_mode(n: Node, src: &[u8]) -> Option<u32> {
     if target.kind() != "int_literal" {
         return None;
     }
-    let t = text_of(target, src).replace('_', "");
-    let digits = t
-        .strip_prefix("0o")
-        .or_else(|| t.strip_prefix("0O"))
-        .or_else(|| t.strip_prefix('0'))?;
-    u32::from_str_radix(digits, 8).ok()
+    octal_value(text_of(target, src))
 }
 
 /// The mode of a call that creates or changes a file, when anyone can write
