@@ -9,6 +9,10 @@ file, the report formats and the public library API.
 
 ### Added
 
+- The path conventions for code an operator runs (migrations, seeds, scripts) now cover
+  every language but C and C++ (ADR-0033), not only Ruby: its vulnerability rules that read a
+  file's shape skip them, taint analysis doesn't. `php/hardcoded-credentials` skips translation
+  files (`lang/es/auth.php`).
 - Ruby migrations, seeds, Rake tasks and `script/` and `bin/` files (ADR-0033) skip the
   vulnerability rules that read a file's shape (`ruby/sql-interpolation`,
   `ruby/command-execution`, `ruby/hardcoded-credentials`, ...), as test files do; taint
