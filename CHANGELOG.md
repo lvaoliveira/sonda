@@ -9,6 +9,8 @@ file, the report formats and the public library API.
 
 ### Added
 
+- The Rules page says in how many projects a `[[rules.ignore]]` entry names each rule
+  (`ignoredIn` in `GET /api/rules`): it still runs there, but not in some paths.
 - Java and C# have path conventions for operators' code too (ADR-0033): Java `liquibase`
   and `flyway`; C# `Migrator`, `Seeder` and directories ending in `Migrations`. Their
   vulnerability rules that read a file's shape skip them. On Keycloak, Bitwarden, Jenkins,

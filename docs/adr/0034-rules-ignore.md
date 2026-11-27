@@ -78,7 +78,8 @@ per-path threshold, or per-path severity.
   without entries keeps the single SQL statement it had.
 - **The project's Rules tab** lists the entries under the repository's
   `sonda.toml`, with what they mean, and the changes between analyses
-  (`ignored`, `no longer ignored`, by rule).
+  (`ignored`, `no longer ignored`, by rule). The Rules page says in how many
+  projects an entry names each rule (`ignoredIn`), under "Where it's off".
 - **What it doesn't do:** change what the server counts or hides. The
   entries are the scanner's, and the findings they leave out were never
   uploaded.
