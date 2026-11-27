@@ -278,7 +278,7 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
             onConfirm={() => setStatus(checked, 'confirmed')}
           />
           {items.length === 0 && <NothingMatches onReset={() => changeFilter(base)} />}
-          <div role="listbox" aria-label="Issues" className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <ul aria-label="Issues" className="m-0 flex min-h-0 flex-1 list-none flex-col overflow-auto p-0">
             {items.map((issue) => (
               <IssueRow
                 key={issue.id}
@@ -290,7 +290,7 @@ function Issues({ me, project }: Readonly<{ me: string | null; project?: string 
                 onCheck={() => toggleChecked(issue.id)}
               />
             ))}
-          </div>
+          </ul>
           {page.total > page.limit && <Pager page={page} last={last} onOffset={setOffset} />}
         </section>
 
@@ -435,7 +435,11 @@ function NothingMatches({ onReset }: Readonly<{ onReset: () => void }>) {
   )
 }
 
-/** An issue in the list. The selected one is the one Tab reaches; Enter or Space opens it. */
+/**
+ * An issue in the list. Its message is the button that opens it, stretched over
+ * the whole row; the checkbox sits above it. The selected one is the one Tab
+ * reaches.
+ */
 function IssueRow({
   issue,
   on,
@@ -444,37 +448,35 @@ function IssueRow({
   onOpen,
   onCheck,
 }: Readonly<{ issue: IssueSummary; on: boolean; checked: boolean; me: string | null; onOpen: () => void; onCheck: () => void }>) {
-  const row = useRef<HTMLDivElement>(null)
+  const row = useRef<HTMLLIElement>(null)
   // Selected with j/k (or a drill-down link) past the list's edge: scroll it in.
   useEffect(() => {
     if (on) row.current?.scrollIntoView?.({ block: 'nearest' })
   }, [on])
   return (
-    <div
+    <li
       ref={row}
-      role="option"
-      aria-selected={on}
-      tabIndex={on ? 0 : -1}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
-        e.preventDefault()
-        onOpen()
-      }}
-      className="grid cursor-pointer grid-cols-[16px_14px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-3 pr-3.5 pl-[11px] hover:bg-hover"
+      className="relative grid grid-cols-[16px_14px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-3 pr-3.5 pl-[11px] hover:bg-hover"
       style={{ borderLeft: `3px solid ${on ? 'var(--sd-accent)' : 'transparent'}`, background: on ? 'var(--sd-panel)' : undefined }}
     >
       <input
         type="checkbox"
         aria-label={`Select ${issue.file}:${issue.line}`}
         checked={checked}
-        onClick={(e) => e.stopPropagation()}
         onChange={onCheck}
-        className="m-0 mt-[3px] accent-brand"
+        className="relative z-10 m-0 mt-[3px] accent-brand"
       />
       <SeverityGlyph severity={issue.severity} className="pt-[3px] text-[10px]" />
       <span className="flex min-w-0 flex-col gap-1">
-        <span className="text-[13.5px] leading-[1.35] font-medium">{issue.message}</span>
+        <button
+          type="button"
+          aria-current={on ? 'true' : undefined}
+          tabIndex={on ? 0 : -1}
+          onClick={onOpen}
+          className="cursor-pointer border-0 bg-transparent p-0 text-left text-[13.5px] leading-[1.35] font-medium text-inherit after:absolute after:inset-0 after:content-['']"
+        >
+          {issue.message}
+        </button>
         <Mono className="overflow-hidden text-[10.5px] text-ellipsis whitespace-nowrap text-fg-faint">
           {issue.file}:{issue.line}
         </Mono>
@@ -490,7 +492,7 @@ function IssueRow({
           {me && issue.assignee === me && <Tag>YOU</Tag>}
         </span>
       </span>
-    </div>
+    </li>
   )
 }
 
