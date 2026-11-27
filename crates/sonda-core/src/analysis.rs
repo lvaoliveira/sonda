@@ -2034,31 +2034,69 @@ fn skipped_in_test_file(active: &ActiveRule, test_file: bool) -> bool {
         || (!test_file && TEST_CODE_RULES.contains(&active.rule.id))
 }
 
-/// Code an operator runs, not a request: a Rails migration, a seed, a Rake
-/// task, a script. What it builds into a query or a command is its author's
-/// own, so the vulnerability rules that read a file's shape skip it; a request's
-/// value reaching a sink (taint analysis) is still reported there.
+/// Code an operator runs, not a request: a migration, a seed, a script, a
+/// build or task file. What it builds into a query or a command is its
+/// author's own, so the vulnerability rules that read a file's shape skip it;
+/// a request's value reaching a sink (taint analysis) is still reported there.
+///
+/// By the conventions of each language (ADR-0033): directories every one
+/// has (`migrations`, `seeds`, `scripts`), and those and the files of its own.
+/// Not `tools`, which is as often a library the program imports (PocketBase's
+/// `tools/security`). C and C++ have no convention a path can say.
 pub(crate) fn is_tooling_file(path: &str, lang: Lang) -> bool {
-    if lang != Lang::Ruby {
-        return false;
+    /// What a language adds to the directories every one has: directories,
+    /// file names (without their extension, where it varies), suffixes.
+    struct Own {
+        dirs: &'static [&'static str],
+        names: &'static [&'static str],
+        suffixes: &'static [&'static str],
     }
-    let mut segments = path.split(['/', '\\']).rev();
-    let name = segments.next().unwrap_or("");
-    name == "Rakefile"
-        || name.ends_with(".rake")
-        || name.starts_with("seeds.")
+    const NONE: Own = Own {
+        dirs: &[],
+        names: &[],
+        suffixes: &[],
+    };
+    let own = match lang {
+        Lang::Ruby => Own {
+            dirs: &["migrate", "post_migrate", "tasks", "bin"],
+            names: &["rakefile"],
+            suffixes: &[".rake"],
+        },
+        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => Own {
+            dirs: &["bin"],
+            names: &["gulpfile", "gruntfile"],
+            suffixes: &[],
+        },
+        Lang::Python => Own {
+            dirs: &["management", "bin"],
+            names: &["manage", "fabfile", "setup", "noxfile", "tasks"],
+            suffixes: &[],
+        },
+        Lang::Go => Own {
+            dirs: &["hack"],
+            ..NONE
+        },
+        Lang::Rust => Own {
+            dirs: &["xtask"],
+            names: &["build"],
+            suffixes: &[],
+        },
+        Lang::Java | Lang::CSharp | Lang::Php => NONE,
+        Lang::C | Lang::Cpp => return false,
+    };
+    let lower = path.to_ascii_lowercase();
+    let mut segments = lower.split(['/', '\\']).rev();
+    let file = segments.next().unwrap_or("");
+    let stem = file.split('.').next().unwrap_or("");
+    let ruby_seed = lang == Lang::Ruby && file.starts_with("seeds.");
+    ruby_seed
+        || own.names.contains(&stem)
+        || own.suffixes.iter().any(|x| file.ends_with(x))
         || segments.any(|d| {
             matches!(
                 d,
-                "migrate"
-                    | "post_migrate"
-                    | "migrations"
-                    | "seeds"
-                    | "tasks"
-                    | "script"
-                    | "scripts"
-                    | "bin"
-            )
+                "migrations" | "migration" | "seeds" | "seeders" | "scripts" | "script"
+            ) || own.dirs.contains(&d)
         })
 }
 
@@ -2077,8 +2115,32 @@ fn skipped_for_path(active: &ActiveRule, path: &str) -> bool {
     match active.rule.id {
         "py/wildcard-import" => path.rsplit(['/', '\\']).next() == Some("__init__.py"),
         "cs/iserializable-without-constructor" => rules::in_csharp_test_project(path),
+        // A translation file says `'password' => 'contrasenya'`: a label.
+        "php/hardcoded-credentials" => is_message_catalog(path),
         _ => false,
     }
+}
+
+/// Whether `path` is in a directory of translations (Laravel's `lang`,
+/// `resources/lang`, a `locales` or `translations` folder).
+fn is_message_catalog(path: &str) -> bool {
+    path.to_ascii_lowercase()
+        .split(['/', '\\'])
+        .rev()
+        .skip(1)
+        .any(|d| {
+            matches!(
+                d,
+                "lang"
+                    | "langs"
+                    | "languages"
+                    | "locale"
+                    | "locales"
+                    | "translations"
+                    | "i18n"
+                    | "l10n"
+            )
+        })
 }
 
 /// The Java version each rule's suggestion needs: on code that targets an
@@ -5217,6 +5279,17 @@ pub(crate) mod tests {
             .collect()
     }
 
+    /// The ids of the rules that report in `src` as the file at `path`.
+    fn rules_reporting(path: &str, lang: Lang, src: &str, cfg: &Config) -> Vec<&'static str> {
+        let rules = RuleSet::new(&cfg.rules).unwrap();
+        analyze(path, lang, src, &rules, cfg, far_deadline())
+            .unwrap()
+            .issues
+            .iter()
+            .map(|i| i.rule)
+            .collect()
+    }
+
     /// The lines of a Ruby file that `rule` flags, for `src` as the file.
     pub(crate) fn flagged_ruby(rule: &str, src: &str) -> Vec<usize> {
         flagged_ruby_at("a.rb", rule, src)
@@ -5365,27 +5438,79 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn tooling_files_are_recognized_in_ruby_only() {
-        for path in [
-            "db/migrate/20240101_add_x.rb",
-            "db/post_migrate/1_x.rb",
-            "db/seeds.rb",
-            "db/seeds/dev.rb",
-            "lib/tasks/ci.rake",
-            "Rakefile",
-            "script/import.rb",
-            "app\\models\\tasks\\a.rb",
+    fn tooling_files_are_recognized_by_each_languages_conventions() {
+        for (path, lang) in [
+            ("db/migrate/20240101_add_x.rb", Lang::Ruby),
+            ("db/post_migrate/1_x.rb", Lang::Ruby),
+            ("db/seeds.rb", Lang::Ruby),
+            ("lib/tasks/ci.rake", Lang::Ruby),
+            ("Rakefile", Lang::Ruby),
+            ("app\\models\\tasks\\a.rb", Lang::Ruby),
+            ("core/server/data/migrations/1-x.js", Lang::JavaScript),
+            ("tools/scripts/clean.ts", Lang::TypeScript),
+            ("gulpfile.js", Lang::JavaScript),
+            ("shop/migrations/0001_initial.py", Lang::Python),
+            ("blog/management/commands/import.py", Lang::Python),
+            ("manage.py", Lang::Python),
+            ("src/main/java/db/migration/V1__x.java", Lang::Java),
+            ("Data/Migrations/20240101_Init.cs", Lang::CSharp),
+            ("internal/db/migrations/001.go", Lang::Go),
+            ("hack/gen.go", Lang::Go),
+            ("database/seeders/UserSeeder.php", Lang::Php),
+            ("database/migrations/2024_create_users.php", Lang::Php),
+            ("xtask/src/main.rs", Lang::Rust),
+            ("build.rs", Lang::Rust),
+            ("scripts/release.py", Lang::Python),
         ] {
-            assert!(is_tooling_file(path, Lang::Ruby), "{path}");
+            assert!(is_tooling_file(path, lang), "{path}");
         }
-        for path in [
-            "app/models/user.rb",
-            "lib/migrator.rb",
-            "app/services/tasker.rb",
+        for (path, lang) in [
+            ("app/models/user.rb", Lang::Ruby),
+            ("lib/migrator.rb", Lang::Ruby),
+            ("app/services/tasker.rb", Lang::Ruby),
+            // Another language's directory, and a name that only starts like one.
+            ("db/migrate/1.py", Lang::Python),
+            ("src/tools/a.rb", Lang::Ruby),
+            ("src/migrate.js", Lang::JavaScript),
+            ("pkg/migrate/migrate.go", Lang::Go),
+            ("src/setup_user.py", Lang::Python),
+            ("src/main/java/App.java", Lang::Java),
+            ("tools/security/hash.go", Lang::Go),
+            ("tools/lib/parse.js", Lang::JavaScript),
+            ("scripts/gen.c", Lang::C),
+            ("tools/a.cpp", Lang::Cpp),
         ] {
-            assert!(!is_tooling_file(path, Lang::Ruby), "{path}");
+            assert!(!is_tooling_file(path, lang), "{path}");
         }
-        assert!(!is_tooling_file("db/migrate/1.py", Lang::Python));
+    }
+
+    #[test]
+    fn translations_are_not_credentials() {
+        assert!(is_message_catalog("lang/es/auth.php"));
+        assert!(is_message_catalog("resources/lang/en/passwords.php"));
+        assert!(!is_message_catalog("app/Models/lang.php"));
+        assert!(!is_message_catalog("app/Auth/Passwords.php"));
+        let src = "<?php\nreturn ['password' => 'contrasenya1'];\n$db = ['password' => 'hunter2-prod'];\n";
+        let mut cfg = Config::default();
+        cfg.rules.enabled = vec!["php/hardcoded-credentials".to_string()];
+        let found = |path| {
+            rules_reporting(path, Lang::Php, src, &cfg)
+                .iter()
+                .filter(|r| **r == "php/hardcoded-credentials")
+                .count()
+        };
+        assert_eq!(found("app/db.php"), 2);
+        assert_eq!(found("resources/lang/es/auth.php"), 0);
+    }
+
+    #[test]
+    fn tooling_in_another_language_skips_its_vulnerability_rules_too() {
+        let src = "const db = connect({ password: 'hunter2' });\n";
+        let cfg = Config::default();
+        let rules_in = |path| rules_reporting(path, Lang::JavaScript, src, &cfg);
+        assert!(rules_in("src/db.js").contains(&"js/hardcoded-password"));
+        assert!(!rules_in("db/migrations/1-seed.js").contains(&"js/hardcoded-password"));
+        assert!(!rules_in("scripts/seed.js").contains(&"js/hardcoded-password"));
     }
 
     #[test]
@@ -5430,15 +5555,7 @@ pub(crate) mod tests {
         // Vulnerability rules skip them; others don't.
         let src = "const db = connect({ password: 'hunter2' });\nvar x = 1;";
         let cfg = Config::default();
-        let rules = RuleSet::new(&cfg.rules).unwrap();
-        let rules_in = |path| {
-            analyze(path, Lang::JavaScript, src, &rules, &cfg, far_deadline())
-                .unwrap()
-                .issues
-                .iter()
-                .map(|i| i.rule)
-                .collect::<Vec<_>>()
-        };
+        let rules_in = |path| rules_reporting(path, Lang::JavaScript, src, &cfg);
         assert!(rules_in("src/db.js").contains(&"js/hardcoded-password"));
         assert_eq!(
             rules_in("src/db.test.js"),
