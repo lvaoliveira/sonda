@@ -688,6 +688,11 @@ fn scan_files(
             .sort_by(|a, b| (a.line, a.column, a.rule).cmp(&(b.line, b.column, b.rule)));
     }
 
+    // What `[[rules.ignore]]` says doesn't report in a path: after every pass,
+    // so the project's own findings are covered too.
+    let ignores = crate::path_ignore::PathIgnores::new(&cfg.rules.ignore).map_err(Error::Config)?;
+    crate::path_ignore::apply(&mut files, &ignores);
+
     let baseline = apply_baseline(opts, cfg, &mut files)?;
 
     let started = Instant::now();

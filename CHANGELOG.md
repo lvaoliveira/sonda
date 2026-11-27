@@ -9,6 +9,10 @@ file, the report formats and the public library API.
 
 ### Added
 
+- `[[rules.ignore]]` in `sonda.toml` ([ADR-0034](docs/adr/0034-rules-ignore.md)): `paths`
+  (gitignore-style) and `rules` (ids, or a prefix and `*`) say where a rule doesn't report;
+  the files are still analyzed and measured, unlike `scan.exclude`, and the other rules still
+  report there.
 - Ruby's taint analysis (ADR-0033) and PHP's share the code that gives the reads
   after a reassignment that always runs a version of the variable, so `ip = params[:ip]`
   followed by `ip = octets.join('.')` no longer taints the second. `ruby/sql-interpolation`,

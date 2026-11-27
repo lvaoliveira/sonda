@@ -261,6 +261,22 @@ impl RuleSet {
                 "unknown rule '{id}' (run `sonda rules` to list them)"
             )));
         }
+        // `[[rules.ignore]]` names rules by id or by prefix, in paths that
+        // must be patterns.
+        for entry in &cfg.ignore {
+            for pattern in &entry.rules {
+                let known = match pattern.strip_suffix('*') {
+                    Some(prefix) => RULES.iter().any(|r| r.id.starts_with(prefix)),
+                    None => find(pattern).is_some(),
+                };
+                if !known {
+                    return Err(Error::Config(format!(
+                        "unknown rule '{pattern}' in rules.ignore (run `sonda rules` to list them)"
+                    )));
+                }
+            }
+        }
+        crate::path_ignore::PathIgnores::new(&cfg.ignore).map_err(Error::Config)?;
         let active: Vec<ActiveRule> = RULES
             .iter()
             .filter(|r| r.on_by_default() || cfg.enabled.iter().any(|e| e == r.id))
