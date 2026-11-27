@@ -170,6 +170,38 @@ pub(super) fn is_credential_name(name: &str) -> bool {
         && !NOT_A_CREDENTIAL.iter().any(|w| lower.contains(w))
 }
 
+/// The text of a node.
+pub(super) fn text_of<'a>(n: Node, src: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&src[n.byte_range()]).unwrap_or_default()
+}
+
+/// Calls `f` for `n` and every node below it, in source order.
+pub(super) fn visit<'t>(n: Node<'t>, f: &mut impl FnMut(Node<'t>)) {
+    f(n);
+    let mut c = n.walk();
+    for child in n.children(&mut c) {
+        visit(child, f);
+    }
+}
+
+/// A node's text without whitespace, so `a.b` and `a . b` compare equal.
+pub(super) fn squeezed(n: Node, src: &[u8]) -> String {
+    text_of(n, src)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// A mode written as an octal literal: `0777`, `0o666`.
+pub(super) fn octal_value(literal: &str) -> Option<u32> {
+    let t = literal.replace('_', "");
+    let digits = t
+        .strip_prefix("0o")
+        .or_else(|| t.strip_prefix("0O"))
+        .or_else(|| t.strip_prefix('0'))?;
+    u32::from_str_radix(digits, 8).ok()
+}
+
 /// Words that make a value a placeholder, not a secret.
 const PLACEHOLDERS: &[&str] = &[
     "here",

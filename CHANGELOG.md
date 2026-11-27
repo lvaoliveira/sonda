@@ -13,6 +13,8 @@ file, the report formats and the public library API.
   vulnerability rules that read a file's shape (`ruby/sql-interpolation`,
   `ruby/command-execution`, `ruby/hardcoded-credentials`, ...), as test files do; taint
   analysis still reports a request's value reaching a sink there.
+- Ruby's taint analysis and rules read a heredoc (`find_by_sql(<<~SQL)`, `q = <<-SQL.strip`)
+  as the string it is, with the `#{}` in its body.
 - Ruby's taint analysis (ADR-0033) and PHP's share the code that gives the reads
   after a reassignment that always runs a version of the variable, so `ip = params[:ip]`
   followed by `ip = octets.join('.')` no longer taints the second. `ruby/sql-interpolation`,

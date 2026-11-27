@@ -39,8 +39,8 @@ describe('Issues', () => {
   it('applies drill-down links and explains them', async () => {
     renderAt('/issues?cat=vulnerability')
     expect(await screen.findByText(/Showing vulnerabilities — from the metric you clicked/)).toBeInTheDocument()
-    const list = screen.getByRole('listbox', { name: 'Issues' })
-    const rows = within(list).getAllByRole('option')
+    const list = screen.getByRole('list', { name: 'Issues' })
+    const rows = within(list).getAllByRole('listitem')
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row).toHaveTextContent('Vulnerability')
   })
@@ -53,8 +53,8 @@ describe('Issues', () => {
     const rust = within(languages).getByRole('checkbox', { name: /Rust/ })
     expect(rust.closest('label')).toHaveTextContent('Rust2')
     await user.click(rust)
-    await waitFor(() => expect(within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')).toHaveLength(2))
-    for (const row of within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')) expect(row).toHaveTextContent('.rs')
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Issues' })).getAllByRole('listitem')).toHaveLength(2))
+    for (const row of within(screen.getByRole('list', { name: 'Issues' })).getAllByRole('listitem')) expect(row).toHaveTextContent('.rs')
   })
 
   it('copies an issue, or the list, as a prompt for an AI assistant', async () => {
@@ -99,7 +99,7 @@ describe('Issues', () => {
     const detail = await screen.findByRole('article', { name: 'Issue detail' })
     await within(detail).findByRole('button', { name: 'Accept risk' })
     expect(within(detail).getByText('No triage changes yet.')).toBeInTheDocument()
-    const row = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')[0]
+    const row = within(screen.getByRole('list', { name: 'Issues' })).getAllByRole('listitem')[0]
     const before = within(row).getByText(/^(Open|Confirmed)$/).textContent ?? ''
     // Accepting asks why first (ADR-0014).
     await user.click(within(detail).getByRole('button', { name: 'Accept risk' }))
@@ -180,13 +180,14 @@ describe('Issues: moving through the list', () => {
   it('moves the selection with j and k', async () => {
     const user = userEvent.setup()
     renderAt('/issues')
-    const list = await screen.findByRole('listbox', { name: 'Issues' })
-    const options = within(list).getAllByRole('option')
-    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+    const list = await screen.findByRole('list', { name: 'Issues' })
+    // The selected row's button is the one marked current.
+    const current = () => within(list).getAllByRole('listitem').findIndex((row) => within(row).getByRole('button').getAttribute('aria-current') === 'true')
+    expect(current()).toBe(0)
     await user.keyboard('j')
-    expect(within(list).getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true')
+    expect(current()).toBe(1)
     await user.keyboard('k')
-    expect(within(list).getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true')
+    expect(current()).toBe(0)
   })
 
   it('fits the list to the window, so its pager stays in view', async () => {
@@ -253,7 +254,7 @@ describe('Issues: moving through the list', () => {
       renderAt('/issues')
       const list = await screen.findByRole('region', { name: 'Issue list' })
       expect(screen.queryByRole('article', { name: 'Issue detail' })).not.toBeInTheDocument()
-      await user.click(within(list).getAllByRole('option')[1])
+      await user.click(within(within(list).getAllByRole('listitem')[1]).getByRole('button'))
       const detail = await screen.findByRole('article', { name: 'Issue detail' })
       expect(screen.queryByRole('region', { name: 'Issue list' })).not.toBeInTheDocument()
       await user.click(await within(detail).findByRole('button', { name: '← All issues' }))
@@ -416,7 +417,7 @@ describe('Projects', () => {
     expect(await screen.findByText(/billing-service on its main branch/)).toBeInTheDocument()
     expect(within(screen.getByRole('navigation', { name: 'Project' })).getByRole('link', { name: 'Issues' })).toHaveAttribute('aria-current', 'page')
     // billing-service has two of the mock's issues; the accepted one is filtered out by default.
-    const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
+    const rows = within(screen.getByRole('list', { name: 'Issues' })).getAllByRole('listitem')
     expect(rows).toHaveLength(1)
     expect(rows[0]).toHaveTextContent('StripeConfig.java')
   })
@@ -427,7 +428,7 @@ describe('Projects', () => {
     const [measures] = await screen.findAllByRole('region', { name: 'Measures' })
     await user.click(within(within(measures).getByText('Bugs').parentElement!).getByRole('link'))
     expect(await screen.findByText(/payments-platform on main/)).toBeInTheDocument()
-    const rows = within(screen.getByRole('listbox', { name: 'Issues' })).getAllByRole('option')
+    const rows = within(screen.getByRole('list', { name: 'Issues' })).getAllByRole('listitem')
     const bugs = (await createMockApi(0).issues({ project: 'payments-platform', branch: 'main', severity: [], category: ['bug'], status: ['open', 'confirmed'], component: [], language: [], file: '', isNew: false, offset: 0, limit: 50 })).total
     expect(rows).toHaveLength(Math.min(bugs, 50))
     expect(screen.getByRole('checkbox', { name: /Bug/ })).toBeChecked()
@@ -1217,9 +1218,9 @@ describe('Overview', () => {
     expect(await screen.findByText(/Showing on main · blocker · src\/main\/java\/com\/acme\/billing\/config\/StripeConfig\.java/)).toBeInTheDocument()
     expect(within(screen.getByRole('navigation', { name: 'Project' })).getByRole('link', { name: 'Issues' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    const list = await screen.findByRole('listbox')
-    expect(within(list).getAllByRole('option')).toHaveLength(1)
-    expect(within(list).getByRole('option', { selected: true })).toHaveTextContent('Live Stripe secret key hard-coded')
+    const list = await screen.findByRole('list', { name: 'Issues' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(within(list).getByRole('listitem')).getByRole('button', { current: true })).toHaveTextContent('Live Stripe secret key hard-coded')
   })
 
   it('says so honestly when the server has no overview yet', async () => {
