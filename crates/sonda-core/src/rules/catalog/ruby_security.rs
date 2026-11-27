@@ -4,7 +4,7 @@
 //! `params` itself, and waits for taint analysis to do better.
 
 use super::ruby::{arguments, method_name, receiver_text, text_of, visit};
-use super::{is_credential_name, looks_like_a_secret, prelude::*};
+use super::{is_credential_name, looks_like_a_secret, octal_value, prelude::*};
 use crate::lang::RUBY;
 
 pub(super) static RULES: &[Rule] = &[
@@ -717,12 +717,7 @@ fn octal_mode(n: Node, src: &[u8]) -> Option<u32> {
     if n.kind() != "integer" {
         return None;
     }
-    let t = text_of(n, src).replace('_', "");
-    let digits = t
-        .strip_prefix("0o")
-        .or_else(|| t.strip_prefix("0O"))
-        .or_else(|| t.strip_prefix('0'))?;
-    u32::from_str_radix(digits, 8).ok()
+    octal_value(text_of(n, src))
 }
 
 /// The mode of a call that creates or changes a file, when anyone can write
