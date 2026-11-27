@@ -930,7 +930,9 @@ impl<'a, 't> Cx<'a, 't> {
             "identifier" => self.identifier_taint(n, state, next),
             "instance_variable" => held(self.decl_of(n), &self.checked, state),
             "string" | "subshell" => self.string_taint(n, state, next),
+            "heredoc_beginning" => self.taint(heredoc_body(n)?, state, next),
             "interpolation"
+            | "heredoc_body"
             | "array"
             | "hash"
             | "argument_list"
@@ -1537,6 +1539,30 @@ summarize_for!(
 
 // ---------------------------------------------------------------- syntax
 
+/// The body of the heredoc `<<~SQL` starts: it follows the statement the
+/// marker is in, in the order the statement's markers are (`f(<<~A, <<~B)`).
+pub(crate) fn heredoc_body(marker: Node) -> Option<Node> {
+    let mut statement = marker;
+    while let Some(p) = statement.parent() {
+        if STATEMENT_LISTS.contains(&p.kind()) {
+            break;
+        }
+        statement = p;
+    }
+    let mut markers = Vec::new();
+    each_node(statement, |n| {
+        if n.kind() == "heredoc_beginning" {
+            markers.push(n.id());
+        }
+        true
+    });
+    let nth = markers.iter().position(|id| *id == marker.id())?;
+    std::iter::successors(statement.next_named_sibling(), |n| n.next_named_sibling())
+        .take_while(|n| matches!(n.kind(), "heredoc_body" | "comment"))
+        .filter(|n| n.kind() == "heredoc_body")
+        .nth(nth)
+}
+
 /// The value a method returns when it says no `return` for it: its last
 /// statement.
 fn implicit_return<'t>(function: Node<'t>) -> Option<Node<'t>> {
@@ -1962,6 +1988,25 @@ end
         // A template name can't leave the folder; a file's can.
         let src = "def a\n  render template: params[:t]\n  render file: params[:f]\nend\n";
         assert_eq!(flagged("ruby/path-injection", src), [3]);
+    }
+
+    #[test]
+    fn a_heredoc_holds_what_is_interpolated_in_it() {
+        // As an argument, and assigned, with a method called on it.
+        let src = "def a\n  User.find_by_sql(<<~SQL)\n    SELECT * FROM t WHERE n = '#{params[:n]}'\n  SQL\n  q = <<-SQL.strip\n    DELETE FROM t WHERE id = #{params[:id]}\n  SQL\n  ActiveRecord::Base.connection.execute(q)\nend\n";
+        assert_eq!(flagged("ruby/sql-injection", src), [2, 8]);
+        // A number, a bound value, and a heredoc that interpolates nothing.
+        let src = "def a\n  User.find_by_sql(<<~SQL)\n    SELECT * FROM t WHERE id = #{params[:id].to_i}\n  SQL\n  User.where(<<~SQL, params[:n])\n    n = ?\n  SQL\n  User.find_by_sql(<<~'SQL')\n    SELECT '#{params[:n]}'\n  SQL\nend\n";
+        assert!(flagged("ruby/sql-injection", src).is_empty());
+    }
+
+    #[test]
+    fn each_heredoc_of_a_call_has_its_own_body() {
+        let src = "def a\n  system(<<~CMD)\n    ls #{params[:d]}\n  CMD\n  system(<<~A, <<~B)\n    one\n  A\n    two #{params[:x]}\n  B\nend\n";
+        // Two heredocs make two arguments: the program and its argument.
+        assert_eq!(flagged("ruby/command-injection", src), [2]);
+        let src = "def a\n  Open3.capture2(<<~A)\n    a\n  A\n  system(<<~B)\n    b\n  B\nend\n";
+        assert!(flagged("ruby/command-injection", src).is_empty());
     }
 
     // ---------------------------------------------------- inheritance
