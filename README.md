@@ -143,6 +143,11 @@ disabled = ["js/no-console"]
 [rules.severity]
 "common/function-length" = "minor"
 
+# Rules that don't report in some paths; the files are still analyzed and measured (ADR-0034).
+[[rules.ignore]]
+paths = ["db/legacy/**", "**/*_generated.rb"]   # gitignore-style, from the scan root
+rules = ["ruby/sql-interpolation", "common/*"]  # rule ids, or a prefix and `*`
+
 [thresholds]
 cognitive_complexity = 15  # default: 15, and 25 for C and C++, as SonarQube
 function_lines = 80

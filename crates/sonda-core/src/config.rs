@@ -50,6 +50,13 @@ disabled = []
 [rules.severity]
 # "js/no-console" = "info"
 
+# Rules that don't report in some paths: gitignore-style patterns from the
+# scan root, and rule ids or a prefix and `*`. Unlike `scan.exclude`, the
+# files are still analyzed and measured, and the other rules still report.
+# [[rules.ignore]]
+# paths = ["db/legacy/**", "**/*_generated.rb"]
+# rules = ["ruby/sql-interpolation", "common/*"]
+
 [thresholds]
 # Cognitive complexity a function may have; by default 15, and 25 in C and
 # C++, as SonarQube.
@@ -165,6 +172,21 @@ pub struct RulesConfig {
     pub enabled: Vec<String>,
     pub disabled: Vec<String>,
     pub severity: HashMap<String, Severity>,
+    /// Rules that don't report in some paths.
+    pub ignore: Vec<IgnoreRule>,
+}
+
+/// `[[rules.ignore]]`: in the files `paths` match, the rules don't report.
+/// Unlike `scan.exclude`, the files are still analyzed and measured, and
+/// the other rules still report there.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IgnoreRule {
+    /// Gitignore-style patterns, relative to the scan root: `db/legacy/**`,
+    /// `**/*_generated.rb`, `lib/tasks`.
+    pub paths: Vec<String>,
+    /// Rule ids, or a prefix ending in `*`: `ruby/*`.
+    pub rules: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

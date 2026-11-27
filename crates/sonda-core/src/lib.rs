@@ -49,6 +49,7 @@ mod gate;
 mod git;
 mod measures;
 mod newcode;
+mod path_ignore;
 mod project;
 mod py_syntax;
 mod regex;
